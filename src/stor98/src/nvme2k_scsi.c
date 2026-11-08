@@ -32,6 +32,8 @@
 #include "nvme2k.h"
 #include "utils.h"
 #include "inqid.h"
+#include "capdata.h"
+#include "vfychk.h"
 #include "stor98ver.h"
 
 //
@@ -232,13 +234,14 @@ BOOLEAN ScsiHandleReadCapacity(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_
     if (DevExt->NamespaceSizeInBlocks == 0 || DevExt->NamespaceBlockSize == 0) {
         return ScsiNotReady(DevExt, Srb);
     }
-    // Check if capacity exceeds 32-bit
-    if (DevExt->NamespaceSizeInBlocks > 0xFFFFFFFF) {
-        lastLba = 0xFFFFFFFF;  // Indicate to use READ CAPACITY(16)
+    // 512-byte sectors whatever the namespace's block size (PLAN "4 KiB-
+    // sector namespaces"); 0xFFFFFFFF sends the OS to READ CAPACITY(16).
+    if (DevExt->ExposedBlocks > 0xFFFFFFFF) {
+        lastLba = 0xFFFFFFFF;
     } else {
-        lastLba = (ULONG)(DevExt->NamespaceSizeInBlocks - 1);
+        lastLba = (ULONG)(DevExt->ExposedBlocks - 1);
     }
-    blockSize = DevExt->NamespaceBlockSize;
+    blockSize = DevExt->ExposedBytes;      // the view's sector (47.31)
     
     // Return in big-endian format
     capacityData[0] = BSWAP(lastLba);
@@ -249,33 +252,80 @@ BOOLEAN ScsiHandleReadCapacity(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_
 }
 
 //
-// ScsiHandleReadCapacity - Handle SCSI READ CAPACITY(16) command
+// ScsiHandleReadCapacity64 - Handle SCSI READ CAPACITY(16) command. The 32-byte
+// answer is built whole (src/capdata.h) and cut at the CDB's allocation
+// length and the data buffer, as INQUIRY's is: a caller that asks for the
+// 12-byte form gets those 12 bytes, not an error.
 //
 BOOLEAN ScsiHandleReadCapacity64(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb)
 {
-    PREAD_CAPACITY16_DATA capacityData;
-    ULARGE_INTEGER lastLba;
-    ULONG blockSize;
-    
-    if (Srb->DataTransferLength < sizeof(*capacityData)) {
-        return ScsiError(DevExt, Srb, SRB_STATUS_DATA_OVERRUN);
-    }
-    
+    UCHAR data[CAP16_LEN];
+    ULONG n, i;
+
     // As READ CAPACITY(10): never a made-up capacity.
     if (DevExt->NamespaceSizeInBlocks == 0 || DevExt->NamespaceBlockSize == 0) {
         return ScsiNotReady(DevExt, Srb);
     }
-    capacityData = (PREAD_CAPACITY16_DATA)Srb->DataBuffer;
-    RtlZeroMemory(capacityData, Srb->DataTransferLength);
-    lastLba.QuadPart = DevExt->NamespaceSizeInBlocks - 1;
-    blockSize = DevExt->NamespaceBlockSize;
-    
-    // Return in big-endian format
-    BSWAPCopy(&capacityData->LogicalBlockAddress,&lastLba);
-    capacityData->BytesPerBlock = BSWAP(blockSize);
-
-    Srb->DataTransferLength = sizeof(*capacityData);
+    // The view's logical blocks (47.31): 512-byte ones, 2^LbaShift of them a
+    // native block, or the native blocks themselves (LbaShift 0)
+    // (LBPPBE; PLAN "4 KiB-sector namespaces").
+    n = Cap16Build(DevExt->ExposedBlocks, DevExt->ExposedBytes, DevExt->LbaShift, data);
+    n = ScsiAnswerLen(n, Cap16Alloc(Srb->Cdb), Srb->DataTransferLength);
+    if (Srb->DataBuffer == NULL) {
+        n = 0;
+    }
+    for (i = 0; i < n; i++) {
+        ((PUCHAR)Srb->DataBuffer)[i] = data[i];
+    }
+    Srb->DataTransferLength = n;
     return ScsiSuccess(DevExt, Srb);
+}
+
+//
+// ScsiHandleVerify - VERIFY(10) and VERIFY(16) (src/vfychk.h; PLAN
+// "VERIFY", xhci98 3.4.2.0, its roadmap 47.22): a range past the namespace,
+// a compare or protection check the driver does not make, and more than
+// VFY_MAX_SECTORS sectors are refused; a count of 0 succeeds; anything else
+// reads the medium (EngSubmitVerify): by NVMe Verify where the controller
+// has it, otherwise by reads into the bounce pages.
+//
+// On the 9x build a VERIFY that starts at or past the end (VFY_PAST_END)
+// succeeds with no media access (owner, 2026-11-06; PLAN "VERIFY"): MS-DOS
+// FORMAT /U walks a volume with its boot sector's geometry and, where that
+// differs from Windows' own, addresses tracks past the drive; a refusal
+// makes it mark those tracks' allocation units bad in the new FAT, as
+// 3.4.1.0, which answered every VERIFY GOOD, never did. A VERIFY partly in
+// range is still refused, and READ and WRITE past the end still are.
+//
+BOOLEAN ScsiHandleVerify(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb)
+{
+    ULONGLONG lba;
+    ULONG count;
+
+    if (DevExt->NamespaceSizeInBlocks == 0 || DevExt->NamespaceBlockSize == 0) {
+        return ScsiNotReady(DevExt, Srb);
+    }
+    switch (VfyCheck(Srb->Cdb, DevExt->ExposedBlocks, VfyMaxSectors(DevExt->ExposedBytes))) {
+    case VFY_BAD_FIELD:
+        return ScsiIllegalRequest(DevExt, Srb, SCSI_ADSENSE_INVALID_CDB);
+    case VFY_PAST_END:
+#ifdef NVME2K_W9X
+        Srb->DataTransferLength = 0;
+        return ScsiSuccess(DevExt, Srb);
+#else
+        return ScsiIllegalRequest(DevExt, Srb, SCSI_ADSENSE_ILLEGAL_BLOCK);
+#endif
+    case VFY_OUT_OF_RANGE:
+        return ScsiIllegalRequest(DevExt, Srb, SCSI_ADSENSE_ILLEGAL_BLOCK);
+    default:
+        break;
+    }
+    VfyDecode(Srb->Cdb, &lba, &count);
+    if (count == 0) {
+        Srb->DataTransferLength = 0;
+        return ScsiSuccess(DevExt, Srb);
+    }
+    return EngSubmitVerify(DevExt, Srb, lba, count);
 }
 
 //
@@ -293,9 +343,9 @@ BOOLEAN ScsiHandleLogSense(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOC
     ScsiDebugPrint(0, "nvme2k: ScsiHandleLogSense - Page Code=0x%02X\n", pageCode);
 #endif
 
-    // We only support the SMART/Health Information log page for now
-    // A real implementation would check for other pages.
-    // For simplicity, we assume any log sense is for SMART data.
+    // Page 2Fh (Informational Exceptions) alone, built from the NVMe
+    // SMART/Health log at completion (src/logpage.h); any other page is
+    // refused.
     if (pageCode == SCSI_LOG_PAGE_INFORMATIONAL) {
 
         // NVMe Get Log Page (SMART/Health) through the engine
@@ -370,56 +420,31 @@ BOOLEAN ScsiHandleSatPassthrough(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUES
 //
 BOOLEAN ScsiHandleReadDefectData10(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb)
 {
-    PUCHAR buffer;
     PCDB_READ_DEFECT_DATA cdb = (PCDB_READ_DEFECT_DATA)Srb->Cdb;
+    UCHAR header[4];
     ULONG allocationLength;
-    UCHAR defectListFormat;
-    BOOLEAN requestPList;
-    BOOLEAN requestGList;
+    ULONG n, i;
 
-    // Parse CDB
     // Allocation length is at bytes 7-8 (big-endian)
-    allocationLength = (cdb->AllocationLength[0] << 8) |
-                       cdb->AllocationLength[1];
+    allocationLength = ((ULONG)cdb->AllocationLength[0] << 8) | cdb->AllocationLength[1];
 
-    // Defect list format byte (byte 2 for READ DEFECT DATA 10):
-    // Bit 4: PLIST (request Primary defect list - factory defects)
-    // Bit 3: GLIST (request Grown defect list - defects developed during use)
-    // Bits 2-0: Format of defect descriptors
-    requestPList = (cdb->FormatByte & 0x10) ? TRUE : FALSE;
-    requestGList = (cdb->FormatByte & 0x08) ? TRUE : FALSE;
-    defectListFormat = cdb->FormatByte & 0x07;
-
-    // Check buffer size - need at least 4 bytes for header
-    if (Srb->DataTransferLength < 4) {
-        return ScsiError(DevExt, Srb, SRB_STATUS_DATA_OVERRUN);
+    // The answer is the 4-byte header (SBC-3 section 5.7) with empty lists:
+    // NVMe drives handle bad blocks internally. Byte 1 echoes PLIST (bit 4),
+    // GLIST (bit 3) and the defect list format (bits 2-0); PS (bit 7) is 0.
+    // Bytes 2-3, the defect list length, are 0. Like every software answer
+    // it is cut at the allocation length and the data buffer (SPC).
+    header[0] = 0x00;
+    header[1] = (UCHAR)(cdb->FormatByte & 0x1F);
+    header[2] = 0x00;
+    header[3] = 0x00;
+    n = ScsiAnswerLen(sizeof(header), allocationLength, Srb->DataTransferLength);
+    if (Srb->DataBuffer == NULL) {
+        n = 0;
     }
-
-    buffer = (PUCHAR)Srb->DataBuffer;
-    RtlZeroMemory(buffer, Srb->DataTransferLength);
-
-    // Build READ DEFECT DATA (10) response header (4 bytes)
-    // Per SBC-3 specification section 5.7
-
-    // Byte 0: Reserved
-    buffer[0] = 0x00;
-
-    // Byte 1: Response flags
-    // Bit 7: PS (Parameters Saveable) = 0 (not saveable)
-    // Bit 4: PLIST = echo from CDB (indicates if P-list is being returned)
-    // Bit 3: GLIST = echo from CDB (indicates if G-list is being returned)
-    // Bits 2-0: Defect List Format = echo from CDB
-    // For NVMe SSDs: We acknowledge the request but return empty lists
-    buffer[1] = (cdb->FormatByte & 0x1F);  // Copy PLIST, GLIST, and format bits
-
-    // Bytes 2-3: Defect list length (big-endian, excludes the 4-byte header)
-    // For NVMe SSDs, both P-list and G-list are empty (length = 0)
-    // NVMe drives handle bad blocks transparently via internal wear leveling
-    buffer[2] = 0x00;
-    buffer[3] = 0x00;
-
-    // Set actual transfer length (just the 4-byte header, no defect descriptors)
-    Srb->DataTransferLength = 4;
+    for (i = 0; i < n; i++) {
+        ((PUCHAR)Srb->DataBuffer)[i] = header[i];
+    }
+    Srb->DataTransferLength = n;
     return ScsiSuccess(DevExt, Srb);
 }
 
@@ -489,14 +514,6 @@ BOOLEAN ScsiHandleModeSense(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLO
         headerSize = 4;  // MODE SENSE(6) header is 4 bytes
     }
 
-    // Check buffer size
-    if (Srb->DataTransferLength < headerSize) {
-#ifdef NVME2K_DBG
-        ScsiDebugPrint(0, "nvme2k: ModeSense buffer too small\n");
-#endif
-        return ScsiError(DevExt, Srb, SRB_STATUS_DATA_OVERRUN);
-    }
-
 #ifdef NVME2K_DBG
     ScsiDebugPrint(0, "nvme2k: ModeSense pageCode=0x%02X pageControl=0x%02X dbd=%d\n",
                    pageCode, pageControl, dbd);
@@ -525,27 +542,25 @@ BOOLEAN ScsiHandleModeSense(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLO
     blockDescLength = 0;
 
     offset = headerSize;
-#if 1
     // Add block descriptor if not disabled
     if (!dbd && (offset + 8) <= sizeof(full)) {
         PUCHAR blockDesc = buffer + offset;
-        ULONG blockSize = DevExt->NamespaceBlockSize ? DevExt->NamespaceBlockSize : 512;
-        ULONGLONG numBlocks = DevExt->NamespaceSizeInBlocks;
+        ULONG blockSize = DevExt->ExposedBytes; // the logical block length (PLAN "4 KiB-sector namespaces")
+        ULONGLONG numBlocks = DevExt->ExposedBlocks;
 
-        // Block descriptor format (8 bytes):
-        // Byte 0: Density code (0 = default)
-        blockDesc[0] = 0x00;
-
-        // Bytes 1-3: Number of blocks (or 0xFFFFFF if > 24-bit)
-        if (numBlocks > 0xFFFFFF) {
-            blockDesc[1] = 0xFF;
-            blockDesc[2] = 0xFF;
-            blockDesc[3] = 0xFF;
-        } else {
-            blockDesc[1] = (UCHAR)((numBlocks >> 16) & 0xFF);
-            blockDesc[2] = (UCHAR)((numBlocks >> 8) & 0xFF);
-            blockDesc[3] = (UCHAR)(numBlocks & 0xFF);
+        // The direct-access short block descriptor (SBC, 8 bytes):
+        // bytes 0-3 the number of logical blocks, big-endian, FFFFFFFFh
+        // when it does not fit (READ CAPACITY(16) has it then); byte 4
+        // reserved; bytes 5-7 the logical block length. Not the general
+        // SCSI-2 layout with a density code in byte 0, which saturated at
+        // FFFFFFh logical blocks.
+        if (numBlocks > 0xFFFFFFFF) {
+            numBlocks = 0xFFFFFFFF;
         }
+        blockDesc[0] = (UCHAR)((numBlocks >> 24) & 0xFF);
+        blockDesc[1] = (UCHAR)((numBlocks >> 16) & 0xFF);
+        blockDesc[2] = (UCHAR)((numBlocks >> 8) & 0xFF);
+        blockDesc[3] = (UCHAR)(numBlocks & 0xFF);
 
         // Byte 4: Reserved
         blockDesc[4] = 0x00;
@@ -560,8 +575,6 @@ BOOLEAN ScsiHandleModeSense(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLO
         blockDescLength = 8;
         offset += blockDescLength;
     }
-#endif
-#if 1
     // Add mode pages based on pageCode; for changeable values each page
     // has a zero body (ModePageChangeable).
     if (pageCode == MODE_SENSE_RETURN_ALL || pageCode == MODE_PAGE_FORMAT_DEVICE) {
@@ -569,6 +582,8 @@ BOOLEAN ScsiHandleModeSense(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLO
         if ((offset + 24) <= sizeof(full)) {
             PUCHAR formatPage = buffer + offset;
             ULONG sectorsPerTrack = 63;
+            // Data bytes per physical sector: the native block, as RC16's
+            // LBPPBE says (PLAN "4 KiB-sector namespaces").
             ULONG blockSize = DevExt->NamespaceBlockSize ? DevExt->NamespaceBlockSize : 512;
 
             formatPage[0] = MODE_PAGE_FORMAT_DEVICE;  // Page code
@@ -700,8 +715,6 @@ BOOLEAN ScsiHandleModeSense(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLO
             offset += 20;
         }
     }
-#endif
-#if 1
     if (pageCode == MODE_SENSE_RETURN_ALL || pageCode == MODE_PAGE_RIGID_GEOMETRY) {
         // Page 04h: Rigid Disk Geometry Page
         if ((offset + 24) <= sizeof(full)) {
@@ -709,8 +722,8 @@ BOOLEAN ScsiHandleModeSense(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLO
             ULONGLONG totalCylinders;
             ULONG sectorsPerTrack = 63;
             ULONG heads = 64;
-            ULONGLONG numBlocks = DevExt->NamespaceSizeInBlocks;
-            ULONG blockSize = DevExt->NamespaceBlockSize ? DevExt->NamespaceBlockSize : 512;
+            ULONGLONG numBlocks = DevExt->ExposedBlocks;
+            ULONG blockSize = DevExt->ExposedBytes;
 
             // Calculate number of cylinders based on: Total Blocks = Cylinders * Heads * Sectors
             // Cylinders = Total Blocks / (Heads * Sectors)
@@ -788,8 +801,6 @@ BOOLEAN ScsiHandleModeSense(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLO
             offset += 24;
         }
     }
-#endif
-#if 1
     if (pageCode == MODE_SENSE_RETURN_ALL || pageCode == MODE_PAGE_CONTROL) {
         // Page 0Ah: Control Mode Page
         if ((offset + 12) <= sizeof(full)) {
@@ -832,8 +843,6 @@ BOOLEAN ScsiHandleModeSense(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLO
             offset += 12;
         }
     }
-#endif
-#if 1
     if (pageCode == MODE_SENSE_RETURN_ALL || pageCode == MODE_PAGE_POWER_CONDITION) {
         // Page 1Ah: Power Condition Mode Page
         if ((offset + 12) <= sizeof(full)) {
@@ -867,8 +876,6 @@ BOOLEAN ScsiHandleModeSense(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLO
             offset += 12;
         }
     }
-#endif
-#if 1
     if (pageCode == MODE_SENSE_RETURN_ALL || pageCode == MODE_PAGE_FAULT_REPORTING) {
         // Page 1Ch: Informational Exceptions Control (IEC) Page
         // This page indicates SMART-like health monitoring capability
@@ -919,7 +926,6 @@ BOOLEAN ScsiHandleModeSense(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLO
             offset += 12;
         }
     }
-#endif
     // Calculate total length
     totalLength = offset;
 
@@ -952,6 +958,9 @@ BOOLEAN ScsiHandleModeSense(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLO
     }
     if (totalLength > Srb->DataTransferLength) {
         totalLength = Srb->DataTransferLength;
+    }
+    if (Srb->DataBuffer == NULL) {
+        totalLength = 0;
     }
 
     RtlCopyMemory(Srb->DataBuffer, full, totalLength);
@@ -1020,26 +1029,19 @@ BOOLEAN HandleIO_NVME2KDB(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK
 }
 
 //
-// HandleIO_SCSIDISK - Process SMART/ATA pass-through IOCTLs
+// HandleIO_SCSIDISK - the SCSIDISK IOCTL_SCSI_MINIPORT codes (SMART and
+// IDENTIFY through the disk class driver). None is served: every control
+// code returns FALSE (SRB_STATUS_INVALID_REQUEST), at once, never at the
+// port's timeout (tests/scsichk). smartctl sends 001B0500 (SMART VERSION).
+// The SMART and IDENTIFY handling upstream had after this switch could not
+// be reached and was removed; SMART data is served through SAT ATA
+// PASS-THROUGH and LOG SENSE page 2Fh instead.
 //
-// for now we dont really support any SCSIDISK IOCTLS so all return FALSE
-// smartctl calls 001B0500 which seems to be from windows XP
-//
-// Every control code returns FALSE in the switch below (INVALID_REQUEST),
-// so the ATA/SMART handling after it is not reached today. Its paths that
-// return TRUE set SrbStatus themselves or admit the SRB to the engine
-// (ScsiDispatch completes the SRB if neither happened).
 BOOLEAN HandleIO_SCSIDISK(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb)
 {
     PSRB_IO_CONTROL srbControl;
-    PSENDCMDINPARAMS sendCmdIn;
-    PSENDCMDOUTPARAMS sendCmdOut;
-    PIDEREGS regs;
-    ULONG dataBufferSize;
-    ULONG requiredSize;
-    NVME_SMART_INFO smartInfo;
-    PHYSICAL_ADDRESS smartPhys;
-    ULONG returnedLength;
+
+    UNREFERENCED_PARAMETER(DevExt);
 
 #ifdef NVME2K_DBG
     ScsiDebugPrint(0, "nvme2k: HandleSmartIoctl called - DataTransferLength=%u\n",
@@ -1123,127 +1125,4 @@ BOOLEAN HandleIO_SCSIDISK(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK
             //srbControl->ReturnCode = STATUS_INVALID_DEVICE_REQUEST;
             return FALSE; // returns SRB_STATUS_INVALID_REQUEST
     }
-
-    // Validate that we have enough space for SENDCMDINPARAMS
-    requiredSize = sizeof(SRB_IO_CONTROL) + sizeof(SENDCMDINPARAMS) - 1;
-    if (Srb->DataTransferLength < requiredSize) {
-#ifdef NVME2K_DBG
-    ScsiDebugPrint(0, "nvme2k: HandleSmartIoctl called - DataTransferLength=%u required size = %u\n",
-                   Srb->DataTransferLength, requiredSize);
-#endif
-        return FALSE;
-    }
-
-    // Get the SENDCMDINPARAMS structure (follows SRB_IO_CONTROL header)
-    sendCmdIn = (PSENDCMDINPARAMS)((PUCHAR)Srb->DataBuffer + sizeof(SRB_IO_CONTROL));
-    sendCmdOut = (PSENDCMDOUTPARAMS)((PUCHAR)Srb->DataBuffer + sizeof(SRB_IO_CONTROL));
-    regs = &sendCmdIn->irDriveRegs;
-
-#ifdef NVME2K_DBG
-    ScsiDebugPrint(0, "nvme2k: HandleSmartIoctl SMART IOCTL IO:%08X sz:%08X Cmd=0x%02X Feature=0x%02X CylLow=0x%02X CylHi=0x%02X Drive:%02X\n",
-                   srbControl->ControlCode, sendCmdIn->cBufferSize, regs->bCommandReg, regs->bFeaturesReg, regs->bCylLowReg, regs->bCylHighReg, sendCmdIn->bDriveNumber);
-#endif
-
-    switch (regs->bCommandReg) {
-        case ATA_IDENTIFY_DEVICE:
-            // Validate SMART signature in cylinder registers
-            if (regs->bCylLowReg != SMART_CYL_LOW || regs->bCylHighReg != SMART_CYL_HI) {
-                // Not a SMART command, could be IDENTIFY or other ATA command
-                dataBufferSize = sizeof(SRB_IO_CONTROL) + sizeof(SENDCMDOUTPARAMS) + 512 - 1;
-                if (Srb->DataTransferLength < dataBufferSize) {
-                    return FALSE;
-                }
-                NvmeToAtaIdentify(DevExt, (PATA_IDENTIFY_DEVICE_STRUCT)sendCmdOut->bBuffer);
-                RtlZeroMemory(&sendCmdOut->DriverStatus, sizeof(DRIVERSTATUS));
-                sendCmdOut->DriverStatus.bDriverError = 0;
-                sendCmdOut->DriverStatus.bIDEError = 0;
-                sendCmdOut->cBufferSize = 512;
-                srbControl->ReturnCode = 0;
-                Srb->SrbStatus = SRB_STATUS_SUCCESS;
-                return TRUE;
-            } else {
-                return FALSE;
-            }
-            break;
-        case ATA_SMART_CMD:
-            // Process based on SMART subcommand (features register)
-            switch (regs->bFeaturesReg) {
-                case ATA_SMART_READ_DATA:
-                    // Read SMART data / attributes - translate to NVMe Get Log Page
-        #ifdef NVME2K_DBG
-                    ScsiDebugPrint(0, "nvme2k: SMART READ DATA/ATTRIBS request\n");
-        #endif
-                    // Ensure we have buffer space for output
-                    dataBufferSize = sizeof(SRB_IO_CONTROL) + sizeof(SENDCMDOUTPARAMS) + 512 - 1;
-                    if (Srb->DataTransferLength < dataBufferSize) {
-                        return FALSE;
-                    }
-
-                    // NVMe Get Log Page (SMART/Health) through the engine;
-                    // the engine admits or completes the SRB.
-                    return EngSubmitLogPage(DevExt, Srb, NVME_LOG_PAGE_SMART_HEALTH);
-
-                case ATA_SMART_RETURN_STATUS:
-                    // Return SMART status - check if device is healthy
-        #ifdef NVME2K_DBG
-                    ScsiDebugPrint(0, "nvme2k: SMART RETURN STATUS request\n");
-        #endif
-                    // Initialize output structure
-                    RtlZeroMemory(&sendCmdOut->DriverStatus, sizeof(DRIVERSTATUS));
-                    sendCmdOut->cBufferSize = 0;
-                    sendCmdOut->DriverStatus.bDriverError = 0;  // Success
-                    sendCmdOut->DriverStatus.bIDEError = 0;     // No error
-
-                    // In ATA SMART, threshold exceeded is indicated by:
-                    // Cylinder registers: 0x2C (low) and 0xF4 (high) = FAILING
-                    // Cylinder registers: 0x4F (low) and 0xC2 (high) = PASSING
-                    // We'd need to read NVMe SMART critical warning to determine this
-                    // For now, return passing status
-                    regs->bCylLowReg = SMART_CYL_LOW;   // 0x4F = passing
-                    regs->bCylHighReg = SMART_CYL_HI;   // 0xC2 = passing
-
-                    srbControl->ReturnCode = 0;  // Success
-                    Srb->SrbStatus = SRB_STATUS_SUCCESS;
-                    return TRUE;
-
-                case ATA_SMART_ENABLE:
-        #ifdef NVME2K_DBG
-                    ScsiDebugPrint(0, "nvme2k: SMART ENABLE (NVMe always enabled)\n");
-        #endif
-                    // NVMe SMART is always enabled
-                    RtlZeroMemory(&sendCmdOut->DriverStatus, sizeof(DRIVERSTATUS));
-                    sendCmdOut->DriverStatus.bDriverError = 0;
-                    srbControl->ReturnCode = 0;
-                    Srb->SrbStatus = SRB_STATUS_SUCCESS;
-                    return TRUE;
-
-                case ATA_SMART_DISABLE:
-        #ifdef NVME2K_DBG
-                    ScsiDebugPrint(0, "nvme2k: SMART DISABLE (NVMe cannot disable)\n");
-        #endif
-                    // NVMe SMART cannot be disabled, return success anyway
-                    RtlZeroMemory(&sendCmdOut->DriverStatus, sizeof(DRIVERSTATUS));
-                    sendCmdOut->DriverStatus.bDriverError = 0;
-                    srbControl->ReturnCode = 0;
-                    Srb->SrbStatus = SRB_STATUS_SUCCESS;
-                    return TRUE;
-
-                case ATA_SMART_AUTOSAVE:
-                case ATA_SMART_READ_THRESHOLDS:
-                default:
-        #ifdef NVME2K_DBG
-                    ScsiDebugPrint(0, "nvme2k: Unsupported SMART subcommand 0x%02X\n",
-                                regs->bFeaturesReg);
-        #endif
-                    return FALSE;
-            } // switch bFeatursReg
-            break;
-
-        default:
-#ifdef NVME2K_DBG
-            ScsiDebugPrint(0, "nvme2k: HandleSmartIoctl unhandled - Cmd=0x%02X Feature=0x%02X CylLow=0x%02X CylHi=0x%02X\n",
-                   regs->bCommandReg, regs->bFeaturesReg, regs->bCylLowReg, regs->bCylHighReg);
-#endif
-            return FALSE;
-    } // switch bCommandReg
 }

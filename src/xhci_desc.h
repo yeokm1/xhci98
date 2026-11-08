@@ -2,6 +2,12 @@
  * xhci_desc.h - the configuration-descriptor snoop (src/xhci_desc.c), roadmap
  * task 9-A.2.
  *
+ * **Host-suite-only under the HCD**, but for the two power helpers at the end
+ * (XhciDescMaxPowerMa, XhciDescPowerTabByte), which the driver calls: the
+ * snoop was the miniport's, which saw descriptors only as they crossed its
+ * EP0, and the HCD reads them itself (src/xhci_desc.c's head). What follows
+ * is the miniport's account, kept for the suite and the record.
+ *
  * ## The question this exists to answer
  *
  * An isochronous Endpoint Context's Interval is `log2` of the endpoint's

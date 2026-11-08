@@ -1007,6 +1007,20 @@ int inst_busy_retry(INST_U32 error, int tries);
  * group, a member that joined later included). */
 int inst_busy_spent(const int *tries, int n);
 
+/* The device list's capacity after cap entries filled it: twice cap, at
+ * most max; cap itself when cap is max already or not positive (the
+ * list is full: the scan says so and changes nothing). The NT scan
+ * starts at INST_DEV_CAP_FIRST and grows to INST_DEV_CAP_NT; 98 SE and
+ * ME stay at the first. */
+/* A typed or pasted number (a range setting's box): 1 when text is one
+ * or more decimal digits and nothing else, and fits 32 bits (*v the
+ * number); 0 otherwise ("12abc", "abc", "", 4294967296). */
+int inst_parse_dec(const char *text, INST_U32 *v);
+
+#define INST_DEV_CAP_FIRST      1536
+#define INST_DEV_CAP_NT         16384
+int inst_dev_cap_next(int cap, int max);
+
 /* A parent's job and the devices below it (98 SE update over 3.0.0.0 with
  * an external hub, 2026-10-19: the root hub's reinstall restarted it, its
  * hub was gone for about four seconds, and the hub's job, made at once,
@@ -1091,7 +1105,8 @@ int inst_remove_rank(const char *instanceId, const char *service,
 /* The NT uninstall's rank (record 23 section 9.2): inst_remove_rank's, but
  * a root hub after the controllers (6): on 8.1 and 10 a root hub removed
  * under its running controller came straight back, the controller
- * reporting it again (run-43-24, Finding 2), and the controller's own
+ * reporting it again (run-43-24, the first uninstall on 8.1 and 10),
+ * and the controller's own
  * removal takes it with it. 98 SE and ME keep inst_remove_rank's order. */
 int inst_remove_rank_nt(const char *instanceId, const char *service);
 #define INST_REMOVE_RANK_NT_MAX 6
@@ -1101,9 +1116,10 @@ int inst_remove_rank_nt(const char *instanceId, const char *service);
  * read), pkgState and storeState file_state's (1 there, 0 absent, -1 not
  * readable), name the file's. A file the package holds and the stored
  * package lacks is skipped only when no NT install can stage it - a 98 SE
- * and ME port driver or VxD, .mpd or .vxd (stor98.inf's stor98.mpd,
- * run-43-24, Finding 3); any other file the store lacks is unread, and
- * blocks as one. */
+ * and ME port driver or VxD, .mpd or .vxd (run-43-24, the stor98.mpd
+ * check on NT; no NT INF names one since the family layout, so this is
+ * a guard); any other file the store lacks is unread, and blocks as
+ * one. trap_scan and store_matches both take this verdict. */
 #define INST_STORE_EQUAL   0
 #define INST_STORE_DIFFERS 1
 #define INST_STORE_UNREAD  2
@@ -1114,7 +1130,8 @@ int inst_store_verdict(const char *name, int same, int pkgState,
 /* The uninstall's step for a tunnel port it filtered (record 23 section
  * 9.2 step 1): present, it is given back to Windows' own driver; not
  * present with no other filter left once xhcicm is off, its entry is
- * removed (revision 43, run-43-24 Finding 9); not present with another
+ * removed (revision 43; run-43-24, the uninstall waiting for every
+ * filtered port); not present with another
  * filter left, the run stops as before, since removing the entry would
  * drop that filter with it. */
 #define INST_PORT_GIVE_BACK 1
@@ -1630,6 +1647,17 @@ const char *inst_tray_list_text(int runState, int action);
     "Software\\Microsoft\\Windows\\CurrentVersion\\Setup\\SetupX\\INF\\OEM Name"
 int inst_oem_name_ours(const char *valueName, const char *path,
                        const char *shortPath);
+
+/* 98 SE and ME (record 26 section 6.5.8 step 2, task 47.7): 1 when an
+ * Enum\SCSI\<device>\<instance> entry is the disk of the storage unit
+ * unitId - instance is unitId with each '\' written '&', then the entry's
+ * SCSITargetID and SCSILUN values, each a non-empty string of decimal
+ * digits - case aside; 0 otherwise. */
+int inst_scsi_disk_of(const char *instance, const char *unitId,
+                      const char *target, const char *lun);
+/* 1 when id is an entry of the XHCIUAS enumerator, which only xhciuas.sys
+ * creates (a UAS unit). */
+int inst_uas_unit_id(const char *id);
 
 /* ---- the machine-wide value (record 26 section 5.4; task 42-A.17) ------------ */
 
@@ -2187,6 +2215,11 @@ int inst_resident_way(int exists, int putOk, int queueOk);
 #define INST_RQ_HOLD    3
 int inst_resident_queued(int tmpExists, int tmpIsPkg, int dstIsPkg,
                          int entry, int uninstall);
+/* The Windows folder's subfolder 98 SE and ME load a placed driver file
+ * from: "SYSTEM" for xhcinet.sys, which NDIS.VXD loads by DeviceVxDs from
+ * the INF's dirid 11 (record 35 section 9.5), SYSTEM32\DRIVERS for the
+ * others. */
+const char *inst_place9x_dir(const char *file);
 
 /* A value typed or chosen for row i, checked (the installer offers only
  * what the readme admits, rather than leaving the driver to clamp or
@@ -2792,8 +2825,8 @@ int inst_qc_build(const unsigned char *b, size_t n, INST_U32 member,
  * make-release.ps1 writes it for package-common.ps1's pins (the cut and
  * test-package.ps1 hold the two equal): the installer's record of what the
  * folder must hold. "" for a release with no such set. */
-#define INST_WDMFREE_SUMS       "4E23A5C34BFFF7E414B8FED6C1378B82C9124293544DB062A1C29277E39F2465"
-#define INST_NONFREE_SUMS     "FF7FE4C680034515212320A561D576C5DAFB270064F5689F100EB862D07F8780"
+#define INST_WDMFREE_SUMS       "553C5CA44F5C7AFB050A7AF2AFC5719F7881CB7501BAE477066E7E6711F09E80"
+#define INST_NONFREE_SUMS     "F6B23081EEB2CC7A4B5F5A634E5FD13E9F9A3ADDF4B06BEA87B1F193B364950F"
 /* The owner, 2026-10-23: NUSB 3.3's files and both sets under one folder,
  * in the download and in the install directory, every level 8.3. */
 #define INST_USBDRV_DIR         "USBDRV"
@@ -2804,10 +2837,11 @@ int inst_qc_build(const unsigned char *b, size_t n, INST_U32 member,
 #define INST_SET_COUNT          2
 /* The free set's certificate's public half (record 26 section 6.7.11). */
 #define INST_WDMFREE_CER        "usb-wdm-free-test.cer"
-/* The owner's sentence for the free set (2026-10-23), verbatim. */
+/* The owner's sentence for the free set (2026-10-23), verbatim, its last
+ * sentence (the address) dropped by the owner on 2026-11-06 (task 47.2):
+ * the line under it gives the address. */
 #define INST_FREE_NOTICE "These drivers are experimental. They may not work " \
-    "with every device and can make Windows unstable. Report problems at " \
-    "https://github.com/yeokm1/usb-wdm-free."
+    "with every device and can make Windows unstable."
 /* A set's state in the download (section 6.7.3). */
 #define INST_OTHER_ABSENT       0   /* no folder                             */
 #define INST_OTHER_CARRIED      1   /* the folder holds what the record names */

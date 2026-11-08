@@ -21,7 +21,9 @@
 //   the timer routine is in progress (another process's memory context).
 // - Each RequestTimerCall by the set in progress when it is made.
 // STOR98_TEST_VMMMAP (nvme2k.c) adds one deliberate fault inside a chosen
-// VMM service; STOR98_TEST_FINDNONE (nvme2k.c) makes the 9x find refuse.
+// VMM service; STOR98_TEST_FINDNONE (nvme2k.c) makes the 9x find refuse;
+// STOR98_TEST_FWDECODEOFF (nvme2k.c) turns the found function's memory
+// decode off for the set-up check (PLAN 3.1).
 //
 
 #ifndef _STOR98_VMMPROBE_H_
@@ -29,6 +31,9 @@
 
 #if defined(STOR98_TEST_FINDNONE) && (!defined(STOR98_DBGPORT) || !defined(NVME2K_W9X))
 #error STOR98_TEST_FINDNONE is test-only and 9x-only: build it with STOR98_DBGPORT=1 for 9x (out\<flavor>-dbgport, never staged)
+#endif
+#if defined(STOR98_TEST_FWDECODEOFF) && (!defined(STOR98_DBGPORT) || !defined(NVME2K_W9X))
+#error STOR98_TEST_FWDECODEOFF is test-only and 9x-only: build it with STOR98_DBGPORT=1 for 9x (out\<flavor>-dbgport, never staged)
 #endif
 #if defined(STOR98_TEST_VMMMAP) && !defined(STOR98_TEST_VMMPROBE)
 #error STOR98_TEST_VMMMAP needs STOR98_TEST_VMMPROBE

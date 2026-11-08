@@ -2,6 +2,23 @@
 
 This document supplements the xHCI spec PDF (`docs/references/xHCI__Rev1.2c.pdf`, revision 1.2c). Read the spec for authoritative detail; use this doc for orientation and for driver-specific decisions. For exact bit positions, TRB/context field layouts, type codes, and alignment rules (everything needed to write `src/xhci.h`), use the companion `docs/usb-xhci-info/xhci-data-structures.md` - its tables were transcribed and verified against the spec PDF.
 
+> **Which driver this page describes.** It was written for the `1.2.0.0`
+> miniport (Option A, under `usbport.sys`), and its initialization steps,
+> start refusals and port policy are that driver's unless a passage says
+> otherwise. The host controller driver (`xhci98.sys` since `2.0.0.0`,
+> design record 13) differs in four places, each marked below: it manages
+> and powers every USB 3 protocol port and drives SuperSpeed, accepting an
+> all-SuperSpeed controller (`src/xhci_init.c`, the port map; task
+> 29-A.1); it connects its own interrupt, the pin's line or on Vista and
+> later a message, and under `XhciInterruptMode` `0` (automatic) polls a
+> controller with no usable interrupt instead of refusing it (`src/hcd_ctl.c`,
+> `XhciPollDecideEx`; design records 15 and 18) - a forced mode can still
+> refuse, and a line that fails to connect fails the start; it reads the
+> Interrupt Pin to choose the delivery; and it enables interrupts itself,
+> after the start. The register
+> semantics, the ordering rules quoted from the specification, the BIOS
+> handoff and the command, event and transfer ring sections hold for both.
+
 ## Register Map (BAR0 MMIO)
 
 ```
@@ -44,8 +61,8 @@ BAR0 base
 
 Follow spec section 4.2. Steps in order.
 
-Before step 0, and before any MMIO at all, read the PCI Interrupt Pin register
-(config 0x3D) and refuse a controller that reports 0. Step 13 below explains
+**The miniport's (`1.2.0.0`):** before step 0, and before any MMIO at all, read the PCI Interrupt Pin register
+(config 0x3D) and refuse a controller that reports 0. The HCD reads the same register at start to choose the delivery - the line, a message, or polling when the pin reads 0 or the line never arrives. Under `XhciInterruptMode` `0` a pin of 0 is polled rather than refused; a forced mode that the pin cannot serve (`1`, the line) refuses the start, and so does an `IoConnectInterrupt` that fails (`src/hcd_ctl.c`, `XhciPollDecideEx` and `hcdConnect`; design record 15). Step 13 below explains
 why INTx is the only delivery path on either target; what matters here is the
 position of the check. It needs no register access and its answer is final, so
 running it first refuses an unusable controller without having taken it from
@@ -174,7 +191,7 @@ Controller").
     more: `usbport.sys` sizes its root-hub removable/power masks from the
     reported port count and asks for roughly 1 GB of nonpaged pool at zero
     (`docs/usb-xhci-info/usbport-miniport-abi.md` section 9).
-13. Connect the interrupt: under Option A, `usbport.sys` owns the interrupt object and the miniport never calls `IoConnectInterrupt`. Ensure the miniport ISR/DPC callbacks are registered with `usbport.sys` before unmasking controller interrupts. (Under the Option B fallback, `IRP_MN_START_DEVICE` calls `IoConnectInterrupt` with the translated interrupt resource first.)
+13. Connect the interrupt. The HCD connects its own: the pin's line with `IoConnectInterrupt`, or on Vista and later a message (`IoConnectInterruptEx`, on 32-bit systems through the helper `xhcihlpr.sys`), or no interrupt at all when it polls (design records 15 and 18). **The miniport's:** under Option A, `usbport.sys` owns the interrupt object and the miniport never calls `IoConnectInterrupt`. Ensure the miniport ISR/DPC callbacks are registered with `usbport.sys` before unmasking controller interrupts. (Under the Option B fallback, `IRP_MN_START_DEVICE` calls `IoConnectInterrupt` with the translated interrupt resource first.)
 14. Enable interrupts: set `IR[0].IMAN.IE` = 1, then set `USBCMD.INTE` = 1.
 
     Under Option A this is not part of the start sequence at all, and its real
@@ -207,7 +224,7 @@ Controller").
     answers it at once. Record that R/S was written before writing it, so a
     start that then fails its confirmation still knows it has a controller to
     stop.
-16. Power up ports: for each USB2 port managed by this driver, ensure `PORTSC.PP` = 1, at either value of HCCPARAMS1.PPC, which says only whether the controller has power switches: "software cannot change the state of the port unless Port Power (PP) is asserted (`1`), regardless of the Port Power Control (PPC) capability" (5.4.8, p.371). PPC gates the 20 ms settle delay, not the write.
+16. Power up ports: for each port managed by this driver (the HCD manages every USB 2.0 and USB 3 protocol port; the miniport managed the USB 2.0 ones alone), ensure `PORTSC.PP` = 1, at either value of HCCPARAMS1.PPC, which says only whether the controller has power switches: "software cannot change the state of the port unless Port Power (PP) is asserted (`1`), regardless of the Port Power Control (PPC) capability" (5.4.8, p.371). PPC gates the 20 ms settle delay, not the write.
 
     This step is after step 15 and cannot be moved: "software shall ensure that
     the xHC is running (HCHalted (HCH) = `0`) before attempting to write to this
@@ -215,9 +232,9 @@ Controller").
     a device already attached asserts PSCEG as HCH transitions to `0`,
     "generating a respective Port Status Change Event" (4.19.4, p.296).
 
-    It must also take power off the USB 3.x ports. PP defaults to asserted on
-    every port after HCRST (4.19.4, p.295), so the port strategy's "leave
-    USB 3.x ports unpowered" is a write, not an omission. See
+    **The miniport's:** it also had to take power off the USB 3.x ports. PP defaults to asserted on
+    every port after HCRST (4.19.4, p.295), so its port strategy's "leave
+    USB 3.x ports unpowered" was a write, not an omission; the HCD powers them. See
     `docs/contributing/implementation-invariants.md`, "PORTSC Writes", for that
     rule, the ordering it imposes (assert before deassert, because VBus is the
     OR of a connector's two ports), the 20 ms power-stable delay a `0` to `1`
@@ -276,18 +293,22 @@ This mapping is a convention, not guaranteed by the spec. Verify against the chi
 
 Port categories after classification:
 
-| Category | Condition | Action |
-|---|---|---|
-| USB 2.0-only | `port_usb2[i]` and no USB 3.x companion | Manage: power on, handle connects |
-| USB 2.0 companion | `port_usb2[i]` with a USB 3.x companion | Manage: power on, handle connects |
-| USB 3.x companion | `port_usb3[i]` with a USB 2.0 companion | Leave unmanaged: do NOT power on |
-| USB 3.x orphan | `port_usb3[i]` and no USB 2.0 companion | Out of scope - would require SuperSpeed; left unpowered/unmanaged |
+| Category | Condition | Action (the HCD) | The `1.2.0.0` miniport |
+|---|---|---|---|
+| USB 2.0-only | `port_usb2[i]` and no USB 3.x companion | Manage: power on, handle connects | The same |
+| USB 2.0 companion | `port_usb2[i]` with a USB 3.x companion | Manage: power on, handle connects | The same |
+| USB 3.x companion | `port_usb3[i]` with a USB 2.0 companion | Manage: power on, train SuperSpeed and handle connects; a UAS-only device on a controller that cannot stream is sent back to the companion (`roadmap-hcd.md` task 29-A.5) | Left unmanaged and unpowered |
+| USB 3.x orphan | `port_usb3[i]` and no USB 2.0 companion | Manage: power on, handle connects at SuperSpeed | Out of scope; left unpowered and unmanaged |
 
 Signaling note: a USB 3.x logical port uses SuperSpeed electrical signaling (SSTX/SSRX differential pairs). A USB 2.0 logical port uses USB 2.0 signaling (D+/D- differential pairs). These are completely different physical paths in the cable and connector. There is no mechanism to make a USB 3.x logical port communicate at USB 2.0 speeds; the SS path simply cannot carry USB 2.0 signals. The USB 2.0 companion port is the correct path for USB 2.0 and USB 2.0-fallback operation.
 
-USB 3.x capable devices on USB 2.0 companion ports: if the USB 3.x logical companion port is left unpowered (PORTSC.PP = 0), a USB 3.x capable device plugged into that physical connector will fail SS link training on the SS path and fall back to its D+/D- USB 2.0 path, connecting to our managed USB 2.0 companion port at High-Speed. This is the intended behavior (USB 3.0 is out of scope; HS fallback is the supported path).
+USB 3.x capable devices on USB 2.0 companion ports, under the miniport: with the USB 3.x logical companion port left unpowered (PORTSC.PP = 0), a USB 3.x capable device plugged into that physical connector will fail SS link training on the SS path and fall back to its D+/D- USB 2.0 path, connecting to the managed USB 2.0 companion port at High-Speed. That was the miniport's intended behaviour (USB 3.0 out of scope; High-Speed fallback the supported path). Under the HCD the device trains at SuperSpeed on the USB 3.x port.
 
 ## What SuperSpeed Support Would Require
+
+> The `1.2.0.0` miniport's account, kept as history: the HCD that
+> followed is that support (design record 13), and it accepts an
+> all-SuperSpeed controller.
 
 General SuperSpeed support is not an extension of the USB 2.0 miniport path.
 The reused Win2000-era `usbport.sys` has no SuperSpeed speed reporting,

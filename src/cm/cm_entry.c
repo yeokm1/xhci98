@@ -1,15 +1,16 @@
 /*
  * cm_entry.c - DriverEntry, AddDevice and the dispatch table of
- * xhcicm.sys (cm.h has the two roles).
+ * xhcicm.sys (cm.h has its roles and other kinds of device object).
  *
  * The image carries the flavour marker XHCI98_FLAVOUR_* that
  * scripts\check-flavour-marker.ps1 and make-package.ps1 read out of the
  * bytes, from the define src\cm\sources derives from BUILD_ALT_DIR as
  * src\sources does for xhci98.sys, and the package version string.
  *
- * IRQL: DriverEntry, AddDevice, Unload, the PnP and power dispatch and
- * CmForwardSync at PASSIVE_LEVEL; CmCompleteIrp, CmZero and the other
- * dispatch routines at <= DISPATCH_LEVEL.
+ * IRQL: DriverEntry, AddDevice, Unload, the PnP and power dispatch,
+ * CmForwardSync, CmWaitEvent and CmWaitEventMs at PASSIVE_LEVEL;
+ * CmCompleteIrp, CmZero, CmRelativeMs and the other dispatch routines at
+ * <= DISPATCH_LEVEL.
  */
 
 #include "cm.h"
@@ -72,8 +73,106 @@ NTSTATUS CmForwardSync(PCM_COMMON common, PIRP irp)
     IoCopyCurrentIrpStackLocationToNext(irp);
     CM_SET_COMPLETION_ALWAYS(irp, cmSignal, &done);
     (VOID)IoCallDriver(common->Lower, irp);
-    (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE, NULL);
+    (VOID)CmWaitEvent(&done, 0);
     return irp->IoStatus.Status;
+}
+
+/* hcd_svc.c's HcdRelativeMs, for this image. */
+VOID CmRelativeMs(PLARGE_INTEGER due, ULONG ms)
+{
+    ULONG ticks;
+
+    if (ms > 400000UL) {
+        ms = 400000UL;
+    }
+    ticks = ms * CM_CLOCK_UNITS_PER_MS;
+    due->LowPart = 0UL - ticks;
+    due->HighPart = (ticks == 0) ? 0 : -1;
+}
+
+/*
+ * hcd_svc.c's HcdWaitEvent, for this image. Windows 98 can end
+ * KeWaitForSingleObject with an undocumented 0xFFFFFFFF and the event
+ * unsignalled (win98-wdm.md, "Win98/98 SE status"); a caller that went on
+ * from there would leave a stack event for a completion routine to set in
+ * a dead frame, free an IRP still below it, free or delete what a thread,
+ * a DPC or a dispatch still uses, or enter a gate another party holds. A
+ * 1 ms delay follows each unsatisfied return, so a wait that keeps ending
+ * at once yields the processor rather than spinning.
+ *
+ * `bound` 0 waits until the event is satisfied: for an event a completion
+ * routine, a leaving thread or a draining count is owed to set, any return
+ * before that is worse than waiting on. A gate passes CM_GATE_WAIT_BOUND,
+ * because win98-wdm.md knows no remedy for the nested-block case and warns
+ * against an unbounded retry there, which would wedge the gate's every
+ * later caller too; after `bound` unsatisfied returns in a row the wait is
+ * abandoned, and the caller, which does not hold the gate then, neither
+ * enters nor releases it.
+ */
+ULONG CmWaitEvent(PKEVENT event, ULONG bound)
+{
+    LARGE_INTEGER due;
+    ULONG missed;
+
+    missed = 0;
+    while (KeWaitForSingleObject(event, Executive, KernelMode, FALSE,
+                                 NULL) != STATUS_SUCCESS) {
+        missed++;
+        if (bound != 0 && missed >= bound) {
+            break;
+        }
+        CmRelativeMs(&due, 1);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
+    return missed;
+}
+
+/*
+ * A timed wait whose time is the clock's, not the count of its returns:
+ * an unsatisfied return before the time is up (Windows 98's, above) is
+ * followed by a 1 ms delay and a wait for what is left, so it neither
+ * ends the wait early nor spins.
+ */
+BOOLEAN CmWaitEventMs(PKEVENT event, ULONG ms)
+{
+    LARGE_INTEGER due;
+    LARGE_INTEGER from;
+    LARGE_INTEGER now;
+    ULONG tickUs;
+    ULONG ticks;
+    ULONG spent;
+    ULONG left;
+    NTSTATUS status;
+
+    if (ms > 400000UL) {
+        ms = 400000UL;
+    }
+    tickUs = KeQueryTimeIncrement() / 10UL;
+    if (tickUs == 0) {
+        tickUs = 1;
+    }
+    KeQueryTickCount(&from);
+    for (;;) {
+        KeQueryTickCount(&now);
+        ticks = now.LowPart - from.LowPart;
+        if (ticks >= 0xFFFFFFFFUL / tickUs) {
+            spent = ms;
+        } else {
+            spent = ticks * tickUs / 1000UL;
+        }
+        left = (spent < ms) ? ms - spent : 0;
+        CmRelativeMs(&due, left);
+        status = KeWaitForSingleObject(event, Executive, KernelMode, FALSE,
+                                       &due);
+        if (status == STATUS_SUCCESS) {
+            return TRUE;
+        }
+        if (status == STATUS_TIMEOUT || left == 0) {
+            return FALSE;
+        }
+        CmRelativeMs(&due, 1);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
 }
 
 /* TRUE when a bridge filter of this driver is already on the PDO's stack:
@@ -197,8 +296,9 @@ static NTSTATUS cmAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
 static VOID cmUnload(PDRIVER_OBJECT driver)
 {
     UNREFERENCED_PARAMETER(driver);
-    /* A 98 CONFIGMG worker a stop could not wait for leaves on its own
-     * (cm_cfgwk.c): its code is this image's. */
+    /* Installed on NT alone (DriverEntry), where no CONFIGMG worker runs,
+     * and CmCfgwkStart clears it where one starts: the drain is for a
+     * driver that never started one (cm_cfgwk.c), and finds none. */
     CmCfgwkDrain();
     CmNvlinkUnload();
 }

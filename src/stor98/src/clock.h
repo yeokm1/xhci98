@@ -55,7 +55,7 @@
 // every reading folds the TSC units elapsed since the previous one into the
 // count at the rate in force at that moment, so a re-calibration changes
 // only how later TSC units are priced and never re-prices an interval that
-// has already elapsed (review round 2: re-pricing old stamps with a new rate
+// has already elapsed (revised: re-pricing old stamps with a new rate
 // made elapsed estimates jump). A gap too long for 32-bit TSC units (over
 // about an hour without a reading, timer stopped) is folded with the safe
 // clock instead.
@@ -79,7 +79,7 @@
 //   - Permission to release. A deadline whose expiry completes an SRB whose
 //     buffer the device may still reach, or releases driver memory, without
 //     isolation evidence (the MD-1 gone deadline and the per-SRB bound of
-//     R6-6 in `gone`), and every hardware wait that must never end early
+//     PLAN 0.10 in `gone`), and every hardware wait that must never end early
 //     (CAP.TO for RDY and the disable, the SHST bound), uses the
 //     TRUSTWORTHY elapsed time: the smaller of the TSC and safe estimates,
 //     with the safe estimate reduced by its resolution (ClockResolutionMs),

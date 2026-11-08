@@ -472,13 +472,15 @@ typedef struct {
 /* Port topology classification                                       */
 /* ------------------------------------------------------------------ */
 
+/* "Exercised" is this tool's: C6 and C8 power, reset and read the USB2
+ * ports and leave the USB3 ones unpowered. xhci98.sys drives both since
+ * 2.0.0.0. */
 #define PC_NONE        0
-#define PC_USB2_ONLY   1   /* managed by the driver */
-#define PC_USB2_PAIRED 2   /* managed: USB2 companion of a USB3 connector */
-#define PC_USB3_PAIRED 3   /* unmanaged (SuperSpeed out of scope) */
-#define PC_USB3_ORPHAN 4   /* unmanaged, no USB2 companion */
+#define PC_USB2_ONLY   1   /* exercised by C6/C8 */
+#define PC_USB2_PAIRED 2   /* exercised: USB2 companion of a USB3 connector */
+#define PC_USB3_PAIRED 3   /* not exercised here (C6/C8 use USB2 ports) */
+#define PC_USB3_ORPHAN 4   /* not exercised here, no USB2 companion */
 
-#define MAX_XHCI   8
 #define MAX_CONTROLLERS 24
 #define MAX_PORTS  64
 #define MAX_PROTO  8
@@ -653,10 +655,20 @@ typedef struct {
     int cleanup_failed;
     int irq_selftest;
     int irq_no_event;        /* C4: the No-Op never completed, even polled */
+    int irq_tool_failed;     /* C4: a DPMI step of the tool's own (the
+                              * hook's install or the line's unmask)
+                              * failed, so C4 was not completed: v_irq is
+                              * FAIL, irq_note the step, and it is no
+                              * evidence about the controller            */
+    int irq_teardown_failed; /* C4's hook could not be taken down after
+                              * C4 ended: v_irq keeps what C4 saw, the
+                              * step is irq_teardown_note, and C6 and C8
+                              * are not run                               */
     int irq_force_poll;      /* C4: POLL with IP never raised: mode 2 only */
     ROUTEINFO route;         /* task 36.11, read before any active test */
     long route_gsi;          /* --gsi N, or -1                           */
     char irq_note[80];
+    char irq_teardown_note[80];
     char port_note[80];
     char handoff_note[80];
     char dma_note[80];
@@ -905,7 +917,15 @@ void xcap_walk(CTRL *c, u32 xecp_off, u32 window, XCAP_RD_FN rd, void *ctx);
 #define QUICK_LOOKS_OK      0   /* subject to the active tests               */
 #define QUICK_DISQUALIFIED  1   /* a read-only pass genuinely sees this      */
 #define QUICK_CANNOT_SAY    2   /* a state this pass may not change          */
-#define QUICK_CAVEATS       3   /* needs polling: no line interrupt (36.10)  */
+#define QUICK_CAVEATS       3   /* needs polling: no line interrupt (36.10),
+                                   or no USB2 protocol port (TL-7)        */
+
+/* usb2_ports below: the USB2 protocol ports counted, or this when the
+ * controller reports no root port at all (MaxPorts 0, which xhci98.sys
+ * refuses, or no port in any Supported Protocol capability), which still
+ * disqualifies. quick_ports_arg gives the value for a controller read. */
+#define QUICK_NO_ROOT_PORTS (-1)
+int quick_ports_arg(const CTRL *c);
 
 /* Which of two outcomes the quick scan's verdict takes: LOOKS_OK, then
  * CAVEATS, then DISQUALIFIED, then CANNOT_SAY. */
@@ -1095,5 +1115,115 @@ void sys_cpuid(u32 leaf, u32 *out4);
 /* report.c: the console alone (paged), for the quick scan's screen lines
  * whose full form goes to the log and serial line through qlogprintf. */
 void qconprintf(const char *fmt, ...);
+
+/* ------------------------------------------------------------------ */
+/* edd.c (pure, host-tested) and sysprobe.c (DOS): --edd, the EDD 3.0 */
+/* device path of each disk unit (roadmap-usb4.md task 47.24, design  */
+/* record 37 section 4.1 and its Q1)                                  */
+/* ------------------------------------------------------------------ */
+
+#define EDD_UNIT_FIRST  0x80
+#define EDD_UNIT_COUNT  8           /* units 80h-87h                     */
+#define EDD_SIZE_FINAL  0x4A        /* the final EDD 3.0 buffer          */
+#define EDD_SIZE_EARLY  0x42        /* the earlier EDD 3.0 buffer        */
+#define EDD_TRIALS      2           /* 4Ah, then 42h                     */
+#define EDD_AREA        0x200       /* the buffer and its guard bytes    */
+#define EDD_MAX_XHCI    MAX_CONTROLLERS
+
+#define EDD_LAYOUT_NONE    0
+#define EDD_LAYOUT_FINAL   1        /* path length 2Ch, checksum at 49h  */
+#define EDD_LAYOUT_EARLY   2        /* path length 24h, checksum at 41h  */
+#define EDD_LAYOUT_UNKNOWN 3
+
+/* One real-mode INT 13h through DPMI 0300h: AX, BX, CX, DX in and out. */
+typedef struct {
+    u16 ax, bx, cx, dx;
+    u16 flags;                  /* out: the BIOS's FLAGS (CF bit 0)      */
+    int made;                   /* 1 when DPMI 0300h made the call       */
+    u16 dpmi_err;               /* DPMI's AX when it did not             */
+} EDD_REGS;
+
+/* One function 48h request and what came back. */
+typedef struct {
+    int asked;
+    u16 size;                   /* the buffer given: 4Ah or 42h          */
+    EDD_REGS r;
+    u8  raw[EDD_SIZE_FINAL];    /* the `size` bytes as returned          */
+    unsigned guard_changed;     /* guard bytes after `size` that changed */
+    unsigned guard_first, guard_last;
+    /* the PCI check, made after every INT 13h call */
+    int pci_checked, pci_present, pci_in_scan;
+    u16 pci_vid, pci_did;
+    u32 pci_class;
+} EDD_TRIAL;
+
+typedef struct {
+    u8 unit;
+    EDD_REGS r41;               /* function 41h, BX=55AAh                */
+    EDD_TRIAL t[EDD_TRIALS];
+} EDD_UNIT;
+
+/* A trial's buffer decoded. Every field read lies inside the buffer
+ * given; the device path's bytes are kept only as zero / nonzero. */
+typedef struct {
+    u16 size, flags;
+    int base_ok;
+    u32 cyls, heads, spt, sec_lo, sec_hi;
+    u16 bps, dpte_off, dpte_seg;
+    u16 key;
+    int has_key;
+    u8  path_len;
+    int layout;
+    int nofit;                  /* the layout's checksum is past `size`  */
+    unsigned cks_at;
+    char host_bus[5], iface[9];
+    u8  ipath[8];
+    int dpath_lo_nz, dpath_hi_nz;
+    u8  cks_byte, cks_sum;
+    int cks_ok, is_pci, is_pcix, is_usb;
+} EDD_PATH;
+
+typedef struct {
+    u8 bus, dev, fn;
+    u16 vid, did;
+} EDD_XHCI;
+
+/* Every machine access --edd makes, so the host suite can check the order:
+ * the environment first, then INT 13h, then (the buffer freed) PCI. */
+typedef struct {
+    void *ctx;
+    int  (*win1600)(void *ctx, u16 *ax);                 /* INT 2Fh 1600h */
+    int  (*dos3306)(void *ctx, u16 *ax, u16 *bx);        /* INT 21h 3306h */
+    int  (*dpmi0400)(void *ctx, u16 *ax, u16 *bx);       /* DPMI version  */
+    unsigned (*bda_disks)(void *ctx);                    /* 0040:0075h    */
+    void (*sysinfo)(void *ctx);         /* the system description lines  */
+    u8  *(*buf_open)(void *ctx);        /* the EDD_AREA bytes, or 0      */
+    void (*buf_close)(void *ctx);
+    void (*int13)(void *ctx, EDD_REGS *r);   /* 48h: DS:SI = the area    */
+    int  (*pci_scan_xhci)(void *ctx, EDD_XHCI *out, int max);
+    int  (*pci_id)(void *ctx, u8 bus, u8 dev, u8 fn, u16 *vid, u16 *did,
+                   u32 *classcode);     /* 1 when a function is there    */
+    u32  (*pci_writes)(void *ctx);
+    void (*flush)(void *ctx);
+} EDD_OPS;
+
+/* Pure (edd.c). */
+void edd_prepare(u8 *area, unsigned asked);
+void edd_guard_scan(const u8 *area, unsigned asked, EDD_TRIAL *t);
+void edd_decode(const u8 *raw, unsigned asked, EDD_PATH *p);
+int  edd_trial_result(const EDD_TRIAL *t, EDD_PATH *p);
+int  edd_unit_answered41(const EDD_UNIT *u);
+/* One line, at most 77 characters, into `out` (96 bytes). */
+void edd_conclude(const EDD_UNIT *u, char *out);
+void report_edd_unit(const EDD_UNIT *u, QPRINTF_FN pf);
+/* The whole mode. pf is the screen, log and serial line; detail the log
+ * and serial line (the screen when there is no log). Returns the exit
+ * code: 2 refused, 1 done. */
+int  edd_run(const EDD_OPS *ops, EDD_UNIT *units, QPRINTF_FN pf,
+             QPRINTF_FN detail);
+/* sysprobe.c: the real operations. `si` is filled by the sysinfo
+ * operation unless skip is set, and printed with pf (short) and detail. */
+void edd_dos_ops(EDD_OPS *ops, SYSINFO *si, int skip_sysinfo,
+                 QPRINTF_FN pf, QPRINTF_FN detail);
 
 #endif /* QUAL_H */

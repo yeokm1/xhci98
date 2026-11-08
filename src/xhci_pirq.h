@@ -184,7 +184,8 @@ typedef struct _XHCI_PIRQ_IRQ {
 
 /*
  * The record (all ULONGs, copied whole into the snapshot's HCD region and
- * named there by xhcisnap.c in this order). The three counts are never
+ * named there by the snapshot reader, xhcitr\tr_snap.c, in this order). The
+ * three counts are never
  * zeroed; Mode and the value are the start's (XhciPirqLatch); the rest is
  * the last run's, XHCI_PIRQ_UNREAD where it did not read so far.
  */
@@ -235,6 +236,105 @@ ULONG XhciPirqPairListed(ULONG xhciId, ULONG lpcId);
 
 /* 1 for the verified E7250: 8086:9CB1, subsystem 1028:062D, LPC 8086:9CC3. */
 ULONG XhciPirqVerified(ULONG xhciId, ULONG subsystem, ULONG lpcId);
+
+/*
+ * The chipset-routed GSI offer (task 47.33; design record 18 sections
+ * 16.1 and 16.2, on 2000, XP and XP x64).
+ * On a controller whose firmware gives Windows 2000/XP no interrupt for it
+ * (decodes off at boot and no _PRT entry), the NT 5 requirements filter may
+ * offer, before its memory-only configuration, the I/O APIC input the PCH
+ * really routes the xHCI's INTA to: D20IR's IAR names PIRQA-H, which are
+ * inputs 16-23 in APIC mode. Read-only: no register is written, and the
+ * I/O APIC is Windows' to program for whatever it grants.
+ *
+ * XhciIntelNoRouteIrq (owner, 2026-11-06): 0 never offers; 1, the default
+ * and the meaning of a value missing, of another type or out of range,
+ * offers on value 1's allowlist alone (HP 7-series boards, read on the
+ * owner's 8470p), each also a reviewed pair; 2 on any reviewed xHCI/LPC
+ * pair.
+ */
+#define XHCI_PIRQ_NR_OFF            0UL     /* never offer                  */
+#define XHCI_PIRQ_NR_LISTED         1UL     /* the listed subsystems        */
+#define XHCI_PIRQ_NR_REVIEWED       2UL     /* any reviewed pair            */
+
+/* An APIC-mode PIRQ's I/O APIC input: PIRQA is 16. */
+#define XHCI_PIRQ_GSI_BASE          16UL
+#define XHCI_PIRQ_NO_GSI            0xFFFFFFFFUL
+
+/* What ended an offer's run (XHCI_PIRQ_OFFER.Decision), in check order. */
+#define XHCI_PIRQ_O_NONE            0UL     /* not run                      */
+#define XHCI_PIRQ_O_BAD_PARAM       1UL
+#define XHCI_PIRQ_O_OFF             2UL     /* the value 0                  */
+#define XHCI_PIRQ_O_NOT_SLOT        3UL     /* the list is not 0:14.0's     */
+#define XHCI_PIRQ_O_OWN_UNREAD      4UL     /* 00:14.0's header not read    */
+#define XHCI_PIRQ_O_NOT_REVIEWED    5UL
+#define XHCI_PIRQ_O_NOT_ADMITTED    6UL     /* value 1, subsystem unlisted  */
+#define XHCI_PIRQ_O_LPC_UNREAD      7UL
+#define XHCI_PIRQ_O_LPC_UNLISTED    8UL
+#define XHCI_PIRQ_O_RCBA_INVALID    9UL
+#define XHCI_PIRQ_O_MAP_FAILED      10UL
+#define XHCI_PIRQ_O_PIN             11UL    /* own pin or D20IP not INTA    */
+#define XHCI_PIRQ_O_D20IR_UNREAD    12UL
+#define XHCI_PIRQ_O_OFFERED         13UL    /* Gsi is the offer             */
+#define XHCI_PIRQ_O_QEMU            14UL    /* the qemu flavour's injection */
+/* 15, "a 32-bit Windows: no offer", is no longer set (design record 18
+ * section 16.2): reserved, so a snapshot of an earlier release reads as
+ * it did. */
+#define XHCI_PIRQ_O_NOT_X64         15UL
+#define XHCI_PIRQ_O_NOT_AT_SLOT     16UL    /* 00:14.0 is not this function */
+
+/* The offer's record (all ULONGs; the start writes it to the notes). */
+typedef struct _XHCI_PIRQ_OFFER {
+    ULONG Decision;     /* XHCI_PIRQ_O_*                                    */
+    ULONG Mode;         /* XHCI_PIRQ_NR_*                                   */
+    ULONG XhciId;       /* 00:14.0's 00h                                    */
+    ULONG Subsystem;    /* 00:14.0's 2Ch                                    */
+    ULONG Pin;          /* 00:14.0's 3Dh                                    */
+    ULONG LpcId;        /* 00:1F.0's 00h                                    */
+    ULONG Rcba;         /* 00:1F.0's F0h                                    */
+    ULONG D20ip;
+    ULONG D20ir;
+    ULONG Pirq;         /* IAR, 0-7 (PIRQA-H)                               */
+    ULONG Gsi;          /* XHCI_PIRQ_NO_GSI unless offered                  */
+} XHCI_PIRQ_OFFER, *PXHCI_PIRQ_OFFER;
+
+/* XhciIntelNoRouteIrq: 0, 1 or 2 when found as such; 1 otherwise. */
+ULONG XhciPirqNoRouteMode(ULONG found, ULONG value);
+
+/* 1 for an xHCI (00:14.0's 00h) and subsystem (2Ch) value 1's allowlist
+ * admits: Intel 1E31 (7 series) with HP (103C) boards 179B, 17A7, 17AB,
+ * 17DF, 176C and 176B. */
+ULONG XhciPirqNoRouteListed(ULONG xhciId, ULONG subsystem);
+
+/*
+ * Windows 2000's strip (task 47.33; design record 18 section 16.4): 1 when
+ * the filter must take every interrupt out of the controller's list - on
+ * Windows 2000 (`isW2k`), where the offer's run passed its identity
+ * guards (`decision` XHCI_PIRQ_O_LPC_UNREAD to XHCI_PIRQ_O_OFFERED: the
+ * location, 00:14.0's identity the controller's own, a reviewed controller;
+ * whatever the route's reads then found, a failed mapping included; never
+ * at value 0, which ends the run as XHCI_PIRQ_O_OFF) and the board is on
+ * value 1's list (`listed`, at value 2 too). Windows 2000's ACPI stops with 0xA5 on these boards' firmware for
+ * a list carrying the line; XP and XP x64 are never stripped.
+ */
+ULONG XhciPirqW2kStrip(ULONG isW2k, ULONG decision, ULONG listed);
+
+/* Clears the record: decision NONE, every read field XHCI_PIRQ_UNREAD, no
+ * GSI. */
+VOID XhciPirqOfferClear(PXHCI_PIRQ_OFFER st);
+
+/*
+ * The offer's run for the controller the PDO places at PCI bus `bus`,
+ * `address` (DevicePropertyAddress: device 31:16, function 15:0), whose own
+ * configuration space gave `ownId` (00h) and `ownSubsystem` (2Ch). The
+ * location must be 0, 00:14.0, and 00:14.0's header, read through
+ * io->Slot, must carry the same two dwords; then 00:1F.0, RCBA+3000h's
+ * D20IP and D20IR, the page unmapped. io->Own and io->Write16 are never
+ * called. Returns the decision; st->Gsi holds the GSI when OFFERED.
+ */
+ULONG XhciPirqOffer(const XHCI_PIRQ_IO *io, ULONG bus, ULONG address,
+                    ULONG ownId, ULONG ownSubsystem, ULONG mode,
+                    PXHCI_PIRQ_OFFER st);
 
 /* 1 for an IRQ PIRQx_ROUT's field can name: 3-7, 9-12, 14 and 15. */
 ULONG XhciPirqPicIrq(ULONG irq);

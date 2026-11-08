@@ -247,6 +247,43 @@ ULONG XhciTolStreamHaltDrain(ULONG code, ULONG eventData);
 /* 1 when a halt candidate's context state (XHCI_EP_STATE_*) cycles. */
 ULONG XhciTolHaltConfirmed(ULONG epState);
 
+/*
+ * Issue 26 (2026-11-07): an endpoint brought to rest by Stop Endpoint,
+ * bounded, as Linux's xhci-ring.c does at a Stop Endpoint's completion. A
+ * Stop after which the Endpoint Context reads Running, or one answered
+ * Context State Error, raced a restart: a doorbell rung before the
+ * caller's pause (some controllers read Stopped for up to a few ms after
+ * one, then run) or a device's ERDY on another stream. The Stop is issued
+ * again after a short wait, at most XHCI_TOL_STOP_RESTOPS times. An
+ * endpoint still Running then, or a Stop that ended with any other code
+ * (0: no completion), is given up: the caller faults the device rather
+ * than leave the endpoint paused and its requests held (the cancel that
+ * returned with the endpoint Running and nothing owed, 3.4.1.0). A
+ * Context State Error with the endpoint read Stopped is stopped again too
+ * and, once the restops are spent, taken as Stopped. The callbacks run in
+ * the caller's context (the controller thread, PASSIVE_LEVEL).
+ */
+#define XHCI_TOL_STOP_RESTOPS   3UL
+
+#define XHCI_TOL_STOP_REST      0UL     /* *state: the context's state now */
+#define XHCI_TOL_STOP_GIVEUP    1UL
+
+typedef ULONG (*XHCI_TOL_STOP_CMD)(PVOID context);
+typedef ULONG (*XHCI_TOL_STOP_STATE)(PVOID context);
+typedef VOID (*XHCI_TOL_STOP_WAIT)(PVOID context);
+
+typedef struct _XHCI_TOL_STOP_IO {
+    XHCI_TOL_STOP_CMD Stop;         /* issue Stop Endpoint: its code, or 0 */
+    XHCI_TOL_STOP_STATE State;      /* the Endpoint Context's EP State     */
+    XHCI_TOL_STOP_WAIT Wait;        /* the pause before a restop           */
+    PVOID Context;
+} XHCI_TOL_STOP_IO, *PXHCI_TOL_STOP_IO;
+
+/* Issues the first Stop and any restops; *state is the state last read
+ * and *restops how many Stops followed the first. */
+ULONG XhciTolStopRest(const XHCI_TOL_STOP_IO *io, PULONG state,
+                      PULONG restops);
+
 /* The event path's one decision (record 17 section 4.3): the reason a
  * Transfer Event marks its device, XHCI_TOL_CYCLE_NONE for none. claimed:
  * XhciXferCodeInfo took the code; unattributed: the queue could match no TD
@@ -433,9 +470,9 @@ ULONG XhciTolBackstop(PXHCI_TOL_OBS obs, ULONG tolerance, ULONG pending,
 /* One location's budget (record 17 sections 4.5 and 4.9). */
 /* Eight ULONGs: the clock stamps and the dump's counts whole, the budgets,
  * the hold and the flags a byte each (none exceeds 3, or 1), because there
- * is one per root port and one per hub port in the extension and XHCISNAP
- * keeps the whole extension in a 256 KB image (xhcisnap.c,
- * EXT_IMAGE_MAX). */
+ * is one per root port and one per hub port in the extension and the
+ * snapshot reader keeps the whole extension in a 256 KB image
+ * (xhcitr\tr_snap.c, EXT_IMAGE_MAX). */
 typedef struct _XHCI_TOL_LOC {
     ULONG Charges;      /* every charge, never re-armed (the dump)          */
     ULONG Holds;        /* times held, never re-armed (the dump)            */

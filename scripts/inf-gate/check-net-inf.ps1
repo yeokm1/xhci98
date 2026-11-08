@@ -36,8 +36,12 @@ The rule families, each named as the other INF gates name theirs:
   NET9X-*   The x86 file's 98 SE and ME install: DevLoader *ndis,
             DeviceVxDs xhcinet.sys, EnumPropPages netdi.dll, the NDIS
             version 5.0, Ndi\DeviceID the hardware id, the Interfaces and
-            Install keys, the image copied to dirid 11 (record 35 section
-            7.8).
+            Install keys (record 35 section 7.8). NET9X-NOCOPY: neither
+            the install section nor a section its Ndi\Install keys name
+            copies a file, or reaches another section by Include or Needs
+            (record 35 section 9.5, revision 17): there any copy asked for
+            the disk at Windows' own source path when the adapter
+            installed, so Setup places xhcinet.sys in SYSTEM itself.
   NETNT-*   Each .NT install, the NDIS 5 one and the NDIS 6 one alike:
             Characteristics 0x84 (NCF_PHYSICAL and NCF_HAS_UI), a BusType,
             its image copied to dirid 12 (xhcinet.sys on the NDIS 5 path,
@@ -76,6 +80,7 @@ param(
     [switch]$SelfTest
 )
 
+Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 
@@ -98,13 +103,19 @@ function Get-InfFor([string]$a) {
     return (Join-Path $repo "src\net\xhcinet.inf")
 }
 
+# The version and DriverVer date src\xhci_version.h defines, each "" when
+# its #define is not there (anchored at a line's start, as the other INF
+# gates read them); Test-NetInf fails either missing rather than skipping
+# its comparison.
 function Get-Version {
     $h = Get-Content -LiteralPath (Join-Path $repo "src\xhci_version.h") -Raw
-    $m = [regex]::Match($h, 'XHCI_VER_STR\s+"([0-9.]+)"')
-    $d = [regex]::Match($h, 'XHCI_DRIVERVER_DATE\s+"([0-9/]+)"')
+    $m = [regex]::Match($h, '(?m)^#define\s+XHCI_VER_STR\s+"(\d+\.\d+\.\d+\.\d+)"')
+    $d = [regex]::Match($h, '(?m)^#define\s+XHCI_DRIVERVER_DATE\s+"(\d{2}/\d{2}/\d{4})"')
+    $version = ""
     $date = ""
+    if ($m.Success) { $version = $m.Groups[1].Value }
     if ($d.Success) { $date = $d.Groups[1].Value }
-    return @{ Version = $m.Groups[1].Value; Date = $date }
+    return @{ Version = $version; Date = $date }
 }
 
 # Parses INF text into ordered sections of raw lines (comments and blank
@@ -229,9 +240,13 @@ function Test-NetInf {
     if ($dv.Count -ne 1) {
         Fail "BOTH-DRIVERVER" "$($dv.Count) DriverVer lines"
     } else {
-        $val = (Get-Key $ver "DriverVer") -split '\s*,\s*'
-        if ($val.Count -ne 2 -or $val[1] -ne $v.Version) { Fail "BOTH-DRIVERVER" "DriverVer '$((Get-Key $ver 'DriverVer'))' is not version $($v.Version)" }
-        if ($v.Date -ne "" -and $val[0] -ne $v.Date) { Fail "BOTH-DRIVERVER" "DriverVer date '$($val[0])' is not $($v.Date)" }
+        $val = @((Get-Key $ver "DriverVer") -split '\s*,\s*')
+        if ($v.Version -eq "" -or $v.Date -eq "") {
+            Fail "BOTH-DRIVERVER" "src\xhci_version.h defines no XHCI_VER_STR or no XHCI_DRIVERVER_DATE in its #define form, so DriverVer cannot be compared"
+        } else {
+            if ($val.Count -ne 2 -or $val[1] -ne $v.Version) { Fail "BOTH-DRIVERVER" "DriverVer '$((Get-Key $ver 'DriverVer'))' is not version $($v.Version)" }
+            if ($val[0] -ne $v.Date) { Fail "BOTH-DRIVERVER" "DriverVer date '$($val[0])' is not $($v.Date)" }
+        }
     }
     $cat = Get-Key $ver "CatalogFile"
     if ($A -eq "amd64" -and $cat -ne "xhcinet.cat") { Fail "BOTH-CATALOG" "the amd64 file names no CatalogFile=xhcinet.cat" }
@@ -361,7 +376,22 @@ function Test-NetInf {
         }
 
         if ($p.Kind -eq "9x") {
-            if (-not $copiesImage -or -not $dirOk) { Fail "NET9X-COPY" "[$($p.Name)] does not copy xhcinet.sys to dirid 11" }
+            # NET9X-NOCOPY: the install section and its Ndi\Install sections.
+            $noCopy = @(@{ Name = $p.Name; Lines = $sec })
+            foreach ($k in @("ndis3", "ndis4", "ndis5")) {
+                $r = Find-Reg $rows "Ndi\Install" $k
+                if ($null -ne $r) {
+                    $s = Get-Section $inf $r[4]
+                    if ($null -ne $s) { $noCopy += @{ Name = $r[4]; Lines = $s } }
+                }
+            }
+            foreach ($nc in $noCopy) {
+                foreach ($l in $nc.Lines) {
+                    if ($l -match '^(CopyFiles|Include|Needs)\s*=') {
+                        Fail "NET9X-NOCOPY" "[$($nc.Name)] has $($Matches[1]): the 98 SE and ME install copies nothing (Setup places xhcinet.sys)"
+                    }
+                }
+            }
             $need = @(
                 @("", "DevLoader", "*ndis"), @("", "DeviceVxDs", "xhcinet.sys"),
                 @("", "EnumPropPages", "netdi.dll,EnumPropPages"),
@@ -465,6 +495,7 @@ if ($SelfTest) {
     # The DriverVer mutation takes the version from the header, so a bump
     # leaves it a mutation of the committed INF.
     $curVer = (Get-Version).Version
+    $curDate = (Get-Version).Date
     $cases = @(
         @{ A = "x86"; Rule = "FILE-CRLF"; From = "[Version]`r`n"; To = "[Version]`n" },
         @{ A = "x86"; Rule = "FILE-ASCII"; From = 'MtuDesc="MTU"'; To = ('MtuDesc="MT' + [char]0xE9 + '"') },
@@ -473,6 +504,8 @@ if ($SelfTest) {
         @{ A = "x86"; Rule = "BOTH-CLASS"; From = "Class=Net"; To = "Class=System" },
         @{ A = "x86"; Rule = "BOTH-COMPATIBLE"; From = "Compatible=1`r`n"; To = "" },
         @{ A = "x86"; Rule = "BOTH-DRIVERVER"; From = ("," + $curVer); To = ",9.9.9.9" },
+        @{ A = "amd64"; Rule = "BOTH-DRIVERVER"; From = ("DriverVer=" + $curDate + ","); To = "DriverVer=01/02/2001," },
+        @{ A = "x86"; Rule = "BOTH-DRIVERVER"; From = ("DriverVer=" + $curDate + ","); To = "DriverVer=1/2/2001," },
         @{ A = "x86"; Rule = "BOTH-CATALOG"; From = "Provider=%Provider%"; To = "Provider=%Provider%`r`nCatalogFile=xhcinet.cat" },
         @{ A = "amd64"; Rule = "BOTH-CATALOG"; From = "CatalogFile=xhcinet.cat`r`n"; To = "" },
         @{ A = "x86"; Rule = "BOTH-STRING"; From = 'MtuDesc="MTU"'; To = 'MtuDescX="MTU"' },
@@ -502,7 +535,10 @@ if ($SelfTest) {
         @{ A = "amd64"; Rule = "PATH-NO9X"; From = "[ControlFlags]"; To = "[NetModels]`r`n%NetDesc%=Net.Dev,XHCICM\TBNET`r`n[ControlFlags]" },
         @{ A = "x86"; Rule = "NET9X-KEY"; From = "HKR,,DevLoader,,*ndis"; To = "HKR,,DevLoader,,*ntkern" },
         @{ A = "x86"; Rule = "NET9X-KEY"; From = "HKR,NDIS,MajorNdisVersion,1,05"; To = "HKR,NDIS,MajorNdisVersion,1,04" },
-        @{ A = "x86"; Rule = "NET9X-COPY"; From = "Net.CopyFiles9x=11"; To = "Net.CopyFiles9x=12" },
+        @{ A = "x86"; Rule = "NET9X-NOCOPY"; From = "[Net.Dev]`r`nAddReg="; To = "[Net.Dev]`r`nCopyFiles=Net.CopyFiles`r`nAddReg=" },
+        @{ A = "x86"; Rule = "NET9X-NOCOPY"; From = "[Net.Ndis]`r`n"; To = "[Net.Ndis]`r`nCopyFiles=Net.CopyFiles`r`n" },
+        @{ A = "x86"; Rule = "NET9X-NOCOPY"; From = "[Net.Dev]`r`nAddReg="; To = "[Net.Dev]`r`nNeeds=Net.Dev.NTx86`r`nAddReg=" },
+        @{ A = "x86"; Rule = "NET9X-NOCOPY"; From = "[Net.Ndis]`r`n"; To = "[Net.Ndis]`r`nInclude=netoem.inf`r`n" },
         @{ A = "x86"; Rule = "NETNT-CHAR"; From = "Characteristics=0x84"; To = "Characteristics=0x4" },
         @{ A = "amd64"; Rule = "NETNT-BUSTYPE"; From = "BusType=15`r`n"; To = "" },
         @{ A = "x86"; Rule = "NETNT-SERVICE"; From = "AddService=xhcinet,0x00000002,"; To = "AddService=xhcinet,0x00000000," },
@@ -521,7 +557,7 @@ if ($SelfTest) {
         @{ A = "x86"; Rule = "VAL-UNKNOWN"; From = 'HKR,,XhciNetMtu,0x00000002,"1500"'; To = "HKR,,XhciNetMtu,0x00000002,`"1500`"`r`nHKR,,XhciNetPoll,0x00000002,`"1`"" }
     )
     foreach ($a in @("x86", "amd64")) {
-        $f = Invoke-Check (Get-InfFor $a) $a
+        $f = @(Invoke-Check (Get-InfFor $a) $a)
         if ($f.Count -ne 0) { Write-Host "FAIL selftest: the committed $a INF does not pass:"; $f | ForEach-Object { Write-Host "  $_" }; $bad++ }
     }
     foreach ($c in $cases) {
@@ -545,7 +581,7 @@ if ($SelfTest) {
 }
 
 if ($InfPath -eq "") { $InfPath = Get-InfFor $Arch }
-$fails = Invoke-Check $InfPath $Arch
+$fails = @(Invoke-Check $InfPath $Arch)
 if ($fails.Count -ne 0) {
     $fails | ForEach-Object { Write-Host "FAIL $_" }
     Write-Host "check-net-inf: $($fails.Count) failures in $InfPath"

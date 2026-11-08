@@ -111,6 +111,35 @@ XHCI_C_ASSERT(xhci_snap_hcd_idplace,
               XHCI_SNAPSHOT_HCD_IDPLACE_AT +
                       XHCI_SNAPSHOT_HCD_IDPLACE_COUNT *
                           XHCI_SNAPSHOT_HCD_IP_RECORD_WORDS ==
+                  XHCI_SNAPSHOT_HCD_ISOP_RECORDS);
+
+/* 47.30: four words, then the isochronous records, which end the header. */
+XHCI_C_ASSERT(xhci_snap_hcd_isop,
+              XHCI_SNAPSHOT_HCD_ISOP_RECORDS + 1 ==
+                  XHCI_SNAPSHOT_HCD_ISOP_WORDS &&
+              XHCI_SNAPSHOT_HCD_ISOP_WORDS + 1 ==
+                  XHCI_SNAPSHOT_HCD_ISOP_FIRST &&
+              XHCI_SNAPSHOT_HCD_ISOP_FIRST + 1 ==
+                  XHCI_SNAPSHOT_HCD_EVT_TRBS &&
+              XHCI_SNAPSHOT_HCD_EVT_TRBS + 1 == XHCI_SNAPSHOT_HCD_ISOP_AT &&
+              XHCI_SNAPSHOT_HCD_IO_DRYAT + 1 ==
+                  XHCI_SNAPSHOT_HCD_IO_RECORD_WORDS &&
+              XHCI_SNAPSHOT_HCD_ISOP_AT +
+                      XHCI_SNAPSHOT_HCD_ISOP_COUNT *
+                          XHCI_SNAPSHOT_HCD_IO_RECORD_WORDS ==
+                  XHCI_SNAPSHOT_HCD_UFAIL_RECORDS);
+
+/* Issue 26: three words, then the failure records, which end the header. */
+XHCI_C_ASSERT(xhci_snap_hcd_ufail,
+              XHCI_SNAPSHOT_HCD_UFAIL_RECORDS + 1 ==
+                  XHCI_SNAPSHOT_HCD_UFAIL_WORDS &&
+              XHCI_SNAPSHOT_HCD_UFAIL_WORDS + 1 ==
+                  XHCI_SNAPSHOT_HCD_UFAIL_FIRST &&
+              XHCI_SNAPSHOT_HCD_UFAIL_FIRST + 1 ==
+                  XHCI_SNAPSHOT_HCD_UFAIL_AT &&
+              XHCI_SNAPSHOT_HCD_UFAIL_AT +
+                      XHCI_SNAPSHOT_HCD_UFAIL_COUNT *
+                          XHCI_SNAPSHOT_HCD_UFAIL_RECORD_WORDS ==
                   XHCI_SNAPSHOT_HCD_HEAD_WORDS);
 
 /* The image carries the counter block whole, word for word. */
@@ -203,11 +232,25 @@ ULONG XhciSnapHcdHead(ULONG ports, ULONG word)
         return XHCI_SNAPSHOT_HCD_IP_RECORD_WORDS;
     case XHCI_SNAPSHOT_HCD_IDPLACE_FIRST:
         return XHCI_SNAPSHOT_HCD_IDPLACE_AT;
+    case XHCI_SNAPSHOT_HCD_ISOP_RECORDS:
+        return XHCI_SNAPSHOT_HCD_ISOP_COUNT;
+    case XHCI_SNAPSHOT_HCD_ISOP_WORDS:
+        return XHCI_SNAPSHOT_HCD_IO_RECORD_WORDS;
+    case XHCI_SNAPSHOT_HCD_ISOP_FIRST:
+        return XHCI_SNAPSHOT_HCD_ISOP_AT;
+    case XHCI_SNAPSHOT_HCD_UFAIL_RECORDS:
+        return XHCI_SNAPSHOT_HCD_UFAIL_COUNT;
+    case XHCI_SNAPSHOT_HCD_UFAIL_WORDS:
+        return XHCI_SNAPSHOT_HCD_UFAIL_RECORD_WORDS;
+    case XHCI_SNAPSHOT_HCD_UFAIL_FIRST:
+        return XHCI_SNAPSHOT_HCD_UFAIL_AT;
     default:
         /* XHCI_SNAPSHOT_HCD_TERMINAL, the routing record, the transfer
          * readings, the class driver records, 36.38's DNCTRL words and
-         * device records, 44.35's transport records and 45.40's places
-         * are readings, not layout: the door fills them (hcd_door.c). */
+         * device records, 44.35's transport records, 45.40's places,
+         * 47.30's event ring count and isochronous records and issue 26's
+         * failure records are readings, not layout: the door fills them
+         * (hcd_door.c). */
         return 0;
     }
 }

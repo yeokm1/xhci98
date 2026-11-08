@@ -8,14 +8,15 @@ One source tree (`src/`) builds three drivers:
 | Target | Output | Toolchain | Environment |
 |---|---|---|---|
 | Windows 98 SE / ME | `stor98.mpd` | Windows 2000 DDK + MSVC 6.0, Windows 98 DDK `SCSI.H`/`SRB.H` | `setenv <ddk> free w2k x86`, `NVME2K_W9X` |
-| Windows 2000 - 7, x86 | `stor98.sys` | Windows 2000 DDK + MSVC 6.0 | `setenv <ddk> free w2k x86` |
-| XP x64 / Vista / 7, amd64 | `stor98.sys` | WDK 7.1 (7600.16385.1) | `setenv <wdk> fre x64 WNET no_oacr` |
+| Windows 2000 - 10, x86 | `stor98.sys` | Windows 2000 DDK + MSVC 6.0 | `setenv <ddk> free w2k x86` |
+| XP x64 / Vista / 7 / 8 / 8.1 / 10, amd64 | `stor98.sys` | WDK 7.1 (7600.16385.1) | `setenv <wdk> fre x64 WNET no_oacr` |
 
 The 9x image is the NT4-ABI SCSI miniport that Windows 9x's SCSI layer loads, built the way
 SweetLow built nvme9x (see `src/README-nvme9x.txt`): Windows 2000 DDK and MSVC 6.0, with the
 Windows 98 DDK's `SCSI.H` and `SRB.H` ahead of the Windows 2000 ones, and `NVME2K_W9X`
 defined (which implies `NVME2K_NT4`). The amd64 image targets NT 5.2 (`WNET`), so one binary
-serves XP x64, Server 2003 x64, Vista x64 and 7 x64.
+serves XP x64, Server 2003 x64 and Vista x64 to 10 x64. Windows 10 is a target below build
+22000 (xhci98's installer refuses 11).
 
 ## The `tools\` folder
 
@@ -155,10 +156,12 @@ the flavour marker and the import allowlist (xhci98's `scripts\check-stor98-buil
 `scripts\import-gate\stor98-imports.allow`), a source stamp beside each image, and the
 gated record its signing step reads. xhci98's `make-package.ps1` bundles that build in each
 package, with `LICENSE`, `NOTICE` and [package-readme.txt](package-readme.txt) as
-`stor98-LICENSE.txt`, `stor98-NOTICE.txt` and `stor98-readme.txt`, and xhci98's
-`make-release.ps1` publishes it in the release's `release-x86\` and `release-x64\`
-(xhci98's `docs\contributing\build-and-test.md`, "Building Stor98" and "The bundled Stor98
-build"). The releases made here up to `0.4.0.0` stay in `releases\` as history
+`stor98-LICENSE.txt`, `stor98-NOTICE.txt` and `stor98-readme.txt`. Those packages are
+flat staging folders; since xhci98 3.4.0.0 xhci98's `make-release.ps1` publishes Stor98 in
+the release's family folders `98-me\stor98\`, `nt-x86\stor98\` and `nt-x64\stor98\` (up to
+3.3.0.0 in its `release-x86\` and `release-x64\`; xhci98's
+`docs\contributing\build-and-test.md`, "Building Stor98" and "The bundled Stor98 build").
+The releases made here up to `0.4.0.0` stay in `releases\` as history
 ([releases/README.md](../releases/README.md)); the release script that made them was
 removed.
 

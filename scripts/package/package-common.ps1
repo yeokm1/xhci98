@@ -178,7 +178,8 @@ $script:FamilyFlatDir = @{ "x86" = "release-x86"; "amd64" = "release-x64" }
 # cm\tbnet\ (task 45.59 step S10, record 36 section 9, record 35 section
 # 9.5): Thunderbolt networking's INF and images, apart from xhcicm's, so an
 # integration leaves it out by one folder. 98-me\ carries no xhcinet6.sys:
-# 98 SE and ME install xhcinet.sys alone ([Net.CopyFiles9x]).
+# 98 SE and ME load xhcinet.sys alone (Setup places it; record 35
+# section 9.5, revision 17).
 $script:FamilyLayout = @{
     "x86" = [ordered]@{
         "xhci98.inf"         = @("98-me\xhci98.inf", "nt-x86\xhci98.inf")
@@ -510,6 +511,9 @@ NLITE, NTLITE AND DISM
 Point the tool at nt-x86\ or nt-x64\ and let it search the subfolders:
 
   nLite, NTLite  add the folder as a driver folder, with its subfolders.
+                 nLite asks Textmode or PnP for each folder: Textmode for
+                 nt-x86\ or nt-x64\ itself, PnP for cm\, cm\tbnet\ and
+                 stor98\.
   DISM           Dism /Image:<mounted image> /Add-Driver /Driver:<folder>
                  /Recurse, and for nt-x64\ also /ForceUnsigned.
 
@@ -981,6 +985,41 @@ function Test-ProjectTestSignature {
         return ("the digest it vouches for ({0}) is not the image's ({1})" -f $Signature.VouchedDigest, $Signature.ImageDigest)
     }
     if ($Signature.Timestamped) { return "it carries a countersignature (timestamp), which record 19 does not take" }
+    return ""
+}
+
+function Get-PublicCertificateFault {
+    # The verdict on a published xhci98-test.cer: "" when the file is one
+    # DER-encoded X.509 certificate and nothing else, carries no private
+    # key, and is the certificate whose thumbprint is given; otherwise the
+    # reason it is not. The content type is asked before anything is
+    # loaded, so a PKCS #12 file is refused unread rather than imported.
+    param([string]$Path, [string]$Thumbprint)
+
+    $name = Split-Path -Leaf $Path
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return "there is no $name" }
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -lt 2 -or $bytes[0] -ne 0x30) { return "$name is not a DER-encoded certificate" }
+    $kind = $null
+    try { $kind = [System.Security.Cryptography.X509Certificates.X509Certificate2]::GetCertContentType($bytes) }
+    catch { return "$name cannot be read as a certificate: $($_.Exception.Message)" }
+    if ($kind -ne [System.Security.Cryptography.X509Certificates.X509ContentType]::Cert) {
+        return "$name is a $kind file, not one certificate"
+    }
+    $cert = $null
+    try { $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 -ArgumentList (,$bytes) }
+    catch { return "$name cannot be read as a certificate: $($_.Exception.Message)" }
+    try {
+        if ([Convert]::ToBase64String($cert.RawData) -ne [Convert]::ToBase64String($bytes)) {
+            return "$name holds more than one DER certificate's bytes"
+        }
+        if ($cert.HasPrivateKey) { return "$name carries a private key" }
+        if ($cert.Thumbprint -ne $Thumbprint) {
+            return ("{0} is certificate {1}, not the project test certificate {2}" -f $name, $cert.Thumbprint, $Thumbprint)
+        }
+    } finally {
+        $cert.Reset()
+    }
     return ""
 }
 
@@ -1923,12 +1962,11 @@ function Get-SilentBatchFaults {
                   'cscript //nologo silent.vbs show', 'if errorlevel 1 goto nochange',
                   'regedit /s silent.reg', 'cscript //nologo silent.vbs 1',
                   'if errorlevel 5 goto unverified', 'if errorlevel 4 goto nolist',
-                  'if errorlevel 3 goto partial', 'if errorlevel 1 goto notset')
+                  'if errorlevel 1 goto notset')
         if ($merges.Count -ne 1) { $faults += "it does not merge SILENT.REG exactly once" }
     } else {
         $pins = @('if not exist silent.vbs goto nofile', 'cscript //nologo silent.vbs 0',
-                  'if errorlevel 5 goto unverified', 'if errorlevel 3 goto partial',
-                  'if errorlevel 1 goto notset', ':list')
+                  'if errorlevel 5 goto unverified', 'if errorlevel 1 goto notset', ':list')
         if ($merges.Count -ne 0) { $faults += "it merges a .reg file; silent-off.bat leaves the list alone" }
         foreach ($needle in @('The list was left in place', 'delete the', 'SilentClasses key')) {
             if (-not $Text.Contains($needle)) { $faults += "it no longer says '$needle'" }
@@ -3540,7 +3578,7 @@ function Read-ToolReadmeLines {
     return $lines
 }
 
-# --- two claims no published text may make (roadmap Phase 20, F7) ----------
+# --- two claims no published text may make (roadmap task 20.4) -------------
 #
 # "WINDOWS 98 ONLY" described DisableSelectiveSuspend as a Windows 98
 # setting after 1.0.1.0 had made the NT path write it too, and the shipped
@@ -3798,16 +3836,17 @@ $script:NonFreeFolder = "USBDRV\NONFREE"
 $script:NonFreePrefix = "non-free"
 $script:NonFreeExtras = @("NOTICE.md", "README.md", "STAGE.TXT")
 $script:NonFreePin = [pscustomobject]@{
-    Tag        = "v1.2.0"
-    Commit     = "c40ad7e4568fe2be7a889a79f6ada01f33123e81"
+    Tag        = "v1.3.0"
+    Commit     = "d2f7a26987fb9e074f6c5c4e974b6cad80c96c46"
     # The SHA-256 of the pack's own SHA256.TXT blob at that commit.
-    PackSums   = "0360249F34C3EABC48E2C38F9B6008CF6E8341F3639FE864E4BBBD0FE0E25701"
+    PackSums   = "ADF5AB70CB6BBF52CED63038F5F327CD1E2E466D71CDEC61354537F0E75888F7"
 }
 # The folders of non-free/ that download 3 leaves out, and their STAGE.TXT
 # lines with them. The owner, 2026-10-28: the Wi-Fi drivers stay in
 # usb-wdm-nonfree and its own release, where people get them; download 3
-# keeps the Ethernet, HID and serial drivers, and from v1.2.0 (owner,
-# 2026-11-02) the audio driver, TASCAM's US-122.
+# keeps the Ethernet, HID and serial drivers, from v1.2.0 (owner,
+# 2026-11-02) the audio driver, TASCAM's US-122, and from v1.3.0 (owner,
+# 2026-11-08) Microsoft's USB smart card reader driver, copied only.
 $script:NonFreeExcluded = @("wifi")
 $script:WdmFreeFolder = "USBDRV\FREE"
 $script:WdmFreePrefix = "free"
@@ -4831,8 +4870,12 @@ function Get-OtherLifted {
     # proved apart over the carried sets (-Sets) with this cut's rows' kinds;
     # throws the first that is not. A system the pair has neither kind on
     # now is left to Test-OtherPkgsTransition, which refuses the drop.
+    # On 98 SE and ME a pair of one set with an endpoint in -NeverShipped
+    # (Get-OtherNeverShipped's; Test-OtherNeverShippedPair) is not a lift
+    # (section 6.7.16): Test-OtherPkgsTransition admits its COEXISTS there
+    # without the proof, and nothing is recorded LIFTED for it.
     # Returns @{ A; B; Systems } per pair lifted.
-    param($Prev, $Now, $Sets)
+    param($Prev, $Now, $Sets, [string[]]$NeverShipped = @())
     $prevSys = [ordered]@{}
     $ends = @{}
     $prevLifted = @()
@@ -4846,12 +4889,14 @@ function Get-OtherLifted {
     $out = @()
     foreach ($k in @($prevSys.Keys)) {
         $a = $ends[$k][0]; $b = $ends[$k][1]
+        $exempt = @()
+        if (Test-OtherNeverShippedPair -A $a -B $b -NeverShipped $NeverShipped) { $exempt = @($script:OtherNeverShippedSystems) }
         $same = @($Now.Rels | Where-Object { (Get-OtherRelPairKey -A $_.A -B $_.B) -ceq $k })
         $ex = @(); $co = @()
         foreach ($r in $same) {
             if ($r.Kind -ceq "EXCLUDES") { $ex += $r.Systems } elseif ($r.Kind -ceq "COEXISTS") { $co += $r.Systems }
         }
-        $lift = @($prevSys[$k] | Where-Object { $ex -cnotcontains $_ -and $co -ccontains $_ })
+        $lift = @($prevSys[$k] | Where-Object { $ex -cnotcontains $_ -and $co -ccontains $_ -and $exempt -cnotcontains $_ })
         if ($lift.Count -eq 0) { continue }
         $kindA = "DEVICE"; $kindB = "DEVICE"
         $ra = @($Now.Rows | Where-Object { $_.Id -ceq $a }); if ($ra.Count -gt 0) { $kindA = $ra[0].Kind }
@@ -5121,8 +5166,11 @@ function Test-OtherPkgsTransition {
     # Get-OtherPresent's "<set>:<class>/<package>" ids; task 44.34); every
     # relationship line is still there, on at least its systems - an
     # EXCLUDES except on a system -Lifted (Get-OtherLifted's) proves its
-    # pair apart (section 6.7.14).
-    param($Prev, $Now, [string[]]$Shipped = @(), $Lifted = @())
+    # pair apart (section 6.7.14), or except on a system a COEXISTS of the
+    # pair now names on 98 SE or ME where the pair is of one set and an
+    # endpoint is in -NeverShipped (Test-OtherNeverShippedPair, section
+    # 6.7.16).
+    param($Prev, $Now, [string[]]$Shipped = @(), $Lifted = @(), [string[]]$NeverShipped = @())
     foreach ($r in $Prev.Rows) {
         $n = @($Now.Rows | Where-Object { $_.Id -ceq $r.Id })
         if ($n.Count -eq 0) { throw "the package table drops $($r.Id), which $($Prev.Version) carried: a row is never removed, only marked withdrawn (design record 26 section 6.7.11)." }
@@ -5147,6 +5195,11 @@ function Test-OtherPkgsTransition {
             $cover = @()
             foreach ($x in $n) { $cover += $x.Systems }
             foreach ($l in @($Lifted)) { if ($null -ne $l -and (Get-OtherRelPairKey -A $l.A -B $l.B) -ceq $k) { $cover += $l.Systems } }
+            if (Test-OtherNeverShippedPair -A $r.A -B $r.B -NeverShipped $NeverShipped) {
+                foreach ($x in @($Now.Rels | Where-Object { $_.Kind -ceq "COEXISTS" -and (Get-OtherRelPairKey -A $_.A -B $_.B) -ceq $k })) {
+                    $cover += @($x.Systems | Where-Object { $script:OtherNeverShippedSystems -ccontains $_ })
+                }
+            }
             $kept = @($r.Systems | Where-Object { $cover -cnotcontains $_ }).Count -eq 0
         }
         if (-not $kept -and $r.Kind -ceq "COEXISTS") {
@@ -5246,6 +5299,50 @@ function Find-PreviousOtherPkgs {
     return $best
 }
 
+function Get-OtherNeverShipped {
+    # Record 26 section 6.7.16: the set-qualified ids that every
+    # otherpkgs.txt below -Version under -ReleasesDir names and none has as
+    # current (withdrawn or known in each), so no earlier release carried
+    # the package and no earlier run of the installer staged it. @() when
+    # there is no such record.
+    param([string]$ReleasesDir, [string]$Version)
+    if (-not (Test-Path -LiteralPath $ReleasesDir -PathType Container)) { return @() }
+    $seen = @{}
+    $current = @{}
+    foreach ($d in (Get-ChildItem -LiteralPath $ReleasesDir -Directory)) {
+        $v = $null
+        if (-not [version]::TryParse($d.Name, [ref]$v)) { continue }
+        if ($v -ge [version]$Version) { continue }
+        $p = Join-Path $d.FullName $script:OtherPkgsRecordName
+        if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { continue }
+        $rec = ConvertFrom-OtherPkgsRecord -Text ([System.IO.File]::ReadAllText($p)) -Label "'$p'" -Fallback ($v.ToString())
+        foreach ($r in $rec.Rows) {
+            $seen[$r.Id] = $true
+            if ($r.State -ceq "current") { $current[$r.Id] = $true }
+        }
+    }
+    return @($seen.Keys | Where-Object { -not $current.ContainsKey($_) } | Sort-Object)
+}
+
+# Record 26 section 6.7.16: the systems the exception holds on, 98 SE and
+# ME, where a run that copies a set takes every DevicePath entry of the
+# set's earlier copy out (other_withdraw_devicepath); on NT an earlier
+# staged INF a device uses, or another owner's, is kept (other_unstage).
+$script:OtherNeverShippedSystems = @("W98SE", "WME")
+
+function Test-OtherNeverShippedPair {
+    # Record 26 section 6.7.16: 1 when the pair ("<set>:<class>/<package>"
+    # each) is of one set and an endpoint is in -NeverShipped. Only one
+    # set: on 98 SE and ME a run that copies a set replaces that set's
+    # earlier copy and its staging (sections 6.7.5 and 6.7.13), so no
+    # earlier release's partner of the same set stays staged beside the new
+    # package; a partner of the other set could, and is held to section
+    # 6.7.14. The callers hold it to $script:OtherNeverShippedSystems.
+    param([string]$A, [string]$B, [string[]]$NeverShipped = @())
+    if ($A.Split(':')[0] -cne $B.Split(':')[0]) { return $false }
+    return (@($NeverShipped) -ccontains $A -or @($NeverShipped) -ccontains $B)
+}
+
 function Invoke-OtherSetChecks {
     # Every check of this block over the carried sets (Export-WdmFreeSet's
     # and Export-NonFreeSet's results, either $null), the installer's table
@@ -5310,8 +5407,11 @@ function Invoke-OtherSetChecks {
         $n = ConvertFrom-OtherPkgsRecord -Text ($record -join "`r`n") -Label "this cut's otherpkgs.txt"
         # An EXCLUDES lifted to a COEXISTS only where proved apart, and an
         # earlier lift proved again (record 26 section 6.7.14).
-        $lifted = @(Get-OtherLifted -Prev $p -Now $n -Sets $sets)
-        Test-OtherPkgsTransition -Prev $p -Now $n -Shipped (Get-OtherPresent -Sets $sets) -Lifted $lifted
+        # A pair with a package no earlier release carried is admitted
+        # COEXISTS without the proof (section 6.7.16).
+        $never = @(Get-OtherNeverShipped -ReleasesDir $ReleasesDir -Version $Version)
+        $lifted = @(Get-OtherLifted -Prev $p -Now $n -Sets $sets -NeverShipped $never)
+        Test-OtherPkgsTransition -Prev $p -Now $n -Shipped (Get-OtherPresent -Sets $sets) -Lifted $lifted -NeverShipped $never
     } else {
         # No history here: the table's lifted rows are proved by themselves
         # (draft 57). After Get-OtherHeldLifts a row of kind 2 is left only

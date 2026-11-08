@@ -532,6 +532,47 @@ static VOID xhciFuncMi(XHCI_FUNC_TEXT *t, const XHCI_FUNC *func)
 }
 
 /* IRQL: any. */
+ULONG XhciFuncGhostStart(ULONG nt, ULONG orphan, ULONG listed, ULONG role,
+                         ULONG removed, ULONG quarantined)
+{
+    return (!nt && !orphan && !listed && !role && !removed && !quarantined)
+               ? 1UL
+               : 0UL;
+}
+
+ULONG XhciFuncGhostDescriptor(const UCHAR *setup)
+{
+    /* GET_DESCRIPTOR (USB 2.0 Table 9-4: 6), standard, device to host, to
+     * the device (bmRequestType 80h), descriptor index 0 in wValue's low
+     * byte, wIndex 0 (no language id for these two types). */
+    if (setup == NULL || setup[0] != 0x80 || setup[1] != 6 ||
+        setup[2] != 0 || setup[4] != 0 || setup[5] != 0) {
+        return XHCI_FUNC_GHOST_NONE;
+    }
+    if (setup[3] == XHCI_FUNC_DT_DEVICE) {
+        return XHCI_FUNC_GHOST_DEVICE;
+    }
+    if (setup[3] == XHCI_FUNC_DT_CONFIG) {
+        return XHCI_FUNC_GHOST_CONFIG;
+    }
+    return XHCI_FUNC_GHOST_NONE;
+}
+
+ULONG XhciFuncGhostCopyLength(ULONG urbLength, ULONG wLength,
+                              ULONG copyLength)
+{
+    ULONG n;
+
+    n = urbLength;
+    if (n > wLength) {
+        n = wLength;
+    }
+    if (n > copyLength) {
+        n = copyLength;
+    }
+    return n;
+}
+
 ULONG XhciFuncCompatCount(ULONG cls, ULONG sub, ULONG prot)
 {
     (VOID)sub;
@@ -836,9 +877,10 @@ ULONG XhciFuncRetireByPlace(const char *oldSerial, ULONG oldKey,
 }
 
 ULONG XhciFuncInstanceId(const char *serial, ULONG location, ULONG mi,
-                         char *out, ULONG capacity, PULONG used)
+                         ULONG bot, char *out, ULONG capacity, PULONG used)
 {
     XHCI_FUNC_TEXT t;
+    const char *mark;
     ULONG i;
 
     if (used == NULL || (out == NULL && capacity != 0) ||
@@ -860,6 +902,11 @@ ULONG XhciFuncInstanceId(const char *serial, ULONG location, ULONG mi,
         xhciFuncDec(&t, location);
         if (mi != XHCI_INSTANCE_NO_MI) {
             xhciFuncHexN(&t, mi, 2);
+        }
+    }
+    if (bot) {
+        for (mark = XHCI_INSTANCE_BOT; *mark != 0; mark++) {
+            xhciFuncChar(&t, *mark);
         }
     }
     xhciFuncChar(&t, 0);

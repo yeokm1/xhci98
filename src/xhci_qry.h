@@ -25,9 +25,9 @@
 /*
  * CTL_CODE(FILE_DEVICE_UNKNOWN 0x22, 0xA48, METHOD_BUFFERED,
  * FILE_ANY_ACCESS): a function code in the vendor range, beside xhcicm's
- * 0xA40 to 0xA42, and none of the USB hub or USBUSER codes the door already
- * answers. No input. Opened with no access rights; a standard user may
- * read. Not gated by the door's enable step: what it serves follows
+ * 0xA40 to 0xA44 and xhci98's 0xA49 (XHA_IOCTL, xhci_acpi.h), and none of
+ * the USB hub or USBUSER codes the door already answers. No input. Opened
+ * with no access rights; a standard user may read. Not gated by the door's enable step: what it serves follows
  * XhciLogVerbosity instead (below).
  *   - output buffer < XHQ_HDR_BYTES_V1: STATUS_BUFFER_TOO_SMALL, nothing;
  *   - output buffer < the whole answer: STATUS_SUCCESS with the header

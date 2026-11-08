@@ -34,7 +34,7 @@ static unsigned char pool[8 * 4096];
 /* Odd and unaligned caller buffers (xhci98 roadmap 43.79): the PRP rules
    bounce every offset that is not DWORD aligned, and the bounce copy moves
    the bytes in both directions at offsets 1, 2, 3, 511 and page straddles,
-   for 512 B to 2 MiB, in 32 KiB children (ENG_BOUNCE_PAGES), through a
+   for 512 B to 2 MiB, in 32 KiB children (ENG_BOUNCE_GENERAL), through a
    one-fragment byte list and a list of fragments out of order. */
 /* Where byte Off of the request lies in the pool, from the layout the test
    builds, not through Sg9xResolve: one fragment at Start, or fragments of

@@ -1,8 +1,9 @@
 @echo off
 rem build.cmd [qemu] - XHCIPFW.SYS, the boot-start driver that closes PCI
 rem bridges' prefetchable windows lying wholly above 4 GB before the PCI
-rem driver of Windows 2000 or the 32-bit Vista, 7, 8, 8.1 and 10 reads them
-rem (roadmap-usb4 task 44.49, design record 32 section 11).
+rem driver of Windows 2000, XP (both with one processor only) or the 32-bit
+rem Vista, 7, 8 and 8.1 reads them; on the 32-bit Windows 10 it loads and
+rem does nothing (roadmap-usb4 task 44.49, design record 32 section 11).
 rem
 rem   (none)  the release image: objfre\i386\xhcipfw.sys
 rem   qemu    the qemu flavour's image, which writes its counts to QEMU's

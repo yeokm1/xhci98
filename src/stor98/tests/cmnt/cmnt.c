@@ -90,7 +90,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     /* Only on a fresh rendezvous: an object already there belongs to a CM
      * (live, or unloaded and leaving its permanent object), and a second
      * responder or a second table in that boot would break the contract
-     * the receiver is tested against (Codex round 2). Load the stand-in
+     * the receiver is tested against. Load the stand-in
      * only on a system with no CM since boot. */
     status = ExCreateCallback(&object, &attributes, FALSE, TRUE);
     if (NT_SUCCESS(status)) {

@@ -354,7 +354,8 @@ static int di_line_is(const DI_TOK *t, int n, const char *key, int words)
  *   HWND <decimal>
  *   DEVICE <device id>            install and remove
  *   INF <inf path>                install
- *   FLAGS <flag> [<flag>]         install, optional: force, quiet
+ *   FLAGS <flag> [<flag> [<flag>]]  install, optional: force, quiet,
+ *                                 nocopy (each at most once)
  *   END
  *
  * The RESULT line is found first, wherever it is, since with no usable

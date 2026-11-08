@@ -94,6 +94,13 @@ static ULONG xhciDbgAppendHex(char *buf, ULONG len, ULONG value, ULONG digits)
 
 #ifdef XHCI_DBG_E9_NOEXEC
 /*
+ * **No supported build defines XHCI_DBG_E9_NOEXEC.** It was built through
+ * `XHCI_EXTRA_DEFINES`, which `src\sources` and `build-driver.cmd` now refuse
+ * (the miniport's diagnostic hatch, retired with it), so building this
+ * discriminator means adding the define to the qemu flavour's `C_DEFINES`
+ * line in `src\sources` by hand, in a tree that is never published. It is
+ * kept because defect 2b is still open and this is the binary that answers it.
+ *
  * The discriminating test for the 0.0.0.4 debug flavour's Code 2 on the E460
  * (defect 2b). That binary does not load there, the sole import
  * delta against the standard flavour is HAL.dll!WRITE_PORT_UCHAR, and a rebuild

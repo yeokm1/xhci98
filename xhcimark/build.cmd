@@ -6,11 +6,12 @@ rem
 rem   build.cmd        both executables
 rem   build.cmd x86    XHCIMARK.EXE alone, for a host without tools\WinDDK71
 rem
-rem Nothing is installed machine-wide. XHCIMARK.EXE, for 32-bit Windows 2000,
-rem XP, Vista and 7, is built with the in-repo MSVC 6.0 (tools\MSVC600; MSVC6
-rem overrides it); XHCIMK64.EXE, for XP x64, Vista x64 and 7 x64, with WDK
-rem 7.1's amd64 compiler (tools\WinDDK71; WDK71 overrides it), as XHCIINST's
-rem pair is. Both link the C runtime statically and import KERNEL32 and
+rem Nothing is installed machine-wide. XHCIMARK.EXE, for 32-bit Windows 2000
+rem to 10, is built with the in-repo MSVC 6.0 (tools\MSVC600; MSVC6 overrides
+rem it); XHCIMK64.EXE, for XP x64 and 64-bit Vista to 10, with WDK 7.1's
+rem amd64 compiler (tools\WinDDK71; WDK71 overrides it), as XHCIINST's pair
+rem is. Both link the multithreaded C runtime statically (/MT: the service
+rem has a second thread) and import KERNEL32 and
 rem ADVAPI32 alone; every SetupAPI and configuration-manager routine is
 rem looked up at run time. The sources: xhcimark.c (the service), mark_core.c
 rem (its pure half, which -selftest runs), ..\xhciinst\inst_bootp.c (the
@@ -55,7 +56,7 @@ set "INCLUDE=%MSVC6%\VC98\Include"
 set "LIB=%MSVC6%\VC98\Lib"
 rc /fo xhcimark.res xhcimark.rc
 if errorlevel 1 exit /b 1
-cl /nologo /W3 /WX /O2 /FeXHCIMARK.EXE xhcimark.c mark_core.c ..\xhciinst\inst_core.c ..\xhciinst\inst_bootp.c xhcimark.res advapi32.lib /link /SUBSYSTEM:CONSOLE,4.0
+cl /nologo /W3 /WX /O2 /MT /FeXHCIMARK.EXE xhcimark.c mark_core.c ..\xhciinst\inst_core.c ..\xhciinst\inst_bootp.c xhcimark.res advapi32.lib /link /SUBSYSTEM:CONSOLE,4.0
 if errorlevel 1 exit /b 1
 if not exist XHCIMARK.EXE exit /b 1
 endlocal

@@ -38,7 +38,9 @@ typedef struct _CM_STATUS_IN {
                                board at reads 0 (section 12.8.15.13), 7
                                no routine route (12.8.15.15), 8 the
                                deferral's bound (12.8.15.16), 9 ECAM
-                               needing reads 1 (12.8.15.18)               */
+                               needing reads 1 (12.8.15.18); every
+                               system: 10 the same code refused at
+                               XhciCmAsm4242Structural 0 (task 47.29)     */
     ULONG Blocked;          /* bit n: port n blocked by a 9x eject; bit
                                4 + n: an eject in progress there
                                (CM_ST_F_BLOCKED_*, CM_ST_F_EJECTING_SHIFT;

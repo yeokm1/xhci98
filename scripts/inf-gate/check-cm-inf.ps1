@@ -817,7 +817,7 @@ function Test-CmInfText {
         if ($hlprCtl.Count -gt 0 -and $hlprSvcSecs.Count -eq 0) { & $add "CM-HLPR" "no NT install path installs the helper (design record 18 section 15.15)." }
         $hstr = & $get "Strings"
         $hd = @(if ($null -ne $hstr) { $hstr.Lines | Where-Object { $_.Key -ieq "XhciHlprSvcDesc" } | ForEach-Object { $_.Value } })
-        if ($hd.Count -ne 1 -or $hd[0] -cne '"xHCI98 helper for 32-bit Windows 2000, XP, Vista and 7 (xhcihlpr)"') { & $add "CM-HLPR" "[Strings] must define XhciHlprSvcDesc once as xhci98.inf does, so either INF writes the same DisplayName." }
+        if ($hd.Count -ne 1 -or $hd[0] -cne '"xHCI98 helper for 32-bit Windows 2000 to 10 (xhcihlpr)"') { & $add "CM-HLPR" "[Strings] must define XhciHlprSvcDesc once as xhci98.inf does, so either INF writes the same DisplayName." }
         # Any other section copying or installing it: the 98 SE and ME path,
         # the right-click sections.
         foreach ($s in $sections) {

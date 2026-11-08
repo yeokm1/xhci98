@@ -1,4 +1,4 @@
-#Requires -Version 2.0
+#Requires -Version 4.0
 <#
 stage-ddk.ps1 - find the Windows 98 SE DDK members S98VSD.VXD is compiled
 against and linked with, hold each to the SHA-256 docs\references\README.md
@@ -23,8 +23,10 @@ cut, since Open Watcom reads past it; and AEP.H's three
 every object, become "} AEP_x, *PAEP_x;". The second must match exactly
 three times or the staging fails.
 
-With -VerifyOnly nothing is copied: the members, and the linker pair
-already in obj\bin\, are held to the hashes.
+With -VerifyOnly nothing is copied: the members, and the linker pair in
+obj\bin\, are held to the hashes; a linker copy that is not there fails.
+
+Get-FileHash needs PowerShell 4.0.
 
 Exit code 0 = staged (or verified); 1 = a member missing or at another hash.
 #>
@@ -83,9 +85,13 @@ foreach ($w in $want) {
     if ($got -ne $hash) { Fail ("{0} hashes to {1}, not the {2} the README records" -f $found, $got, $hash) }
     $copy = Join-Path $obj $w.To
     if ($VerifyOnly) {
-        if (-not $w.Header -and (Test-Path -LiteralPath $copy) -and
-            (Get-FileHash -LiteralPath $copy -Algorithm SHA256).Hash.ToUpperInvariant() -ne $hash) {
-            Fail ("{0} is not the {1} the README records; rebuild (src\vsd\build.cmd)" -f $copy, $w.Member)
+        if (-not $w.Header) {
+            if (-not (Test-Path -LiteralPath $copy -PathType Leaf)) {
+                Fail ("{0} is not there to verify; stage it (src\vsd\build.cmd)" -f $copy)
+            }
+            if ((Get-FileHash -LiteralPath $copy -Algorithm SHA256).Hash.ToUpperInvariant() -ne $hash) {
+                Fail ("{0} is not the {1} the README records; rebuild (src\vsd\build.cmd)" -f $copy, $w.Member)
+            }
         }
         Write-Output ("verified {0} (SHA-256 as recorded)" -f $w.Member)
         continue
@@ -97,7 +103,8 @@ foreach ($w in $want) {
     }
     $bytes = [System.IO.File]::ReadAllBytes($found)
     $cut = [Array]::IndexOf($bytes, [byte]26)
-    if ($cut -ge 0) { $bytes = $bytes[0..($cut - 1)] }
+    # A Ctrl-Z at offset 0 leaves nothing; $bytes[0..-1] would be two bytes.
+    if ($cut -eq 0) { $bytes = [byte[]]@() } elseif ($cut -gt 0) { $bytes = $bytes[0..($cut - 1)] }
     $text = [System.Text.Encoding]::ASCII.GetString($bytes)
     if ($w.Member -eq 'INC_WIN98_AEP.H') {
         $re = '\} (AEP_\w+); \*(PAEP_\w+);'

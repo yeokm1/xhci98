@@ -44,6 +44,7 @@
 #include "polltun.h"
 #include "xfertun.h"
 #include "pcicap.h"
+#include "rmw.h"
 
 //
 // Adapter states (PLAN 0.7). One variable, changed only through
@@ -119,7 +120,7 @@
 #define ENG_FAIL_SUBMIT         7
 #define ENG_FAIL_CAPS           8   // queue capability validation (0.9)
 #define ENG_FAIL_RESET_TIMEOUT  9   // reset disable not acknowledged within CAP.TO
-// 10 was ENG_FAIL_STORM: retired in review round 3 (N1), a storm never disables the controller
+// 10 was ENG_FAIL_STORM: retired, a storm never disables the controller (lifecycle.c, "Interrupt storms")
 #define ENG_FAIL_IDLE_FLUSH     11  // the internal idle Flush missed its deadline (no port timeout covers it)
 #define ENG_FAIL_REOPEN         12  // contact regained in gone with CC.EN=1 or RDY=1 (reopen invariant, PLAN 0.10)
 
@@ -131,7 +132,15 @@
 #define ENG_MAX_PARENTS     32
 #define ENG_MAX_CHILDREN    64
 #define ENG_PRP_PAGES       8   // PRP list pages (also the Get Log Page data pages)
-#define ENG_BOUNCE_PAGES    8   // bounce buffer pages (PLAN 0.4, MD-3 (a): uncached extension)
+// Bounce pages (PLAN 0.4, MD-3 (a): uncached extension; MD-4 on 9x): the
+// general pool (a bounced child is cut to at most that many pages), then the
+// two edge pages of the one read-modify-write at a time (PLAN "4 KiB-sector
+// namespaces", "Bounce memory and its pools"), edge k at ENG_EDGE_FIRST + k.
+#define ENG_BOUNCE_GENERAL  8
+#define ENG_EDGE_PAGES      2
+#define ENG_EDGE_FIRST      ENG_BOUNCE_GENERAL
+#define ENG_EDGE_MASK       (((1UL << ENG_EDGE_PAGES) - 1) << ENG_EDGE_FIRST)
+#define ENG_BOUNCE_PAGES    (ENG_BOUNCE_GENERAL + ENG_EDGE_PAGES)
 #define ENG_ADMIN_CHILDREN  4   // admin children at once (Get Log Page)
 #define ENG_BUSY_TRACK      ENG_MAX_PARENTS // SRBs whose BUSY completions are counted (0.3, Q-NT)
 #define ENG_BUSY_LIMIT      20  // never a 21st BUSY for one SRB (Q-NT: the port fails it after 21)
@@ -162,6 +171,7 @@
 #define ENG_K_SHUTDOWN      3   // SRB_FUNCTION_SHUTDOWN (class 2): Flush, CC.SHN, SHST
 #define ENG_K_LOG           4   // NVMe Get Log Page for LOG SENSE / SAT / SMART IOCTL
 #define ENG_K_HELD          5   // any SRB held while not running; replayed through ScsiDispatch when running
+                                    // (software-only ones also after a completed shutdown notification)
 #define ENG_K_ABORT         6   // SRB_FUNCTION_ABORT_COMMAND waiting for its target
 #define ENG_K_RESET         7   // SRB_FUNCTION_RESET_BUS/DEVICE waiting for the disable acknowledgement
 
@@ -173,8 +183,27 @@
 #define ENG_PF_PRESET       0x10    // SrbStatus already set by the completion handler (ENG_K_LOG)
 #define ENG_PF_REPLAYED     0x20    // admitted by the replay of a held SRB
 #define ENG_PF_FUA          0x40    // READ/WRITE(10)/(16) with FUA (CDB byte 1 bit 3): every child carries NVMe FUA
+#define ENG_PF_VERIFY       0x80    // VERIFY(10)/(16) (ENG_K_RW, no data): NVMe Verify or reads into the bounce pages (47.22)
 
-// Cancellation (PLAN 0.10 "Parent cancellation", H1)
+// Edge work still to issue (ENG_PARENT.EdgeTodo; PLAN "4 KiB-sector
+// namespaces"): for edge k, its read (an unaligned READ's edge read, or an
+// unaligned WRITE's pre-read) and its write-back. A write's write-back bits
+// are set at admission, so work is left between the phases.
+#define ENG_ET_READ(k)      ((UCHAR)(0x01 << (k)))
+#define ENG_ET_WB(k)        ((UCHAR)(0x04 << (k)))
+#define ENG_ET_READS        0x03
+#define ENG_ET_WBS          0x0C
+
+// Read-modify-write phase (ENG_PARENT.RmwPhase)
+#define ENG_RMW_NONE        0       // aligned, or a READ
+#define ENG_RMW_PRE         1       // pre-reads to issue or outstanding; nothing written yet
+#define ENG_RMW_WRITE       2       // edges patched: write-backs and middle
+
+// Work left to dispatch, and stopping it (first error, cancellation)
+#define ENG_WORK_LEFT(p)    ((p)->BlocksLeft != 0 || (p)->EdgeTodo != 0)
+#define ENG_STOP_WORK(p)    ((p)->BlocksLeft = 0, (p)->EdgeTodo = 0)
+
+// Cancellation (PLAN 0.10 "Parent cancellation")
 #define ENG_CANCEL_NONE     0
 #define ENG_CANCEL_ABORT    1       // ABORTED
 #define ENG_CANCEL_RESET    2       // BUS_RESET
@@ -196,6 +225,10 @@ typedef struct _ENG_CHILD {
     UCHAR BouncePage;       // first bounce page, ENG_NONE if not bounced
     UCHAR BounceCount;
     UCHAR Internal;         // ENG_INT_*
+    UCHAR EdgeRef;          // TRUE: BouncePage is an edge page its parent owns (not freed with the child)
+    UCHAR Reserved[3];
+    ULONG CopySkip;         // a READ's copy at completion: from bounce + CopySkip ...
+    ULONG CopyBytes;        // ... this many bytes to the caller at BufOffset (0: no copy)
     USHORT Gen;             // CID generation of this slot
     USHORT Cid;
     ULONG Bytes;
@@ -234,6 +267,16 @@ typedef struct _ENG_PARENT {
     UCHAR PfRuns;           // physical runs seen so far, at most STOR98PF_RUN_WALK_MAX
     UCHAR PfNotSeen;        // a span was not translated (bounced): the layout is not known
     USHORT PfReserved;
+    // 512-byte sectors on larger blocks (PLAN "4 KiB-sector namespaces"):
+    // NextLba / BlocksLeft / NextOffset are the aligned middle, in native
+    // blocks; the edges are below. Range is what the overlap rules read.
+    RMW_RANGE Range;
+    ULONG EdgeOffset[2];    // caller buffer offset of edge k's bytes
+    ULONG EdgeSkip[2];      // their offset in the native block
+    ULONG EdgeBytes[2];     // their length
+    UCHAR EdgeTodo;         // ENG_ET_*
+    UCHAR RmwPhase;         // ENG_RMW_*
+    USHORT EdgeReserved;
 } ENG_PARENT, *PENG_PARENT;
 
 typedef struct _ENG_BUSY {
@@ -264,11 +307,12 @@ typedef struct _ENG_TUNABLES {
     ULONG Magic;            // ENG_TUNABLES_MAGIC once parsed
     ULONG GoneMs;           // gone deadline (MD-1), 5 s
     ULONG IdleFlushMs;      // MD-7 (a) write-idle time before the timer's Flush
-    ULONG GoneMarginMs;     // per-SRB bound margin (R6-6)
+    ULONG GoneMarginMs;     // per-SRB bound margin (PLAN 0.10 "Per-SRB bound")
     ULONG HoldMarginMs;     // hold-then-BUSY: TimeOutValue minus this (0.3)
     ULONG Hold9xMs;         // 9x fixed hold bound (TimeOutValue unusable, G9); StorHold9xMs
     ULONG FragBytes;        // test: maximum child size (0 = MDTS / port limit)
     ULONG ForceBounce;      // test: bounce every data child (exercises 0.4 bounce)
+    ULONG VfyRead;          // test: VERIFY by reads into the bounce pages even where NVMe Verify is there (47.22)
     ULONG Sg9xFailEvery;    // test (9x): every Nth caller-buffer copy reports unresolved (failure paths)
     ULONG Sg9xFailCount;    // test: copies counted for Sg9xFailEvery
     ULONG CalPct;           // test: TSC calibration scaled to this percent (0 = as measured)
@@ -296,7 +340,7 @@ typedef struct _ENG_TUNABLES {
 // unmasked on trial after the polling hold, which doubles up to its maximum.
 #define ENG_STORM_INTS      1000
 #define ENG_STORM_WINDOW_MS 1000
-#define ENG_IDLE_FLUSH_TO_MS 30000 // idle Flush deadline (review round 4): no SRB, so no port timeout
+#define ENG_IDLE_FLUSH_TO_MS 30000 // idle Flush deadline: no SRB, so no port timeout
 #define ENG_POLL_HOLD_MS    2000
 #define ENG_POLL_HOLD_MAX_MS 60000
 
@@ -322,6 +366,8 @@ VOID EngStop(IN struct _HW_DEVICE_EXTENSION *DevExt);
 
 // Request submission from the SCSI handlers
 BOOLEAN EngSubmitReadWrite(IN struct _HW_DEVICE_EXTENSION *DevExt, IN PSCSI_REQUEST_BLOCK Srb);
+BOOLEAN EngSubmitVerify(IN struct _HW_DEVICE_EXTENSION *DevExt, IN PSCSI_REQUEST_BLOCK Srb, IN ULONGLONG Lba,
+                        IN ULONG Count);
 // Counter answer (docs/PLAN.md MD-8): a data SRB at HwStartIo's entry, and a
 // software answer copied to the SRB's data (fragment by fragment on 9x;
 // FALSE, nothing copied, when its buffer cannot be resolved).
@@ -359,6 +405,8 @@ BOOLEAN EngSubmitInternalFlush(IN struct _HW_DEVICE_EXTENSION *DevExt, IN UCHAR 
 VOID EngShutdownFlushed(IN struct _HW_DEVICE_EXTENSION *DevExt, IN ULONG Index, IN USHORT Status);
 ULONG EngIssuedChildren(IN struct _HW_DEVICE_EXTENSION *DevExt);
 VOID EngEnterGone(IN struct _HW_DEVICE_EXTENSION *DevExt, IN ULONG Source);
+VOID EngEdgeRelease(IN struct _HW_DEVICE_EXTENSION *DevExt, IN ULONG Index);
+VOID EngEdgeGiveBack(IN struct _HW_DEVICE_EXTENSION *DevExt);
 
 // Engine CIDs carry bit 15; bring-up admin CIDs (1-5) do not.
 #define ENG_CID_FLAG        0x8000

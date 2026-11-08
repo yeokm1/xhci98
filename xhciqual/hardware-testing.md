@@ -97,7 +97,7 @@ press ESC at a pager prompt to disable further pauses.
 
 | Controller | Best first device | Useful second device | Notes |
 |---|---|---|---|
-| xHCI | An inexpensive, expendable USB 2.0 flash drive or blank USB 2.0 card reader | A basic wired USB mouse/keyboard; then a USB 2.0 hub | The project manages xHCI USB2 protocol ports only. An explicit USB 2.0 device is less ambiguous than a USB 3.x storage device. |
+| xHCI | An inexpensive, expendable USB 2.0 flash drive or blank USB 2.0 card reader | A basic wired USB mouse/keyboard; then a USB 2.0 hub | This tool's C6 and C8 exercise xHCI USB2 protocol ports only (the driver drives SuperSpeed too). An explicit USB 2.0 device is less ambiguous than a USB 3.x storage device. |
 | EHCI | An inexpensive USB 2.0 High-Speed flash drive/card reader | Another known High-Speed USB 2.0 device | EHCI owns High-Speed devices. Full-/Low-Speed HID is commonly routed to an OHCI/UHCI companion and may correctly produce C6 WARN/SKIP on EHCI. |
 | OHCI | A simple wired USB 1.1/2.0 mouse or keyboard that operates at Full-/Low-Speed | An old Full-Speed flash drive or card reader | Use a direct port for the first pass. OHCI C4 WARN is currently expected; see below. |
 | Mixed controllers | One visibly different device per controller | A basic USB 2.0 hub after direct-port tests pass | Physical connector-to-controller routing is machine-specific. Use the single-family runs to map ports before the mixed run. |
@@ -123,7 +123,8 @@ CAVEATS` (the same, but `Interrupt Pin = 0`: no line interrupt, so the driver
 polls the controller, or an MSI-capable OS takes a message interrupt - since
 2.2.0.3, roadmap-hcd task 36.10; until then it disqualified), `DISQUALIFIED`
 (something a read-only pass genuinely sees: no xHCI function, BAR0 unusable or
-above 4 GB, no USB2 protocol ports), and `CANNOT SAY` (the controller is not
+above 4 GB; no USB2 protocol ports is a caveat from 3.4.2.0, as C6 and C8
+cannot exercise such a controller), and `CANNOT SAY` (the controller is not
 in D0, or Memory Space Enable is clear). The screen ends on the verdict
 and does not print a next command (`README.md`, "Start here").
 
@@ -648,7 +649,8 @@ Done.
 C1 may be WARN if firmware never advertised or released ownership; retain
 the log and BIOS settings. C8 is informational: a C8 WARN/FAIL does not by
 itself disqualify a controller that passed C1-C4. A USB 3.x device placed
-only on an xHCI SuperSpeed logical port is intentionally unmanaged and can
+only on an xHCI SuperSpeed logical port is not exercised by this tool (C6
+and C8 use the USB 2.0 ports; the driver itself drives SuperSpeed) and can
 produce C6 SKIP; attach an explicit USB 2.0 device for the qualification
 pass.
 
@@ -854,9 +856,9 @@ release notes carry applies in full:
 > driver does not list, and at your own risk. Everyone else should use 0
 > or 1.
 
-Send the `PROBE.LOG` with any report of such a part, and an `XHCISNAP`
-report with `psw.mode` 2 and its route records, so the list can grow by its
-id.
+Send the `PROBE.LOG` with any report of such a part, and the driver's
+snapshot (`XHCITR /snapshot`) with `psw.mode` 2 and its route records, so
+the list can grow by its id.
 
 Why this class gets its own note: the 7-, 8- and 9-series PCH and Wellsburg
 (C610/X99) are the last Intel parts carrying both EHCI and xHCI, so they are
@@ -909,8 +911,8 @@ routed to xHCI - a perfect init will see no connects".
 Demonstrating the mux does need a device, because "routed to xHCI" is a
 register value while "the port therefore reports a connect" is C6/C8. Run
 `5XDEV` with an expendable USB 2.0 flash drive in the first blue connector; a
-USB 3.x device on a SuperSpeed logical port is intentionally unmanaged and
-can report C6 SKIP. Then run one scan per remaining connector to map every
+USB 3.x device on a SuperSpeed logical port is not exercised by this tool
+(C6 and C8 use the USB 2.0 ports) and can report C6 SKIP. Then run one scan per remaining connector to map every
 physical receptacle to a controller. Together with C7's register reading,
 that physical map is the routing evidence, so it belongs in the results
 README.
@@ -1053,9 +1055,9 @@ is wired to is a per-machine fact. For such a report, take
 `XHCIQUAL --probe-only --no-page --log PROBE.LOG` first, say which
 controller the connector the device stops on belongs to where it can be
 told (the controller id under which Device Manager or `lsusb -t` lists the
-device on a current system), and send both with the driver's `XHCISNAP`
-reports (`docs/contributing/failure-diagnosis.md`, "A device stops until
-it is replugged").
+device on a current system), and send both with the driver's snapshot
+files (`XHCITR /snapshot`; `docs/contributing/failure-diagnosis.md`, "A
+device stops until it is replugged").
 
 ### ThinkPad P14s Gen 1 - does the `$PIR` list the Thunderbolt root port?
 
@@ -1106,3 +1108,44 @@ pin swizzles to, and a hot-add is still the proof. Note any entries on
 other buses the `NO ENTRY` line counts: a table may describe a device
 behind a bridge directly, and whether such an entry matches a function
 behind the tunnel depends on the bus number that function is given.
+
+### ThinkPad P14s Gen 1 - does the firmware name its USB stick?
+
+Roadmap-usb4 task 47.24, for design record 37's Q1. On the P14s under
+Windows 98 SE a USB stick plugged in at power-on keeps the start from
+reaching the desktop (`docs/contributing/runs/run-47.md`, "Boot with a USB
+stick attached (P14s report)"). Whether the firmware names that stick by
+an EDD 3.0 device path on its xHCI, through INT 13h function 48h, decides
+what record 37's Q2 can offer. It has to be read while the firmware still
+owns the controller, before Windows starts, so:
+
+1. Copy `XHCIQUAL.EXE` to `C:\` (the internal disk, never the stick).
+2. Shut the machine down. Plug the stick into the port it was in for the
+   report.
+3. Power on. As Windows 98 starts, hold Ctrl (or press F8) for the Startup
+   Menu, and choose 5, "Command prompt only". (`BootMenu=1` in the
+   `[Options]` section of `C:\MSDOS.SYS` shows the menu at every start.)
+   Not "Restart in MS-DOS mode": by then Windows has run and `xhci98.sys`
+   has taken the controller, so the firmware's answer means nothing. Load
+   no EMM386 (HIMEM is fine).
+4. At `C:\>`:
+
+   ```bat
+   XHCIQUAL --edd --log EDD.LOG
+   ```
+
+   Press a key at each `-- More --`. The last block, `EDD device path, per
+   unit:`, is the answer: for the stick's unit, `named as USB on the xHCI at
+   00:14.0` is the yes Q1 asks; `no device path` is the no. Any other line
+   says which check failed, and the log has every field.
+5. If the machine stops, the last line on the screen names the unit and
+   function it stopped in: photograph it, then power off.
+6. Optional, as a control: the same with no stick, `XHCIQUAL --edd --log
+   EDD0.LOG`.
+7. Start Windows and keep `C:\EDD.LOG` (and `EDD0.LOG`) with the run's
+   other logs.
+
+The log names the machine (make, model, BIOS) and never the stick: the
+device path's bytes, which can hold its serial number, print as `xx`.
+Run inside a Windows MS-DOS Prompt the tool refuses (exit 2), since INT 13h
+there is Windows' own.

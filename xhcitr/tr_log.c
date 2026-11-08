@@ -252,7 +252,7 @@ int tr_snap_window(const unsigned char *buf, size_t returned, TR_SNAPW *w)
         return TR_SW_BAD;
     }
     w->UuStatus = trlGet(buf, TR_UU_STATUS);
-    if (w->UuStatus == TR_SNAP_UU_NOT_SUPPORTED) {
+    if (w->UuStatus == TR_SNAP_UU_MINIPORT_ERROR) {
         return TR_SW_OFF;
     }
     if (w->UuStatus != 0) {
@@ -543,6 +543,7 @@ int tr_xhq_xport_find(const TR_XHQ *x, TR_U32 port, TR_U32 route,
         r->Inputs = trlGet(p, XHQ_X_INPUTS);
         r->Triple = trlGet(p, XHQ_X_TRIPLE);
         r->Count = trlGet(p, XHQ_X_COUNT);
+        r->Driver = x->DriverVersion;
         return 1;
     }
     return 0;
@@ -607,13 +608,15 @@ void tr_xport_text(const TR_XPORT *r, char *out, size_t cap)
     tr_sprintf(out + strlen(out), cap - strlen(out), "%s", more);
 }
 
-int tr_xport_stale(const TR_XPORT *r, const char *service)
+/* 1 when `service` is `name` (seven lower-case letters), compared without
+ * case or a ".sys". */
+static int trlServiceIs(const char *service, const char *name)
 {
     char s[16];
     size_t n;
     size_t i;
 
-    if (r == NULL || service == NULL || r->Transport != TR_XPORT_UAS) {
+    if (service == NULL) {
         return 0;
     }
     n = strlen(service);
@@ -630,7 +633,27 @@ int tr_xport_stale(const TR_XPORT *r, const char *service)
         s[i] = (char)((c >= 'A' && c <= 'Z') ? c + 32 : c);
     }
     s[n] = '\0';
-    return strcmp(s, "usbstor") == 0;
+    return strcmp(s, name) == 0;
+}
+
+int tr_xport_stale(const TR_XPORT *r, const char *service)
+{
+    if (r == NULL || r->Transport != TR_XPORT_UAS) {
+        return 0;
+    }
+    return trlServiceIs(service, "usbstor");
+}
+
+int tr_xport_unrunnable(const TR_XPORT *r, const char *service)
+{
+    if (r == NULL || r->Transport != TR_XPORT_BOT ||
+        (r->Inputs & (TR_XPORT_F_SUPERSPEED | TR_XPORT_F_HC_STREAMS |
+                      TR_XPORT_F_BOT_OWN_ID)) != TR_XPORT_F_SUPERSPEED ||
+        !trlServiceIs(service, "xhciuas")) {
+        return TR_XPORT_UNRUN_NO;
+    }
+    return r->Driver >= TR_XPORT_OWN_ID_DRIVER ? TR_XPORT_UNRUN_GATE
+                                               : TR_XPORT_UNRUN_OLD;
 }
 
 void tr_xhq_log_text(TR_TEXT *t, const TR_XHQ *x, int nt)

@@ -509,7 +509,7 @@ A `CALL` line per engine routine with its `RETERR`; a `RESULT` line with
 one verdict word; an `ERROR` line with the engine's error name
 (`ERR_DI_*`, from the header's enumeration) and number where a call
 failed; `END` with the count. The installer's pure half parses it
-(`inst_di_result`, host-tested on every verdict and on a truncated file):
+(`inst_di_parse` (designed as `inst_di_result`), host-tested on every verdict and on a truncated file):
 no `END`, a count that differs, a version that is not the installer's, a
 `JOB` that is not the one started (the job file's `JOB`, `DEVICE` and
 `INF` records, in that order, as section 4.4 says), or an unknown verdict

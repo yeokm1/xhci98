@@ -58,6 +58,16 @@
 #include "nvme2k.h"
 #include "utils.h"
 #include "prpchk.h"
+#include "vfychk.h"
+#include "prprun.h"
+
+// The physically contiguous run the port last stated while one child's
+// PRPs are built (EngMapCaller; src/prprun.h).
+typedef struct _ENG_PRP_RUN {
+    ULONG Off;              // child offset the port was asked for
+    ULONGLONG Pa;           // its physical address
+    ULONG Len;              // contiguous bytes from there, at most the rest of the child
+} ENG_PRP_RUN, *PENG_PRP_RUN;
 #ifdef NVME2K_W9X
 #include "sg9x.h"
 #endif
@@ -362,11 +372,13 @@ static UCHAR EngBounceAlloc(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG Count)
     ULONG first;
     ULONG mask;
 
-    if (Count == 0 || Count > ENG_BOUNCE_PAGES) {
+    // General pages only: the edge pages above them are the read-modify-
+    // write's (EngEdgeTake).
+    if (Count == 0 || Count > ENG_BOUNCE_GENERAL) {
         return ENG_NONE;
     }
     mask = (Count == 32) ? 0xFFFFFFFF : ((1UL << Count) - 1);
-    for (first = 0; first + Count <= ENG_BOUNCE_PAGES; first++) {
+    for (first = 0; first + Count <= ENG_BOUNCE_GENERAL; first++) {
         if (!(DevExt->BounceBitmap & (mask << first))) {
             DevExt->BounceBitmap |= (mask << first);
             return (UCHAR)first;
@@ -428,6 +440,9 @@ static PENG_CHILD EngChildAlloc(IN PHW_DEVICE_EXTENSION DevExt, IN BOOLEAN Admin
             c->BouncePage = ENG_NONE;
             c->BounceCount = 0;
             c->Internal = ENG_INT_NONE;
+            c->EdgeRef = FALSE;
+            c->CopySkip = 0;
+            c->CopyBytes = 0;
             c->Bytes = 0;
             c->BufOffset = 0;
             c->FlushGen = 0;
@@ -442,10 +457,14 @@ static PENG_CHILD EngChildAlloc(IN PHW_DEVICE_EXTENSION DevExt, IN BOOLEAN Admin
 // isolation evidence (PLAN 0.10).
 static VOID EngChildRelease(IN PHW_DEVICE_EXTENSION DevExt, IN PENG_CHILD c)
 {
+    BOOLEAN edge = (BOOLEAN)(c->EdgeRef != 0);
+
     if (c->PrpPage != ENG_NONE) {
         EngPrpFree(DevExt, c->PrpPage);
     }
-    EngBounceFree(DevExt, c->BouncePage, c->BounceCount);
+    if (!edge) {
+        EngBounceFree(DevExt, c->BouncePage, c->BounceCount);
+    }
     if (c->State == ENG_CH_ISSUED) {
         if (c->Admin) {
             DevExt->ChildrenAdmin--;
@@ -474,6 +493,69 @@ static VOID EngChildRelease(IN PHW_DEVICE_EXTENSION DevExt, IN PENG_CHILD c)
     c->BouncePage = ENG_NONE;
     c->BounceCount = 0;
     c->Parent = ENG_NONE;
+    c->EdgeRef = FALSE;
+    if (edge) {
+        // An edge page goes back only when no parent owns it and no other
+        // child still uses it; this child is free now.
+        EngEdgeGiveBack(DevExt);
+    }
+}
+
+//
+// Edge pages (PLAN "4 KiB-sector namespaces", "Bounce memory and its
+// pools"): the two pages of the one read-modify-write at a time. A page is
+// allocated (BounceBitmap) from EngEdgeTake until no parent owns the pair
+// (EdgeOwner) and no child that used it is issued or quarantined.
+//
+VOID EngEdgeGiveBack(IN PHW_DEVICE_EXTENSION DevExt)
+{
+    ULONG k, i;
+    UCHAR page;
+    BOOLEAN used;
+
+    if (DevExt->EdgeOwner != ENG_NONE) {
+        return;
+    }
+    for (k = 0; k < ENG_EDGE_PAGES; k++) {
+        page = (UCHAR)(ENG_EDGE_FIRST + k);
+        used = FALSE;
+        for (i = 0; i < ENG_MAX_CHILDREN; i++) {
+            if (DevExt->Children[i].State != ENG_CH_FREE && DevExt->Children[i].EdgeRef &&
+                DevExt->Children[i].BouncePage == page) {
+                used = TRUE;
+                break;
+            }
+        }
+        if (!used) {
+            DevExt->BounceBitmap &= ~(1UL << page);
+        }
+    }
+}
+
+// The parent Index no longer needs the edge pages (it completed, or the
+// stop forgot it): ownership ends; the pages its quarantined children still
+// use stay allocated.
+VOID EngEdgeRelease(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG Index)
+{
+    if (DevExt->EdgeOwner == (UCHAR)Index) {
+        DevExt->EdgeOwner = ENG_NONE;
+        EngEdgeGiveBack(DevExt);
+    }
+}
+
+// Both edge pages for parent Index, or FALSE while another parent owns them
+// or a child still uses one (quarantined included).
+static BOOLEAN EngEdgeTake(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG Index)
+{
+    if (DevExt->EdgeOwner == (UCHAR)Index) {
+        return TRUE;
+    }
+    if (DevExt->EdgeOwner != ENG_NONE || (DevExt->BounceBitmap & ENG_EDGE_MASK) != 0) {
+        return FALSE;
+    }
+    DevExt->BounceBitmap |= ENG_EDGE_MASK;
+    DevExt->EdgeOwner = (UCHAR)Index;
+    return TRUE;
 }
 
 // No isolation evidence for this child: keep its slot, CID and pages out of
@@ -543,7 +625,7 @@ VOID EngChildrenSettle(IN PHW_DEVICE_EXTENSION DevExt, IN BOOLEAN Evidence)
     }
     if (!Evidence) {
         DBGSTAGE(STG_QUARANTINE, (DevExt->Quarantined & 0xFF) | ((DevExt->PrpQuarantineBitmap & 0xFF) << 8) |
-                 ((DevExt->BounceQuarantineBitmap & 0xFF) << 16));
+                 ((DevExt->BounceQuarantineBitmap & 0xFFFF) << 16));
     }
     PlatDmaSettle(DevExt, Evidence);
 }
@@ -693,7 +775,15 @@ VOID EngFinishParent(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG Index)
     }
     srb = p->Srb;
     EngParentStatus(DevExt, p, srb);
-    if (p->Kind == ENG_K_RW) {
+    if (p->Kind == ENG_K_RW && (p->Flags & ENG_PF_VERIFY)) {
+        // A VERIFY (47.22): no data counters (MD-8); its size, mode and
+        // time for the legs.
+        ULONG ms = EngMsSince(DevExt, p->AdmitTime);
+
+        DBGSTAGE(STG_VFY_DONE, (ms > 0xFFFF ? 0xFFFF : ms) | ((ULONG)(p->Issued > 0xFFF ? 0xFFF : p->Issued) << 16) |
+                 ((ULONG)(SRB_STATUS(srb->SrbStatus) != SRB_STATUS_SUCCESS) << 28) |
+                 ((ULONG)(DevExt->VerifyCmd && !DevExt->Tun.VfyRead) << 29));
+    } else if (p->Kind == ENG_K_RW) {
         if (SRB_STATUS(srb->SrbStatus) == SRB_STATUS_SUCCESS && PfRunClass(p->Bytes) < STOR98PF_RUN_CLASSES) {
             PfAdd(&DevExt->Pf.Runs[PfRunClass(p->Bytes)][PfRunBucket(p->PfRuns, (BOOLEAN)(p->PfNotSeen != 0))], 1);
         }
@@ -705,6 +795,7 @@ VOID EngFinishParent(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG Index)
     }
     p->Srb = NULL;
     p->State = ENG_PA_FREE;
+    EngEdgeRelease(DevExt, Index);
     DevExt->ParentsCompleted++;
     if ((DevExt->ParentsCompleted & 0xFF) == 0) {
         DBGSTAGE(STG_ENG_STATS, (DevExt->ParentsCompleted & 0xFFFF) | ((DevExt->StaleCqes & 0xFF) << 16) |
@@ -826,17 +917,22 @@ static BOOLEAN EngSubmitChild(IN PHW_DEVICE_EXTENSION DevExt, IN PENG_CHILD c, I
 //
 // Translation contract. Each PRP entry describes one span: entry 1 from the
 // buffer's offset to the end of its page (or to the end of the child), each
-// later entry one whole page (or the child's last partial page). Every span
-// is translated on its own, starting at its own address, so physical
-// contiguity is needed only inside one page, which a page always has. The
-// length the port returns is the physically contiguous length from that
-// address; it must cover the whole span, or the mapping is refused (reason
-// 4) and the child bounced: a shorter length means the port could not vouch
-// for the span. NT ports return the contiguous run (at least to the end of
-// the page). The Windows 98 SE port returns at most the length to the end
-// of the page (engine runs, 2026-10-15), which by construction covers each
-// span; were a 9x port ever to return less, the check bounces the child
-// rather than trust it.
+// later entry one whole page (or the child's last partial page). The length
+// the port returns is the physically contiguous length from the address
+// asked for (the port is asked for the rest of the child, and the run
+// kept is clamped to it whatever it answers); it must cover the whole span, or the mapping is refused (reason 4) and the child
+// bounced: a shorter length means the port could not vouch for the span.
+// A later span that lies wholly inside the run the port last stated takes
+// its address from that run without another call (src/prprun.h; design
+// record 30 section 13.6, C2); any other span is translated on its own, so
+// physical contiguity is never assumed beyond what the port stated. Every
+// entry, derived or translated, gets the same checks (PrpLaterOk,
+// EngSpanOk). NT ports return the contiguous run. The Windows 98 SE port
+// (S98VSD loaded, in the emulator, xhci98 3.4.2.0's C2 reading) returned
+// lengths past the end of the page for large linear buffers (512 KiB to
+// 2 MiB) and only to the end of the page for 64 to 256 KiB buffers and
+// single pages; where it states no more than the page, every span is
+// translated on its own as before.
 //
 static BOOLEAN EngSpanOk(IN PHYSICAL_ADDRESS Pa, IN ULONG Len, IN ULONG Need)
 {
@@ -859,6 +955,32 @@ static VOID EngPfSpan(IN PHW_DEVICE_EXTENSION DevExt, IN PENG_CHILD c, IN PHYSIC
     p->PfNextPa = (ULONGLONG)Pa.QuadPart + Len;
 }
 
+// The physical address of the span at child offset Off (Need bytes) after
+// entry 1: from the run the port last stated when the span lies wholly in
+// it, otherwise by a call that asks for the rest of the child, whose answer
+// becomes the run. *Len receives the contiguous bytes from the address (0
+// when the port could not translate).
+static PHYSICAL_ADDRESS EngMapNext(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb, IN PENG_CHILD c,
+                                   IN PUCHAR Va, IN ULONG Off, IN ULONG Need, IN OUT PENG_PRP_RUN Run,
+                                   OUT PULONG Len)
+{
+    PHYSICAL_ADDRESS pa;
+    ULONGLONG derived;
+    ULONG avail;
+
+    if (PrpRunDerive(Run->Off, Run->Pa, Run->Len, Off, Need, &derived, &avail)) {
+        pa.QuadPart = (LONGLONG)derived;
+        *Len = avail;
+        return pa;
+    }
+    *Len = c->Bytes - Off;
+    pa = ScsiPortGetPhysicalAddress(DevExt, Srb, Va + Off, Len);
+    Run->Off = Off;
+    Run->Pa = (ULONGLONG)pa.QuadPart;
+    Run->Len = PrpRunClamp(Off, *Len, c->Bytes);
+    return pa;
+}
+
 static ULONG EngMapCaller(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb, IN PENG_CHILD c,
                           IN PNVME_COMMAND Cmd)
 {
@@ -867,6 +989,7 @@ static ULONG EngMapCaller(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK
     PHYSICAL_ADDRESS pa;
     ULONG len, need, offsetInPage, firstBytes, pages, i;
     PULONGLONG list;
+    ENG_PRP_RUN run;
 
     len = c->Bytes;
     pa = ScsiPortGetPhysicalAddress(DevExt, Srb, va, &len);
@@ -876,6 +999,9 @@ static ULONG EngMapCaller(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK
     if (pa.QuadPart == 0) {
         return 3;
     }
+    run.Off = 0;
+    run.Pa = (ULONGLONG)pa.QuadPart;
+    run.Len = PrpRunClamp(0, len, c->Bytes);
     // PRP entry 1: DWORD aligned (bits 1:0 zero); its page offset is the
     // buffer's page offset.
     callerVa = EngCallerVa(Srb, c->BufOffset);
@@ -897,8 +1023,7 @@ static ULONG EngMapCaller(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK
     pages = (offsetInPage + c->Bytes + PAGE_SIZE - 1) / PAGE_SIZE;
     if (pages == 2) {
         need = c->Bytes - firstBytes;
-        len = need;
-        pa = ScsiPortGetPhysicalAddress(DevExt, Srb, va + firstBytes, &len);
+        pa = EngMapNext(DevExt, Srb, c, va, firstBytes, need, &run, &len);
         if (len == 0) {
             return 1;
         }
@@ -932,8 +1057,7 @@ static ULONG EngMapCaller(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK
         if (need > PAGE_SIZE) {
             need = PAGE_SIZE;
         }
-        len = c->Bytes - off;
-        pa = ScsiPortGetPhysicalAddress(DevExt, Srb, va + off, &len);
+        pa = EngMapNext(DevExt, Srb, c, va, off, need, &run, &len);
         if (len == 0) {
             why = 1;
         } else if (!PrpLaterOk(pa.LowPart)) {
@@ -987,10 +1111,13 @@ static BOOLEAN EngMapBounce(IN PHW_DEVICE_EXTENSION DevExt, IN PENG_CHILD c, IN 
 #define ENG_WAIT_PRP        3
 #define ENG_WAIT_BOUNCE     4
 #define ENG_WAIT_BARRIER    5
+#define ENG_WAIT_EDGE       6   // the edge pages (another read-modify-write, or quarantined)
+#define ENG_WAIT_OVERLAP    7   // an earlier parent shares an edge block (PLAN "Concurrency and ordering")
+#define ENG_WAIT_SELF       8   // its own pre-reads are outstanding: later parents may go (never logged)
 
-// Issues the next child of a READ/WRITE parent. Returns ENG_WAIT_NONE if a
-// child was issued (or the parent failed), or the capacity it waits for.
-static ULONG EngIssueRwChild(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG Index)
+// Issues the next middle child of a READ/WRITE parent. Returns ENG_WAIT_NONE
+// if a child was issued (or the parent failed), or the capacity it waits for.
+static ULONG EngIssueMidChild(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG Index)
 {
     PENG_PARENT p = &DevExt->Parents[Index];
     PSCSI_REQUEST_BLOCK srb = p->Srb;
@@ -1034,7 +1161,7 @@ static ULONG EngIssueRwChild(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG Index)
         }
     }
     if (bounce) {
-        ULONG maxBytes = ENG_BOUNCE_PAGES * PAGE_SIZE;
+        ULONG maxBytes = ENG_BOUNCE_GENERAL * PAGE_SIZE;
         ULONG pages;
 
         p->PfNotSeen = 1;
@@ -1070,8 +1197,11 @@ static ULONG EngIssueRwChild(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG Index)
             c->State = ENG_CH_FREE;
             DBGSTAGE(STG_ENG_MAP_FAIL, ENG_MAP_UNRESOLVED | (Index << 8));
             EngParentError(p, SRB_STATUS_ERROR, SCSI_SENSE_HARDWARE_ERROR, 0x44, 0x00, 0);
-            p->BlocksLeft = 0;
+            ENG_STOP_WORK(p);
             return ENG_WAIT_NONE;
+        }
+        if (c->Opcode == NVME_CMD_READ) {
+            c->CopyBytes = bytes;
         }
         DBGSTAGE(STG_ENG_BOUNCE, c->Cid | (pages << 16) | ((ULONG)(DevExt->Tun.ForceBounce != 0) << 24));
     }
@@ -1110,6 +1240,263 @@ static ULONG EngIssueRwChild(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG Index)
     p->NextOffset += bytes;
     p->BlocksLeft -= blocks;
     return ENG_WAIT_NONE;
+}
+
+//
+// The next child of a VERIFY parent (47.22; PLAN "VERIFY"): no data reaches
+// the caller and no caller buffer is mapped or copied. Where the controller
+// has NVMe Verify (DevExt->VerifyCmd), one Verify command (no data pointer)
+// of at most the read child size, 65536 blocks and the Verify Size Limit;
+// elsewhere, or with the test tunable VfyRead, one Read into the general
+// bounce pages of at most ENG_BOUNCE_GENERAL pages (32 KiB), CopyBytes 0, the
+// pages freed with the child or quarantined with it as a bounced read's.
+// Both with FUA, so the medium is read. Returns ENG_WAIT_NONE if a child was
+// issued, or the capacity it waits for.
+//
+static ULONG EngIssueVerifyChild(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG Index)
+{
+    PENG_PARENT p = &DevExt->Parents[Index];
+    PENG_CHILD c;
+    ULONG ci, blocks, pages, bs = DevExt->NamespaceBlockSize;
+    NVME_COMMAND cmd;
+    BOOLEAN useCmd = (BOOLEAN)(DevExt->VerifyCmd && !DevExt->Tun.VfyRead);
+
+    c = EngChildAlloc(DevExt, FALSE, &ci);
+    if (c == NULL) {
+        return ENG_WAIT_CHILDREN;
+    }
+    blocks = VfyChildBlocks(useCmd, p->BlocksLeft, DevExt->MaxChildBytes, bs, VfyVslBlocks(DevExt->Vsl, bs),
+                            ENG_BOUNCE_GENERAL * PAGE_SIZE);
+    c->Parent = (UCHAR)Index;
+    c->BufOffset = 0;
+    c->CopyBytes = 0;
+
+    RtlZeroMemory(&cmd, sizeof(cmd));
+    cmd.NSID = 1;
+    cmd.CDW0.Fields.Flags = NVME_CMD_PRP;
+    if (useCmd) {
+        c->Opcode = NVME_CMD_VERIFY;
+        c->Bytes = 0;
+        cmd.PRP1 = 0;
+        cmd.PRP2 = 0;
+    } else {
+        c->Opcode = NVME_CMD_READ;
+        c->Bytes = blocks * bs;
+        pages = (c->Bytes + PAGE_SIZE - 1) / PAGE_SIZE;
+        c->BouncePage = EngBounceAlloc(DevExt, pages);
+        if (c->BouncePage == ENG_NONE) {
+            c->State = ENG_CH_FREE;
+            return ENG_WAIT_BOUNCE;
+        }
+        c->BounceCount = (UCHAR)pages;
+        if (!EngMapBounce(DevExt, c, &cmd)) {
+            EngBounceFree(DevExt, c->BouncePage, c->BounceCount);
+            c->BouncePage = ENG_NONE;
+            c->BounceCount = 0;
+            c->State = ENG_CH_FREE;
+            return ENG_WAIT_PRP;
+        }
+    }
+    cmd.CDW10 = (ULONG)p->NextLba;
+    cmd.CDW11 = (ULONG)(p->NextLba >> 32);
+    cmd.CDW12 = (blocks - 1) | (1UL << 30);     // NLB 0-based; FUA: from the medium
+    if (!EngSubmitChild(DevExt, c, &cmd)) {
+        // Released by EngSubmitChild (its pages too), as the read path's.
+        return ENG_WAIT_CHILDREN;
+    }
+    DBGSTAGE(STG_VFY_CHILD, c->Cid | ((ULONG)c->Opcode << 16) | ((blocks > 0xFF ? 0xFF : blocks) << 24));
+    p->Flags |= ENG_PF_STARTED;
+    p->Outstanding++;
+    p->Issued++;
+    p->NextLba += blocks;
+    p->BlocksLeft -= blocks;
+    return ENG_WAIT_NONE;
+}
+
+//
+// 512-byte sectors on larger blocks (PLAN "4 KiB-sector namespaces"). An
+// edge child moves one native block through one bounce page (PRP1 only):
+// an unaligned READ's edge read (a general page of its own, its caller bytes
+// copied out at its completion), or an unaligned WRITE's pre-read or
+// write-back (edge page k of the pair the parent owns).
+//
+static ULONG EngIssueEdgeChild(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG Index, IN ULONG Edge, IN BOOLEAN WriteBack)
+{
+    PENG_PARENT p = &DevExt->Parents[Index];
+    PENG_CHILD c;
+    ULONG ci, bs = DevExt->NamespaceBlockSize;
+    NVME_COMMAND cmd;
+    BOOLEAN rmw = (BOOLEAN)((p->Flags & ENG_PF_WRITE) != 0);
+    BOOLEAN took = FALSE;
+
+    c = EngChildAlloc(DevExt, FALSE, &ci);
+    if (c == NULL) {
+        return ENG_WAIT_CHILDREN;
+    }
+    c->Parent = (UCHAR)Index;
+    c->BufOffset = p->EdgeOffset[Edge];
+    c->Bytes = bs;
+    if (rmw) {
+        // The pair is taken in the step that submits the first pre-read,
+        // so a parent that owns it has always started (never retired as a
+        // held request, LcFailHeldParents).
+        if (DevExt->EdgeOwner != (UCHAR)Index) {
+            if (!EngEdgeTake(DevExt, Index)) {
+                c->State = ENG_CH_FREE;
+                return ENG_WAIT_EDGE;
+            }
+            took = TRUE;
+        }
+        c->BouncePage = (UCHAR)(ENG_EDGE_FIRST + Edge);
+        c->BounceCount = 1;
+        c->EdgeRef = TRUE;
+        c->Opcode = (UCHAR)(WriteBack ? NVME_CMD_WRITE : NVME_CMD_READ);
+    } else {
+        c->BouncePage = EngBounceAlloc(DevExt, 1);
+        if (c->BouncePage == ENG_NONE) {
+            c->State = ENG_CH_FREE;
+            return ENG_WAIT_BOUNCE;
+        }
+        c->BounceCount = 1;
+        c->Opcode = NVME_CMD_READ;
+        c->CopySkip = p->EdgeSkip[Edge];
+        c->CopyBytes = p->EdgeBytes[Edge];
+        p->PfNotSeen = 1;
+    }
+    RtlZeroMemory(&cmd, sizeof(cmd));
+    cmd.NSID = 1;
+    cmd.CDW0.Fields.Flags = NVME_CMD_PRP;
+    cmd.PRP1 = EngBouncePa(DevExt, c->BouncePage);
+    cmd.PRP2 = 0;
+    cmd.CDW10 = (ULONG)p->Range.EdgeLba[Edge];
+    cmd.CDW11 = (ULONG)(p->Range.EdgeLba[Edge] >> 32);
+    cmd.CDW12 = 0;                          // one block
+    if (c->Opcode == NVME_CMD_WRITE && (DevExt->WtFua || (p->Flags & ENG_PF_FUA))) {
+        // A write-back is part of the write: FUA as every child of it.
+        cmd.CDW12 |= (1UL << 30);
+        DevExt->WtFuaWrites++;
+    } else if (c->Opcode == NVME_CMD_READ && !rmw && (p->Flags & ENG_PF_FUA)) {
+        // An edge read of a READ with FUA; a pre-read needs the block's
+        // current contents only, which an ordinary read returns.
+        cmd.CDW12 |= (1UL << 30);
+    }
+    if (!EngSubmitChild(DevExt, c, &cmd)) {
+        if (took) {
+            EngEdgeRelease(DevExt, Index);
+        }
+        return ENG_WAIT_CHILDREN;
+    }
+    if (rmw && !WriteBack && !(p->Flags & ENG_PF_STARTED)) {
+        DBGSTAGE(STG_RMW_PREREAD, Index | ((ULONG)p->Range.Edges << 8) |
+                 (((ULONG)p->Range.EdgeLba[0] & 0xFFFF) << 16));
+    }
+    PfAdd(&DevExt->Pf.CmdSize[c->Opcode == NVME_CMD_WRITE ? STOR98PF_WRITE : STOR98PF_READ][PfSizeBucket(bs)], 1);
+    PfAdd(&DevExt->Pf.Depth[PfDepthBucket(DevExt->ChildrenIo)], 1);
+    if (!rmw) {
+        PfAdd(&DevExt->Pf.Bounced, 1);
+    }
+    if (p->Issued == 1) {
+        PfAdd(&DevExt->Pf.Splits, 1);
+    }
+    p->EdgeTodo &= (UCHAR)~(WriteBack ? ENG_ET_WB(Edge) : ENG_ET_READ(Edge));
+    p->Flags |= ENG_PF_STARTED;
+    p->Outstanding++;
+    p->Issued++;
+    return ENG_WAIT_NONE;
+}
+
+// After the last pre-read: the caller's bytes into each edge page, every
+// edge before the first WRITE is submitted. FALSE: a copy could not be
+// resolved (9x), the parent failed with nothing of it written.
+static BOOLEAN EngRmwPatch(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG Index)
+{
+    PENG_PARENT p = &DevExt->Parents[Index];
+    ULONG k;
+
+    for (k = 0; k < p->Range.Edges; k++) {
+        if (!EngCallerCopy(DevExt, p->Srb, p->EdgeOffset[k],
+                           EngBounceVa(DevExt, (UCHAR)(ENG_EDGE_FIRST + k)) + p->EdgeSkip[k], p->EdgeBytes[k],
+                           FALSE)) {
+            DBGSTAGE(STG_ENG_MAP_FAIL, ENG_MAP_UNRESOLVED | (Index << 8));
+            EngParentError(p, SRB_STATUS_ERROR, SCSI_SENSE_HARDWARE_ERROR, 0x44, 0x00, 0);
+            ENG_STOP_WORK(p);
+            return FALSE;
+        }
+    }
+    DBGSTAGE(STG_RMW_PATCHED, Index | ((ULONG)p->Range.Edges << 8));
+    return TRUE;
+}
+
+// Issues the next child of a READ/WRITE parent, in buffer order: an edge
+// whose caller bytes start the buffer, the middle, the other edge. An
+// unaligned WRITE first issues its pre-reads (ENG_RMW_PRE), waits for them
+// (ENG_WAIT_SELF), and is patched before its first WRITE. Returns
+// ENG_WAIT_NONE if a child was issued (or the parent failed), or what it
+// waits for.
+static ULONG EngIssueRwChild(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG Index)
+{
+    PENG_PARENT p = &DevExt->Parents[Index];
+    ULONG k;
+    BOOLEAN wb;
+
+    if (p->Flags & ENG_PF_VERIFY) {
+        return EngIssueVerifyChild(DevExt, Index);
+    }
+    if (p->RmwPhase == ENG_RMW_PRE) {
+        for (k = 0; k < p->Range.Edges; k++) {
+            if (p->EdgeTodo & ENG_ET_READ(k)) {
+                return EngIssueEdgeChild(DevExt, Index, k, FALSE);
+            }
+        }
+        if (p->Outstanding != 0) {
+            return ENG_WAIT_SELF;
+        }
+        if (!EngRmwPatch(DevExt, Index)) {
+            return ENG_WAIT_NONE;
+        }
+        p->RmwPhase = ENG_RMW_WRITE;
+    }
+    wb = (BOOLEAN)(p->RmwPhase == ENG_RMW_WRITE);
+    for (k = 0; k < p->Range.Edges; k++) {
+        if (p->EdgeOffset[k] == 0 && (p->EdgeTodo & (wb ? ENG_ET_WB(k) : ENG_ET_READ(k)))) {
+            return EngIssueEdgeChild(DevExt, Index, k, wb);
+        }
+    }
+    if (p->BlocksLeft != 0) {
+        return EngIssueMidChild(DevExt, Index);
+    }
+    for (k = 0; k < p->Range.Edges; k++) {
+        if (p->EdgeTodo & (wb ? ENG_ET_WB(k) : ENG_ET_READ(k))) {
+            return EngIssueEdgeChild(DevExt, Index, k, wb);
+        }
+    }
+    return ENG_WAIT_NONE;
+}
+
+// The overlap rules (PLAN "Concurrency and ordering", src/rmw.h): TRUE when
+// an earlier unfinished READ/WRITE parent and this one, not yet started,
+// share an edge block of an unaligned write.
+static BOOLEAN EngOverlapWait(IN PHW_DEVICE_EXTENSION DevExt, IN PENG_PARENT p)
+{
+    ULONG i;
+    PENG_PARENT q;
+
+    if (DevExt->LbaShift == 0) {
+        return FALSE;           // one SCSI sector a native block: no edge to share
+    }
+    for (i = 0; i < ENG_MAX_PARENTS; i++) {
+        q = &DevExt->Parents[i];
+        if (q == p || q->State == ENG_PA_FREE || q->State == ENG_PA_PARKED || q->Kind != ENG_K_RW) {
+            continue;
+        }
+        if ((LONG)(q->Seq - p->Seq) >= 0) {
+            continue;
+        }
+        if (RmwMustWait(&q->Range, &p->Range)) {
+            return TRUE;
+        }
+    }
+    return FALSE;
 }
 
 // A Flush child, for a parent (Parent != ENG_NONE) or internal.
@@ -1263,14 +1650,17 @@ BOOLEAN EngParentsWaiting(IN PHW_DEVICE_EXTENSION DevExt)
 }
 
 //
-// SoftwareOnly (review round 3, N3): dispatch only the leading run of held
+// SoftwareOnly: dispatch only the leading run of held
 // requests that complete in software without starting hardware work
 // (ScsiCompletesInSoftware), in order, and stop at the first other one. The
 // timer runs this before its hold check, so a request such as INQUIRY held
 // through a bring-up that has just reached `running` is answered rather than
 // completed BUSY; anything that would start DMA is dispatched only after the
 // hold check, so one whose hold bound has passed still gets BUSY before any
-// child is issued (hold-then-BUSY, PLAN 0.3).
+// child is issued (hold-then-BUSY, PLAN 0.3). The same leading run is
+// answered after a completed shutdown notification (`shutdown`,
+// ENG_BU_SHN_DONE), where nothing else may be dispatched: a request that
+// needs no hardware does not re-enable the controller (LcShnStep).
 //
 static VOID EngDispatchEx(IN PHW_DEVICE_EXTENSION DevExt, IN BOOLEAN SoftwareOnly)
 {
@@ -1285,7 +1675,9 @@ static VOID EngDispatchEx(IN PHW_DEVICE_EXTENSION DevExt, IN BOOLEAN SoftwareOnl
     DevExt->InDispatch = TRUE;
     // A 9x removal transaction past its drain dispatches nothing more
     // (platform.h, PlatCmRemoveGate): undispatched work stays frozen.
-    while (DevExt->State == ENG_ST_RUNNING && !(PlatCmRemoveGate(DevExt) & PLAT_RM_GATE_DISPATCH)) {
+    while ((DevExt->State == ENG_ST_RUNNING ||
+            (SoftwareOnly && DevExt->State == ENG_ST_SHUTDOWN && DevExt->Bringup == ENG_BU_SHN_DONE)) &&
+           !(PlatCmRemoveGate(DevExt) & PLAT_RM_GATE_DISPATCH)) {
         idx = EngNextWaiting(DevExt);
         if (idx < 0) {
             break;
@@ -1317,12 +1709,23 @@ static VOID EngDispatchEx(IN PHW_DEVICE_EXTENSION DevExt, IN BOOLEAN SoftwareOnl
             DevExt->ReplayAdmitTime = 0;
             continue;
         case ENG_K_RW:
-            while (p->State == ENG_PA_WAITING && p->BlocksLeft > 0 && p->ErrSrbStatus == 0 &&
+            if (!(p->Flags & ENG_PF_STARTED) && EngOverlapWait(DevExt, p)) {
+                why = ENG_WAIT_OVERLAP;
+                break;
+            }
+            while (p->State == ENG_PA_WAITING && ENG_WORK_LEFT(p) && p->ErrSrbStatus == 0 &&
                    p->Cancel == ENG_CANCEL_NONE) {
                 why = EngIssueRwChild(DevExt, (ULONG)idx);
                 if (why != ENG_WAIT_NONE) {
                     break;
                 }
+            }
+            if (why == ENG_WAIT_SELF) {
+                // Its pre-reads are outstanding: it goes on from their
+                // completion; later parents are not held back.
+                why = ENG_WAIT_NONE;
+                p->State = ENG_PA_ISSUED;
+                continue;
             }
             if (why != ENG_WAIT_NONE) {
                 break;
@@ -1451,7 +1854,8 @@ VOID EngKick(IN PHW_DEVICE_EXTENSION DevExt)
     EngNotifyReady(DevExt, TRUE);
 }
 
-// The timer's dispatch before its hold check: software-only replays (N3).
+// The timer's dispatch before its hold check: software-only replays
+// (SoftwareOnly, above).
 VOID EngKickSoftware(IN PHW_DEVICE_EXTENSION DevExt)
 {
     EngDispatchEx(DevExt, TRUE);
@@ -1563,9 +1967,10 @@ BOOLEAN EngSubmitReadWrite(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOC
     ULONG blocks = 0;
     BOOLEAN isWrite = FALSE;
     BOOLEAN fua = FALSE;
-    ULONG bs = DevExt->NamespaceBlockSize;
     ULONGLONG bytes;
     PENG_PARENT p;
+    RMW_PLAN plan;
+    ULONG k;
 
     switch (cdb->CDB10.OperationCode) {
     case SCSIOP_READ6:
@@ -1602,14 +2007,15 @@ BOOLEAN EngSubmitReadWrite(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOC
         Srb->DataTransferLength = 0;
         return ScsiSuccess(DevExt, Srb);
     }
-    // Checked arithmetic and namespace bounds (1.3).
-    bytes = (ULONGLONG)blocks * bs;
-    if (bytes > Srb->DataTransferLength || bs == 0) {
+    // Checked arithmetic and namespace bounds (1.3), in the 512-byte sectors
+    // the OS sees (PLAN "4 KiB-sector namespaces").
+    bytes = (ULONGLONG)blocks * DevExt->ExposedBytes;   // the view's sectors (47.31)
+    if (bytes > Srb->DataTransferLength || DevExt->NamespaceBlockSize == 0) {
         Srb->ScsiStatus = SCSISTAT_CHECK_CONDITION;
         ScsiSetSense(DevExt, Srb, SCSI_SENSE_ILLEGAL_REQUEST, SCSI_ADSENSE_INVALID_CDB, 0);
         return ScsiError(DevExt, Srb, SRB_STATUS_ERROR);
     }
-    if (lba >= DevExt->NamespaceSizeInBlocks || (ULONGLONG)blocks > DevExt->NamespaceSizeInBlocks - lba) {
+    if (lba >= DevExt->ExposedBlocks || (ULONGLONG)blocks > DevExt->ExposedBlocks - lba) {
         Srb->ScsiStatus = SCSISTAT_CHECK_CONDITION;
         ScsiSetSense(DevExt, Srb, SCSI_SENSE_ILLEGAL_REQUEST, SCSI_ADSENSE_ILLEGAL_BLOCK, 0);
         return ScsiError(DevExt, Srb, SRB_STATUS_ERROR);
@@ -1629,13 +2035,70 @@ BOOLEAN EngSubmitReadWrite(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOC
     if (fua) {
         p->Flags |= ENG_PF_FUA;
     }
-    p->NextLba = lba;
-    p->BlocksLeft = blocks;
-    p->NextOffset = 0;
+    // Native units: the aligned middle as NextLba / BlocksLeft / NextOffset,
+    // the partly covered blocks as edges (src/rmw.h). With 512-byte blocks
+    // there are no edges and the middle is the request.
+    RmwPlan(lba, blocks, DevExt->LbaShift, &plan);    // native view: shift 0, no edges
+    p->NextLba = plan.MidLba;
+    p->BlocksLeft = plan.MidBlocks;
+    p->NextOffset = plan.MidOffset;
+    p->Range.First = plan.First;
+    p->Range.End = plan.End;
+    p->Range.Edges = (UCHAR)plan.Edges;
+    p->Range.Rmw = (UCHAR)(isWrite && plan.Edges != 0);
+    p->EdgeTodo = 0;
+    p->RmwPhase = (UCHAR)(p->Range.Rmw ? ENG_RMW_PRE : ENG_RMW_NONE);
+    for (k = 0; k < plan.Edges; k++) {
+        p->Range.EdgeLba[k] = plan.Edge[k].Lba;
+        p->EdgeOffset[k] = plan.Edge[k].Offset;
+        p->EdgeSkip[k] = plan.Edge[k].Skip;
+        p->EdgeBytes[k] = plan.Edge[k].Bytes;
+        p->EdgeTodo |= ENG_ET_READ(k);
+        if (isWrite) {
+            p->EdgeTodo |= ENG_ET_WB(k);
+        }
+    }
     p->Bytes = (ULONG)bytes;
     p->PfNextPa = 0;
     p->PfRuns = 0;
     p->PfNotSeen = 0;
+    EngDispatch(DevExt);
+    EngTimerEnsure(DevExt, ENG_TICK_WATCH_US);
+    return TRUE;
+}
+
+// VERIFY(10)/(16) that reads the medium (47.22; PLAN "VERIFY"): ScsiHandleVerify
+// has checked the CDB (VfyCheck: the fields, the range, the work bound) and
+// a count above 0. A READ-kind parent marked ENG_PF_VERIFY over the whole
+// native blocks the range touches, with no data (Bytes 0, nothing mapped or
+// copied: success completes with DataTransferLength 0) and the overlap range
+// set as a READ's, so it waits behind an unaligned write as a READ does.
+BOOLEAN EngSubmitVerify(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb, IN ULONGLONG Lba, IN ULONG Count)
+{
+    PENG_PARENT p;
+    ULONGLONG first;
+    ULONG blocks;
+
+    VfyNativeRange(Lba, Count, DevExt->LbaShift, &first, &blocks);
+    if (!EngAdmitOrBusy(DevExt, Srb, ENG_K_RW, &p)) {
+        return TRUE;
+    }
+    p->Flags |= ENG_PF_VERIFY;
+    p->NextLba = first;
+    p->BlocksLeft = blocks;
+    p->NextOffset = 0;
+    p->Range.First = first;
+    p->Range.End = first + blocks;      // exclusive
+    p->Range.Edges = 0;
+    p->Range.Rmw = 0;
+    p->EdgeTodo = 0;
+    p->RmwPhase = ENG_RMW_NONE;
+    p->Bytes = 0;
+    p->PfNextPa = 0;
+    p->PfRuns = 0;
+    p->PfNotSeen = 0;
+    DBGSTAGE(STG_VFY_ADMIT, (Count & 0xFFFF) | ((ULONG)(DevExt->VerifyCmd && !DevExt->Tun.VfyRead) << 16) |
+             ((ULONG)DevExt->LbaShift << 20) | ((ULONG)(p - DevExt->Parents) << 24));
     EngDispatch(DevExt);
     EngTimerEnsure(DevExt, ENG_TICK_WATCH_US);
     return TRUE;
@@ -1745,7 +2208,9 @@ VOID EngChildCompleted(IN PHW_DEVICE_EXTENSION DevExt, IN BOOLEAN Admin, IN USHO
     // Data copies first, while everything is still owned.
     copyFailed = FALSE;
     if (p != NULL && p->Srb != NULL && ok && c->BouncePage != ENG_NONE && c->Opcode == NVME_CMD_READ &&
-        !EngCallerCopy(DevExt, p->Srb, c->BufOffset, EngBounceVa(DevExt, c->BouncePage), c->Bytes, TRUE)) {
+        c->CopyBytes != 0 &&
+        !EngCallerCopy(DevExt, p->Srb, c->BufOffset, EngBounceVa(DevExt, c->BouncePage) + c->CopySkip, c->CopyBytes,
+                       TRUE)) {
         DBGSTAGE(STG_ENG_MAP_FAIL, ENG_MAP_UNRESOLVED | ((ULONG)c->Parent << 8));
         copyFailed = TRUE;
     }
@@ -1781,7 +2246,7 @@ VOID EngChildCompleted(IN PHW_DEVICE_EXTENSION DevExt, IN BOOLEAN Admin, IN USHO
     p->Outstanding--;
     if (copyFailed && p->Kind != ENG_K_SHUTDOWN) {
         EngParentError(p, SRB_STATUS_ERROR, SCSI_SENSE_HARDWARE_ERROR, 0x44, 0x00, 0);
-        p->BlocksLeft = 0;
+        ENG_STOP_WORK(p);
     }
     if (!ok && !(p->Flags & ENG_PF_PRESET)) {
         if (p->Kind == ENG_K_SHUTDOWN) {
@@ -1790,8 +2255,9 @@ VOID EngChildCompleted(IN PHW_DEVICE_EXTENSION DevExt, IN BOOLEAN Admin, IN USHO
             DBGSTAGE(STG_IO_ERROR, ((ULONG)SRB_STATUS_ERROR << 24) | Status);
         } else {
             EngMapNvmeError(p, Status);
-            // First error wins: no new children (parent error mapping).
-            p->BlocksLeft = 0;
+            // First error wins: no new children (parent error mapping); a
+            // failed pre-read leaves the whole write unissued.
+            ENG_STOP_WORK(p);
         }
     }
     if (p->Outstanding != 0) {
@@ -1802,7 +2268,7 @@ VOID EngChildCompleted(IN PHW_DEVICE_EXTENSION DevExt, IN BOOLEAN Admin, IN USHO
         // recovery that took over meanwhile (reset, quarantine, gone) is
         // authoritative: its state stands, the shutdown work it suppressed
         // is not resumed, and the SHUTDOWN SRB completes with the
-        // recovery's status (review round 2: a late Flush used to switch a
+        // recovery's status (revised: a late Flush used to switch a
         // resetting adapter to `shutdown`, abandoning the reset and
         // stranding its parked reset SRB).
         if (p->Cancel == ENG_CANCEL_NONE && DevExt->State == ENG_ST_RUNNING) {
@@ -1817,8 +2283,9 @@ VOID EngChildCompleted(IN PHW_DEVICE_EXTENSION DevExt, IN BOOLEAN Admin, IN USHO
         EngFinishParent(DevExt, (ULONG)(p - DevExt->Parents));
         return;
     }
-    if (p->BlocksLeft != 0 && p->Cancel == ENG_CANCEL_NONE && p->ErrSrbStatus == 0) {
-        // More fragments to dispatch.
+    if (ENG_WORK_LEFT(p) && p->Cancel == ENG_CANCEL_NONE && p->ErrSrbStatus == 0) {
+        // More fragments to dispatch (or a write's phase 2 after its
+        // pre-reads).
         p->State = ENG_PA_WAITING;
         return;
     }
@@ -1826,7 +2293,7 @@ VOID EngChildCompleted(IN PHW_DEVICE_EXTENSION DevExt, IN BOOLEAN Admin, IN USHO
 }
 
 //
-// Cancellation (PLAN 0.10 "Parent cancellation", H1): stop dispatch at once;
+// Cancellation (PLAN 0.10 "Parent cancellation"): stop dispatch at once;
 // what was issued still quiesces before the parent completes. A parent all
 // of whose work was already dispatched is not marked cancelled.
 //
@@ -1837,12 +2304,13 @@ VOID EngCancelParent(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG Index, IN UCHAR Ca
     if (p->State == ENG_PA_FREE) {
         return;
     }
-    // Required work still to come: fragments not dispatched, a held SRB,
-    // or a SHUTDOWN whose CC.SHN step has not been taken.
-    if (p->State == ENG_PA_WAITING || p->BlocksLeft != 0 || p->Kind == ENG_K_HELD ||
+    // Required work still to come: fragments not dispatched (a write's
+    // write-backs included), a held SRB, or a SHUTDOWN whose CC.SHN step has
+    // not been taken.
+    if (p->State == ENG_PA_WAITING || ENG_WORK_LEFT(p) || p->Kind == ENG_K_HELD ||
         (p->Kind == ENG_K_SHUTDOWN && p->State != ENG_PA_SHN)) {
         p->Cancel = Cause;
-        p->BlocksLeft = 0;
+        ENG_STOP_WORK(p);
     }
     if (p->State == ENG_PA_WAITING) {
         p->State = ENG_PA_ISSUED;

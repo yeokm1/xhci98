@@ -831,11 +831,13 @@ static void test_quick_no_interrupt_pin(void)
     CHECK(quick_classify(&p, 1, 4, 1) == QUICK_CAVEATS,
           "an active run's read-only half says the same");
 
+    /* No USB2 port is a caveat too since TL-7 (owner, 2026-11-06): the
+     * pin's reason is the one line's. */
+    CHECK(quick_classify(&p, 1, 0, 0) == QUICK_CAVEATS,
+          "a pin-0 controller with no USB2 ports has caveats");
+    CHECK(strstr(quick_reason(&p, 1, 0, 0), "needs polling") != 0,
+          "and the reason is the pin's");
     /* The other disqualifiers stand, and win over it. */
-    CHECK(quick_classify(&p, 1, 0, 0) == QUICK_DISQUALIFIED,
-          "no USB2 ports still disqualifies a pin-0 controller");
-    CHECK(strstr(quick_reason(&p, 1, 0, 0), "USB2") != 0,
-          "and the reason is the ports'");
     p.bar_hi = 1;
     CHECK(quick_classify(&p, 0, 0, 0) == QUICK_DISQUALIFIED,
           "a BAR above 4 GB still disqualifies a pin-0 controller");
@@ -858,17 +860,24 @@ static void test_quick_no_interrupt_pin(void)
           "the quick scan ranks caveats just above looks-qualified");
 }
 
-/* No USB2 protocol ports: the driver manages only those, so a controller with
- * none has nothing for it to do. */
+/* No USB2 protocol ports: C6 and C8 cannot exercise such a controller, a
+ * limit of this tool and not a disqualification of the controller or the
+ * driver, which drives SuperSpeed too (owner, 2026-11-06, TL-7). */
 static void test_quick_no_usb2_ports(void)
 {
     PCIINFO p;
 
     base_pci(&p);
     p.ipin = 1;
-    CHECK(quick_classify(&p, 1, 0, 0) == QUICK_DISQUALIFIED,
-          "no USB2 protocol ports disqualifies");
-    CHECK(strstr(quick_reason(&p, 1, 0, 0), "USB2") != 0, "and says so");
+    CHECK(quick_classify(&p, 1, 0, 0) == QUICK_CAVEATS,
+          "no USB2 protocol ports is a caveat, not a disqualifier");
+    CHECK(strstr(quick_reason(&p, 1, 0, 0), "C6/C8") != 0, "and says why");
+    CHECK(quick_classify(&p, 1, 4, 0) == QUICK_LOOKS_OK,
+          "with USB2 ports and a pin, no caveat");
+    CHECK(quick_classify(&p, 1, QUICK_NO_ROOT_PORTS, 0) == QUICK_DISQUALIFIED,
+          "no root port at all still disqualifies");
+    CHECK(strstr(quick_reason(&p, 1, QUICK_NO_ROOT_PORTS, 0), "root") != 0,
+          "and says so");
 }
 
 /*

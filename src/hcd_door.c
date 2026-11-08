@@ -6,8 +6,9 @@
  *   - On the controller FDO: IRP_MJ_CREATE and CLOSE with no work, and
  *     IRP_MJ_DEVICE_CONTROL for the controller's Advanced tab
  *     (IOCTL_GET_HCD_DRIVERKEY_NAME, IOCTL_USB_GET_ROOT_HUB_NAME and
- *     IOCTL_USB_USER_REQUEST request 1, section 8.1) and for XHCISNAP
- *     (IOCTL_USB_USER_REQUEST request 3, USBUSER_PASS_THRU, with usbport's
+ *     IOCTL_USB_USER_REQUEST request 1, section 8.1) and for XHCITR's
+ *     snapshot reader (xhcitr/tr_snap.c; IOCTL_USB_USER_REQUEST request 3,
+ *     USBUSER_PASS_THRU, with usbport's
  *     dispatcher reproduced clause for clause so the tool's wire format and
  *     its -probe expectations carry over unchanged, section 8.8).
  *   - On the root-hub FDO: the hub IOCTLs of section 8.3 for the Power tab
@@ -515,7 +516,8 @@ static ULONG hcdNameMake(PHCD_CONTROLLER hc, ULONG *taken, ULONG down,
         if (len != 0 && hcdNameFree(link)) {
             status = hcdLink(link, target, 1);
             if (NT_SUCCESS(status)) {
-                RtlCopyMemory(name, link, (len + 1) * sizeof(WCHAR));
+                hcdCopy((PUCHAR)name, (const UCHAR *)link,
+                        (len + 1) * (ULONG)sizeof(WCHAR));
                 *chars = len;
                 *index = n;
                 return 1;
@@ -823,7 +825,7 @@ NTSTATUS HcdDoorCreateClose(PIRP irp)
 }
 
 /* ----------------------------------------------------------------------- */
-/* USBUSER: request 1 and XHCISNAP's request 3                               */
+/* USBUSER: request 1 and the snapshot reader's request 3                    */
 /* ----------------------------------------------------------------------- */
 
 /* IRQL: any. */
@@ -1026,6 +1028,90 @@ static ULONG hcdDoorIdPlaceWord(PHCD_CONTROLLER hc, ULONG index, ULONG word)
         return e->Deferrals;
     case XHCI_SNAPSHOT_HCD_IP_IDFAILS:
         return e->Fails;
+    default:
+        return 0;
+    }
+}
+
+/* Task 47.30 (design record 13 section 11.10, Part B, point 3): the open
+ * isochronous pipes the table shows, in slot and DCI order, at most
+ * XHCI_SNAPSHOT_HCD_ISOP_COUNT; returns how many. IRQL: DISPATCH_LEVEL,
+ * controller lock held. */
+static ULONG hcdDoorIsoPipes(PHCD_CONTROLLER hc, PHCD_PIPE *out)
+{
+    PHCD_USB_DEVICE dev;
+    PHCD_PIPE pipe;
+    ULONG found;
+    ULONG slot;
+    ULONG dci;
+
+    found = 0;
+    for (slot = 1; slot <= XHCI_MAX_SLOTS; slot++) {
+        dev = hc->SlotDevice[slot];
+        if (dev == NULL) {
+            continue;
+        }
+        for (dci = 2; dci < 32; dci++) {
+            pipe = dev->Pipes[dci];
+            if (pipe == NULL || pipe->Iso == NULL) {
+                continue;
+            }
+            out[found++] = pipe;
+            if (found == XHCI_SNAPSHOT_HCD_ISOP_COUNT) {
+                return found;
+            }
+        }
+    }
+    return found;
+}
+
+/* One word of an isochronous record (xhci.h, XHCI_SNAPSHOT_HCD_IO_*).
+ * IRQL: DISPATCH_LEVEL, controller lock held. */
+static ULONG hcdDoorIsoWord(PHCD_PIPE pipe, ULONG word)
+{
+    const XHCI_ISO_TIMING *t;
+
+    if (pipe == NULL) {
+        return 0;
+    }
+    t = &pipe->IsoTiming;
+    switch (word) {
+    case XHCI_SNAPSHOT_HCD_IO_SLOTDCI:
+        return ((pipe->Device->SlotId & 0xFFUL) << 8) |
+               (pipe->Dci & 0xFFUL);
+    case XHCI_SNAPSHOT_HCD_IO_RING:
+        return (XhciRingCapacity(pipe->Ring) & 0xFFFFUL) |
+               (pipe->IsoPageVa != NULL ? 0x10000UL : 0UL);
+    case XHCI_SNAPSHOT_HCD_IO_RECS:
+        return (pipe->XferCount & 0xFFUL) |
+               ((pipe->IsoRecordsPeak & 0xFFUL) << 8);
+    case XHCI_SNAPSHOT_HCD_IO_PUBS:
+        return t->Publications;
+    case XHCI_SNAPSHOT_HCD_IO_PUBEMPTY:
+        return t->PubOnEmpty;
+    case XHCI_SNAPSHOT_HCD_IO_WAITED:
+        return t->Waited;
+    case XHCI_SNAPSHOT_HCD_IO_FILLMIN:
+        return t->FillMin;
+    case XHCI_SNAPSHOT_HCD_IO_FILLMAX:
+        return t->FillMax;
+    case XHCI_SNAPSHOT_HCD_IO_GAPMAX:
+        return t->GapMax;
+    case XHCI_SNAPSHOT_HCD_IO_GAPAT:
+        return t->GapAt;
+    case XHCI_SNAPSHOT_HCD_IO_GAPLAG:
+        return t->GapLag;
+    case XHCI_SNAPSHOT_HCD_IO_GAPFLAGS:
+        return t->GapFlags;
+    case XHCI_SNAPSHOT_HCD_IO_LAGMAX:
+        return t->LagMax;
+    case XHCI_SNAPSHOT_HCD_IO_ODD:
+        return (t->Crossed > 0xFFFFUL ? 0xFFFFUL : t->Crossed) |
+               ((t->Backward > 0xFFFFUL ? 0xFFFFUL : t->Backward) << 16);
+    case XHCI_SNAPSHOT_HCD_IO_DRY:
+        return t->Dry;
+    case XHCI_SNAPSHOT_HCD_IO_DRYAT:
+        return t->DryAt;
     default:
         return 0;
     }
@@ -1288,6 +1374,8 @@ static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
     ULONG word;
     ULONG value;
     ULONG i;
+    PHCD_PIPE isoPipes[XHCI_SNAPSHOT_HCD_ISOP_COUNT];
+    ULONG isoCount;
 
     ports = hcdDoorPorts(hc);
     total = XhciSnapHcdWords(ports);
@@ -1316,10 +1404,45 @@ static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
     hc->Xstat.TimeNowHi = (ULONG)now.HighPart;
     xstat = (const ULONG *)&hc->Xstat;
     xpipe = (const ULONG *)&hc->Xpipe;
+    isoCount = hcdDoorIsoPipes(hc, isoPipes);
     for (i = 0; i < count; i++) {
         switch (XhciSnapHcdLocate(ports, first + i, &record, &word)) {
         case XHCI_SNAPSHOT_HCD_IN_HEAD:
-            /* 45.40's places end the header, after 44.35's records. */
+            /* Issue 26's failure records end the header, after 47.30's
+             * records; the class drivers write them under this lock
+             * (hcd_urb.c). */
+            if (word >= XHCI_SNAPSHOT_HCD_UFAIL_AT) {
+                record = (word - XHCI_SNAPSHOT_HCD_UFAIL_AT) /
+                         XHCI_SNAPSHOT_HCD_UFAIL_RECORD_WORDS;
+                value = hc->UasTele[record].Fail
+                            [XHCI98_FAIL_COUNT +
+                             (word - XHCI_SNAPSHOT_HCD_UFAIL_AT) %
+                                 XHCI_SNAPSHOT_HCD_UFAIL_RECORD_WORDS];
+                break;
+            }
+            if (word >= XHCI_SNAPSHOT_HCD_UFAIL_RECORDS) {
+                value = XhciSnapHcdHead(ports, word);
+                break;
+            }
+            /* 47.30's records, after 45.40's places. */
+            if (word >= XHCI_SNAPSHOT_HCD_ISOP_AT) {
+                record = (word - XHCI_SNAPSHOT_HCD_ISOP_AT) /
+                         XHCI_SNAPSHOT_HCD_IO_RECORD_WORDS;
+                value = hcdDoorIsoWord(
+                    record < isoCount ? isoPipes[record] : NULL,
+                    (word - XHCI_SNAPSHOT_HCD_ISOP_AT) %
+                        XHCI_SNAPSHOT_HCD_IO_RECORD_WORDS);
+                break;
+            }
+            if (word == XHCI_SNAPSHOT_HCD_EVT_TRBS) {
+                value = hc->Hc.EventRing.Trbs;
+                break;
+            }
+            if (word >= XHCI_SNAPSHOT_HCD_ISOP_RECORDS) {
+                value = XhciSnapHcdHead(ports, word);
+                break;
+            }
+            /* 45.40's places, after 44.35's records. */
             if (word >= XHCI_SNAPSHOT_HCD_IDPLACE_AT) {
                 value = hcdDoorIdPlaceWord(
                     hc, (word - XHCI_SNAPSHOT_HCD_IDPLACE_AT) /
@@ -1373,8 +1496,8 @@ static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
              * the door gate (a start) or the power gate (a return to D0),
              * not this lock. This copy runs under both gates, so one
              * window never mixes two runs; a header split across two
-             * windows could, which XHCISNAP's first window (the whole
-             * header) never does. */
+             * windows could, which the snapshot reader's first window
+             * (the whole header) never does. */
             if (word >= XHCI_SNAPSHOT_HCD_PIRQ_AT &&
                 word < XHCI_SNAPSHOT_HCD_XSTAT_WORDS) {
                 value = pirq[word - XHCI_SNAPSHOT_HCD_PIRQ_AT];
@@ -1420,8 +1543,9 @@ typedef char hcdSnapshotFallbackSlots[FIELD_OFFSET(XHCIHC_COUNTERS,
                                           ? 1
                                           : -1];
 
-/* XHCISNAP keeps the whole extension in one 256 KB image to print the note
- * ring from it (xhcisnap.c, EXT_IMAGE_MAX) and refuses a larger one, on
+/* XHCITR's snapshot reader keeps the whole extension in one 256 KB image to
+ * print the note ring from it (xhcitr/tr_snap.c, EXT_IMAGE_MAX) and refuses
+ * a larger one, on
  * either architecture: a build whose extension outgrows it fails here, not
  * on a user's machine. */
 typedef char hcdSnapshotFitsTool[sizeof(XHCI_EXTENSION) <= 262144UL ? 1
@@ -1435,7 +1559,7 @@ typedef char hcdSnapshotHubLocPorts[XHCI_TOL_HUB_LOC_PORTS ==
                                         : -1];
 
 /*
- * XHCISNAP's window, the miniport's xhciPassThru (branch 1.2.0.0) over the
+ * The snapshot window, the miniport's xhciPassThru (branch 1.2.0.0) over the
  * HCD's embedded XHCI_EXTENSION: schema 5 unchanged, so the published tool
  * reads it. Returns the USBUSER status: 6 for a GUID not ours, for the shut
  * channel (XhciLogVerbosity 0) and for a block too small for a header - the
@@ -2084,7 +2208,9 @@ static VOID hcdDoorConnection(PHCD_CONTROLLER hc, ULONG parent,
         c->ConfigBytes = (sourceBytes < configCap) ? sourceBytes : configCap;
         hcdCopy(config, source, c->ConfigBytes);
     }
-    if (wantPdo) {
+    if (wantPdo && pdo->PnpStarted) {
+        /* Only a PDO PnP has started (hcd_pdo.c, PnpStarted): a listed one
+         * may still be on its way to PnP, with no devnode to ask. */
         c->Pdo = pdo->Common.Self;
         ObReferenceObject(c->Pdo);
     }

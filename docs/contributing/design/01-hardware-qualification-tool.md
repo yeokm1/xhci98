@@ -118,10 +118,16 @@ tool source/
                the table, CPUID, INT 15h E820, INT 21h 30h/3306h, INT 2Fh
                1600h through DPMI 0300h; reads only                    [needs extender]
   sysasm.asm   CPUID and the EFLAGS.ID test, every register but EAX saved
+  edd.c        Roadmap-usb4 task 47.24: --edd, each disk unit's EDD 3.0
+               device path (INT 13h 41h/48h), the mode's order and the
+               decode, every machine access an injected operation; never
+               the device path's bytes; pure                           [host-testable]
+               (its operations are sysprobe.c's edd_dos_ops, DPMI 0300h
+               and 0100h, the PCI reads after every INT 13h)            [needs extender]
   main.c       Sequencing, family selection (default all), CLI flags
                (--probe-only/--no-active, --poll-only, --irq-selftest, --set-intel-ports,
                --no-wait, --no-devid, --no-page, --serial, --log [filename],
-               --done-flag FILE, --gsi N, --no-sysinfo)
+               --done-flag FILE, --gsi N, --no-sysinfo, --edd)
 ```
 
 `--probe-only` runs Tier A and any Tier B reads the firmware's existing PCI state permits. It is read-only: it never enables MSE, clears INTx Disable, writes PMCSR, or takes ownership. If MSE is clear, the report records that Tier B was unavailable and leaves the bit unchanged. The default runs the full suite.
@@ -138,9 +144,9 @@ Register offsets below are relative to BAR0 unless noted. Capability regs at BAR
 
 The detailed matrix below is the xHCI matrix. EHCI/OHCI reuse its C1/C2/C3/C4/C5/C6 meanings with the family-specific mechanisms described in section 2. C7 and C8 remain xHCI-only.
 
-### Automated QEMU regression matrix (54 cases)
+### Automated QEMU regression matrix (55 cases)
 
-`xhciqual/test/run-qemu-matrix.ps1` cold-boots a fresh Win98SE (MS-DOS 7.1) QEMU process per case, the same DOS the field procedure uses. The matrix stood at 40 cases as of v0.11, at 42 since task 36.11's two `--gsi` cases, at 46 since task 36.10's four no-working-interrupt cases, at 50 since task 36.48's four `-smbios` cases, which also fail if a serial number, UUID, SKU, asset tag or part number is printed (one with `--no-sysinfo`, which must print none of the machine), and at 53 since roadmap-usb4 task 39-0.6's three cases reading SeaBIOS's `$PIR` table, one with a bridge at `00:1C.0`, and at 54 since 2026-10-18's `ohci_poll_mouse` case, OHCI's C4 under `--poll-only` (`xhciqual/README.md` carries the version history). The `HCCPARAMS2` line (row B9) is pinned in the `xhci_probe_only` case, so a regression in the read-only U3C/CMC/FSC report fails the matrix.
+`xhciqual/test/run-qemu-matrix.ps1` cold-boots a fresh Win98SE (MS-DOS 7.1) QEMU process per case, the same DOS the field procedure uses. The matrix stood at 40 cases as of v0.11, at 42 since task 36.11's two `--gsi` cases, at 46 since task 36.10's four no-working-interrupt cases, at 50 since task 36.48's four `-smbios` cases, which also fail if a serial number, UUID, SKU, asset tag or part number is printed (one with `--no-sysinfo`, which must print none of the machine), and at 53 since roadmap-usb4 task 39-0.6's three cases reading SeaBIOS's `$PIR` table, one with a bridge at `00:1C.0`, at 54 since 2026-10-18's `ohci_poll_mouse` case, OHCI's C4 under `--poll-only`, and at 55 since roadmap-usb4 task 47.24's `edd_seabios`, `--edd` with a stick SeaBIOS presents (`xhciqual/README.md` carries the version history). The `HCCPARAMS2` line (row B9) is pinned in the `xhci_probe_only` case, so a regression in the read-only U3C/CMC/FSC report fails the matrix.
 
 The cases are: standalone help, an isolated locked xHCI IRQ self-test, two `--probe-only` cases, and the controller/device cases. Controller presence is exhaustive across the requested families: none, xHCI, EHCI, OHCI, xHCI+EHCI, xHCI+OHCI, EHCI+OHCI, and all three. Empty and attached-device variants cover xHCI HS storage, FS HID, a hub with downstream HID, and an unmanaged SuperSpeed-only placement; EHCI HS storage and FS HID; OHCI HID and storage; pairwise mixed attachments; and all-three mixed attachments. It also covers default-all scanning, combined selectors, selecting an absent family, and --log ohci log-name/selector disambiguation.
 
@@ -159,6 +165,8 @@ Since task 36.11 it also builds `xhciqual/test/test_route.c`, over `xhciqual/rou
 Since roadmap-usb4 task 39-0.6 `test_route.c` also covers the BIOS `$PIR` table parser in `route.c`: a valid table, `00:1C` listed and not, a bad checksum, a truncated table and header, bad sizes and versions, no table, `00:1C` found past the 128-entry dump cap, and the `00:1C` functions printed with no usable table.
 
 Since task 36.48 it also builds `xhciqual/test/test_sysinfo.c`, over `xhciqual/sysinfo.c`: SMBIOS entry points (2.x, 3.0, legacy DMI, bad checksums, a table above 4 GB) and tables (valid, truncated at every length, garbled, strings missing), CPUID text and the no-SMBIOS fallback, with every identifier planted and checked absent from the output.
+
+Since roadmap-usb4 task 47.24 it also builds `xhciqual/test/test_edd.c`, over `xhciqual/edd.c`: `--edd`'s order through fake operations (no INT 13h or PCI access after a refusal, every INT 13h with the buffer allocated and before any PCI read) and its EDD 3.0 decode (both layouts, the checksum, a guard overrun, failed calls, no serial number printed, no read past the buffer).
 
 Since task 36.10 it also builds `xhciqual/test/test_verdict.c`, over `xhciqual/verdict.c` and `mmiodiag.c`: C4's outcome, the C6/C8 gate, the verdict through each C4 outcome and the exit code. The matrix reaches the "needs polling" outcome only through two test programs that rewrite the Interrupt Line before the run.
 
@@ -229,7 +237,7 @@ Four steps fail with no useful error if the hardware/firmware misbehaves; the dr
 
 ## 8. Go / No-Go criteria
 
-A machine is qualified for the driver (either target; see section 3's per-target table for how far C4 transfers) when the tool reports PASS for C2 (reset), C3 (DMA round-trip), and C4 (interrupt on a legacy 8259 IRQ), C1 (handoff) is PASS or WARN, and it prints a non-empty USB2 port topology (B7) and context size (B1).
+A machine is qualified for the driver (either target; see section 3's per-target table for how far C4 transfers) when the tool reports PASS for C2 (reset), C3 (DMA round-trip), and C4 (interrupt on a legacy 8259 IRQ), C1 (handoff) is PASS or WARN, and it prints a non-empty USB2 port topology (B7) and context size (B1). An empty B7 (no USB2 protocol port) makes the verdict QUALIFIED WITH CAVEATS at best since `3.4.2.0` (owner, 2026-11-06): C6 and C8 cannot exercise such a controller, which is a limit of this tool, not a disqualification of the controller or of the driver, which drives SuperSpeed too.
 
 C1 is not a hard gate. Some firmware never clears the BIOS-Owned semaphore yet stops touching the controller anyway, so a handoff timeout is reported WARN and the run continues; the machine can still qualify, but only as "QUALIFIED (with warnings)". A C1 that hangs the machine is a different outcome: no verdict is printed at all.
 
@@ -238,7 +246,7 @@ A machine is disqualified if any of the following hold, regardless of other resu
 - C4 FAIL (section 3's note): the No-Op never completed, even polled, or the interrupt test failed in a way polling does not answer. Until `2.2.0.3` Interrupt Pin = 0 and a C4 that never fired disqualified too; with polling (roadmap-hcd task 36.10) they read "needs polling" and the verdict QUALIFIED WITH CAVEATS (exit 3) when the command completes polled.
 - C3 never completes -> DMA/bus-mastering is broken.
 - BAR0 above 4 GB with no 32-bit alias -> incompatible with the driver's 32-bit addressing on both targets.
-- C2 halt/reset fails, or the controller reports no USB2 protocol ports.
+- C2 halt/reset fails. (Until `3.4.2.0` a controller reporting no USB2 protocol ports was disqualified too; it is a caveat since, as above.)
 
 Two outcomes are neither a pass nor a disqualification, and both force "QUALIFIED (with warnings)" or better wording rather than a clean verdict:
 

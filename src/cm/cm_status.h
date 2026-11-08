@@ -60,7 +60,7 @@
 #define CM_ST_E_APPROVAL        16UL    /* CM_ST_APPR_* */
 #define CM_ST_E_PORT_STATE      20UL    /* USB4: state 7:0, why 15:8; else 0 */
 #define CM_ST_E_IDS             24UL    /* see CM_ST_KIND_* */
-#define CM_ST_E_GEN             28UL    /* CM_ST_GEN_* 7:0, USB4 version 15:8 */
+#define CM_ST_E_GEN             28UL    /* CM_ST_GEN_* 7:0, then 15:8 */
 #define CM_ST_E_LANES           32UL    /* CM_ST_LANES_* */
 #define CM_ST_E_TUNNELS         36UL    /* PCIe 3:0, USB3 7:4, DP 11:8: CM_ST_TUN_* */
 #define CM_ST_E_BRIDGE          40UL    /* its tunnel port's bus/dev/fn, or CM_ST_UNKNOWN */
@@ -123,6 +123,11 @@
  * whose mailbox only ECAM reaches, left at XhciCmAsm4242Reads 0 (record
  * 32 section 12.8.15.18, 113h). */
 #define CM_ST_F_HO_ECAMOFF      0x02000000UL
+/* Bit 26 (every system): not sent, the same handover code in another
+ * build (tier 3) and XhciCmAsm4242Structural 0, set at that refusal alone
+ * (record 32 section 12.8.11, task 47.29); tier 3 with bit 19 clear does
+ * not say it, since a later refusal leaves the same pair. */
+#define CM_ST_F_HO_SAMEOFF      0x04000000UL
 #define CM_ST_HO_NONE           0UL
 #define CM_ST_HO_UNKNOWN        1UL
 #define CM_ST_HO_KNOWN          2UL
@@ -138,8 +143,12 @@
 #define CM_ST_KIND_USB4_LINK    3UL     /* a deeper router (record 22
                                            section 7.1): CM_ST_UNKNOWN */
 
+/* Generations. In 15:8 a USB4 router's USB4 Version byte (ROUTER_CS_4), and
+ * a Thunderbolt router's generation, 1 to 3, where the software connection
+ * manager read the router (record 22 section 19.10 item 5); 0 there is not
+ * given (an ICM entry, an earlier driver's record) and reads as 3. */
 #define CM_ST_GEN_UNKNOWN       0UL
-#define CM_ST_GEN_TBT3          1UL
+#define CM_ST_GEN_TBT3          1UL     /* a Thunderbolt router */
 #define CM_ST_GEN_USB4          2UL
 
 #define CM_ST_LANES_UNKNOWN     0UL

@@ -331,14 +331,25 @@ typedef struct _ATA_IDENTIFY_DEVICE_STRUCT {
     UCHAR HardwareResetResult[2];        // Word 93: Hardware reset result
     UCHAR Reserved10[12];                // Word 94-99: Reserved
     UCHAR TotalAddressableSectors48[8];  // Word 100-103: Total addressable sectors (LBA-48)
-    UCHAR Reserved11[44];                // Word 104-125: Reserved
-    UCHAR RemovableMediaStatus[2];       // Word 126: Removable media status notification
-    UCHAR SecurityStatus[2];             // Word 127: Security status
-    UCHAR VendorSpecific[62];            // Word 128-158: Vendor specific
-    UCHAR Reserved12[194];               // Word 159-255: Reserved
+    UCHAR Reserved11[4];                 // Word 104-105: Reserved
+    UCHAR PhysLogSectorSize[2];          // Word 106: Physical / logical sector size
+    UCHAR Reserved11b[20];               // Word 107-116: Reserved
+    UCHAR LogicalSectorWords[4];         // Word 117-118: Logical sector size in words (when word 106 bit 12)
+    UCHAR Reserved11c[16];               // Word 119-126: Reserved
+    UCHAR RemovableMediaStatus[2];       // Word 127: Removable media status notification
+    UCHAR SecurityStatus[2];             // Word 128: Security status
+    UCHAR VendorSpecific[62];            // Word 129-159: Vendor specific
+    UCHAR Reserved12[192];               // Word 160-255: Reserved
 } ATA_IDENTIFY_DEVICE_STRUCT, *PATA_IDENTIFY_DEVICE_STRUCT;
 
 #pragma pack(pop)
+
+// The IDENTIFY DEVICE data is 256 words; words 100, 127 and 128 where ATA
+// puts them.
+typedef char ATA_IDENTIFY_SIZE_CHECK[(sizeof(ATA_IDENTIFY_DEVICE_STRUCT) == 512) ? 1 : -1];
+typedef char ATA_IDENTIFY_W100_CHECK[(FIELD_OFFSET(ATA_IDENTIFY_DEVICE_STRUCT, TotalAddressableSectors48) == 200) ? 1 : -1];
+typedef char ATA_IDENTIFY_W127_CHECK[(FIELD_OFFSET(ATA_IDENTIFY_DEVICE_STRUCT, RemovableMediaStatus) == 254) ? 1 : -1];
+typedef char ATA_IDENTIFY_W128_CHECK[(FIELD_OFFSET(ATA_IDENTIFY_DEVICE_STRUCT, SecurityStatus) == 256) ? 1 : -1];
 
 //
 // SCSI Log Page Structures

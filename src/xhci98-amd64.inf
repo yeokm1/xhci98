@@ -28,7 +28,7 @@ ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
 Provider=%Provider%
 LayoutFile=layout.inf
 ; Must equal src\xhci_version.h.
-DriverVer=11/05/2026,3.4.1.0
+DriverVer=11/08/2026,3.4.2.0
 ; Made and test-signed by the packager alone (design record 19).
 CatalogFile=xhci98.cat
 
@@ -163,6 +163,7 @@ HKR,,XhciFirstEnumWaitMs,0x00010003,5000
 HKR,,XhciFirstEnumPortMs,0x00010003,2000
 HKR,,XhciIntelPortSwitch,0x00010003,0
 HKR,,XhciIntelIrqRoute,0x00010003,1
+HKR,,XhciIntelNoRouteIrq,0x00010003,1
 HKR,,XhciTolerance,0x00010003,1
 HKR,,XhciIntervalCap,0x00010003,1
 HKR,,XhciAvgTrbEsit,0x00010003,0
@@ -186,6 +187,15 @@ HKR,,XhciAcpiTables,0x00010003,1
 HKR,,XhciUsb2Bos,0x00010003,1
 HKR,,XhciResumeKeep,0x00010003,1
 HKR,,XhciLinkKeep,0x00010003,1
+; The event ring's size (task 47.30; design record 13 section 11.10): 1024
+; the larger ring, 256 the one-page ring of the releases before it.
+; Absent, or any other value, is 1024 (src\hcd_ctl.c).
+HKR,,XhciEventRingTrbs,0x00010003,1024
+; The Bulk-Only form's own instance id (roadmap-usb4 UASBOT.1; design record
+; 13 section 10.7): 1 gives a drive that offers UAS too a devnode of its own
+; where the bus offers it as Bulk-Only; 0 the one devnode of the releases
+; before. Absent, or anything but a DWORD 0, is 1 (src\hcd_ctl.c).
+HKR,,XhciBulkOnlyOwnId,0x00010003,1
 ; Linux's xHCI controller quirks (roadmap-hcd task 38.10; design record 20
 ; section 6.1): 0 off, 1 Linux's listed controllers, 2 every controller
 ; where the record offers it. Absent reads as the default written here.

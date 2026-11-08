@@ -342,6 +342,14 @@ static void test_short_reads(void)
     CHECK_EQ(p.FailCause, XHCI_ENUM_FAIL_CONFIG,
              "a wTotalLength shorter than its own header");
 
+    drive_full(&p, 8, &a);
+    e = full_event(8, 1);
+    e.Value = 9;
+    step(&p, e, &a);
+    CHECK_EQ(p.FailCause, XHCI_ENUM_FAIL_CONFIG,
+             "a wTotalLength of the header alone: no interface");
+    CHECK_EQ(p.State, XHCI_ENUM_FAILED, "is no Present either");
+
     drive_full(&p, 9, &a);
     e = full_event(9, 1);
     e.Bytes = 33;

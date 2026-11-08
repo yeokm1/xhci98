@@ -21,7 +21,7 @@ rem (snapshot=on), so guest writes - including any --log copy on C: - are
 rem discarded on exit and never touch the host. Do not switch to fat:rw:, which
 rem writes back to the host directory. The usb-storage device attaches
 rem as SuperSpeed on a USB3 port
-rem (correctly unmanaged); the usb-mouse attaches as a USB2 device, giving
+rem (not exercised by C6/C8); the usb-mouse attaches as a USB2 device, giving
 rem C6 its connect+reset and C8 a device to identify (expect
 rem "0627:0001 QEMU USB Mouse", interface class 03 HID). More devices can
 rem be hot-added from the QEMU monitor (Ctrl-Alt-2):

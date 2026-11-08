@@ -2502,7 +2502,7 @@ The registry route's index then listed the RSDT's five entries as rows "not
 kept by this Windows", the FACP's among them; the next commit lists them by
 address, counted ("The RSDT lists 5 tables, at these addresses; the registry
 keeps 1 of them, so 4 were not saved:"), since the registry gives no address
-with a table. Built with `xhcitruild.cmd` (`XHCITR.EXE` `14aa41ed...`,
+with a table. Built with `xhcitr\build.cmd` (`XHCITR.EXE` `14aa41ed...`,
 `XHCITR64.EXE` `d46070fa...`), its self-test and the host tests passed; the
 XP administrator leg read again on it gave that list and the four tables, and
 the message without "more are listed".
@@ -3944,7 +3944,7 @@ does not see a page's pixels, so the fix was read on the guests.
 - 7 x86 at 120 DPI, the same overlay (`w7`, a cold start on the new
   cut): Welcome; Components with the boxes clicked through each state,
   the line growing to two lines and back: every row in its place, no old
-  pixels (`w7-120dpi-fix-*.png`).
+  pixels (`w7\a-120dpi-fix-*.png`).
 
 ### Seen, not changed
 

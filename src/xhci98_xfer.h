@@ -25,7 +25,11 @@
  *                                 storage before the IRP completes, so the
  *                                 bus never holds a pointer into the caller.
  *                                 Sent at <= DISPATCH_LEVEL, never waited
- *                                 for under the caller's lock.
+ *                                 for under the caller's lock. Since
+ *                                 3.4.2.0 (issue 26) the same request also
+ *                                 carries a PXHCI98_FAILURES, told apart by
+ *                                 its first word; a bus before then refuses
+ *                                 it STATUS_INVALID_PARAMETER.
  *   IOCTL_XHCI98_RESUME_STATE     the same, Argument1 = a
  *                                 PXHCI98_RESUME_STATE (task 45.23, design
  *                                 record 20 section 4.3.3): the function's
@@ -131,6 +135,71 @@ typedef struct _XHCI98_TRANSFER_POLICY {
 typedef struct _XHCI98_TELEMETRY {
     ULONG Word[XHCI98_TELE_WORDS];
 } XHCI98_TELEMETRY, *PXHCI98_TELEMETRY;
+
+/* ---- the class driver's last failures (issue 26) ---------------------- */
+
+/*
+ * The last XHCI98_FAIL_RECORDS commands that did not end GOOD, oldest
+ * overwritten, as IOCTL_XHCI98_TELEMETRY's second record: a header, then
+ * the ring. COUNT is how many have been recorded since the class driver's
+ * start; the newest is entry (COUNT - 1) % XHCI98_FAIL_RECORDS. Each entry
+ * is XHCI98_FAIL_WORDS words:
+ *   word 0  event 31:24 (XHCI98_FAIL_E_*), origin 23:16
+ *           (XHCI98_FAIL_O_*), tag 15:8, the CDB's operation code 7:0
+ *   word 1  SRB status 31:24 (without its flag bits), SCSI status 23:16,
+ *           ASC 15:8, ASCQ 7:0
+ *   word 2  sense key 31:24 (0xFF: no sense), the command's slot state
+ *           23:16, its transfers 15:8 (XHCI98_FAIL_X_*), the timeout in
+ *           seconds 7:0 (255 and above as 255)
+ *   word 3  the command's data length, in bytes
+ */
+#define XHCI98_FAIL_SIGNATURE       0x46383958UL    /* 'X98F' */
+#define XHCI98_FAIL_VERSION         1UL
+#define XHCI98_FAIL_RECORDS         8UL
+#define XHCI98_FAIL_WORDS           4UL
+
+#define XHCI98_FAIL_SIG             0
+#define XHCI98_FAIL_VER             1
+#define XHCI98_FAIL_SIZE            2
+#define XHCI98_FAIL_COUNT           3
+#define XHCI98_FAIL_AT              4
+#define XHCI98_FAIL_TOTAL_WORDS     (XHCI98_FAIL_AT + XHCI98_FAIL_RECORDS * \
+                                     XHCI98_FAIL_WORDS)
+
+/* Events. */
+#define XHCI98_FAIL_E_SENSE         1UL /* ended CHECK CONDITION            */
+#define XHCI98_FAIL_E_TIMEOUT       2UL /* its timeout ran out (recorded
+                                         * then, before any recovery)       */
+#define XHCI98_FAIL_E_ENDED         3UL /* ended by recovery or teardown:
+                                         * the SRB status says how          */
+#define XHCI98_FAIL_E_REFUSED       4UL /* a RESPONSE IU refused it         */
+#define XHCI98_FAIL_E_LOCAL         5UL /* answered by the class driver,
+                                         * never sent (XhciUasNoAtaPass-
+                                         * Through)                         */
+#define XHCI98_FAIL_E_OTHER         6UL /* another status from the device
+                                         * (BUSY, a short transfer's error) */
+#define XHCI98_FAIL_E_FAST_RESET    7UL /* XhciUasFastReset: the device
+                                         * reset at once - a second timeout
+                                         * after an answered ABORT TASK, or
+                                         * a data cancel that never came
+                                         * back (its transfers say which)   */
+
+/* Origins. */
+#define XHCI98_FAIL_O_CLASS         0UL /* the storage class driver's SRB   */
+#define XHCI98_FAIL_O_PROGRAM       1UL /* a program's pass-through or SMART */
+#define XHCI98_FAIL_O_INTERNAL      2UL /* the class driver's own command   */
+
+/* Transfers, as the event found them. */
+#define XHCI98_FAIL_X_STATUS        0x01UL  /* the status read in flight    */
+#define XHCI98_FAIL_X_DATA          0x02UL  /* the data transfer in flight  */
+#define XHCI98_FAIL_X_COMMAND       0x04UL  /* the COMMAND IU in flight     */
+#define XHCI98_FAIL_X_CANCELLING    0x08UL  /* one of them being cancelled  */
+#define XHCI98_FAIL_X_FINAL         0x10UL  /* its SENSE or RESPONSE IU in  */
+#define XHCI98_FAIL_X_DATA_POSTED   0x20UL  /* a data transfer was posted   */
+
+typedef struct _XHCI98_FAILURES {
+    ULONG Word[XHCI98_FAIL_TOTAL_WORDS];
+} XHCI98_FAILURES, *PXHCI98_FAILURES;
 
 /* ---- the resume state (45.23) ---------------------------------------- */
 

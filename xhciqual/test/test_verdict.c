@@ -68,6 +68,11 @@ static CTRL *full_pass(void)
     ctrl.pci.iline = 11;
     ctrl.mmio_ok = 1;
     ctrl.usb2_ports = 4;
+    ctrl.maxports = 4;
+    ctrl.portclass[1] = PC_USB2_ONLY;
+    ctrl.portclass[2] = PC_USB2_ONLY;
+    ctrl.portclass[3] = PC_USB2_ONLY;
+    ctrl.portclass[4] = PC_USB2_ONLY;
     ctrl.v_handoff = V_PASS;
     ctrl.v_reset = V_PASS;
     ctrl.v_dma = V_PASS;
@@ -265,10 +270,61 @@ static void test_full_failures_stand(void)
 {
     CTRL *c = full_pass();
 
+    /* A DPMI step of the tool's own: not completed, not a routing
+     * verdict, and no controller fault inferred. */
     c->v_irq = V_FAIL;
+    c->irq_tool_failed = 1;
     strcpy(c->irq_note, "DPMI IRQ install failed (AX=8001)");
     CHECK(final_verdict(c, 1) == VERDICT_NOT, "a tool failure: NOT");
-    CHECK(has("no interrupt on legacy IRQ (C4): DPMI"), "worded as before");
+    CHECK(has("NOT QUALIFIED: C4 could not be completed by the tool:") &&
+          has("DPMI IRQ install failed (AX=8001)"), "said as the tool's");
+    CHECK(!has("DISQUALIFIED") && !has("routing failed"),
+          "not a disqualifier, no routing named");
+    CHECK(has("No controller fault was inferred"), "and no fault inferred");
+
+    /* An interrupt that did not arrive is still the routing's. */
+    c = full_pass();
+    c->v_irq = V_FAIL;
+    strcpy(c->irq_note, "xHCI IP pending but ISR never fired on IRQ 11; "
+                        "no event");
+    CHECK(final_verdict(c, 1) == VERDICT_NOT, "a routing failure: NOT");
+    CHECK(has("no interrupt on legacy IRQ (C4):") && has("routing failed"),
+          "worded as before");
+
+    /* The hook not taken down after a C4 that passed: C4's PASS stands,
+     * the teardown is said on its own, and no fault is inferred. */
+    c = full_pass();
+    c->irq_teardown_failed = 1;
+    c->v_port = V_SKIP;
+    strcpy(c->irq_teardown_note, "DPMI set vector failed (AX=8022)");
+    CHECK(final_verdict(c, 1) == VERDICT_NOT, "a teardown failure: NOT");
+    CHECK(has("could not take its C4 interrupt hook down") &&
+          has("DPMI set vector failed (AX=8022)") &&
+          has("C6 and C8 were not run"), "said as the teardown's");
+    CHECK(!has("DISQUALIFIED") && !has("routing failed"),
+          "C4's PASS is not turned into a routing failure");
+    CHECK(has("No controller fault was inferred"), "and no fault inferred");
+
+    /* The same after a C4 that needed polling: the caveat still said. */
+    c = full_pass();
+    c->v_irq = V_POLL;
+    c->irq_teardown_failed = 1;
+    c->v_port = V_SKIP;
+    strcpy(c->irq_note, "xHCI IP pending, ISR never fired on IRQ 11; "
+                        "event polled");
+    strcpy(c->irq_teardown_note, "DPMI set vector failed (AX=8022)");
+    CHECK(final_verdict(c, 1) == VERDICT_NOT, "polling and a teardown failure: NOT");
+    CHECK(has("NEEDS POLLING: C4:") && has("could not take its C4 interrupt"),
+          "both said");
+
+    /* In the IRQ self-test, a teardown failure fails the self-test. */
+    c = full_pass();
+    c->irq_selftest = 1;
+    c->irq_teardown_failed = 1;
+    strcpy(c->irq_teardown_note, "DPMI set vector failed (AX=8022)");
+    CHECK(final_verdict(c, 1) == VERDICT_NOT, "the self-test's teardown: NOT");
+    CHECK(has("C4's hook was not removed") && has("IRQ SELF-TEST FAILED"),
+          "said as a self-test failure");
 
     c = full_pass();
     c->v_irq = V_FAIL;
@@ -299,12 +355,33 @@ static void test_full_failures_stand(void)
     strcpy(c->cleanup_note, "HCH never set");
     CHECK(final_verdict(c, 1) == VERDICT_NOT, "a cleanup failure wins");
 
+    /* TL-7 (owner, 2026-11-06): no USB2 port is a caveat on the verdict,
+     * C6 and C8's limit, not a disqualifier. */
     c = full_pass();
     c->pci.ipin = 0;
     c->usb2_ports = 0;
     c->v_irq = V_POLL;
+    CHECK(final_verdict(c, 1) == VERDICT_CAVEATS,
+          "pin 0 and no USB2 ports: caveats both");
+
+    c = full_pass();
+    c->usb2_ports = 0;
+    CHECK(final_verdict(c, 1) == VERDICT_CAVEATS,
+          "no USB2 ports alone: qualified with caveats");
+
+    /* No root port at all still disqualifies: the driver refuses
+     * MaxPorts 0. */
+    c = full_pass();
+    c->usb2_ports = 0;
+    c->maxports = 0;
     CHECK(final_verdict(c, 1) == VERDICT_NOT,
-          "pin 0 and no USB2 ports: the ports disqualify");
+          "no root ports: disqualified");
+    CHECK(has("no root ports"), "and said");
+    c = full_pass();
+    c->usb2_ports = 0;
+    memset(c->portclass, PC_NONE, sizeof(c->portclass));
+    CHECK(final_verdict(c, 1) == VERDICT_NOT,
+          "no port in any protocol capability: disqualified");
 
     c = full_pass();
     c->pci.ipin = 0;
@@ -348,15 +425,18 @@ static void test_other_modes(void)
     CHECK(final_verdict(c, 1) == VERDICT_NOT, "the self-test's FAIL");
     CHECK(has("IRQ SELF-TEST FAILED"), "said as a failure");
 
-    /* A static disqualifier with every self-test gate passing is not an
-     * IRQ self-test failure, and must not be closed as one. */
+    /* No USB2 protocol port with every self-test gate passing: a pass
+     * with the ports' caveat (TL-7, owner 2026-11-06), never a failure
+     * and never the polling caveat. */
     c = full_pass();
     c->irq_selftest = 1;
     c->usb2_ports = 0;
-    CHECK(final_verdict(c, 1) == VERDICT_NOT,
-          "the self-test with a static disqualifier");
-    CHECK(has("every IRQ self-test gate passed") &&
-          has("a static disqualifier above"), "the disqualifier is named");
+    CHECK(final_verdict(c, 1) == VERDICT_CAVEATS,
+          "the self-test with no USB2 ports: caveats");
+    CHECK(has("IRQ SELF-TEST PASS") && has("no USB2 protocol ports"),
+          "a pass, the ports' caveat named");
+    CHECK(!has("NO WORKING INTERRUPT") && !has("polls this controller"),
+          "and no polling caveat");
     CHECK(!has("IRQ SELF-TEST FAILED") && !has("IRQ SELF-TEST FAILURE"),
           "and the self-test is not called failed");
 

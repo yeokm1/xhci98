@@ -158,8 +158,15 @@ NTSTATUS UasPdoCreate(PUAS_FDO fdo, ULONG lun, const UCHAR *inquiry,
     nameBuffer[n] = 0;
     RtlInitUnicodeString(&name, nameBuffer);
 
+    /* The PDO is named, and its pass-through rests on the access the
+     * handle was granted (design record 13 section 16.3): on NT,
+     * FILE_DEVICE_SECURE_OPEN has the device object's security descriptor
+     * checked for an open of a name below it (\Device\XHCIUAS<n>\x)
+     * too. 98 SE and ME have no such check, and take 0 as before. */
     status = IoCreateDevice(UasDriverObject, sizeof(UAS_PDO), &name,
-                            FILE_DEVICE_MASS_STORAGE, 0, FALSE, &self);
+                            FILE_DEVICE_MASS_STORAGE,
+                            UasIsNt ? FILE_DEVICE_SECURE_OPEN : 0, FALSE,
+                            &self);
     if (!NT_SUCCESS(status)) {
         return status;
     }
@@ -454,6 +461,46 @@ static NTSTATUS uasSrbDone(PIRP irp, PSCSI_REQUEST_BLOCK srb, UCHAR srbStatus)
     return UasCompleteIrp(irp, status, 0);
 }
 
+/* Issue 26: whether this device's ATA PASS-THROUGH and SMART are answered
+ * here (XhciUasNoAtaPassThrough, uas_fdo.c). <= DISPATCH_LEVEL, no lock
+ * held. */
+static BOOLEAN uasNoAta(PUAS_FDO fdo)
+{
+    BOOLEAN on;
+    KIRQL irql;
+
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    on = fdo->NoAtaPt;
+    KeReleaseSpinLock(&fdo->Lock, irql);
+    return on;
+}
+
+/*
+ * Issue 26: an SRB carrying ATA PASS-THROUGH (12) or (16) for a device
+ * whose XhciUasNoAtaPassThrough is set, answered without reaching the
+ * device: CHECK CONDITION, ILLEGAL REQUEST, INVALID FIELD IN CDB, as
+ * Linux's uas.c answers it under US_FL_NO_ATA_1X; nothing moved. The
+ * autosense as the SRB allows it. <= DISPATCH_LEVEL.
+ */
+static NTSTATUS uasSrbNoAta(PIRP irp, PSCSI_REQUEST_BLOCK srb)
+{
+    UCHAR st;
+    ULONG n;
+
+    st = SRB_STATUS_ERROR;
+    srb->ScsiStatus = UAS_SCSI_CHECK_CONDITION;
+    srb->DataTransferLength = 0;
+    if (srb->SenseInfoBuffer != NULL && srb->SenseInfoBufferLength != 0 &&
+        (srb->SrbFlags & SRB_FLAGS_DISABLE_AUTOSENSE) == 0) {
+        n = UasInvalidCdbSense((PUCHAR)srb->SenseInfoBuffer,
+                               srb->SenseInfoBufferLength);
+        srb->SenseInfoBufferLength = (UCHAR)n;
+        st |= SRB_STATUS_AUTOSENSE_VALID;
+    }
+    srb->SrbStatus = st;
+    return UasCompleteIrp(irp, STATUS_IO_DEVICE_ERROR, 0);
+}
+
 /* The parent rundown: a dispatch that will read pdo->Fdo enters, and the
  * parent's removal sets Gone and waits for the last to leave. */
 static BOOLEAN uasPdoEnter(PUAS_PDO pdo)
@@ -510,6 +557,11 @@ static NTSTATUS uasPdoScsiInside(PUAS_PDO pdo, PUAS_FDO fdo, PIRP irp,
 
     switch (srb->Function) {
     case SRB_FUNCTION_EXECUTE_SCSI:
+        if (UasNoAtaCdb(srb->Cdb, srb->CdbLength) && uasNoAta(fdo)) {
+            UasEngineNoteLocal(fdo, srb->Cdb, XHCI98_FAIL_O_CLASS,
+                               srb->DataTransferLength);
+            return uasSrbNoAta(irp, srb);
+        }
         return UasEngineSubmit(fdo, pdo, irp, srb);
 
     case SRB_FUNCTION_CLAIM_DEVICE:
@@ -844,6 +896,53 @@ static NTSTATUS uasPassDrop(PUAS_PCMD pc, NTSTATUS status)
     return UasCompleteIrp(irp, status, 0);
 }
 
+static VOID uasSiocReply(PUCHAR buf, ULONG returnCode, ULONG length);
+
+/*
+ * Issue 26: a pass-through or SMART request for a device whose
+ * XhciUasNoAtaPassThrough is set, answered here from the sense a device
+ * gives a command it does not know (5/24/00, UasInvalidCdbSense), by the
+ * same writers as an answer that came from it: the SCSI forms CHECK
+ * CONDITION with that sense, the ATA forms Error 04h and Status 51h, SMART
+ * STATUS_NOT_SUPPORTED (design record 13 section 16.8 and 16.9's shapes for
+ * a drive with no SAT). Called before any buffer is locked or allocated:
+ * the record is freed and the IRP completed here.
+ */
+static NTSTATUS uasPassLocal(PUAS_PCMD pc)
+{
+    UCHAR sense[UAS_INVALID_CDB_SENSE];
+    PIRP irp;
+    PUCHAR buf;
+    ULONG n;
+    ULONG result;
+    ULONG information;
+    ULONG bytes;
+    ULONG err;
+    NTSTATUS status;
+
+    irp = pc->Irp;
+    buf = (PUCHAR)irp->AssociatedIrp.SystemBuffer;
+    n = UasInvalidCdbSense(sense, sizeof(sense));
+    information = 0;
+    if (pc->Form == UAS_PCMD_PT) {
+        result = UasPtResult(&pc->Plan, buf, pc->OutLength, UAS_SRB_ERROR,
+                             UAS_SCSI_CHECK_CONDITION, 0, sense, n,
+                             &information);
+    } else {
+        result = UasSmartResult(&pc->Smart, buf + UAS_SIOC_LENGTH, pc->Room,
+                                UAS_SRB_ERROR, UAS_SCSI_CHECK_CONDITION, 0,
+                                NULL, sense, n, &bytes, &err);
+        uasSiocReply(buf, err, bytes);
+        if (result == UAS_PTR_SUCCESS) {
+            information = UAS_SIOC_LENGTH + bytes;
+        }
+    }
+    status = uasPassStatus(result);
+    UasFree(pc->Data);
+    UasFree(pc);
+    return UasCompleteIrp(irp, status, NT_SUCCESS(status) ? information : 0);
+}
+
 /*
  * SCSI and ATA pass-through, buffered and direct (16.4, 16.5). Inside the
  * PDO's dispatch rundown. The direct forms at PASSIVE_LEVEL only.
@@ -895,6 +994,11 @@ static NTSTATUS uasPassThrough(PUAS_PDO pdo, PIRP irp, ULONG kind,
     /* No pool byte the caller never wrote goes back (16.4). */
     if (outLength > inLength) {
         UasZero(buf + inLength, outLength - inLength);
+    }
+    if (UasNoAtaCdb(pc->Plan.Cdb, pc->Plan.CdbLength) && uasNoAta(fdo)) {
+        UasEngineNoteLocal(fdo, pc->Plan.Cdb, XHCI98_FAIL_O_PROGRAM,
+                           pc->Plan.DataLength);
+        return uasPassLocal(pc);
     }
     data = NULL;
     if (pc->Plan.DataLength != 0 && direct) {
@@ -976,6 +1080,13 @@ static NTSTATUS uasMiniport(PUAS_PDO pdo, PIRP irp, ULONG inLength,
     if (capacity < room) {
         room = capacity;
     }
+    if (control == UAS_SIOC_SMART_VERSION && uasNoAta(fdo)) {
+        /* Issue 26: a device no ATA command reaches offers no SMART, and
+         * says so at the first question, as Windows' own usbstor.sys
+         * answers a Bulk-Only stick (STATUS_NOT_SUPPORTED): disk.sys then
+         * predicts no failure by SMART, and a SMART tool stops asking. */
+        return UasCompleteIrp(irp, STATUS_NOT_SUPPORTED, 0);
+    }
     if (control == UAS_SIOC_SMART_VERSION) {
         if (inLength - UAS_SIOC_LENGTH < UAS_SMART_VERSION_LENGTH ||
             room < UAS_SMART_VERSION_LENGTH) {
@@ -1007,6 +1118,11 @@ static NTSTATUS uasMiniport(PUAS_PDO pdo, PIRP irp, ULONG inLength,
             uasSiocReply(buf, err, UAS_SMART_OUT_HEADER);
         }
         return uasPassDrop(pc, STATUS_INVALID_PARAMETER);
+    }
+    if (uasNoAta(fdo)) {
+        UasEngineNoteLocal(fdo, pc->Smart.Cdb, XHCI98_FAIL_O_PROGRAM,
+                           pc->Smart.DataLength);
+        return uasPassLocal(pc);
     }
     if (pc->Smart.DataLength != 0) {
         pc->Data = (PUCHAR)UasAlloc(pc->Smart.DataLength);

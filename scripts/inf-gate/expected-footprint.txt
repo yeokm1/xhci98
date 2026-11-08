@@ -101,6 +101,7 @@ reg|Windows 98|Xhci.AddReg|HKR||XhciFirstEnumWaitMs|0x00010003|5000|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciFirstEnumPortMs|0x00010003|2000|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciIntelPortSwitch|0x00010003|0|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciIntelIrqRoute|0x00010003|1|keep
+reg|Windows 98|Xhci.AddReg|HKR||XhciIntelNoRouteIrq|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciTolerance|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciIntervalCap|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciAvgTrbEsit|0x00010003|0|keep
@@ -119,6 +120,8 @@ reg|Windows 98|Xhci.AddReg|HKR||XhciAcpiTables|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciUsb2Bos|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciResumeKeep|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciLinkKeep|0x00010003|1|keep
+reg|Windows 98|Xhci.AddReg|HKR||XhciEventRingTrbs|0x00010003|1024|keep
+reg|Windows 98|Xhci.AddReg|HKR||XhciBulkOnlyOwnId|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciMsiAvoid|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciStreamsOff|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciResumeReinit|0x00010003|1|keep
@@ -147,6 +150,7 @@ reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciFirstEnumWaitMs|0x00010003|5000|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciFirstEnumPortMs|0x00010003|2000|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciIntelPortSwitch|0x00010003|0|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciIntelIrqRoute|0x00010003|1|keep
+reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciIntelNoRouteIrq|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciTolerance|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciIntervalCap|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciAvgTrbEsit|0x00010003|0|keep
@@ -165,6 +169,8 @@ reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciAcpiTables|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciUsb2Bos|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciResumeKeep|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciLinkKeep|0x00010003|1|keep
+reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciEventRingTrbs|0x00010003|1024|keep
+reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciBulkOnlyOwnId|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciMsiAvoid|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciStreamsOff|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciResumeReinit|0x00010003|1|keep
@@ -257,6 +263,7 @@ reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciFirstEnumWaitMs|0x00010003|5
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciFirstEnumPortMs|0x00010003|2000|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciIntelPortSwitch|0x00010003|0|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciIntelIrqRoute|0x00010003|1|keep
+reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciIntelNoRouteIrq|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciTolerance|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciIntervalCap|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciAvgTrbEsit|0x00010003|0|keep
@@ -275,6 +282,8 @@ reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciAcpiTables|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciUsb2Bos|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciResumeKeep|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciLinkKeep|0x00010003|1|keep
+reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciEventRingTrbs|0x00010003|1024|keep
+reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciBulkOnlyOwnId|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciMsiAvoid|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciStreamsOff|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciResumeReinit|0x00010003|1|keep

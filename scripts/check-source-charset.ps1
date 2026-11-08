@@ -58,32 +58,35 @@ $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repo = Split-Path -Parent $scriptDir
 
-# The trees that hold source. src\ is the one that ships; the other four were
-# measured clean on 2026-09-12 under all three rules, so including them costs
-# nothing today and puts the guard where a future edit would land.
-$trees = @("src", "test", "scripts", "xhcitr", "xhciqual", "xhciperf")
+# The trees that hold source: every top-level tracked directory but docs\,
+# releases\ and images\ (and the git-ignored tools\, external\, vm\, out\ and
+# temp\). src\ is the one that ships; xhciinst\ (the installer, whose strings
+# Windows 98 shows, and the shipped INSTALL.BAT) and xhcimark\ (the mark
+# service) were added on 2026-11-06, both measured clean under all three
+# rules that day.
+$trees = @("src", "test", "scripts", "xhciinst", "xhcimark", "xhcitr", "xhciqual", "xhciperf")
 
 # File kinds the 1998-era toolchain reads. All three rules apply to these.
 # `.oem` is txtsetup.oem, which text-mode Setup reads (task 33.3); `.vbs` is
 # src\portsw.vbs, which Windows 98's Script Host reads (roadmap-hcd 36.42);
 # `.bat` covers src\portsw-on.bat and portsw-off.bat, which COMMAND.COM runs
-# on Windows 98 SE and ME (roadmap-hcd 36.56).
-$toolchainExt = @(".c", ".h", ".asm", ".rc", ".def", ".inf", ".bat", ".cmd", ".oem", ".vbs")
+# on Windows 98 SE and ME (roadmap-hcd 36.56); `.reg` is src\silent.reg,
+# which Windows 98's REGEDIT imports (task 38.2), and `.manifest` the tools'
+# application manifests, which rc.exe embeds and the loader reads.
+$toolchainExt = @(".c", ".h", ".asm", ".rc", ".def", ".inf", ".bat", ".cmd", ".oem", ".vbs", ".reg", ".manifest")
 $toolchainName = @("makefile", "sources")
 
 # Everything else that is source in this tree. Rules 1 and 2 only - see above.
 # `.allow` is the import allowlist, which is tracked source this project edits
 # by hand and which no other gate reads for encoding (the audit of
-# 2026-09-16).
-$otherExt = @(".ps1", ".psd1", ".md", ".txt", ".list", ".expected", ".allow")
+# 2026-09-16); `.py` and `.sh` are the host-side helpers under scripts\.
+$otherExt = @(".ps1", ".psd1", ".md", ".txt", ".list", ".expected", ".allow", ".py", ".sh")
 
 # Repo-relative paths that are not tracked source, each git-ignored for the
 # reason given. A filesystem walk finds them; git would not, but no other gate
 # in this build shells out to git and this one does not start.
 $skip = @(
-    '^src\\obj',                                  # build.exe output: obj, objchk, objchk_qemu, objfre
-    '^src\\uas\\obj',                             # the same under src\uas, xhciuas.sys (task 31-A.2)
-    '^src\\hlpr\\obj',                            # the same under src\hlpr, xhcihlpr.sys (tasks 36.15, 38.3)
+    '^src\\(.+\\)?obj[^\\]*\\',                   # build.exe output (obj, objchk_*, objfre_*) of every driver under src\
     '^src\\stor98\\',                             # Stor98, tracked under its own rules, not this file's (task 42-A.20)
     '^scripts\\local\\',                          # per-operator bench tooling
     '^xhciqual\\test\\(win98hdd|hdd)\\',          # generated guest disks

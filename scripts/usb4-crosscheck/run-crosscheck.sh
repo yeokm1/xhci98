@@ -21,8 +21,15 @@
 set -e
 here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(cd "$here/../.." && pwd)"
-emu="${USB4EMU:-$repo/../usb4-emu}"
-[ -d "$emu/src/qemu/hw/usb4" ] || emu="$repo/../../usb4-emu"
+# An explicit USB4EMU is used as given, or the run stops: falling back
+# from it would read a different checkout than the one named.
+if [ -n "${USB4EMU:-}" ]; then
+    emu="$USB4EMU"
+    [ -d "$emu/src/qemu/hw/usb4" ] || { echo "USB4EMU=$emu holds no src/qemu/hw/usb4" >&2; exit 2; }
+else
+    emu="$repo/../usb4-emu"
+    [ -d "$emu/src/qemu/hw/usb4" ] || emu="$repo/../../usb4-emu"
+fi
 qemu="$emu/src/qemu"
 out="${OUT:-$repo/out/u4-crosscheck}"
 mkdir -p "$out/trace"
@@ -67,7 +74,6 @@ if [ -f "$qemu/hw/usb4/usb4-router-asm2464.c" ]; then
 fi
 gcc -std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter \
     -Wno-sign-compare -Wno-missing-field-initializers $asm2464 \
-    -Wno-sign-compare -Wno-missing-field-initializers \
     -I"$here" \
     -I"$qemu/tests/usb4/stub" -I"$out" -I"$qemu/include" -I"$qemu" \
     -I"$qemu/hw/usb4" -I"$repo/src" \

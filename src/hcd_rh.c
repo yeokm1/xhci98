@@ -776,7 +776,7 @@ NTSTATUS HcdRootHubFdoCleanup(PHCD_ROOTHUB_FDO fdo, PIRP irp)
 /* IRP_MJ_SYSTEM_CONTROL on the root-hub FDO: this FDO is no WMI provider,
  * so the request goes down to the root-hub PDO, inside the FDO's I/O count.
  * Completing it here is Driver Verifier's stop C9 0x220 at the first boot
- * under Verifier (finding D4, design record 18 section 11.2). */
+ * under Verifier (design record 18 section 11.2). */
 NTSTATUS HcdRootHubFdoSystemControl(PHCD_ROOTHUB_FDO fdo, PIRP irp)
 {
     NTSTATUS status;

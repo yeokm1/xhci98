@@ -320,7 +320,7 @@ static int ehci_dma(LEGACY_CTRL *c)
      * said so since it was written: "distinguish 'the tool ran out of
      * conventional memory' from 'the controller cannot do DMA' - reporting the
      * former as a DMA failure disqualifies working hardware"
-     * (`xhci_dma_proof` in bringup.c). The legacy path set V_FAIL, and a
+     * (`qual_dma` in bringup.c). The legacy path set V_FAIL, and a
      * V_FAIL on C3 prints DISQUALIFIED - so a perfectly good EHCI was
      * disqualified because this tool could not get 96 bytes of conventional
      * memory, which is a fact about the DOS box it was run in. Design record

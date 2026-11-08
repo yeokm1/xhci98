@@ -24,6 +24,61 @@ Do not turn a hypothesis into a settled hardware quirk. Move confirmed design
 rules into the appropriate normative document while keeping the debugging
 history here.
 
+**Most of this file is the `1.2.0.0` miniport's.** Until 2026-10-02
+`xhci98.sys` was a `usbport.sys` miniport (Option A), and an entry written
+before that date describes it unless it says otherwise: its measurements
+stand as evidence, but a "reusable rule" that rests on usbport owning the
+stack, the extensions or the pool may not hold for the host controller
+driver. Where an entry and `AGENTS.md`, design record 13 or a roadmap
+decisions table disagree about the HCD, they win; two pool entries below
+carry a dated note saying so.
+
+## A USB disk the BIOS saw at power-on stalls a Windows 98 boot for the firmware's USB time-out, once the host controller driver owns the controller
+
+Environment: development host A, the q35 Windows 98 SE base under the
+pinned emulator (SeaBIOS rel-1.17.0, `qemu-xhci`), `3.4.1.0` installed;
+2026-11-06, the owner's report that a P14s Gen 1 never reaches the desktop
+with a stick plugged in at power-on (`runs/run-47.md`, "Boot with a USB
+stick attached (P14s report)").
+
+Observed: with a stick attached at power-on the boot sat on a text screen
+for 72 s (protected-mode disk driver present) to several minutes (none, or
+the stick behind a hub), then reached the desktop. QEMU's trace shows, after
+the driver's controller reset, doorbell writes to the stick's bulk OUT
+endpoint with no Bulk-Only command behind them, 5.1 s apart; the CPU is in
+SeaBIOS meanwhile, and `log int` shows Windows 98's real-mode disk code
+(`ffff:xxxx`) issuing INT 13h reset and read for BIOS disk 82h, the stick.
+A stick the BIOS never saw, or no driver taking the controller, gives no
+stall.
+
+Proven: a stick the BIOS enumerates is an INT 13h disk with an MS-DOS
+letter, and Windows 98 reads it through INT 13h during the boot after the
+host controller driver has reset the controller; each such request costs the
+firmware's own USB time-out, and the driver itself is idle meanwhile. With
+the protected-mode disk driver present the requests stopped after 15 and its
+disk commands followed; without it they went on for minutes. Read since
+(task 47.12, `runs/run-47.md`, "47.12 The BIOS's USB disk after the
+takeover on 98 SE and ME: the reading"): each burst of five is one MS-DOS
+request to the stick's letter, IO.SYS retrying; the protected-mode disk's
+next command came 3.6 s after the last of them, and from then on the
+stick's INT 13h unit was served from that disk in protected mode, so
+nothing reached the firmware any more. Inferred, not read: that the
+requests come from a protected-mode component walking the MS-DOS drives
+just after the takeover (98 SE's registers), that the disk's configuration
+waited because the system was held in the firmware, and that IOS's
+association of the unit is what moved it to protected mode. Unknown: what
+the P14s's firmware does with such a request. Inferred, not read: a
+firmware whose time-out is longer, or that never returns, turns the stall
+into a stop.
+
+Rule: on 98 SE and ME, a boot that stops or crawls only with a USB disk
+plugged in at power-on is first this, before any driver defect: compare
+with the disk plugged in after the BIOS has started the boot sector (or the
+BIOS's USB storage support off), and count the BIOS's requests after the
+reset in a `usb_xhci_doorbell_write` / `usb_msd_cmd_submit` trace. The
+q35 base also cannot run with `smm=off` (C: is served by SeaBIOS through
+SMM), so that is not a way to take SeaBIOS out of the picture there.
+
 ## A contract derived from two usbport builds was enforced against a third, and the refusal was a user's Code 10
 
 Roadmap task 24.1, 2026-09-24, static. `XhciIntervalFromPeriod` refused a
@@ -1076,13 +1131,15 @@ a write into somebody else's memory.
 
 ## A failure path whose recovery step has no owner is not a recovery path
 
-`xhciResetController` masked its interrupt enables, latched `ControllerFailed`,
-and said in its own trace text that recovery was "a stop/start". Nothing in
-the driver, and nothing in either shipping `usbport.sys`, ever performed one.
-The sentence read like a design because it named a real mechanism and pointed
-at the right layer; it was in fact a `TODO` that had lost its marker. The cost
-was Finding 3, a root port that goes permanently deaf until a cold boot, on
-two machines, found by a bench trip that was booked for something else.
+`xhciResetController` masked its interrupt enables, latched
+`ControllerFailed`, and said in its own trace text that recovery was "a
+stop/start". Nothing in the driver, and nothing in either shipping
+`usbport.sys`, ever performed one. The sentence read like a design because
+it named a real mechanism and pointed at the right layer; it was in fact a
+`TODO` that had lost its marker. The cost was a root port that goes
+permanently deaf until a cold boot (`run-13e.md`, its two
+unexplained episodes), on two machines, found by a bench
+trip that was booked for something else.
 
 What made it look survivable for months is that every individual statement in
 the comment was true: the callback really does run at DISPATCH inside
@@ -1235,7 +1292,7 @@ read no counter. Not audited.
 the Windows 2000 bench run sheet's Q2b (deleted with the batch and the vehicle
 it was written for).
 
-## Finding 3 went from unreproducible to a five-event recipe, and the two NEGATIVE runs are what made it a measurement
+## The deaf root port went from unreproducible to a five-event recipe, and the two NEGATIVE runs are what made it a measurement
 
 Environment: ThinkPad E460, Windows 98 SE, NUSB 3.3, `xhci98.sys` 0.0.0.4
 release flavour, `usbhub.sys` present. Second bench session of the day. No
@@ -1244,10 +1301,10 @@ trace channel, so every reading here is behavioural.
 The narrow operation: stages E3 and E4 of batch 13-E. The investigation below
 was not planned and displaced the rest of the sheet.
 
-Result: a defect that had resisted two sessions was reduced to a single named
-variable in an afternoon, with no instrumentation. Finding 3, the most serious
-thing outstanding and the only one with no mechanism, is now reproducible in
-five plugs.
+Result: a defect that had resisted two sessions was reduced to a single
+named variable in an afternoon, with no instrumentation. The deaf root port,
+the most serious thing outstanding and the only defect with no mechanism, is
+now reproducible in five plugs.
 
 ### What was found
 
@@ -1282,13 +1339,14 @@ race.
   wedged it on the first alternation. The flawed step cost one boot and is the
   reason the next one was decisive.
 - "It needs X" is often a description of how it was reached, not of what it
-  requires. Finding 3 was written up for two sessions as needing isochronous
-  audio playing, and its only named mechanism, a UP interrupt livelock, rested
-  entirely on an isochronous endpoint at `bInterval`=1 posting an event per
-  frame. It reproduces with no audio, no load and no traffic at all. Nothing
-  was wrong with the earlier observations; the generalisation drawn from them
-  named the vehicle instead of the fault. Two sightings of a fault under one
-  condition are not evidence that the condition is necessary.
+  requires. The deaf root port was written up for two sessions as needing
+  isochronous audio playing, and its only named mechanism, a UP interrupt
+  livelock, rested entirely on an isochronous endpoint at `bInterval`=1
+  posting an event per frame. It reproduces with no audio, no load and no
+  traffic at all. Nothing was wrong with the earlier observations; the
+  generalisation drawn from them named the vehicle instead of the fault. Two
+  sightings of a fault under one condition are not evidence that the
+  condition is necessary.
 - Ask when it breaks, not only what breaks it. Three plugs separated
   "teardown is broken" from "teardown is clean and the next enumeration reads
   what it left", two different functions and two different fixes, with no
@@ -1573,8 +1631,8 @@ witness, and a restore verified by size verifies nothing.
 
 ### What remains unknown
 
-- Whether finding 2 is an unresolved import or a decoded `0xE9`. A clean Code 2
-  favours the former and does not settle it.
+- Whether the Code 2 (defect 2b) is an unresolved import or a decoded
+  `0xE9`. A clean Code 2 favours the former and does not settle it.
 - Whether the crash tracks the enumeration burst rather than sustained
   interrupt rate. A mouse has no high steady-state rate and crashed at the
   plug, and 60 s of capture on a quiet bus was survivable: consistent, not
@@ -4031,7 +4089,7 @@ lease (`192.168.1.235`), `arp -a` resolving the adapter's hardware MAC, and a
 host ping of 6/6, TTL=128, a check outside the guest and outside QEMU's
 trace.
 
-The backpressure latch is measured unreachable, which is the finding 8-A was
+The backpressure latch is measured unreachable, which is what 8-A was
 owed. `TransfersRefusedRingFull` and `EndpointRetriesAsked` are both 0 across
 a working receive path under sustained load. Mass storage cannot fill a bulk
 ring for BOT protocol reasons; a NIC does not because it keeps only a handful
@@ -5490,7 +5548,7 @@ cycles).
 Launchers needed no regeneration here for the first time in four hosts: this
 host's scoop path is what the committed `.cmd` files already carry.
 
-### Finding 1: the 11.0.0 attribution is falsified
+### The 11.0.0 attribution is falsified
 
 This file's Phase 4 checkpoint entry recorded that `win2k-smp.img` wedged in
 boot driver init after exactly 12,691 IDE reads on development host A,
@@ -5520,7 +5578,7 @@ creates a partition on this host (the checkpointed `kernel-irqchip=off` rung
 was still used, unchanged). That is a fourth distinct WHPX outcome across
 four hosts.
 
-### Finding 2: the checkpoint's plug/unplug clause never witnessed an unplug
+### The checkpoint's plug/unplug clause never witnessed an unplug
 
 The Phase 4 checkpoint names "the debug DPC log shows Port Status Change
 events when a QEMU USB device is plugged/unplugged". Measured on the 2d VM
@@ -5560,7 +5618,7 @@ block so a release build carries the clause too. It was not applied in this
 session, so that the SMP leg ran the same binary as 2a/2b; it owes one
 re-observation boot per VM once made.
 
-### Finding 3: the 2d guest's keyboard layout is US-Dvorak
+### The 2d guest's keyboard layout is US-Dvorak
 
 Driving the Found New Hardware wizard by `sendkey` produced garbage in the
 path field: `E:\pkg` came out as `.S\lt`-shaped text, and a diagnostic
@@ -5602,9 +5660,9 @@ What is not observed: Driver Verifier's own Driver Status page was never
 read back. The Verifier options were configured through the GUI by the
 operator and the boot that follows them is in the trace, but "Verifier was
 verifying `xhci98.sys`" is at this point reported, not witnessed, which is
-the distinction finding 2 and the Phase 4 checkpoint entry are about, so it
-is recorded as owed rather than assumed. The 2b Verifier clause taken there
-is unaffected and was read back there.
+the distinction the plug/unplug clause above and the Phase 4 checkpoint
+entry are about, so it is recorded as owed rather than assumed. The 2b
+Verifier clause taken there is unaffected and was read back there.
 
 ## Second run on the same host - the fixed witnesses work, and hot-plug operations are not hot-plug events - which is most of the SMP VM's contention coverage
 
@@ -5612,8 +5670,8 @@ is unaffected and was read back there.
 
 Same host and VM as the entry above, rebuilt debug driver `xhci98.sys`
 36,987 B (`built Jul 31 2026 22:56:54`) carrying both the PSC witness fix
-from finding 2 above and the No Op witness rework that had never run on a
-VM. Installed by disabling the device, overwriting
+from the plug/unplug clause above and the No Op witness rework that had
+never run on a VM. Installed by disabling the device, overwriting
 `C:\WINNT\system32\drivers\xhci98.sys` from `E:\pkg`, and re-enabling.
 Traces archived as `vm\win2k-smp-debugcon.phase4-newwitness.log` (342 lines)
 and `vm\win2k-smp-qemu-trace.phase4-newwitness.log` (the host-side oracle
@@ -7045,7 +7103,16 @@ the stronger claim.
 This changes the reason for the rule, not the rule: the compatibility header
 still undefines the DDK's `ExAllocatePool` macro and the gate still denies
 both tagged names, because an Option-A miniport should not be allocating
-private pool at all. That is now the whole reason. A second reason once
+private pool at all. That is now the whole reason.
+
+> **2026-11-06, for the host controller driver:** the HCD allocates pool,
+> at named lifetime-scoped sites, through `ExAllocatePoolWithTag` and
+> `ExFreePool` in `hcd_pool.obj` alone, and the import gate admits that pair
+> there and denies `ExAllocatePool` and `ExFreePoolWithTag` (design record
+> 13 section 7.5; `AGENTS.md`, "Imports and the API ceiling"). The
+> compatibility header still undefines the DDK's `ExAllocatePool` macro, as
+> this entry says, so a stray untagged call resolves to the name the gate
+> refuses. A second reason once
 stood beside it, that the original Win98 retail release is unconfirmed and
 exports strictly less than SE, and it went when that release stopped being a
 target of this project. usbport supplies every buffer, so a pool call site
@@ -7801,6 +7868,12 @@ audit; the binary, not the source spelling, is the proof.
 Prefer avoiding private pool allocation under Option A: usbport allocates
 the miniport extension and controller/endpoint common-buffer extensions,
 and fixed metadata can usually live inside those declared sizes.
+
+> **2026-11-06, for the host controller driver:** the `#undef` above is
+> still the rule, but the HCD has no usbport to allocate for it: its pool is
+> `ExAllocatePoolWithTag` and `ExFreePool` at the sites design record 13
+> section 7.5 names, admitted in `hcd_pool.obj` alone. The tagged allocator
+> is no longer denied.
 
 Normative updates: `AGENTS.md`, `docs/usb-xhci-info/win98-wdm.md`, and
 `docs/contributing/build-and-test.md`.

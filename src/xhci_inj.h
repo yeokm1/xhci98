@@ -118,7 +118,13 @@
                                        * rollback (Resource Error), 2 and 3
                                        * no completion there - the
                                        * controller reset requested          */
-#define XHCI_INJ_LAST_BUILT      25UL
+/* Issue 26 (2026-11-07), hex 1A: the next `arg` Stop Endpoints (0 one) on
+ * an endpoint with streams are sent for real and answered Context State
+ * Error, the endpoint's next context read answered Running - the race an
+ * Intel 7 Series controller showed, which in 3.4.1.0 left a cancel's
+ * endpoint paused for good. */
+#define XHCI_INJ_STOP_RACE       26UL
+#define XHCI_INJ_LAST_BUILT      26UL
 #define XHCI_INJ_CLEAR           0xFFUL  /* every injection ended            */
 
 /* XhciInjTake's verdicts. */
@@ -155,8 +161,9 @@
                                        * TR Dequeue puts it back             */
 #define XHCI_INJ_STOP_BROKEN     2UL  /* anything else: abandoned, counted   */
 
-/* The refused code REFUSED_CODE and the EP0 faults carry: record 17's
- * finding T3 names Bandwidth Overrun among the codes nothing claims. */
+/* The refused code REFUSED_CODE and the EP0 faults carry: design record 17's
+ * row on the codes nothing claims (section 3, T3) names Bandwidth Overrun
+ * among them. */
 #define XHCI_INJ_REFUSED_CC      XHCI_CC_BANDWIDTH_OVERRUN
 
 /* The argument that means "until CLEAR" for LOST_IRQ; for DEAD it is 0. */

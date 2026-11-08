@@ -3184,28 +3184,37 @@ static void test_iso_page(void)
     CHECK_EQ(XhciPipeIsoPageWanted(&ep, 1), 0, "bulk: never");
     CHECK_EQ(XhciPipeIsoPageWanted(NULL, 1), 0, "NULL");
 
-    /* Point 3, by hand: a pipe counted at capacity + 5, so kept = 64 +
-     * 2 x 67 = 198. 256 entries, nothing open: 58. */
-    CHECK_EQ(XHCI_ISO_EVENTS_OVER_TRBS, 5, "capacity plus five");
-    CHECK_EQ(XhciPipeIsoGrant(256, 0, 0, 62), 58, "256, alone: 58");
-    CHECK_EQ(XhciPipeIsoRingTrbs(58, 62), 122, "allowance 120, ring 122");
-    /* One pool pipe already counted (67): below 0. */
-    CHECK_EQ(XhciPipeIsoGrant(256, 67, 0, 62), 0, "after a pool pipe: none");
-    CHECK_EQ(XhciPipeIsoGrant(256, 125, 0, 62), 0, "after a page: none");
+    /* Point 3, by hand, with section 11.9's eight records: a pipe counted
+     * at capacity + 9, so kept = 64 + 2 x 71 = 206. 256 entries, nothing
+     * open: 50. */
+    CHECK_EQ(XHCI_ISO_EVENTS_OVER_TRBS, 9, "capacity plus nine");
+    CHECK_EQ(XhciPipeIsoGrant(256, 0, 0, 62), 50, "256, alone: 50");
+    CHECK_EQ(XhciPipeIsoRingTrbs(50, 62), 114, "allowance 112, ring 114");
+    /* One pool pipe already counted (71), or a page (121): none. */
+    CHECK_EQ(XhciPipeIsoGrant(256, 71, 0, 62), 0, "after a pool pipe: none");
+    CHECK_EQ(XhciPipeIsoGrant(256, 121, 0, 62), 0, "after a page: none");
     /* A switch dropping the page it replaces borrows its count. */
-    CHECK_EQ(XhciPipeIsoGrant(256, 125, 125, 62), 58, "switch borrows");
-    CHECK_EQ(XhciPipeIsoGrant(256, 125, 500, 62), 58, "borrow clamped");
-    /* 256 - 198 - 42 = 16, the minimum; 43 leaves 15. */
-    CHECK_EQ(XhciPipeIsoGrant(256, 42, 0, 62), 16, "exactly the minimum");
-    CHECK_EQ(XhciPipeIsoGrant(256, 43, 0, 62), 0, "below the minimum");
-    CHECK_EQ(XhciPipeIsoGrant(198, 0, 0, 62), 0, "nothing past the kept");
-    /* 1,024 entries: 826 capped at 192 (counted 259); then 1024 - 198 -
-     * 259 = 567 -> 192, 308 -> 192, then 49. */
+    CHECK_EQ(XhciPipeIsoGrant(256, 121, 121, 62), 50, "switch borrows");
+    CHECK_EQ(XhciPipeIsoGrant(256, 121, 500, 62), 50, "borrow clamped");
+    /* 256 - 206 - 34 = 16, the minimum; 35 leaves 15. */
+    CHECK_EQ(XhciPipeIsoGrant(256, 34, 0, 62), 16, "exactly the minimum");
+    CHECK_EQ(XhciPipeIsoGrant(256, 35, 0, 62), 0, "below the minimum");
+    CHECK_EQ(XhciPipeIsoGrant(206, 0, 0, 62), 0, "nothing past the kept");
+    /* 1,024 entries: 818 capped at 192 (a full page counted 263); then
+     * 1024 - 206 - 263 = 555 -> 192, 292 -> 192, then 29 (allowance 91,
+     * counted 100), and nothing once that fourth is counted (889). */
     CHECK_EQ(XhciPipeIsoGrant(1024, 0, 0, 62), 192, "1024: capped 192");
     CHECK_EQ(XhciPipeIsoRingTrbs(192, 62), 256, "the page's 256");
-    CHECK_EQ(XhciPipeIsoGrant(1024, 259, 0, 62), 192, "second");
-    CHECK_EQ(XhciPipeIsoGrant(1024, 518, 0, 62), 192, "third");
-    CHECK_EQ(XhciPipeIsoGrant(1024, 777, 0, 62), 49, "fourth: 49, 111");
+    CHECK_EQ(XhciPipeIsoGrant(1024, 263, 0, 62), 192, "second");
+    CHECK_EQ(XhciPipeIsoGrant(1024, 526, 0, 62), 192, "third");
+    CHECK_EQ(XhciPipeIsoGrant(1024, 789, 0, 62), 29, "fourth: 29, 91");
+    CHECK_EQ(XhciPipeIsoGrant(1024, 889, 0, 62), 0, "then none");
+    /* Task 47.30 (design record 13 section 11.10, point 4): a pool pipe
+     * opened first leaves a page its full allowance at 1,024 entries,
+     * where at 256 it leaves none. */
+    CHECK_EQ(XhciPipeIsoGrant(1024, 71, 0, 62), 192,
+             "1024, after a pool pipe: 192, allowance 254");
+    CHECK_EQ(XhciPipeIsoRingTrbs(192, 62), 256, "its ring one page");
     CHECK_EQ(XhciPipeIsoGrant(1024, 0xFFFFFFF0UL, 0, 62), 0, "no wrap");
     CHECK_EQ(XhciPipeIsoGrant(1024, 0, 0, 254), 0, "no room over 254");
     CHECK_EQ(XhciPipeIsoRingTrbs(0, 62), 0, "no grant, no ring");
@@ -3221,6 +3230,117 @@ static void test_iso_page(void)
     CHECK_EQ(XhciPipeIsoPageBytes(257, 0, 4096), 0, "257 refused");
     CHECK_EQ(XhciPipeIsoPageBytes(2, 0, 4096), 0, "2 refused");
     CHECK_EQ(XhciPipeIsoPageBytes(130, 0, 3000), 0, "odd page size");
+}
+
+/* Design record 13 section 10.5.2 (task 47.10): a ghost's select walks the
+ * URB's interface entries against the PDO's copy. The layout is the x86
+ * USBD_INTERFACE_INFORMATION's (16 bytes before the pipes, 20 a pipe);
+ * the walk takes both sizes from its caller. */
+static ULONG sw_entry(UCHAR *at, ULONG length, ULONG number, ULONG alt)
+{
+    ULONG i;
+
+    for (i = 0; i < length; i++) {
+        at[i] = 0;
+    }
+    at[0] = (UCHAR)(length & 0xFF);
+    at[1] = (UCHAR)(length >> 8);
+    at[2] = (UCHAR)number;
+    at[3] = (UCHAR)alt;
+    return length;
+}
+
+static void test_select_walk(void)
+{
+    /* Two HID interfaces, one interrupt endpoint each, and if1 alt 1 with
+     * two endpoints. */
+    static const UCHAR cfg[73] = {
+        0x09, 0x02, 0x49, 0x00, 0x02, 0x01, 0x00, 0xA0, 0x32,
+        0x09, 0x04, 0x00, 0x00, 0x01, 0x03, 0x01, 0x01, 0x00,
+        0x09, 0x21, 0x11, 0x01, 0x00, 0x01, 0x22, 0x41, 0x00,
+        0x07, 0x05, 0x81, 0x03, 0x08, 0x00, 0x0A,
+        0x09, 0x04, 0x01, 0x00, 0x01, 0x03, 0x00, 0x00, 0x00,
+        0x07, 0x05, 0x82, 0x03, 0x08, 0x00, 0x0A,
+        0x09, 0x04, 0x01, 0x01, 0x02, 0x03, 0x00, 0x00, 0x00,
+        0x07, 0x05, 0x82, 0x03, 0x08, 0x00, 0x0A,
+        0x07, 0x05, 0x02, 0x03, 0x08, 0x00, 0x0A };
+    UCHAR u[256];
+    ULONG n;
+    ULONG off;
+    ULONG count;
+
+    CHECK_EQ(cfg[2], sizeof(cfg), "the fixture's wTotalLength");
+    /* Two entries, each with room for its one pipe. */
+    off = sw_entry(u, 36, 0, 0);
+    off += sw_entry(u + off, 36, 1, 0);
+    count = 99;
+    CHECK_EQ(XhciPipeSelectWalk(u, off, 16, 20, cfg, sizeof(cfg), &count),
+             XHCI_PIPE_OK, "two interfaces");
+    CHECK_EQ(count, 2, "two entries");
+    /* One entry is a select of one interface. */
+    CHECK_EQ(XhciPipeSelectWalk(u, 36, 16, 20, cfg, sizeof(cfg), &count),
+             XHCI_PIPE_OK, "one interface");
+    CHECK_EQ(count, 1, "one entry");
+    /* An alternate setting the copy carries, with room for its two. */
+    n = sw_entry(u, 56, 1, 1);
+    CHECK_EQ(XhciPipeSelectWalk(u, n, 16, 20, cfg, sizeof(cfg), &count),
+             XHCI_PIPE_OK, "if1 alt 1");
+    /* Room for one pipe of two: the caller's buffer. */
+    n = sw_entry(u, 36, 1, 1);
+    CHECK_EQ(XhciPipeSelectWalk(u, n, 16, 20, cfg, sizeof(cfg), &count),
+             XHCI_PIPE_TOO_SMALL, "if1 alt 1 in 36 bytes");
+    /* Exactly the fixed part with no pipe room, for an interface with a
+     * pipe. */
+    n = sw_entry(u, 16, 0, 0);
+    CHECK_EQ(XhciPipeSelectWalk(u, n, 16, 20, cfg, sizeof(cfg), &count),
+             XHCI_PIPE_TOO_SMALL, "no room for the pipe");
+    /* An entry shorter than the fixed part, past the end, or a tail. */
+    n = sw_entry(u, 15, 0, 0);
+    CHECK_EQ(XhciPipeSelectWalk(u, 36, 16, 20, cfg, sizeof(cfg), &count),
+             XHCI_PIPE_REFUSED, "an entry below the fixed part");
+    n = sw_entry(u, 37, 0, 0);
+    CHECK_EQ(XhciPipeSelectWalk(u, 36, 16, 20, cfg, sizeof(cfg), &count),
+             XHCI_PIPE_REFUSED, "an entry past the URB's end");
+    off = sw_entry(u, 36, 0, 0);
+    CHECK_EQ(XhciPipeSelectWalk(u, off + 15, 16, 20, cfg, sizeof(cfg),
+                                &count),
+             XHCI_PIPE_REFUSED, "a tail too short for an entry");
+    /* Named twice; not in the copy; a number of 32. */
+    off = sw_entry(u, 36, 0, 0);
+    off += sw_entry(u + off, 36, 0, 0);
+    CHECK_EQ(XhciPipeSelectWalk(u, off, 16, 20, cfg, sizeof(cfg), &count),
+             XHCI_PIPE_REFUSED, "an interface named twice");
+    n = sw_entry(u, 36, 2, 0);
+    CHECK_EQ(XhciPipeSelectWalk(u, n, 16, 20, cfg, sizeof(cfg), &count),
+             XHCI_PIPE_REFUSED, "an interface the copy lacks");
+    n = sw_entry(u, 36, 0, 3);
+    CHECK_EQ(XhciPipeSelectWalk(u, n, 16, 20, cfg, sizeof(cfg), &count),
+             XHCI_PIPE_REFUSED, "an alternate the copy lacks");
+    n = sw_entry(u, 36, 32, 0);
+    CHECK_EQ(XhciPipeSelectWalk(u, n, 16, 20, cfg, sizeof(cfg), &count),
+             XHCI_PIPE_REFUSED, "interface number 32");
+    /* No entry at all; bad arguments. */
+    CHECK_EQ(XhciPipeSelectWalk(u, 0, 16, 20, cfg, sizeof(cfg), &count),
+             XHCI_PIPE_REFUSED, "no entry");
+    CHECK_EQ(count, 0, "no count on a refusal");
+    CHECK_EQ(XhciPipeSelectWalk(NULL, 36, 16, 20, cfg, sizeof(cfg), &count),
+             XHCI_PIPE_BAD_PARAM, "NULL entries");
+    CHECK_EQ(XhciPipeSelectWalk(u, 36, 16, 20, NULL, sizeof(cfg), &count),
+             XHCI_PIPE_BAD_PARAM, "NULL configuration");
+    CHECK_EQ(XhciPipeSelectWalk(u, 36, 16, 20, cfg, sizeof(cfg), NULL),
+             XHCI_PIPE_BAD_PARAM, "NULL count");
+    CHECK_EQ(XhciPipeSelectWalk(u, 36, 3, 20, cfg, sizeof(cfg), &count),
+             XHCI_PIPE_BAD_PARAM, "fixed below its four header bytes");
+    n = sw_entry(u, 36, 0, 0);
+    CHECK_EQ(XhciPipeSelectWalk(u, n, 16, 0x04000000UL, cfg, sizeof(cfg),
+                                &count),
+             XHCI_PIPE_TOO_SMALL, "an absurd pipe size, no wrap");
+    /* The amd64 sizes (24 and 32) the same way. */
+    off = sw_entry(u, 56, 0, 0);
+    off += sw_entry(u + off, 88, 1, 1);
+    CHECK_EQ(XhciPipeSelectWalk(u, off, 24, 32, cfg, sizeof(cfg), &count),
+             XHCI_PIPE_OK, "amd64 layout, if0 and if1 alt 1");
+    CHECK_EQ(count, 2, "two entries, amd64");
 }
 
 int main(void)
@@ -3258,6 +3378,7 @@ int main(void)
     test_walk_surplus();
     test_play2_async();
     test_iso_page();
+    test_select_walk();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

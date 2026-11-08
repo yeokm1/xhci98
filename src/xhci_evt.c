@@ -176,9 +176,9 @@ static ULONG xhciHandleEvent(PXHCI_EXTENSION ext, const XHCI_TRB *trb)
 
     case XHCI_TRB_TYPE_COMMAND_COMPLETION:
         /*
-         * The one arm that acts. XhciCommandEvent (src/xhci_cmd.c) matches by
-         * TRB pointer under the controller lock held by this DPC. usbport's
-         * MiniportInterruptsSpinLock does not exclude submit or timeout.
+         * One of the five arms that act (the header above). XhciCommandEvent
+         * (src/xhci_cmd.c) matches by TRB pointer under the controller lock
+         * held by this DPC.
          */
         XHCI_DBG_VALUE_CHANGED("event: command completion, code",
                                XHCI_TRB_GET_COMPLETION(trb->Status));
@@ -621,9 +621,10 @@ BOOLEAN XhciIsr(PXHCI_EXTENSION ext)
  * consumes them cannot own a CPU at DISPATCH_LEVEL; here the xHC is halted, no
  * doorbell has been rung and the CRCR write above fetches nothing until one is,
  * so there is no producer at all. What makes this bound unreachable rather than
- * merely generous is arithmetic: it is four times a ring that holds
- * `XHCI_EVENT_RING_TRBS` entries, so a ring nothing is refilling is empty long
- * before the count is spent, and the loop always exits on the Cycle Bit.
+ * merely generous is arithmetic: a ring nothing is refilling holds at most its
+ * entries less one - 255 on the in-block ring, 1,023 on the larger one (task
+ * 47.30, design record 13 section 11.10, point 7) - and the bound is 1,024,
+ * so the walk ends on the Cycle Bit before the count is spent.
  *
  * IRQL: PASSIVE_LEVEL (restore only). **The controller lock is not held** -
  * `XhciResumeController` calls `xhciRestoreState` without it, though this

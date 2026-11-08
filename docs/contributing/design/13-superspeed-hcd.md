@@ -17,8 +17,9 @@ section 11 is the transfer-buffer policy (25.7) and section 12 the index of
 what Phase 25 leaves open; section 14 is a cancelled TD behind the head
 (task 43.64), section 15 a device kept across its SuperSpeed link's
 recovery (task 45.41), section 16 a UAS drive's pass-through and SMART
-(task 45.52), and section 17 a UAS drive in Safely Remove Hardware (task
-45.61). Appendix A is the full Windows 98 export table.
+(task 45.52), section 17 a UAS drive in Safely Remove Hardware (task
+45.61), and section 18 a departed device's isochronous requests on 98 SE
+and ME (Phase 47). Appendix A is the full Windows 98 export table.
 
 **Since 2026-10-02 the successor is `xhci98.sys` and `src\` is the
 successor's** (owner, the same day, after task 25.8 had first built it as
@@ -615,6 +616,9 @@ value that reads as an absent one does - under the same rule and flag.
 one value whose written number is not what an absent one reads as: the
 INFs write 0 and the driver reads an absent one as 1 (above, and section
 5.6).
+**Amended by roadmap-usb4 UASBOT.1 (owner, 2026-11-08):**
+`XhciBulkOnlyOwnId`, read at each enumeration beside `XhciForceBulkOnly`,
+written at 1, which an absent one reads as too (section 10.7.3).
 
 **Amended for `3.1.0.0` (roadmap-usb4 42-A.17; owner, 2026-10-18, on
 SweetLow's proposal): the machine-wide key.** Every value above, and every
@@ -1334,6 +1338,27 @@ changes nothing.
 The log ring notes `power.d0.refused` (the bus's status) and
 `power.d0.flush` (bits 1-0 the decision, bits 31-8 the commands
 completed); `D0Refusals` counts them.
+
+### 5.9 Three lifetime rules from the audit of 2026-11-06 (task 47.1)
+
+Dated notes, added 2026-11-06 for `3.4.2.0`; the code is the authority.
+
+- **A START to a controller already started is not served.** The running
+  lifetime is stopped and the START completes, unforwarded, with
+  `STATUS_DEVICE_CONFIGURATION_ERROR` (`src/hcd_pnp.c`), instead of
+  zeroing the live extension and starting a second controller thread.
+- **The stop holds the power gate through the halt.** From the start of
+  the halt through the connectors' hand-back, with `ControllerStarted`
+  cleared inside it, so a power IRP that waited on the gate finds nothing
+  started; the direct power transition does nothing for a lifetime that is
+  not started (`src/hcd_ctl.c`, `src/hcd_power.c`).
+- **A fail-closed stop quarantines a map request it cannot drain.** It no
+  longer waits for ever on a map-register channel request the HAL cannot
+  grant: after a bounded wait the request is quarantined under `MapLock`
+  (its late execution routine returns `DeallocateObject` and touches
+  nothing else), the map pump stays closed, later STARTs are refused and
+  REMOVE keeps the device object, so the FDO lives for the rest of the
+  system's life (`src/hcd_dma.c`, `src/hcd_pnp.c`; section 11.3).
 
 ## 6. The function-driver contract (task 25.2)
 
@@ -5610,6 +5635,12 @@ install that writes no hub page or the wrong one (section 9).
 
 ### 8.8 `XHCISNAP` through the door
 
+> **Since `3.1.0.0` the reader is XHCITR** (roadmap-usb4 task 42-A.4):
+> `xhcisnap\xhcisnap.c`'s engine moved to `xhcitr\tr_snap.c` (`XHCITR
+> /snapshot`, `/dump`, `/probe`), and `docs/contributing/snapshot-reader.md`
+> replaces `xhcisnap/README.md` as the reader's reference. This section keeps
+> the names and line numbers it was written with.
+
 Today (`xhcisnap\xhcisnap.c`, `src\xhci.h`, the ABI document's "Debug /
 single-packet"): `CreateFileA("\\.\HCD<n>", GENERIC_READ | GENERIC_WRITE)`,
 `DeviceIoControl(0x00220438)`, in = out buffer. Layout: +0x00
@@ -6549,7 +6580,7 @@ step handed to the bus's PASSIVE worker.
    9.2.6.3; xHCI p.102: "Software shall be responsible for timing the
    SetAddress() 'recovery interval'").
 7. Descriptors: on Full Speed the 64-byte initial EP0 size, then Evaluate
-   Context to the real `bMaxPacketSize0` (the miniport's Finding 2 fix,
+   Context to the real `bMaxPacketSize0` (the miniport's fix for the two Creative Full-Speed units of `run-13e.md`,
    `XHCI_EP0_MPS_FULL_INITIAL` 64); Low Speed 8; High Speed 64.
 
 Port power on a root port with `PPC` = 1: 20 ms after `PP` before any state
@@ -6902,6 +6933,227 @@ transfer without an event (the bench reading above). The 43.49 series
 re-run on 98 SE with no controller reset is the runtime check of this
 change.
 
+#### 10.5.2 A departed PDO's start on Windows 98 SE and ME (task 47.10, 2026-11-06)
+
+**What was read.** Task 43.49 (`runs/run-43.md`, "43.49 - Windows ME
+Stops After Back-to-Back Mouse Plugs and Unplugs") stopped Windows ME
+under fast mouse plugs and unplugs: the REMOVE of a HID device whose
+START had failed, and which ME had then stopped, blocked inside ME's
+`hidusb.sys` and the configuration manager waited on it for good. The
+reading recorded there (its static reading of ME's `HIDUSB.SYS` 4.90, and
+its memory reads at the stop: state 5, pending count 0, a waiter on the
+removal event) is what this section rests on; nothing new was read from
+that binary. In short: `hidusb.sys` runs its STOP's stop routine - its
+decrement - only from its started state, its REMOVE skips the decrement
+after a STOP, and ME sends exactly that STOP after a failed START, so a
+HID stack whose start fails and whose device then goes waits at its
+REMOVE on an event nothing sets. It is the missing decrement, not a
+request left pending, that 43.49 read. How the start fails does not
+matter (runs b, c2 and d2 there): this driver refusing the START of a
+PDO whose device had left (`hcdPdoStarted`), the START answered success
+with `hidusb.sys`'s own descriptor requests then failing (run c2, an
+experiment not kept), or the device leaving while those requests were
+under way (run d2). ME's own stack stops the same way (task 43.54's note
+there). 98 SE's `hidusb.sys` runs its STOP's stop routine
+unconditionally, and 98 SE's configuration manager answers a failed START
+with a REMOVE, not a STOP, so 98 SE does not stop there. The owner took
+candidate 3 (the release notes' known limitation) at the time and noted
+candidate 1 - let the start succeed - as the later option (DEPART.1); its
+9x part is this task.
+
+**The rule until now** (`hcd_pdo.c`, `hcdPdoStarted`): the START of a
+PDO whose device has left is failed `STATUS_UNSUCCESSFUL`, on every
+target, so that the configuration manager tears the devnode down. That
+was chosen on 2026-10-04 from an ME reading ("started (refused), stopped
+and left ... the shell wedged") that 43.49 read as this same stop.
+
+**The design.** On Windows 98 SE and ME only (no
+`IoIsWdmVersionAvailable(1, 0x10)`, asked at the START as `hcd_ctl.c`
+asks it), a START that today's rule refuses because the
+device has left is answered **success**, and the PDO then answers the
+requests a class driver's start sends first from its own copies, so that
+the class driver's own start can finish and its stack reach the started
+state its STOP and REMOVE expect. **That this is enough for ME's
+`hidusb.sys` is the hypothesis the legs read** (below): run c2 showed
+that a START answered success alone is not, because the descriptor
+requests that follow it failed; which requests a class driver's start
+sends after it is read at runtime here, from the `qemu` trace, not from
+any binary. In detail:
+
+1. **Which START** (the pure half `XhciFuncGhostStart`, `src\xhci_func.c`):
+   on 9x, a device PDO or a function PDO - not a hub PDO and not a
+   composite parent, which are this driver's own roles and have no such
+   defect - with a controller (not an orphan), not listed (its device
+   has left), no REMOVE received since it was last listed or started
+   (a removed PDO started again while gone is refused as today), and not
+   under selective suspend's sticky quarantine (`IdleQuarantined`, which
+   `HcdSuspPdoReopen` never lets a START end, since an abandoned idle
+   callback may still hold the previous lifetime's state). The
+   rule is decided under `PdoListLock` where `hcdPdoStarted` reads
+   `Listed` today, and **again where that START would otherwise fail
+   because the device left after that read**: `HcdSuspPdoReopen`
+   refuses a PDO unlinked since the caller's check (its "Unlinked since
+   the caller's check" branch), so when it fails the PDO is re-read
+   under `PdoListLock` and, still eligible and now unlisted, becomes a
+   ghost; a failure of `HcdSuspPdoReopen` with the PDO still listed (its
+   quarantine, `IdleQuarantined`, or an idle rundown that did not end)
+   keeps the refusal. Everything else is as today: an NT target, a hub,
+   a composite parent, an orphan or a removed PDO is refused; a listed
+   PDO starts as before.
+2. **What the START does.** Under `PdoListLock` it sets `PnpStarted` (PnP
+   has the devnode, as for any START) and `Ghost`; it reopens the PDO's
+   own URB admission (`Closing` 0: a STOP before it, for example the 9x
+   controller stop that left the PDO dormant, closed it in
+   `hcdPdoQuiesce`); it sets the PnP state to started and completes the
+   IRP with `STATUS_SUCCESS`. It does not register or enable the device
+   interface (`HcdDoorDeviceStart`), tell the port machine
+   (`PortPdoStarted`: the port no longer waits on this PDO), or reopen
+   selective suspend's admission (`HcdSuspPdoReopen`): there is no device
+   behind it. The PDO has been reported missing already, or will be at
+   the next relations answer, which the departure requested, so the
+   STOP or REMOVE that follows comes as it does today.
+3. **What a ghost PDO answers** (`hcd_urb.c`; first of the URB
+   dispatch's departed paths, after the length check and before the
+   contained controller's hold, `hcdUnreadable`, since these answers
+   touch no hardware; the classifier `XhciFuncGhostDescriptor` and the
+   length `XhciFuncGhostCopyLength` in `src\xhci_func.c`):
+   - a standard GET_DESCRIPTOR to the device for the device descriptor
+     (type 1, index 0) or the configuration descriptor (type 2, index
+     0), from `DeviceDesc` and `Config` - for a function PDO its own
+     filtered configuration, as a live function PDO answers it
+     (`hcdFunctionConfig`) - inline, to the smallest of the URB's length,
+     `wLength` and the copy, through `hcdFunctionConfig`'s buffer rule
+     (`TransferBuffer`, or a mapped MDL's `MappedSystemVa`; an MDL shorter
+     than the URB, or an unmapped one with bytes to copy, refused at the
+     next tick);
+   - SELECT_CONFIGURATION: with no descriptor (the unconfigure), success;
+     with one, validated against the PDO's copy as the composite parent's
+     select is (`hcdCompSelect`: `XhciPipeRecordCheck` on the caller's
+     descriptor, every interface entry inside the URB, found in the copy
+     by `XhciPipeFindInterface`, each once, with room for its pipes),
+     then answered from the copy - each interface's class, subclass,
+     protocol and number of pipes, each pipe's address, type, maximum
+     packet size and interval - with a configuration handle (the PDO),
+     interface handles (`HCD_IFACE_COOKIE`) and a **ghost pipe handle**
+     for each pipe, a non-NULL value no handle lookup resolves: a
+     departed PDO has no device record, and every path that resolves a
+     handle (`hcdPipeFromHandle`, `HcdCfgPipe`) is reached only through
+     one. Nothing is configured; a refusal is completed at the next tick
+     (`HcdIoRefuseLater`) with the composite select's status;
+   - a bulk, interrupt or isochronous transfer: **held on the PDO**,
+     cancellable, as a contained controller's new requests are
+     (`HcdIoHoldUnreadable`, with no endpoint: any abort of the PDO
+     covers it), and released as section 10.5's held requests are - its
+     IRP's cancel, an ABORT_PIPE that covers it, the PDO's STOP, surprise
+     removal or REMOVE. A refusal would complete it DEVICE_GONE at the
+     next tick, the status 98 SE's `hidclass.sys` resubmits on at once
+     (section 10.5, "Why report first and park"), so a class stack that
+     did start on a ghost would spin there until its REMOVE; held, it
+     simply pends. A class driver that waited inside its own START for
+     such a transfer, with no timeout, would wait until that START's own
+     end, which nothing then brings: none is known, and the stick leg
+     below reads Bulk-Only's start;
+   - ABORT_PIPE as on any departed PDO: it succeeds, recording its
+     horizon and releasing what it covers (`HcdIoAbortMark`,
+     `HcdIoParkedRelease`);
+   - everything else - class and vendor requests, other descriptors
+     (strings, a HID report descriptor), SELECT_INTERFACE, RESET_PIPE and
+     the rest - fails `USBD_STATUS_DEVICE_GONE` at the next tick
+     (`hcdGoneLater`), as a departed PDO's do today. A control request is
+     one a class driver's start may wait for synchronously, so it is
+     answered, never held.
+   The ghost path answers all of these itself, ahead of the contained
+   controller's hold (35-T.6, `hcdUnreadable`), so a contained
+   controller changes nothing for a ghost: its control requests are
+   still refused at the next tick, not held there.
+4. **What is expected to follow, for a HID device on ME** (the
+   hypothesis): `hidusb.sys` reads the two descriptors and selects, so
+   its own start ends in its started state; `hidclass.sys` then asks for
+   the report descriptor, which fails, and fails the stack's START; ME
+   sends its STOP, whose stop routine `hidusb.sys` now runs; the REMOVE
+   finds its event set and is passed down, and the PDO is deleted at the
+   next relations answer once reported missing, as any gone PDO is. On
+   98 SE the same START succeeds and the stack fails above the PDO the
+   same way, and 98 SE sends the REMOVE it sends today. The legs read
+   each step from the `qemu` trace.
+5. **The flag's life.** `Ghost` is cleared at the PDO's REMOVE and at a
+   START that finds it listed (a dormant group revived,
+   `hcdDormantRevive`, re-lists the PDO before its START is answered; a
+   revived PDO is never a ghost). A STOP leaves it set: a START after it
+   is decided again by point 1. A split device's function PDOs are
+   decided one by one; they share the device record and leave the
+   relations together (section 5.2), so a ghost function has siblings
+   that are ghosts or refused, never live.
+6. **What it does not cover.** Run d2's case - the device leaving while
+   the class driver's start requests are already under way - is not
+   changed: requests in flight at the departure follow section 10.5's
+   park and refusal rules, so a start under way can still fail and ME
+   still reach the stop through it; that case keeps the release notes'
+   limitation. NT targets keep the refusal: Windows 2000's hub driver
+   lets a START with no prior REMOVE succeed (`hcdPdoStarted`'s note),
+   and no NT target has shown this stop.
+
+**Counters and log.** `PdoGhostStarts`, `PdoGhostAnswers` and
+`PdoGhostHeld`, fields of the controller beside the isochronous page's
+(not the published counter block, so no serialized layout moves), traced
+by the `qemu` flavour as they change; a note per START, `pdo.ghost` (the
+PDO's serial), so a leg reads which PDOs took the path, beside the
+existing `pnp.pdo` note of each PnP IRP; and the `qemu` trace names each
+answered or held request.
+
+**Host vectors** (`test\test_func.c`): `XhciFuncGhostStart` over every
+input - 9x or NT, orphan, listed, hub or composite, REMOVE received,
+quarantined - answering 1 only for 9x, a controller, not listed, neither
+role, no REMOVE, no quarantine; `XhciFuncGhostDescriptor` for the device and configuration reads
+at index 0 (1, 2), and 0 for index 1, a string, a HID report descriptor
+(`0x81 06 0x22`), a class or vendor request, a request to an interface
+or endpoint, a SET_DESCRIPTOR, and a NULL setup; `XhciFuncGhostCopyLength`
+for the smallest of the three at each boundary (0, 9, 18, the copy's own
+length and above it). The select's walk over the URB's interface entries
+is pure too, `XhciPipeSelectWalk` (`src\xhci_pipe.c`, `test\test_pipe.c`,
+the entry layout's two sizes passed by the caller, x86's 16 and 20 and
+amd64's 24 and 32 in the vectors): one and two entries, an alternate the
+copy carries, room for fewer pipes than the interface has (too small),
+an entry below the fixed part, past the URB's end or a tail too short
+for one, an interface named twice, one or an alternate the copy lacks,
+number 32, no entry, NULL arguments and a pipe size that would wrap.
+The returned fields are the copy's endpoint bytes, as the composite
+select fills them.
+
+**What the legs read.** In QEMU, the `qemu` flavour, task 43.49's series
+(a `usb-mouse` hot-plugged at a root port and behind a hub, pulled 1.0 s
+after its plug, as task 43.54 timed it), on ME and 98 SE, against the
+build without the change: on ME the cycles before a stop, if any, and
+for each ghost PDO the PnP sequence it saw from the `qemu` trace (START
+answered, the requests its class driver sent and how each was answered
+or held, STOP, REMOVE), so point 4's hypothesis is read, not assumed; at
+the end a mouse plugged and left, its START and pointer read (the
+configuration manager still running). On 98 SE no stop and no controller
+reset, and the REMOVE following each ghost START. Positive coverage:
+the series counted only with at least one `pdo.ghost` in it. The same
+pulls with a `usb-storage` stick (a class driver other than HID) and
+with QEMU's `usb-audio` (a composite the bus splits: function PDOs) on
+both. A 98 SE controller disable with a device pulled while disabled and
+the enable after it (the dormant group retired, its START), read for
+`pdo.ghost` there. And Windows 2000 SP4 once, the mouse series for a few
+cycles, as the NT regression: its STARTs refused as before, no
+`pdo.ghost`. Real hardware is not read: DEPART.1's never-completed
+request on metal stays in "Planned work".
+
+**What the legs read (2026-11-06, `runs/run-47.md`, "47.10").** The
+`qemu` flavour of `bfddd4d4` on the q35 98 SE and ME bases, task 43.49's
+series pulled 1.0 s (and 0.8 s) after each plug: 240 cycles on 98 SE and
+160 on ME, two ghost STARTs on each. Every ghost saw the sequence point 4
+supposes - the device descriptor, the configuration descriptor twice and
+SELECT_CONFIGURATION answered from the copies, then SET_IDLE and the
+report descriptor refused, then STOP - and on ME the relations without it
+and a REMOVE reaching the PDO. 98 SE, too, sent STOP after a start that
+failed above the PDO (point 4 said REMOVE, which is what it sends after
+this driver's own refusal). No controller reset on either. ME stopped
+once, after 160 cycles, at a device pulled while its class driver's start
+was under way (point 6's case, not a ghost). Not read: the stick, the
+split device, the 98 SE disable and enable, the Windows 2000 series.
+
 ### 10.6 The ids the targets' INFs match
 
 **Matching is case-insensitive on every target.** Windows 98 SE's own
@@ -6970,7 +7222,7 @@ case-insensitive matching above, and the form most INF lines use.
 | `BusQueryDeviceID` | `USB\VID_vvvv&PID_pppp` |
 | `BusQueryHardwareIDs` | `USB\VID_vvvv&PID_pppp&REV_rrrr`, `USB\VID_vvvv&PID_pppp` |
 | `BusQueryCompatibleIDs` | `USB\Class_cc&SubClass_ss&Prot_pp`, `USB\Class_cc&SubClass_ss`, `USB\Class_cc` (the last left out for `01/ss/20` and `01/ss/30`, 10.7.2): from the interface when `bDeviceClass` is 0 and the configuration has exactly one interface, from the device descriptor otherwise - so a multi-interface device the bus does not split (10.8) reports its own triple, `00/00/00` when its class is 0, never its first interface's, which would bind a class driver to the whole device (corrected 2026-10-03 by 26-A.7 from "from the interface when `bDeviceClass` is 0"; Windows 2000's `usbaudio.sys` bound to a whole composite device bugchecks, guest leg c14, `runs/run-26.md`). Whether to add the `USB\DevClass_cc...` forms XP's `usbhub.sys` carries templates for (and Vista's and 7's `USB\DevClass_00&SubClass_00&Prot_00`) is open (10.9); no stock INF in the table above matches a `DevClass` id |
-| `BusQueryInstanceID` | the serial id when the device has a usable one that no present PDO of the same VID and PID carries already, with `UniqueID` TRUE in its capabilities: the NT instance path `USB\VID_0781&PID_5567\4C530001230920108174` (what Windows 98 SE and ME make of it is for task 33.2's guest legs to read); else the location key in decimal, `UniqueID` FALSE - root port 3 is `3`, and behind hubs the Route String sits above the port (`XhciHubInstanceKey`, route `0x31` over port 2 is `12546`). The rule is "Instance ids from the serial number" below (task 33.2; until `2.1.0.0` every device had the location form) |
+| `BusQueryInstanceID` | the serial id when the device has a usable one that no present PDO of the same VID and PID carries already, with `UniqueID` TRUE in its capabilities: the NT instance path `USB\VID_0781&PID_5567\4C530001230920108174` (what Windows 98 SE and ME make of it is for task 33.2's guest legs to read); else the location key in decimal, `UniqueID` FALSE - root port 3 is `3`, and behind hubs the Route String sits above the port (`XhciHubInstanceKey`, route `0x31` over port 2 is `12546`). The rule is "Instance ids from the serial number" below (task 33.2; until `2.1.0.0` every device had the location form). Since UASBOT.1, either form then `&BOT` for the Bulk-Only form of a device that offers UAS too (10.7.3) |
 
 **A function PDO** (one per function of a split device; since task 36.43 a
 child of the device's composite-parent PDO, whose own ids are section
@@ -6981,7 +7233,7 @@ child of the device's composite-parent PDO, whose own ids are section
 | `BusQueryDeviceID` | `USB\VID_vvvv&PID_pppp&MI_nn` |
 | `BusQueryHardwareIDs` | `USB\VID_vvvv&PID_pppp&REV_rrrr&MI_nn`, `USB\VID_vvvv&PID_pppp&MI_nn` |
 | `BusQueryCompatibleIDs` | `USB\Class_cc&SubClass_ss&Prot_pp`, `USB\Class_cc&SubClass_ss`, `USB\Class_cc` (the last left out for `01/ss/20` and `01/ss/30`, 10.7.2): for an IAD function from the IAD's `bFunctionClass` / `bFunctionSubClass` / `bFunctionProtocol`, as Microsoft's "Support for interface collections" gives them; for any other function, a legacy audio group included, from its first interface (alternate 0). Decided 2026-10-03; it was open (10.10) |
-| `BusQueryInstanceID` | with the device's serial id, that id, `&` and `nn`, `UniqueID` TRUE: `ABC123&03`; without, the location key in decimal, then `nn`: port 3's `MI_03` is `303`, `UniqueID` FALSE (task 33.2; the location form was corrected 2026-10-03 by 26-A.7 from "the parent device's instance string plus the function number") |
+| `BusQueryInstanceID` | with the device's serial id, that id, `&` and `nn`, `UniqueID` TRUE: `ABC123&03`; without, the location key in decimal, then `nn`: port 3's `MI_03` is `303`, `UniqueID` FALSE (task 33.2; the location form was corrected 2026-10-03 by 26-A.7 from "the parent device's instance string plus the function number"). Since UASBOT.1, either form then `&BOT` for a storage function offered as Bulk-Only that offers UAS too: `ABC123&03&BOT`, `303&BOT` (10.7.3) |
 
 **Instance ids from the serial number** (roadmap task 33.2, `2.1.0.0`;
 `XhciFuncSerialId`, `XhciFuncInstanceId` in `xhci_func.c`, host vectors in
@@ -7660,6 +7912,107 @@ id and keeps the other two:
   completes, and plug the device in again. The release notes say so.
 - Not this bus's: under Windows' own USB stack the generic id stays, and
   `usb-wdm-free`'s README carries that known issue for XP and XP x64.
+
+#### 10.7.3 The Bulk-Only form's own instance id (roadmap-usb4 UASBOT.1, 2026-11-08)
+
+**The problem** (roadmap-usb4 47.39, issue 26). A storage interface that
+offers Bulk-Only at alternate 0 and UAS gets one transport (31-A.3), and
+its compatible ids follow it; its instance id did not. A drive with a
+serial number had one devnode, `USB\VID_v&PID_p\<serial>` with `UniqueID`
+TRUE, wherever it was plugged in, and Windows does not read the compatible
+ids again for an installed devnode. Installed with `xhciuas` where the
+controller streams, the devnode kept `xhciuas` on a controller that cannot
+(the ASMedia ASM1042's `XhciStreamsOff` quirk), where the bus offers the
+drive as Bulk-Only; `xhciuas` selected the UAS setting, its
+`IOCTL_XHCI98_OPEN_STREAMS` was refused and its start failed: Code 10
+(runtime, XP x64 under `3.4.1.0`, `runs/run-47.md`, "47.39 (issue 26)").
+The same devnode under `XhciForceBulkOnly` on a controller that streams
+kept running UAS, so the force value did nothing for an installed drive.
+
+**The rule** (the owner's option 1, scope and gate of 2026-11-08). When
+`XhciXportChoose` chooses Bulk-Only (`XHCI_XPORT_BOT`: why 4, the force
+value, or why 5, SuperSpeed on a controller that cannot stream - only
+ever a device that offers UAS too) and the controller's
+`XhciBulkOnlyOwnId` is on (input `XHCI_XPORT_F_BOT_OWN_ID`), it sets
+`XHCI_XPORT.OwnId`, and the PDO's instance id is the one above with
+`&BOT` (`XHCI_INSTANCE_BOT`) appended - after the serial id and `&nn`, or
+after the location key and `nn` (`XhciFuncInstanceId`'s `bot`, host
+vectors in `test_func` and `test_xport`):
+
+| Today's form | The Bulk-Only form's |
+|---|---|
+| `ASM42SIM0001`, `UniqueID` TRUE | `ASM42SIM0001&BOT`, `UniqueID` TRUE |
+| `ABC123&03` (a function) | `ABC123&03&BOT` |
+| `3` (location), `UniqueID` FALSE | `3&BOT`, `UniqueID` FALSE |
+| `303` (a function's location) | `303&BOT` |
+
+Every other outcome keeps its id: the UAS form, a UAS-only device, a
+Bulk-Only-only device (`XHCI_XPORT_NONE`), the refused form (already a
+device id of its own, 10.7.1), hubs and composite parents. The form is a
+devnode apart from the UAS form's; its compatible ids carry `Prot_50`,
+which every target's `usbstor.inf` matches (10.6), so Windows installs
+its own Bulk-Only driver there at the first plug, and the UAS form's
+devnode keeps `xhciuas`. Only one of the two is present for a drive at
+once: the transport is the controller's.
+
+*Why a marker with `UniqueID` TRUE*, not `UniqueID` FALSE: under FALSE,
+NT prefixes the parent's `ParentIdPrefix` and 98 SE appends the parent's
+path (10.13.5), so the form would be a devnode per root hub and per
+external hub; with the marker it is one per drive on the machine, as the
+UAS form is (the owner's choice). *Why not a new device id*, as 10.7.1's:
+98 SE and ME match INF lines against the device id, and a `usbstor.inf`
+line naming the drive's `USB\VID_v&PID_p` must still bind. *Why the
+location form too*: a serial-less drive would otherwise meet the same
+Code 10, or the same ignored force value, when the value or
+`XhciStreamsOff` changes on the same controller and port.
+
+**Fixed for the PDO's life.** `OwnId` is part of `Xport`, decided at the
+PDO's creation and copied with it (`HcdDevicePdoRepresentFunctions`), so
+every instance-id query of one PDO answers alike; `hcdDormantSame`
+compares `Xport` whole, so on Windows 98 SE and ME a dormant group is
+revived only by the same form under the same value, and otherwise retired
+as before (same serial id, or same place). The duplicate rules still
+compare serial ids, not instance ids: on 98 SE or ME with two
+controllers, a UAS-form group dormant on one still sends the drive's
+Bulk-Only form on the other to the location form for that plug, as
+before, now `N&BOT` - a devnode of its own either way. Of two units of
+one model, one whose serial is literally another's with `&BOT` appended
+could meet the other's Bulk-Only form; that is not detected.
+
+**Length.** A 126-character serial id, `&nn` and `&BOT` are 133
+characters (`XHCI_INSTANCE_ID_BYTES` 134 with the NUL, the answer's
+buffer in `hcdInstanceQueryId`); the longest instance path,
+`USB\VID_vvvv&PID_pppp&MI_nn\` and those 133, is 162, under
+`MAX_DEVICE_ID_LEN` (200).
+
+**The value.** `XhciBulkOnlyOwnId` (`HcdCtlBulkOnlyOwnId`), the
+`XhciForceBulkOnly` family: a `REG_DWORD`, the machine-wide key first,
+then the controller's driver key (`hcdReadDword`), read at each PDO's
+creation (`hcdXportFlags`), so a change takes effect at the next plug;
+only a DWORD 0 turns it off, which gives the one devnode of the releases
+before. Absent reads as 1 and every INF path writes 1 (no overwrite; the
+INF gate's `VAL-*` rows and the footprints). Per controller and not per
+drive: the instance id decides which devnode, and so which device key, a
+drive has, so a per-drive value would live in the key it selects. In
+text-mode Setup both values are absent: a dual drive is Bulk-Only there
+and answers `&BOT`, and after the install writes `XhciForceBulkOnly` 0 it
+is offered as UAS under its plain id, a second devnode installed then.
+For Windows started from such a drive (not supported; roadmap BOOTUSB.1)
+the disk would change devnode between text mode and the first start;
+recorded for BOOTUSB.1. The flag is also in the device record's inputs
+(`XportInputs`, the query's `XHQ_X_INPUTS`, the snapshot's
+`XHCI_SNAPSHOT_HCD_X_INPUTS`, bit 3), which XHCITR reads (design record
+25 section 19 item 4).
+
+**Drives already installed.** The UAS form, Bulk-Only-only and UAS-only
+drives keep their entries. A dual drive installed as Bulk-Only by an
+earlier release (the force value, or a controller that cannot stream)
+is a new entry once at its first plug in that situation after the
+update, installed with Windows' Bulk-Only driver; Windows may give it
+another drive letter, and the old entry stays non-present (10.13.6). One
+that met the Code 10 gets the new entry with no manual step. One whose
+plain entry was moved to `usbstor` by hand keeps running Bulk-Only where
+UAS is offered, as XHCITR's existing note says.
 
 ### 10.8 When and how the bus splits a device
 
@@ -10214,6 +10567,10 @@ packet layout of a USB 2.0 isochronous TD is unchanged from the miniport's
 (design record 04 section 3.6 and the isochronous ABI work of Phases 8 and 9
 cover the ring side, which the HCD keeps).
 
+**Note, 2026-11-06 (task 47.1).** A fail-closed stop that cannot drain a
+map-register channel request quarantines it and keeps the FDO for the life
+of the system (section 5.9).
+
 ### 11.4 What 25.7 leaves to Phase 26
 
 - The map-register grant on Windows 98 SE and Windows 2000 (26-A.5, a
@@ -11149,7 +11506,7 @@ deferral of scope recorded in the roadmap, not a correctness limit.
 1. **The ring size.** When a streams endpoint is opened
    (`hcdCfgStreamsBuild`) on a start with promotion enabled
    (`hc->WideEnabled`, section 11.6 point 2), every stream's ring is
-   `XHCI_BIG_RING_TRBS` = 1024 TRBs (16 KiB, 1022 usable) instead of
+   `XHCI_STREAM_BIG_RING_TRBS` (designed as `XHCI_BIG_RING_TRBS`) = 1024 TRBs (16 KiB, 1022 usable) instead of
    `PoolRingTrbs` (64). The bus cannot tell UAS's status pipe from its data
    pipes, so the status pipe's rings grow too, which costs memory and
    nothing else. 1024 is the smallest power of two whose usable TRBs (1022)
@@ -11313,6 +11670,17 @@ compatibility and multi-device load matrix applies.
 
 ### 11.8 The isochronous ring: a page of its own, the event budget and moderation (43.38 to 43.40)
 
+**Amended 2026-11-06 (task 47.5, section 11.9):** an isochronous pipe has
+eight transfer records, so a pipe is counted at its capacity plus nine where
+this section says five (71 on a pool ring, not 67); a page's allowance
+with the 256-entry event ring is 112 where it says 120, and at 1,024
+entries (point 9) the fourth page's is 91 where it says 111. In "The
+numbers" below, the 256-entry row reads 112 TRBs (56, 74 and 112 TDs:
+7.0, 9.3 and 14.0 ms), and the 1,024-entry row is held by the ring, not
+the records (127, 169 and 254 TDs: 15.9, 21.1 and 31.75 ms), eight
+records of 42 packets holding up to 336 TDs. The rest of the section
+stands as written.
+
 **Why.** The owner's decision of 2026-10-20 (roadmap-usb4, Phase 43, tasks 43.38 to
 43.40; the larger event ring of point 9, 43.41 until the owner deferred it on
 2026-10-22, is the planned ISORING.4): enlarge the isochronous ring now, and consider
@@ -11328,7 +11696,7 @@ does. A 3 x 1024-byte High Speed endpoint (a UVC camera's high-bandwidth
 alternate setting, 3,072 bytes a microframe) crosses on half to three
 quarters of its packets, so it holds about 4.4 to 5.2 ms. xHCI98 has never
 carried High Speed isochronous traffic in any recorded reading (the release
-notes, "Untested ground").
+`docs/contributing/target-standing.md`, "Untested ground").
 
 **The limit that is not the ring: the event ring.** Every isochronous TD
 carries IOC (the builder, `xhciXferBuildIsoPacket`), so each TD the
@@ -11552,7 +11920,9 @@ transfer ring.
    while a bus master may still run (`CommonBufferPinned`,
    `HcdDmaStreamFree`). A held (retained or pinned) pipe keeps its page
    until its own release, as it keeps its pool ring.
-9. **What lifts the limit next.** A larger event ring raises the grant by
+9. **What lifts the limit next** (taken by task 47.30, section 11.10: a
+   1,024-entry segment of its own, the in-block ring its fall-back). A
+   larger event ring raises the grant by
    the difference: at 1,024 entries three page pipes take the full
    allowance of 254 and a fourth 111 (each counted at its allowance plus
    five, with the margin and one pool pipe's room kept). The event ring is
@@ -11635,6 +12005,549 @@ open is not among them: `usbaudio.sys` sends no port request
 device's disable and enable does not reach `hcdCfgResetPort`, so the page
 across RESET_PORT, which re-adds the pipe with its ring as it re-adds a
 stream's, is read by review and owed to a client that sends one.
+
+### 11.9 More requests in flight on an isochronous pipe (task 47.5, 2026-11-06)
+
+**Why.** Every pipe has four transfer records (`HCD_PIPE_XFERS`,
+`src\hcd.h`), and a URB that finds them all out waits on the pipe, unmapped,
+for one to come back (`hcd_io.c`, the Waiting list; `hcdRecordRelease`
+hands a finished record straight to the first waiting IRP). So whatever
+a client queues, at most four of an isochronous pipe's requests are on its
+ring or held mapped beside it. Task 46.30's readings (`usb-wdm-free`'s
+`docs/testing/2026-11-04-uac2-queue.md`: XP x64, the CX31993 simulator,
+`uac2` 0.1.8's eight data URBs of 4 ms) named that cap as what the deeper
+queue alone could not lift. The owner opened ISOREC.1 as task 47.5
+(2026-11-04, after 46.30): an isochronous pipe given more records, with
+this record's sizing and the host vectors.
+
+**Where the cap binds, and where it does not.** What a pipe holds in
+flight is the smaller of its records' requests and its ring's allowance
+(section 11.8): the pool ring's 62 TRBs, or a page's allowance. A Full
+Speed pipe with `bInterval` 1 and a High Speed one with `bInterval` 4,
+one TD a frame, sit on the pool ring, which holds 62 ms; there the
+records bind whenever a client's requests are shorter than 15 ms (a
+slower endpoint, one TD every 2 ms or more, holds proportionally more
+a request, and its pool ring more time). A High Speed pipe
+with `bInterval` 1 to 3 gets a page when the budget allows, and there
+the allowance binds for requests of 4 ms or more at one TD a microframe
+(32 TDs; three of them fill 120). **So the case 46.30 read - High Speed,
+`bInterval` 1, 4 ms URBs - is held by the page's allowance, not by the
+records**: the allowance of 120 holds three of those URBs whatever the
+record count, and a fourth record already waited beside them for ring
+room (`RingWait`). What lifts that case is a larger event ring
+(ISORING.4, section 11.8 point 9, kept in "Planned work"). More records
+lift the Full Speed case, the High Speed `bInterval` 4 case and short
+requests at High Speed, and they cost the event budget (below).
+
+**The count: eight records for an isochronous pipe.** Every other pipe
+keeps four, and a stream's pipe two (`HCD_STREAM_XFERS`).
+
+1. **The budget's bound grows with the records.** Section 11.8 point 3
+   counts a pipe at its ring's capacity plus one underrun event for each
+   record that can be published while software is not draining, plus the
+   empty stretch already running. A record is still published at most
+   once in that time - a record that reached the ring is freed only by a
+   completion the drain delivers, and a record held for ring room
+   (`RingWait`) is published only by the pipe's release after a completion
+   (`HcdIoPipeRelease`) - so with eight records a pipe is counted at its
+   capacity plus nine (`XHCI_ISO_EVENTS_OVER_TRBS` 9, held equal to
+   `HCD_ISO_PIPE_XFERS + 1` by a compile-time check in `hcd.h`): 71 on a
+   pool ring, against 67.
+2. **The page's allowance shrinks by eight.** The grant keeps the reserve
+   (64) and the new pipe's and one more pool pipe's base, each now 71:
+   `256 - 64 - 2 x 71` is 50, so with nothing else open the allowance is
+   112 (ring 114 TRBs, counted 121; 121 + 71 = 192, the 256 less the
+   margin), against 120. Every other rule of point 3 stands: a page only
+   into room the event ring has, no pipe ever refused for the budget,
+   and with any isochronous pipe already open no page at 256 entries.
+3. **Why eight and not more.** In milliseconds in flight, the smaller of
+   the records' requests and the allowance, in whole requests, one TD a
+   frame at Full Speed and one a microframe at High Speed `bInterval` 1,
+   no packet crossing a page:
+
+   | Request | 4 records (today) | 8 records | 16 records |
+   |---|---|---|---|
+   | Full Speed (pool ring, 62 TDs), 1 ms | 4 | 8 | 16 |
+   | Full Speed, 2 ms | 8 | 16 | 32 |
+   | Full Speed, 4 ms | 16 | 32 | 60 |
+   | Full Speed, 8 ms | 32 | 56 | 56 |
+   | Full Speed, 10 ms | 40 | 60 | 60 |
+   | High Speed `bInterval` 1 (page), allowance | 120 TDs | 112 TDs | 96 TDs |
+   | High Speed `bInterval` 1, 1 ms (8 TDs) | 4 | 8 | 12 |
+   | High Speed `bInterval` 1, 2 ms (16 TDs) | 8 | 14 | 12 |
+   | High Speed `bInterval` 1, 4 ms (32 TDs) | 12 | 12 | 12 |
+
+   (High Speed with `bInterval` 4 is the Full Speed rows; a slower
+   endpoint's request of the same length has fewer TDs, so eight
+   records hold proportionally more of it.) Eight
+   is never worse than four in any row; it puts `uac2`'s default queue
+   (eight 4 ms URBs) on the ring whole at Full Speed and at High Speed
+   `bInterval` 4; and it costs the page eight TDs, which the 4 ms row
+   does not notice. Sixteen would cost the page 24 (96 TDs), is worse
+   than eight for 2 ms requests at High Speed, and doubles the memory
+   again for a gain only at 4 ms and below at Full Speed and for 1 ms
+   requests at High Speed. The count is a
+   constant, not a registry value: no client asks for a depth, and the
+   budget's bound has to be known when the pipe is counted.
+4. **Memory, per isochronous pipe** (non-paged pool, allocated with the
+   pipe on the thread, never per transfer: section 7.5's rule): four
+   more records, about 1 KiB each on x86 (most of it the record's
+   33-element scatter-gather list), and four more request blocks
+   (`HCD_ISO_BLOCK`, section 11.8 point 4): 8 x 3,488 = 27,904 bytes on a
+   pool ring against 13,952, and 8 x 6,288 = 50,304 on a page at 112
+   packets against 4 x 6,736 = 26,944 at 120. No common buffer changes:
+   the pool rings, their count and design record 04's layout are as they
+   were, and a page is still one page (114 TRBs, 1,824 bytes; doubled
+   under the overfetch pad, 3,648).
+5. **Map registers.** Each record holds the map registers of its one
+   chunk from its mapping to its completion (section 11.3); an
+   isochronous chunk is at most `HCD_SG_ELEMENTS` pages (section 11.8
+   point 5), so a pipe can hold up to eight chunks' registers where it
+   held four. Where map registers are not real (x86 with memory below 4
+   GB, every 98 SE and ME machine) that is nothing; where they are, an
+   audio stream's requests are a page or two each.
+
+**What changes in the code.**
+
+- `src\hcd.h`: `HCD_ISO_PIPE_XFERS` 8; `HCD_PIPE_BYTES(n)`, the bytes of
+  a pipe with `n` records (`FIELD_OFFSET(HCD_PIPE, Xfers)` plus `n`
+  records), which `HCD_STREAM_PIPE_BYTES` becomes a use of. `Xfers` stays
+  declared with `HCD_PIPE_XFERS` entries, so every non-isochronous pipe
+  and the embedded default pipe (`Ep0Pipe`) keep their size; an
+  isochronous pipe is allocated at `HCD_PIPE_BYTES(HCD_ISO_PIPE_XFERS)`
+  and its `XferCount` says eight, as a stream's pipe is allocated short
+  and its `XferCount` says two. Nothing reads `Xfers` past `XferCount`:
+  every loop over the records is bounded by it (`hcd_io.c`, `hcd_cfg.c`,
+  `hcd_dev.c`), and a record's block index is its offset from `Xfers`
+  (`hcdIsoBlock`). Compile-time checks: the isochronous allocation is
+  no smaller than `sizeof(HCD_PIPE)`, and `XHCI_ISO_EVENTS_OVER_TRBS` is
+  `HCD_ISO_PIPE_XFERS + 1`.
+- `src\hcd_cfg.c`, `hcdCfgPipeNew`: the allocation and its zeroing by
+  the pipe's bytes; `HcdIoPipeInitCount` with eight for an isochronous
+  endpoint; the request blocks for `XferCount` records.
+  `hcdCfgCancelPipe`'s array of cancelled TDs is `2 x HCD_PIPE_XFERS`
+  (eight): an isochronous record is one TD group on the queue
+  (`XhciXferSubmitIso` appends one transfer a request), so eight records
+  are at most eight entries; a compile-time check holds the array at
+  least `HCD_ISO_PIPE_XFERS`.
+- `src\xhci_pipe.h`: `XHCI_ISO_EVENTS_OVER_TRBS` 9 and its comment;
+  `XhciPipeIsoGrant` is unchanged code over the new constant.
+- Telemetry: the pipe keeps the most records it had out at once
+  (`IsoRecordsPeak`, counted where a record is claimed, under the
+  controller lock), and the note given when its budget count is returned
+  (`hcdCfgIsoCountReturn`) is joined by `iso.recs`: slot 31:24, DCI
+  23:16, the peak 15:8 and the pipe's record count 7:0. No serialized
+  structure grows (section 8).
+- `docs/contributing/target-standing.md`'s isochronous row: 112 TRBs and
+  packets a request on a page, where it says 120.
+
+**Host vectors** (`test\test_pipe.c`, the grant's rows rewritten for the
+new constant): `XHCI_ISO_EVENTS_OVER_TRBS` is 9; 256 entries alone: grant
+50, ring 114 (allowance 112); after a pool pipe (71) and after a page
+(121): none; a switch borrowing the page's 121: 50 again, a borrow above
+the count clamped; exactly the minimum at a count of 34 (grant 16), none
+at 35; nothing at 206 entries (the kept alone); 1,024 entries: 192, then
+192 after one full page (263) and after two (526), 29 after three (789,
+allowance 91), and none once that fourth is counted too (its 100 make
+889); the no-wrap and
+no-room rows as before. The record count itself lives in `hcd.h`, which
+the host suites do not compile; its two compile-time checks and the
+gated build hold it.
+
+**What the legs read.** QEMU's `usb-audio` (Full Speed, UAC 1) played
+whole on Windows 2000, XP and 98 SE where it plays, once on the pool
+ring and once on a page (`XhciQemuIsoRing` 1), with `iso.recs` read for
+the most records `usbaudio.sys` keeps out (if it never passes four, this
+change is invisible to it), `iso.page` granting 112, and Missed Service
+and `IsoPacketErrors` at 0; and `usb-wdm-free`'s UAC 2.0 simulator
+(`uacemu.py`, the CX31993 profile, High Speed `bInterval` 1) under `uac2`
+on the emulator 46.30 used, where `iso.recs` should read a peak of up to
+eight with the ring still holding three requests. A stick and a mouse on
+the same controller, unchanged. Real hardware and High Speed's interrupt
+saving stay as section 11.8 left them.
+
+**What the leg read (2026-11-06, `runs/run-47.md`, "47.5").** XP SP3 on
+the q35 base, the `qemu` flavour of `bfddd4d4`, QEMU's `usb-audio`: on the
+pool ring the budget counted 71, on a page (`XhciQemuIsoRing` 1) a page
+was built and counted 121 - an allowance of 112 - and `usbaudio.sys` sent
+10-packet requests with at most three or four of the eight records out
+(`iso.recs`), packet errors and Missed Service 0. So the change is
+invisible to `usbaudio.sys`; a client that queues more (`uac2`) and the
+High Speed simulator were not read, the emulator here having no
+`usb-redir`.
+
+### 11.10 A larger event ring, and the isochronous stream's timing (task 47.30, 2026-11-06)
+
+**Why.** Section 11.8 point 9 left the next limit to a larger event ring,
+planned as ISORING.4 and deferred by the owner on 2026-10-22: the event
+ring touches every device and every leg, and a ring larger than one page
+needs physically contiguous memory on Windows 98 SE. Task 47.5 (section
+11.9) read that 46.30's case - High Speed, `bInterval` 1, `uac2`'s 4 ms
+URBs - is held by a page's allowance (112 TRBs, three URBs, 12 ms) and not
+by the records, and only a larger event ring lifts it. The owner moved
+ISORING.4 into Phase 47 as 47.30 (2026-11-06) and added, the same day, a
+diagnostic from a user's report: an FL1100 on XP x64 with a High Speed UAC
+2 DAC (`bInterval` 1, `iso.page` `030E0078`: slot 3, DCI 14, allowance
+120, about 15 ms) showed two Ring Underruns in its snapshot that nothing
+could place in time, because no note carries one, so whether the stream
+starved upstream (the client late) or in this driver (a request held
+before its publication) could not be told.
+
+**Part A, the ring.**
+
+1. **One segment of 1,024 TRBs** (`XHCI_EVENT_RING_BIG_TRBS`, 16,384
+   bytes), named by a one-entry Event Ring Segment Table as today:
+   ERSTSZ 1, the entry's Ring Segment Size 1,024. A segment holds 16 to
+   4,096 TRBs, is 64-byte aligned and does not cross a 64 KiB boundary
+   (`xhci-data-structures.md` section 1, Table 6-1; the ERST entry,
+   section 6.5); `XhciEventRingInit` already enforces all three against
+   the physical address (`XhciSegmentUsable`). Nothing else about the
+   interrupter changes: interrupter 0 only, IMOD, IMAN, EHB and ERDP as
+   they are, DESI always 0.
+2. **Its own allocation, at the controller's start.** `HcdDmaOpen`, after
+   the controller block (section 11.2) and the enumeration scratch, asks
+   the adapter for 16 KiB of common buffer, cache-enabled, below 4 GB, as
+   a stream block or an iso page is. The block's placement within 64 KiB
+   is the allocator's: a page-aligned 16 KiB block crosses a 64 KiB line
+   when it starts in the last three pages of one (three placements in
+   sixteen), and nothing in the adapter's contract says it will not. So
+   the segment is placed by its physical address: a pure function
+   (`XhciEventRingWindow`, `xhci_mem.c`) gives the offset of the first
+   64-byte-aligned window of 16 KiB in a block that crosses no 64 KiB
+   line, or none. A 16 KiB block that has none is freed and **32 KiB**
+   asked for once instead: a 64-byte-aligned block of 32 KiB crosses at
+   most one 64 KiB line and the part on one side of it is at least 16 KiB,
+   so it always has a window. A refusal of either, a block above 4 GB, or
+   no window leaves the controller on **today's ring**: the 256-entry
+   segment in the controller block's own page (record 04 section 4,
+   `0x2000`), which every start still carves, zeroes and keeps. The block
+   is freed in `HcdDmaClose` with the controller block, under the same
+   rule: kept for good and counted (`CommonBuffersKept`) while a bus
+   master may still run (`CommonBufferPinned`). The controller block's
+   size, layout and carve do not change (record 04; section 11.2's reason
+   1: its 409,600 bytes are observed granted on every target), so the
+   in-block page is idle while the large ring is in use: 4 KiB.
+3. **Who reads which ring.** The core asks the HCD for the segment
+   through one new service, `HcdSvcEventRing(ext, &va, &pa)`, returning
+   its TRB count: the large block's window when the start got one, the
+   in-block page and 256 otherwise (`hcd_svc.c`; the services' pattern,
+   `hcd_svc.h`). `xhciProgramEventRing` takes the segment from it and
+   writes the ERST entry's size from the count, not from
+   `Layout.EventRingTrbs`, which keeps describing the in-block page. The
+   answer is fixed from `HcdDmaOpen` to `HcdDmaClose`, so the start, a
+   recovery's reinitialisation and a resume that reinitialises all
+   program the same segment, and a restore rewrites ERSTSZ, ERSTBA and
+   ERDP from `ext->EventRing` exactly as today (the ERST entry stays in
+   the block's page, unchanged across the transition). Every other reader
+   already takes the size from the ring itself (`ext->EventRing.Trbs`):
+   the dequeue, the Cycle state's toggle at the wrap, `XhciEventRingPending`,
+   the ERDP value and the `qemu` flavour's injected events.
+4. **The budget follows the ring.** `hcdCfgPipeNew`'s grant
+   (`XhciPipeIsoGrant`) is given `ext->EventRing.Trbs` where it was given
+   `Layout.EventRingTrbs`; the rule, the reserve (64), the counting of a
+   pipe at its capacity plus nine and the cap of 192 a grant are section
+   11.8 point 3 and section 11.9 unchanged, and the one-page transfer
+   ring stays (`XHCI_ISO_PAGE_MAX_RING_TRBS` 256). At 1,024 entries, with
+   nothing else open, three page pipes get the full allowance of 254 (ring
+   256 TRBs, counted 263 each: 263, 526, 789) and a fourth 91 (section
+   11.9's host vectors already hold these rows); a pool pipe opened first
+   (71) leaves the next page its 254 (`1024 - 64 - 71 - 142` is 747,
+   capped to 192), so a camera opened after its microphone gets a page
+   too, which at 256 entries it did not. On today's ring the grants are
+   exactly today's.
+5. **What it holds** (High Speed `bInterval` 1, one TD a microframe):
+   a stream of small packets, one TRB a TD, 254 TDs, 31.75 ms, against 14
+   ms; `uac2`'s 4 ms URBs (32 TDs), seven on the ring, 28 ms, against
+   three and 12 ms - the eighth record waits for ring room (`RingWait`),
+   since eight would need 256 TDs; a 3 x 1024-byte camera endpoint the
+   1,024-entry row of section 11.8's amended table (127, 169 and 254 TDs:
+   15.9, 21.1 and 31.75 ms). A request keeps its bound of 128 packets
+   (section 11.8 point 4), so a client still keeps at least two in flight.
+   Full Speed pipes and High Speed ones at `bInterval` 4 or more stay on
+   the pool ring and are unchanged.
+6. **Memory.** Per controller: 16 KiB of contiguous common buffer (32 KiB
+   on the second route), beside the 400 KiB block every start already
+   needs - 4 % more than the start asks for today, in a separate request
+   whose failure costs only the larger ring. Per page pipe at 254: the
+   page is still one page (256 TRBs, 4,096 bytes; two pages under the
+   overfetch pad, section 11.8 point 1), and its eight request blocks
+   (`HCD_ISO_BLOCK`) are sized at 128 packets, 8 x 7,184 = 57,472 bytes of
+   non-paged pool, against 8 x 6,288 = 50,304 at 112. The controller's
+   isochronous scratch (254 TRBs, 128 TD lengths) was sized for this by
+   section 11.8 point 6 and does not change.
+7. **The drain's bound.** `XHCI_DPC_MAX_EVENTS` is four laps of today's
+   ring, 1,024. It keeps the value, written as the literal it is and no
+   longer derived from `XHCI_EVENT_RING_TRBS`, with a compile-time check
+   that it is at least `XHCI_EVENT_RING_BIG_TRBS`: a DPC pass still stops
+   after at most 1,024 events, so its longest time at DISPATCH_LEVEL is
+   unchanged, and a ring that is full when the pass starts (1,023 events,
+   a producer ring keeping one entry free) is drained in one pass. Its
+   second user, the restore's walk (`XhciEventDiscardStale`), relied on
+   "four times a ring": a ring nothing refills holds at most 1,023 events,
+   so the walk still ends on the Cycle Bit before the bound; its comment
+   is rewritten to that argument. `XHCI_ERDP_PUBLISH_EVERY` (32) is a
+   fraction of either ring and stays.
+8. **Why one segment, and the alternatives set aside.** Several segments
+   of 256 (one page each, no contiguity beyond a page) are what Linux
+   does - interrupter 0 gets `ERST_DEFAULT_SEGS` (2) segments of
+   `TRBS_PER_SEGMENT` (256), no more than ERST Max allows
+   (`xhci-mem.c`, `xhci_alloc_interrupter`; `xhci.h`) - but ERST Max may
+   be 0 (one segment, HCSPARAMS2 7:4), the dequeue would walk segments
+   (DESI) on every event, and QEMU's controller takes a one-entry ERST
+   only (`hcd-xhci.c`, `xhci_er_reset`: "invalid value for ERSTSZ"), so
+   no leg here could read it: later, if a controller ever refuses a large
+   segment. Per-interrupter rings would need a vector per interrupter,
+   which a line delivery and Windows 98 SE do not have (record 15). A looser budget (counting a
+   pipe below its ring's capacity) is what makes an Event Ring Full - a
+   controller reset under every device (section 11.8) - possible again.
+   Larger `uac2` URBs are the client's and do not help a camera.
+9. **The `qemu` flavour's test value** `XhciQemuEventRing` (DWORD, read at
+   start and logged, never in a published flavour, as `XhciQemuIsoRing`):
+   0 or absent, the rule above; 1, the in-block ring, so a leg reads the
+   fall-back; 2, the 32 KiB route taken whatever the 16 KiB block's
+   placement, so a leg reads the window. The start notes `evt.ring` in
+   every flavour: the TRB count in 15:0 and how it was reached in 23:16
+   (0 the 16 KiB block, 1 the 32 KiB route, 2 refused, 3 the test value,
+   4 the owner's value at 256, point 10).
+   Value 3 makes both requests read as refused (the second request still
+   made and freed), so a leg reads the refusal's path and its cleanup. The
+   value is read in `hcdStartBody` before `HcdDmaOpen`, not in
+   `hcdReadValues`, which runs after it; the allocation's answer is kept in
+   `HCD_CONTROLLER` (outside the extension a start zeroes) and noted once
+   the log is set up. The controller keeps the block's own address, length
+   and physical address apart from the window it uses, frees the block by
+   the former, and clears all of them on both exits, freed or kept.
+10. **The owner's value** (2026-11-06): `XhciEventRingTrbs`, a DWORD read
+    at every start before `HcdDmaOpen`, beside the test value: 256 keeps
+    the in-block ring of the releases before (route 4 in `evt.ring`),
+    anything else - absent, another number, another type - asks for the
+    larger ring. The INFs write 1024 under the don't-overwrite rule, with
+    its INF-gate row and its `docs/using/tuning.md` row, so a user on a
+    controller that misbehaves with a large segment goes back without a
+    new build. The start also notes `evt.ring.value` (the DWORD read, or
+    `FFFFFFFF` for none) and, at level 4, `evt.ring.pa`.
+
+**Every other path, against the owner's deferral.** What the ring's size
+reaches, and why each is unaffected or only gains room:
+
+- *Events of every kind* (command completions, Port Status Change,
+  transfer events of control, bulk, interrupt and stream endpoints, MFINDEX
+  wrap, Host Controller): consumed one at a time by index from
+  `ext->EventRing`, matched by TRB address or identity, never by their
+  position in the ring; nothing in `xhci_evt.c`, `hcd_dev.c` or the
+  command layer reads the ring's size. A larger ring is more room before
+  an Event Ring Full, for every source.
+- *Start, stop, remove and the controller's disable and enable*: the block
+  is allocated and freed with the controller block in the same two
+  functions, under the same pin rule; a start that cannot get it starts
+  on today's ring.
+- *Recovery* (the HCRST path): reinitialises through
+  `xhciProgramEventRing`, which zeroes and reprograms the same segment.
+- *Suspend, resume, stand-by and hibernation*: memory and ERST stay
+  allocated across the transition; the restore rewrites the three
+  registers from `ext->EventRing`, its walk bounded as point 7 says; a
+  resume that reinitialises takes the start's path. On 98 SE and ME the
+  stand-by path is the same code.
+- *Polled delivery* (record 15): the poll drains with the DPC's body and
+  bound; a longer poll period fills a larger ring later.
+- *The snapshot and XHCITR*: `XHCI_EXTENSION` does not grow
+  (`ext->EventRing.Trbs` and `.BasePA` read 1,024 and the block's address
+  where they read 256 and the block's page); the offset tables are
+  unchanged; `evt.ring` is a note.
+- *Non-isochronous pipes*: their rings, records, pool and budgets are
+  untouched; the only change to them is the event ring's room.
+- *Windows 98 SE's memory*: one more contiguous request of 16 KiB (32 KiB
+  at worst) at the start, through the same adapter calls the stream
+  blocks and iso pages use, and today's ring when it is refused; the
+  pool growth is only an isochronous page pipe's (point 6).
+
+**Part B, the stream's timing.** Cheap enough for the publication path,
+no new import, read from the note ring and the snapshot.
+
+1. **Per isochronous pipe**, in its `HCD_PIPE` (pool, not serialized),
+   under the controller lock, from its open to its close:
+   - *the longest gap between two publications* (`hcdIsoPublish`), in
+     time-stamp counts: each publication takes a stamp (`HcdTscStamp`:
+     the count and the processor), and an interval is measured only
+     between two stamps of one processor, as task 36.21 measures
+     (`xhci_xstat.h`), one that crossed counted apart. Unlike
+     `XhciXstatInterval`, which discards an interval above `7FFFFFFF`
+     counts, this one **saturates** at `FFFFFFFF` (a long stall is the
+     reading wanted, not noise), by a pure helper of its own; an end
+     before its start is counted apart with the crossed ones. With the
+     longest gap the pipe keeps, from the same publication, the system
+     time (below), that request's own claim-to-publication wait, and
+     whether its record was handed to it from the Waiting list;
+   - *the longest wait from a record's claim to its publication* - the
+     map pump, its execution routine and `RingWait` - saturating the same
+     way. A record is claimed in two places, `hcdTakeRecord` and
+     `hcdRecordRelease`'s hand-over to the first waiting IRP (`hcd_io.c`),
+     and both stamp it;
+   - *the requests that waited*: publications of an IRP that had been
+     parked on the Waiting list - all eight records busy when it came, or
+     an earlier IRP already waiting - whichever way it left it (the
+     hand-over in `hcdRecordRelease`, or `hcdWaitingStart` through
+     `hcdTakeRecord`); the record carries the flag from its claim to its
+     publication;
+   - *the fewest TRBs the ring held at a publication*, in software's view
+     (published and not yet completed, before the new request), counted
+     only for a publication onto a ring that was not empty, and *the
+     publications onto an empty ring* apart (the first of a stream, and
+     every restart after the ring ran dry); and *the most TRBs it held
+     just after one* (the depth the stream reached on the ring);
+   - *the Ring Underrun and Overrun events* on the pipe, with the system
+     time of the last.
+   These are clues for a reader, not a verdict: the time an IRP spends on
+   the Waiting list is not measured (every `DriverContext` word of a URB's
+   IRP is spoken for), so a short wait does not by itself prove the client
+   late. What the sample kept with the longest gap says is narrower and
+   sound: a gap ended by a request that had **waited** on the Waiting list
+   shows queueing in this driver (every record busy, some perhaps
+   completed and not yet released) without excluding a client that sent
+   late, since its arrival time is not kept; one ended by a request with
+   a long claim-to-publication wait was at least that long in this
+   driver; a gap ended by a request that neither waited nor sat long
+   between claim and publication is consistent with an upstream stall,
+   though it does not prove one. The fewest
+   TRBs say how close the ring came to empty. Hardware starvation itself
+   is not measured: an event carries no time (task 36.21's limit).
+2. **A time on the notes.** After each `xfer.error` the error budget lets
+   through (every code, the isochronous Ring Underrun, Overrun and Missed
+   Service among them) and each `tol.stream.halt`, one record `at` follows
+   with the system time (`KeQuerySystemTime`, already imported, on every
+   target from 98 SE) in units of 1,024 x 100 ns (102.4 us), its low 32
+   bits: `(Hi << 22) | (Lo >> 10)`, no 64-bit arithmetic. It wraps every
+   5.09 days; XHCITR places it against the system time the snapshot
+   carries (`XHCI_XSTAT.TimeNowLo/Hi`) as the latest such time not after
+   it, and prints its time of day in UTC, from the snapshot's own system
+   time and not the tool's start (no new import) - exact for a note younger than
+   5.09 days at the snapshot and with no change of the system clock
+   between them; an older one, or one across a clock change, is
+   misplaced, which the report says. The clock is the system time's,
+   whose tick is the system's (1 to 15.6 ms, coarser on some 98 SE
+   machines), which places an event among the user's own times and the
+   other notes; the gaps above are on the finer counter. When a pipe
+   closes, its `iso.recs` note (section 11.9) is joined by `iso.gap` (the
+   longest gap, counts, saturated at `FFFFFFFF`), `iso.gap.lag` (that
+   gap's own wait, bit 31 its request waited, bit 30 the wait not
+   measured, the count in 29:0 saturated) and `iso.lag` (the longest
+   wait), then `iso.dry` (the underruns and overruns) and `iso.close`
+   (the publications); `iso.gap`, `iso.dry` and `iso.close` are each
+   followed by an `at` - the gap's end, the last dry event, the close;
+   an `at` of 0 is "no sample" (no gap measured, no dry event: the
+   system time is never noted as 0, one landing on it reads 1), which
+   XHCITR prints as none (revised after the legs). A
+   record and its `at` are appended in one hold of the controller lock
+   (`XhciLogNoteLocked` twice), so no other producer or a flush falls
+   between them; the close notes, which `hcdCfgIsoCountReturn` writes
+   after it releases the lock, take the lock once for all eight.
+3. **In the snapshot.** The HCD region's header gains, appended with its
+   version unchanged as 44.35's and 45.40's blocks were, a table of the
+   open isochronous pipes: `XHCI_SNAPSHOT_HCD_ISOP_COUNT` (4) records of
+   16 words - slot and DCI; the ring's capacity and whether it is a page;
+   the records and their peak; publications; publications onto an empty
+   ring; the requests that waited; the fewest TRBs and the most; the
+   longest gap and its system time; that gap's own sample (its request's
+   claim-to-publication wait, and in a flags word whether that request
+   had waited and whether its wait was measured - not across processors,
+   not backward); the longest wait; the crossed and backward intervals
+   (one word, each half held at `FFFF`); the underruns and overruns; and
+   the last one's time - in slot and DCI order, filled under the
+   controller lock the door already holds; and one word, the event ring's
+   TRB count. `XHCI_SNAPSHOT_HCD_HEAD_WORDS` grows from 792 to 860 (the
+   record count, a record's words, the first record's word, the ring's
+   count, then 64 words); the pure
+   header writer (`xhci_snap.c`, `XhciSnapHcdHead`, and its check that the
+   last block ends the header) gains the block. XHCITR reads it when the
+   header is that long and says nothing of it otherwise; older XHCITRs
+   read the header by its advertised length and offsets and skip it.
+4. **XHCITR** prints the table in its report, the counts converted to
+   microseconds with the rate the snapshot's two clock pairs give (as for
+   the transfer-size readings, marked approximate on a counter that is
+   not invariant, task 47.6), the times as UTC times of day, and an `at`
+   note's time beside the record it follows.
+5. **The cost.** Per publication one stamp (CPUID and RDTSC, at
+   DISPATCH_LEVEL under the lock already held, no IRQL step), a
+   difference by pairs and a few comparisons; per record claimed one
+   stamp; per budgeted error note one `KeQuerySystemTime`. `uac2` and
+   `usbaudio.sys` publish every 1 to 10 ms, but nothing holds a client
+   to more than one packet a request, so a High Speed `bInterval` 1 pipe
+   may publish up to 8,000 times a second: at most 16,000 stamps a second
+   a pipe, each a CPUID and an RDTSC, which is the bound. What that costs
+   in time is the machine's: about a hundred cycles each on hardware, and
+   in a virtual machine a hypervisor exit, which at an illustrative
+   microsecond would be some 1.6 % of one processor, under the controller
+   lock. A client that sends one packet a request already costs a
+   publication, an event and a completion per packet.
+
+**What changes in the code.** `src\xhci.h` (`XHCI_EVENT_RING_BIG_TRBS`,
+its checks, the snapshot block's constants), `src\xhci_hw.h`
+(`XHCI_DPC_MAX_EVENTS` as a literal and its check), `src\xhci_mem.c`
+(`XhciEventRingWindow`), `src\hcd_dma.c` (the block's allocation and
+release), `src\hcd.h` and `src\hcd_svc.c`/`.h` (`HcdSvcEventRing`, the
+controller's block fields, the pipe's and record's timing fields),
+`src\xhci_init.c` (`xhciProgramEventRing`), `src\xhci_evt.c` (the walk's
+comment), `src\hcd_cfg.c` (the grant's ring, the close notes),
+`src\hcd_ctl.c` (`evt.ring`, the owner's and the `qemu` values),
+`src\xhci98.inf` and `src\xhci98-amd64.inf` and the INF gate
+(`XhciEventRingTrbs`), `xhcitr\tr_core.c` (the `at` decoders),
+`src\hcd_io.c` (the
+stamps), `src\hcd_dev.c` (the `at` records, the underrun count),
+`src\hcd_door.c` and `src\xhci_snap.c` (the table), `src\xhci_xstat.c`
+(the saturating interval), `xhcitr\tr_snap.c` (its report). Documents:
+this section; section 11.8 point 9 and record 04 section 4 (the in-block
+ring is the fall-back); `xhci-data-structures.md`'s "use 256";
+`target-standing.md`'s isochronous row; `docs/using/tuning.md`'s row. No new import, no new export,
+no structure the snapshot copies by layout grows.
+
+**Host vectors.** `test_membuf`: `XhciEventRingWindow` at every page
+phase of a 64 KiB line for 16 and 32 KiB blocks, at an unaligned base,
+and the refusals (no window, a window past the block). `test_ring`: a
+1,024-entry ring's wrap and Cycle toggle, the ERDP value across it, its
+init refused across a 64 KiB line. `test_pipe`: the grants at 1,024
+already held (section 11.9), and a pool pipe then a page at 1,024 (254).
+`test_snap`: the header's new length and offsets, the table's words, and
+the timing's pure half (the saturating gap and wait, crossed and backward
+intervals, the fewest TRBs, the `at` value from a system time) beside its
+`XhciXstatInterval` rows. XHCITR's host suite (`test_tr`, `test_trlog`):
+an old header without the block and a new one, the `at` decoder's
+placement across a wrap and at the 5.09-day edge, an `at` whose record
+the ring's wrap cut off, and a ring where the error budget ran out.
+
+**The legs.** On the `qemu` flavour (the notes and the table) and the
+release flavour once installed: Windows 98 SE, ME, 2000, XP, XP x64 and 7
+x64, each read for `evt.ring` 1,024 at start; a stick read and written
+with a verified compare, a mouse, a hub with a device behind it, an
+unplug and replug, a device's port reset where the system sends one, the
+controller's disable and enable (stop and start) twice, and stand-by and
+hibernation where the base takes them; once with `XhciQemuEventRing` 1
+(the fall-back, `evt.ring` 256), once with 2 (the window) and once with
+3 (both refused, the start on today's ring). On XP and 98 SE also: the
+recovery's HCRST with the large ring kept and reprogrammed (the `qemu`
+fault 5, `XHCI_INJ_HCH`, then the stick again); `XhciInterruptMode` 2
+(polled delivery) with the stick and the mouse; and two `qemu-xhci`
+controllers, each with its own block. QEMU's controller has no Force
+Save Context, so its stand-by legs take the reinitialisation and not the
+restore (`hcd_power.c`); the restore across the large ring, with stale
+events near its end, is read by the host vectors and on real hardware.
+The kept block (`CommonBufferPinned`) and a start that fails after
+`HcdDmaOpen` are read by review: no leg here can make a controller keep
+mastering, and the failed start takes `hcdRelease`, which closes the
+block with the controller block. QEMU's `usb-audio` on
+XP on a page (`XhciQemuIsoRing` 1): allowance 254, the table read live
+and the close notes. `usb-wdm-free`'s UAC 2.0 simulator (`uacemu.py`,
+the CX31993 profile, High Speed `bInterval` 1, and the `cx31993m`
+profile, the report's own 3302:12C3 descriptors replayed: OUT 7,
+adaptive, 248, 372 and 496-byte alternates at `bInterval` 1) under
+`uac2` on XP x64, on the usb4-emu QEMU build 46.30 used (with
+`usb-redir`): the allowance
+254, the table's most TRBs at seven requests' own TRB counts (224 when
+no packet crosses a page, as the trace's per-request TRB counts show)
+and `iso.recs` at its peak of eight (the eighth held for ring room), and 46.30's CPU-load
+condition read for Ring Underruns against its 4-record reading, with the
+table. Then the owner's UAC 2 devices by passthrough under load. Real
+controllers, which no emulator stands for, read the 1,024-entry segment
+first on the owner's machines.
 
 ## 12. What Phase 25 leaves open, and where each item binds
 
@@ -13147,7 +14060,7 @@ for the cancel pair. The loads on 98 SE and ME are read at the legs:
 
 The timeout is the header's `TimeOutValue`, in seconds. 0 becomes 30
 (`UAS_DEFAULT_TIMEOUT`, what a class SRB naming none gets). Anything above
-`UAS_PASS_TIMEOUT_MAX` = 120 becomes 120. The reason for the upper bound is
+`UAS_PT_TIMEOUT_MAX` (designed as `UAS_PASS_TIMEOUT_MAX`) = 120 becomes 120. The reason for the upper bound is
 the lifetime rules of 16.5: a request in flight holds a STOP or a REMOVE of
 its LUN until it ends. `UasEngineCloseLun` waits for the LUN's requests
 with no bound of its own. The clamp bounds the command's own share of that
@@ -13550,6 +14463,54 @@ in `usb4-emu` on its own branch. The legs of 16.11 name the fork commit
 and the command line. It makes no claim about any real bridge: the
 reading behind a real SAT bridge stays on the bench list.
 
+### 16.13 A drive's ATA requests answered here (issue 26, 2026-11-07)
+
+A UAS drive that is not an ATA disk inside refuses ATA PASS-THROUGH, and
+some drives handle the request badly. `XhciUasNoAtaPassThrough`, a
+`REG_DWORD` in the UAS device's hardware key (on NT its `Device Parameters`
+key), written 0 by both INFs' `.HW` sections with `FLG_ADDREG_NOCLOBBER` and
+read at each start (`uas_fdo.c`, `uasReadNoAta`), has the driver answer them
+itself at any value but 0, as Linux's `uas.c` does under `US_FL_NO_ATA_1X`:
+
+- an SRB whose CDB is 85h or A1h, by its operation code alone as Linux
+  tests `cmnd[0]`: CHECK CONDITION, ILLEGAL REQUEST, INVALID FIELD IN CDB
+  (5/24/00, Linux's `usb_stor_sense_invalidCDB`), the autosense as the SRB
+  allows it, nothing moved (`uas_pdo.c`, `uasSrbNoAta`);
+- `IOCTL_SCSI_PASS_THROUGH(_DIRECT)` with such a CDB and
+  `IOCTL_ATA_PASS_THROUGH(_DIRECT)`, whose CDB is always 85h (16.8): the
+  outcome written by 16.7's and 16.8's own writers from that sense, before
+  any buffer is locked - the SCSI forms CHECK CONDITION with it, the ATA
+  forms Error 04h and Status 51h (`uasPassLocal`);
+- the SMART requests (16.9): `SMART_VERSION` refused `STATUS_NOT_SUPPORTED`,
+  the answer Windows' own `usbstor.sys` gives a Bulk-Only stick (16.11's
+  45.27 reading), so `disk.sys` predicts no failure by SMART and a SMART
+  tool stops asking; every other control code `SMART_NOT_SUPPORTED`
+  through `UasSmartResult`. Answering `SMART_VERSION` as before and
+  refusing what follows was the alternative: tools would keep asking for
+  data a drive with no ATA device cannot have.
+
+Each answer but `SMART_VERSION`'s refusal, which names no command, enters
+the failure ring as "answered here" (`XHCI98_FAIL_E_LOCAL`,
+`src/xhci98_xfer.h`). Host vectors: `test_uas`, `test_no_ata`; the INF gate's
+`UAS-NOATA` rule.
+
+### 16.14 Repeated timeouts reset sooner (issue 26, the owner's choice, 2026-11-07)
+
+`XhciUasFastReset`, a `REG_DWORD` beside 16.13's in the UAS device's
+hardware key, written 0 by both INFs; at 0 recovery is as before. At any
+other value (`uas_xport.c`, `uasFastDue`; the pure rules `UasFastResetDue`
+and `UasFinalCancelDue`): the first timeout keeps ABORT TASK; once the
+device has answered one, a second timeout within 120 s, on a command
+started at or after it, with no command ended GOOD since, goes straight
+to the device reset (`uasResetDevice`), the history kept across recovery
+passes and cleared by progress, a reset or a start; and a command whose
+final IU is in, still waiting 5 s for its data transfer's cancel, asks for
+the device reset instead of running on to an ABORT TASK the device has no
+task for. Each is entered in the failure ring as
+`XHCI98_FAIL_E_FAST_RESET`. The trade is the reset's: every command in
+flight ended `SRB_STATUS_BUS_RESET`, and on removable media the volume
+verified again.
+
 ## 17. A UAS drive in Safely Remove Hardware (task 45.61, 2026-10-31)
 
 Status: 2026-10-31, the reading done and the change designed, reviewed and
@@ -13582,7 +14543,7 @@ record, design section or `lessons.md` entry gives a reason [hist]. At that
 hour the bus's device PDOs answered TRUE as well; `9001ebd` (14:38 the same
 day) turned the device PDO's answer to FALSE, as Windows 2000's `usbhub.sys`
 answers, so that the hot-plug applet lists a USB stick again (`runs/run-28.md`,
-the upgrade report's finding 1; `roadmap-hcd.md`, decisions table, "Device
+the upgrade report's item on the hot-plug applet; `roadmap-hcd.md`, decisions table, "Device
 PDOs and `SurpriseRemovalOK`"), and `8993884` kept TRUE for a split function
 of a composite device. The UAS FDO's override was left as written, so since
 `2.0.0.0` the UAS drive's devnode has said TRUE where the bus answers
@@ -13702,6 +14663,183 @@ Read beside it by task 45.65 (`runs/run-45.md` "45.65"): on Vista's own USB
 stack (EHCI, `usbehci.sys` and `usbstor.sys`, no xHCI98) the same unplug
 leaves the copy, dir and shutdown blocked, with and without the Explorer
 window; XP and 7 on the same EHCI are clean. The hang needs no xHCI98.
+
+## 18. A departed device's isochronous requests on 98 SE and ME (Phase 47, 2026-11-06)
+
+The owner chose B (section 18.6), built as section 18.7 records. The
+readings are `runs/run-47.md`, "The 98 SE usbaudio fault at unplug while
+playing", runtime on QEMU with its `usb-audio` device (UAC 1.0, Full
+Speed) and Sound Recorder playing; the candidates of section 18.3 are test
+builds of the `qemu` flavour, never committed.
+
+### 18.1 The report and what was read
+
+Reported: Windows 98 SE stops when a USB audio device is unplugged while
+Windows' own `usbaudio.sys` plays it - "A fatal exception 00 has occurred
+at 0028:FF09FED4 in VXD USBAUDIO(01) + 00002ED4" under xHCI98 3.4.1.0, "A
+fatal exception 0E has occurred at 0028:FF06A848" under NUSB 3.3 with
+Windows' UHCI driver.
+
+Both 98 SE faults come with no unplug: playing QEMU's `usb-audio` stops
+98 SE within seconds, at the same two addresses. That is the Phase 9
+finding (lessons.md, "Windows 98 SE cannot play USB audio here"), the
+guest's limitation with that emulated device; a real device played on
+98 SE under the miniport (batch 13-E, finding X). 98 SE's behaviour at an
+unplug while playing cannot be read with this device.
+
+What was read is Windows ME, whose `usbaudio.sys` plays the same device.
+An unplug about 12 s into a play stops ME with "An error has occurred ...
+NTKERN(01) + 0000EECA Error: 0E : 0028 : C002EFDA" in 5 of 20 valid
+unplugs under 3.4.1.0. ME's own UHCI stack with no xHCI98 stops it in 5 of
+10, in another shape ("Error: 0E : 0028 : 0B70001D", CR2 the same
+address). No idle unplug stopped either.
+
+### 18.2 The order at the departure
+
+The `qemu` build's trace of a faulting unplug (ME):
+
+1. At the unplug ME's `usbaudio.sys` aborts and resets its isochronous OUT
+   pipe and resubmits; four requests of ten packets are on the ring.
+2. About 2 s later the disconnect reaches the bus; section 10.5's teardown
+   holds the four on the PDO (`HcdIoPark`, step 3).
+3. About 0.3 s later ME, its root hub's relations answered, sends a
+   SELECT_CONFIGURATION to the departed PDO (refused DEVICE_GONE at the
+   next tick; whether it is an unconfigure was not read), then the REMOVE
+   with the four pending.
+4. The PDO's REMOVE (`hcdPdoQuiesce`) completes the four `STATUS_CANCELLED`
+   / `USBD_STATUS_CANCELED` one after another inside the REMOVE dispatch.
+   The trace ends at the fourth completion's marker, before the release's
+   own line; ME is then at the NTKERN fault screen. Another unplug with
+   the same sequence survived.
+
+That supports an ordering-sensitive failure above the bus that involves
+the held requests' completion inside the REMOVE. It does not identify the
+state or the access NTKERN faults on, which is Microsoft's code and not
+read. The fields the requests carry are in the run record; none
+contradicts Windows 2000 DDK `usbdi.h`, and no zero packet count or frame
+interval is returned.
+
+### 18.3 Candidates read
+
+| Candidate (ME) | Valid unplugs | Stops | The REMOVE after the departure | URBs to the departed PDO before it |
+|---|---|---|---|---|
+| none: 3.4.1.0 release | 20 | 5 | about 0.3 s (the trace build) | a SELECT_CONFIGURATION |
+| 1: an isochronous request not held, every target | 20 | 0 | not read (trace budget) | a retry loop (below) |
+| 2: the hold kept; a SELECT_CONFIGURATION on a departed PDO first releases every held request `CANCELED` | 20 | 0 | 0.22 s | 5 (an abort, a reset, one transfer, two selects) |
+| 3: candidate 1 as section 18.4 writes it (98 SE and ME only, abort precedence) | 26 | 0 | 2.0 s and 2.4 s | at least 111 aborts, 111 resets and 1,189 transfers in 2.4 s (the trace's budget, so a lower bound) |
+
+Candidates 1 and 3 complete the departed stream `DEVICE_GONE` at once;
+ME's `usbaudio.sys` answers each failure with an abort, a reset and new
+requests, each refused at the next tick, until its REMOVE, which comes
+about 2 s later instead of 0.3 s. Candidate 2 keeps `CANCELED` and only
+moves the completions before the REMOVE, so its result points at the
+time of the completions rather than their status.
+
+### 18.4 Option A: not held on 9x (candidate 3)
+
+On Windows 98 SE and ME only (`IoIsWdmVersionAvailable(1, 0x10)` false, as
+`hcdPdoGhostStart` decides), the departure drain does not hold an
+isochronous request:
+
+- in `HcdIoDeferred`, a record whose transfer is isochronous and completes
+  `DEVICE_GONE` is not parked; whether it is isochronous is read from the
+  record before `hcdRecordRelease`, which ends the record's hold on its
+  pipe;
+- in `hcdWaitingRefuse`, an isochronous IRP waiting for a record is not
+  parked;
+- an abort keeps its precedence: a request its pipe's abort horizon
+  covers completes `CANCELED`, as `HcdIoPark` completes it
+  (`hcdAbortedLocked`); any other completes `DEVICE_GONE` /
+  `STATUS_DEVICE_NOT_CONNECTED`, the ring's at once and a waiting one at
+  the next tick (`HcdIoRefuseLater`).
+
+Unchanged: interrupt, bulk and control requests are held (hidclass's case,
+section 10.5); a contained controller's and a ghost's holds
+(`HcdIoHoldUnreadable`, section 10.5.2) still hold isochronous requests;
+the accounting (`UrbsPending`, `RefusedPending`) and the REMOVE's waits;
+NT 5.x and 6.x, whose SURPRISE_REMOVAL releases the hold before the
+REMOVE. The cost is the retry loop of section 18.3 until the REMOVE: about
+2 s and several hundred refused requests a second on ME; for another
+client (usb-wdm-free's `uac2`, a feedback IN pipe, deeper queues) it is
+not read, and 27-V.1 showed what a retry loop can do to the REMOVE.
+
+### 18.5 Option B: released at a departed PDO's SELECT_CONFIGURATION, isochronous only
+
+On Windows 98 SE and ME only (as section 18.4 decides), the hold kept
+(section 10.5) with one more release. The trigger is the one tested: any
+SELECT_CONFIGURATION reaching a departed PDO (`hcdSubmitUrb`, before
+`hcdGoneLater`). Whether ME's is an unconfigure (a NULL configuration
+descriptor) was not read, so the design does not narrow the trigger to one.
+
+- Under the cancel spin lock, the PDO is latched (a new flag, set once and
+  never cleared: a departed PDO never comes back, it is deleted at its
+  REMOVE) and its held isochronous IRPs - an URB whose function is
+  `URB_FUNCTION_ISOCH_TRANSFER`, which no completion path rewrites while
+  the IRP is held - are taken off the held list, their cancel routines
+  cleared, as `HcdIoParkedRelease` takes its IRPs. They complete `CANCELED`
+  after the lock is dropped, inside the select's dispatch as an
+  ABORT_PIPE's do, each returning its `UrbsPending` count once and entering
+  no refusal accounting.
+- The departure's two park points (`HcdIoDeferred`, `hcdWaitingRefuse`)
+  test the latch for an isochronous request under the same lock, before
+  it would be inserted, and complete such a request `CANCELED` instead of
+  holding it, so a request the drain reaches after the select is not held
+  into the REMOVE. `HcdIoHoldUnreadable`'s holds (section 10.5.2) do not
+  test it.
+- Interrupt, bulk and control requests stay held until the REMOVE as today,
+  so hidclass is untouched.
+
+It helps only a client that selects before passing its REMOVE down, as
+ME's `usbaudio.sys` does; a client that does not is left as today. On NT
+the departure also precedes the SURPRISE_REMOVAL, and a client may select
+while handling it before passing it down; B is therefore not proposed for
+NT, whose order is unread here. Candidate 2 as tested released every
+pipe's held requests and had no latch; option B is that reading narrowed.
+
+### 18.6 The owner's choice and what stays open
+
+- A: section 18.4, 98 SE and ME.
+- B: section 18.5, 98 SE and ME (recommended: 0 of 20 under its test form,
+  the REMOVE as prompt as today's, no retry loop, and nothing changes for
+  a client that does not select before its REMOVE).
+- C: no change; a known limitation for ME (and, unproven, 98 SE): stop
+  playback before unplugging a USB audio device. ME's own USB stack stops
+  ME in the same act.
+
+Open with A or B: 98 SE on real hardware with a UAC 1.0 device (whether
+its `usbaudio.sys` selects before the REMOVE); usb-wdm-free's `uac2`
+unplugged during play on 98 SE and ME; the code, its review and legs.
+
+### 18.7 Option B as built (owner, 2026-11-06)
+
+The owner chose B once 98 SE was shown playing a real UAC 1.0 device (the
+Logi USB Headset, `046D:0A64`, passed through to QEMU) and its unplugs
+read as ME's do (`runs/run-47.md`). The code:
+
+- `HcdIoIsoRelease` (`src\hcd_io.c`): on 98 SE and ME only, read once per
+  PDO at its creation at PASSIVE_LEVEL (`HCD_DEVICE_PDO.IsoReleaseOn`, set
+  by `HcdIoRefusedInit`), since `IoIsWdmVersionAvailable` is PASSIVE_LEVEL
+  only and a select may come at DISPATCH_LEVEL. Under the cancel spin lock
+  it sets `IsoReleased` and takes off the held list every IRP a departure
+  holds whose URB is `URB_FUNCTION_ISOCH_TRANSFER`, clearing its cancel
+  routine; after the lock it completes each through `hcdParkedComplete`
+  (`USBD_STATUS_CANCELED`, `STATUS_CANCELLED`, the packets and lengths as
+  the drain wrote them, one `UrbsPending` count returned).
+- `HcdIoPark` takes whether the hold is a departure's: the departure's
+  callers (`HcdIoDeferred`, `hcdWaitingRefuse`, `hcd_cfg.c`'s flush of a
+  gone device's queued requests) say so, `HcdIoHoldUnreadable` (a
+  contained controller, a ghost) does not. A departure hold is marked in
+  the IRP's `IoStatus.Information` (this driver's until the completion,
+  which writes 0), which is how `HcdIoIsoRelease` tells it from the others.
+  With `IsoReleased` set, a departed isochronous request is completed
+  `CANCELED` under the same lock instead of listed, as an abort covers one.
+- The trigger, any SELECT_CONFIGURATION of a valid length on a departed
+  PDO, at the three places the bus finds the departure: `hcdSubmitUrb`'s
+  departed branch, its later `dev == NULL` refusal of a command, and
+  `HcdCfgQueue`'s `dev->Gone` refusal when the PDO is unlisted (a stop's
+  or a reset's drain leaves the PDO listed). The select itself is refused
+  `DEVICE_GONE` at the next tick as before; a ghost's select is answered
+  earlier by `hcdGhostUrb` and never reaches it.
 
 ## Appendix A. The Windows 98 export evidence, pair by pair (task 25.3)
 

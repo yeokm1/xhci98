@@ -398,8 +398,13 @@ ULONG XhciEnumStep(PXHCI_ENUM_PORT port, const XHCI_ENUM_EVENT *event,
 
     case XHCI_ENUM_CONFIG9:
         if (event->Kind == XHCI_ENUM_EV_TRANSFER_DONE) {
+            /* A wTotalLength of the header alone is a configuration with no
+             * interface in it, which no device can be configured by - and a
+             * whole read of 9 bytes is one the executor tells from the head
+             * read by its length only (hcd_enum.c), so it would never be
+             * kept. A configuration failure, as a shorter one is. */
             if (!ok || event->Bytes < XHCI_ENUM_CONFIG_HEAD_BYTES ||
-                event->Value < XHCI_ENUM_CONFIG_HEAD_BYTES) {
+                event->Value <= XHCI_ENUM_CONFIG_HEAD_BYTES) {
                 return xhciEnumFail(port, XHCI_ENUM_FAIL_CONFIG, action);
             }
             port->ConfigLength = event->Value;

@@ -15,12 +15,17 @@ systems are first-class targets: a single 32-bit build of each driver must
 install and work on either, and a phase is not done until its checkpoint has
 been observed on both.
 
-**There are two drivers, and there were two generations.** Since `2.0.0.0`
-the product is a monolithic host controller driver (HCD), `xhci98.sys`, that
-replaces `usbport.sys`, the hub driver and the composite parent, and so
-drives SuperSpeed devices and hubs; beside it in the same package is
-`xhciuas.sys`, a UAS class driver of this project's own, with its own INFs.
-Up to `1.2.0.0` the product was a `usbport.sys` miniport of the same file
+**There are two generations, and the package holds several drivers.** Since
+`2.0.0.0` the product is a monolithic host controller driver (HCD),
+`xhci98.sys`, that replaces `usbport.sys`, the hub driver and the composite
+parent, and so drives SuperSpeed devices and hubs; beside it in the same
+package is `xhciuas.sys`, a UAS class driver of this project's own, with its
+own INFs. Around those two are `xhcihlpr.sys`, the x86 helper (from
+`2.3.0.0`); `xhcicm.sys`, the Thunderbolt 3 and USB4 connection manager
+(from `3.0.0.0`); `xhcinet.sys` and `xhcinet6.sys`, its Thunderbolt
+networking miniports (from `3.4.0.0`); the small images `S98VSD.VXD`,
+`XHCIPFW.VXD` and `XHCIPFW.SYS`; and the bundled Stor98. "Repository
+Layout" below says where each lives. Up to `1.2.0.0` the product was a `usbport.sys` miniport of the same file
 name, USB 2.0 only. **The miniport is frozen** (owner, 2026-10-02): `1.2.0.0`
 is its last release, its sources are on branch `1.2.0.0` and its binaries in
 `releases\1.2.0.0`, and nothing in `src\` builds it. `docs/contributing/roadmap-hcd.md`
@@ -51,12 +56,15 @@ target the "observed on both" rule is satisfied by the VM work (the SP4 target
 VM, the SMP stress environment, the device matrix), not by metal. Do not write
 "validated on both targets" without that qualification, and do not read a
 bare-metal Windows 98 result as covering Windows 2000.
-`docs/using/release-notes.md` states it under "What this is".
+`docs/contributing/target-standing.md`, "The Windows 2000 qualification, and
+the real hardware", records it; the user documents carry no testing status
+(owner, 2026-10-31), so a reading goes there and never into the release
+notes.
 
 The tier paragraphs below record how each further target was admitted and
 what the miniport was observed doing there. What the HCD has been observed
-doing on each is `docs/using/release-notes.md`, "Targets and their standing",
-and `roadmap-hcd.md` Phase 28; for `2.0.0.0` every target but Windows 98 SE
+doing on each is `docs/contributing/target-standing.md`, "Each target's
+standing", and `roadmap-hcd.md` Phase 28; for `2.0.0.0` every target but Windows 98 SE
 is virtual-machine only, 32-bit Windows 7 included (owner, 2026-10-04), and
 for `2.3.0.0` Windows XP x64 and 7 x64 also ran on the owner's Dell Latitude
 E7250 (the bench of 2026-10-11, `runs/run-36.md`).
@@ -136,8 +144,9 @@ a rescan, each guest under four virtual processors. Vista x64 then took five
 more remove/rescan cycles on 2026-09-16, installed through the committed
 `src/xhci98-amd64.inf`. The 32-bit guests run the one binary and the x64
 guests the second, both through the `Xhci.Dev6` install path, which copies
-`xhci98.sys` alone because every install of those systems already carries the
-four OS-supplied files. It carries no checkpoint tax, and the standing rule
+no OS-supplied file, because every install of those systems already has
+`usbd.sys` and `usbui.dll`: only `xhci98.sys` and, in the 32-bit file, the
+helper `xhcihlpr.sys`. It carries no checkpoint tax, and the standing rule
 holds: accommodate them where the change is small and low-risk, never at a
 primary target's expense. Of the four, 32-bit Windows 7 has run on real
 hardware once (the E460, 2026-09-19, roadmap task 22.9: the install and
@@ -197,10 +206,10 @@ driver fills the gap for both.
 | Item | Value |
 |---|---|
 | Primary targets | Windows 98 SE (4.10.2222) and Windows 2000 SP4 - one binary, both required |
-| Supported in VM | How each target was admitted, under the miniport; the HCD's standing on each is the release notes' "Targets and their standing", every one virtual-machine only for `2.0.0.0`. Windows ME (4.90.3000), under SweetLow's USB 2.0 stack only - observed in one QEMU guest on 2026-09-02, never on metal, no checkpoint tax; under the host controller driver it needs no USB 2.0 stack (stock ME read 2026-10-12, roadmap 37.1). Same 16-bit setup engine and undecorated INF half as Windows 98 SE; see `docs/contributing/build-and-test.md`, "Windows ME target VM". 32-bit Windows XP (SP3) - observed in one QEMU guest on 2026-09-03 (xHCI-only package install, HID, mass storage, composite audio, the disable/enable/remove/rescan sequence), never on metal, no checkpoint tax; the `.NTx86` INF half under XP's own `usbport.sys`. Accommodate it where the change is small and low-risk, never at a primary target's expense; see `docs/contributing/build-and-test.md`, "Windows XP target VM", and `docs/usb-xhci-info/win98-wdm.md`, "What about Windows XP?" Windows XP x64 / Server 2003 x64 (NT 5.2.3790) - observed in one QEMU guest on 2026-09-09 (the same clauses, on the `qemu` build and then the `release` flavour; `debug-x64` has never been read in a guest), on metal once, the Dell Latitude E7250 at the `2.3.0.0` bench (2026-10-11), no checkpoint tax; the `.NTamd64` half of the *second* INF, and **a second binary, not this one** - see "Windows XP x64 target VM" and `docs/contributing/design/11-x64-targets.md`. Windows Vista (SP2) and Windows 7 (SP1), 32-bit and x64 - observed in four QEMU guests on 2026-09-13 (the same clauses plus five disable/enable cycles each, on the `qemu` build; the published `release` package was then installed on all four on 2026-09-18, roadmap task 22.10), never on metal except one 32-bit Windows 7 session on the E460 (2026-09-19) and 64-bit Windows 7 on the E7250 at the `2.3.0.0` bench (2026-10-11), no checkpoint tax; the `Xhci.Dev6` install path of both INFs and the Version 300 registration path of both binaries. **The x64 half loads in test-signing mode (the binaries are test-signed, design record 19) or on an F8 boot with signature enforcement disabled**; see "Windows Vista and Windows 7 target VMs" and "Vista x64 and Windows 7 x64 target VMs" |
-| USB scope | SuperSpeed (5 Gbit/s) and USB 2.0 (HS/FS/LS) devices and hubs, and UAS; HID, mass storage, USB Ethernet, and USB Audio validation targets. SuperSpeedPlus links are accepted at their trained rate and are untested ground, as is SuperSpeed isochronous (`roadmap-hcd.md`, decisions table; the release notes, "Untested ground"). The frozen miniport was USB 2.0 only |
+| Supported in VM | How each target was admitted, under the miniport; the HCD's standing on each is `docs/contributing/target-standing.md`, every one virtual-machine only for `2.0.0.0`. Windows ME (4.90.3000), under SweetLow's USB 2.0 stack only - observed in one QEMU guest on 2026-09-02, never on metal, no checkpoint tax; under the host controller driver it needs no USB 2.0 stack (stock ME read 2026-10-12, roadmap 37.1). Same 16-bit setup engine and undecorated INF half as Windows 98 SE; see `docs/contributing/build-and-test.md`, "Windows ME target VM". 32-bit Windows XP (SP3) - observed in one QEMU guest on 2026-09-03 (xHCI-only package install, HID, mass storage, composite audio, the disable/enable/remove/rescan sequence), never on metal, no checkpoint tax; the `.NTx86` INF half under XP's own `usbport.sys`. Accommodate it where the change is small and low-risk, never at a primary target's expense; see `docs/contributing/build-and-test.md`, "Windows XP target VM", and `docs/usb-xhci-info/win98-wdm.md`, "What about Windows XP?" Windows XP x64 / Server 2003 x64 (NT 5.2.3790) - observed in one QEMU guest on 2026-09-09 (the same clauses, on the `qemu` build and then the `release` flavour; `debug-x64` has never been read in a guest), on metal once, the Dell Latitude E7250 at the `2.3.0.0` bench (2026-10-11), no checkpoint tax; the `.NTamd64` half of the *second* INF, and **a second binary, not this one** - see "Windows XP x64 target VM" and `docs/contributing/design/11-x64-targets.md`. Windows Vista (SP2) and Windows 7 (SP1), 32-bit and x64 - observed in four QEMU guests on 2026-09-13 (the same clauses plus five disable/enable cycles each, on the `qemu` build; the published `release` package was then installed on all four on 2026-09-18, roadmap task 22.10), never on metal except one 32-bit Windows 7 session on the E460 (2026-09-19) and 64-bit Windows 7 on the E7250 at the `2.3.0.0` bench (2026-10-11), no checkpoint tax; the `Xhci.Dev6` install path of both INFs and the Version 300 registration path of both binaries. **The x64 half loads in test-signing mode (the binaries are test-signed, design record 19) or on an F8 boot with signature enforcement disabled**; see "Windows Vista and Windows 7 target VMs" and "Vista x64 and Windows 7 x64 target VMs" |
+| USB scope | SuperSpeed (5 Gbit/s) and USB 2.0 (HS/FS/LS) devices and hubs, and UAS; HID, mass storage, USB Ethernet, and USB Audio validation targets. SuperSpeedPlus links are accepted at their trained rate and are untested ground, as is SuperSpeed isochronous (`roadmap-hcd.md`, decisions table; `docs/contributing/target-standing.md`, "Untested ground"). The frozen miniport was USB 2.0 only |
 | Integration model | A monolithic bus driver (design record 13): `xhci98.sys` is the controller's FDO and its root hub's FDO, runs hubs and composite splitting inside the bus, and presents device PDOs to each target's own class drivers; since `2.1.0.0` each external hub also has a PDO under a project-owned id, bound to `xhci98.sys` again as a hub FDO (design record 13 section 10.11). It replaces `usbport.sys`, `usbhub.sys`, `usbhub20.sys` and `usbccgp.sys`; `xhciuas.sys` is the UAS class driver above it. The miniport's model, a `usbport.sys` miniport (Option A), is the `1.2.0.0` branch's |
-| Compiler | MSVC 6.0, run in place from `tools/MSVC600` (unpacked from `tools/MSVC600.zip`). The amd64 build is the exception and cannot be otherwise: it is WDK 7.1's `cl` 15.00 from `tools/WinDDK71`, reached by `build-driver.cmd <flavour> -amd64`, because no compiler here older than that can target x64. One x86 binary is the other exception: `xhcihlpr.sys`, the x86 helper for 32-bit 2000, XP, Vista and 7 (design record 18; `xhcimsi.sys`, Vista and 7 only, through 2.3.x), which `build-driver.cmd` builds with WDK 7.1's `WXP` x86 environment at subsystem version 5.00 in every x86 run, because only that kit declares `IoConnectInterruptEx` (now looked up at run time, so the image loads on 2000 and XP); an x86 build therefore needs `tools/WinDDK71` too. `xhci98.sys` and `xhciuas.sys` x86 stay on MSVC 6.0 |
+| Compiler | MSVC 6.0, run in place from `tools/MSVC600` (unpacked from `tools/MSVC600.zip`). The amd64 build is the exception and cannot be otherwise: it is WDK 7.1's `cl` 15.00 from `tools/WinDDK71`, reached by `build-driver.cmd <flavour> -amd64`, because no compiler here older than that can target x64. One x86 binary is the other exception: `xhcihlpr.sys`, the x86 helper for 32-bit 2000 to 10 (design record 18; `xhcimsi.sys`, Vista and 7 only, through 2.3.x), which `build-driver.cmd` builds with WDK 7.1's `WXP` x86 environment at subsystem version 5.00 in every x86 run, because only that kit declares `IoConnectInterruptEx` (now looked up at run time, so the image loads on 2000 and XP); an x86 build therefore needs `tools/WinDDK71` too. The third exception, on both architectures, is `xhcinet6.sys`, the NDIS 6.20 Thunderbolt networking miniport of Windows 8 to 10, which only WDK 7.1's `WIN7` environment builds, because only that kit carries NDIS 6.20 (`src/net/ndis6/sources` refuses any other). `xhci98.sys`, `xhciuas.sys`, `xhcicm.sys` and `xhcinet.sys` x86 stay on MSVC 6.0 |
 | DDK | Windows 2000 DDK, unpacked into `tools/ntddk` (from `tools/WIN2KDDK.EXE`), for every 32-bit build; WDK 7.1 in `tools/WinDDK71` (`x64 WNET`) for the amd64 one, whether it stays being design record 11's decision 3. All of them live in the repo and install nothing machine-wide; every script finds them relative to itself. `DDKROOT` overrides where the DDK is found and reaches its `setenv.bat`, so it does redirect the compiler the driver is built with. `MSVC6` does NOT: the DDK build takes its compiler from the generated environment script, and `MSVC6` only redirects the host-side tools that need `dumpbin` and `cl` of their own - the import gate and `scripts\vm-matrix\gen-offsets.ps1` |
 | Language | C (C89/C90 compatible with MSVC 6.0) |
 | Driver type | WDM kernel-mode driver (.sys) |
@@ -223,6 +232,15 @@ src/            Driver source code (C): the HCD, xhci98.sys (roadmap Phases
                 of xhcihlpr.sys, the x86 helper (design record 18 section
                 15), whose code is src/xhci_hlpr.c. The miniport left the
                 tree on 2026-10-02; its last sources are on branch 1.2.0.0
+src/net/        Thunderbolt networking, from 3.4.0.0 (design record 35,
+                roadmap-usb4 task 45.59): xhcinet.sys, an NDIS 5 miniport
+                for 98 SE to 7 (src/net/ndis5/; Windows 2000 DDK on x86,
+                WDK 7.1 on amd64), and xhcinet6.sys, an NDIS 6.20 miniport
+                for 8 to 10 (src/net/ndis6/; WDK 7.1 WIN7 only), above
+                xhcicm.sys's network device, with their two INFs,
+                gated by scripts/inf-gate/check-net-inf.ps1 and the
+                import gate's net98 and net6 profiles; the framing core
+                both share is src/net/net_frame.c. Packaged in cm\tbnet\
 src/stor98/     Stor98, the NVMe SCSI miniport the packages bundle, a
                 BSD-3-Clause driver with its own AGENTS.md and build,
                 built and versioned with this package since 3.1.0.0; see
@@ -235,9 +253,14 @@ src/vsd/        S98VSD.VXD, the Windows 98 SE and ME IOS vendor-supplied
 src/pfw/        XHCIPFW, which closes PCI bridges' prefetchable windows
                 lying wholly above 4 GB before the system reads them:
                 XHCIPFW.VXD for 98 SE and ME and, under src/pfw/nt/,
-                XHCIPFW.SYS for the 32-bit 2000 to 7, from 3.3.0.0
-                (roadmap-usb4 task 44.49, design record 32)
-test/           Host-side unit tests for the DDK-free core (test\run-host-tests.cmd)
+                XHCIPFW.SYS, which acts on 32-bit 2000, XP, Vista, 7, 8
+                and 8.1 (on 2000 and XP with one processor only) and loads
+                and does nothing on 10, from 3.3.0.0 (roadmap-usb4 task
+                44.49, design record 32)
+test/           Host-side unit tests for the DDK-free core (test\run-host-tests.cmd),
+                and three guest-side clients that are never packaged:
+                test/pmclient/ (a kernel test driver with its INF, for
+                selective suspend), test/xfertest/ and test/atatest/
 scripts/        The build wrapper, host setup helpers, and the import/INF/
                 packaging gates. `scripts/local/` is git-ignored per-host
                 tooling; do not make a committed procedure depend on it.
@@ -262,6 +285,16 @@ xhcitr/         The xHCI98 USB Tree (`XHCITR.EXE`, `XHCITR64.EXE`), the
                 engine, moved; `docs/contributing/snapshot-reader.md` is
                 the route's reference); `xhcitr/README.TXT` is its guide.
                 Tracked.
+xhcimark/       The Thunderbolt safe-removal mark service (`XHCIMARK.EXE`,
+                `XHCIMK64.EXE`), an NT service the installer puts in place
+                on 2000 to 10 with the Thunderbolt 3 / USB4 support, from
+                `3.1.0.0` (roadmap-usb4 task 42-A.5, design record 21
+                section 7.4, record 31): it keeps xhcicm's filter mark on
+                the devices behind a verified tunnel port and gives
+                tunnelled NVMe drives to Stor98. Built by its own
+                `build.cmd` (MSVC 6.0 and WDK 7.1, static runtime), its
+                pure half host-tested; `xhcimark/README.TXT` is its guide.
+                Tracked.
 xhciperf/       XHCIPERF (`XHCIPERF.EXE`, `XHCIPF64.EXE`), a file-based
                 disk benchmark with a window that also reads Stor98's
                 counters: a developer diagnostic, built and host-tested
@@ -272,7 +305,7 @@ images/         The pictures `README.md` embeds. Tracked.
 docs/           The documentation tree: using/ (release notes, the release
                 acceptance test), contributing/ (roadmap, architecture,
                 build/test/runbooks, design records, run sheets and their
-                evidence), issues/, usb-xhci-info/, and references/.
+                evidence, and the target standing record), issues/, usb-xhci-info/, and references/.
                 `docs/README.md` is the index, and every document below is
                 reachable from it.
 tools/          The build toolchain itself, used in place and installed
@@ -283,7 +316,8 @@ tools/          The build toolchain itself, used in place and installed
                 template that tells a clone where to point the DOS harnesses
                 at a boot image this repository cannot carry.
 external/       Local read-only mirrors of the reference sources (ReactOS,
-                Linux, Haiku, FreeBSD). Git-ignored except
+                Linux, Haiku, FreeBSD, the Thunderbolt trees of Linux and
+                FreeBSD, and QEMU's xHCI model). Git-ignored except
                 `external/README.md`, which says how to fetch them.
 vm/             Guest disk images and transfer disks. The per-run evidence the
                 run sheets and `lessons.md` cite by `vm\` path was discarded on
@@ -321,25 +355,25 @@ but not every input; see
 
 ### Where to start
 
-Read `docs/contributing/roadmap.md` for the current phase and its checkpoint.
-The roadmap is four files: that one has the status, the conventions and
+**The current state is the status line at the head of
+`docs/contributing/roadmap-usb4.md`**, the one place that names the open
+phase, the release it is for and its branch; its decisions table is the
+current state behind it, and no other document restates them. The roadmap
+is four files: `docs/contributing/roadmap.md` has the conventions and
 Phases 0-16 (the initial release);
 `docs/contributing/roadmap-miniport-updates.md` has Phases 17-24, the
 miniport's public updates after it, closed with the `1.2.0.0`
-cut that froze it; `docs/contributing/roadmap-hcd.md` has Phases 25
-onward of the host controller driver, a USB phase opened later included; and
-`docs/contributing/roadmap-usb4.md` (opened 2026-10-14) has Phases 39
-onward, the USB4 and Thunderbolt connection-manager work: a driver beside
+cut that froze it; `docs/contributing/roadmap-hcd.md` has Phases 25 to 38
+of the host controller driver, and is closed; and
+`docs/contributing/roadmap-usb4.md` (opened 2026-10-14) has Phase 39
+onward, every phase since, USB ones included: it began as the USB4 and
+Thunderbolt connection-manager work, a driver beside
 `xhci98.sys` whose test bed is the `usb4-emu` repository, read there and
 never modified, with design record 21 as Phase 39's plan (the Thunderbolt
 firmware connection manager client) and design record 22 as Phase 40's
 (the USB4 software connection manager); both phases opened 2026-10-15 and
 shipped together as `3.0.0.0`, cut on 2026-10-17 with Phase 41 (XHCITR,
-design record 25). **The open phase is that file's Phase 45**, opened by
-the owner on 2026-10-29 for release `3.4.0.0` (hot-added docks on 2000
-and XP and daisy chains, the kept child, and what `3.3.0.0` left), on
-branch `3.4.0.0`;
-the file's status line and decisions table are the current state. The miniport is
+design record 25). The miniport is
 frozen (owner, 2026-10-02): `1.2.0.0` is its last release, and its sources
 are on branch `1.2.0.0`. The build constraints - C89, the arithmetic rules,
 ASCII and CRLF, the build flavours, the import and INF gates - bind the HCD
@@ -481,6 +515,9 @@ Windows 98 evidence and no row, and the compatibility header still undoes the
 DDK's `POOL_TAGGING` rewrite so a stray untagged call resolves to the name the
 gate refuses. (The miniport allocated no pool at all, under Option A's
 usbport-allocated extensions; that rule stays with the `1.2.0.0` sources.)
+`xhcicm.sys` has the same exception, through `CmAllocPaged` (`cm_pool.c`,
+its one pool site with `CmAlloc` and `CmFree`), for `cm_filt.c`'s
+replacement compatible-id answer and requirement lists.
 `xhciuas.sys` has its own allowlists, `xhciuas-imports*.allow`.
 
 See `docs/usb-xhci-info/win98-wdm.md` ("Imports are a silent load-time gate"
@@ -493,8 +530,12 @@ There are two build flavours and only one is ever published (since
 roadmap-usb4 task 45.45, owner 2026-10-30: "one build for everyone").
 `release` ships: it is what `make-package.ps1 -Flavor` stages by default and
 the one directory per architecture a cut publishes. Its MSVC 6.0 x86 builds
-keep frame pointers (`/Oy-`, `NTNOFPO` in each driver's `sources`, held by
-`scripts\check-frame-pointers.ps1`), and it carries the command-state
+of `xhci98.sys`, `xhciuas.sys`, `xhcicm.sys` and `xhcinet.sys` keep frame
+pointers (`/Oy-`, `NTNOFPO` in each driver's `sources`, held by
+`scripts\check-frame-pointers.ps1`); `XHCIPFW.SYS` and Stor98 keep their
+builds as they were, without `/Oy-`, since neither had a `debug` flavour to
+retire (owner, 2026-10-30; design record 08 section 14), and WDK 7.1's x86
+builds compile `/Oy-` already. It carries the command-state
 checker (`hcd_strict.c`), on unless `XhciCommandCheck` is 0. `qemu` is a
 checked build with the port-`0xE9` mirror and its `HAL.dll!WRITE_PORT_UCHAR`
 import, and **must never be published**: that import is the sole delta
@@ -580,14 +621,23 @@ for text-mode Setup's F6 prompt, held by
 **The x86 package carries a third binary since 2.3.0.0**: since 2.4.0.0
 `xhcihlpr.sys`, the x86 helper (design record 18 section 15), which hands
 `xhci98.sys` the MSI connection on Vista and 7 and `ExSetTimerResolution`
-(the finer timer, design record 15 section 7.2) on 2000 and later; 2.3.0.0
+(the finer timer, design record 15 section 7.2) on 2000 and later, and hands
+the x86 `xhcicm.sys` `MmGetSystemRoutineAddress` for the NT USB4 handover
+(design record 32 section 12.8.15.15); 2.3.0.0
 and 2.3.1.0 shipped it as `xhcimsi.sys`, the MSI half alone, for Vista and 7
 alone. `src/xhci98.inf` installs it as a boot-start service from
 `[Xhci.Dev.NTx86]` (2000 and XP: no `Reboot`, no `.HW`) and from
 `[Xhci.Dev6.NTx86]` (Vista and 7: the controller's `.HW` request for one
 message, a `Reboot`, and `DelService=xhcimsi` with the old file deleted,
-which the VM matrix read happen at once, during the update) and nowhere
-else; the INF gate's `HLPR-*` and `MSI-*` rules
+which the VM matrix read happen at once, during the update). Since
+`3.4.1.0` the x86 connection manager INF, `src\cm\xhcicm.inf`, installs the
+same service from its two NT sections, `[Cm.Dev.NTx86]` and
+`[Cm.Dev6.NTx86]`, so that a Thunderbolt-only install on 32-bit NT, with
+every xHCI controller left on Windows' own driver, still has the routine
+the x86 `xhcicm.sys` needs to send the ASMedia ASM4242 handover (design
+record 18 section 15.15, task 46.12); the family layout carries a second
+copy in `nt-x86\cm\`, the same bytes. Nowhere else: the INF gate's
+`HLPR-*` and `MSI-*` rules and the CM gate's `CM-HLPR`
 hold it there, and the 64-bit package never carries it. Its imports are
 gated by the import gate's `-GateProfile hlprx86` against
 `xhcihlpr-imports.allow` and the x86 kernels' and HALs' export tables of
@@ -598,12 +648,25 @@ because it is never installed on Windows 98 or ME.
 The x86 package carries two more images of this project's own, neither
 bound by the INF: `S98VSD.VXD` (`src/vsd/`, design record 30), staged
 beside `stor98.mpd` since 3.2.0.0, and since 3.3.0.0 `XHCIPFW.VXD` and
-`XHCIPFW.SYS` (`src/pfw/`, design record 32) at its root, each placed or
+`XHCIPFW.SYS` (`src/pfw/`, design record 32) at its root (from 3.4.0.0
+`98-me\stor98\S98VSD.VXD`, `98-me\cm\XHCIPFW.VXD` and
+`nt-x86\cm\XHCIPFW.SYS`), each placed or
 removed by the installer alone. Each has a gate of its own
 (`src/vsd/check-vsd.ps1`, `src/pfw/check-pfw.ps1`,
 `src/pfw/nt/check-pfwsys.ps1`, and the import gate's `hlprx86` profile
 with `xhcipfw-imports.allow` for `XHCIPFW.SYS`), run by its build and again
 by the packager; the 64-bit package carries none of them.
+
+Since 3.4.0.0 every family folder also carries the connection manager's
+Thunderbolt networking miniports in `cm\tbnet\` (`src/net/`, design record
+35): `xhcinet.sys`, the NDIS 5 miniport, in all three, and `xhcinet6.sys`,
+the NDIS 6.20 one for Windows 8 to 10, in `nt-x86\` and `nt-x64\`, both
+bound by `xhcinet.inf` (`xhcinet-amd64.inf` on x64) to the network device
+`xhcicm.sys` creates. `scripts\inf-gate\check-net-inf.ps1` gates the two
+INFs, and the import gate's `-GateProfile net98` (`xhcinet.sys` x86,
+against the NDIS export names of 98 SE and ME as well as the NT kernels)
+and `net6` (`xhcinet6.sys`, against 8.1's and 10's) gate the images, with
+their own allowlists, `xhcinet*-imports*.allow`.
 
 The media carries no Microsoft file, but for the one exception below. The HCD's INFs have the setup engine
 copy two of the OS's own files, `usbd.sys` (whose helper exports the class
@@ -615,9 +678,10 @@ because nothing on an xHCI-only machine ever placed them - except
 `usbui.dll` on the 64-bit file's XP x64 and Server 2003 x64 device install
 since 3.4.0.0 (above). On an xHCI-only
 Windows 98 machine that means the Windows 98 CD may be asked for; the NT
-targets take them from their driver cache with no prompt; and Vista's and 7's
-`Xhci.Dev6` path copies `xhci98.sys` alone, since every install of those
-systems has both. The HCD needs no `usbport.sys` and no `usbhub.sys`, and its
+targets take them from their driver cache with no prompt; and the
+`Xhci.Dev6` path of Vista and later copies no OS-supplied file (only
+`xhci98.sys` and, in the 32-bit file, the helper), since every install of
+those systems has both. The HCD needs no `usbport.sys` and no `usbhub.sys`, and its
 INFs copy neither (the miniport's INFs fetched both as well). On Windows 98
 SE, `xhciuas.inf` names NUSB's `USBNTMAP.SYS` as an upper filter by name and
 never ships it. `usbhub20.sys` is on no path. Do not put
@@ -636,10 +700,12 @@ Windows 2000 CD to the floppy - the media still carries none of them
 files, unmodified, from the separate driver-pack repository
 `usb-wdm-nonfree` (its top-level `nusb33/`, kept apart from the pack's
 `non-free/`), staged by task 43.3 with their `nusb33/NOTICE.md` into
-the upload set alone, at the download's root as `NUSB33\`, a folder of its
-own beside the installer and never inside a `NONFREE\` (owner, 2026-10-20;
+the upload set alone, as `USBDRV\NUSB33\`, a folder of its own beside the
+other driver sets and never inside `USBDRV\NONFREE\` (owner, 2026-10-20;
 the folder 2026-10-22: NUSB is kept apart from the non-free pack, in the
-pack's repository and in the download), and never into a package, a commit or
+pack's repository and in the download; 2026-10-23: NUSB 3.3's files and
+both driver sets under one folder, `USBDRV\`, design record 26 section
+6.7.2), and never into a package, a commit or
 `releases\<version>\`. The `OS-*` and `PKG-MSFILE` rules stay as they are
 for this project's own files; they name none of the seven
 (roadmap-usb4 tasks 43.1 to 43.3;
@@ -659,7 +725,9 @@ the x64 one, each holding only what its Windows installs - the controller's and 
 driver's INFs and images at its root (with `xhcihlpr.sys` and `txtsetup.oem` in
 `nt-x86\`, `txtsetup.oem` in `nt-x64\`, so each NT root is its F6 floppy), the
 connection manager in `cm\` (its NT filter shipped as `cm\xhcicmf.inx`, its one copy,
-so no integration tool takes it as an INF; the CM gate's `CM-INX`) and Stor98 in
+so no integration tool takes it as an INF, the CM gate's `CM-INX`; XHCIPFW beside it in
+`98-me\` and `nt-x86\`; the networking miniports in `cm\tbnet\`; and in `nt-x86\cm\`
+the second copy of `xhcihlpr.sys`, which `xhcicm.inf` installs) and Stor98 in
 `stor98\` (the 9x INF as `98-me\stor98\stor98.inf`; the x86 Stor98 INF NT-only) - with
 `INTEGRATE.TXT` at the root. `make-package.ps1`'s staged packages, the VM matrix's
 and the leg kits' input, stay flat; `package-common.ps1`'s `$script:FamilyLayout` is
@@ -787,7 +855,7 @@ packages bundle, in this repository since 2026-10-19 as one snapshot of
 its own repository's tracked files (branch `audit-2026-10-18` at `4253b58`,
 no history; roadmap-usb4 task 42-A.20, owner). It stays its own driver and
 its own files - `stor98.mpd` for 98 SE and ME, `stor98.sys` for x86 and
-x64, its two INFs - built by `src\stor98\scripts\build.cmd` into the
+x64, its three INFs (`stor98-9x.inf`, `stor98-x86.inf` and `stor98-x64.inf`) - built by `src\stor98\scripts\build.cmd` into the
 ignored `src\stor98\out\`, never folded into this project's binaries.
 **Since 3.1.0.0 it is built, gated and versioned with this package**
 (roadmap-usb4 task 42-A.30, owner 2026-10-19): `scripts\build-driver.cmd`
@@ -795,7 +863,7 @@ builds its free images for the run's architecture and gates them in every
 flavour (version, the `STOR98_FLAVOUR_FREE` marker and the import
 allowlist, `scripts\check-stor98-build.ps1` and
 `scripts\import-gate\stor98-imports.allow`; the source stamp; the gated
-record), its two INFs carry the package's `DriverVer`
+record), its three INFs carry the package's `DriverVer`
 (`scripts\inf-gate\check-stor98-inf.ps1`), its version resources take
 `src\xhci_version.h` through `src\stor98\src\stor98ver.h`, and
 `make-package.ps1` bundles that build by default (`-NoStor98` leaves it
@@ -843,27 +911,31 @@ rules that bind day-to-day work, and none of them is optional.
   on all four paths by it, to dirid 11 rather than 10. The one exception
   since is decided for `3.2.0.0` (owner, 2026-10-20) and recorded there:
   NUSB 3.3's seven Windows 98 SE storage files, unmodified, in the release
-  download only, in its own `NUSB33\` folder, from `usb-wdm-nonfree`'s
+  download only, in its own `USBDRV\NUSB33\` folder, from `usb-wdm-nonfree`'s
   `nusb33/` (kept apart from its `non-free/` pack, owner 2026-10-22) with
   their `NOTICE.md`, never in a commit, and with no licence to redistribute them
   established; the generated readme says which kind of download it is.
   The second is decided for `3.2.0.0` as well (owner, 2026-10-22, task
   43.48) and recorded there: download 3, `xhci98-<version>-nonfree.zip`,
   carries the `non-free/` folder of `usb-wdm-nonfree` at a pinned tag as
-  `NONFREE\`, other makers' drivers among which are two Microsoft KMDF
+  `USBDRV\NONFREE\`, other makers' drivers among which are two Microsoft KMDF
   co-installers, unmodified, with no licence to redistribute them found
   beyond the few makers' statements the pack's `NOTICE.md` quotes;
   download 2, `-free.zip`, carries the qualifying
-  `usb-wdm-free` drivers (GPL-2.0) as `WDMFREE\`. Both in the release
-  downloads only, never in a commit; the installer copies them only when
-  ticked and never installs them.
+  `usb-wdm-free` drivers (GPL-2.0) as `USBDRV\FREE\`. Both in the release
+  downloads only, never in a commit. The installer copies a set only when
+  it is ticked and stages the ticked packages for Windows (on 98 SE and ME
+  on `DevicePath`, on 2000 and later in the driver store), but never
+  installs one on a device; the free set's test certificate is trusted only
+  when the user asks (the trust box, `/wdmfree:trust`). NUSB 3.3's files,
+  by contrast, it installs on Windows 98 SE (design record 26 section 6.5).
   **Do not put any other Microsoft file onto the media or the download,
   under any name, without a decision recorded there**, and do not write
   "this project redistributes nothing"
   anywhere: the tool executables (`XHCIQUAL`, `XHCISNAP` up to
   `3.0.0.0`, from `2.4.0.0` to `3.2.0.0` `XHCICLN` and `XHCICL64`, from `3.0.0.0`
   `XHCIINST`, `XHCIIN64`, `XHCITR` and `XHCITR64`, from `3.1.0.0`
-  `XHCIWIZ` and `XHCIWZ64`)
+  `XHCIWIZ`, `XHCIWZ64`, `SETUP.EXE`, `XHCIDI`, `XHCIMARK` and `XHCIMK64`)
   carry statically linked runtimes (section 2a).
 - A fact may be tracked; the artifact it came from may not. Write facts in a
   form re-derivable without the artifact: the address, the instruction, the
@@ -955,7 +1027,7 @@ UTF-8.
 - Do not introduce EHCI, OHCI, or UHCI concepts; xHCI is a completely different hardware model.
 - Do not assume physical addresses above 4 GB.
 - Do not use C++ syntax, STL, or runtime library functions.
-- Do not take a SuperSpeed or SuperSpeedPlus field, encoding or state transition from memory. Take it from `docs/usb-xhci-info/xhci-data-structures.md` sections 10 and 11, checked against xHCI 1.2c and USB 3.2 (roadmap-hcd tasks 29-0 and 30-0), and say in the release notes what no vehicle has read.
+- Do not take a SuperSpeed or SuperSpeedPlus field, encoding or state transition from memory. Take it from `docs/usb-xhci-info/xhci-data-structures.md` sections 10 and 11, checked against xHCI 1.2c and USB 3.2 (roadmap-hcd tasks 29-0 and 30-0), and record in `docs/contributing/target-standing.md` what no vehicle has read.
 - Do not attempt to make a USB 3.x logical port operate at USB 2.0 speeds; it is electrically impossible.
 - Do not write against a guessed function-driver contract. What a target's class drivers send a USB PDO, and what the property pages and `XHCITR`'s snapshot (`XHCISNAP` up to `3.0.0.0`) send the door, is read per target and recorded in design record 13 sections 6 and 8; a contract taken from the DDK headers alone, or one target's assumed for another's, is what Phase 25 exists to prevent.
 - Do not bring `usbport.sys`, `usbhub.sys` or a composite parent back underneath or beside the HCD, and do not bind the root hub to `USB\ROOT_HUB`: the bus owns the root hub, hubs and composite splitting (`roadmap-hcd.md`, decisions table).
@@ -965,5 +1037,7 @@ UTF-8.
 - Do not sign a binary by hand, sign an x86 binary, or let the test-signing key (`.pfx`) or its password reach a tracked file, a package, a log or a note. The packager signs the x64 binaries at staging (design record 19).
 - Do not describe a fact as runtime-observed when it was read out of a disassembly. Tag the method you actually used.
 - Do not write a legal conclusion into any file in this repository. `docs/contributing/legal-provenance.md` records facts, not verdicts.
-- Do not name the review tool, a review round or a finding number in a tracked file (owner, 2026-10-14; made explicit 2026-10-18): no tracked document and no source or script comment says which tool reviewed a change, "review round N" or "finding N". Cite the commit, the date, the task id or the run section instead, and say "reviewed and revised" at most. The dated run sheets (`docs/contributing/runs/run-*.md` and `run-13e.md`) are left as they were written, and so is the credit line in `README.md`'s "AI usage", which names the agents on purpose.
+- Do not name the review tool, a review round or a finding number in a tracked file (owner, 2026-10-14; made explicit 2026-10-18): no tracked document and no source or script comment says which tool reviewed a change, "review round N" or "finding N". Cite the commit, the date, the task id or the run section instead, and say "reviewed and revised" at most. The dated run sheets (`docs/contributing/runs/run-*.md` and `run-13e.md`) are left as they were written, and so is the credit line in `README.md`'s "AI usage", which names the agents on purpose. `scripts\check-text.ps1` holds this rule (and, for `docs/`, a TAB or control byte that marks an eaten escape): a breach fails the run.
 - Do not write a development machine's name (its `hostname`) into any tracked file, commit message or report. Name the host by its alias - "development host A", "B", "C" - as every run record here does; the key from name to alias is kept out of the repository (owner, 2026-09-28). Logs that print `$env:COMPUTERNAME` are git-ignored; do not transcribe that field.
+- Do not identify the owner's own desktop board in any tracked file, release text, readme or commit message (owner, 2026-10-29): not by model, not by its maker's product line, not by its chipset or platform, and not by naming its USB4 host controller, or the captures taken on it, as the owner's. Write "the owner's board". A USB4 host controller may be named as supported hardware, and the emulator's model of one as the emulator's. The owner's laptops named elsewhere in this file are not this rule's subject.
+- Do not write testing status into a user document (owner, 2026-10-29 to 2026-11-01): `README.md`, `docs/using/`, the generated `readme.txt` and the installer and tool texts say what the package does, name no virtual machine or emulator, and mark nothing untested; the readings go to `docs/contributing/target-standing.md`. The release notes' sections for past releases stay as they were published.

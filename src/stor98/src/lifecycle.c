@@ -35,7 +35,7 @@
 //   (elapsed time, CAP.TO), creates the I/O queues and identifies. A failure
 //   after CC.EN disables the controller and ends in `failed` (disable
 //   acknowledged) or `quarantined`; the adapter stays started. HwInitialize
-//   never returns FALSE on resume (G7, R6-7).
+//   never returns FALSE on resume (G7; PLAN 0.10 "Bring-up").
 // - Requests while not running are held with no child issued, and completed
 //   BUSY once most of their TimeOutValue has passed (hold-then-BUSY, G1,
 //   Q-NT); never a 21st BUSY for one SRB. 9x uses a fixed hold bound, and
@@ -43,7 +43,8 @@
 // - Presence loss (all-ones CSTS) enters `gone`: issued SRBs held, new ones
 //   fast-failed with SRB_STATUS_NO_DEVICE. Each held SRB completes on
 //   isolation evidence or at its own deadline: the earlier of the gone
-//   deadline and its start + TimeOutValue - margin on NT (R6-6); the MD-1
+//   deadline and its start + TimeOutValue - margin on NT (PLAN 0.10
+//   "Per-SRB bound"); the MD-1
 //   outcome quarantines its DMA memory. BusChangeDetected follows on NT.
 //   Contact regained with CC.EN=1 or RDY=1 (reopen violation) leaves
 //   `gone` for the disable wait of `resetting`, so a controller shown
@@ -93,7 +94,7 @@ static ULONG LcSafe(IN PHW_DEVICE_EXTENSION DevExt)
 // It gives permission to release: every deadline whose expiry completes an
 // SRB the device may still reach, or releases memory, without isolation
 // evidence (the MD-1 gone deadline from entry into `gone` and the per-SRB
-// bound of R6-6), and every hardware wait that must not end early (CAP.TO
+// bound of PLAN 0.10), and every hardware wait that must not end early (CAP.TO
 // for RDY and the disable, the SHST bound). The safe clock never runs ahead
 // of real time and its quantisation is taken off, so a fast TSC (a
 // calibration of 0.57x makes it read 1.75x) cannot shorten these.
@@ -139,26 +140,9 @@ static ULONG LcNonFreeParents(IN PHW_DEVICE_EXTENSION DevExt)
 // Tunables (PLAN 0.5): parsed once; a NULL ArgumentString (resume) keeps
 // what the device extension already holds.
 //
-static UCHAR LcLower(UCHAR c)
-{
-    return (UCHAR)((c >= 'A' && c <= 'Z') ? (c - 'A' + 'a') : c);
-}
-
 static PCHAR LcFind(IN PCHAR s, IN const char *Key)
 {
-    ULONG i;
-
-    if (s == NULL) {
-        return NULL;
-    }
-    for (; *s; s++) {
-        for (i = 0; Key[i] && s[i] && LcLower((UCHAR)s[i]) == (UCHAR)Key[i]; i++) {
-        }
-        if (Key[i] == 0) {
-            return s + i;
-        }
-    }
-    return NULL;
+    return (PCHAR)DpkFind(s, Key);
 }
 
 // Decimal value; saturates at 0xFFFFFFFF (as PollParseDec), so a number
@@ -314,6 +298,14 @@ VOID EngParseTunables(IN PHW_DEVICE_EXTENSION DevExt, IN PCHAR ArgumentString)
 #else
         t->ForceBounce = 0;
 #endif
+#if defined(STOR98_TEST_VFYREAD) && !defined(STOR98_DBGPORT)
+#error STOR98_TEST_VFYREAD is test-only: build it with STOR98_DBGPORT=1 (out\<flavor>-dbgport, never staged)
+#endif
+#ifdef STOR98_TEST_VFYREAD
+        t->VfyRead = 1;         // 9x test images: VERIFY by reads (47.22)
+#else
+        t->VfyRead = 0;
+#endif
         t->CalPct = 0;
         t->ShnFlush = 0;
         t->StormTest = 0;
@@ -339,12 +331,13 @@ VOID EngParseTunables(IN PHW_DEVICE_EXTENSION DevExt, IN PCHAR ArgumentString)
         // Test-only shapes of the engine's work (test builds only).
         t->FragBytes = LcNum(LcFind(ArgumentString, DPK_FRAG), t->FragBytes / 1024) * 1024;
         t->ForceBounce = LcNum(LcFind(ArgumentString, DPK_BOUNCE), t->ForceBounce);
+        t->VfyRead = LcNum(LcFind(ArgumentString, DPK_VFYREAD), t->VfyRead);
         // Simulated miscalibration of the TSC against the stall (seen from
         // 0.57x to 2.05x under TCG): calx=57 makes the TSC estimate run
         // 1.75x fast.
         t->CalPct = LcNum(LcFind(ArgumentString, DPK_CALX), t->CalPct);
-        // SRB_FUNCTION_FLUSH runs the restartable shutdown (review round 2
-        // late-Flush tests: FlushFileBuffers drives the SHUTDOWN path).
+        // SRB_FUNCTION_FLUSH runs the restartable shutdown (the late-Flush
+        // tests: FlushFileBuffers drives the SHUTDOWN path).
         t->ShnFlush = LcNum(LcFind(ArgumentString, DPK_SHNFLUSH), t->ShnFlush);
         t->CapToMs = LcNum(LcFind(ArgumentString, DPK_CAPTO), t->CapToMs);
         // Provoke the QEMU INTx defect (TESTING "INTx model caveat") to
@@ -352,7 +345,7 @@ VOID EngParseTunables(IN PHW_DEVICE_EXTENSION DevExt, IN PCHAR ArgumentString)
         // doorbell after bring-up. Test builds only; never on hardware.
         t->StormTest = LcNum(LcFind(ArgumentString, DPK_STORMTEST), t->StormTest);
         // A lower storm threshold, so that another device on a shared INTx
-        // line can reach it in the emulator (review round 3, N1 test).
+        // line can reach it in the emulator (the shared-line storm test).
         t->StormInts = LcNum(LcFind(ArgumentString, DPK_STORMINTS), t->StormInts);
         // A shorter idle Flush deadline, for the held-idle-Flush test
         // (harness: x-faults at=fetch op=flush act=hold).
@@ -395,7 +388,7 @@ VOID EngSetState(IN PHW_DEVICE_EXTENSION DevExt, IN UCHAR State, IN ULONG Reason
     DevExt->State = State;
     DevExt->StateTime = LcNow(DevExt);
     DevExt->StateSafe = LcSafe(DevExt);
-    // Interface 3 R10 (K1, Codex round 1 on fix-0.3.0.1): whatever state is
+    // Interface 3 R10 (K1, reviewed on fix-0.3.0.1): whatever state is
     // entered, from whichever callback, a CM channel that wants polling gets
     // a timer callback (a resume that ends in `failed` returns from
     // HwInitialize without arming one). EngTimerEnsure ignores the stopped
@@ -445,7 +438,7 @@ static ULONG LcPollBusyUs(IN PHW_DEVICE_EXTENSION DevExt)
 // presumed absent or stuck, a late completion there is rare and only
 // releases its own request, and coarse ticks keep the OS-clock cross-check
 // (clock.c) running while the gone deadline and the per-SRB bounds are
-// measured (review round 3). After a storm (PollMode without PollAlways)
+// measured. After a storm (PollMode without PollAlways)
 // the fast tick applies in every state, as before.
 //
 static BOOLEAN LcPollFast(IN PHW_DEVICE_EXTENSION DevExt)
@@ -649,9 +642,9 @@ static VOID LcFailParkedResets(IN PHW_DEVICE_EXTENSION DevExt)
 
 // Watchdog recovery or a reset: CC.EN=0 has been written and the disable
 // is not yet acknowledged. Every entry into `resetting` goes through here.
-// The recovery is authoritative (review round 2): a SHUTDOWN whose Flush is
+// The recovery is authoritative: a SHUTDOWN whose Flush is
 // still outstanding will not write CC.SHN any more (its work is cancelled,
-// H1), so its late Flush completion cannot take the adapter out of the
+// PLAN 0.10 "Parent cancellation"), so its late Flush completion cannot take the adapter out of the
 // recovery (engine.c, EngChildCompleted).
 static VOID LcEnterResetting(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG Reason)
 {
@@ -684,6 +677,10 @@ static VOID LcFailHeldParents(IN PHW_DEVICE_EXTENSION DevExt)
         srb = p->Srb;
         p->Srb = NULL;
         p->State = ENG_PA_FREE;
+        // Never an owner of the edge pages (they are taken with the first
+        // pre-read, which starts the parent); kept as the rule for every
+        // path that retires a parent.
+        EngEdgeRelease(DevExt, i);
         DevExt->ParentsCompleted++;
         LcFailSrb(DevExt, srb);
     }
@@ -699,7 +696,7 @@ static VOID LcEnable(IN PHW_DEVICE_EXTENSION DevExt)
     // QEMU's controller reset clears INTMS; mask again before enabling.
     NvmeWriteReg32(DevExt, NVME_REG_INTMS, 0xFFFFFFFF);
     // The blocks become reachable again: RESERVED or ISOLATED -> OWNED
-    // before any queue base or CC.EN is written (platform.h, N2).
+    // before any queue base or CC.EN is written (platform.h).
     PlatDmaReachable(DevExt);
 
     DevExt->AdminQueue.SubmissionQueueHead = 0;
@@ -716,6 +713,11 @@ static VOID LcEnable(IN PHW_DEVICE_EXTENSION DevExt)
     DevExt->AdminChainDone = FALSE;
     DevExt->AdminError = 0;
     DevExt->AdminCqLive = TRUE;
+    // What this bring-up reads of VERIFY (47.22); SkipIocsProbe outlives it.
+    DevExt->Oncs = 0;
+    DevExt->Vsl = 0;
+    DevExt->VerifyCmd = FALSE;
+    DevExt->IocsPending = FALSE;
 
     aqa = ((ULONG)(DevExt->AdminQueue.QueueSize - 1) << 16) | (DevExt->AdminQueue.QueueSize - 1);
     NvmeWriteReg32(DevExt, NVME_REG_AQA, aqa);
@@ -856,6 +858,12 @@ static VOID LcBringupStep(IN PHW_DEVICE_EXTENSION DevExt)
             } else if (DevExt->AdminError != 0) {
                 LcFailDisable(DevExt, ENG_FAIL_ADMIN_STATUS);
             } else if (ms > DevExt->CapTimeoutMs) {
+                // CNS 06h (47.22) unanswered: the bring-up fails as for any
+                // admin command, and later bring-ups of this extension do
+                // not ask it again.
+                if (DevExt->IocsPending) {
+                    DevExt->SkipIocsProbe = TRUE;
+                }
                 LcFailDisable(DevExt, ENG_FAIL_ADMIN_TIMEOUT);
             }
         }
@@ -1004,7 +1012,9 @@ VOID EngResetSoftState(IN PHW_DEVICE_EXTENSION DevExt)
         DevExt->Children[i].PrpPage = ENG_NONE;
         DevExt->Children[i].BouncePage = ENG_NONE;
         DevExt->Children[i].BounceCount = 0;
+        DevExt->Children[i].EdgeRef = FALSE;
     }
+    DevExt->EdgeOwner = ENG_NONE;
     for (i = 0; i < ENG_BUSY_TRACK; i++) {
         DevExt->Busy[i].Srb = NULL;
         DevExt->Busy[i].Count = 0;
@@ -1051,6 +1061,10 @@ VOID EngResetSoftState(IN PHW_DEVICE_EXTENSION DevExt)
     DevExt->IdentifyDone = FALSE;
     DevExt->NamespaceSizeInBlocks = 0;
     DevExt->NamespaceBlockSize = 0;
+    DevExt->ExposedBlocks = 0;
+    DevExt->SectorShift = 0;
+    DevExt->LbaShift = 0;
+    DevExt->ExposedBytes = 0;
     DevExt->FailReason = 0;
     DevExt->AdminError = 0;
     DevExt->Bringup = ENG_BU_NONE;
@@ -1062,7 +1076,7 @@ VOID EngResetSoftState(IN PHW_DEVICE_EXTENSION DevExt)
 }
 
 //
-// HwInitialize (G1; resume: G7, R6-7)
+// HwInitialize (G1; resume: G7, PLAN 0.10 "Bring-up")
 //
 BOOLEAN EngInitialize(IN PHW_DEVICE_EXTENSION DevExt)
 {
@@ -1075,7 +1089,8 @@ BOOLEAN EngInitialize(IN PHW_DEVICE_EXTENSION DevExt)
 
     if (csts == ENG_ALL_ONES) {
         // Presence lost before CC.EN was written. At boot or start the
-        // failure may be returned; on resume never (R6-7): gone instead.
+        // failure may be returned; on resume never (PLAN 0.10 "Bring-up"):
+        // gone instead.
         DBGSTAGE(STG_BRINGUP_FAIL, ENG_FAIL_PRESENCE);
         if (!DevExt->Resumed) {
             DBGSTAGE(STG_HWINIT_RETURN, 0);
@@ -1118,7 +1133,8 @@ BOOLEAN EngInitialize(IN PHW_DEVICE_EXTENSION DevExt)
     }
     if (fail != 0) {
         // Nothing written to CC: failure may be returned at start, but on
-        // resume the adapter stays started in `failed` (R6-7).
+        // resume the adapter stays started in `failed` (PLAN 0.10
+        // "Bring-up").
         DevExt->FailReason = fail;
         DBGSTAGE(STG_BRINGUP_FAIL, fail);
         if (!DevExt->Resumed) {
@@ -1195,11 +1211,12 @@ VOID EngEnterGone(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG Source)
             continue;
         }
         // Issued children: held, with their buffers owned, until evidence
-        // or the deadline; nothing more is dispatched (cancellation, H1),
+        // or the deadline; nothing more is dispatched (PLAN 0.10 "Parent
+        // cancellation"),
         // and a SHUTDOWN's CC.SHN step is suppressed with the rest.
-        if (p->BlocksLeft != 0 || p->State == ENG_PA_WAITING || p->Kind == ENG_K_SHUTDOWN) {
+        if (ENG_WORK_LEFT(p) || p->State == ENG_PA_WAITING || p->Kind == ENG_K_SHUTDOWN) {
             p->Cancel = ENG_CANCEL_GONE;
-            p->BlocksLeft = 0;
+            ENG_STOP_WORK(p);
         }
         p->State = ENG_PA_ISSUED;
     }
@@ -1222,14 +1239,15 @@ static VOID LcBusChange(IN PHW_DEVICE_EXTENSION DevExt)
 #endif
 
 // The deadline of a held parent: the gone deadline, and on NT also its own
-// start + TimeOutValue - margin (R6-6), whichever comes first. TRUE if it
+// start + TimeOutValue - margin (PLAN 0.10 "Per-SRB bound"), whichever
+// comes first. TRUE if it
 // has passed; *PerSrb tells which. Both release the caller's buffer without
 // isolation evidence (MD-1), so both are measured with the trustworthy
 // elapsed time (LcTrustMs: never early, clock.h). The per-SRB bound keeps
 // its measured margin before the port's timeout; should the trustworthy
 // clock run so slow that the port's timer fires first, HwResetBus in `gone`
 // returns FALSE with the SRB still held (G4), which is safe where an early
-// release is not (review round 2: the larger estimate, used here before,
+// release is not (revised: the larger estimate, used here before,
 // let a fast TSC release a buffer about a second after admission).
 static BOOLEAN LcGoneDue(IN PHW_DEVICE_EXTENSION DevExt, IN PENG_PARENT p, OUT PBOOLEAN PerSrb)
 {
@@ -1306,7 +1324,7 @@ static VOID LcGoneStep(IN PHW_DEVICE_EXTENSION DevExt)
             DevExt->ContactLogged = TRUE;
             DBGSTAGE(STG_GONE_CONTACT, csts);
         }
-        // Reopen invariant (R4-3): trust nothing until the controller is
+        // Reopen invariant (PLAN 0.10): trust nothing until the controller is
         // shown fresh (CC.EN=0 and RDY=0).
         cc = NvmeReadReg32(DevExt, NVME_REG_CC);
         if (cc != ENG_ALL_ONES) {
@@ -1626,7 +1644,8 @@ static VOID LcResettingStep(IN PHW_DEVICE_EXTENSION DevExt)
         LcFailHeldParents(DevExt);
         LcFailParkedResets(DevExt);
         // The reset suppressed whatever the held parents had not dispatched
-        // yet (H1): they can no longer complete with success.
+        // yet (PLAN 0.10 "Parent cancellation"): they can no longer
+        // complete with success.
         for (i = 0; i < ENG_MAX_PARENTS; i++) {
             if (DevExt->Parents[i].State != ENG_PA_FREE && DevExt->Parents[i].State != ENG_PA_PARKED) {
                 EngCancelParent(DevExt, i, ENG_CANCEL_RESET);
@@ -1786,8 +1805,13 @@ static VOID LcShnStep(IN PHW_DEVICE_EXTENSION DevExt)
     if (csts == ENG_ALL_ONES) {
         EngEnterGone(DevExt, ENG_GONE_TIMER);
     } else if (EngParentsWaiting(DevExt)) {
-        // Requests that queued behind the SHUTDOWN: re-enable for them.
-        LcReenable(DevExt, NULL);
+        // Requests that queued behind the SHUTDOWN: the leading ones that
+        // need no hardware (ScsiCompletesInSoftware) are answered in order
+        // with the controller left shut down; re-enable only for the rest.
+        EngKickSoftware(DevExt);
+        if (EngParentsWaiting(DevExt)) {
+            LcReenable(DevExt, NULL);
+        }
     }
 }
 
@@ -1961,7 +1985,7 @@ BOOLEAN EngStartIo(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb)
     if (Srb->Function == SRB_FUNCTION_EXECUTE_SCSI && Srb->Cdb[0] == SCSIOP_REQUEST_SENSE &&
         (DevExt->State == ENG_ST_FAILED || DevExt->State == ENG_ST_QUARANTINED)) {
         // Answered from memory, no device access: the sense of the request
-        // that just failed in this state (R3-9).
+        // that just failed in this state (PLAN "Sense rules").
         ScsiHandleRequestSense(DevExt, Srb);
         EngStartIoTail(DevExt, tagged);
         return TRUE;
@@ -2016,6 +2040,18 @@ BOOLEAN EngStartIo(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb)
             DBGSTAGE(STG_SHUT_REPEAT, STG_SRB_ARG(Srb, DevExt->State));
             Srb->DataTransferLength = 0;
             ScsiSuccess(DevExt, Srb);
+        } else if (ScsiCompletesInSoftware(Srb) && !EngParentsWaiting(DevExt)) {
+            // Answered from memory (INQUIRY, TEST UNIT READY, START STOP
+            // UNIT, ...): no hardware work, so the controller stays shut
+            // down rather than being reset and brought up for it. The
+            // presence check of `running` comes first (2.1; one MMIO
+            // read): a drive gone with no notice is not answered present.
+            if (LcCsts(DevExt) == ENG_ALL_ONES) {
+                EngEnterGone(DevExt, ENG_GONE_STARTIO);
+                LcGoneFailSrb(DevExt, Srb);
+            } else {
+                ScsiDispatch(DevExt, Srb);
+            }
         } else {
             LcReenable(DevExt, Srb);
             EngHold(DevExt, Srb);
@@ -2119,7 +2155,7 @@ static VOID LcHoldCheck(IN PHW_DEVICE_EXTENSION DevExt)
 }
 
 //
-// Idle Flush deadline (review round 4). The idle Flush (MD-7 (a)) is an
+// Idle Flush deadline. The idle Flush (MD-7 (a)) is an
 // internal command with no SRB, so no port timeout and no HwResetBus ever
 // covers it: a present controller that stops completing it would leave
 // IdleFlushOutstanding set for good and suppress every later idle Flush.
@@ -2373,7 +2409,7 @@ VOID EngTimer(IN PVOID DeviceExtension)
     }
     LcIntWatch(DevExt, stepRan);
     LcStormUnmaskTrial(DevExt);
-    // Software-only replays first (review round 3, N3): a held request that
+    // Software-only replays first (engine.c, SoftwareOnly): a held request that
     // completes without hardware work (INQUIRY, TEST UNIT READY, READ
     // CAPACITY...) is answered in the tick whose bring-up step reached
     // `running`, before the hold bound is checked, so it is never completed
@@ -2449,8 +2485,9 @@ VOID EngTimer(IN PVOID DeviceExtension)
 //
 // The admin queue is drained while engine work can still complete on it:
 // a child issued, or one quarantined (failed reset, MD-1 deadline) whose own
-// completion is its command-level quiescence (PLAN 0.10, R4-4) and releases
-// its parent and PRP page (review round 2: quarantining decremented
+// completion is its command-level quiescence (PLAN 0.10 "Abort is not
+// quiescence") and releases its parent and PRP page (revised: quarantining
+// decremented
 // ChildrenAdmin, so a late Get Log Page completion was never consumed).
 // Only an initialised admin queue (LcEnable), and never while starting:
 // there the bring-up chain owns the admin queue (LcBringupStep), and its
@@ -2475,7 +2512,7 @@ BOOLEAN EngProcessCompletions(IN PHW_DEVICE_EXTENSION DevExt)
 }
 
 //
-// Interrupt storms (review round 2; round 3, N1). A level-triggered INTx line
+// Interrupt storms (reviewed and revised). A level-triggered INTx line
 // that stays asserted with nothing in the queues (a controller that lost a
 // completion queue head doorbell, keeps its interrupt status for another
 // reason, or another device on a shared line) calls the ISR without end and
@@ -2492,7 +2529,7 @@ BOOLEAN EngProcessCompletions(IN PHW_DEVICE_EXTENSION DevExt)
 //    while work is outstanding; every state with live queues polls them).
 // 2. If empty interrupts go on with the vector masked, that proves nothing
 //    about this controller: another device on a shared line keeps calling
-//    the ISR whatever stor98 masks (review round 3, N1: isolating here used
+//    the ISR whatever stor98 masks (revised: isolating here used
 //    to reset a healthy controller once per generation, failing its I/O with
 //    BUS_RESET, for another device's interrupts). The engine stays on
 //    polling, re-writes the mask and doubles the polling hold (up to 60 s),
@@ -2500,7 +2537,7 @@ BOOLEAN EngProcessCompletions(IN PHW_DEVICE_EXTENSION DevExt)
 //    controller for interrupts. NVMe gives no register that shows a
 //    pin-based controller asserting its line, and the PCI Interrupt Status
 //    bit is in configuration space, which the SCSIport contract does not
-//    let the engine read at run time (PLAN 0.12, R4-2), so no evidence of
+//    let the engine read at run time (PLAN 0.12, G9), so no evidence of
 //    ownership is available from the ISR. A controller that really ignores
 //    the mask and stops completing commands is handled by the evidence that
 //    does exist: its commands time out, and the port's HwResetBus runs the
@@ -2679,6 +2716,11 @@ VOID EngStop(IN PHW_DEVICE_EXTENSION DevExt)
     for (i = 0; i < ENG_MAX_CHILDREN; i++) {
         DevExt->Children[i].Parent = ENG_NONE;
     }
+    // The edge pages' owner went with the parents; a page a child still
+    // uses stays allocated until that child is released (EngChildRelease),
+    // and stays out of use if it is quarantined below.
+    DevExt->EdgeOwner = ENG_NONE;
+    EngEdgeGiveBack(DevExt);
 
     if (csts == ENG_ALL_ONES || old == ENG_ST_GONE || old == ENG_ST_NONE) {
         // No hardware access: what is issued stays quarantined.
@@ -2691,7 +2733,8 @@ VOID EngStop(IN PHW_DEVICE_EXTENSION DevExt)
 
     if (old == ENG_ST_RUNNING && (NvmeReadReg32(DevExt, NVME_REG_CC) & NVME_CC_ENABLE) &&
         (csts & NVME_CSTS_RDY)) {
-        // Flush if dirty under the conservative tracking (0.10, R6-3).
+        // Flush if dirty under the conservative tracking (PLAN 0.10
+        // "Durability at stop").
         if (dirty) {
             if (EngSubmitInternalFlush(DevExt, ENG_INT_STOP_FLUSH)) {
                 DevExt->StopFlushOutstanding = TRUE;
@@ -2703,8 +2746,8 @@ VOID EngStop(IN PHW_DEVICE_EXTENSION DevExt)
                     if (!DevExt->StopFlushOutstanding) {
                         break;
                     }
-                    // Presence lost while the Flush is outstanding (review
-                    // round 3): stop polling at once rather than spend the
+                    // Presence lost while the Flush is outstanding: stop
+                    // polling at once rather than spend the
                     // rest of the stall budget on absent hardware.
                     csts = LcCsts(DevExt);
                     if (csts == ENG_ALL_ONES) {
@@ -2768,7 +2811,7 @@ out:
     DevExt->NextOwed = FALSE;
     DevExt->NextLuOwed = FALSE;
     // The engine never touches its DMA blocks again: relinquish them
-    // (isolated -> RELEASED, otherwise QUARANTINED; platform.h, N2).
+    // (isolated -> RELEASED, otherwise QUARANTINED; platform.h).
     PlatDmaRelinquish(DevExt);
     DBGMARK(STG_STOP_RESULT, (ULONG)acked | ((ULONG)clean << 1) | ((ULONG)(DevExt->Quarantined != 0) << 2) |
             (stalls << 8) | (ownedHeld << 16) | (ownedIssued << 24));

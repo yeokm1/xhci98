@@ -39,7 +39,7 @@ re-verify a citation without downloading the source.
 | `usb4_202511/USB4 Connection Manager Guide 2.0 November 2025.pdf` | USB4 Connection Manager Guide 2.0, November 2025 | `09f4441915eaeb421ed5314156534d61a350f8a5b8eb8a9c63f65b7fbd251d42` | the same zip. Cited as `CM Guide 2.0 section N` |
 | `usb4_202511/USB4 DROM Specification November 2025.pdf` | USB4 DROM Specification, November 2025 | `ba87d482f919c3b4b7916a027280f8b9d27c907b4fa856c26330f290296a2055` | the same zip |
 | `usb4_202511/USB4 DVSEC Version 1.0.pdf` | USB4 DVSEC 1.0 | `ce331604d25de88cc17d9475263ab5945191ed090e8971cd97ea9f8a6b9d1729` | the same zip |
-| `usb4_202511/USB4 Inter-Domain Service Specification 2.0 November 2025.pdf` | USB4 Inter-Domain Service Specification 2.0, November 2025 | `ab337460641c1f012a78c63dcf8cf182bf90deb29a7a841726973be79dcd7396` | the same zip; out of scope for the planned work, kept because the zip carries it |
+| `usb4_202511/USB4 Inter-Domain Service Specification 2.0 November 2025.pdf` | USB4 Inter-Domain Service Specification 2.0, November 2025 | `ab337460641c1f012a78c63dcf8cf182bf90deb29a7a841726973be79dcd7396` | the same zip; the inter-domain discovery protocol of Thunderbolt networking (`src/cm/tbt_xdp.c`, roadmap-usb4 task 45.59, design record 35) is written from it |
 | `usb4_202511/USB4 2.0 ECN - Configuration and Behavior When TMU is Disabled.pdf` | USB4 2.0 ECN, TMU disabled | `af6404a13bdce86badd70c76b112e79a5a7c7739220522543352ddcb55531a0e` | the same zip |
 
 [intel-xhci]: https://www.intel.com/content/www/us/en/content-details/868295/extensible-host-controller-interface-for-universal-serial-bus-xhci-requirements-specification-r1-2c.html
@@ -343,10 +343,10 @@ sections 10 and 11 were verified against it on 2026-10-04.
 ## USB4 2.0, November 2025 bundle
 
 The USB4 Specification 2.0 and the Connection Manager Guide 2.0 are the
-standard behind `roadmap-usb4.md`'s planned work and design record 21: the
+standard behind `roadmap-usb4.md`'s Thunderbolt and USB4 work (design records 21 and 22, from Phase 39): the
 host interface's ring register layout and descriptors (specification
 section 12), the control packet format and its CRC-32C with the Appendix
-A.2 vectors (section 6), and, for the later USB4 software connection
+A.2 vectors (section 6), and, for the USB4 software connection
 manager, everything the guide says a connection manager does. The six
 PDFs in `usb4_202511/` were taken on 2026-10-14 (owner's permission) from
 the `usb4-emu` repository's own git-ignored `docs/references/usb-if/`,

@@ -130,6 +130,8 @@ static const char *refusal;     /* the window refuses the switches */
 
 static LONG busy;               /* a job runs on the worker thread */
 static LONG cancelAsked;
+static int jobNow;              /* the job busy is set for (JOB_*) */
+static int closeWanted;         /* Cancel during the reading: close after it */
 static int readCode = -1;       /* begin and read: -1 went on */
 static int planCode = -1;
 static int planFirst = -1;      /* the reading's own plan, before any page */
@@ -409,15 +411,10 @@ static int wiz_waiting(void *ctx, const INST_WAIT *w)
 
     (void)ctx;
     if (w->Kind != INST_WAIT_POINT && pageWnd[P_PROGRESS] != NULL) {
-        if (w->BoundMs != 0) {
-            _snprintf(text, sizeof(text) - 1, "%s (%lu of %lu minutes).",
-                      w->What != NULL ? w->What : "Waiting",
-                      (unsigned long)(w->ElapsedMs / 60000UL),
-                      (unsigned long)((w->BoundMs + 59999UL) / 60000UL));
-        } else {
-            _snprintf(text, sizeof(text) - 1, "%s.",
-                      w->What != NULL ? w->What : "Waiting");
-        }
+        /* What Setup waits for alone, whatever the wait's bound (owner,
+         * 2026-11-06, task 47.3). */
+        _snprintf(text, sizeof(text) - 1, "%s.",
+                  w->What != NULL ? w->What : "Waiting");
         text[sizeof(text) - 1] = '\0';
         d = dup(text);
         if (d != NULL &&
@@ -633,6 +630,11 @@ static int start_job(int job)
 
     if (InterlockedExchange(&busy, 1) != 0) {
         return 0;
+    }
+    jobNow = job;
+    if (job != JOB_READ) {
+        /* A Cancel heard before this run is not this run's. */
+        InterlockedExchange(&cancelAsked, 0);
     }
     h = (HANDLE)_beginthreadex(NULL, 0, job_main, (void *)(size_t)job, 0, &id);
     if (h == NULL) {
@@ -2612,21 +2614,6 @@ static void oth_flow(HWND dlg)
             h = text_h(dc, text, tw, NULL);
             if (h > dlu_y(dlg, 34)) {
                 h = dlu_y(dlg, 34);
-                /* The free set's notice, whose address ends it, cut off
-                 * (a long install folder): the line gives the address
-                 * itself instead of pointing above. */
-                if (set == INST_SET_FREE &&
-                    (GetWindowLongA(ln, GWL_STYLE) & WS_VISIBLE)) {
-                    char addr[200];
-                    _snprintf(addr, sizeof(addr) - 1, "Latest version: %s.",
-                              inst_other_address(set));
-                    addr[sizeof(addr) - 1] = '\0';
-                    GetWindowTextA(ln, text, sizeof(text));
-                    if (strcmp(text, "Latest version: see the address above.") ==
-                        0) {
-                        SetWindowTextA(ln, addr);
-                    }
-                }
             }
             SetWindowPos(t, NULL, tx, y, tw, h, SWP_NOZORDER |
                          SWP_NOACTIVATE);
@@ -3207,6 +3194,7 @@ static int combo_read(HWND combo, const INST_ROW *r, INST_U32 *v)
     INST_U32 data;
 
     if (sel < 0) {
+        *v = r->InForce;
         return 0;
     }
     data = (INST_U32)(size_t)SendMessageA(combo, CB_GETITEMDATA, sel, 0);
@@ -3647,6 +3635,9 @@ static void row_choice(const ROWCTL *rc)
 /* What a row's choice says now: 1 written (value in *v), 0 left as it is.
  * A range's text that does not parse, or lies outside it, is 0 with *v
  * the text's number (the page says so). */
+/* 1 the row's value written (*v), 0 not written, -1 a range row's text
+ * that is not a number in its range (ES_NUMBER filters typing, not a
+ * paste). */
 static int row_read(const ROWCTL *rc, INST_U32 *v)
 {
     const INST_ROW *r = &rows[rc->Row];
@@ -3657,14 +3648,18 @@ static int row_read(const ROWCTL *rc, INST_U32 *v)
         return 0;
     }
     if (instValues[r->Value].Hi != 0) {
+        *v = r->InForce;
+        if (GetWindowTextLengthA(rc->Choice) >= (int)sizeof(text)) {
+            return -1;
+        }
         GetWindowTextA(rc->Choice, text, sizeof(text));
         if (text[0] == '\0') {
-            *v = r->InForce;
             return 0;
         }
-        *v = (INST_U32)strtoul(text, NULL, 10);
-        if (!inst_value_in_range(r->Value, *v)) {
-            return 0;
+        if (!inst_parse_dec(text, v) ||
+            !inst_value_in_range(r->Value, *v)) {
+            *v = r->InForce;
+            return -1;
         }
         return choice_writes(r, 0, *v);
     }
@@ -3728,20 +3723,16 @@ static int settings_leave(HWND dlg, int page)
 
     for (i = 0; i < rp->Count; i++) {
         const INST_ROW *r = &rows[rp->R[i].Row];
-        char typed[32];
-        typed[0] = '\0';
+        int got;
         if (r->Greyed) {
             choiceSet[r->Value] = 0;
             continue;
         }
-        if (instValues[r->Value].Hi != 0) {
-            GetWindowTextA(rp->R[i].Choice, typed, sizeof(typed));
-        }
-        if (row_read(&rp->R[i], &v)) {
+        got = row_read(&rp->R[i], &v);
+        if (got > 0) {
             choiceSet[r->Value] = 1;
             choiceVal[r->Value] = v;
-        } else if (instValues[r->Value].Hi != 0 && typed[0] != '\0' &&
-                   !inst_value_in_range(r->Value, v)) {
+        } else if (got < 0) {
             char text[256];
             char range[64];
             inst_value_range_text(r->Value, range, sizeof(range));
@@ -3811,8 +3802,10 @@ static int adv_take(HWND dlg)
             adv_cell(GetDlgItem(dlg, IDC_LIST), advCur);
             return 1;
         }
-        v = (INST_U32)strtoul(text, NULL, 10);
-        if (!inst_value_in_range(r->Value, v)) {
+        if (GetWindowTextLengthA(GetDlgItem(dlg, IDC_A_EDIT)) >=
+                (int)sizeof(text) ||
+            !inst_parse_dec(text, &v) ||
+            !inst_value_in_range(r->Value, v)) {
             char range[64];
             inst_value_range_text(r->Value, range, sizeof(range));
             _snprintf(text, sizeof(text) - 1, "%s.", range);
@@ -3919,13 +3912,23 @@ static WIZ_DLGRET CALLBACK adv_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         return TRUE;
     case WM_NOTIFY:
         nm = (NMHDR *)lp;
+        if (nm->idFrom == IDC_LIST && nm->code == LVN_ITEMCHANGING) {
+            /* A value refused keeps its row selected, as in Stor98's
+             * dialog: the change is vetoed before the selection moves, so
+             * the highlight never leaves the row the pane edits. */
+            NMLISTVIEW *nl = (NMLISTVIEW *)lp;
+            if ((nl->uNewState & LVIS_SELECTED) &&
+                !(nl->uOldState & LVIS_SELECTED) && nl->iItem != advCur &&
+                !adv_take(dlg)) {
+                SET_RESULT(dlg, TRUE);
+                return TRUE;
+            }
+        }
         if (nm->idFrom == IDC_LIST && nm->code == LVN_ITEMCHANGED) {
             NMLISTVIEW *nl = (NMLISTVIEW *)lp;
             if ((nl->uNewState & LVIS_SELECTED) && nl->iItem >= 0 &&
                 nl->iItem < advCount && nl->iItem != advCur) {
-                if (adv_take(dlg)) {
-                    adv_show(dlg, nl->iItem);
-                }
+                adv_show(dlg, nl->iItem);   /* taken at the change */
             }
         }
         break;
@@ -5708,6 +5711,15 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             SET_RESULT(dlg, 0);
             return TRUE;
         case PSN_QUERYCANCEL:
+            if (busy && jobNow == JOB_READ) {
+                /* No run is under way: the reading ends, then the window
+                 * closes (WM_APP_DONE). */
+                closeWanted = 1;
+                SetDlgItemTextA(dlg, IDC_STATUS, "Setup will close when it "
+                                "has finished looking for devices.");
+                SET_RESULT(dlg, TRUE);
+                return TRUE;
+            }
             if (busy) {
                 /* Record 26 section 5.8: the run stops at the next step. */
                 InterlockedExchange(&cancelAsked, 1);
@@ -5801,6 +5813,11 @@ static LRESULT CALLBACK sheet_sub(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     if (msg == WM_APP_DONE) {
         if ((int)wp == JOB_READ) {
             readDone = 1;
+            if (closeWanted) {
+                closeWanted = 0;
+                PropSheet_PressButton(sheet, PSBTN_CANCEL);
+                return 0;
+            }
             if (pageWnd[P_WELCOME] != NULL) {
                 welcome_state(pageWnd[P_WELCOME]);
             }
@@ -5934,9 +5951,10 @@ static int wow64_start(void)
     PFN_ISWOW64 isWow64;
     BOOL wow = FALSE;
     char self[WIZ_PATH];
-    char cmd[WIZ_PATH * 4];
+    char *cmd;
     const char *tail;
     char *slash;
+    BOOL made;
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
     DWORD code = INST_EXIT_REFUSED;
@@ -5963,17 +5981,27 @@ static int wow64_start(void)
         tail = strchr(tail + 1, '"');
         tail = tail != NULL ? tail + 1 : "";
     } else {
-        while (*tail != '\0' && *tail != ' ') {
+        while (*tail != '\0' && *tail != ' ' && *tail != '\t') {
             tail++;
         }
     }
-    _snprintf(cmd, sizeof(cmd) - 1, "\"%s\"%s", self, tail);
-    cmd[sizeof(cmd) - 1] = '\0';
+    /* Sized from the parts: the x64 window gets the arguments whole, never
+     * a command line cut in mid-switch. */
+    cmd = (char *)malloc(strlen(self) + strlen(tail) + 3);
+    if (cmd == NULL) {
+        return -1;
+    }
+    cmd[0] = '"';
+    strcpy(cmd + 1, self);
+    strcat(cmd, "\"");
+    strcat(cmd, tail);
     memset(&si, 0, sizeof(si));
     si.cb = sizeof(si);
     memset(&pi, 0, sizeof(pi));
-    if (!CreateProcessA(self, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si,
-                        &pi)) {
+    made = CreateProcessA(self, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si,
+                          &pi);
+    free(cmd);
+    if (!made) {
         return -1;
     }
     CloseHandle(pi.hThread);

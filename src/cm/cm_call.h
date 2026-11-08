@@ -233,10 +233,6 @@ VOID CmCallwkService(struct _CM_NHI *nhi, struct _CM_CALLWK *b);
  * THE STOP" above says. PASSIVE_LEVEL. */
 VOID CmCallwkStop(struct _CM_CALLWK *b);
 
-/* A system thread at `routine` with `context`, its handle closed at once
- * (cm_thr.c, the one site of ZwClose for threads). PASSIVE_LEVEL. */
-NTSTATUS CmThrSpawn(VOID (NTAPI *routine)(PVOID), PVOID context);
-
 #endif /* !XHCI_HOST_TEST */
 
 #endif /* CM_CALL_H */

@@ -581,7 +581,7 @@ NTSTATUS HcdHubFdoCleanup(PHCD_HUB_FDO fdo, PIRP irp)
 
 /* IRP_MJ_SYSTEM_CONTROL on a hub FDO: no WMI provider here either, so the
  * request goes down to the hub's device PDO, inside the FDO's I/O count
- * (finding D4, as HcdRootHubFdoSystemControl). */
+ * (design record 18 section 11.2, as HcdRootHubFdoSystemControl). */
 NTSTATUS HcdHubFdoSystemControl(PHCD_HUB_FDO fdo, PIRP irp)
 {
     NTSTATUS status;

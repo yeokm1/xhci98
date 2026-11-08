@@ -25,16 +25,11 @@ if not exist silent.vbs goto nofile
 echo Setting the switch to 0:
 cscript //nologo silent.vbs 0
 if errorlevel 5 goto unverified
-if errorlevel 3 goto partial
 if errorlevel 1 goto notset
 goto list
 :unverified
 echo The machine-wide switch may have changed and could not be read back.
 echo Run silent-off.bat again, or check XhciSilentInstall in regedit.
-goto list
-:partial
-echo The switch was set back to 0 on some controllers and not others. Run
-echo silent-off.bat again.
 goto list
 :notset
 echo The switch was not set back to 0.

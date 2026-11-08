@@ -128,7 +128,7 @@ evidence.
 
   The census in the ABI doc (the two notes after the `UsbPortInvalidateController(RESET)` box) established that usbport reaches `StopController`/`StartController` only from a PnP or power transition something outside it initiates, that the reset DPC arms nothing, and that `CheckController` is a `VOID` slot from which usbport collects no verdict.
 
-  A callback that only marked the controller failed and named a stop/start in its trace text therefore left the machine down until the next cold boot; that was the whole of Finding 3 (`docs/contributing/runs/run-13e.md`, Finding S). So every such path in this driver names the context that performs the recovery, and that context is one this driver reaches on its own.
+  A callback that only marked the controller failed and named a stop/start in its trace text therefore left the machine down until the next cold boot; that was the whole of the deaf root port (`docs/contributing/runs/run-13e.md`, its two unexplained episodes and Finding S). So every such path in this driver names the context that performs the recovery, and that context is one this driver reaches on its own.
   - The owner here is usbport's health poll (nominal 500 ms; 36-80 ms measured on the E460, see "Fatal Errors"), which arms one `UsbPortRequestAsyncCallback`; the callback runs at DISPATCH_LEVEL holding no usbport lock, and `XhciRecoverController` reinitializes there. The arming is not done in `ResetController` itself: that would nest usbport's timer machinery inside usbport's reset-DPC spin lock, two hierarchies with no stated order between them.
   - Everything the recovery runs sets `ext->InitBelowPassive`, and that flag is a contract rather than a convenience: while it is set, every bounded wait stalls instead of sleeping, `UsbPortReadWriteConfigSpace` is not called at all, and `XhciFailClosedDma` counts instead of bugchecking, because nothing on that path reclaims the common buffer, which is the premise the bugcheck rests on. A service documented PASSIVE_LEVEL-only must be skipped there, never "probably fine".
   - The retries are bounded (`XHCI_RECOVERY_MAX_ATTEMPTS`) and a controller that will not come back stays latched. That is still a terminal state; the difference is that it is a measured one, with `RecoveryAttempts`, `RecoveryFailures` and `RecoveryLastStep` saying so from a release build.
@@ -521,7 +521,7 @@ code:
   - Two of the three `*_POLLS` names left in that tree were inside `#ifdef
     XHCI_FIX_*`: `XHCI_RH_SWEEP_SLOW_POLLS` (W15SLOW) and
     `XHCI_RH_GATE_STUCK_POLLS` (W7), so no shipping flavour carries either.
-    They are Finding 3 bench candidates whose cadence is the measurement, and
+    They are bench candidates for the deaf root port whose cadence is the measurement, and
     they are left alone on purpose. A candidate that is ever promoted to a
     shipping flavour has to convert first, and W7's is the same defect as the
     rest: twenty polls is ten seconds at 500 ms and 0.7-1.6 s at the E460's

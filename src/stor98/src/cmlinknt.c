@@ -110,28 +110,7 @@ VOID PlatCmLinkDriverEntry(IN PVOID DriverObject, IN PVOID Argument2)
 // stacks pass it; G6).
 static BOOLEAN CmlDumpArgument(IN PCHAR ArgumentString)
 {
-    static const char key[] = DPK_DUMP;
-    ULONG i, k;
-
-    if (ArgumentString == NULL) {
-        return FALSE;
-    }
-    for (i = 0; ArgumentString[i] != 0; i++) {
-        for (k = 0; key[k] != 0; k++) {
-            UCHAR c = (UCHAR)ArgumentString[i + k];
-
-            if (c >= 'A' && c <= 'Z') {
-                c = (UCHAR)(c + ('a' - 'A'));
-            }
-            if (c != (UCHAR)key[k]) {
-                break;
-            }
-        }
-        if (key[k] == 0) {
-            return TRUE;
-        }
-    }
-    return FALSE;
+    return (BOOLEAN)(DpkFind(ArgumentString, DPK_DUMP) != NULL);
 }
 
 // Asks \Callback\Stor98LinkState for the table: CML_RC_BOUND with *Table

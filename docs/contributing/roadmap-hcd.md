@@ -1,4 +1,4 @@
-# Development Roadmap - The Host Controller Driver, Phases 25 Onward
+# Development Roadmap - The Host Controller Driver, Phases 25 to 38
 
 The third roadmap file, opened on 2026-10-02 at the project owner's request,
 the day Phase 24 closed on the `1.2.0.0` cut. It carries every phase of the
@@ -6,7 +6,7 @@ miniport's successor: a monolithic USB host controller driver, `xhci98.sys`,
 that replaces `usbport.sys`, the hub driver and the composite parent with code
 of this project's own and so can drive USB 3.x SuperSpeed devices, hubs and
 UAS storage on the same targets the miniport serves. The first two files are
-unchanged by it: [`roadmap.md`](roadmap.md) keeps the status, the conventions
+unchanged by it: [`roadmap.md`](roadmap.md) keeps the conventions
 and Phases 0-16, and
 [`roadmap-miniport-updates.md`](roadmap-miniport-updates.md) keeps Phases 17-24, the whole of the miniport's life after `1.0.0.0`. Every
 convention of theirs holds here: the batching convention and the task-id
@@ -14,9 +14,9 @@ rules, "observed on both" as `AGENTS.md` qualifies it, and the rule that no
 phase advances past an unobserved checkpoint.
 
 **Status: Phases 25 to 38 are closed; `2.4.0.0`, cut on 2026-10-14, is
-this file's last release.** The work after it is in
-[`roadmap-usb4.md`](roadmap-usb4.md) (`3.0.0.0`, cut 2026-10-17, and the
-open Phase 42, `3.1.0.0`). `2.0.0.0` was
+this file's last release.** Every phase after it, USB ones included, is in
+[`roadmap-usb4.md`](roadmap-usb4.md), from Phase 39 and `3.0.0.0` (cut
+2026-10-17); its status line names the open phase. `2.0.0.0` was
 cut on 2026-10-04 and squash-merged to `main` as `4038447` ("2.0.0.0
 (#13)"); the owner benched it after the cut and reports no issue beyond the
 known limitations (Phase 28, 28-E.1). `2.1.0.0`, the first update, was cut
@@ -717,7 +717,7 @@ reach every device; and it ends in a release.
 - [x] 36.1 a diagnostic build, `2.2.0.2`. Done 2026-10-08 (`3d667f1`), reverted the same day after its read (owner); issue 12 section 3.3 keeps the description
 - [x] 36.2 the read on the E7250 under Windows 7 x64 and XP x64. Done 2026-10-08 (owner; issue 12 section 3): the `D20IR` misroute found; rewriting it live fixed the mouse and mounted the stick
 - [x] 36.3 the routing quirk, `XhciIntelIrqRoute` (`0` report, `1` the E7250 only, the default, `2` the six reviewed pairs; issue 12 section 5.1). Done 2026-10-09 (`b71bd64..95b2c31`); read at the bench: the repair rewrote `D20IR` `3210` -> `3215` under XP x64 and under Windows 7 x64's line, and wrote nothing under MSI
-- [x] 36.4 the bounded BUSY retry in `hcdCommand` (issue 12 Finding 1). Done 2026-10-09 (`9a8f32e..9dca404`)
+- [x] 36.4 the bounded BUSY retry in `hcdCommand` (issue 12, the boot-time no-slot refusal). Done 2026-10-09 (`9a8f32e..9dca404`)
 - [x] 36.5 (was POLL.0) the polling design, record 15 with its issue 12 amendment, reviewed to convergence before code. Done 2026-10-09 (`a744811..f7f0907`, record 15 revision 5)
 - [x] 36.6 (was POLL.1) the three values `XhciInterruptMode`, `XhciPollIdleMs`, `XhciPollActiveMs`. Done 2026-10-09 (`158ad18..53cb9e2`)
 - [x] 36.7 (was POLL.2) the delivery and the poller, with the dead-line move. Done 2026-10-09 (`158ad18..53cb9e2`)

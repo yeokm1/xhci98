@@ -122,7 +122,7 @@ function Read-Win2kBaselineManifest {
             throw "$Path line ${lineNo}: PACKED and OUTPUT must be bare file names"
         }
 
-        $provider = $fields[2].ToLower()
+        $provider = $fields[2].ToLowerInvariant()
         $providers = @("ntoskrnl.exe", "hal.dll")
         if ($AllowNdis) { $providers += "ndis.sys" }
         if ($provider -notin $providers) {
@@ -132,7 +132,7 @@ function Read-Win2kBaselineManifest {
         $length = Assert-ManifestIdentityFields -Path $Path -LineNo $lineNo `
             -Version $fields[3] -Length $fields[4] -Sha256 $fields[5]
 
-        $outputKey = $fields[1].ToLower()
+        $outputKey = $fields[1].ToLowerInvariant()
         if ($outputs.ContainsKey($outputKey)) {
             throw "$Path line ${lineNo}: duplicate output '$($fields[1])'"
         }
@@ -144,7 +144,7 @@ function Read-Win2kBaselineManifest {
             Provider = $provider
             Version  = $fields[3]
             Length   = $length
-            Sha256   = $fields[5].ToUpper()
+            Sha256   = $fields[5].ToUpperInvariant()
         }
     }
 
@@ -201,7 +201,7 @@ function Read-Win98EvidenceManifest {
             continue
         }
         if ($line -match "^\[(\w+)\]$") {
-            $section = $Matches[1].ToLower()
+            $section = $Matches[1].ToLowerInvariant()
             if ($section -notin @("precedent", "nametable")) {
                 throw "$Path line ${lineNo}: unknown section '[$section]'"
             }
@@ -222,7 +222,7 @@ function Read-Win98EvidenceManifest {
         $length = Assert-ManifestIdentityFields -Path $Path -LineNo $lineNo `
             -Version $fields[1] -Length $fields[2] -Sha256 $fields[3]
 
-        $key = $fields[0].ToLower()
+        $key = $fields[0].ToLowerInvariant()
         if ($seen.ContainsKey($key)) {
             throw "$Path line ${lineNo}: duplicate path '$($fields[0])'"
         }
@@ -240,7 +240,7 @@ function Read-Win98EvidenceManifest {
             Label    = [System.IO.Path]::GetFileName($fields[0])
             Version  = $fields[1]
             Length   = $length
-            Sha256   = $fields[3].ToUpper()
+            Sha256   = $fields[3].ToUpperInvariant()
             Note     = $note
         }
     }

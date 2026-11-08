@@ -1,5 +1,10 @@
 # Plan
 
+Current status (2026-11-06): Stor98 has no releases of its own since xhci98 3.1.0.0; it is
+built, versioned and shipped with xhci98's package (README, "For redistributors"; the
+version is xhci98's, src/stor98ver.h), and its targets are those of the Scope line below.
+The dated status that follows is kept as written.
+
 Status 2026-10-18: 0.4.0.0 is the current release (2026-10-16; 0.3.0.0 and 0.3.0.1 came
 before it, [releases/history.md](../releases/history.md)). The phase 0.0 gates and the 9x
 and NT qualifications ran where the test VMs allow, and every maintainer decision this
@@ -16,10 +21,11 @@ Base: SweetLow's nvme9x/nvment (port of nvme2k 1.0.0.2; Windows 9x, NT4 and 2000
 from one tree), BSD-3-Clause per SweetLow (2026-10-14). Reference for backports: upstream nvme2k 1.2.0.0
 (commit `0c41727`), which adds an amd64 target and several fixes.
 
-Scope: Windows 98 SE, ME, 2000 SP4, XP, Vista and 7, 32- and 64-bit. **Windows NT4 is
+Scope: Windows 98 SE, ME, 2000 SP4, XP, Vista, 7, 8, 8.1 and 10 (below build 22000), 32- and
+64-bit (no 64-bit 98, ME or 2000; 8, 8.1 and 10 since xhci98 3.2.0.0). **Windows NT4 is
 outside the product scope.** The inherited NT4 build path (`NVME2K_NT4`) stays only while it
 costs nothing to keep compiling; it is not tested, validated or shipped, and any item below
-may drop it (R2-12).
+may drop it.
 
 Evidence behind this plan:
 
@@ -28,12 +34,11 @@ Evidence behind this plan:
   references are relative to each source tree. Line references into `src/` in this plan
   are to the tree at commit 1784969; commit 035bc30 added a 30-line licence header to every
   file there, so add 30 for the current tree.
-- Plan reviews by Codex, 2026-10-14: round 1 (C1-C16), round 2 (R2-1 to R2-12), round 3
-  (R3-1 to R3-14, reviewing 1784969) and round 4 (R4-1 to R4-7, reviewing 702834c), folded
-  in below and cited where they apply, round 5 (H1, M1, M2) and round 6 (R6-1 to R6-9,
-  reviewing the phase 0.0 results, 2026-10-15). The finding tags cited in this plan (C,
-  R, H, M, P and N numbers) refer to the maintainer's review notes, which are not in the
-  repository. The maintainer's calls
+- Plan reviews, 2026-10-14 and 15: six reviews of this plan, two of them of commits
+  1784969 and 702834c, and the last of the phase 0.0 results (2026-10-15), folded in
+  below. Their notes are not in the repository; this plan cites the rule each one led
+  to, by its section and name. The N numbers and `#` numbers cited in the tables are
+  the items of [reviews/review-nvme9x.md](reviews/review-nvme9x.md). The maintainer's calls
   are recorded under "Maintainer decisions" at the end (MD-1 and MD-2 decided 2026-10-14; `CachesData` TRUE
   on NT, 9x and Me, MD-3 to MD-7 decided 2026-10-15).
 - Emulator runs (usb4-emu, 2026-10-14), full results in usb4-emu `docs/NVME-DRIVER-EVAL.md`
@@ -55,17 +60,16 @@ Evidence behind this plan:
 
 - **Request engine first, features second.** Every later item (MDTS splitting, 4 KiB
   translation, barriers, removal) needs one SRB to own several NVMe commands safely. That
-  engine, admission control and a DMA-safe reset/removal path come before any of them (C1,
-  C2, C6).
+  engine, admission control and a DMA-safe reset/removal path come before any of them.
 - **Start serialized.** The first translating implementation runs one parent request per
-  namespace at a time. Concurrency is added only after the overlap tests pass (C3).
+  namespace at a time. Concurrency is added only after the overlap tests pass.
 - **Each item lands with an emulator test that failed before it.**
 - **A buffer is released only when the device can no longer reach it.** Generation counters
   and CID tracking discard stale completions; they do not stop a device from writing into
-  memory. Only the evidence listed in 0.10 does (R2-1). No path accepts a "residual risk"
+  memory. Only the evidence listed in 0.10 does. No path accepts a "residual risk"
   of DMA into memory that is freed or reused: if the evidence cannot be obtained, the memory
-  stays owned and out of use (R3-1). All-ones reads, from MMIO or config space, are
-  presence-loss signals, never that evidence (R4-1). **One exception, accepted by the
+  stays owned and out of use. All-ones reads, from MMIO or config space, are
+  presence-loss signals, never that evidence. **One exception, accepted by the
   maintainer (decision MD-1):** at the gone deadline without evidence, held SRBs are
   completed with the terminal status, so the callers' buffers go back to the OS, while
   driver-owned DMA memory is quarantined, never freed. No other path may complete or free
@@ -73,11 +77,11 @@ Evidence behind this plan:
 - **Experiment before contract.** Where correctness depends on SCSIport or IOS behaviour
   that only an experiment can establish, that behaviour is a feasibility gate (0.0) with a
   pass condition and a stated consequence if it fails, settled before the contract that
-  relies on it is written (R3-8).
+  relies on it is written.
 
 ## Dependencies
 
-Phase 0 is ordered internally (R3-8):
+Phase 0 is ordered internally:
 
 1. 0.1 (build matrix including a minimal amd64 build) and the fault-injection harness
    (TESTING.md, harness work) in parallel.
@@ -99,7 +103,7 @@ Product code that depends on the allocation, shutdown or removal contracts also 
 the qualification items listed under 0.0 ("Qualification before dependent product code",
 R6).
 Phase 4 needs phase 2. Phase 5 is install, signing and full validation of an amd64 binary
-that has built since 0.1 (R2-10).
+that has built since 0.1.
 
 ## Phases
 
@@ -107,19 +111,19 @@ that has built since 0.1 (R2-10).
 
 | # | Item | Source |
 |---|---|---|
-| 0.0 | **Feasibility gates** (below): minimal prototypes on each port, with the harness's fault injection, answering the port and IOS questions the contracts depend on. Runs right after 0.1; its results fix the contracts 0.10-0.12. **Status 2026-10-15: complete on 2000 and XP x64, mostly on 7 x64; 9x partial** ("Phase 0.0 results" below, R6-8): G1 passes on 2000, XP x64 and 7 x64; G2, G4 and G7 (resume path, allocations and resume-failure semantics) on 2000, XP x64 and 7 x64; G3 with the link-state table (MD-6) and G6 on 2000 and XP x64; G8's 2000 shutdown failure is resolved by the restartable SHUTDOWN, demonstrated (Q-NT); G9 passes on 98 SE with QuickInstall's IOS (orderly stop shown only with the inherited shutdown code); G5 fails on 2000, XP x64, 7 x64 and Me (MD-3 (a) on NT, MD-4 on 9x) and G9 on Me (MD-5 open); still open: G3 on 9x, 9x G1/G4, G6 on 7 x64, and XP x86, Vista and 7 x86 | R3-8; R3-1 to R3-7 |
-| 0.1 | Buildable target matrix from one tree: 9x (`.mpd`), NT x86 and a **minimal NT amd64 build** (compiles and links with WDK 7.1 `wnet`/`win7` amd64; intrinsics instead of `atomic.h` inline assembly, 9x VMM/PTE code excluded). CI-style build script per toolchain. Every later commit keeps all three building | AGENTS.md; R2-10 |
-| 0.2 | **Parent/child request engine.** A parent (the SRB) owns its original buffer and length, fragment list, phase, outstanding-child count, first error, deadline, locks and resources. Each live CID maps to (child, controller generation); CIDs are no longer derived from `QueueTag` (on 9x `QueueTag` is a rolling request number and every SRB is untagged at depth 1, G9). The parent completes exactly once, after every child has completed or been safely quiesced (0.10); all copies and bookkeeping finish before `RequestComplete`, and the SRB is never touched afterwards. A failed fragment does not undo fragments already written. The parent also carries a **cancellation state** (0.10, "Parent cancellation"): once abort, reset or removal suppresses any required unfinished work, the parent can no longer complete with success. Final status comes from the parent error mapping below | C1, R2-4, H1; src/nvme2k.h:167, nvme2k_nvme.c:368, nvme2k_cpl.c:509 |
-| 0.3 | **Admission control without blocking.** Driver-owned limits for admitted parents, live children, PRP pages and bounce buffers. Accepted SRBs wait in a bounded pending list and are advanced from synchronized completion/timer callbacks; `NextRequest`/`NextLuRequest` are withheld while capacity is exhausted. Alternative: before issuing any child, complete with `SRB_STATUS_BUSY`. Never return BUSY after partial execution, never hold a completed SRB, never use BUSY for removal. No sleeping, event waits or spinning in StartIo/ISR. **Hold-then-BUSY (G1, measured):** a request held with no child issued (bring-up, or capacity exhausted) is held for at most a fraction of its own SRB `TimeOutValue`, measured as elapsed time (the prototype used a quarter, counted in ticks), then completed `SRB_STATUS_BUSY` and held again when re-sent. Pure hold is unsafe: Windows 2000's bus-scan INQUIRY has a 4 s timeout and the port reset it at 6 s RDY. On 9x `TimeOutValue` is unusable (0 on 98 SE and pointer-like garbage on Me for TEST UNIT READY and READ CAPACITY, G9), so 9x uses a fixed hold bound. **The port's BUSY limit (Q-NT, 2000, XP x64, 7 x64):** each port re-issues an SRB completed `SRB_STATUS_BUSY` 20 times (21 BUSY completions), then fails it to its owner. The limit is a count, not a time (holds of 1.5-4 s gave the same count); the retries come about 1.56 s apart on 2000 and about 1.0 s on XP x64 and 7 x64, and the bus scan issues INQUIRY 3 times (63 BUSY in all). So one request can be carried for at most 21 x (hold + the port's retry delay); with a quarter-`TimeOutValue` hold that is about 33 s per INQUIRY issue on 2000, shorter than the largest CAP.TO (127.5 s). Therefore the hold uses most of the request's `TimeOutValue` (elapsed time, minus a margin; on 2000 about 3 s of the INQUIRY's 4 s, about 95 s per issue), the driver never completes BUSY more than 20 times for one SRB and fails the request itself before what would be the 21st BUSY, and the bring-up deadline stays CAP.TO, after which the request completes in the failed state. Not measured: the disk class driver's own retries on top of the port's limit for READ/WRITE. **As implemented (engine):** the hold is `TimeOutValue` minus half of it (at least 1 s), measured with the larger elapsed estimate (0.10, "Which clock, which bound"; half, not a quarter, because the estimate can still be off). Coverage of CAP.TO: the bus scan (INQUIRY 4 s on 2000, 3 issues) 21 x (2 s + 1.56 s) x 3 = about 224 s, above the largest CAP.TO (127.5 s); I/O behind a re-enable (after a restartable shutdown or a reset; READ/WRITE with the disk class driver's 10 s) about 138 s per issue on 2000 and about 126 s on XP x64 and 7 x64, so a CAP.TO above about 126 s there relies on the class driver's own retry (not measured). **9x measured (engine, 98 SE, 2026-10-15):** with RDY delayed 6 s at the bus scan, the INQUIRY held for `hold9x` (4 s, now measured with the OS clock) and completed BUSY is not re-sent by IOS: the disk is not found (a second scan after RDY finds it). Before the qualified clock the 9x hold ran on a TSC calibrated far too slow there (0.1x) and nominal ticks, which stretched it past such RDY delays by accident. **9x rule (Q-9x, implemented in review round 2):** on 9x the bus-scan INQUIRY held during bring-up is never completed BUSY: it stays held until bring-up succeeds (then it is replayed) or fails (then it fails as in the failed state); bring-up is bounded by CAP.TO. A `HwResetBus` during bring-up returns FALSE and completes nothing (the port calls it again about every 7.5 s and never completes the held SRB itself; completing the held INQUIRY with BUS_RESET after a TRUE return made Me's port fail `ScsiPortInitialize` and unload the adapter, Q-9x G1). Other requests held on 9x keep the fixed `hold9x` bound | C2, G1, Q-NT; nvme2k_scsi.c:35, nvme2k.c:54 |
-| 0.4 | **Per-child PRP construction.** PRPs built from each child's buffer offset and byte count; validate address, contiguous length, page alignment and list capacity for every mapping. Bounce buffers and PRP list pages are carved from the **uncached extension**, the memory the port can translate with `ScsiPortGetPhysicalAddress(..., NULL, ...)` (pool and device-extension memory cannot be translated that way). **This rule is conditional on MD-3/MD-4 (R6-2):** if MD-3 option (b) is chosen, bounce buffers, PRP list pages and queues come from the driver-owned pool instead, their physical addresses are recorded at allocation, and `ScsiPortGetPhysicalAddress(..., NULL, ...)` is no longer their translation route (dump mode keeps the uncached extension, 4.1). Caller storage is translated with the SRB; `MapBuffers=TRUE` kept for CPU copies. Bounced edges and the direct middle are separate commands (PRP lists cannot concatenate them in general). **9x caller buffer (xhci98 roadmap 42-A.33, 2026-10-19):** on 98 SE and ME, `Srb->DataBuffer` is the first fragment of the IOR's logical scatter/gather list when the IOR has `IORF_SCATTER_GATHER` (every file-system request does), so `DataBuffer + offset` is wrong past that fragment. The engine resolves every CPU access to the caller's data (the bounce copies in both directions and the PRP1 page-offset check) through that list, as SCSIPORT itself does (`src/sg9x.h`: `Sg9xClassify`, `Sg9xResolve`, `Sg9xCopy`; `EngCallerVa`, `EngCallerCopy` in `engine.c`). The IOP comes from `PORT_SRB.SrbIopPointer` (Win98 DDK `block\inc\SCSIPORT.H`, offset 0x40); `IOP_srb`, `IOP_ior`, `IOR_flags`, `IOR_buffer_ptr` and `DCB_apparent_blk_shift` from the DDK's `IOP.H`, `IOR.H` and `DCB.H`. The same layout and walk were read in SCSIPORT.PDR of 98 SE 4.10.2222, the 4.10.2223 update and ME (no 98 FE copy was available; `docs/INVESTIGATION-9X-REQUEST-SIZE.md`, section 7). A request is classified as linear (no SG flag), SG list, or unknown. It is unknown when a pointer lies outside the system arena, the IOP does not point back at the SRB, or the first fragment is not `DataBuffer`. Byte-counted lists (`IORF_CHAR_COMMAND`) use byte counts. No alignment is required: IOS's big-request splitter passes a one-entry list at an odd address. A span that cannot be resolved is never copied through a guessed address: the mapping is refused, the bounce copy refuses, and the parent fails with HARDWARE ERROR, ASC 44h. A write fails before its child is issued; a read fails at completion. Children already issued still quiesce first. Before this, a bounced file-system request copied through the wrong addresses (an emulator page fault, reproduced). Pass-through requests (IOR function 0Fh, ASPI) arrive with linear buffers. NT is unchanged | C4, R2-5; nvme2k_nvme.c:608 |
-| 0.5 | Allocation separate from hardware init; allocations aligned against their **physical** address; lifecycle flags reset on every start. Allocations are reused only where gates G5 and G7 show the port preserves them (expected: power stop and resume); after a stop for removal or resource rebalance the driver assumes they may have been freed and reacquires (0.11). Memory the controller may still reach is never handed back to the port (0.10, stop path). **Measured (G5, G7, G9):** on 2000 and XP x64 a power stop preserves the device extension (not zeroed) and the uncached extension (same VA/PA, contents intact), so reuse across power applies on both, with the sub-allocator and lifecycle flags reset on every start (the base lacked this). A removal stop frees and reuses both within seconds, acknowledged or not (7 x64 the same, at once, Q-NT), and a surprise removal frees them with no callback; the driver image is unloaded with its last device. On 9x the `.mpd` is unloaded at every removal and its extensions freed. DMA-reachable memory stays in the port's allocations on NT (MD-3 (a), decided) and comes from a `_PageAllocate` pool on 9x (MD-4, decided, to be prototyped). **`ArgumentString` is NULL at resume** on 2000, XP x64 and 7 x64 (Q-NT): `ConfigInfo` values (`CachesData` above all) are constants, never derived from DriverParameter, and registry-derived tunables are parsed once and kept in the device extension (which survives resume), never re-parsed from a NULL `ArgumentString` | C4, N2, #8, #11, R2-2, R3-4, G5, G7, G9; utils.c:707 |
-| 0.6 | **DMA-safe reset and abort.** Release a buffer only on DMA-isolation evidence (0.10). Do not reuse queues/CIDs until old completions are excluded. Invalidate child mappings, pending parents, locks and timers together | C6, #1; nvme2k.c:1290 |
-| 0.7 | **Lifecycle state definitions** (moved forward from phase 2): starting, running, resetting, stopping, stopped, gone, failed. For each state: which callbacks may arrive, whether new SRBs are admitted, who owns outstanding SRBs, whether the timer may rearm. All-ones CSTS/MMIO (or config space, where read) is a presence-loss trigger into `gone`, not proof that DMA has stopped; `gone` holds SRBs until isolation evidence or the gone deadline (0.10). Absent hardware is distinguished from present-but-fatal (CSTS.CFS) and stuck hardware | C6, #7, R2-10, R4-1 |
-| 0.8 | **DMA and transfer negotiation in `HwFindAdapter`.** Today `MaximumTransferLength` (256 KiB) and `NumberOfPhysicalBreaks` (511) are set unconditionally. Instead: keep any lower value the port supplied (registry `MaximumSGList` and similar), treat `SP_UNINITIALIZED_VALUE` as "no port limit"; set `Dma32BitAddresses`/`Dma64BitAddresses`, `Master`, `ScatterGather`, `AlignmentMask` and the limits **before** `ScsiPortGetUncachedExtension`, which fixes the DMA adapter from them; size PRP list pages for the worst-case buffer offset (a buffer of N pages at a non-zero page offset touches N+1 pages). Child splitting by MDTS (1.4) is independent of these port limits | R2-5; src/nvme2k.c:181, 196 |
-| 0.9 | **Queue capability validation** (moved from 3.5): power-of-two queue sizes from a widened MQES; CAP.MPSMIN/MPSMAX against the host page size; doorbell stride and BAR range checked before the first doorbell write. Needed before any translated I/O | #14, R2-10 |
-| 0.10 | **Recovery contract** (below), written from the gate results and implemented on the engine. Exit: the contract is written down with the measured port behaviour, and the bring-up-failure, delayed-RDY, failed-disable, stop-without-acknowledgement, presence-loss (including the gone-deadline outcome of MD-1), abort, parent-cancellation and reopen tests pass on 98 SE, 2000, XP, XP x64, 7 x86 and 7 x64 | R2-1, R3-1 to R3-4, R4-1, R4-3, R4-4, H1, MD-1; src/nvme2k.c:837, 1298 |
-| 0.11 | **NT callback, state and resource matrix** (below), implemented for `HwAdapterControl` and `SRB_FUNCTION_SHUTDOWN`/`FLUSH` | R2-2, R3-5, R3-7; src/nvme2k.c:1118, 1334, 1351; nvme2k_nvme.c:744 |
-| 0.12 | **Windows 9x IOS integration prototype** on 98 SE and ME: decide whether stock IOS and Configuration Manager behaviour is enough for removal and re-arrival, or whether a helper VxD is needed. Name the owner of each: IOS linkage block (ILB) access, DCB identity and lifetime, volume removal and re-arrival, callback teardown on unload. If a helper VxD is needed, its build target, INF install and load order become phase-0 work items. Its minimal form runs first as gate G9, which also settles 9x config-space access (3.4) and G5's memory lifetime on 9x. Feeds 2.7. **G9 result: on 98 SE no helper VxD is needed** (nor NVMEVSD.VXD): IOS, CONFIGMG and the stock port handle arrival, orderly removal, dismount, the open-file veto and re-arrival with the plain `.mpd`; no VxD build target, INF install or load-order item is added for 98 SE. Qualified (R6-8): the measured IOS was QuickInstall's updated set, not gold 98 SE (gold `SCSIPORT.PDR` measured, gold IOS *inferred* from static analysis); the orderly-removal stop ran the inherited shutdown code inside `HwAdapterState(FALSE)` (RDY=0 seen), so a bounded stop and a stop whose disable fails are not yet shown. Owners: IOS/CONFIGMG own DCB identity, lifetime and volume removal (only CONFIGMG `Remove_SubTree`/`Reenumerate_DevNode` removes a surprise-removed volume, driven by xhci98's CM or the user); the miniport owns failing requests fast. **Windows Me is blocked**: its port never calls a stop (`HwAdapterState(FALSE)`), at removal or at shutdown; its only shutdown notification is `SRB_FUNCTION_SHUTDOWN`, which arrives only with `CachesData` TRUE (measured). See MD-5 | R2-6, R3-8, R4-2, G9; src/sources (miniport only) |
+| 0.0 | **Feasibility gates** (below): minimal prototypes on each port, with the harness's fault injection, answering the port and IOS questions the contracts depend on. Runs right after 0.1; its results fix the contracts 0.10-0.12. **Status 2026-10-15: complete on 2000 and XP x64, mostly on 7 x64; 9x partial** ("Phase 0.0 results" below): G1 passes on 2000, XP x64 and 7 x64; G2, G4 and G7 (resume path, allocations and resume-failure semantics) on 2000, XP x64 and 7 x64; G3 with the link-state table (MD-6) and G6 on 2000 and XP x64; G8's 2000 shutdown failure is resolved by the restartable SHUTDOWN, demonstrated (Q-NT); G9 passes on 98 SE with QuickInstall's IOS (orderly stop shown only with the inherited shutdown code); G5 fails on 2000, XP x64, 7 x64 and Me (MD-3 (a) on NT, MD-4 on 9x) and G9 on Me (MD-5 open); still open: G3 on 9x, 9x G1/G4, G6 on 7 x64, and XP x86, Vista and 7 x86 | plan review, 2026-10-14/15 |
+| 0.1 | Buildable target matrix from one tree: 9x (`.mpd`), NT x86 and a **minimal NT amd64 build** (compiles and links with WDK 7.1 `wnet`/`win7` amd64; intrinsics instead of `atomic.h` inline assembly, 9x VMM/PTE code excluded). CI-style build script per toolchain. Every later commit keeps all three building | AGENTS.md |
+| 0.2 | **Parent/child request engine.** A parent (the SRB) owns its original buffer and length, fragment list, phase, outstanding-child count, first error, deadline, locks and resources. Each live CID maps to (child, controller generation); CIDs are no longer derived from `QueueTag` (on 9x `QueueTag` is a rolling request number and every SRB is untagged at depth 1, G9). The parent completes exactly once, after every child has completed or been safely quiesced (0.10); all copies and bookkeeping finish before `RequestComplete`, and the SRB is never touched afterwards. A failed fragment does not undo fragments already written. The parent also carries a **cancellation state** (0.10, "Parent cancellation"): once abort, reset or removal suppresses any required unfinished work, the parent can no longer complete with success. Final status comes from the parent error mapping below | src/nvme2k.h:167, nvme2k_nvme.c:368, nvme2k_cpl.c:509 |
+| 0.3 | **Admission control without blocking.** Driver-owned limits for admitted parents, live children, PRP pages and bounce buffers. Accepted SRBs wait in a bounded pending list and are advanced from synchronized completion/timer callbacks; `NextRequest`/`NextLuRequest` are withheld while capacity is exhausted. Alternative: before issuing any child, complete with `SRB_STATUS_BUSY`. Never return BUSY after partial execution, never hold a completed SRB, never use BUSY for removal. No sleeping, event waits or spinning in StartIo/ISR. **Hold-then-BUSY (G1, measured):** a request held with no child issued (bring-up, or capacity exhausted) is held for at most a fraction of its own SRB `TimeOutValue`, measured as elapsed time (the prototype used a quarter, counted in ticks), then completed `SRB_STATUS_BUSY` and held again when re-sent. Pure hold is unsafe: Windows 2000's bus-scan INQUIRY has a 4 s timeout and the port reset it at 6 s RDY. On 9x `TimeOutValue` is unusable (0 on 98 SE and pointer-like garbage on Me for TEST UNIT READY and READ CAPACITY, G9), so 9x uses a fixed hold bound. **The port's BUSY limit (Q-NT, 2000, XP x64, 7 x64):** each port re-issues an SRB completed `SRB_STATUS_BUSY` 20 times (21 BUSY completions), then fails it to its owner. The limit is a count, not a time (holds of 1.5-4 s gave the same count); the retries come about 1.56 s apart on 2000 and about 1.0 s on XP x64 and 7 x64, and the bus scan issues INQUIRY 3 times (63 BUSY in all). So one request can be carried for at most 21 x (hold + the port's retry delay); with a quarter-`TimeOutValue` hold that is about 33 s per INQUIRY issue on 2000, shorter than the largest CAP.TO (127.5 s). Therefore the hold uses most of the request's `TimeOutValue` (elapsed time, minus a margin; on 2000 about 3 s of the INQUIRY's 4 s, about 95 s per issue), the driver never completes BUSY more than 20 times for one SRB and fails the request itself before what would be the 21st BUSY, and the bring-up deadline stays CAP.TO, after which the request completes in the failed state. Not measured: the disk class driver's own retries on top of the port's limit for READ/WRITE. **As implemented (engine):** the hold is `TimeOutValue` minus half of it (at least 1 s), measured with the larger elapsed estimate (0.10, "Which clock, which bound"; half, not a quarter, because the estimate can still be off). Coverage of CAP.TO: the bus scan (INQUIRY 4 s on 2000, 3 issues) 21 x (2 s + 1.56 s) x 3 = about 224 s, above the largest CAP.TO (127.5 s); I/O behind a re-enable (after a restartable shutdown or a reset; READ/WRITE with the disk class driver's 10 s) about 138 s per issue on 2000 and about 126 s on XP x64 and 7 x64, so a CAP.TO above about 126 s there relies on the class driver's own retry (not measured). **9x measured (engine, 98 SE, 2026-10-15):** with RDY delayed 6 s at the bus scan, the INQUIRY held for `hold9x` (4 s, now measured with the OS clock) and completed BUSY is not re-sent by IOS: the disk is not found (a second scan after RDY finds it). Before the qualified clock the 9x hold ran on a TSC calibrated far too slow there (0.1x) and nominal ticks, which stretched it past such RDY delays by accident. **9x rule (Q-9x, implemented on review):** on 9x the bus-scan INQUIRY held during bring-up is never completed BUSY: it stays held until bring-up succeeds (then it is replayed) or fails (then it fails as in the failed state); bring-up is bounded by CAP.TO. A `HwResetBus` during bring-up returns FALSE and completes nothing (the port calls it again about every 7.5 s and never completes the held SRB itself; completing the held INQUIRY with BUS_RESET after a TRUE return made Me's port fail `ScsiPortInitialize` and unload the adapter, Q-9x G1). Other requests held on 9x keep the fixed `hold9x` bound | G1, Q-NT; nvme2k_scsi.c:35, nvme2k.c:54 |
+| 0.4 | **Per-child PRP construction.** PRPs built from each child's buffer offset and byte count; validate address, contiguous length, page alignment and list capacity for every mapping. Bounce buffers and PRP list pages are carved from the **uncached extension**, the memory the port can translate with `ScsiPortGetPhysicalAddress(..., NULL, ...)` (pool and device-extension memory cannot be translated that way). **This rule is conditional on MD-3/MD-4:** if MD-3 option (b) is chosen, bounce buffers, PRP list pages and queues come from the driver-owned pool instead, their physical addresses are recorded at allocation, and `ScsiPortGetPhysicalAddress(..., NULL, ...)` is no longer their translation route (dump mode keeps the uncached extension, 4.1). Caller storage is translated with the SRB; `MapBuffers=TRUE` kept for CPU copies. Bounced edges and the direct middle are separate commands (PRP lists cannot concatenate them in general). **9x caller buffer (xhci98 roadmap 42-A.33, 2026-10-19):** on 98 SE and ME, `Srb->DataBuffer` is the first fragment of the IOR's logical scatter/gather list when the IOR has `IORF_SCATTER_GATHER` (every file-system request does), so `DataBuffer + offset` is wrong past that fragment. The engine resolves every CPU access to the caller's data (the bounce copies in both directions and the PRP1 page-offset check) through that list, as SCSIPORT itself does (`src/sg9x.h`: `Sg9xClassify`, `Sg9xResolve`, `Sg9xCopy`; `EngCallerVa`, `EngCallerCopy` in `engine.c`). The IOP comes from `PORT_SRB.SrbIopPointer` (Win98 DDK `block\inc\SCSIPORT.H`, offset 0x40); `IOP_srb`, `IOP_ior`, `IOR_flags`, `IOR_buffer_ptr` and `DCB_apparent_blk_shift` from the DDK's `IOP.H`, `IOR.H` and `DCB.H`. The same layout and walk were read in SCSIPORT.PDR of 98 SE 4.10.2222, the 4.10.2223 update and ME (no 98 FE copy was available; `docs/INVESTIGATION-9X-REQUEST-SIZE.md`, section 7). A request is classified as linear (no SG flag), SG list, or unknown. It is unknown when a pointer lies outside the system arena, the IOP does not point back at the SRB, or the first fragment is not `DataBuffer`. Byte-counted lists (`IORF_CHAR_COMMAND`) use byte counts. No alignment is required: IOS's big-request splitter passes a one-entry list at an odd address. A span that cannot be resolved is never copied through a guessed address: the mapping is refused, the bounce copy refuses, and the parent fails with HARDWARE ERROR, ASC 44h. A write fails before its child is issued; a read fails at completion. Children already issued still quiesce first. Before this, a bounced file-system request copied through the wrong addresses (an emulator page fault, reproduced). Pass-through requests (IOR function 0Fh, ASPI) arrive with linear buffers. NT is unchanged | nvme2k_nvme.c:608 |
+| 0.5 | Allocation separate from hardware init; allocations aligned against their **physical** address; lifecycle flags reset on every start. Allocations are reused only where gates G5 and G7 show the port preserves them (expected: power stop and resume); after a stop for removal or resource rebalance the driver assumes they may have been freed and reacquires (0.11). Memory the controller may still reach is never handed back to the port (0.10, stop path). **Measured (G5, G7, G9):** on 2000 and XP x64 a power stop preserves the device extension (not zeroed) and the uncached extension (same VA/PA, contents intact), so reuse across power applies on both, with the sub-allocator and lifecycle flags reset on every start (the base lacked this). A removal stop frees and reuses both within seconds, acknowledged or not (7 x64 the same, at once, Q-NT), and a surprise removal frees them with no callback; the driver image is unloaded with its last device. On 9x the `.mpd` is unloaded at every removal and its extensions freed. DMA-reachable memory stays in the port's allocations on NT (MD-3 (a), decided) and comes from a `_PageAllocate` pool on 9x (MD-4, decided, to be prototyped). **`ArgumentString` is NULL at resume** on 2000, XP x64 and 7 x64 (Q-NT): `ConfigInfo` values (`CachesData` above all) are constants, never derived from DriverParameter, and registry-derived tunables are parsed once and kept in the device extension (which survives resume), never re-parsed from a NULL `ArgumentString` | N2, #8, #11, G5, G7, G9; utils.c:707 |
+| 0.6 | **DMA-safe reset and abort.** Release a buffer only on DMA-isolation evidence (0.10). Do not reuse queues/CIDs until old completions are excluded. Invalidate child mappings, pending parents, locks and timers together | #1; nvme2k.c:1290 |
+| 0.7 | **Lifecycle state definitions** (moved forward from phase 2): starting, running, resetting, stopping, stopped, gone, failed. For each state: which callbacks may arrive, whether new SRBs are admitted, who owns outstanding SRBs, whether the timer may rearm. All-ones CSTS/MMIO (or config space, where read) is a presence-loss trigger into `gone`, not proof that DMA has stopped; `gone` holds SRBs until isolation evidence or the gone deadline (0.10). Absent hardware is distinguished from present-but-fatal (CSTS.CFS) and stuck hardware | #7 |
+| 0.8 | **DMA and transfer negotiation in `HwFindAdapter`.** Today `MaximumTransferLength` (256 KiB) and `NumberOfPhysicalBreaks` (511) are set unconditionally. Instead: keep any lower value the port supplied (registry `MaximumSGList` and similar), treat `SP_UNINITIALIZED_VALUE` as "no port limit"; set `Dma32BitAddresses`/`Dma64BitAddresses`, `Master`, `ScatterGather`, `AlignmentMask` and the limits **before** `ScsiPortGetUncachedExtension`, which fixes the DMA adapter from them; size PRP list pages for the worst-case buffer offset (a buffer of N pages at a non-zero page offset touches N+1 pages). Child splitting by MDTS (1.4) is independent of these port limits | src/nvme2k.c:181, 196 |
+| 0.9 | **Queue capability validation** (moved from 3.5): power-of-two queue sizes from a widened MQES; CAP.MPSMIN/MPSMAX against the host page size; doorbell stride and BAR range checked before the first doorbell write. Needed before any translated I/O | #14 |
+| 0.10 | **Recovery contract** (below), written from the gate results and implemented on the engine. Exit: the contract is written down with the measured port behaviour, and the bring-up-failure, delayed-RDY, failed-disable, stop-without-acknowledgement, presence-loss (including the gone-deadline outcome of MD-1), abort, parent-cancellation and reopen tests pass on 98 SE, 2000, XP, XP x64, 7 x86 and 7 x64 | MD-1; src/nvme2k.c:837, 1298 |
+| 0.11 | **NT callback, state and resource matrix** (below), implemented for `HwAdapterControl` and `SRB_FUNCTION_SHUTDOWN`/`FLUSH` | src/nvme2k.c:1118, 1334, 1351; nvme2k_nvme.c:744 |
+| 0.12 | **Windows 9x IOS integration prototype** on 98 SE and ME: decide whether stock IOS and Configuration Manager behaviour is enough for removal and re-arrival, or whether a helper VxD is needed. Name the owner of each: IOS linkage block (ILB) access, DCB identity and lifetime, volume removal and re-arrival, callback teardown on unload. If a helper VxD is needed, its build target, INF install and load order become phase-0 work items. Its minimal form runs first as gate G9, which also settles 9x config-space access (3.4) and G5's memory lifetime on 9x. Feeds 2.7. **G9 result: on 98 SE no helper VxD is needed** (nor NVMEVSD.VXD): IOS, CONFIGMG and the stock port handle arrival, orderly removal, dismount, the open-file veto and re-arrival with the plain `.mpd`; no VxD build target, INF install or load-order item is added for 98 SE. Qualified: the measured IOS was QuickInstall's updated set, not gold 98 SE (gold `SCSIPORT.PDR` measured, gold IOS *inferred* from static analysis); the orderly-removal stop ran the inherited shutdown code inside `HwAdapterState(FALSE)` (RDY=0 seen), so a bounded stop and a stop whose disable fails are not yet shown. Owners: IOS/CONFIGMG own DCB identity, lifetime and volume removal (only CONFIGMG `Remove_SubTree`/`Reenumerate_DevNode` removes a surprise-removed volume, driven by xhci98's CM or the user); the miniport owns failing requests fast. **Windows Me is blocked**: its port never calls a stop (`HwAdapterState(FALSE)`), at removal or at shutdown; its only shutdown notification is `SRB_FUNCTION_SHUTDOWN`, which arrives only with `CachesData` TRUE (measured). See MD-5 | G9; src/sources (miniport only) |
 
 #### Feasibility gates (0.0)
 
@@ -135,15 +139,15 @@ rely on.
 
 | Gate | Question | Pass condition | If it fails | Source |
 |---|---|---|---|---|
-| G1 Deferred bring-up | Can `HwInitialize` (and the resume path, G7) set CC.EN, return TRUE and finish bring-up (RDY, queue creation, identify, namespace selection) from the timer, holding requests or returning BUSY before any child is issued until it is ready? | On each port, with RDY delayed well past the callback budget and, separately, with identify failing: the bus scan completes (disk present, or no disk), no SRB times out into a port reset during bring-up, and a failed bring-up ends in state `failed` with the adapter started and its memory still owned | That port uses synchronous bring-up in `HwFindAdapter` and returns failure only before CC.EN was ever written, after an acknowledged disable, or after Bus Master Enable was cleared and read back (config writes are permitted there). If none of these fits the port's rules, the port is blocked pending a maintainer decision | R3-1 |
-| G2 Gone-state hold | (Was "config-space presence"; withdrawn as an evidence gate in round 4: an all-ones config read is presence-loss evidence only, and NT runtime callbacks have no legal config access, R4-1, R4-2.) What does each port do while the miniport holds SRBs in `gone` up to and beyond the gone deadline (0.10): does the port's own SRB timeout fire, does it then call `HwResetBus` (G4), and does it retire the held SRBs itself before the OS removal path? | Measured and recorded per port with the tunnel gate closed and no G3 notification; the port never completes a held SRB before the OS has itself established removal | As G4's consequence | R4-1, R4-2 |
-| G3 CM link-down notification | Can xhci98's CM tell stor98 that it has torn down the tunnel carrying the controller (so the PCIe link to the function went down, assumption A1 of 0.10), sent only **after completed quiescence** (the notification boundary in 0.10, evidence 2) and before the OS removal path starts? The sending side is owned by the xhci98 CM driver; stor98 owns the receiving interface | Two stages (R4-7). **Interface prototype:** the notification is delivered on 98 SE and on one NT port; interface named (9x: a VxD service or registered callback; NT candidate: `IOCTL_SCSI_MINIPORT` with an stor98 signature). **Per-port qualification**, required on every OS and architecture (98 SE, ME, 2000, XP, XP x64, Vista, 7 x86 and x64) that relies on G3 for isolation evidence: (1) delivery at every injection point; (2) ordering: after completed quiescence and before that OS's first removal callback, checked in the host trace (in usb4-emu, the notification's marker timestamp is later than the stage-2 endpoint reset/quiesce completion trace event); (3) queue saturation: delivered within the gone deadline while the admission limit and the port's queues are full of held SRBs (on NT the IOCTL must not queue behind them). **Result:** the IOCTL fails (3); the NT interface is the CM-owned link-state table (MD-6, [`include/stor98cm.h`](../include/stor98cm.h)) | Without G3 on an OS, surprise removal there has only evidence 1 (impossible on absent hardware) and evidence 3 (an ownership event, not isolation, R6-1); the gone-deadline outcome (decision MD-1) applies to that OS | R3-2, R4-1, R4-7, M1 |
-| G4 Port after a failed reset | What does each port do when `HwResetBus` returns FALSE, or returns while the miniport still holds SRBs: complete them itself, call the reset again, or start removal? | Measured and recorded per port, and the port never completes a held SRB while the device may still reach its buffer (a forced completion only after the OS has itself established removal) | The held-SRB design of the unresponsive row is not safe on that port; the port is blocked pending a maintainer decision | R3-3 |
-| G5 Memory lifetime at stop | Does the port free or reuse the uncached extension (and SRB extensions) after `ScsiStopAdapter` for removal, rebalance and power, and when relative to the callback's return? Does it call the stop in a context where a longer bounded poll is acceptable? 9x: the same for Configuration Manager stop/remove (from G9) | Either the port keeps the memory while the controller has not acknowledged disable, or the stop path always obtains evidence within its budget (RDY=0 within budget on every tested controller model, or a G3 link-down notification already received; all-ones reads do not count, R4-1) | The stop path cannot be made DMA-safe on that port; the port is blocked pending a maintainer decision | R3-4 |
-| G6 Dump-mode timing and reset | Does each NT dump port tolerate a synchronous dump-mode `HwInitialize` that polls up to CAP.TO in short stalls, and which reset requests does it send during dump I/O? | Crash dump and hibernate complete with RDY delayed by 2 s, and a bus-reset request during dump I/O is disregarded without failing the dump | Scenario C (phase 4) is unsupported on that port | R3-6, R3-4 |
-| G7 Resume path | With `ScsiRestartAdapter` not advertised, does the port resume through `HwFindAdapter`/`HwInitialize`, and are allocations preserved? | Resume works through the normal init path with the failure semantics of the bring-up rule (0.10) | Advertise `ScsiRestartAdapter` on that port only with measured evidence of how the port handles each return value; `ScsiAdapterControlUnsuccessful` is never returned without it | R3-7 |
-| G8 Final shutdown trigger | For each OS and each `CachesData` setting, which callback arrives after the last I/O at system shutdown, hibernate and Device Manager disable (`ScsiStopAdapter`, `SRB_FUNCTION_SHUTDOWN`, a 9x IOS or Configuration Manager event)? | A final trigger is identified for each OS and recorded in 0.11 | CC.SHN is issued on the last shutdown notification seen, and any later I/O re-enables the controller first (tested) | R3-5 |
-| G9 9x IOS integration | 0.12 in minimal form. Also, separately (R4-2): which PCI config-space access method is legal from 9x runtime callbacks, and from which ones, for Bus Master Enable (evidence 4) and 3.4. A 9x config read is a presence signal only, like MMIO, never isolation evidence | as 0.12; for config access, a method is named per callback with its serialisation against other config users | as 0.12; without a legal runtime method, 9x config access is confined to initialisation, as on NT | R2-6, R4-2 |
+| G1 Deferred bring-up | Can `HwInitialize` (and the resume path, G7) set CC.EN, return TRUE and finish bring-up (RDY, queue creation, identify, namespace selection) from the timer, holding requests or returning BUSY before any child is issued until it is ready? | On each port, with RDY delayed well past the callback budget and, separately, with identify failing: the bus scan completes (disk present, or no disk), no SRB times out into a port reset during bring-up, and a failed bring-up ends in state `failed` with the adapter started and its memory still owned | That port uses synchronous bring-up in `HwFindAdapter` and returns failure only before CC.EN was ever written, after an acknowledged disable, or after Bus Master Enable was cleared and read back (config writes are permitted there). If none of these fits the port's rules, the port is blocked pending a maintainer decision | plan review, 2026-10-14/15 |
+| G2 Gone-state hold | (Was "config-space presence"; withdrawn as an evidence gate on review: an all-ones config read is presence-loss evidence only, and NT runtime callbacks have no legal config access, G9.) What does each port do while the miniport holds SRBs in `gone` up to and beyond the gone deadline (0.10): does the port's own SRB timeout fire, does it then call `HwResetBus` (G4), and does it retire the held SRBs itself before the OS removal path? | Measured and recorded per port with the tunnel gate closed and no G3 notification; the port never completes a held SRB before the OS has itself established removal | As G4's consequence | plan review, 2026-10-14/15 |
+| G3 CM link-down notification | Can xhci98's CM tell stor98 that it has torn down the tunnel carrying the controller (so the PCIe link to the function went down, assumption A1 of 0.10), sent only **after completed quiescence** (the notification boundary in 0.10, evidence 2) and before the OS removal path starts? The sending side is owned by the xhci98 CM driver; stor98 owns the receiving interface | Two stages. **Interface prototype:** the notification is delivered on 98 SE and on one NT port; interface named (9x: a VxD service or registered callback; NT candidate: `IOCTL_SCSI_MINIPORT` with an stor98 signature). **Per-port qualification**, required on every OS and architecture (98 SE, ME, 2000, XP, XP x64, Vista, 7 x86 and x64) that relies on G3 for isolation evidence: (1) delivery at every injection point; (2) ordering: after completed quiescence and before that OS's first removal callback, checked in the host trace (in usb4-emu, the notification's marker timestamp is later than the stage-2 endpoint reset/quiesce completion trace event); (3) queue saturation: delivered within the gone deadline while the admission limit and the port's queues are full of held SRBs (on NT the IOCTL must not queue behind them). **Result:** the IOCTL fails (3); the NT interface is the CM-owned link-state table (MD-6, [`include/stor98cm.h`](../include/stor98cm.h)) | Without G3 on an OS, surprise removal there has only evidence 1 (impossible on absent hardware) and evidence 3 (an ownership event, not isolation); the gone-deadline outcome (decision MD-1) applies to that OS | plan review, 2026-10-14/15 |
+| G4 Port after a failed reset | What does each port do when `HwResetBus` returns FALSE, or returns while the miniport still holds SRBs: complete them itself, call the reset again, or start removal? | Measured and recorded per port, and the port never completes a held SRB while the device may still reach its buffer (a forced completion only after the OS has itself established removal) | The held-SRB design of the unresponsive row is not safe on that port; the port is blocked pending a maintainer decision | plan review, 2026-10-14/15 |
+| G5 Memory lifetime at stop | Does the port free or reuse the uncached extension (and SRB extensions) after `ScsiStopAdapter` for removal, rebalance and power, and when relative to the callback's return? Does it call the stop in a context where a longer bounded poll is acceptable? 9x: the same for Configuration Manager stop/remove (from G9) | Either the port keeps the memory while the controller has not acknowledged disable, or the stop path always obtains evidence within its budget (RDY=0 within budget on every tested controller model, or a G3 link-down notification already received; all-ones reads do not count) | The stop path cannot be made DMA-safe on that port; the port is blocked pending a maintainer decision | plan review, 2026-10-14/15 |
+| G6 Dump-mode timing and reset | Does each NT dump port tolerate a synchronous dump-mode `HwInitialize` that polls up to CAP.TO in short stalls, and which reset requests does it send during dump I/O? | Crash dump and hibernate complete with RDY delayed by 2 s, and a bus-reset request during dump I/O is disregarded without failing the dump | Scenario C (phase 4) is unsupported on that port | plan review, 2026-10-14/15 |
+| G7 Resume path | With `ScsiRestartAdapter` not advertised, does the port resume through `HwFindAdapter`/`HwInitialize`, and are allocations preserved? | Resume works through the normal init path with the failure semantics of the bring-up rule (0.10) | Advertise `ScsiRestartAdapter` on that port only with measured evidence of how the port handles each return value; `ScsiAdapterControlUnsuccessful` is never returned without it | plan review, 2026-10-14/15 |
+| G8 Final shutdown trigger | For each OS and each `CachesData` setting, which callback arrives after the last I/O at system shutdown, hibernate and Device Manager disable (`ScsiStopAdapter`, `SRB_FUNCTION_SHUTDOWN`, a 9x IOS or Configuration Manager event)? | A final trigger is identified for each OS and recorded in 0.11 | CC.SHN is issued on the last shutdown notification seen, and any later I/O re-enables the controller first (tested) | plan review, 2026-10-14/15 |
+| G9 9x IOS integration | 0.12 in minimal form. Also, separately: which PCI config-space access method is legal from 9x runtime callbacks, and from which ones, for Bus Master Enable (evidence 4) and 3.4. A 9x config read is a presence signal only, like MMIO, never isolation evidence | as 0.12; for config access, a method is named per callback with its serialisation against other config users | as 0.12; without a legal runtime method, 9x config access is confined to initialisation, as on NT | plan review, 2026-10-14/15 |
 
 #### Phase 0.0 results
 
@@ -151,7 +155,7 @@ Run 2026-10-14/15 in usb4-emu (TCG; i440FX for 98 SE, Me, 2000 and XP x64, q35 f
 One record per gate under [gates/](gates/), with its evidence; the prototypes stay on the
 `phase0-*` branches (and `qual-nt` for the NT qualification runs) named in each record and
 are not on `main`. **Status: complete on 2000 and XP x64, mostly complete on 7 x64, partial
-on 9x (R6-8).** G1 passes on 2000, XP x64 and 7 x64. G2 and G4 pass on 2000, XP x64 and
+on 9x.** G1 passes on 2000, XP x64 and 7 x64. G2 and G4 pass on 2000, XP x64 and
 7 x64 ([Q-NT](gates/Q-NT.md) for 7 x64; G4's stuck-controller variant not run on 7). G7 is a
 full pass on 2000, XP x64 and 7 x64: resume path, allocation reuse and the resume-failure
 semantics with the deferred bring-up and no `ScsiRestartAdapter` (Q-NT). G8 passes for
@@ -198,9 +202,9 @@ Still open in 0.0:
   enclosure is the next measurement).
 - Windows Me: Device Manager Disable, standby and hibernate not tested.
 
-#### Qualification before dependent product code (R6)
+#### Qualification before dependent product code
 
-Verdict of review round 6: **build work (0.1) and isolated request-engine scaffolding (the
+Verdict of the review of the phase 0.0 results (2026-10-15): **build work (0.1) and isolated request-engine scaffolding (the
 parts of 0.2-0.3 that need no lifecycle, memory-placement or shutdown decision, testable in
 the unit harness) may proceed.** The allocation, shutdown and removal contracts need
 resolution before any product code that depends on them. Each item below must pass, or
@@ -209,14 +213,14 @@ have its maintainer decision recorded, before the code that depends on it is wri
 | Item | Blocks | Status (2026-10-15) |
 |---|---|---|
 | Windows 7 x64 runs of G2, G4, G5 and G7 (and 7 x86, XP x86 and Vista where they are claimed) | gone-state, reset, stop and resume code on those OSes | **done for 7 x64** ([Q-NT](gates/Q-NT.md)): G2, G4, G7 pass, G5 fails (MD-3 (a) covers it). Open: G4 stuck-controller and G5 surprise-removal variants on 7; XP x86, Vista and 7 x86 (no VM) |
-| Combined G1 + G7 prototype: resume failure with the deferred bring-up and `ScsiRestartAdapter` not advertised (R6-7) | the resume-failure handling of 0.10 and 0.11 | **done**: pass on 2000, XP x64 and 7 x64 (Q-NT item 2) |
-| Windows 2000 shutdown with CC.SHN actually written on each `SRB_FUNCTION_SHUTDOWN`, and re-enable on the I/O between them (R6-5) | the restartable shutdown notification of 0.11 | **done**: demonstrated on 2000 (two SHUTDOWNs, data verified), XP x64 and 7 x64 (Q-NT item 3); R6-5 closed |
+| Combined G1 + G7 prototype: resume failure with the deferred bring-up and `ScsiRestartAdapter` not advertised | the resume-failure handling of 0.10 and 0.11 | **done**: pass on 2000, XP x64 and 7 x64 (Q-NT item 2) |
+| Windows 2000 shutdown with CC.SHN actually written on each `SRB_FUNCTION_SHUTDOWN`, and re-enable on the I/O between them | the restartable shutdown notification of 0.11 | **done**: demonstrated on 2000 (two SHUTDOWNs, data verified), XP x64 and 7 x64 (Q-NT item 3); closed |
 | Port `SRB_STATUS_BUSY` retry limit for long RDY waits | hybrid hold-then-BUSY (0.3) beyond the measured waits | **done**: 20 re-issues (21 BUSY) per request, count-based (Q-NT item 5; rule in 0.3). Open: class-driver retries on top for READ/WRITE |
 | 9x runs of G1 and G4 (deferred bring-up, failed reset on the 9x port; what the 9x port does after `HwResetBus` returns FALSE) | 9x bring-up, reset and gone-state code | open |
-| G3, on every OS where isolation relies on the CM notification (R4-7) | release of memory on evidence 2 on that OS | **done for 2000 and XP x64** with the link-state table (MD-6, [G3](gates/G3.md)); the product NT receiver (0.4.0.0) passed with xhci98 3.0.0.0's CM there too (TESTING "CM notification, product NT receiver"). Open: 98 SE and Me (designed, not prototyped; rendezvous pending MD-5), 7 x64, XP x86, Vista, 7 x86 (xhci98 withholds the statement there, so MD-1 applies) |
-| G6, including dump scenario C; the allocation interface must keep a separate dump-mode route (R6-2) | phase 4; and any allocation interface (0.5) that dump mode would otherwise share | **done for 2000 and XP x64** ([G6](gates/G6.md)). Open: 7 x64 (and XP x86, Vista, 7 x86) |
-| Flush and SHST latency against the stop-callback budget, per OS and controller (R6-3) | the stop path's durability claim (0.10 stop) | **measured in the emulator** (Q-NT item 4): Flush within the budget refuted for the XP x64 and 7 disable stop; **decided as MD-7 (a)** (idle flush plus accept-and-document). Open: real-SSD latency |
-| MD-4 pool prototype: operational queues, PRP lists and bounce buffers in the `_PageAllocate` pool, not only a sentinel (R6-2) | adoption of the 9x pool | **integrated on `int-0.2` (2026-10-16, after D4 was adopted; [INTEGRATION-0.2.md](INTEGRATION-0.2.md)); the rest of this cell is the state of 2026-10-15.** Prototyped on branch `qual-9x` (Q-9x item 3, pass on 98 SE and Me in the emulator), not integrated in the engine then. Known blocker (review round 2, P1-1): integrate on D4 adoption. The pool records live in interface 3 of `include/stor98cm.h`, which D4 (adopted 2026-10-16) settled, so the engine took the provider only after that decision. Until then the engine's 9x build still carves its DMA memory from the port's uncached extension, which the 9x port frees when it unloads the `.mpd` at removal: after the MD-1 gone deadline that memory stays quarantined (owned, out of every pool) only until that removal, so 9x removal after unconfirmed isolation can free memory the device might still reach (G5 on 9x, review round 2 P1-1). Each such quarantine is counted and logged (`STG_DMA_GAP`). **The engine side is ready:** the provider hook in `src/platform.h` (`PLAT_DMA_PROVIDER`: `Acquire` before any CC write and without writing memory a previous load may have left reachable, `PagePa` per page, `Note` for record owner changes in the interface 3 states: RESERVED, OWNED and ISOLATED while this load holds a block, RELEASED or QUARANTINED only when the engine relinquishes it for good: at the end of its stop, review round 3 N2, or on 9x when an interface 3 removal transaction's disable is acknowledged, after the queue gates close (accepted in the `int-0.2` review, 2026-10-16; [INTEGRATION-0.2.md](INTEGRATION-0.2.md)); `HoldsPastRemoval`); every engine allocation goes through `PlatDmaAlloc` and every page given to the controller through `PlatDmaPagePa`; a build with `STOR98_DMA_POOL` takes `PlatDmaPoolProvider` on 9x and fails the find before CC.EN when the pool cannot be had (no silent fallback). Integration work: the pool module (allocation, cap, records in the CM table, reclaim on a newer link generation) implementing that table, plus the per-boot rendezvous of Q-9x item 2 |
+| G3, on every OS where isolation relies on the CM notification | release of memory on evidence 2 on that OS | **done for 2000 and XP x64** with the link-state table (MD-6, [G3](gates/G3.md)); the product NT receiver (0.4.0.0) passed with xhci98 3.0.0.0's CM there too (TESTING "CM notification, product NT receiver"). Open: 98 SE and Me (designed, not prototyped; rendezvous pending MD-5), 7 x64, XP x86, Vista, 7 x86 (xhci98 withholds the statement there, so MD-1 applies) |
+| G6, including dump scenario C; the allocation interface must keep a separate dump-mode route | phase 4; and any allocation interface (0.5) that dump mode would otherwise share | **done for 2000 and XP x64** ([G6](gates/G6.md)). Open: 7 x64 (and XP x86, Vista, 7 x86) |
+| Flush and SHST latency against the stop-callback budget, per OS and controller | the stop path's durability claim (0.10 stop) | **measured in the emulator** (Q-NT item 4): Flush within the budget refuted for the XP x64 and 7 disable stop; **decided as MD-7 (a)** (idle flush plus accept-and-document). Open: real-SSD latency |
+| MD-4 pool prototype: operational queues, PRP lists and bounce buffers in the `_PageAllocate` pool, not only a sentinel | adoption of the 9x pool | **integrated on `int-0.2` (2026-10-16, after D4 was adopted; [INTEGRATION-0.2.md](INTEGRATION-0.2.md)); the rest of this cell is the state of 2026-10-15.** Prototyped on branch `qual-9x` (Q-9x item 3, pass on 98 SE and Me in the emulator), not integrated in the engine then. Known blocker (on review): integrate on D4 adoption. The pool records live in interface 3 of `include/stor98cm.h`, which D4 (adopted 2026-10-16) settled, so the engine took the provider only after that decision. Until then the engine's 9x build still carves its DMA memory from the port's uncached extension, which the 9x port frees when it unloads the `.mpd` at removal: after the MD-1 gone deadline that memory stays quarantined (owned, out of every pool) only until that removal, so 9x removal after unconfirmed isolation can free memory the device might still reach (G5 on 9x; the blocker above). Each such quarantine is counted and logged (`STG_DMA_GAP`). **The engine side is ready:** the provider hook in `src/platform.h` (`PLAT_DMA_PROVIDER`: `Acquire` before any CC write and without writing memory a previous load may have left reachable, `PagePa` per page, `Note` for record owner changes in the interface 3 states: RESERVED, OWNED and ISOLATED while this load holds a block, RELEASED or QUARANTINED only when the engine relinquishes it for good: at the end of its stop (`platform.h`'s record states), or on 9x when an interface 3 removal transaction's disable is acknowledged, after the queue gates close (accepted in the `int-0.2` review, 2026-10-16; [INTEGRATION-0.2.md](INTEGRATION-0.2.md)); `HoldsPastRemoval`); every engine allocation goes through `PlatDmaAlloc` and every page given to the controller through `PlatDmaPagePa`; a build with `STOR98_DMA_POOL` takes `PlatDmaPoolProvider` on 9x and fails the find before CC.EN when the pool cannot be had (no silent fallback). Integration work: the pool module (allocation, cap, records in the CM table, reclaim on a newer link generation) implementing that table, plus the per-boot rendezvous of Q-9x item 2 |
 | MD-5: the Windows Me removal stop | Me support; the 9x G3 rendezvous | decided 2026-10-15 (handshake + write-through on Me); prototyped on `qual-9x` (Q-9x), integrated on `int-0.2` (2026-10-16) |
 
 #### Recovery contract (0.10)
@@ -227,7 +231,7 @@ Today `HwResetBus` completes every outstanding request immediately without touch
 hardware (src/nvme2k.c:1298), and the abort/reset SRBs return success without doing
 anything.
 
-**Stall budget (R3-4).** Each `ScsiPortStallExecution` call is at most 100 µs, and the
+**Stall budget.** Each `ScsiPortStallExecution` call is at most 100 µs, and the
 total stall in one callback invocation is under 1 ms, which is SCSIport's limit per
 routine (to be confirmed against the installed DDK documentation in 0.0; if the kit states
 a lower figure, that figure applies). This budget is separate from hardware deadlines
@@ -250,7 +254,7 @@ does not complete a shutdown: it is clean only when CSTS.SHST reads "shutdown pr
 complete". DMA resources are released only after an acknowledged disable or the other
 evidence below.
 
-**Assumption A1: link-down resets the endpoint (R4-1; accepted under MD-2).** On real
+**Assumption A1: link-down resets the endpoint (accepted under MD-2).** On real
 hardware, tearing down the USB4/Thunderbolt PCIe tunnel takes down the PCIe link above the
 endpoint (the virtual link between the host's PCIe downstream adapter and the device
 router's upstream port). The basis, from the PCIe Base Specification (r3.0 and later):
@@ -274,19 +278,19 @@ with an enclosure that has an internal PCIe switch. The emulator models it the s
 usb4-emu `docs/ARCHITECTURE.md` §4.4, stage 2 (quiesce) resets the endpoint after the gate
 closes, and a later `up` always realises a fresh endpoint.
 
-**Presence loss is not isolation (R4-1).** All-ones from CSTS, any MMIO register or a
+**Presence loss is not isolation.** All-ones from CSTS, any MMIO register or a
 config read means a completion timeout or Unsupported Request was turned into all-ones by
 the host. That is consistent with the link being down, but also with a hung device, a
 bridge that stopped decoding, or a fault that blocks the host-to-device direction while
 the device can still master DMA. It moves the adapter to `gone` and nothing else.
 
-**DMA-isolation evidence**, in order of preference (R3-2, R4-1):
+**DMA-isolation evidence**, in order of preference:
 
 1. *Controller disable acknowledged*, as defined above (CC.EN=0 and CSTS.RDY=0 read from a
    CSTS value that is not all-ones).
 2. *Link-down statement* (G3): xhci98's CM, which tore the tunnel down itself, reports that
    the PCIe link to this function went down. Under A1 that implies the endpoint was reset.
-   **Notification boundary (M1): after completed quiescence.** The CM may send the
+   **Notification boundary: after completed quiescence.** The CM may send the
    statement only once the tunnel's PCIe path is closed *and* the endpoint reset or drain
    has completed; a statement sent earlier, for example as the teardown starts, does not
    count. In usb4-emu, guest memory is safe only at the end of stage 2 of
@@ -311,8 +315,8 @@ the device can still master DMA. It moves the adapter to `gone` and nothing else
    the same table is to be found through a rendezvous that follows MD-5 (G3.md); designed,
    not prototyped.
 3. *OS-established removal*: `ScsiStopAdapter` after removal (NT), or the Configuration
-   Manager stop/remove (9x). **This is an ownership event, not proof of DMA isolation
-   (R6-1):** it says the OS has taken the device away from the driver, not that the device
+   Manager stop/remove (9x). **This is an ownership event, not proof of DMA isolation:**
+   it says the OS has taken the device away from the driver, not that the device
    can no longer master DMA. On NT it arrives after SCSIport has already retired the
    outstanding requests, so it is never the evidence for completing SRBs or freeing DMA
    memory; it only releases what the port leaves to the miniport (timers, state). On the
@@ -327,11 +331,11 @@ the device can still master DMA. It moves the adapter to `gone` and nothing else
    where PCI config writes are permitted (NT: `HwFindAdapter`, `ScsiSetRunningConfig`; 9x:
    per G9). Fallback only.
 
-Never on this list: all-ones MMIO or config reads, alone or together (R4-1); a controller
+Never on this list: all-ones MMIO or config reads, alone or together; a controller
 generation counter, which filters stale completions but cannot stop DMA; an NVMe Abort
-completion (R4-4, below).
+completion (below).
 
-**Gone state and its deadline (R4-1).** On presence loss the adapter enters `gone`: no new
+**Gone state and its deadline.** On presence loss the adapter enters `gone`: no new
 child is issued, new SRBs are fast-failed with the terminal status of 2.2 (safe, since they
 never reached the device), and SRBs already issued stay held with their buffers owned. The
 driver then waits for evidence 1 (if CSTS becomes readable again) or 2, up to the **gone
@@ -353,8 +357,8 @@ G2 and G9, it is set as follows:
   run late), and the TSC is re-calibrated against it. The TSC estimate is a monotonic
   accumulated millisecond count: each reading folds the TSC units since the previous one
   at the rate then in force, so a re-calibration prices only later units and never
-  re-prices an interval that has already elapsed (review round 2: dividing old stamps by
-  a new rate made elapsed estimates jump). **Rule (corrected in review round 2):** two
+  re-prices an interval that has already elapsed (corrected on review: dividing old stamps
+  by a new rate made elapsed estimates jump). **Rule (as corrected):** two
   kinds of decision are kept apart. *Permission to release*, that is every deadline whose
   expiry completes an SRB the device may still reach or releases memory without isolation
   evidence (the gone deadline and the per-SRB bound below), and every hardware wait that
@@ -369,7 +373,7 @@ G2 and G9, it is set as follows:
   slow. The earlier rule, which measured the per-SRB bound with the larger estimate, was
   wrong: either check can release the same buffers, so a TSC running 2x fast released an
   SRB about one real second after admission when its bound was two seconds away.
-- **Per-SRB bound (R6-6).** The port times each SRB from when it was started, not from
+- **Per-SRB bound.** The port times each SRB from when it was started, not from
   presence loss, so a deadline measured only from entering `gone` can outlast an SRB that
   was already outstanding for a while. On NT each held SRB therefore has its own effective
   deadline: the earlier of (entry into `gone` + the gone deadline) and (the time the SRB
@@ -429,7 +433,7 @@ below applies and the deadline is cancelled. If the deadline passes with neither
 Recovery from `gone` without removal (the tunnel reopens before the OS removes the device)
 follows the reopen invariant below.
 
-**Reopen invariant (R4-3).** Memory released on evidence 2 must stay unreachable if the
+**Reopen invariant.** Memory released on evidence 2 must stay unreachable if the
 tunnel reopens before the driver has reset the controller. That holds only because of A1
 and two obligations on the CM (MD-2): xhci98's CM re-establishes a tunnel only to an
 endpoint whose link went down since the last tunnel (so it was reset), and it sends the G3
@@ -448,9 +452,9 @@ the CM's obligation, and the emulator test that skips the endpoint reset shows t
 (TESTING.md, reopen tests). Part of decision MD-2. DMA by such a controller between the
 driver's CC.EN=0 write and its RDY=0 acknowledgement is documented behaviour, not a driver
 fault: it is exposure after a contract the CM has already violated, and the driver reuses
-nothing until RDY=0 is acknowledged (M2).
+nothing until RDY=0 is acknowledged.
 
-**Entry points and request ownership (R3-3).** The driver's watchdog recovery is separate
+**Entry points and request ownership.** The driver's watchdog recovery is separate
 from `HwResetBus`: it starts from per-command deadlines (2.3) without the port, may span
 many timer ticks, and returns no status to the port. Return values are truthful:
 
@@ -461,7 +465,7 @@ many timer ticks, and returns no status to the port. Return values are truthful:
 | `SRB_FUNCTION_ABORT_COMMAND` | yes | SUCCESS once every child of the target parent is quiesced in the command-level sense below, or controller-wide isolation (evidence 1 or 2) is established; `SRB_STATUS_ABORT_FAILED` if neither can be shown | the target stays owned until then; see "Abort is not quiescence" |
 | Watchdog recovery | timer | no return to the port; `ResetDetected` notified on NT when a driver-initiated reset is acknowledged, including a disable acknowledged late after `HwResetBus` returned FALSE: the held SRBs are completed with `SRB_STATUS_BUS_RESET` first, then `ResetDetected`; the port resumes dispatch about 3 s later with no double completion (G4) | owned until evidence, then completed per the outcomes below |
 
-**Abort is not quiescence (R4-4).** Two different things are proved in this plan:
+**Abort is not quiescence.** Two different things are proved in this plan:
 *command-level quiescence* of one NVMe command, which holds once the driver has consumed
 that command's own completion entry (any status) from its completion queue, and
 *controller-wide isolation*, which is evidence 1 or 2 above. The completion of an NVMe Abort
@@ -484,7 +488,7 @@ arrive in either order. Handling of `SRB_FUNCTION_ABORT_COMMAND`:
   (parent cancellation, below); otherwise with its own status from the parent error mapping.
 - Base: the abort SRB returns success without doing anything (see above).
 
-**Parent cancellation (H1).** A parent's work is complete only when every required step
+**Parent cancellation.** A parent's work is complete only when every required step
 has been done: every fragment dispatched and completed, and for a read-modify-write every
 write-back issued after its pre-read and completed. The parent carries a cancellation
 state, set when an abort, a reset, the gone state or a removal suppresses any of that
@@ -528,7 +532,7 @@ of the controller, and none produces repeated resets. On q35 with native PCIe ho
 the held SRBs itself before any gone deadline; there MD-1's deadline matters only when
 presence is lost without a hot-plug event (a hung device, or the harness gate).
 
-**Bring-up (R3-1).** Every check that can fail without the controller enabled runs before
+**Bring-up.** Every check that can fail without the controller enabled runs before
 CC.EN is written: BAR and CAP decoding, queue capabilities (0.9), page size, DMA
 negotiation and allocation (0.8, 0.5), CSTS not all-ones, CFS clear, and RDY clear (if a
 previous owner left RDY set, a disable is done first and must be acknowledged). Identify
@@ -548,7 +552,7 @@ is `failed` with its memory quarantined. Either way the adapter stays started an
 memory; no disk is exposed if identify never succeeded, and requests fail as in the parent
 error mapping. At boot or start (not resume), init failure is returned to the port only
 before CC.EN was ever written, or after an acknowledged disable. **Resume is excluded from
-that permission (R6-7):** on resume `HwInitialize` returns TRUE in every case and expresses
+that permission:** on resume `HwInitialize` returns TRUE in every case and expresses
 failure as state `failed` (or `gone` on all-ones CSTS). G7 measured the hang only for FALSE
 after CC.EN, but nothing measured shows the port treats FALSE differently before CC.EN or
 after an acknowledged disable. **The deferred resume-failure handling is verified** by the
@@ -564,7 +568,7 @@ returns FALSE on an RDY or identify timeout without disabling. Upstream 1.2.0.0 
 same synchronous sequence into `HwFindAdapter` (third_party nvme2k.c:452, nvme2k_nvme.c:1306)
 and returns `SP_RETURN_ERROR` the same way, so it offers no deferred model to backport.
 
-**Stop (R3-4).** `ScsiStopAdapter` is synchronous and no timer runs after it returns. If
+**Stop.** `ScsiStopAdapter` is synchronous and no timer runs after it returns. If
 evidence 2 already holds, it does no waits; if CSTS reads all-ones without it, it does no
 waits either, and what it held stays owned or quarantined. Otherwise, within the budget: submit a Flush
 if the adapter is dirty (below; not only if writes are outstanding: on
@@ -572,7 +576,7 @@ XP x64 and 7 a Device Manager disable sends no flush of any kind before the stop
 RDY. A shutdown whose SHST completion was not seen is logged as not clean; durability then
 rests on the flush that preceded the stop (G8 establishes which flush that is per OS).
 
-*Durability at stop (R6-3).* Write tracking is conservative: the adapter becomes dirty when
+*Durability at stop.* Write tracking is conservative: the adapter becomes dirty when
 any write child (edge write-backs included) is **submitted**, and the dirty state is
 cleared only when an NVMe Flush that was submitted after every write tracked so far had
 completed **completes successfully** (an ordered flush). A failed, timed-out or abandoned
@@ -601,7 +605,7 @@ stop-path Flush took 2.1-18.9 ms (XP x64) and 5.8-17.1 ms (7 x64): **a Flush wit
   that idle time plus the Flush's own latency, at the cost of extra flushes.
   The idle Flush has no SRB, so no port timeout or `HwResetBus` covers it; it has its own
   deadline (30 s, at least CAP.TO, trusted elapsed time from its submission), and a missed
-  deadline runs the disable recovery of a timed-out request (review round 4).
+  deadline runs the disable recovery of a timed-out request.
 - *At the stop* the stop path still submits a Flush if the adapter is dirty, then CC.SHN
   and CC.EN=0, each polled only within the budget. A Flush or SHST not seen within the
   budget is logged as not clean, the dirty state is not cleared, and nothing claims the
@@ -634,11 +638,11 @@ identify failing at bring-up; controller that clears RDY only after a delay long
 callback budget; controller that never clears RDY, during reset and during stop; reset with
 I/O in flight; abort SRB targeting a live command, with the Abort reporting "not aborted",
 with the target's completion racing the Abort's in both orders, and with several live
-children (R4-4); parent cancellation (H1); presence loss with and without the G3
+children; parent cancellation; presence loss with and without the G3
 notification, with no evidence arriving before the gone deadline (MD-1: SRBs completed at
 the deadline, driver memory quarantined, counter incremented), and with the controller hung
-behind a live tunnel; the negative test, presence lost while the DMA path stays open
-(R4-1); reopen with a fresh endpoint and reopen without the endpoint reset (R4-3, M2). These need emulator hooks (see TESTING.md, harness work).
+behind a live tunnel; the negative test, presence lost while the DMA path stays open;
+reopen with a fresh endpoint and reopen without the endpoint reset. These need emulator hooks (see TESTING.md, harness work).
 
 #### NT callback, state and resource matrix (0.11)
 
@@ -647,9 +651,9 @@ already gone. Allocations survive a power stop/resume but may be freed after a s
 removal or rebalance (G5, G7). The teardown invariants (interrupts disabled at the
 controller by INTMS or CC.EN=0, and the timer unable to rearm, before the callback returns)
 apply only to real stop transitions, the `ScsiStopAdapter` rows. Resume restores
-interrupts and the timer (R3-5).
+interrupts and the timer.
 
-Three classes of event are kept apart (R6-5); every row below belongs to exactly one:
+Three classes of event are kept apart; every row below belongs to exactly one:
 
 1. **Flush barriers** (`SRB_FUNCTION_FLUSH`, SYNCHRONIZE CACHE): NVMe Flush in the running
    state, submitted only after every earlier write (and all of its children) has
@@ -670,16 +674,16 @@ Three classes of event are kept apart (R6-5); every row below belongs to exactly
 
 | Event | Callbacks | Hardware action | SRBs | Resources | Notes |
 |---|---|---|---|---|---|
-| Orderly stop (disable, eject) | `ScsiStopAdapter` | stop path of 0.10 (Flush if the adapter is dirty under the conservative tracking of 0.10, CC.SHN, SHST, CC.EN=0, RDY, each polled within the budget; a Flush within the budget is refuted for the XP x64 and 7 disable stop, so the idle flush of MD-7 (a) bounds the unflushed window and the rest is documented, R6-3) | none expected; any owned are completed per 0.10 | released only after an acknowledged disable; otherwise quarantined (G5); no pointers kept. The port frees its own memory after the return either way (G5, 2000 and XP x64), so quarantine needs memory outside the port (MD-3) | teardown invariants apply. Measured (G5): PCI.sys clears Bus Master Enable and sets D3hot 2-4 ms after the callback returns; on XP x64 and 7 no flush precedes the stop (G8) |
-| Stop with device already absent (surprise removal) | **none on 2000, XP x64 and 7 x64** (G2, G5, Q-NT): PnP surprise removal produces no `HwAdapterControl` call, with or without held SRBs; the miniport timer stops ticking. A `ScsiStopAdapter` with the device absent is still handled as below should another port send one | none; all-ones MMIO reads, no config access (not permitted here, R4-2), no waits | the port retires held SRBs itself (as "no such device") on PnP removal of the controller, with no callback to the miniport (G2); any the driver still holds complete only on evidence 2, otherwise at the gone deadline (MD-1) | freed by the port without a callback (G5); driver-owned memory outside the port stays quarantined (MD-3) | teardown invariants cannot be enforced from a callback on 2000/XP x64; whether a `RequestTimerCall` armed before the removal fires afterwards is unmeasured. On real hardware a surprise removal is a link-down (A1), so for callers' buffers the emulator's DMA-open case is the MD-1 residual risk; for driver-owned DMA memory left in the port's extensions it is the broader risk of MD-3 option (a) (R6-1) |
+| Orderly stop (disable, eject) | `ScsiStopAdapter` | stop path of 0.10 (Flush if the adapter is dirty under the conservative tracking of 0.10, CC.SHN, SHST, CC.EN=0, RDY, each polled within the budget; a Flush within the budget is refuted for the XP x64 and 7 disable stop, so the idle flush of MD-7 (a) bounds the unflushed window and the rest is documented, "Durability at stop") | none expected; any owned are completed per 0.10 | released only after an acknowledged disable; otherwise quarantined (G5); no pointers kept. The port frees its own memory after the return either way (G5, 2000 and XP x64), so quarantine needs memory outside the port (MD-3) | teardown invariants apply. Measured (G5): PCI.sys clears Bus Master Enable and sets D3hot 2-4 ms after the callback returns; on XP x64 and 7 no flush precedes the stop (G8) |
+| Stop with device already absent (surprise removal) | **none on 2000, XP x64 and 7 x64** (G2, G5, Q-NT): PnP surprise removal produces no `HwAdapterControl` call, with or without held SRBs; the miniport timer stops ticking. A `ScsiStopAdapter` with the device absent is still handled as below should another port send one | none; all-ones MMIO reads, no config access (not permitted here), no waits | the port retires held SRBs itself (as "no such device") on PnP removal of the controller, with no callback to the miniport (G2); any the driver still holds complete only on evidence 2, otherwise at the gone deadline (MD-1) | freed by the port without a callback (G5); driver-owned memory outside the port stays quarantined (MD-3) | teardown invariants cannot be enforced from a callback on 2000/XP x64; whether a `RequestTimerCall` armed before the removal fires afterwards is unmeasured. On real hardware a surprise removal is a link-down (A1), so for callers' buffers the emulator's DMA-open case is the MD-1 residual risk; for driver-owned DMA memory left in the port's extensions it is the broader risk of MD-3 option (a) |
 | Resource rebalance | `ScsiStopAdapter`, then a new start | as orderly stop | as orderly stop | BAR mapping, interrupt and allocations reacquired from the new `ConfigInfo` | teardown invariants apply |
-| Power down / resume | Measured (G7, 2000, XP x64 and 7 x64, hibernate): `ScsiStopAdapter` at power-down; on resume `HwFindAdapter` (same device extension, not zeroed; **no `ArgumentString`**) then `HwInitialize`, lazily at the first request to the disk on 2000 and XP x64, during the resume itself on 7 x64 (a held START STOP UNIT). `ScsiRestartAdapter` not advertised; `ScsiSetRunningConfig` advertised but never called, and on 7 x64 no `HwAdapterControl` call at all on resume | stop path on power down (Hibernate sends START STOP UNIT (stop) after the last SYNCHRONIZE CACHE, then the stop, G8); on resume, PCI command restored in `HwFindAdapter` (permitted there, 3.4; `ScsiSetRunningConfig` cannot be relied on), then the bring-up of 0.10 | none across the transition | reused: device extension and uncached extension preserved (same VA/PA, contents intact, G7, also 7 x64 in G1); sub-allocator and flags reset | clear `IsShutDown`; interrupts and timer restored by bring-up. S3 not testable on the VMs; hibernate only |
+| Power down / resume | Measured (G7, 2000, XP x64 and 7 x64, hibernate): `ScsiStopAdapter` at power-down; on resume `HwFindAdapter` (same device extension, not zeroed; **no `ArgumentString`**) then `HwInitialize`, lazily at the first request to the disk on 2000 and XP x64, during the resume itself on 7 x64 (a held START STOP UNIT). `ScsiRestartAdapter` not advertised; `ScsiSetRunningConfig` advertised but never called, and on 7 x64 no `HwAdapterControl` call at all on resume | stop path on power down (Hibernate sends START STOP UNIT (stop) after the last SYNCHRONIZE CACHE, then the stop, G8); on resume, PCI command restored in `HwFindAdapter` (permitted there, 3.4; `ScsiSetRunningConfig` cannot be relied on), then the bring-up of 0.10 | none across the transition | reused: device extension and uncached extension preserved (same VA/PA, contents intact, G7, also 7 x64 in G1); sub-allocator and flags reset; the region is not zeroed at the resume's HwFindAdapter (the controller may own parts of it until a disable is acknowledged): the bring-up zeroes the queues and the utility buffer after isolation (LcEnable; xhci98 3.4.2.0) | clear `IsShutDown`; interrupts and timer restored by bring-up. S3 not testable on the VMs; hibernate only |
 | Flush barrier (class 1) | `SRB_FUNCTION_FLUSH` (passed only when `CachesData` is TRUE), SYNCHRONIZE CACHE | NVMe Flush after the earlier writes (1.6); a successful ordered Flush clears the dirty state (0.10 stop) | the SRB completes only after the NVMe Flush completes | unchanged | running state; later I/O proceeds normally, no re-init |
-| Shutdown notification (class 2, restartable) | `SRB_FUNCTION_SHUTDOWN` (passed only when `CachesData` is TRUE) on 2000, XP x64, 7 x64 and Me | NVMe Flush, then CC.SHN; SHST wait carried by the timer; the next I/O re-enables the controller first (class 2 above) | the SHUTDOWN SRB completes after SHST complete (or the logged timeout); other SRBs as in the running state, held or BUSY during a re-enable | **retained**: nothing freed or handed back; timer and interrupts stay the driver's | may or may not be the last notification (2000 sends two with I/O between, G8). Today `IsShutDown` is set before the flush (src/nvme2k.c:1118) and then suppresses timer cancellation (nvme2k_nvme.c:744); it becomes the restartable `shut down` state, and the timer is cancelled unconditionally only on a class-3 stop. **Demonstrated (Q-NT item 3, R6-5 closed):** on 2000 CC.SHN on each of two SHUTDOWNs, SHST at the first tick, the I/O between re-enabled the controller in about 100 ms with the resources retained, data verified after boot; XP x64 and 7 x64 the same with one SHUTDOWN. The SHUTDOWN SRB is untagged on 2000 but **tagged on XP x64 and 7 x64**: never rely on it being untagged or alone. Untested: SHST slower than one tick, and a SHUTDOWN with writes still outstanding |
+| Shutdown notification (class 2, restartable) | `SRB_FUNCTION_SHUTDOWN` (passed only when `CachesData` is TRUE) on 2000, XP x64, 7 x64 and Me | NVMe Flush, then CC.SHN; SHST wait carried by the timer; the next I/O re-enables the controller first (class 2 above) | the SHUTDOWN SRB completes after SHST complete (or the logged timeout); other SRBs as in the running state, held or BUSY during a re-enable | **retained**: nothing freed or handed back; timer and interrupts stay the driver's | may or may not be the last notification (2000 sends two with I/O between, G8). Today `IsShutDown` is set before the flush (src/nvme2k.c:1118) and then suppresses timer cancellation (nvme2k_nvme.c:744); it becomes the restartable `shut down` state, and the timer is cancelled unconditionally only on a class-3 stop. **Demonstrated (Q-NT item 3):** on 2000 CC.SHN on each of two SHUTDOWNs, SHST at the first tick, the I/O between re-enabled the controller in about 100 ms with the resources retained, data verified after boot; XP x64 and 7 x64 the same with one SHUTDOWN. The SHUTDOWN SRB is untagged on 2000 but **tagged on XP x64 and 7 x64**: never rely on it being untagged or alone. Untested: SHST slower than one tick, and a SHUTDOWN with writes still outstanding |
 | Final shutdown trigger | per OS, measured by G8 and G9 with `CachesData` TRUE (below). **Hibernate and Device Manager disable** (2000, XP x64, 7 x64): `ScsiStopAdapter` (class 3), nothing after it. **Shutdown and restart:** no `ScsiStopAdapter` on any NT port. XP x64 and 7 x64: one `SRB_FUNCTION_SHUTDOWN`, final. 2000: two `SRB_FUNCTION_SHUTDOWN` with reads and writes between them, so neither is recognisable as final. 98 SE: `HwAdapterState(FALSE)` (also the removal stop), no SHUTDOWN SRB even with `CachesData` TRUE. Me: `SRB_FUNCTION_SHUTDOWN` with `CachesData` TRUE (with FALSE nothing at all) | by class: a `SRB_FUNCTION_SHUTDOWN` is handled as the restartable shutdown notification above (on 2000 on each, re-enabling for the I/O between); `ScsiStopAdapter` and `HwAdapterState(FALSE)` run the stop path of 0.10. On 9x and Me, whichever of `SRB_FUNCTION_SHUTDOWN` and `HwAdapterState(FALSE)` comes first does the Flush and CC.SHN; a later `HwAdapterState(FALSE)` still runs the stop path | by class (restartable notification or stop) | by class: retained after a SHUTDOWN SRB, per the orderly-stop row after a stop | with `CachesData` FALSE NT gives no shutdown notification at all and CC.SHN is never issued at shutdown/restart; hence `CachesData` TRUE |
-| Resume failure | `HwInitialize` on resume | bring-up failure under 0.10 | later SRBs fast-fail | owned until the next stop | state `failed`; **`HwInitialize` never returns FALSE on resume** after CC.EN: G7 measured that both 2000 and XP x64 then hang the I/O (XP x64 never starts an SRB; 2000 starts one that never completes; no reset or timeout in 4 min). `ScsiAdapterControlUnsuccessful` is not used: legacy documentation reserves it, and the base returns it from `ScsiRestartAdapter` (src/nvme2k.c:1351). An OS exception needs measured evidence (G7). The boot-time permission to return FALSE after an acknowledged disable does not apply here (R6-7). **Verified** with the deferred bring-up on 2000, XP x64 and 7 x64 (Q-NT item 2): no hang; 2000 keeps the volume mounted and failing fast, XP x64 and 7 x64 remove the disk after a rescan; no reset, stop or `HwAdapterControl` follows |
+| Resume failure | `HwInitialize` on resume | bring-up failure under 0.10 | later SRBs fast-fail | owned until the next stop | state `failed`; **`HwInitialize` never returns FALSE on resume** after CC.EN: G7 measured that both 2000 and XP x64 then hang the I/O (XP x64 never starts an SRB; 2000 starts one that never completes; no reset or timeout in 4 min). `ScsiAdapterControlUnsuccessful` is not used: legacy documentation reserves it, and the base returns it from `ScsiRestartAdapter` (src/nvme2k.c:1351). An OS exception needs measured evidence (G7). The boot-time permission to return FALSE after an acknowledged disable does not apply here. **Verified** with the deferred bring-up on 2000, XP x64 and 7 x64 (Q-NT item 2): no hang; 2000 keeps the volume mounted and failing fast, XP x64 and 7 x64 remove the disk after a rescan; no reset, stop or `HwAdapterControl` follows |
 
-`CachesData` (C8, 1.6): **TRUE on NT, decided 2026-10-15 (maintainer), from G8; TRUE
+`CachesData` (1.6): **TRUE on NT, decided 2026-10-15 (maintainer), from G8; TRUE
 on 9x and Me too, decided 2026-10-15 (maintainer), from G9.** The adapter itself holds no
 write data after an SRB completes (bounce images live only inside an incomplete parent);
 `CachesData` TRUE is set so that the port passes `SRB_FUNCTION_SHUTDOWN` and
@@ -694,7 +698,7 @@ SRB; `HwAdapterState(FALSE)` remains the trigger). Handling:
   shutdown notification (Flush, CC.SHN, SHST), resources retained; nothing follows.
 - On 2000 (two, with I/O between, untagged): the same on each; I/O after the first
   re-enables the controller first (fresh bring-up with the retained resources), so the
-  second shuts it down again. Demonstrated with CC.SHN written on each (Q-NT, R6-5).
+  second shuts it down again. Demonstrated with CC.SHN written on each (Q-NT).
 - `CachesData` is a constant in `HwFindAdapter`, never taken from DriverParameter: the
   resume `HwFindAdapter` gets no `ArgumentString` (Q-NT), so a parsed value would silently
   fall back to its default at every resume.
@@ -710,45 +714,45 @@ page WCE = 1 when the controller reports a volatile write cache that is enabled 
 Features, Volatile Write Cache), else 0; SYNCHRONIZE CACHE maps to NVMe Flush. Tests: on each OS, the trace
 shows an NVMe Flush after the last write and before CC.SHN at shutdown, hibernate and
 Device Manager disable; I/O issued after a FLUSH or a SYNCHRONIZE CACHE completes normally
-with no controller re-init (R3-5); I/O issued after a shutdown notification (CC.SHN
+with no controller re-init; I/O issued after a shutdown notification (CC.SHN
 written) completes normally after the controller is re-enabled, with resources retained and
-the timer and interrupts active throughout (R6-5).
+the timer and interrupts active throughout.
 
 ### 1. Correctness and data safety
 
 | # | Item | Source |
 |---|---|---|
 | 1.1 | Decode the namespace: identify-namespace layout (NGUID at 104, LBAF at 128), block size from the selected format's LBADS, metadata/protection settings validated. Never misreport. Formats the driver cannot serve (interleaved metadata, protection information) are refused; 4 KiB is never refused (1.7) | both reviews, #2; observed 98/2000/XP failures |
-| 1.2 | **Native vs exposed units everywhere.** Separate native block size/count from the exposed 512-byte count (`NSZE * native/512`, checked). Audit READ CAPACITY(10/16), MODE SENSE block descriptors, format and geometry pages, bounds checks and command paths. READ/WRITE(6) count 0 means 256 blocks; (10/16) count 0 means none. NLB limits apply after translation and splitting | C10; nvme2k_scsi.c:138, 587, 754; nvme2k_nvme.c:473 |
+| 1.2 | **Native vs exposed units everywhere.** Separate native block size/count from the exposed 512-byte count (`NSZE * native/512`, checked). Audit READ CAPACITY(10/16), MODE SENSE block descriptors, format and geometry pages, bounds checks and command paths. READ/WRITE(6) count 0 means 256 blocks; (10/16) count 0 means none. NLB limits apply after translation and splitting | nvme2k_scsi.c:138, 587, 754; nvme2k_nvme.c:473 |
 | 1.3 | Validate every transfer: 64-bit checked arithmetic, namespace bounds, zero-length commands completed without I/O | #4 |
-| 1.4 | MDTS in units of CAP.MPSMIN (checked shift), plus the port's limits negotiated in 0.8; split into children | C10, N5, upstream #12 |
-| 1.5 | **Remove the magic-pattern TRIM completely.** Three parts go together: the submission transform (a write whose first 4 KiB matches the pattern becomes a deallocate of the whole request and overwrites the caller's first 16 bytes with a DSM range, nvme2k_nvme.c:541); the completion-side "restoration" (any completed write whose bytes 16-4095 match the pattern gets its first 16 bytes overwritten with the pattern's, nvme2k_cpl.c:448, which corrupts the caller's buffer even when no TRIM happened); and the enabling IOCTLs `TRIM_MODE_ON`/`OFF` and their device-extension state (`TrimEnable`, `TrimPattern`; nvme2k_scsi.c:1043). Any future deallocate interface validates and translates ranges, joins overlap/barrier scheduling and never rounds outward. Regression test: with the old IOCTL issued (now rejected), write a buffer whose bytes 16-4095 match the pattern and whose first 16 bytes differ; verify the disk contents and that the caller's buffer is unchanged after completion | C5, R2-3; nvme2k_nvme.c:541, nvme2k_cpl.c:448, nvme2k_scsi.c:1043 |
-| 1.6 | **Barriers and durability.** Parents carry sequence numbers. FLUSH waits for all earlier writes and their children; ORDERED waits for earlier tasks and blocks later ones (ordering does not imply flushing). FUA goes on every write child, edge write-backs included. Cover SYNCHRONIZE CACHE, `SRB_FUNCTION_FLUSH`, shutdown, IMMED, error propagation. `CachesData`/WCE as decided in 0.11 | C8, #9, R2-2; nvme2k_scsi.c:229, 698; nvme2k.c:186 |
-| 1.7 | **4 KiB-sector namespaces are supported (maintainer decision 2026-10-14: never refuse them).** See the section below. Lands after phase 0, 1.1-1.6 and 1.9 | maintainer |
+| 1.4 | MDTS in units of CAP.MPSMIN (checked shift), plus the port's limits negotiated in 0.8; split into children | N5, upstream #12 |
+| 1.5 | **Remove the magic-pattern TRIM completely.** Three parts go together: the submission transform (a write whose first 4 KiB matches the pattern becomes a deallocate of the whole request and overwrites the caller's first 16 bytes with a DSM range, nvme2k_nvme.c:541); the completion-side "restoration" (any completed write whose bytes 16-4095 match the pattern gets its first 16 bytes overwritten with the pattern's, nvme2k_cpl.c:448, which corrupts the caller's buffer even when no TRIM happened); and the enabling IOCTLs `TRIM_MODE_ON`/`OFF` and their device-extension state (`TrimEnable`, `TrimPattern`; nvme2k_scsi.c:1043). Any future deallocate interface validates and translates ranges, joins overlap/barrier scheduling and never rounds outward. Regression test: with the old IOCTL issued (now rejected), write a buffer whose bytes 16-4095 match the pattern and whose first 16 bytes differ; verify the disk contents and that the caller's buffer is unchanged after completion | nvme2k_nvme.c:541, nvme2k_cpl.c:448, nvme2k_scsi.c:1043 |
+| 1.6 | **Barriers and durability.** Parents carry sequence numbers. FLUSH waits for all earlier writes and their children; ORDERED waits for earlier tasks and blocks later ones (ordering does not imply flushing). FUA goes on every write child, edge write-backs included. Cover SYNCHRONIZE CACHE, `SRB_FUNCTION_FLUSH`, shutdown, IMMED, error propagation. `CachesData`/WCE as decided in 0.11 | #9; nvme2k_scsi.c:229, 698; nvme2k.c:186 |
+| 1.7 | **4 KiB-sector namespaces are supported (maintainer decision 2026-10-14: never refuse them).** See the section below. Lands after phase 0, 1.1-1.6 and 1.9; implemented in xhci98 3.4.2.0 (its roadmap 47.20); on Windows 8, 8.1 and 10 a 4 KiB namespace shows its native 4096-byte sectors, as Windows' own stornvme does (owner 2026-11-06, option B; xhci98 roadmap 47.31), the 512-byte translation kept on 98 SE to 7 and for 1 and 2 KiB namespaces everywhere | maintainer, owner |
 | 1.8 | Correct INQUIRY EVPD decoding and bounded responses; reject unsupported SERVICE ACTION IN | #15, N8 |
-| 1.9 | **Namespace selection and identity.** Today NSID 1 is hardcoded for identify and I/O. First release: expose the **lowest active NSID** as target 0, LUN 0; active NSIDs come from the active namespace list (Identify CNS 02h) or, on NVMe 1.0 controllers without it, from probing 1..NN for a non-zero NSZE. If that namespace's format cannot be served, no disk is exposed and the reason is logged; other namespaces are logged and ignored. Other target/LUN values are rejected as today. Multiple namespaces as several LUNs is a later item. Identity is (NGUID if non-zero, else EUI64 if non-zero, else controller serial + model + NSID), plus NSZE and LBA format; it is recorded at start and compared on reconnect (2.6). Tests: controller whose only active namespace is NSID 2; controller with several namespaces | R2-8; nvme2k_nvme.c:274, 506; nvme2k.c:975 |
+| 1.9 | **Namespace selection and identity.** Today NSID 1 is hardcoded for identify and I/O. First release: expose the **lowest active NSID** as target 0, LUN 0; active NSIDs come from the active namespace list (Identify CNS 02h) or, on NVMe 1.0 controllers without it, from probing 1..NN for a non-zero NSZE. If that namespace's format cannot be served, no disk is exposed and the reason is logged; other namespaces are logged and ignored. Other target/LUN values are rejected as today. Multiple namespaces as several LUNs is a later item. Identity is (NGUID if non-zero, else EUI64 if non-zero, else controller serial + model + NSID), plus NSZE and LBA format; it is recorded at start and compared on reconnect (2.6). Tests: controller whose only active namespace is NSID 2; controller with several namespaces | nvme2k_nvme.c:274, 506; nvme2k.c:975 |
 
 ### 2. Removal and lifecycle (the reason this fork exists)
 
 | # | Item | Source |
 |---|---|---|
-| 2.1 | **Presence detection and transitions** over the states defined in 0.7: all-ones CSTS/MMIO moves to `gone`, which holds issued SRBs until evidence 1 or 2 (the G3 notification) or the gone deadline of 0.10 (MD-1 outcome); all-ones is never itself the evidence. CSTS.CFS or a failed reset moves to `failed` | C6, #7, R3-2, R4-1 |
-| 2.2 | **Terminal removal contract** (applies on path down, evidence 2 of 0.10, and at the gone deadline under MD-1 option (b), where held SRBs complete with this status while driver-owned DMA memory stays quarantined; ordinary I/O errors use the parent error mapping). One gone-state gate before every dispatch. Complete held SRBs promptly with `SRB_STATUS_NO_DEVICE` (consistent `ScsiStatus`, conservative transfer length), fast-fail later media requests and discovery probes (INQUIRY, TEST UNIT READY must fail, not return BUSY), and keep issuing readiness notifications so port-held requests drain. On NT, `BusChangeDetected` once per transition. Determine per OS (2000, XP, XP x64, Vista, 7) which status stops class-driver retries; `SRB_STATUS_SELECTION_TIMEOUT` is a candidate to test, not a known answer. Measured: on 2000 and XP x64 both NO_DEVICE and SELECTION_TIMEOUT stop retries (NO_DEVICE stays the default, G2); on 7 x64 NO_DEVICE at the deadline gave the application error 2 at once and the disk was gone 1 s later (Q-NT, G2 run B; SELECTION_TIMEOUT not run); on 98 SE and Me NO_DEVICE ends IOS retries after 6 tries (G9); on 8 x86 (xhci98 roadmap 43.23, 2026-10-22, no platform notification, TESTING.md "Windows 8 and 8.1") **neither status stops classpnp's retries**: a fast-failed WRITE was retried (disk event 153) about every 1.4-2.7 s under NO_DEVICE and under SELECTION_TIMEOUT alike, the retries ending only when the disk was removed after the gone deadline's `BusChangeDetected` (the failed INQUIRY), the application's error at 5.4 s (NO_DEVICE) or 5.6 s (SELECTION_TIMEOUT, which also raised the "Delayed Write Failed" popup); NO_DEVICE stays the default; 8 x64 and 8.1 x64 not run (xhci98 3.1.0.0's catalog-less x64 package was refused at their driver store; with `stor98.cat`, xhci98 roadmap 43.36, 8.1 x64 took the package into the store and bound no drive to it), 8.1 x86 not run (no medium); on 10 x86 (22H2, 2026-10-22, TESTING.md "Windows 10") NO_DEVICE ran without stage codes: Delayed Write Failed and paging errors, the disk removed at the deadline, the copy failed at about 5.9 s, no retry event logged; SELECTION_TIMEOUT not run; 10 x64 not run (the catalog-less package refused as on 8 x64; with `stor98.cat` taken into the store, no drive bound); Vista and XP x86 not yet run | C7, R2-4, G2, G9; nvme2k_scsi.c:68, 204; nvme2k.c:1040; XP x64 hang |
+| 2.1 | **Presence detection and transitions** over the states defined in 0.7: all-ones CSTS/MMIO moves to `gone`, which holds issued SRBs until evidence 1 or 2 (the G3 notification) or the gone deadline of 0.10 (MD-1 outcome); all-ones is never itself the evidence. CSTS.CFS or a failed reset moves to `failed` | #7 |
+| 2.2 | **Terminal removal contract** (applies on path down, evidence 2 of 0.10, and at the gone deadline under MD-1 option (b), where held SRBs complete with this status while driver-owned DMA memory stays quarantined; ordinary I/O errors use the parent error mapping). One gone-state gate before every dispatch. Complete held SRBs promptly with `SRB_STATUS_NO_DEVICE` (consistent `ScsiStatus`, conservative transfer length), fast-fail later media requests and discovery probes (INQUIRY, TEST UNIT READY must fail, not return BUSY), and keep issuing readiness notifications so port-held requests drain. On NT, `BusChangeDetected` once per transition. Determine per OS (2000, XP, XP x64, Vista, 7) which status stops class-driver retries; `SRB_STATUS_SELECTION_TIMEOUT` is a candidate to test, not a known answer. Measured: on 2000 and XP x64 both NO_DEVICE and SELECTION_TIMEOUT stop retries (NO_DEVICE stays the default, G2); on 7 x64 NO_DEVICE at the deadline gave the application error 2 at once and the disk was gone 1 s later (Q-NT, G2 run B; SELECTION_TIMEOUT not run); on 98 SE and Me NO_DEVICE ends IOS retries after 6 tries (G9); on 8 x86 (xhci98 roadmap 43.23, 2026-10-22, no platform notification, TESTING.md "Windows 8 and 8.1") **neither status stops classpnp's retries**: a fast-failed WRITE was retried (disk event 153) about every 1.4-2.7 s under NO_DEVICE and under SELECTION_TIMEOUT alike, the retries ending only when the disk was removed after the gone deadline's `BusChangeDetected` (the failed INQUIRY), the application's error at 5.4 s (NO_DEVICE) or 5.6 s (SELECTION_TIMEOUT, which also raised the "Delayed Write Failed" popup); NO_DEVICE stays the default; 8 x64 and 8.1 x64 not run (xhci98 3.1.0.0's catalog-less x64 package was refused at their driver store; with `stor98.cat`, xhci98 roadmap 43.36, 8.1 x64 took the package into the store and bound no drive to it), 8.1 x86 not run (no medium); on 10 x86 (22H2, 2026-10-22, TESTING.md "Windows 10") NO_DEVICE ran without stage codes: Delayed Write Failed and paging errors, the disk removed at the deadline, the copy failed at about 5.9 s, no retry event logged; SELECTION_TIMEOUT not run; 10 x64 not run (the catalog-less package refused as on 8 x64; with `stor98.cat` taken into the store, no drive bound); Vista and XP x86 not yet run | G2, G9; nvme2k_scsi.c:68, 204; nvme2k.c:1040; XP x64 hang |
 | 2.3 | Watchdog armed while any command is outstanding; per-command deadlines; presence checks independent of unrelated activity | N1 |
 | 2.4 | Bounded waits within the stall budget of 0.10; no multi-second stall loops on removal, shutdown or init | #6, #7 |
-| 2.5 | Safe bring-up failure per the bring-up rule of 0.10: at boot or start, failure is returned to the port only before CC.EN was written or after an acknowledged disable; on resume never (R6-7); otherwise the adapter stays started in `failed` and keeps its memory. Resume-failure handling verified by the combined G1 + G7 prototype on 2000, XP x64 and 7 x64 (Q-NT) | #6, R3-1, R6-7, Q-NT |
-| 2.6 | **Reconnect** establishes fresh controller state and re-reads namespace identity (1.9). Before trusting anything it checks the reopen invariant of 0.10: CC.EN=0 and RDY=0, or else an isolation-contract violation is logged and the controller disabled and acknowledged before any reuse (R4-3). Same identity: the disk resumes as the same LUN. Different identity, or changed NSZE/format: the old disk is gone (2.2) and the new one arrives as a new disk (fresh INQUIRY/VPD serial, `BusChangeDetected` on NT). Requests admitted for the old disk never reach the replacement: the admission gate stays closed until identity is resolved, and anything admitted before the drop fails with the terminal status. Never resumes an old bounce image or pending parent. Identity is what the controller and namespace report, so a reconnect that changes only the contents (the same serial, NGUID and EUI64 with a different backing image) is undetectable by this policy and is treated as the same disk; user notes say so | C6, C13, R2-8, R3-14 |
-| 2.7 | **Windows 9x lifecycle contract**, built on the 0.12 prototype. IOS has no `BusChangeDetected`/`BusyRequest` (legacy `SRB.H`), and `RequestTimerCall` is unavailable during `SYS_CRITICAL_EXIT`. Write a 9x callback/notification matrix: admission, completion, critical shutdown, Config Manager stop/start/remove (as driven by xhci98's CM, see usb4-emu `REENUM-EXPERIMENT.md`), real-mode handoff (`HwAdapterState`, N3), rescan, and the helper VxD's role if 0.12 required one. Verify tag delivery and mapped buffers on 98 SE and ME; support untagged operation; drain RMW work before phases where its progress mechanism stops. **Measured by G9** (98 SE, Me): no tags (`SRB_FLAGS_QUEUE_ACTION_ENABLE` never set, `QueueTag` a rolling number, depth 1 per LU although tagged queuing is advertised; `NonTaggedInFlight` must be cleared after `HwResetBus` and covered by fast-fail); buffers always mapped system-linear addresses; transfers up to 64 KiB on 98 SE and **at most 61,440 bytes on Me**; `RequestTimerCall` works but fires late (100 ms requests after 100-315 ms on 98 SE, up to 1.5 s on Me), so every deadline is elapsed time; **no timer runs after `HwAdapterState(FALSE)`** (armed there, it never fires), so the RMW drain and the whole stop finish inside that callback; `HwAdapterState(TRUE)` comes once per load before `HwInitialize`; the `.mpd` is unloaded at every removal and reloaded fresh (`DriverEntry`, new static data); no SHUTDOWN or FLUSH SRB on 98 SE; **on Me `TimeOutValue` is garbage** for TEST UNIT READY and READ CAPACITY (0 on 98 SE), so no timeout is derived from it on 9x; `SRB_STATUS_NO_DEVICE` ends IOS retries after 6 tries; discovery uses `ConfigInfo`'s bus and slot, not the NT4 `HwContext` scan; runtime `ScsiPortGetBusData` on the own function works on 9x from `HwStartIo` and the timer callback (all-ones after surprise removal; a presence signal only), runtime config writes untested; only CONFIGMG removes a surprise-removed volume. Me's port never calls `HwAdapterState(FALSE)` (MD-5) | C11, N3, R2-6, G9; tools/w98ddk/inc/SRB.H:541 (`SCSI_NOTIFICATION_TYPE`), nvme2k_nvme.c:728 |
+| 2.5 | Safe bring-up failure per the bring-up rule of 0.10: at boot or start, failure is returned to the port only before CC.EN was written or after an acknowledged disable; on resume never; otherwise the adapter stays started in `failed` and keeps its memory. Resume-failure handling verified by the combined G1 + G7 prototype on 2000, XP x64 and 7 x64 (Q-NT) | #6, Q-NT |
+| 2.6 | **Reconnect** establishes fresh controller state and re-reads namespace identity (1.9). Before trusting anything it checks the reopen invariant of 0.10: CC.EN=0 and RDY=0, or else an isolation-contract violation is logged and the controller disabled and acknowledged before any reuse. Same identity: the disk resumes as the same LUN. Different identity, or changed NSZE/format: the old disk is gone (2.2) and the new one arrives as a new disk (fresh INQUIRY/VPD serial, `BusChangeDetected` on NT). Requests admitted for the old disk never reach the replacement: the admission gate stays closed until identity is resolved, and anything admitted before the drop fails with the terminal status. Never resumes an old bounce image or pending parent. Identity is what the controller and namespace report, so a reconnect that changes only the contents (the same serial, NGUID and EUI64 with a different backing image) is undetectable by this policy and is treated as the same disk; user notes say so | plan review, 2026-10-14/15 |
+| 2.7 | **Windows 9x lifecycle contract**, built on the 0.12 prototype. IOS has no `BusChangeDetected`/`BusyRequest` (legacy `SRB.H`), and `RequestTimerCall` is unavailable during `SYS_CRITICAL_EXIT`. Write a 9x callback/notification matrix: admission, completion, critical shutdown, Config Manager stop/start/remove (as driven by xhci98's CM, see usb4-emu `REENUM-EXPERIMENT.md`), real-mode handoff (`HwAdapterState`, N3), rescan, and the helper VxD's role if 0.12 required one. Verify tag delivery and mapped buffers on 98 SE and ME; support untagged operation; drain RMW work before phases where its progress mechanism stops. **Measured by G9** (98 SE, Me): no tags (`SRB_FLAGS_QUEUE_ACTION_ENABLE` never set, `QueueTag` a rolling number, depth 1 per LU although tagged queuing is advertised; `NonTaggedInFlight` must be cleared after `HwResetBus` and covered by fast-fail); buffers always mapped system-linear addresses; transfers up to 64 KiB on 98 SE and **at most 61,440 bytes on Me**; `RequestTimerCall` works but fires late (100 ms requests after 100-315 ms on 98 SE, up to 1.5 s on Me), so every deadline is elapsed time; **no timer runs after `HwAdapterState(FALSE)`** (armed there, it never fires), so the RMW drain and the whole stop finish inside that callback; `HwAdapterState(TRUE)` comes once per load before `HwInitialize`; the `.mpd` is unloaded at every removal and reloaded fresh (`DriverEntry`, new static data); no SHUTDOWN or FLUSH SRB on 98 SE; **on Me `TimeOutValue` is garbage** for TEST UNIT READY and READ CAPACITY (0 on 98 SE), so no timeout is derived from it on 9x; `SRB_STATUS_NO_DEVICE` ends IOS retries after 6 tries; discovery uses `ConfigInfo`'s bus and slot, not the NT4 `HwContext` scan; runtime `ScsiPortGetBusData` on the own function works on 9x from `HwStartIo` and the timer callback (all-ones after surprise removal; a presence signal only), runtime config writes untested; only CONFIGMG removes a surprise-removed volume. Me's port never calls `HwAdapterState(FALSE)` (MD-5) | N3, G9; tools/w98ddk/inc/SRB.H:541 (`SCSI_NOTIFICATION_TYPE`), nvme2k_nvme.c:728 |
 
 ### 3. Platform correctness
 
 | # | Item | Source |
 |---|---|---|
-| 3.1 | PnP-constrained discovery (only the supplied function); `ConfigInfo` bus/slot consistent. **9x (xhci98 3.4.1.0, its roadmap 46.1):** `HwFindAdapter` takes only the function whose devnode the port is starting, one adapter per call (`Again` FALSE), and never the NT4-style `HwContext` scan from bus 0, which brought up the first NVMe function it met: on a board whose Windows ran from an internal NVMe drive through the BIOS's INT 13h, a tunnelled drive's load reset that drive and the start stopped at "Initing stor98.mpd". The function is named by the port's first access range, the devnode's memory resource (G9: 98 SE gives `ConfigInfo` the devnode's bus, slot and BAR): it is the NVMe function one of whose memory BARs (both dwords when 64-bit) lies at that range's start - not always BAR0: on the owner's board 98 SE gave an SK hynix drive's second memory BAR, 4 KB above BAR0, as the first range (the `StorFind` report below), and BARs of different functions never share an address (`PciScanIsPortFunction`, `src/pciscan.h`, host test `pciscan_ut`). `ConfigInfo`'s bus and slot are probed first; when they do not hold it, every bus is walked (3.4) for it, and nothing else is taken. No range from the port (start 0) names no function: `SP_RETURN_NOT_FOUND`, nothing touched. **A controller already set up** (xhci98 3.4.1.0, owner 2026-11-02): before anything is written to the found function (before `HwLocateRegisters` turns decode off to size BAR0), its command register and, with memory decode on, CC and CSTS are read through its BAR0; it is taken only with decode off, or with CC.EN 0 and CSTS.RDY 0. Enabled or ready in either combination, all-ones or unreadable registers: `SP_RETURN_NOT_FOUND`, untouched (`PciScanFirmwareState`, `src/pciscan.h`). On the owner's board the BIOS served a tunnelled drive through INT 13h (its boot menu listed it; declined, it kept a drive letter through the real-mode mapper), the port called `HwAdapterState(FALSE)` during start, and the controller this driver had reset could not be given back (review N3: `FALSE` restores nothing, it stops): the start hung. This is a refusal of a controller someone else initialised, not proof that the BIOS will use it again, and not a firmware handoff: a real handoff would have to rebuild the BIOS's I/O queues, which no register holds. Such a drive runs through the BIOS (compatibility mode) and Stor98's devnode shows Code 10; a drive plugged in after start is not set up and is taken. Possible false positive: firmware that leaves a controller it never uses again enabled (to be read on the P14s, whose power-on drive ran under Stor98). The boot-time `FALSE` caller is still unidentified (G9: handoff beyond the load's `TRUE` not tested). Every 9x find writes what it saw as the REG_SZ value `StorFind` in `HKLM\System\CurrentControlSet\Services\stor98` (the port's bus, slot and first range, what its slot holds, where the function was found, the return; `PlatFindReport`). `RangeInMemory` is not relied on (an I/O range cannot equal a memory BAR's address). Residual: a devnode bound to Stor98 for the system disk itself (Stor98 on that devnode by the user's choice) is still brought up; the installer and the INF keep Stor98 off internal drives | N4; backport; xhci98 46.1 |
+| 3.1 | PnP-constrained discovery (only the supplied function); `ConfigInfo` bus/slot consistent. **9x (xhci98 3.4.1.0, its roadmap 46.1):** `HwFindAdapter` takes only the function whose devnode the port is starting, one adapter per call (`Again` FALSE), and never the NT4-style `HwContext` scan from bus 0, which brought up the first NVMe function it met: on a board whose Windows ran from an internal NVMe drive through the BIOS's INT 13h, a tunnelled drive's load reset that drive and the start stopped at "Initing stor98.mpd". The function is named by the port's first access range, the devnode's memory resource (G9: 98 SE gives `ConfigInfo` the devnode's bus, slot and BAR): it is the NVMe function one of whose memory BARs (both dwords when 64-bit) lies at that range's start - not always BAR0: on the owner's board 98 SE gave an SK hynix drive's second memory BAR, 16 KiB above BAR0, as the first range (the `StorFind` report below), and BARs of different functions never share an address (`PciScanIsPortFunction`, `src/pciscan.h`, host test `pciscan_ut`). `ConfigInfo`'s bus and slot are probed first; when they do not hold it, every bus is walked (3.4) for it, and nothing else is taken. No range from the port (start 0) names no function: `SP_RETURN_NOT_FOUND`, nothing touched. **A controller already set up** (xhci98 3.4.1.0, owner 2026-11-02): before anything else is done to the found function (before `HwLocateRegisters` turns decode off to size BAR0), its command register and CC and CSTS are read through its BAR0; it is taken only with CC.EN 0 and CSTS.RDY 0. Enabled or ready in either combination, all ones, registers not reached, or a command register not put back: `SP_RETURN_NOT_FOUND` (`PciScanFirmwareState`, `src/pciscan.h`). **Memory decode off is no exemption** (xhci98 3.4.2.0, its roadmap 47.9, from the review of the whole 3.4.1.0 code, owner 2026-11-05): 3.4.1.0 took a function with decode off unread, so a controller a firmware left enabled with decode off would have been taken and reset. With decode on nothing is written. With decode off, BAR0 is reached only when it is a memory BAR at a nonzero address below 4 GiB and is the port's access range itself (the devnode's first memory resource, at least a page long; the port gives one range, so when it names another BAR, BAR0's allocation is unproven) (`PciScanFirmwareReach`); its page is mapped; then only the command register is written: decode on with every other bit as found (one 16-bit write at 04h, Status untouched), read back on before CC and CSTS are read, and after every such write, whatever it gave, the word as found written back and read back - not reading back as found is a refusal (`PciScanReadFirmware`, the host test `pciscan_ut` holding the sequence with fake operations). Weighed: a missing, high or I/O BAR0 with decode off is refused (`HwLocateRegisters` fails such a function anyway, after writing it); all ones with decode turned on is refused, as with decode on as found since 3.4.1.0, accepting that a path that began to forward only between the find and `HwInitialize`'s first read would have run before (no such path is known; 9x starts a devnode after its parent bridges, and a later start reads it afresh; no retry); a port range naming another BAR with decode off is refused (residual: such a drive is left at Code 10 where it was taken). Read on 98 SE in the emulator: the tunnelled drive found with decode on at power-on (`cmd 0107`) and after it was unplugged and plugged in again (`cmd 0006`). `StorFind` adds "decode on for the read" or "decode off, not read" when decode was found off, "left: command not restored", and "reach <n>" (`PCISCAN_REACH_*`) when BAR0 was not reached; debug-port stage `0x0A` carries the read, decode turned on, not put back and the reason in bits 24-29. A test image (`STOR98_TEST_FWDECODEOFF`, 9x debug-port builds only) turns decode off before the check and records the command word after it (stage `0x0B`). On the owner's board the BIOS served a tunnelled drive through INT 13h (its boot menu listed it; declined, it kept a drive letter through the real-mode mapper), the port called `HwAdapterState(FALSE)` during start, and the controller this driver had reset could not be given back (`FALSE` restores nothing, it stops): the start hung. This is a refusal of a controller someone else initialised, not proof that the BIOS will use it again, and not a firmware handoff: a real handoff would have to rebuild the BIOS's I/O queues, which no register holds. Such a drive runs through the BIOS (compatibility mode) and Stor98's devnode shows Code 10; a drive plugged in after start is not set up and is taken. Possible false positive: firmware that leaves a controller it never uses again enabled (to be read on the P14s, whose power-on drive ran under Stor98). The boot-time `FALSE` caller is still unidentified (G9: handoff beyond the load's `TRUE` not tested). Every 9x find writes what it saw as the REG_SZ value `StorFind` in `HKLM\System\CurrentControlSet\Services\stor98` (the port's bus, slot and first range, what its slot holds, where the function was found, the return; `PlatFindReport`). `RangeInMemory` is not relied on (an I/O range cannot equal a memory BAR's address). Residual: a devnode bound to Stor98 for the system disk itself (Stor98 on that devnode by the user's choice) is still brought up; the installer and the INF keep Stor98 off internal drives | N4; backport; xhci98 46.1 |
 | 3.2 | Port/HAL interrupt routing on PnP targets; manual routing only where needed | N6; backport |
 | 3.3 | Full 64-bit BAR decoding, sizing with decode disabled | #13 |
-| 3.4 | **PCI config access only from permitted callbacks** (R4-2). NT: `ScsiPortGetBusData` only in `HwFindAdapter` and `ScsiSetRunningConfig`, `ScsiPortSetBusDataByOffset` likewise; no raw mechanism #1 (CF8/CFC) access on NT, since it cannot be serialised against the HAL's config cycles on another processor. The base reads and writes the PCI command register from `HwInitialize` (src/nvme2k.c:925); that moves to `HwFindAdapter`. 9x: per G9. Return lengths (the helpers request 256 bytes and ignore the count, src/utils.c:752, 770, 788): request only the bytes needed from offset 0; a return of 0 (no such bus) or 2 (no function; only the invalid Vendor ID is returned) is "not found" and `HwFindAdapter` returns `SP_RETURN_NOT_FOUND`; a Vendor ID of 0xFFFF is the same; on a walk of the buses (9x, looking for the port's function when `ConfigInfo`'s bus and slot do not hold it, 3.1; the NT4-ABI `HwContext` scan before xhci98 3.4.1.0), each slot's Vendor ID is probed with a 4-byte read before the header is read, and the scan walks every bus number, 0 to 255 (`src/pciscan.h`; xhci98 3.3.0.0): the base stopped after bus 15, and a firmware numbers a hot-plug port's bus range far up (the emulator's asm4242 model gives its two USB4 ports buses 19h-48h and 49h-78h), so a drive tunnelled there was never found and its devnode stayed at problem 10 (98 SE in the emulator with the asm4242 model's bus ranges, xhci98's `docs/contributing/runs/run-44.md`, "44.45"); the found path resumes through the same walk, so a find at the last slot of bus 255 ends the scan (`Again` FALSE); read on 98 SE in the emulator, the scan from bus 0 to the drive on bus 35h took about 5 ms (the debug-port stages' TSC), so the whole 0-255 walk is a few tens of milliseconds there; the scan reads other slots, as the base's did, and on 9x such a read can return garbage (G9 recorded a Vendor ID of `003E` for a function that does not exist, in `HwFindAdapter`): a probe that does so leads only to the header read, whose checked length and class check decide as before; a short return makes every field beyond it unavailable, and a needed field that is unavailable fails `HwFindAdapter` with `SP_RETURN_ERROR` before CC.EN is written. `ScsiPortSetBusDataByOffset` must return the requested length, and a Bus Master Enable or Command change is read back. No runtime callback reads config space for presence on NT (presence comes from MMIO; isolation from 0.10) | #10, R4-2; src/utils.c:752, 770, 788; src/nvme2k.c:925 |
-| 3.5 | (Moved to 0.9.) | #14, R2-10 |
+| 3.4 | **PCI config access only from permitted callbacks**. NT: `ScsiPortGetBusData` only in `HwFindAdapter` and `ScsiSetRunningConfig`, `ScsiPortSetBusDataByOffset` likewise; no raw mechanism #1 (CF8/CFC) access on NT, since it cannot be serialised against the HAL's config cycles on another processor. The base reads and writes the PCI command register from `HwInitialize` (src/nvme2k.c:925); that moves to `HwFindAdapter`. 9x: per G9. Return lengths (the helpers request 256 bytes and ignore the count, src/utils.c:752, 770, 788): request only the bytes needed from offset 0; a return of 0 (no such bus) or 2 (no function; only the invalid Vendor ID is returned) is "not found" and `HwFindAdapter` returns `SP_RETURN_NOT_FOUND`; a Vendor ID of 0xFFFF is the same; on a walk of the buses (9x, looking for the port's function when `ConfigInfo`'s bus and slot do not hold it, 3.1; the NT4-ABI `HwContext` scan before xhci98 3.4.1.0), each slot's Vendor ID is probed with a 4-byte read before the header is read, and the scan walks every bus number, 0 to 255 (`src/pciscan.h`; xhci98 3.3.0.0): the base stopped after bus 15, and a firmware numbers a hot-plug port's bus range far up (the emulator's asm4242 model gives its two USB4 ports buses 19h-48h and 49h-78h), so a drive tunnelled there was never found and its devnode stayed at problem 10 (98 SE in the emulator with the asm4242 model's bus ranges, xhci98's `docs/contributing/runs/run-44.md`, "44.45"); the found path resumes through the same walk, so a find at the last slot of bus 255 ends the scan (`Again` FALSE); read on 98 SE in the emulator, the scan from bus 0 to the drive on bus 35h took about 5 ms (the debug-port stages' TSC), so the whole 0-255 walk is a few tens of milliseconds there; the scan reads other slots, as the base's did, and on 9x such a read can return garbage (G9 recorded a Vendor ID of `003E` for a function that does not exist, in `HwFindAdapter`): a probe that does so leads only to the header read, whose checked length and class check decide as before; a short return makes every field beyond it unavailable, and a needed field that is unavailable fails `HwFindAdapter` with `SP_RETURN_ERROR` before CC.EN is written. `ScsiPortSetBusDataByOffset` must return the requested length, and a Bus Master Enable or Command change is read back. No runtime callback reads config space for presence on NT (presence comes from MMIO; isolation from 0.10) | #10; src/utils.c:752, 770, 788; src/nvme2k.c:925 |
+| 3.5 | (Moved to 0.9.) | #14 |
 | 3.6 | Windows 9x cache-mode fallback: supported VMM memory-type call or proper TLB/cache sync | N7 |
 
 ### 4. Crash dump and hibernation
@@ -756,7 +760,7 @@ the timer and interrupts active throughout (R6-5).
 OS applicability: Windows 98 SE and ME have no miniport crash-dump path and their
 hibernation does not go through a dump-mode miniport, so phase 4 covers NT only; what 9x
 standby/hibernate requires of the miniport is part of 0.12 and 2.7. On NT, three scenarios
-are separate deliverables (R2-7):
+are separate deliverables:
 
 | Scenario | What it needs | 2000 / XP / 2003 x64 | Vista / 7 |
 |---|---|---|---|
@@ -766,9 +770,9 @@ are separate deliverables (R2-7):
 
 | # | Item | Source |
 |---|---|---|
-| 4.1 | **Dump-mode detection and allocation.** Recognise dump mode both from the dump stack calling `DriverEntry` with NULL arguments and from the `ArgumentString` dump indication in `HwFindAdapter` (G6, 2000 and XP x64, crash and hibernate: both present every time, `ArgumentString` exactly `"dump=1;"`; the dump instance is a fresh image with fresh statics); allocate once there; XP-and-earlier dump/hibernate uncached allocation **under 32 KiB** including physical-alignment slack (G6: 28 KiB granted, 64 KiB returns NULL on 2000; the base asks 64 KiB). Align every queue and PRP page against the **physical** address (G6: the 28 KiB block's physical base was not page aligned, and offset-aligned queues made the controller fail to start), and leave a page of slack. **Use the access range the port supplies in `ConfigInfo`** in dump mode; never size the BAR there (the write-ones read-back returns the BAR value itself, so the computed length is wrong and `ScsiPortGetDeviceBase` returns NULL). The G3 link-state table stays unused in dump mode (its imports did not disturb the dump driver load) | C9, R2-7, G6; nvme2k.h:80, nvme2k.c:430 |
-| 4.2 | Dump-mode engine: one parent, one child at a time, edge buffer reused sequentially, a completion pump that works under the dump port. No timers, DPCs, registry or wall-clock services. 4 KiB translation stays active. **Dump-mode controller initialisation** is distinct from later bus resets. Initialisation disables the controller left by the runtime driver (RDY=0 acknowledged), re-enables it, creates the I/O queues and identifies the namespace **before init returns**, since the dump port sends I/O immediately; it polls synchronously in stalls of at most 100 µs up to the total limit G6 establishes (no timers exist; 0.10 stall budget table). A later `HwResetBus` in dump mode follows the dump-port contract: Microsoft's guidance is that dump miniports disregard bus-reset requests, so it performs no controller reset and returns TRUE; a command that does not complete fails the dump through the completion pump's deadline. The dump disk keeps the same target/LUN and identity (1.9) as at runtime. **Measured (G6, 2000 and XP x64):** synchronous init in 100 µs stalls took 40-60 ms, 2.4-2.6 s with RDY delayed 2 s, with no timeout from the dump port; the crash dump instance starts from an enabled controller (CSTS.RDY=1), the hibernate one from a controller the runtime stop already disabled; the dump port sends **one bus reset right after the first INQUIRY** (2000 and XP x64), which is disregarded; on 2000 a held write drew one more reset 7.7-15 s later, also disregarded, and XP x64 sent none in 90 s. **The pump deadline is mandatory:** neither dump port times out a lost completion (2000 waited indefinitely after its reset; XP x64 sent nothing), so a dropped completion hangs the dump at the bugcheck screen unless the engine's own deadline (counted in polls or stall time in `HwInterrupt`/`HwStartIo`) completes the SRB with an error. The dump port polls `HwInterrupt` (13-60 polls per write); no timer callback runs. Tests: dump and hibernate with RDY delayed at init; a bus-reset request during dump I/O; a dropped completion ends the dump with an error, not a hang | C9, R2-7, R3-6, G6 |
-| 4.3 | Validate scenario A on every NT target; B and C on translated (4 KiB) volumes where the firmware supports them. G6: the dump stack only ever targets the boot/system disk, so scenario C needs B; **2000 and XP x64 boot and run from the tunnelled NVMe** in usb4-emu (SeaBIOS hooks it into INT 13h, stor98 as a boot-start driver) and scenario C passes there (crash dump and hibernate/resume). Whether the P14s firmware (UEFI CSM) boots a Thunderbolt-attached NVMe at all is outside the driver. 7 x64 not run | C9, R2-7, G6 |
+| 4.1 | **Dump-mode detection and allocation.** Recognise dump mode both from the dump stack calling `DriverEntry` with NULL arguments and from the `ArgumentString` dump indication in `HwFindAdapter` (G6, 2000 and XP x64, crash and hibernate: both present every time, `ArgumentString` exactly `"dump=1;"`; the dump instance is a fresh image with fresh statics); allocate once there; XP-and-earlier dump/hibernate uncached allocation **under 32 KiB** including physical-alignment slack (G6: 28 KiB granted, 64 KiB returns NULL on 2000; the base asks 64 KiB). Align every queue and PRP page against the **physical** address (G6: the 28 KiB block's physical base was not page aligned, and offset-aligned queues made the controller fail to start), and leave a page of slack. **Use the access range the port supplies in `ConfigInfo`** in dump mode; never size the BAR there (the write-ones read-back returns the BAR value itself, so the computed length is wrong and `ScsiPortGetDeviceBase` returns NULL). The G3 link-state table stays unused in dump mode (its imports did not disturb the dump driver load) | G6; nvme2k.h:80, nvme2k.c:430 |
+| 4.2 | Dump-mode engine: one parent, one child at a time, edge buffer reused sequentially, a completion pump that works under the dump port. No timers, DPCs, registry or wall-clock services. 4 KiB translation stays active. **Dump-mode controller initialisation** is distinct from later bus resets. Initialisation disables the controller left by the runtime driver (RDY=0 acknowledged), re-enables it, creates the I/O queues and identifies the namespace **before init returns**, since the dump port sends I/O immediately; it polls synchronously in stalls of at most 100 µs up to the total limit G6 establishes (no timers exist; 0.10 stall budget table). A later `HwResetBus` in dump mode follows the dump-port contract: Microsoft's guidance is that dump miniports disregard bus-reset requests, so it performs no controller reset and returns TRUE; a command that does not complete fails the dump through the completion pump's deadline. The dump disk keeps the same target/LUN and identity (1.9) as at runtime. **Measured (G6, 2000 and XP x64):** synchronous init in 100 µs stalls took 40-60 ms, 2.4-2.6 s with RDY delayed 2 s, with no timeout from the dump port; the crash dump instance starts from an enabled controller (CSTS.RDY=1), the hibernate one from a controller the runtime stop already disabled; the dump port sends **one bus reset right after the first INQUIRY** (2000 and XP x64), which is disregarded; on 2000 a held write drew one more reset 7.7-15 s later, also disregarded, and XP x64 sent none in 90 s. **The pump deadline is mandatory:** neither dump port times out a lost completion (2000 waited indefinitely after its reset; XP x64 sent nothing), so a dropped completion hangs the dump at the bugcheck screen unless the engine's own deadline (counted in polls or stall time in `HwInterrupt`/`HwStartIo`) completes the SRB with an error. The dump port polls `HwInterrupt` (13-60 polls per write); no timer callback runs. Tests: dump and hibernate with RDY delayed at init; a bus-reset request during dump I/O; a dropped completion ends the dump with an error, not a hang | G6 |
+| 4.3 | Validate scenario A on every NT target; B and C on translated (4 KiB) volumes where the firmware supports them. G6: the dump stack only ever targets the boot/system disk, so scenario C needs B; **2000 and XP x64 boot and run from the tunnelled NVMe** in usb4-emu (SeaBIOS hooks it into INT 13h, stor98 as a boot-start driver) and scenario C passes there (crash dump and hibernate/resume). Whether the P14s firmware (UEFI CSM) boots a Thunderbolt-attached NVMe at all is outside the driver. 7 x64 not run | G6 |
 
 ### 5. amd64 target
 
@@ -776,7 +780,7 @@ The minimal amd64 build exists from 0.1. Phase 5 adds what makes it a product: I
 `NTamd64` section modelled on upstream 1.2.0.0's `WDM/sources` target, the signing story
 (test-signed like xhci98's x64 binaries), and the full test matrix on XP x64, Vista x64 and
 7 x64. Already proven buildable: upstream nvme2k 1.2.0.0 builds with WDK 7.1 `wnet` amd64
-and runs on XP x64 (R2-10).
+and runs on XP x64.
 
 ### 6. Packaging
 
@@ -791,7 +795,7 @@ crash dump driver fail to load (events 45 and 49) and hibernation fail with 0xC0
 
 ## Parent error mapping
 
-How a parent completes when a child fails (R2-4). The first error wins; no new children are
+How a parent completes when a child fails. The first error wins; no new children are
 issued after it; children already in flight are allowed to complete or are quiesced under
 0.10, and only then does the parent complete. Children that completed successfully stand
 (see the durability statement). `DataTransferLength` is set to 0 on every failure in the
@@ -810,7 +814,7 @@ first release. Sense data follows the sense rules below.
 | Cancelled with required work suppressed, all issued children successful (0.10, parent cancellation) | as the cause: `ABORTED`, `BUS_RESET`, or per 2.2 | as the cause | as the cause; never SUCCESS |
 | Other NVMe status | `ERROR` | CHECK CONDITION | HARDWARE ERROR 04/00/00; NVMe status logged |
 
-**Sense rules (R3-9).**
+**Sense rules.**
 
 - Autosense is built only when `SenseInfoBuffer` is non-NULL, `SenseInfoBufferLength` is at
   least 18 (fixed format) and `SRB_FLAGS_DISABLE_AUTOSENSE` is clear. Then exactly 18
@@ -819,16 +823,16 @@ first release. Sense data follows the sense rules below.
   `AUTOSENSE_VALID` stays clear, and the sense is kept per LUN for a following REQUEST
   SENSE, for which a handler is added (the base has none). Both base builders
   ignore `SRB_FLAGS_DISABLE_AUTOSENSE` (src/nvme2k.c:987, nvme2k_cpl.c:489).
-- **Ownership of kept sense (review round 2).** Each kept entry belongs to the request
+- **Ownership of kept sense.** Each kept entry belongs to the request
   that failed without autosense, and nothing else consumes it: autosense delivered for
   another request leaves it alone (two tagged requests failing in one completion batch,
   one without autosense and one with it, used to lose the first one's sense); several
   such failures keep one entry each, in completion order (up to 4), and REQUEST SENSE
-  returns and removes the oldest. On overflow (review round 3, N4) the further failure's
+  returns and removes the oldest. On overflow the further failure's
   sense is dropped and logged but its place is kept as a "sense lost" placeholder behind
   the kept entries; later failures queue as placeholders while one is pending, so a freed
   slot never gives a dropped request a later request's sense: REQUEST SENSE reaching a
-  placeholder returns NO SENSE. Placeholders saturate at 255 (review round 4); from then on the loss state is sticky: every REQUEST SENSE past the stored entries returns NO SENSE and nothing is stored until a start, resume, acknowledged reset or new command ends the kept sense. Kept sense ends
+  placeholder returns NO SENSE. Placeholders saturate at 255; from then on the loss state is sticky: every REQUEST SENSE past the stored entries returns NO SENSE and nothing is stored until a start, resume, acknowledged reset or new command ends the kept sense. Kept sense ends
   when a new command other than REQUEST SENSE, INQUIRY or REPORT LUNS starts for the LU,
   at every start and resume (`EngResetSoftState`, `HwFindAdapter`) and at an acknowledged
   reset. Implemented in src/sense.c; host unit test `tests/unit` (NT and 9x `SRB.H`).
@@ -859,108 +863,390 @@ path set: CHECK CONDITION with the sense rules above, or GOOD (the parent error 
 
 ## 4 KiB-sector namespaces
 
-None of the target systems supports a disk with 4 KiB **logical** sectors (native 4Kn):
-Windows 9x, 2000, XP and Vista assume 512-byte sectors, and Windows 7 supports 512e
-(512-byte logical, 4 KiB physical) but not 4Kn. stor98 is therefore to present
-**512-byte logical sectors** and translate to the namespace's block size in the driver.
-**That translation is planned (1.7), not implemented:** today READ CAPACITY reports the
-namespace's own block size (src/nvme2k_scsi.c), so a 4Kn namespace reaches the OS as a disk
-with 4 KiB logical sectors, which 9x, 2000 and XP cannot use. Planned native sizes: 512 and
-4096 bytes (mandatory); larger sizes only within the bounce buffer budget, otherwise refused
-with a logged reason. The rest of this section is the design 1.7 is to implement.
+Of the target systems only Windows 8, 8.1 and 10 support a disk with 4 KiB **logical**
+sectors (native 4Kn): Windows 9x, 2000, XP and Vista assume 512-byte sectors, and Windows 7
+supports 512e (512-byte logical, 4 KiB physical) but not 4Kn. stor98 therefore presents **512-byte
+logical sectors** on every target and translates to the namespace's block size in the
+driver (1.7; maintainer decision 2026-10-14). Implemented in xhci98 3.4.2.0 (its roadmap 47.20):
+`src/rmw.h`, the engine (`src/engine.c`, `src/lifecycle.c`) and the answers
+(`src/nvme2k_scsi.c`, `src/capdata.h`, `src/utils.c`); before it READ CAPACITY reported
+the namespace's own block size. Native sizes served: 512 to 4096 bytes (LBADS 9 to 12, src/nsfmt.h);
+a larger block is refused with a logged reason, never served under another size.
 
-### Request handling (on the phase 0 engine)
+**Two views** (owner, 2026-11-06, option B; xhci98 roadmap 47.31): on Windows 8, 8.1 and 10
+a 4 KiB namespace (LBADS 12) is shown with its **native 4096-byte sectors**, as Windows' own
+stornvme shows it, so a volume made there by stornvme stays readable when Setup puts Stor98
+on the drive (8.1, and 10 when chosen). Everything else - 98 SE, ME, 2000, XP, Vista and 7,
+and 1 KiB and 2 KiB namespaces on every system - keeps the 512-byte view and its
+translation. The view is fixed with the rest of the geometry at Identify Namespace, each
+start (a reset, resume or reconnect decides again by the same rule): the NT build reads the
+running Windows' version from KUSER_SHARED_DATA (`NtMajorVersion` 0x26C, `NtMinorVersion`
+0x270, ntddk.h; the fixed kernel address `clock.c` reads InterruptTime from), 6.2 or later
+choosing the native view (`RmwNativeView`, `src/rmw.h`); the 9x build never does. Then the
+count is computed and gated in that view's sectors. `DevExt->LbaShift` (SCSI LBA to native
+block: `SectorShift` in the 512-byte view, 0 in the native view) and `DevExt->ExposedBytes`
+(512, or 4096) carry it: READ CAPACITY(10)/(16) (block length; LOGICAL BLOCKS PER PHYSICAL
+BLOCK EXPONENT `LbaShift`), MODE SENSE's block descriptor, READ/WRITE (bytes = blocks x
+`ExposedBytes`; `RmwPlan` with `LbaShift` 0 has no edges, so the native view has no
+read-modify-write and no edge pages), VERIFY (the native range; at most 32 MiB in one VERIFY,
+65535 or 8192 sectors), the ATA IDENTIFY answer (word 106 4000h for a 512-byte namespace,
+6000h | `SectorShift` translated, 5000h native with words 117-118 2048 words) and the overlap
+rules (none in the native view). Page 03h keeps the native block; the counter answer keeps
+its 512-byte units. A crash-dump or hibernation instance decides afresh by the same reads;
+native-sector dump I/O is not qualified (as product dump support is not). **The two views
+are not interchangeable**: a volume made through the 512-byte view (98 SE to 7, or 8 to 10
+with a test build before 47.31) and one made through the native view (8 to 10 with 47.31,
+or stornvme) carry different sector sizes in their partition tables and file systems;
+Stor98 neither detects nor converts that (README, "Known limits"). Host test `rmw_ut`
+("view").
 
-- **Aligned** (start and length multiples of the native block): LBA and count divided by
-  the ratio, one or more direct children. No extra media traffic.
-- **Unaligned read:** head/tail native blocks read into bounce buffers and copied out; the
-  aligned middle is read directly. Head and tail in the same native block share one
-  bounce read.
-- **Unaligned write:** head/tail blocks are read, patched and written back (read-modify-write)
-  through bounce buffers; the aligned middle is written directly. Shared head/tail block
-  coalesced.
-- **Overlap (symmetric):** every admitted read and write registers its native-block range
-  before dispatch. A read-modify-write takes exclusive ownership of its edge blocks only
-  after earlier conflicting commands (aligned writes included) have drained, holds it
-  through write-back completion or quiescence, and blocks later conflicting requests.
-  Multiple ranges are acquired atomically or in a fixed order. Callback serialization is not
-  enough: commands already executing on the SSD must be covered. First implementation: one
-  parent per namespace at a time.
-- **Barriers:** as item 1.6, with FUA on edge write-backs.
-- **Failure and removal:** a failing or interrupted child fails the whole parent with the
-  status from the parent error mapping (2.2's terminal status only for path down, evidence 2
-  of 0.10, or the gone deadline under MD-1). An RMW whose write-back was suppressed never
-  completes with success (parent cancellation, 0.10); bounce buffers are released only under
-  0.10 and stay quarantined after the gone deadline. After any recovery, edges are pre-read
-  again; a stale bounce image is never written.
+### Units
 
-### Durability statement (for users)
+- B, the native block, is 2^LBADS bytes; S = LBADS - 9 (0 to 3) and R = 2^S = B / 512.
+  The exposed sector is 512 bytes in the 512-byte view (in the native view of "Two views"
+  it is B, the count NSZE and S effectively 0: none of the translation below applies). With S = 0 nothing below changes a request: every
+  request is aligned and the engine issues what it issued before.
+- The exposed count is `NSZE << S`. NSZE 0 is refused as before; a namespace whose
+  exposed count does not fit 64 bits (NSZE >= 2^(64 - S)) is refused (no disk, reason
+  logged), since no exposed LBA could name its last sectors.
+- Every SCSI answer and every LBA check of a CDB is in exposed units; only NVMe commands
+  carry native units. The counter answer (`include/stor98pf.h`, MD-8) keeps the
+  namespace's own block size and block count: it describes the namespace.
 
-A translated SRB is not transactional: removal or power loss can leave a multi-block write
-partly applied, and data not yet flushed can be lost, as with any disk. Rewriting the
-untouched neighbouring sectors of an edge block is safe when the SSD writes that single
-native block atomically (both old and new images contain the same neighbour bytes); NVMe
-reports power-fail atomicity separately (AWUPF/NAWUPF), and the driver can log it. Do not
-claim the same guarantees as any particular 512e hard disk.
+### Alignment and splitting (`src/rmw.h`, pure arithmetic, host-tested)
 
-### Reporting and alignment
+A READ or WRITE(6/10/16) of N exposed sectors (N >= 1; a (10)/(16) count of 0 completes
+with no I/O, 1.2) at exposed LBA L, checked as today against the exposed count (05/21/00)
+and against DataTransferLength (N x 512 bytes), covers the native blocks F = L >> S to
+E = (L + N + R - 1) >> S (exclusive). With h = L mod R and t = (L + N) mod R:
 
-- Capacity: after checking NSZE is non-zero (a zero-size namespace is not exposed), compute
-  `exposed_count = NSZE * (native/512)` with overflow checking and
-  `last_exposed_lba = exposed_count - 1`. READ CAPACITY(10) returns
-  `min(last_exposed_lba, 0xFFFFFFFF)` (0xFFFFFFFF tells the OS to use RC16). READ
-  CAPACITY(16) returns `last_exposed_lba` (not the count), logical block length 512,
-  LBPPBE = log2(native/512) (3 for 4 KiB) and lowest aligned LBA 0. The legacy `scsi64.h`
-  RC16 layout marks these bytes reserved and must be updated (R2-9).
-- Capacity tests check exact values (R2-9, R3-10). 512-byte namespaces: exposed counts
-  2^32 - 1, 2^32 and 2^32 + 1 sectors (RC10 = 0xFFFFFFFE, 0xFFFFFFFF, 0xFFFFFFFF;
-  RC16 = 0xFFFFFFFE, 0xFFFFFFFF, 0x100000000). 4 KiB namespaces expose NSZE * 8 sectors, so
-  the count is always a multiple of 8: exposed counts 2^32 - 8, 2^32 and 2^32 + 8 (NSZE
-  0x1FFFFFFF, 0x20000000, 0x20000001; RC10 = 0xFFFFFFF7, 0xFFFFFFFF, 0xFFFFFFFF;
-  RC16 = 0xFFFFFFF7, 0xFFFFFFFF, 0x100000007). In every case I/O to `last_exposed_lba`
-  succeeds and to `last_exposed_lba + 1` fails with 05/21/00.
+- **Head edge** (h != 0): native block F, which the request covers only partly. Its
+  caller bytes start at buffer offset 0 and at byte h x 512 of the block, and are
+  min(R - h, N) x 512 long.
+- **Tail edge** (t != 0, and E - 1 is not the head block): native block E - 1. Its caller
+  bytes start at byte 0 of the block and at buffer offset (N - t) x 512, t x 512 long.
+- **Shared edge** (h != 0, t != 0, E - 1 = F): one edge, the head, with N x 512 caller
+  bytes at byte h x 512 of the block.
+- **Middle**: the native blocks wholly covered, from ceil(L / R) to floor((L + N) / R),
+  max(0, floor((L + N) / R) - ceil(L / R)) blocks (none for a shared edge), at buffer
+  offset (R - h) x 512 when there is a head edge, else 0, split into children by the
+  child limit (MaxChildBytes, a multiple of 4 KiB and so of B) as every request is now.
+  The edges and the middle cover the caller's N x 512 bytes exactly once, in buffer order.
+- **Aligned** (h = 0 and t = 0): the middle only, LBA and count shifted by S; no media
+  traffic beyond the request's own bytes.
+
+Every child moves whole native blocks. An edge is one native block in one bounce page
+(B <= 4096 = one page, PRP1 only, the page physically page aligned). A middle child's
+first PRP entry starts at a 512-byte multiple of the caller's buffer, so the DWORD rule
+of 0.4 holds; its mapping is validated as today and bounced when it fails.
+
+**Unaligned READ:** one child per edge reads its block into a general bounce page owned
+by that child, as any bounced child; at that child's own successful completion exactly
+its caller bytes are copied from the page (at the edge's byte offset) to the caller's
+buffer, nothing else of the buffer is written, and the page is released with the child.
+The middle is read into the caller's buffer as today. The children go out in buffer order
+(head, middle, tail), all without waiting for one another.
+
+**Unaligned WRITE (read-modify-write), two phases:**
+
+1. **Pre-read:** one READ child per edge reads its block into one of the two edge pages
+   (below). No WRITE of the request is issued before every pre-read has completed
+   successfully.
+2. **Patch and write:** after the last pre-read's completion was consumed, the dispatcher
+   copies the caller's bytes into each edge page, every edge patched before the first
+   WRITE is submitted, at the edge's byte offset (through
+   EngCallerCopy: on 9x fragment by fragment, a copy that cannot be resolved failing the
+   request with 04/44/00 before anything is written, as other unresolved copies do), then
+   issues the edge write-backs (one WRITE child of one native block from each edge page)
+   and the middle children, in buffer order.
+
+The pre-reads carry no FUA (they need the block's current logical contents, which an
+ordinary read returns, from the drive's cache or the medium); every WRITE
+child of a write with FUA, or under write-through by FUA (D3), carries FUA, the
+write-backs included, and every READ child of a READ with FUA, edges included, as today.
+
+### Bounce memory and its pools
+
+No memory is allocated at I/O time on any OS. Two **edge pages** are added at the top of
+the bounce block (ENG_BOUNCE_PAGES 8 to 10; the first 8 stay the general bounce pool and a
+bounced child is still cut to 8 pages), so the DMA block grows by two pages (22 to 24 with
+the alignment page): on NT the port's uncached extension (MD-3 (a)), on 9x the adapter's
+MD-4 pool block (`src/pool9x.c`; the boot-wide budget counts blocks, so its count is
+unchanged). Each page is translated and validated at the carve (0.4) like every pool page.
+
+- **Ownership.** A write with an edge takes both edge pages in the same dispatch step
+  that submits its first pre-read (EdgeOwner = its parent; when no pre-read can be
+  submitted the pages are given back at once, so a parent that owns them has always
+  started, ENG_PF_STARTED, and is never retired as a held request) and keeps them until it
+  completes: **one read-modify-write at a
+  time per adapter**. A later one waits for them (ENG_WAIT_EDGE, a capacity wait: dispatch
+  stops there, in admission order). An edge page is free only when no parent owns it and
+  no child that used it is still issued or quarantined. Every path that retires a parent
+  gives its ownership back before RequestComplete: EngFinishParent, and the paths that
+  free a parent without it (the held parents failed by LcFailHeldParents, which never own
+  the pages, and EngStop, which forgets every parent); EngResetSoftState starts with no
+  owner. The give-back runs after the child that released a page is free.
+- The pre-read and write-back children reference the edge page without owning it: their
+  release does not free it; their quarantine (MD-1 deadline, unresponsive row) marks it
+  quarantined like any bounce page, and it stays out of use until that child's own
+  completion is consumed or isolation evidence releases it (0.10). Between the phases
+  nothing the device can reach refers to an edge page (the pre-read's completion was
+  consumed, the write-back not yet submitted), so a parent that completes there (error,
+  abort, gone) gives the page back at once.
+- Unaligned reads use general pages owned by their children and never hold memory across
+  a wait.
+- **No deadlock:** the only memory held across a wait is the one read-modify-write's two
+  edge pages; everything else it needs (child slots, PRP pages, general bounce pages) is
+  held only by issued children, which complete without it, and the general pages are never
+  held across a wait, so a full bounced middle (8 pages) can always be had.
+
+### Concurrency and ordering
+
+The callbacks are serialised by the port (engine.h); what has to be covered is commands
+already on the SSD. Every READ/WRITE parent records its native range [F, E) at admission.
+
+- **An unaligned write starts** (its pre-reads) only when no earlier unfinished READ/WRITE
+  parent's range holds one of its edge blocks.
+- **Any READ/WRITE parent starts** (its first child) only when no earlier unfinished
+  unaligned write has an edge block in its range.
+
+"Earlier" is admission order; "unfinished" is admitted and not completed (waiting, issued,
+or between the phases). A parent that must wait stops dispatch there (ENG_WAIT_OVERLAP),
+as at a barrier, and everything later waits behind it in admission order. The rules serialise only intersections that involve an edge block of an
+unaligned write; full-block writes overlapping in its aligned middle keep the ordinary
+rule below. So: two writes
+sharing an edge block of an unaligned write never overlap on the device (the later
+waits for the earlier's completion, write-backs included); an unaligned write's pre-read
+reads what every earlier write of that block wrote; a later aligned write of an edge block
+cannot land before the write-back that would overwrite it; and a read of an edge block
+waits until the write-back is done (the rule is symmetric, though a read alone could not
+be harmed). Overlapping reads and aligned writes keep SCSI's own rule (no order among
+commands outstanding at once), as on any disk.
+
+ORDERED tags and SHUTDOWN stay barriers (after every earlier parent, ahead of every later
+one); a FLUSH waits for every earlier write parent, and an unaligned write is a write
+parent until its write-backs completed (1.6). On 9x (no tags, one request per LU, G9) the
+rules never wait in practice; on NT up to 32 tagged parents meet them.
+
+### Failure, cancellation, recovery and removal
+
+- First error wins, as for every parent. A failed pre-read fails the write with its
+  mapped status (a media error 03/11/00, the parent error mapping) and **nothing of the
+  request is written**: phase 2 never starts. A failed write-back or middle child fails
+  the request after the children already issued quiesce; the range may then be partly
+  written, as with any failed multi-block write.
+- An edge read copies only after its own successful completion; a failed one copies
+  nothing.
+- **Cancellation** (abort, reset, gone; 0.10 parent cancellation): a write whose phase 2
+  is not yet issued still has required work, so it is cancelled and never completes with
+  SUCCESS; no write-back is issued after a cancellation. Recovery never resumes a parent:
+  the port retries the SRB, which is admitted afresh and pre-reads again, so a stale edge
+  image is never written (an edge page holds data only for its owner's life).
+- **Gone and the MD-1 deadline:** the children issued are quarantined with their pages,
+  edge pages included; the parent completes with the terminal status of 2.2; a
+  quarantined edge page keeps every later read-modify-write waiting until evidence
+  releases it.
+- **Stop** (ScsiStopAdapter, HwAdapterState(FALSE), 0.11): the stop forgets every parent
+  (EngStop: the port owns the SRBs) and with them the edge pages' owner, so nothing of a
+  forgotten read-modify-write is issued afterwards; edge pages still used by a child stay
+  quarantined like any page. 9x (2.7, G9: no timer after HwAdapterState(FALSE)): the
+  phases advance from completions (interrupt or polling) and the timer, never from a
+  timer armed in the stop, so there is nothing to drain beyond what the stop does now.
+- **Shutdown** (class 2) is a barrier: every earlier read-modify-write has completed
+  before its Flush.
+
+### Flush, FUA and durability
+
+SYNCHRONIZE CACHE and SRB_FUNCTION_FLUSH submit their NVMe Flush after every earlier write
+parent completed (1.6), for a read-modify-write after its write-backs; a pre-read is not a
+write and does not dirty the adapter. Dirty tracking (0.10) counts every WRITE child from
+submission, write-backs included; the idle Flush (MD-7) and the stop's Flush are unchanged.
+
+**Durability statement (for users).** A translated SRB is not transactional: removal or
+power loss can leave a multi-block write partly applied, and data not yet flushed can be
+lost, as with any disk. An edge write-back rewrites the other 512-byte sectors of its
+native block with the bytes it pre-read, the block's current logical contents (no other
+write can reach that block meanwhile, "Concurrency"), so a power loss during it leaves the
+old block or the new one when the SSD writes one native block atomically. NVM Express
+reports power-fail atomicity as AWUPF (a 0's based count of logical blocks, so its least
+value is one block) and, per namespace, NAWUPF (0 inheriting AWUPF); a write-back is one
+native block and cannot straddle a block boundary, so a conforming controller writes it
+atomically. A drive that does not can lose the neighbouring sectors of the block being
+written, which a 512-byte disk would not.
+Do not claim the same guarantees as any particular 512e hard disk.
+
+### TRIM and UNMAP
+
+None: stor98 implements no UNMAP, WRITE SAME or NVMe deallocate (1.5; UNMAP is refused as
+an unsupported opcode) and reports no logical block provisioning (no VPD page B2h; RC16's
+LBPME and LBPRZ are 0). Any future deallocate deallocates only native blocks wholly inside
+a range, never rounds outward, and promises nothing about the partly covered blocks.
+
+### Capacity, geometry and the other answers
+
+- **READ CAPACITY(10):** `min(exposed - 1, 0xFFFFFFFF)` (0xFFFFFFFF sends the OS to
+  RC16), block length 512.
+- **READ CAPACITY(16):** last LBA `exposed - 1`, block length 512, LBPPBE = S (byte 13
+  bits 3:0; 3 for 4 KiB), lowest aligned LBA 0 (bytes 14-15), every other byte 0
+  (`src/capdata.h`).
+- **MODE SENSE:** the block descriptor (the logical block length) carries the exposed
+  count (FFFFFFFFh when it does not fit) and 512; the format device page's data bytes per
+  physical sector carry B, matching RC16's LBPPBE; the rigid disk geometry's cylinders come
+  from the exposed count.
+- **Sense data:** the Information field stays 0 and VALID clear (sense.c: no failing LBA
+  is reported yet), so no LBA in sense needs converting now; when the sense rules'
+  Information field ("Sense rules" above) is implemented, it carries the first exposed LBA
+  of the failing native block, as those rules say.
+- **VERIFY(10)/(16):** bounds against the exposed count (`src/vfychk.h`); since 3.4.2.0
+  the medium is read over the whole native blocks the range touches ("VERIFY").
+- **ATA IDENTIFY** (the SMART and SAT pass-through answer, `src/utils.c`): the CHS and
+  LBA sector counts from the exposed count.
+- **Capacity tests check exact values.** 512-byte namespaces: exposed counts 2^32 - 1,
+  2^32 and 2^32 + 1 sectors (RC10 = 0xFFFFFFFE, 0xFFFFFFFF, 0xFFFFFFFF; RC16 = 0xFFFFFFFE,
+  0xFFFFFFFF, 0x100000000). 4 KiB namespaces expose NSZE x 8 sectors, so the count is
+  always a multiple of 8: exposed counts 2^32 - 8, 2^32 and 2^32 + 8 (NSZE 0x1FFFFFFF,
+  0x20000000, 0x20000001; RC10 = 0xFFFFFFF7, 0xFFFFFFFF, 0xFFFFFFFF; RC16 = 0xFFFFFFF7,
+  0xFFFFFFFF, 0x100000007). In every case I/O to the last exposed LBA succeeds and to the
+  one after it fails with 05/21/00.
 - Whether Vista or 7 actually aligns new partitions through this SCSIport stack is unknown
   (Microsoft's advanced-format support depends on OS updates and was documented for
   Storport/USBSTOR). Test the CDB traffic and `StorageAccessAlignmentProperty` per OS before
   promising it.
-- Media traffic of an unaligned write (R3-11): with E the number of distinct native blocks
-  the request covers only partly (0, 1 or 2; a shared head/tail block counts once) and B
-  the native block size, traffic = the write rounded out to native blocks + E x B of
-  pre-reads = `aligned_middle_bytes + 2 x E x B`. The write-back of an edge block is part of
-  the rounded-out write and is not counted again. Aligned requests move exactly their own
-  bytes; an unaligned read moves the request rounded out to native blocks.
-- Alignment depends on each request's absolute LBA and the filesystem data-area offset, not
-  only the partition start. Examples (B = 4 KiB): a 4 KiB write at exposed LBA 63 covers
-  exposed LBAs 63-70, partly covering native blocks 7 and 8 with no aligned middle (E = 2):
-  8 KiB written + 8 KiB pre-read = 16 KiB of media traffic; a single 512-byte write (E = 1)
-  costs 4 KiB written + 4 KiB pre-read = 8 KiB. User notes recommend partitions starting at sector 2048 and FAT data
-  areas aligned to 4 KiB, with measured numbers from the benchmark below.
-- Presenting 512-byte sectors does not convert a disk already partitioned and formatted as
-  native 4Kn on another OS; that layout will not be readable here. Firmware (INT 13h) access
-  and booting from a translated disk are separate questions from data-disk use (phase 4,
-  scenarios B and C).
+- **Media traffic** of an unaligned write: with E the number of edges (0, 1 or 2; a shared
+  head/tail block counts once) and B the native block size, traffic = the write rounded out
+  to native blocks + E x B of pre-reads = `aligned_middle_bytes + 2 x E x B`. The write-back
+  of an edge block is part of the rounded-out write and is not counted again. Aligned
+  requests move exactly their own bytes; an unaligned read moves the request rounded out
+  to native blocks.
+- Alignment depends on each request's absolute LBA and the filesystem data-area offset,
+  not only the partition start. Examples (B = 4 KiB): a 4 KiB write at exposed LBA 63
+  covers exposed LBAs 63-70, partly covering native blocks 7 and 8 with no aligned middle
+  (E = 2): 8 KiB written + 8 KiB pre-read = 16 KiB of media traffic; a single 512-byte write
+  (E = 1) costs 4 KiB written + 4 KiB pre-read = 8 KiB. User notes recommend partitions
+  starting at sector 2048 and FAT data areas aligned to 4 KiB.
+- Presenting 512-byte sectors does not convert a disk already partitioned and formatted
+  with 4 KiB sectors on another system or driver (Windows 8 to 10's own driver included);
+  that layout is not readable here. A disk partitioned through stor98 keeps one layout on
+  every target. Firmware (INT 13h) access and booting from a translated disk are separate
+  questions from data-disk use (phase 4, scenarios B and C).
 
-### Tests (deterministic, in usb4-emu)
+### 9x and NT
 
-- Every start offset modulo 8, same-block head/tail, single sector, cross-block, MDTS
-  boundary; fragmented and non-page-aligned caller buffers; DMA above 4 GiB where the OS
-  allows it.
-- Partial/partial and partial/aligned overlaps in both arrival orders; reads during a
-  read-modify-write; exhausted bounce/PRP/CID pools; tagged, untagged and ORDERED traffic.
-- Fault injection at exact points: removal/reset after the pre-read, before the write-back,
-  during each child and before parent completion; delayed and stale completions; lost
-  interrupts; media error on a pre-read. These need the harness work in TESTING.md.
-- FUA/flush failures; sentinel patterns verified outside the requested sectors.
-- Capacity boundaries as above on a sparse image over 2 TiB; dump and hibernate per phase 4;
-  every OS and architecture.
-- DMA bounds (no byte beyond the caller's or bounce buffer) checked separately from total
-  media traffic (which read-modify-write legitimately increases).
-- Benchmark: partitions at 63 and 2048, small random and large sequential I/O, latency.
+One engine path for both. On 9x a caller's buffer can arrive as an IOS scatter/gather list
+(`src/sg9x.h`); every copy (an edge read's copy-out, an edge patch, a bounced child's copy)
+goes through EngCallerCopy, which resolves it fragment by fragment and fails the request
+rather than guess an address. The 9x test images bounce every data child (ForceBounce),
+middles included. 9x requests are at most 64 KiB (61,440 bytes on Me; up to 2 MiB with
+xhci98's S98VSD.VXD) at one request per LU. On NT the port maps every data buffer
+(MapBuffers), so the copies work from any callback, the completion at DIRQL included, as
+bounced reads already do. x86 and amd64 are the same code.
+
+### Logging (test builds)
+
+Debug-port stages: `STG_RMW_PREREAD` (0x190) when an unaligned write submits its first
+pre-read (and so owns the edge pages), `STG_RMW_PATCHED` (0x191) after the last pre-read,
+just before the first write is issued (the "after the pre-read" and "before the
+write-back" points of TESTING's exact-point hooks), and the capacity wait
+`STG_ENG_CAP_WAIT` (0xBA) with reason 6 (the edge pages) or 7 (an overlap with an edge
+block), once per wait as its other reasons.
+
+### Tests
+
+- **Host unit test** `tests/unit/rmw_ut.c`: the plan for every start offset modulo R and
+  every length up to 3 x R + 1 at R = 2, 4 and 8 (and S = 0: aligned only), the shared
+  block (no middle), every extent's count non-negative and the caller's bytes covered
+  exactly once; a model of a 4Kn namespace (an image in native
+  blocks) that executes the plan for reads and writes and compares with a 512-byte
+  reference model: the data, sentinels outside the request on the medium and around the
+  caller's buffer, and the media traffic formula above; the exposed count and its
+  overflow refusal; RC16's bytes for the table above; the overlap rules in both arrival
+  orders.
+- **Emulator legs:** QEMU's NVMe with `logical_block_size=4096` on 98 SE, 2000, XP and 7:
+  format, copy, compare, chkdsk / ScanDisk, the volume at sector 63 (every FAT write
+  unaligned), the pre-reads seen in QEMU's trace.
+- The recovery sequence behind the ownership rule (an unaligned write that cannot
+  submit its first pre-read for want of a child slot, so it owns nothing; a reset whose
+  disable passes CAP.TO fails the held parents; a late acknowledgement and re-enable;
+  then another unaligned write, which must find the edge pages free) is a usb4-emu hook
+  case, owed with the others below.
+- TESTING's rows ("4 KiB sectors", "Media traffic", "Capacity boundaries", "Pre-read media
+  error", "Cancellation between RMW stages", "Removal between RMW stages") stand; the ones
+  that need usb4-emu hooks stay owed, as their rows say.
+- Also, in usb4-emu when its hooks exist: partial/partial and partial/aligned overlaps in
+  both arrival orders; reads during a read-modify-write; exhausted bounce/PRP/CID pools;
+  tagged, untagged and ORDERED traffic; fault injection after the pre-read, before the
+  write-back, during each child and before parent completion; delayed and stale
+  completions; lost interrupts; FUA/flush failures; DMA bounds checked separately from
+  total media traffic; capacity boundaries on a sparse image over 2 TiB; dump and
+  hibernate per phase 4; the benchmark with partitions at 63 and 2048.
+
+## VERIFY (xhci98 3.4.2.0, its roadmap 47.22)
+
+Owner, 2026-11-06 ("doing things properly", the design first): VERIFY reads the medium,
+so a surface scan finds a bad block. Until then VERIFY(10) and VERIFY(16) were answered
+in software and succeeded without a block read.
+
+- **VERIFY(6)** (13h, a sequential-access command): CHECK CONDITION 05/20/00 (INVALID
+  COMMAND OPERATION CODE), answered in software.
+- **VERIFY(10) and (16): the CDB** (`src/vfychk.h`, `VfyCheck`): BYTCHK or VRPROTECT
+  05/24/00; a range past the exposed count 05/21/00; more than `VfyMaxSectors` (32 MiB of
+  the view's sectors, at most VERIFY(10)'s own 65535: 65535 of 512 bytes, 8192 of 4096 in
+  the native view, 47.31) 05/24/00 before any work; a count of 0 GOOD
+  with nothing done.
+- **A range that starts at or past the end** (`VFY_PAST_END`, checked before the work
+  bound): 05/21/00 on 2000 to 10; on the 9x build GOOD with no media access (owner,
+  2026-11-06, option (a)), a deliberate deviation from SBC for blocks that do not exist.
+  The reason: MS-DOS FORMAT /U walks a volume with its boot sector's geometry, and where
+  that differs from the one Windows 98 gives the drive (a FAT volume made elsewhere: 16
+  heads x 63 sectors against 64 x 32) it verifies tracks past the drive's end; refused,
+  it reads every allocation unit in them, each refused too, and marks them bad in the new
+  FAT, half the volume on the 128 MiB test disk, a drive with no bad block. xhci98 3.4.1.0
+  answered every VERIFY GOOD and FORMAT marked none (xhci98's `runs/run-47.md`, "The
+  MS-DOS FORMAT reads past the partition's end"). A VERIFY partly in range is still
+  refused, and READ and WRITE past the end still are. Host test `vfychk_ut`.
+- **The parent** (`EngSubmitVerify`): a READ-kind parent marked `ENG_PF_VERIFY` over the
+  whole native blocks the range touches (`VfyNativeRange`: a block asked for in part is
+  read whole; nothing is written), with no data: nothing mapped or copied, success with
+  `DataTransferLength` 0. Its overlap range is set as a READ's, so it waits behind an
+  unaligned write ("4 KiB-sector namespaces", "Concurrency and ordering"). The counter
+  answer's data counters (MD-8) leave it out.
+- **NVMe Verify** where the controller has it: Identify Controller ONCS bit 7, or a
+  nonzero Verify Size Limit (VSL) in the NVM Command Set's I/O Command Set specific
+  Identify Controller (CNS 06h, CSI 00h), which advertises the command with ONCS bit 7
+  clear (NVM Command Set 1.0d, 3.2.5). CNS 06h is an optional bring-up command after
+  Identify Controller (its fields saved first): a refusal leaves VSL unknown and the
+  bring-up goes on; no answer fails that bring-up through the admin phase's time-out as
+  any admin command does (the disable and isolation rules unchanged), and later
+  bring-ups of the same device extension do not ask it again. Each child is one Verify
+  (opcode 0Ch, FUA, no data pointer) of at most the read child size, 65536 blocks and
+  VSL (`VfyChildBlocks`, `VfyVslBlocks`).
+- **Elsewhere, reads into the bounce pages**: each child one Read with FUA of at most
+  the eight general bounce pages (32 KiB; never the edge pages), nothing copied, the
+  pages freed with the child or quarantined with it as a bounced read's. A 32 KiB child
+  takes all eight pages, so these children run one after another, and a later parent
+  that needs bounce pages waits behind the VERIFY in admission order.
+- **Errors**: as a READ's (parent error mapping): an unrecovered read error is 03/11/00
+  MEDIUM ERROR with VALID 0 and Information 0 (a child covers many blocks: the sense
+  rules give an LBA only for a known failing native block). Removal, gone deadline,
+  reset and abort as a READ's.
+- **Time, accepted**: the work is bounded (32 MiB; at most 1,025 children of 32 KiB on a
+  4 KiB namespace, more where the read child size is smaller), the time is not proved.
+  The engine has no per-command deadline; a VERIFY's time is its children times the
+  latency of consuming one completion, which in the polling mode is the poll period
+  (at least 10 ms on NT, up to 100 ms by `StorPollBusyUs`): a 32 MiB VERIFY by reads,
+  polled on NT, takes 10 to 16 s, past a 10 s time-out, and then ends as any request
+  that outlives its time-out does (the port's time-out, `HwResetBus`, the reset path;
+  never truncated to GOOD; no DMA memory released early). The legs record each VERIFY's
+  size and time (debug-port stages `0x1A1` and `0x1A3`).
+- **Test only**: `STOR98_TEST_VFYREAD` (9x debug-port builds) and `vfyread=1` (NT test
+  builds) VERIFY by reads where NVMe Verify is there. Debug-port stages `0x1A0` (the CNS
+  06h answer), `0x1A1` (a VERIFY admitted), `0x1A2` (each child: its opcode), `0x1A3` (a
+  VERIFY completed: its time, children, mode).
 
 ## Removal acceptance (all OSes)
 
 Scope: a non-critical data disk (not the boot, system, paging or dump disk); surprise
-removal of a critical disk may crash the OS and is not a gate (R2-7). The XP x64 sequence
+removal of a critical disk may crash the OS and is not a gate. The XP x64 sequence
 becomes a gate, with the thresholds in TESTING.md: after `tunnel surprise` during I/O, the
 driver detects the loss and completes everything it holds within a bounded time, the
 application gets an error within a bounded time, the number of pending SRBs stays bounded,
@@ -968,7 +1254,7 @@ the volume is reported gone by T4, at most T0 + 60 s, and there is no recovery l
 events (NT event 117, bus reset, and event 9, timeout; on 9x the driver's reset and timeout
 counters) are counted over the whole 10-minute window starting at T0, with one initial
 recovery allowed: at most one bus reset and at most one timeout, both before T4, and none
-after T4 (R4-6; TESTING.md states the same criterion). Two cases are tested separately,
+after T4 (TESTING.md states the same criterion). Two cases are tested separately,
 with the measurement definitions in TESTING.md:
 
 - **Sustained absence:** the tunnel stays down for the whole 10-minute window starting at
@@ -977,15 +1263,15 @@ with the measurement definitions in TESTING.md:
   brings the disk back working, under the identity rules of 2.6 and the reopen invariant
   of 0.10.
 
-On 9x the volume does not disappear by itself (R6-9): `SRB_STATUS_NO_DEVICE` ends IOS's
+On 9x the volume does not disappear by itself: `SRB_STATUS_NO_DEVICE` ends IOS's
 retries and the application gets its error, but the drive letter stays until CONFIGMG
 removes or re-enumerates the devnode (G9). T4 on 9x therefore needs a named actor
 (xhci98's CM, or the test harness standing in for it) and is measured from that actor's
 call; the miniport's standalone part (error completion, T1-T3) is judged separately from
 the CM-assisted disappearance (TESTING.md, measurement definitions).
 
-Acceptance on an OS and architecture also needs G3 qualified there (per-port qualification,
-R4-7), since all-ones reads are not isolation evidence (R4-1). Without it, the gone-deadline
+Acceptance on an OS and architecture also needs G3 qualified there (per-port
+qualification), since all-ones reads are not isolation evidence. Without it, the gone-deadline
 outcome of MD-1 applies on that OS: held SRBs complete at the deadline (the gone deadline
 equals the T1-T2 budget) with driver-owned memory quarantined, under the accepted residual risk, and the
 acceptance record for that OS states that it relied on the MD-1 exception rather than on
@@ -993,7 +1279,7 @@ isolation evidence.
 
 ## Maintainer decisions
 
-- **MD-1 (R4-1): consequence at the gone deadline. Decided 2026-10-14 (Yeo Kheng Meng):
+- **MD-1: consequence at the gone deadline. Decided 2026-10-14 (Yeo Kheng Meng):
   option (b).** When presence is lost and neither an acknowledged disable nor a G3
   link-down statement arrives by the gone deadline, the driver completes the held SRBs with
   the terminal device-gone status (2.2) and quarantines (never frees) driver-owned DMA
@@ -1005,7 +1291,7 @@ isolation evidence.
   option (a) was to keep holding the SRBs until the OS removal path retired them, leaving
   surprise removal without xhci98's CM unsupported. Tests: TESTING.md "Gone deadline, no
   evidence" and the negative test "Presence lost with the DMA path open".
-- **MD-2 (R4-1, R4-3, M1): assumption A1 and the CM obligations as the basis of
+- **MD-2: assumption A1 and the CM obligations as the basis of
   evidence 2. Decided 2026-10-14 (Yeo Kheng Meng): accepted, to be verified on real
   hardware** (the P14s Gen 1 with an NVMe enclosure, including one with an internal PCIe
   switch). Basis: PCIe Base §2.9.1 (Upstream Port reset on DL_Down and hot-reset
@@ -1050,7 +1336,7 @@ isolation evidence.
   0.3.0.0 and 0.3.0.1 read the 9x value as `WriteThrough`. From 0.4.0.0 it is
   `StorWriteThrough` in HKLM `Services\stor98`, the old name is not read, and no INF
   writes it ("0.4.0.0 plan" item 3).
-- **D4 (interface 3 in include/stor98cm.h):** the first Codex review found it not ready; the maintainer chose to revise all findings and requalify, and approved xhci98's locator (HKLM `Services\stor98` `LinkState` with a CM-hosted `HKEY_DYN_DATA` current-boot proof) and `REMOVE_PENDING` layout (Flags bit 3, `RemoveSequence`/`RemoveAck`). Revised and requalified on 98 SE and Me ([gates/Q-9x.md](gates/Q-9x.md), "Interface 3 revision"). **Adopted 2026-10-16 (maintainer) as cleared by Codex at qual-9x `cf56ccd`**; integrated in the product 9x receiver on `int-0.2` ([INTEGRATION-0.2.md](INTEGRATION-0.2.md)).
+- **D4 (interface 3 in include/stor98cm.h):** the first review found it not ready; the maintainer chose to revise all findings and requalify, and approved xhci98's locator (HKLM `Services\stor98` `LinkState` with a CM-hosted `HKEY_DYN_DATA` current-boot proof) and `REMOVE_PENDING` layout (Flags bit 3, `RemoveSequence`/`RemoveAck`). Revised and requalified on 98 SE and Me ([gates/Q-9x.md](gates/Q-9x.md), "Interface 3 revision"). **Adopted 2026-10-16 (maintainer) as cleared by review at qual-9x `cf56ccd`**; integrated in the product 9x receiver on `int-0.2` ([INTEGRATION-0.2.md](INTEGRATION-0.2.md)).
 - **D5 (rename, 2026-10-16):** the project is renamed Stor98 (`stor98`) before its first
   release, for the NVM Express trademark guidelines; 0.2.0.0 is not cut and the first
   release is 0.3.0.0. The CM interface takes the new names, signatures `'S98L'` and
@@ -1090,7 +1376,7 @@ isolation evidence.
   controller fault ("internal adapter error") in the System log at every start. The 9x
   build uses the documented VMM registry services (D1's table).
 - **MD-5 = CM-driven removal handshake + write-through on Me (decided 2026-10-15,
-  maintainer), no VxD and no undocumented APIs.** Design (Codex assessment): the 9x
+  maintainer), no VxD and no undocumented APIs.** Design (from a design review): the 9x
   link-state table gains a REMOVE_PENDING request (with link generation and request
   sequence). Before a CM-controlled removal the CM obtains file-system quiescence for the
   affected volumes and honours the CONFIGMG removal veto, then sets REMOVE_PENDING; stor98,
@@ -1115,7 +1401,7 @@ isolation evidence.
   (file-system ordering, cancellation, reload, delayed timers) before "clean eject on Me"
   is claimed.
 - *Superseded (history).* **MD-5 constraints (2026-10-15):** no undocumented APIs (the DDB flag write is out) and
-  avoid a VxD (the helper VSD is out). Final MD-5 choice pending a Codex assessment of
+  avoid a VxD (the helper VSD is out). Final MD-5 choice pending an assessment of
   documented, VxD-free options.
 - *Superseded (history; MD-5 is decided above).* **MD-5 = decide after G3**: if G3 shows 98 SE/Me needs a VxD service for the CM
   link-down notice, the helper VSD (option i) is chosen and also delivers the Me removal
@@ -1124,7 +1410,7 @@ isolation evidence.
   `RequestTimerCall` and `HwStartIo`, found by a VSD's `DDB_Reference_Data` or by a
   registry rendezvous without a VxD) but not prototyped, so the 9x half of G3 waits on
   MD-5, which stays **open**.
-- **MD-7 (R6-3, Q-NT item 4): durability at orderly disable on XP x64 and 7. Decided
+- **MD-7 (Q-NT item 4): durability at orderly disable on XP x64 and 7. Decided
   2026-10-15 (maintainer): option (a), idle flush from the timer plus accept-and-document.**
   Evidence: [gates/Q-NT.md](gates/Q-NT.md) item 4. A Device Manager disable on XP x64 and
   7 x64 reaches `ScsiStopAdapter` with unflushed writes every time, and a stop-path Flush
@@ -1302,7 +1588,7 @@ agents' recommendations; nothing here is to be implemented until the maintainer 
   - **(a)** Stay within the SCSIport contract: rely on the OS clearing Bus Master Enable
     and setting D3hot 2-4 ms after `ScsiStopAdapter` returns for the orderly stop (a small
     window), and on MD-1 and link-down (A1, MD-2) for surprise removal.
-    **(a) is a new risk that needs its own acceptance; MD-1 does not cover it (R6-1).**
+    **(a) is a new risk that needs its own acceptance; MD-1 does not cover it.**
     MD-1 accepts returning the callers' buffers at the gone deadline while driver-owned
     DMA memory stays quarantined. Under (a), driver-owned DMA memory (queues, PRP list
     pages, bounce buffers) lives in the port's uncached extension, which the port frees
@@ -1322,7 +1608,7 @@ agents' recommendations; nothing here is to be implemented until the maintainer 
     contract (direct ntoskrnl imports, bypasses the HAL DMA adapter; PAE and 32-bit limits
     must be enforced by the allocation). **G5 tested only a 16 KiB sentinel block, not
     operational queues, PRP lists or bounce buffers in it, so (b) needs a prototype before
-    adoption.** The contract (b) would need (R6-2), to be confirmed by that prototype:
+    adoption.** The contract (b) would need, to be confirmed by that prototype:
     - *Contexts and IRQL.* The legacy DDK documentation allows
       `MmAllocateContiguousMemory[SpecifyCache]` at IRQL up to DISPATCH_LEVEL and
       `MmFreeContiguousMemory` only at PASSIVE_LEVEL (to be confirmed against the installed
@@ -1380,10 +1666,10 @@ agents' recommendations; nothing here is to be implemented until the maintainer 
   `INT 20h`, so no helper VxD), freed only with evidence and leaked when quarantined
   (*inferred*, not prototyped); or **accept the risk** and keep DMA memory in the uncached
   extension. Adopting the pool raises the same questions as MD-3 (b), to be answered
-  before adoption (R6-2): legal allocation and free contexts, per-adapter ownership, physical limits, the
+  before adoption: legal allocation and free contexts, per-adapter ownership, physical limits, the
   no-remapping assumption, failure handling, and a prototype with operational queues in
-  the pool. "Accept the risk" would widen MD-1 for driver-owned memory, as MD-3 (a) does
-  (R6-1). Agent recommendation (G9): adopt the `_PageAllocate` pool and prototype it
+  the pool. "Accept the risk" would widen MD-1 for driver-owned memory, as MD-3 (a) does.
+  Agent recommendation (G9): adopt the `_PageAllocate` pool and prototype it
   before 0.10 on 9x; a resident VxD owning a pool across loads is the alternative if
   leaking is unwanted (see MD-5).
 - **MD-5 (G9 on Windows Me): the missing removal stop. DECIDED (see Decided): handshake + write-through on Me.** (G3 has run on NT; its 9x
@@ -1401,7 +1687,7 @@ agents' recommendations; nothing here is to be implemented until the maintainer 
     available in xhci98 `tools\win98ddk-extracted` (to be copied into stor98's git-ignored
     `tools\`). It could also carry G3's 9x receiving interface and a quarantine pool that
     outlives the `.mpd`. Cost: a second binary to ship and load on 98 SE and Me.
-    *Inferred*, not prototyped. **The removal-time I/O route is unproven (R6-4):** the
+    *Inferred*, not prototyped. **The removal-time I/O route is unproven:** the
     Windows 98 DDK says `AEP_PEND_UNCONFIG_DCB` is the first call IOS makes when a DCB is
     being destroyed and that layers are expected not to initiate further I/O to the device
     after it, and describes `AEP_UNCONFIG_DCB` as a notice that the DCB is going away
@@ -1416,7 +1702,7 @@ agents' recommendations; nothing here is to be implemented until the maintainer 
     `0x04` (DDB at `DeviceExtension - 0x8C`), guarded by checks (DDB signature `0x4442`,
     plausible pointers). Measured to deliver the stop at a CONFIGMG remove twice on Me; it
     puts Me in the state 98 SE always runs in. IOS-private field and SCSIPORT-internal
-    offset. **Trade-off (R6-4, G9.md "Windows Me stop investigation"):** bit `0x04` does
+    offset. **Trade-off (G9.md "Windows Me stop investigation"):** bit `0x04` does
     more than enable the port's stop callback: Me's IOS also tests it in its port-driver
     inquiry loop, which sends a DDB with the bit set down a destroy path that calls
     `CONFIGMG_Remove_SubTree` (static analysis, not traced). The same code exists in the
@@ -1431,7 +1717,7 @@ agents' recommendations; nothing here is to be implemented until the maintainer 
 
 ## Known issues in 0.3.0.0 (fixed in 0.3.0.1)
 
-From the Codex review of `stor98-0.3` (round 1, 2026-10-16); P2, deferred by the
+From the review of `stor98-0.3` (2026-10-16); P2, deferred by the
 maintainer's triage rule for this release (P0/P1 fixed before release, P2/P3 logged).
 
 - **K1 (P2) Terminal states do not take a link-down statement** (`src/lifecycle.c`, timer
@@ -1478,7 +1764,7 @@ Fixed in 0.3.0.1 (branch `fix-0.3.0.1`):
 
 Fixed for 0.3.0.0 from the same review: the pinned test-certificate thumbprint (P1), and
 the 9x link-down acknowledgement now relinquishes the pool and retires the owner first
-(P2-2; repeated surprise removals at changing PCI locations on Me no longer use up the
+(repeated surprise removals at changing PCI locations on Me no longer use up the
 pool budget).
 
 ## Open questions
@@ -1505,7 +1791,7 @@ pool budget).
   to support 4Kn drives by presenting 512-byte sectors and translating (read-modify-write
   for unaligned writes). The code reports the native sector size
   (`src/nvme2k_scsi.c` READ CAPACITY) and issues requests in it (`src/engine.c`), found by
-  the Codex review of the 511-breaks change. Planned for the release after 0.4.0.0, with a
+  the review of the 511-breaks change. Planned for the release after 0.4.0.0, with a
   4Kn QEMU namespace in the tests.
 
 ## 0.4.0.0 plan (maintainer, 2026-10-16; first planned as 0.3.0.2)
@@ -1513,7 +1799,7 @@ pool budget).
 Revised the same day (maintainer): **the release after 0.3.0.1 is 0.4.0.0 (released
 2026-10-16). It carries the NT
 receiver of the xhci98 link-state channel (item 0) together with item 1 (the 9x 512 KiB
-transfer); item 2 (4Kn) moves to the release after it.** Each item gets its own Codex
+transfer); item 2 (4Kn) moves to the release after it.** Each item gets its own
 review loop and a 9x/NT requalification before the release.
 
 0. **NT receiver of the link-state table** (interface 2 of `include/stor98cm.h`, version 4;

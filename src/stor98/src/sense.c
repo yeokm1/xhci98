@@ -30,7 +30,7 @@
 // POSSIBILITY OF SUCH DAMAGE.
 //
 //
-// Sense data (PLAN "Sense rules", R3-9), moved here from nvme2k_scsi.c so
+// Sense data (PLAN "Sense rules"), moved here from nvme2k_scsi.c so
 // that the host unit test (tests/unit) can build it alone.
 //
 // Autosense is built only with a sense buffer of at least 18 bytes and
@@ -40,7 +40,7 @@
 // for another LU) for a following REQUEST SENSE. The Information field
 // stays 0 (no failing LBA known).
 //
-// Ownership (review round 2). Each kept entry belongs to the request that
+// Ownership. Each kept entry belongs to the request that
 // failed without autosense; nothing else consumes it:
 //
 //   - Autosense delivered for another request leaves kept entries alone
@@ -50,7 +50,7 @@
 //   - Several requests failing without autosense keep one entry each, in
 //     completion order (up to ENG_SENSE_KEEP). REQUEST SENSE returns and
 //     removes the oldest.
-//   - Overflow (review round 3, N4): a failure that finds every entry in use
+//   - Overflow: a failure that finds every entry in use
 //     is not stored, but its place in the order is: a placeholder ("sense
 //     lost", SenseLost) queues behind the kept entries. Every later failure
 //     queues as a placeholder too while one is pending, because storing it
@@ -58,7 +58,7 @@
 //     to the dropped request. A REQUEST SENSE that reaches a placeholder
 //     returns NO SENSE (00/00/00), a defined result that is never another
 //     request's sense. Stored entries resume once every placeholder has been
-//     read. Placeholders saturate at 255 (review round 4): from then on
+//     read. Placeholders saturate at 255: from then on
 //     the loss state is sticky, every REQUEST SENSE past the stored entries
 //     returns NO SENSE and nothing is stored again until a new start,
 //     resume, acknowledged reset or new command ends the kept sense, so
@@ -72,7 +72,7 @@
 #include "nvme2k.h"
 
 // SenseLost value meaning "saturated": sticky until ScsiSenseReset or a new
-// command ends the kept sense (review round 4).
+// command ends the kept sense.
 #define SENSE_LOST_STICKY   0xFF
 
 static VOID ScsiBuildSense(OUT PUCHAR Sense, IN UCHAR Key, IN UCHAR Asc, IN UCHAR Ascq)
@@ -109,10 +109,10 @@ VOID ScsiSetSense(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb, IN
     }
     if (DevExt->SenseCount >= ENG_SENSE_KEEP || DevExt->SenseLost != 0) {
         // Full, or a placeholder already queued: this request's place in the
-        // order is kept as a placeholder (N4), its sense is lost.
+        // order is kept as a placeholder (Overflow, above), its sense is lost.
         // SENSE_LOST_STICKY (0xFF) is saturation: from then on the count of
         // placeholders is unknown, so it is never decremented again and no
-        // entry is stored until the kept sense ends (review round 4).
+        // entry is stored until the kept sense ends.
         DevExt->SenseDropped++;
         if (DevExt->SenseLost < SENSE_LOST_STICKY) {
             DevExt->SenseLost++;

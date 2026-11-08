@@ -36,9 +36,10 @@
  * Checks:
  *   - INQUIRY: standard data (36 bytes), a short allocation (8 bytes
  *     returned, not a zeroed buffer); EVPD pages 00h (lists 00h, 80h,
- *     83h), 80h (20-character serial number), 83h (one T10 vendor ID
- *     designator, "NVMe" + model + serial); page B0h and a page code with
- *     EVPD=0 refused with CHECK CONDITION 05/24/00.
+ *     83h and C9h, Stor98's identity page, include/stor98pf.h), 80h
+ *     (20-character serial number), 83h (one T10 vendor ID designator,
+ *     "NVMe" + model + serial); page B0h and a page code with EVPD=0
+ *     refused with CHECK CONDITION 05/24/00.
  *   - Opcodes the driver does not implement (READ(12), REPORT LUNS): 05/20;
  *     SERVICE ACTION IN other than READ CAPACITY(16): 05/24.
  *   - MODE SENSE: caching page WCE (compared with wce= when given: 1 when
@@ -49,7 +50,9 @@
  *     (mode data length as for 255 bytes, descriptor length 8); an
  *     unsupported page is 05/24.
  *   - READ CAPACITY(10)/(16): a real capacity, block size (compared with
- *     bs= when given).
+ *     bs= when given); READ CAPACITY(16) with an allocation of 12 (the
+ *     12-byte form, last LBA and block length) and of 8 returns that many
+ *     of the first bytes, not an error.
  *   - IOCTL_SCSI_MINIPORT: "NVME2KDB" query (succeeds), "SCSIDISK" SMART
  *     RETURN STATUS and SMART VERSION (refused): each completes within 3 s,
  *     never at the port's timeout.
@@ -209,7 +212,7 @@ static DWORD miniport(HANDLE port, const char *sig, ULONG cc, int *ok)
 int main(int argc, char **argv)
 {
     char path[64];
-    UCHAR cdb[16], full6;
+    UCHAR cdb[16], full6, full16[12];
     SPTB b;
     int i, wce = -1, ok;
     ULONG bs = 0, last, blk;
@@ -265,8 +268,9 @@ int main(int argc, char **argv)
     cdb[4] = 255;
     if (pt(cdb, 6, 255, &b)) {
         dump("data", b.data, b.spt.DataTransferLength < 16 ? b.spt.DataTransferLength : 16);
-        check(b.spt.ScsiStatus == 0 && b.spt.DataTransferLength == 7 && b.data[1] == 0x00 && b.data[3] == 3 &&
-              b.data[4] == 0x00 && b.data[5] == 0x80 && b.data[6] == 0x83, "supported pages 00h, 80h, 83h");
+        check(b.spt.ScsiStatus == 0 && b.spt.DataTransferLength == 8 && b.data[1] == 0x00 && b.data[3] == 4 &&
+              b.data[4] == 0x00 && b.data[5] == 0x80 && b.data[6] == 0x83 && b.data[7] == 0xC9,
+              "supported pages 00h, 80h, 83h and Stor98's identity page C9h");
     } else {
         check(0, "VPD 00h");
     }
@@ -412,6 +416,25 @@ int main(int argc, char **argv)
     if (pt(cdb, 16, 32, &b) && b.spt.ScsiStatus == 0) {
         dump("data", b.data, 12);
         check(b.data[0] != 0xFF || b.data[4] != 0xFF, "a real last LBA");
+        check(b.spt.DataTransferLength == 32, "32 bytes returned");
+        memcpy(full16, b.data, 12);
+        printf("READ CAPACITY(16), allocation 12 (the 12-byte form)\n");
+        cdb[13] = 12;
+        if (pt(cdb, 16, 12, &b) && b.spt.ScsiStatus == 0) {
+            dump("data", b.data, 16);
+            check(b.spt.DataTransferLength == 12 && memcmp(b.data, full16, 12) == 0 && b.data[12] == 0xCC,
+                  "the first 12 bytes returned, not an error");
+        } else {
+            check(0, "READ CAPACITY(16), allocation 12");
+        }
+        printf("READ CAPACITY(16), allocation 8, buffer 32\n");
+        cdb[13] = 8;
+        if (pt(cdb, 16, 32, &b) && b.spt.ScsiStatus == 0) {
+            check(b.spt.DataTransferLength == 8 && memcmp(b.data, full16, 8) == 0 && b.data[8] == 0xCC,
+                  "cut at the allocation length");
+        } else {
+            check(0, "READ CAPACITY(16), allocation 8");
+        }
     } else {
         check(0, "READ CAPACITY(16)");
     }

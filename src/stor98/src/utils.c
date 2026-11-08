@@ -34,6 +34,7 @@
 
 #include "nvme2k.h"
 #include "utils.h"
+#include "logpage.h"
 
 //
 // RtlCompareMemory - Compare two memory blocks, return number of matching bytes
@@ -84,13 +85,12 @@ VOID NvmeSmartToAtaSmart(IN PNVME_SMART_INFO NvmeSmart, OUT PATA_SMART_DATA AtaS
         attrIndex++; \
     }
 
-    /* 1. Power-On Hours (Attribute 9) */
-    /* NVMe PowerOnHours is in minutes, ATA expects hours */
+    /* 1. Power-On Hours (Attribute 9): the NVMe log counts hours, as ATA
+     * does, so the value is copied unconverted. */
     {
-        ULONGLONG powerOnMinutes = READ_ULONGLONG(NvmeSmart->PowerOnHours);
-        if (powerOnMinutes > 0) {
-            /* NVMe spec says this is hours, not minutes. No conversion needed. */
-            ADD_ATTRIBUTE(ATA_SMART_ATTR_POWER_ON_HOURS, 100, 100, powerOnMinutes);
+        ULONGLONG powerOnHours = READ_ULONGLONG(NvmeSmart->PowerOnHours);
+        if (powerOnHours > 0) {
+            ADD_ATTRIBUTE(ATA_SMART_ATTR_POWER_ON_HOURS, 100, 100, powerOnHours);
         }
     }
 
@@ -206,8 +206,11 @@ UCHAR ScsiGetLogPageCodeFromSrb(IN PSCSI_REQUEST_BLOCK Srb)
 }
 
 //
-// NvmeLogPageToScsiLogPage - Convert NVMe SMART/Health log to SCSI Log Page format
-// Builds a proper SCSI log page with header and parameters
+// NvmeLogPageToScsiLogPage - LOG SENSE page 2Fh from the NVMe SMART/Health
+// log (src/logpage.h). The page is built whole and its first BufferSize
+// bytes (the allocation length and the data buffer, whichever is shorter;
+// the caller's) are copied; *BytesWritten is that count. FALSE for any
+// other page.
 //
 BOOLEAN NvmeLogPageToScsiLogPage(
     IN PNVME_SMART_INFO NvmeSmart,
@@ -216,148 +219,24 @@ BOOLEAN NvmeLogPageToScsiLogPage(
     IN ULONG BufferSize,
     OUT PULONG BytesWritten)
 {
-    PSCSI_LOG_PAGE_HEADER pageHeader;
-    PSCSI_LOG_PARAMETER param;
-    PUCHAR buffer = (PUCHAR)ScsiLogBuffer;
-    ULONG offset = 0;
-    USHORT tempKelvin;
-    USHORT tempCelsius;
-    ULONGLONG value64;
+    UCHAR page[LOG2F_MAX];
+    ULONG n, i;
 
-    // Ensure buffer is large enough for at least the header
-    if (BufferSize < sizeof(SCSI_LOG_PAGE_HEADER)) {
-        *BytesWritten = 0;
+    *BytesWritten = 0;
+    if (ScsiPageCode != SCSI_LOG_PAGE_INFORMATIONAL) {
         return FALSE;
     }
-
-    // Clear the buffer
-    RtlZeroMemory(ScsiLogBuffer, BufferSize);
-
-    // Build SCSI log page header
-    pageHeader = (PSCSI_LOG_PAGE_HEADER)buffer;
-    pageHeader->PageCode = ScsiPageCode & 0x3F;  // Only lower 6 bits
-    pageHeader->Reserved = 0;
-    offset += sizeof(SCSI_LOG_PAGE_HEADER);
-
-    // Based on the page code, add appropriate parameters
-    if (ScsiPageCode == SCSI_LOG_PAGE_INFORMATIONAL) {
-        // Parameter 0x0000: Temperature
-        if (offset + sizeof(SCSI_LOG_PARAMETER) + 2 <= BufferSize) {
-            param = (PSCSI_LOG_PARAMETER)(buffer + offset);
-            param->ParameterCode[0] = 0x00;  // Parameter code 0x0000 (big-endian)
-            param->ParameterCode[1] = 0x00;
-            param->ControlByte = 0x01;  // Format and linking bits
-            param->ParameterLength = 2;  // 2 bytes for temperature
-            offset += sizeof(SCSI_LOG_PARAMETER);
-
-            // Extract temperature from NVMe SMART (Kelvin, little-endian)
-            tempKelvin = (USHORT)(NvmeSmart->Temperature[0] | (NvmeSmart->Temperature[1] << 8));
-            tempCelsius = (tempKelvin > 273) ? (tempKelvin - 273) : 0;
-
-            // Store as big-endian in SCSI format
-            buffer[offset++] = (UCHAR)(tempCelsius >> 8);
-            buffer[offset++] = (UCHAR)(tempCelsius & 0xFF);
-        }
-
-        // Parameter 0x0001: Available Spare
-        if (offset + sizeof(SCSI_LOG_PARAMETER) + 1 <= BufferSize) {
-            param = (PSCSI_LOG_PARAMETER)(buffer + offset);
-            param->ParameterCode[0] = 0x00;
-            param->ParameterCode[1] = 0x01;
-            param->ControlByte = 0x01;
-            param->ParameterLength = 1;
-            offset += sizeof(SCSI_LOG_PARAMETER);
-            buffer[offset++] = NvmeSmart->AvailableSpare;
-        }
-
-        // Parameter 0x0002: Percentage Used
-        if (offset + sizeof(SCSI_LOG_PARAMETER) + 1 <= BufferSize) {
-            param = (PSCSI_LOG_PARAMETER)(buffer + offset);
-            param->ParameterCode[0] = 0x00;
-            param->ParameterCode[1] = 0x02;
-            param->ControlByte = 0x01;
-            param->ParameterLength = 1;
-            offset += sizeof(SCSI_LOG_PARAMETER);
-            buffer[offset++] = NvmeSmart->PercentageUsed;
-        }
-
-        // Parameter 0x0003: Critical Warning
-        if (offset + sizeof(SCSI_LOG_PARAMETER) + 1 <= BufferSize) {
-            param = (PSCSI_LOG_PARAMETER)(buffer + offset);
-            param->ParameterCode[0] = 0x00;
-            param->ParameterCode[1] = 0x03;
-            param->ControlByte = 0x01;
-            param->ParameterLength = 1;
-            offset += sizeof(SCSI_LOG_PARAMETER);
-            buffer[offset++] = NvmeSmart->CriticalWarning;
-        }
-
-        // Parameter 0x0004: Power On Hours (first 8 bytes)
-        if (offset + sizeof(SCSI_LOG_PARAMETER) + 8 <= BufferSize) {
-            param = (PSCSI_LOG_PARAMETER)(buffer + offset);
-            param->ParameterCode[0] = 0x00;
-            param->ParameterCode[1] = 0x04;
-            param->ControlByte = 0x01;
-            param->ParameterLength = 8;
-            offset += sizeof(SCSI_LOG_PARAMETER);
-
-            // Copy first 8 bytes of power on hours (little-endian in NVMe)
-            RtlCopyMemory(buffer + offset, NvmeSmart->PowerOnHours, 8);
-            offset += 8;
-        }
-
-        // Parameter 0x0005: Data Units Read (first 8 bytes)
-        if (offset + sizeof(SCSI_LOG_PARAMETER) + 8 <= BufferSize) {
-            param = (PSCSI_LOG_PARAMETER)(buffer + offset);
-            param->ParameterCode[0] = 0x00;
-            param->ParameterCode[1] = 0x05;
-            param->ControlByte = 0x01;
-            param->ParameterLength = 8;
-            offset += sizeof(SCSI_LOG_PARAMETER);
-
-            RtlCopyMemory(buffer + offset, NvmeSmart->DataUnitsRead, 8);
-            offset += 8;
-        }
-
-        // Parameter 0x0006: Data Units Written (first 8 bytes)
-        if (offset + sizeof(SCSI_LOG_PARAMETER) + 8 <= BufferSize) {
-            param = (PSCSI_LOG_PARAMETER)(buffer + offset);
-            param->ParameterCode[0] = 0x00;
-            param->ParameterCode[1] = 0x06;
-            param->ControlByte = 0x01;
-            param->ParameterLength = 8;
-            offset += sizeof(SCSI_LOG_PARAMETER);
-
-            RtlCopyMemory(buffer + offset, NvmeSmart->DataUnitsWritten, 8);
-            offset += 8;
-        }
-
-        // Parameter 0x0007: Media Errors (first 8 bytes)
-        if (offset + sizeof(SCSI_LOG_PARAMETER) + 8 <= BufferSize) {
-            param = (PSCSI_LOG_PARAMETER)(buffer + offset);
-            param->ParameterCode[0] = 0x00;
-            param->ParameterCode[1] = 0x07;
-            param->ControlByte = 0x01;
-            param->ParameterLength = 8;
-            offset += sizeof(SCSI_LOG_PARAMETER);
-
-            RtlCopyMemory(buffer + offset, NvmeSmart->MediaErrors, 8);
-            offset += 8;
-        }
-    } else {
-        // Unsupported page code
-        *BytesWritten = 0;
-        return FALSE;
+    n = Log2fBuild((const UCHAR *)NvmeSmart, page);
+    if (n > BufferSize) {
+        n = BufferSize;
     }
-
-    // Update page length in header (big-endian, excluding the header itself)
-    {
-        USHORT pageLength = (USHORT)(offset - sizeof(SCSI_LOG_PAGE_HEADER));
-        pageHeader->PageLength[0] = (UCHAR)(pageLength >> 8);
-        pageHeader->PageLength[1] = (UCHAR)(pageLength & 0xFF);
+    if (ScsiLogBuffer == NULL) {
+        n = 0;
     }
-
-    *BytesWritten = offset;
+    for (i = 0; i < n; i++) {
+        ((PUCHAR)ScsiLogBuffer)[i] = page[i];
+    }
+    *BytesWritten = n;
     return TRUE;
 }
 
@@ -467,8 +346,8 @@ VOID NvmeToAtaIdentify(
     // Bit 15: 0=ATA device, Bit 7: Removable=0, Bit 6: Fixed=1
     WRITE_USHORT(AtaIdentify->GeneralConfiguration, 0x0040);
 
-    // Get total sectors from namespace
-    totalSectors = DevExt->NamespaceSizeInBlocks;
+    // The sectors the OS sees, 512-byte or native (PLAN "4 KiB-sector namespaces")
+    totalSectors = DevExt->ExposedBlocks;
 
     // Calculate CHS geometry (emulate old IDE drives)
     // Use standard translation: 16 heads, 63 sectors per track
@@ -632,6 +511,14 @@ VOID NvmeToAtaIdentify(
     WRITE_USHORT(AtaIdentify->HardwareResetResult, 0x4000);
 
     // Word 100-103: Total addressable sectors (LBA-48)
+    // Word 106 and words 117-118 by the view (47.31, rmw.h): the logical
+    // sector the OS sees and how many make the native block.
+    WRITE_USHORT(AtaIdentify->PhysLogSectorSize,
+                 (USHORT)RmwAtaWord106(DevExt->SectorShift, (BOOLEAN)(DevExt->ExposedBytes > RMW_SECTOR)));
+    if (RmwAtaLogicalWords(DevExt->ExposedBytes) != 0) {
+        WRITE_USHORT(AtaIdentify->LogicalSectorWords, (USHORT)(RmwAtaLogicalWords(DevExt->ExposedBytes) & 0xFFFF));
+        WRITE_USHORT(AtaIdentify->LogicalSectorWords + 2, (USHORT)(RmwAtaLogicalWords(DevExt->ExposedBytes) >> 16));
+    }
     WRITE_USHORT(AtaIdentify->TotalAddressableSectors48, (USHORT)(totalSectors & 0xFFFF));
     WRITE_USHORT(AtaIdentify->TotalAddressableSectors48 + 2, (USHORT)((totalSectors >> 16) & 0xFFFF));
     WRITE_USHORT(AtaIdentify->TotalAddressableSectors48 + 4, (USHORT)((totalSectors >> 32) & 0xFFFF));

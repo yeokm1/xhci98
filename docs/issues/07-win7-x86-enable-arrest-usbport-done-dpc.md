@@ -1365,17 +1365,7 @@ Tools and tables:
   many patterns because `enum *` silently drops symbols), and the tag
   tables `usbport-ring-tags-win7-x64.txt` / `usbport-ring-tags-vista-x64.txt`.
 
-Working notes, `.claude\memory\` (git-ignored, so they may not be present):
-`leg4-usbport-done-dpc-stranded-2026-09-12`,
-`leg4-mechanism-sendcommand-infinite-wait-2026-09-12`,
-`leg4-driver-exonerated-at-the-boundary-2026-09-12` (**its filename
-overstates and its central claim is refuted by section 3 item 5**),
-`usbport-ring-tags-and-the-cancelled-irp-2026-09-12`,
-`healthy-ring-has-no-cancel-2026-09-12`,
-`win7-x86-leg4-r4-descriptor-round-2026-09-12`,
-`win7-x86-enable-stall-repeat-2026-09-12`,
-`win7-x64-enable-arrest-2026-09-12`,
-`smp1-clears-the-enable-arrest-2026-09-12`,
-`vista-x64-retake-and-remove-rescan-wedge-2026-09-12`,
-`usbport-internals-win7-x86-2026-09-12`,
-`setaddress-wedge-hypothesis-and-usbport-survey-2026-09-12`.
+The session's working notes of 2026-09-12 were kept outside the tree, so
+a clone does not have them; this page carries what they established. One
+of them held that the driver was exonerated at the boundary: that
+overstated the case, and its central claim is refuted by section 3 item 5.

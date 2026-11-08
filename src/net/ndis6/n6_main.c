@@ -253,7 +253,13 @@ static NDIS_STATUS net6Initialize(NDIS_HANDLE handle, NDIS_HANDLE driverCtx,
     if (asked != 0) {
         Net6CmLog(a, "net.mtu.range", asked);
     }
-    Net6CmQuery(a, &info);
+    if (!NetCmIfMacWait(&a->Cm, &info)) {
+        /* No MAC from this start (record 35 section 6.5): the adapter is
+         * not registered with 00:00:00:00:00:00. */
+        Net6CmLog(a, "net.mac.none", NET_CMIF_MAC_WAIT_MS);
+        net6FreeAdapter(a);
+        return NDIS_STATUS_ADAPTER_NOT_FOUND;
+    }
     for (i = 0; i < 6; i++) {
         a->Mac[i] = info.Mac[i];
     }

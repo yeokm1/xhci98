@@ -29,7 +29,7 @@ Win98 is frequently not satisfied on Win2000, and Win98 will not tell you.
 | WDM version | 1.0 | 1.10 |
 | `IoGetDmaAdapter` | Available | Full |
 | `KeSetTimerEx` | No | Yes |
-| `ExAllocatePoolWithTag` | Exported (measured; see the note under "Functions missing or dangerous on Win98/98 SE"), denied by the import gate as policy | Yes, denied the same way |
+| `ExAllocatePoolWithTag` | Exported (measured; see the note under "Functions missing or dangerous on Win98/98 SE"); the HCD's allocator, admitted in `hcd_pool.obj` alone (the miniport's gate denied it as policy) | Yes, admitted the same way |
 | `IoAllocateWorkItem` | No | Yes |
 | PnP power management | Partial | Full |
 | WMI | No | Yes |
@@ -93,21 +93,21 @@ do not re-read the field. The version predicates are essential:
 `ServiceKeyName` is also nonempty on Win2000, and WinMe is WDM 1.05, so the
 field test alone does not identify Win98 SE.
 
-This driver allocates no pool at all, so neither name is called, and the import
-gate refuses all four - but by two different routes, which is worth knowing
-when you are reading a gate failure. `ExAllocatePoolWithTag` and
-`ExFreePoolWithTag` have **deny rows**, so they fail as `DENIED:` with the
-reason attached; `ExAllocatePool` and `ExFreePool` have **no row at all**, so
-they fail as `not in the allowlist` (`AGENTS.md`, "Allocate no pool at all").
-The table further down this page has this right; this paragraph said all four
-had no row until the 2026-09-16 audit's E9. Option A needs no private pool -
-fixed software metadata lives in the usbport-allocated miniport and
-common-buffer extensions. The local-DDK macro trap below still matters,
-because the compatibility header undoes the DDK's `POOL_TAGGING` rewrite so
-that a stray call resolves to the untagged name and is refused on it. Were a
-driver to need pool here, the real `ExAllocatePool` rather than
-`ExAllocatePoolWithTag` is the one Windows 98 SE exports; that is what the
-table below records, not an instruction to call it.
+The HCD allocates pool at named lifetime-scoped sites through
+`ExAllocatePoolWithTag` and `ExFreePool`, the pair
+`scripts\import-gate\xhci98-imports.allow` admits in `hcd_pool.obj` alone
+(`SITES=hcd_pool.obj`; design record 13 section 7.5 is the rule, `AGENTS.md`
+"Imports and the API ceiling" the summary). The other two spellings have
+**deny rows**: `ExAllocatePool` (no Windows 98 SE or NUSB binary imports it)
+and `ExFreePoolWithTag` (no Windows 98 evidence at all), so they fail as
+`DENIED:` with the reason attached, and any pool call from another object
+fails its `SITES`. The local-DDK macro trap below still matters, because the
+compatibility header undoes the DDK's `POOL_TAGGING` rewrite so that a stray
+untagged call resolves to the name the gate refuses. Under the `1.2.0.0`
+miniport (Option A) the driver allocated no pool at all, fixed software
+metadata living in the usbport-allocated miniport and common-buffer
+extensions, and its gate denied the two tagged names and had no row for the
+untagged ones.
 
 ### Imports are a silent load-time gate
 
@@ -189,7 +189,7 @@ only bite if the Phase 3 spike forces the monolithic fallback.
 
 | Function | Win98/98 SE status | What to do instead |
 |---|---|---|
-| `ExAllocatePoolWithTag` / `ExFreePoolWithTag` | Oney says missing; measured otherwise on 98 SE (see the note below the table) | Not applicable to this driver, which allocates no pool: the import gate denies the tagged names AND the untagged ones, so any allocation call fails the build. The macro undefine above exists to make a stray call resolve to the name the gate refuses. For a driver that did need pool, the untagged `ExAllocatePool` / `ExFreePool` are the exported pair |
+| `ExAllocatePoolWithTag` / `ExFreePoolWithTag` | Oney says missing; measured otherwise on 98 SE (see the note below the table) | The HCD's pair is `ExAllocatePoolWithTag` / `ExFreePool`, admitted in `hcd_pool.obj` alone; `ExAllocatePool` and `ExFreePoolWithTag` are denied (design record 13 section 7.5). The macro undefine above exists to make a stray untagged call resolve to the name the gate refuses. Under the miniport, which allocated no pool, every allocation call failed the build |
 | `IoAllocateWorkItem` / `IoQueueWorkItem` / `IoFreeWorkItem` | Not exported (p.375) | Option A: use usbport's uncancellable `UsbPortRequestAsyncCallback` with miniport-owned synchronization plus generation/lifecycle validation; Option B: `ExInitializeWorkItem` / `ExQueueWorkItem` only with explicit lifetime protection |
 | `IO_REMOVE_LOCK` family (`IoReleaseRemoveLockAndWait`) | Missing on 98 SE/Me; 98 gold has none of the family (p.191) | Do not use remove locks; roll your own outstanding-I/O count |
 | `MmGetSystemAddressForMdlSafe` | Expands to missing `MmMapLockedPagesSpecifyCache` (p.225) | Option B only: set `MDL_MAPPING_CAN_FAIL`, call `MmMapLockedPages`, check NULL, then restore the flag |
@@ -199,7 +199,7 @@ only bite if the Phase 3 spike forces the monolithic fallback.
 | `KeWaitForSingleObject` on a `PKTHREAD` | **Crashes the system** (p.110, p.375) | Never wait on a thread object. Have the thread signal a `KEVENT` immediately before `PsTerminateSystemThread`, and wait on that event |
 | `KeWaitForSingleObject` / `KeWaitForMultipleObjects` (general) | Can return undocumented `0xFFFFFFFF` (p.93) | Never treat it as success. Retrying is valid for the ordinary "another thread terminated while this wait was blocked" case; Oney reports no workaround for the VxD event-time nested-block case, so do not turn it into an unbounded retry loop |
 | `ZwCreateFile` / `ZwReadFile` / `ZwWriteFile` during early start | File-system services may not be initialized when a boot/PnP device starts (p.82) | Never perform file I/O from `DriverEntry` or the miniport `StartController` path |
-| `IoWriteErrorLogEntry` | Win98 has no persistent kernel error log or Event Viewer; output only reaches the debug terminal (p.375) | Do not treat it as field telemetry. Use the driver's own log ring, read back with `XHCISNAP`; that is the field channel on both targets since `0.0.0.6`. In a VM the `qemu` flavour's port-`0xE9` trace is the richer one. The shipping `debug` build has no live trace, and there is no serial sink |
+| `IoWriteErrorLogEntry` | Win98 has no persistent kernel error log or Event Viewer; output only reaches the debug terminal (p.375) | Do not treat it as field telemetry. Use the driver's own log ring, read back with the snapshot (`XHCITR /snapshot`; `XHCISNAP` up to `3.0.0.0`); that is the field channel on both targets since `0.0.0.6`. In a VM the `qemu` flavour's port-`0xE9` trace is the richer one. The published `release` build has no live trace (nor had the `debug` build published up to `3.3.0.0`), and there is no serial sink |
 | `PoStartNextPowerIrp` | No-op on 98 (p.254) | Option B only; a no-op on 98 is easy to forget, then it deadlocks Win2000 |
 | `Po{Register,Cancel}DeviceNotify`, `Po{Register,Set,Unregister}SystemState` | Not implemented (p.254) | Option B only; avoid entirely |
 | `KeNumberProcessors` | Not exported; the WDMSTUB replacement hard-codes 1 (p.441) | Never reference it. Win98 is uniprocessor by construction (see below); if per-CPU code is ever needed it belongs behind a Win2000-only build, not a runtime check |
@@ -215,12 +215,13 @@ resolve, USB would not work on a stock 98 SE machine at all. The name is also
 present in `ntkern.vxd`'s export name table. Oney's row is most plausibly
 about Win98 gold, which this project does not target.
 
-The rule above stands anyway, for a reason that does not depend on the row
-being right: under Option A the miniport should not be allocating private
-pool at all. So the compatibility header still undefines the macro, and
-`scripts\import-gate\xhci98-imports.allow` denies both tagged names outright.
-The reason is policy rather than a proven missing export, and the gate says so
-when it fires.
+Under Option A the miniport's rule stood anyway, for a reason that did not
+depend on the row being right: the miniport should not be allocating private
+pool at all, so its compatibility header undefined the macro and its
+allowlist denied both tagged names, as policy rather than a proven missing
+export. The HCD keeps the undefine and admits `ExAllocatePoolWithTag` with
+`ExFreePool` at its pool sites, on this measurement (design record 13
+section 7.5).
 
 Under Option A, do not create private helper threads or DPCs for work that
 usbport's callback/timer services already cover. The thread/wait rows remain

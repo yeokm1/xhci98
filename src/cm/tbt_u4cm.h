@@ -125,7 +125,8 @@
  * it acts on, and the credits it writes there (an
  * experiment read on the hardware bench). */
 #define TBT_U4_ASM_VENDOR           0x174CUL
-#define TBT_U4_ASM_HOST             0x2428UL    /* the ASM4242's host router */
+#define TBT_U4_ASM_HOST             0x2428UL    /* the ASM4242's host router (also
+                                                 * tbtU4NetStns, tbtU4PpStuck) */
 #define TBT_U4_ASM_DEVICE           0x2463UL    /* the ASM2464PD */
 #define TBT_U4_ASM7_CREDITS         7UL
 
@@ -681,6 +682,9 @@ typedef struct _TBT_U4_CARRY {
     BOOLEAN Forwarded;      /* TbtU4GetCarry: handed on unchanged, the start
                              * never reaching the host router (the driver
                              * keeps its original stamp) */
+    BOOLEAN Cleaned;        /* section 9.3.1: an instance at
+                             * XhciCmPreOsCleanup 2 ran its cleaning, or was
+                             * left whole by section 9.3.1's rule */
     ULONG HostVendor;
     ULONG HostDevice;
     TBT_U4_CARRY_PORT Port[TBT_U4_MAX_PORTS];
@@ -745,6 +749,7 @@ typedef struct _TBT_U4_COUNTERS {
     ULONG Usb3Disconnected;
     ULONG DetectTimeouts;
     ULONG PendingTimeouts;
+    ULONG PendingIgnored;   /* the ASM4242's Host Interface (tbtU4PpStuck) */
     ULONG HcaTimeouts;
     ULONG Quarantined;
     ULONG QuarantineLifted;
@@ -999,6 +1004,8 @@ typedef struct _TBT_U4CM {
     TBT_U4_CARRY Carried;
     BOOLEAN HostReached;
     BOOLEAN RanHealthy;
+    BOOLEAN PreOsCleaned;   /* section 9.3.1: this start, at value 2, ran its
+                             * cleaning or was left whole (TbtU4GetCarry) */
     BOOLEAN Disturbed;      /* failed or contained since the start: a latch */
     ULONG HwErrors;         /* the core's requests that ended with no answer
                                (the ring not moving or stopped, or no reply

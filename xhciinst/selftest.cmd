@@ -25,7 +25,10 @@ rem KERNEL32.dll and ADVAPI32.dll and nothing else, the window's those and
 rem USER32, GDI32, COMCTL32, COMDLG32 and SHELL32, SETUP.EXE's KERNEL32,
 rem USER32 and SHELL32 - every SetupAPI,
 rem newdev, configuration-manager and version routine is looked up at run
-rem time, which is what lets one image start on Windows 98 SE.
+rem time, which is what lets one image start on Windows 98 SE - and every
+rem function each imports must be a row of xhciinst-imports.allow for its
+rem profile and architecture, the x86 rows being the Windows 98 SE baseline
+rem (a module name alone lets an NT-only function through).
 rem check-imports.ps1 reads the PE import directory of each image itself (a
 rem linker's dump, filtered by a pattern, once let names with other
 rem characters through).
@@ -94,7 +97,8 @@ exit /b 0
 
 :imports
 rem check-imports.ps1 reads the image's import directory itself: every
-rem module name, whatever its characters, and no delay-load table.
+rem module name, whatever its characters, every function against the list,
+rem and no delay-load table.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0check-imports.ps1" -Path "%~1" -Profile %2
 if errorlevel 1 exit /b 1
 exit /b 0

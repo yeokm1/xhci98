@@ -67,14 +67,15 @@ static void test_trigger(void)
     CHECK_EQ(XhciInjTake(&t, 1, XHCI_INJ_VALUE(0, XHCI_INJ_LOST_IRQ, 0, 1)),
              XHCI_INJ_TAKE_FIRE, "first value after an absent one");
 
-    /* Every code: built (01 to 19 hex - 13 is 36.12's device clear, 14 to
-     * 17 are 36.22's bulk faults, 18 and 19 38.10's interface switch - and
-     * FF) or unknown. A refused one is consumed. */
+    /* Every code: built (01 to 1A hex - 13 is 36.12's device clear, 14 to
+     * 17 are 36.22's bulk faults, 18 and 19 38.10's interface switch, 1A
+     * issue 26's Stop race - and FF) or unknown. A refused one is
+     * consumed. */
     for (f = 0; f < 256; f++) {
         ULONG want;
         char what[64];
 
-        if ((f >= 1 && f <= 0x19) || f == XHCI_INJ_CLEAR) {
+        if ((f >= 1 && f <= 0x1A) || f == XHCI_INJ_CLEAR) {
             want = XHCI_INJ_TAKE_FIRE;
         } else {
             want = XHCI_INJ_TAKE_UNKNOWN;
@@ -368,7 +369,7 @@ static void test_needs_live(void)
         want = (f == XHCI_INJ_LOST_IRQ || f == XHCI_INJ_PED ||
                 f == XHCI_INJ_OC || f == XHCI_INJ_HCH ||
                 f == XHCI_INJ_DEAD || f == XHCI_INJ_DEAD_NOPROOF ||
-                (f >= 0x08 && f <= 0x19)) ? 1UL : 0UL;
+                (f >= 0x08 && f <= 0x1A)) ? 1UL : 0UL;
         sprintf(what, "fault %lu needs a live controller", f);
         CHECK_EQ(XhciInjNeedsLive(f), want, what);
     }
@@ -443,6 +444,12 @@ static void test_codes(void)
              "19 is the layer's own");
     CHECK_EQ(XhciInjNeedsLive(XHCI_INJ_SELECT_CONFIG), 1UL,
              "19 refused on a failed controller");
+    CHECK_EQ(XHCI_INJ_STOP_RACE, 0x1A, "1A a Stop's race (issue 26)");
+    CHECK_EQ(XHCI_INJ_LAST_BUILT, XHCI_INJ_STOP_RACE, "1A the last built");
+    CHECK_EQ(XhciInjKind(XHCI_INJ_STOP_RACE), XHCI_INJ_KIND_OTHER,
+             "1A is the layer's own");
+    CHECK_EQ(XhciInjNeedsLive(XHCI_INJ_STOP_RACE), 1UL,
+             "1A refused on a failed controller");
     CHECK_EQ(XHCI_INJ_REFUSED_CC, 18, "Bandwidth Overrun");
 }
 

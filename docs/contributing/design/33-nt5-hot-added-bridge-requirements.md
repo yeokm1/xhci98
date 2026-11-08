@@ -662,7 +662,7 @@ stack (section 6.1):
    result is completed as it came;
 3. builds the snapshot of section 5.2 through `cmCfgRead`
    (`HalGetBusData`, PASSIVE_LEVEL, reads only);
-4. calls the pure rewriter (`CmBreqRewrite`, `cm_breq.c`) with the list,
+4. calls the pure rewriter (`CmBreqPlan` and `CmBreqWrite` (designed as `CmBreqRewrite`), `cm_breq.c`) with the list,
    the snapshot and the system's minor version; it returns "leave" with a
    reason, or the size of the new list;
 5. on a new list: allocates it from paged pool (`CmAllocPaged`), has the

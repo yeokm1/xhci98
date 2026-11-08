@@ -28,6 +28,9 @@ static volatile const char UasFlavourMarker[] = UAS_FLAVOUR_NAME;
 static volatile const char UasVersionString[] = "xhciuas " XHCI_VER_STR;
 
 PDRIVER_OBJECT UasDriverObject;
+/* TRUE on Windows 2000 and later (WDM 1.10), FALSE on 98 SE and ME. Set in
+ * DriverEntry, read only afterwards. */
+BOOLEAN UasIsNt;
 
 /*
  * An event wait that returns only once the event is signalled. Windows 98
@@ -223,6 +226,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         return STATUS_UNSUCCESSFUL;
     }
     UasDriverObject = DriverObject;
+    UasIsNt = IoIsWdmVersionAvailable(1, 0x10);
     UasPoolInit();
     for (i = 0; i <= IRP_MJ_MAXIMUM_FUNCTION; i++) {
         DriverObject->MajorFunction[i] = uasDispatchOther;
@@ -247,7 +251,6 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
      * their last device access, not that they have left the image.
      * xhcicm.sys's rule (cm_entry.c). NT keeps uasUnload; the same worker
      * gap remains open there. */
-    DriverObject->DriverUnload =
-        IoIsWdmVersionAvailable(1, 0x10) ? uasUnload : NULL;
+    DriverObject->DriverUnload = UasIsNt ? uasUnload : NULL;
     return STATUS_SUCCESS;
 }

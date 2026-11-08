@@ -3,18 +3,26 @@
  * (roadmap task 14.1.10).
  *
  * **This file is the single editable source of the version.** Bump it here and
- * in the seventeen literals listed below, and nowhere else. These take their
- * value from it by including it:
+ * in the seventeen literals listed below, and nowhere else. Every file that
+ * includes it takes its value from it, and the tree's own `#include` lines
+ * are the list of those (a grep finds them all); by kind they are:
  *
- *   - the four drivers: `src\xhci98.rc`'s four resource fields and
- *     `src\hcd_entry.c` and `src\hcd_msi86.c`; `src\uas\xhciuas.rc` and
- *     `uas_entry.c`; `src\cm\xhcicm.rc` and `cm_entry.c`;
- *     `src\hlpr\xhcihlpr.rc` and `hlpr_entry.c`
+ *   - the drivers' version resources and code: xhci98.sys (`src\xhci98.rc`,
+ *     `hcd_entry.c`, `hcd_msi86.c`, and `src\xhci_verpk.h`, the packed
+ *     form), xhciuas.sys (`src\uas`), xhcicm.sys (`src\cm`: the resource,
+ *     `cm_entry.c`, `cm_nhi.c`, `cm_oscnt.c`), xhcihlpr.sys (`src\hlpr`),
+ *     the two network drivers (`src\net\ndis5`, `src\net\ndis6`),
+ *     XHCIPFW.SYS (`src\pfw\nt`) and the two VxDs' data blocks
+ *     (`src\pfw\pfw_data.c`, `src\vsd\vsd_data.c`)
  *   - Stor98 (roadmap-usb4 task 42-A.30): `src\stor98\src\stor98ver.h`,
  *     which `nvme2k.rc` reads for stor98.mpd and both stor98.sys images
- *   - the tools: `xhciqual\qual.h`'s `TOOL_VERSION`, `xhcisnap\xhcisnap.c`'s
- *     `XHCISNAP_VERSION`, `xhciinst\xhciinst.c`, `xhcitr\xhcitr.c` and
- *     `xhcitr\xhcitr.rc`
+ *   - the tools: `xhciqual\qual.h`'s `TOOL_VERSION`; XHCITR
+ *     (`xhcitr\tr_core.h`, `xhcitr.c`, `xhcitr.rc`, and `tr_snap.c`, the
+ *     snapshot reader, whose macro keeps the retired XHCISNAP's name,
+ *     `XHCISNAP_VERSION`); the installer (`xhciinst\inst_eng.c`, `xhciwiz.c`,
+ *     `setup.rc`, `xhciwiz.rc`, and `di\xhcidi.c` with its test
+ *     `di\test\ditest.c`); `xhcimark\xhcimark.c`; and XHCIPERF
+ *     (`xhciperf\xhciperf.c`, `xhciperf.rc`)
  *
  * Seventeen cannot include it, because an INF and a manifest are not
  * compiled, and keep a literal:
@@ -33,11 +41,14 @@
  *     `xhciinst\setup.manifest`, `xhciinst\xhciwiz.manifest` and
  *     `xhciperf\xhciperf.manifest`, which no gate reads: bump them by hand
  *
- * **Three toolchains include this**: the Win2000 DDK's `rc.exe` (the driver
- * resource), MSVC 6.0's `cl.exe` (the snapshot reader and the host test suite)
- * and Open Watcom's `wcc386` (the DOS qualifier). So it must stay what all
- * three accept without argument - `#define` lines and comments, no types, no
- * declarations, no pragmas, and nothing that needs an include of its own.
+ * **Every toolchain of the tree includes this**: the Win2000 DDK's `rc.exe`
+ * and MSVC 6.0's `cl.exe` (the 32-bit drivers' resources and code, the tools,
+ * the host test suite), WDK 7.1's `cl.exe` and `rc.exe` (the amd64 builds,
+ * xhcihlpr.sys, the NDIS 6 driver), Open Watcom's `wcc386` (the
+ * DOS qualifier and the two VxDs) and its 16-bit `wcc` (XHCIDI.EXE). So it
+ * must stay what all of them accept without argument - `#define` lines and
+ * comments, no types, no declarations, no pragmas, and nothing that needs an
+ * include of its own.
  *
  * **Why both forms of the number are spelled out.** `FILEVERSION` and
  * `PRODUCTVERSION` take four comma-separated integers and cannot be given a
@@ -48,13 +59,16 @@
  * one clever line that no toolchain agrees about.
  *
  * **The date is the release date, not a build date.** It is what
- * `src\xhci98.inf`'s `DriverVer` carries and what Windows 2000's setup engine
- * ranks a candidate driver by *first* - a package whose date does not exceed
- * the installed one is declined as not better, whatever its version says. Set
- * it to the day the release is cut. The `built <stamp>` lines that `XHCIQUAL`
- * and `XHCISNAP` print are their compilers' `__DATE__`/`__TIME__` and are a
- * different fact: they say *which build* between two cuts of one version, which
- * is exactly what a version cannot (task 13-L.4).
+ * `src\xhci98.inf`'s `DriverVer` carries, and Windows 2000's setup engine
+ * ranks equally matched candidate drivers by that date first and by the
+ * version only when the dates tie: a package dated earlier than the installed
+ * one is declined as not better whatever its version says, and one of the same
+ * date wins only with a higher version. So set it to the day the release is
+ * cut, never to a later day to win the ranking; a second release on one day
+ * is told apart by its higher version. The `built <stamp>` lines that
+ * `XHCIQUAL` and `XHCITR` print are their compilers' `__DATE__`/`__TIME__` and
+ * are a different fact: they say *which build* between two cuts of one
+ * version, which is exactly what a version cannot (task 13-L.4).
  *
  * **Since 2026-10-02 this is the successor HCD's version** (design record 13;
  * roadmap-hcd.md). The miniport, last released as 1.2.0.0, left the tree that
@@ -63,7 +77,7 @@
  * 1.2.0.0 and claimed nothing; task 32.3 set 2.0.0.0, the HCD's first release.
  *
  * See `docs\contributing\build-and-test.md`, "Versioning the driver", for what
- * each field surfaces as on each target, and for the two gates that cover the
+ * each field surfaces as on each target, and for the gates that cover the
  * copies this file cannot reach.
  */
 
@@ -72,16 +86,16 @@
 
 /* The four-part package version, as four integers - what FILEVERSION and
  * PRODUCTVERSION take, and what the Windows shell sorts by. */
-#define XHCI_VER_CSV            3,4,1,0
+#define XHCI_VER_CSV            3,4,2,0
 
-/* The same number as a string - the resource's two version strings, the DOS
+/* The same number as a string - the resources' two version strings, the DOS
  * qualifier's banner, and the snapshot reader's report header. Must agree with
  * XHCI_VER_CSV above; the INF gate refuses a build where it does not. */
-#define XHCI_VER_STR            "3.4.1.0"
+#define XHCI_VER_STR            "3.4.2.0"
 
 /* The release date, in the MM/DD/YYYY form `DriverVer` takes, zero-padded -
  * the INF gate refuses an unpadded one, because Windows 98's 16-bit parser is
  * the reason the padding rule exists. */
-#define XHCI_DRIVERVER_DATE     "11/05/2026"
+#define XHCI_DRIVERVER_DATE     "11/08/2026"
 
 #endif /* XHCI_VERSION_H */

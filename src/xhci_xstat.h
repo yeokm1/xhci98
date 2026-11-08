@@ -21,7 +21,7 @@
  * between two stamps of one processor (XhciXstatInterval); one that crossed
  * is counted apart and not measured. The start's and the dump's pairs may
  * come from two processors: on a machine whose counters disagree the rate
- * and the ages they give are approximate, which XHCISNAP says.
+ * and the ages they give are approximate, which the snapshot reader says.
  *
  * 36.22's value, XhciMaxTransferKB: the command size xhciuas.sys
  * advertises, 64 to 2048 KiB in steps of 4, default 1024; read once at the
@@ -72,7 +72,8 @@ typedef struct _XHCI_XSTAT_TIME {
 
 /*
  * The controller's transfer-size readings since its start. The order is
- * the snapshot's (XHCISNAP names the words in this order; test_snap holds
+ * the snapshot's (the snapshot reader names the words in this order;
+ * test_snap holds
  * the count): append, never reorder.
  */
 typedef struct _XHCI_XSTAT {
@@ -162,6 +163,7 @@ ULONG XhciXpolValue(ULONG found, ULONG value, PULONG why);
  * in flight (0 to XHCI_XSTAT_DEPTH_BUCKETS - 1; 0 reads as 1). */
 ULONG XhciXstatBucket(ULONG bytes);
 ULONG XhciXstatChunkBucket(ULONG chunks);
+/* No driver file calls this one (test_snap does). */
 ULONG XhciXstatDepthBucket(ULONG active);
 
 /* *lo/*hi += v, the carry by hand. */
@@ -189,5 +191,79 @@ VOID XhciXstatAddTime(PXHCI_XSTAT_TIME t, ULONG counts);
 
 /* A data URB's end: its length and the chunks published for it. */
 VOID XhciXstatUrb(PXHCI_XSTAT s, ULONG length, ULONG chunks);
+
+/*
+ * Task 47.30 (design record 13 section 11.10, Part B): an isochronous
+ * pipe's stream timing, from its open to its close, in its HCD_PIPE under
+ * the controller lock. Counts are time-stamp counts; times are the system
+ * time in XhciXstatSysUnits' 102.4 us units. Zeroed with the pipe.
+ *
+ * Unlike XhciXstatDiff, a span here is not discarded when long: a stall is
+ * the reading wanted, so it saturates at FFFFFFFF. Two processors' stamps
+ * are counted in Crossed and an end before its start in Backward, neither
+ * measured.
+ */
+#define XHCI_XSTAT_SPAN_NONE        0UL /* an end not stamped            */
+#define XHCI_XSTAT_SPAN_OK          1UL /* measured, saturated            */
+#define XHCI_XSTAT_SPAN_CROSSED     2UL /* two processors                 */
+#define XHCI_XSTAT_SPAN_BACKWARD    3UL /* the end before the start       */
+
+/* Flags of the longest gap's own sample (GapFlags), and of the close note
+ * iso.gap.lag's high bits. */
+#define XHCI_ISOT_F_GAP             0x00000001UL /* a gap was measured    */
+#define XHCI_ISOT_F_WAITED          0x00000002UL /* its request waited on
+                                                  * the Waiting list      */
+#define XHCI_ISOT_F_LAG_UNMEASURED  0x00000004UL /* its claim-to-publication
+                                                  * wait not measured     */
+#define XHCI_ISOT_NOTE_WAITED       0x80000000UL
+#define XHCI_ISOT_NOTE_UNMEASURED   0x40000000UL
+#define XHCI_ISOT_NOTE_COUNT_MAX    0x3FFFFFFFUL
+
+typedef struct _XHCI_ISO_TIMING {
+    XHCI_XSTAT_STAMP LastPub;   /* the last publication's stamp           */
+    ULONG Publications;
+    ULONG PubOnEmpty;           /* onto a ring empty in software's view   */
+    ULONG Waited;               /* of a request that waited for a record  */
+    ULONG FillMin;              /* TRBs on the ring before a publication
+                                 * onto a non-empty one, the fewest       */
+    ULONG FillMax;              /* TRBs on the ring after one, the most   */
+    ULONG GapMax;               /* the longest gap between publications   */
+    ULONG GapAt;                /* the system time at its end             */
+    ULONG GapLag;               /* its request's claim-to-publication wait */
+    ULONG GapFlags;             /* XHCI_ISOT_F_*                          */
+    ULONG LagMax;               /* the longest claim-to-publication wait  */
+    ULONG Crossed;
+    ULONG Backward;
+    ULONG Dry;                  /* Ring Underrun and Overrun events       */
+    ULONG DryAt;                /* the system time of the last            */
+} XHCI_ISO_TIMING, *PXHCI_ISO_TIMING;
+
+/* `to - from` into *counts, saturated; XHCI_XSTAT_SPAN_*. */
+ULONG XhciXstatSpan(const XHCI_XSTAT_STAMP *from, const XHCI_XSTAT_STAMP *to,
+                    PULONG counts);
+
+/* The system time (100 ns, as KeQuerySystemTime gives it) in units of
+ * 1,024 x 100 ns, its low 32 bits: wraps every 5.09 days. Never 0: 0 is
+ * the `at` notes' "no sample" (GapAt with no gap measured, DryAt with no
+ * dry event), which XHCITR prints as none. */
+ULONG XhciXstatSysUnits(ULONG lo, ULONG hi);
+
+/*
+ * One publication: `claim` the record's claim stamp, `now` this
+ * publication's, `waited` whether its IRP had waited on the Waiting list,
+ * `before` and `after` the TRBs on the ring around it. Returns 1 when this
+ * publication ended the longest gap so far, so the caller stamps GapAt
+ * (only then is the system time read). Updates LastPub.
+ */
+ULONG XhciIsoTimingPublish(PXHCI_ISO_TIMING t, const XHCI_XSTAT_STAMP *claim,
+                           const XHCI_XSTAT_STAMP *now, ULONG waited,
+                           ULONG before, ULONG after);
+
+/* A Ring Underrun or Overrun on the pipe, at system time `at`. */
+VOID XhciIsoTimingDry(PXHCI_ISO_TIMING t, ULONG at);
+
+/* The close note iso.gap.lag: the longest gap's own wait in 29:0
+ * (saturated), XHCI_ISOT_NOTE_WAITED and _UNMEASURED above it. */
+ULONG XhciIsoTimingGapLagNote(const XHCI_ISO_TIMING *t);
 
 #endif /* XHCI_XSTAT_H */

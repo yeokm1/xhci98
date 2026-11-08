@@ -803,6 +803,7 @@ static void test_lines(void)
 static void test_line_ids(void)
 {
     static char inf[65536];
+    static unsigned char hit[256];
     FILE *fp;
     size_t n;
     char *sec;
@@ -822,6 +823,7 @@ static void test_line_ids(void)
     n = fread(inf, 1, sizeof(inf) - 1, fp);
     fclose(fp);
     inf[n] = '\0';
+    CHECK(n < sizeof(inf) - 1, "xhcicm.inf read whole, not cut at the buffer");
     sec = strstr(inf, "\r\n[CmModels]\r\n");
     CHECK(sec != NULL, "its [CmModels]");
     if (sec == NULL) {
@@ -832,6 +834,11 @@ static void test_line_ids(void)
     if (end != NULL) {
         *end = '\0';
     }
+    CHECK(PfwNhiIdCount <= sizeof(hit), "the list fits this test's table");
+    if (PfwNhiIdCount > sizeof(hit)) {
+        return;
+    }
+    memset(hit, 0, sizeof(hit));
     seen = 0;
     cls = 0;
     for (p = strstr(sec, "=Cm.Dev,PCI\\"); p != NULL;
@@ -847,9 +854,18 @@ static void test_line_ids(void)
             }
         }
         CHECK(i < PfwNhiIdCount, "each INF id in the VxD's list");
+        if (i < PfwNhiIdCount) {
+            CHECK(!hit[i], "no INF id row twice");
+            hit[i] = 1;
+        }
         seen++;
     }
     CHECK_EQ(seen, PfwNhiIdCount, "as many ids as the list holds");
+    /* Both directions: every id of the VxD's list is an INF row, so a
+     * duplicated row cannot stand in for a missing one. */
+    for (i = 0; i < PfwNhiIdCount; i++) {
+        CHECK(hit[i], "each id of the VxD's list in the INF");
+    }
     CHECK(cls, "the class row there, PFW_CLASS_USB4_NHI");
 }
 

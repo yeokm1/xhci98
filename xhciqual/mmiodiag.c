@@ -341,17 +341,33 @@ int quick_classify_mmio(const PCIINFO *p, int active_requested)
     return QUICK_DISQUALIFIED;
 }
 
+int quick_ports_arg(const CTRL *c)
+{
+    int i;
+
+    if (c->maxports <= 0)
+        return QUICK_NO_ROOT_PORTS;
+    for (i = 1; i <= c->maxports && i <= MAX_PORTS; i++) {
+        if (c->portclass[i] != PC_NONE)
+            return c->usb2_ports;
+    }
+    return QUICK_NO_ROOT_PORTS;
+}
+
 int quick_classify(const PCIINFO *p, int mmio_ok, int usb2_ports,
                    int active_requested)
 {
     if (!mmio_ok)
         return quick_classify_mmio(p, active_requested);
 
-    if (usb2_ports == 0)
+    /* No root port at all: nothing for the driver to drive. */
+    if (usb2_ports == QUICK_NO_ROOT_PORTS)
         return QUICK_DISQUALIFIED;
 
-    /* Needs polling, not refused (36.10): the other outcomes win. */
-    if (p->ipin == 0)
+    /* Needs polling, not refused (36.10); and no USB2 protocol port is a
+     * limit of C6 and C8, not of the controller or the driver (owner,
+     * 2026-11-06, TL-7): caveats both, the other outcomes win. */
+    if (p->ipin == 0 || usb2_ports == 0)
         return QUICK_CAVEATS;
 
     return QUICK_LOOKS_OK;
@@ -408,8 +424,8 @@ const char *quick_reason(const PCIINFO *p, int mmio_ok, int usb2_ports,
         return "BAR0 MMIO is dead with MSE set and the device in D0";
     }
 
-    if (usb2_ports == 0)
-        return "no USB2 protocol ports";
+    if (usb2_ports == QUICK_NO_ROOT_PORTS)
+        return "no root ports";
 
     /* 36.10: the driver polls it; whether Vista and 7 have a message
      * route instead is the capability list's answer. */
@@ -417,6 +433,8 @@ const char *quick_reason(const PCIINFO *p, int mmio_ok, int usb2_ports,
         return (p->has_msi || p->has_msix)
                    ? "needs polling: Interrupt Pin = 0; it offers MSI"
                    : "needs polling: Interrupt Pin = 0; no MSI either";
+    if (usb2_ports == 0)
+        return "no USB2 ports: C6/C8";
 
     (void)active_requested;
     return "";

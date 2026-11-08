@@ -47,6 +47,10 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
 #define HCD_VALUE_LOG_DEBUGVIEW L"XhciLogDebugView"
 #define HCD_VALUE_IMOD          L"XhciImodInterval250ns"
 #define HCD_VALUE_FORCE_BOT     L"XhciForceBulkOnly"
+/* UASBOT.1 (design record 13 section 10.7): the Bulk-Only form's own
+ * instance id, read at every enumeration beside the force value; only a
+ * DWORD 0 turns it off. The INFs write 1. */
+#define HCD_VALUE_BOT_OWN_ID    L"XhciBulkOnlyOwnId"
 #define HCD_VALUE_FAST_POLL     L"XhciFastPollFsLs"
 /* Task 33.3: the first answer's settle, in ms (xhci_enum.h). The INFs write
  * the defaults (34.1); text-mode Setup's txtsetup.oem writes none, so there
@@ -62,6 +66,11 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * or another number than 0 to 2 is 1, the verified E7250 only
  * (xhci_pirq.h). Read at start; a return to D0 runs on the start's. */
 #define HCD_VALUE_IRQ_ROUTE     L"XhciIntelIrqRoute"
+#define HCD_VALUE_NOROUTE_IRQ   L"XhciIntelNoRouteIrq"
+#define HCD_VALUE_QEMU_NOROUTE  L"XhciQemuNoRouteGsi"
+#define HCD_VALUE_QEMU_LINE_CONN L"XhciQemuLineConnectFail"
+#define HCD_VALUE_QEMU_NR_LISTED L"XhciQemuNoRouteListed"
+#define HCD_VALUE_QEMU_STRIP_FAIL L"XhciQemuStripFail"
 /* 35-T (design record 17 sections 4.7 and 4.11): the tolerance off-switch,
  * the interrupt-interval cap and the Average TRB Length switch, read at
  * every start; absent, another type or another number takes the default. */
@@ -73,6 +82,9 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * at every start; a change reaches the class driver at its next start, and
  * its storage stack at the next reboot. */
 #define HCD_VALUE_MAX_TRANSFER  L"XhciMaxTransferKB"
+/* Task 47.30 (design record 13 section 11.10): the event ring's size, 256
+ * the in-block ring, anything else (absent included) the larger one. */
+#define HCD_VALUE_EVENT_RING    L"XhciEventRingTrbs"
 /* Task 36.33: selective suspend, stages A and B (design record 14 section
  * 7). Default 0; the INFs write the 0 (task 36.51). */
 #define HCD_VALUE_SELECTIVE_SUSPEND L"XhciSelectiveSuspend"
@@ -318,8 +330,8 @@ static VOID hcdReadLogSwitches(PHCD_CONTROLLER hc)
     ext = &hc->Hc;
     verbosity = 0;
     debugView = 0;
-    /* The read statuses travel in XHCISNAP's header (schema 5), so a reader
-     * tells a zero somebody set from a value never found. */
+    /* The read statuses travel in the snapshot's header (schema 5), so a
+     * reader tells a zero somebody set from a value never found. */
     ext->Log.SwitchRead = 1;
     status = hcdReadDword(hc, HCD_VALUE_LOG_VERBOSITY, &verbosity);
     ext->Log.SwitchStatusVerbosity = NT_SUCCESS(status) ? MP_STATUS_SUCCESS
@@ -363,6 +375,32 @@ static VOID hcdVersionCounters(PHCD_CONTROLLER hc)
 }
 
 /* IRQL: PASSIVE_LEVEL. */
+/*
+ * Task 47.30 (design record 13 section 11.10, point 9): what decides the
+ * event ring is read before HcdDmaOpen allocates it, so here and not in
+ * hcdReadValues, which runs after; hcdReadValues notes it once the log is
+ * set up. IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdReadEventRing(PHCD_CONTROLLER hc)
+{
+    ULONG value;
+    NTSTATUS status;
+
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_EVENT_RING, &value);
+    hc->EvtValueRaw = NT_SUCCESS(status) ? value : 0xFFFFFFFFUL;
+    hc->EvtWanted =
+        (NT_SUCCESS(status) && value == XHCI_EVENT_RING_TRBS) ? 0UL : 1UL;
+#if defined(XHCI_FLAVOUR_QEMU)
+    hc->QemuEventRing = HCD_EVT_QEMU_NONE;
+    value = 0;
+    status = hcdReadDword(hc, L"XhciQemuEventRing", &value);
+    if (NT_SUCCESS(status) && value <= HCD_EVT_QEMU_REFUSE) {
+        hc->QemuEventRing = value;
+    }
+#endif
+}
+
 static VOID hcdReadValues(PHCD_CONTROLLER hc)
 {
     PXHCI_EXTENSION ext;
@@ -384,6 +422,19 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     ext = &hc->Hc;
 
     hcdReadLogSwitches(hc);
+
+    /* Task 47.30: what hcdReadEventRing and HcdDmaOpen decided. */
+    XhciLogNote(ext, "evt.ring.value", hc->EvtValueRaw);
+    XhciLogNote(ext, "evt.ring",
+                (hc->EvtRoute << 16) |
+                    (hc->EvtRingVa != NULL ? XHCI_EVENT_RING_BIG_TRBS
+                                           : XHCI_EVENT_RING_TRBS));
+    if (hc->EvtRingVa != NULL) {
+        XhciLogNoteAddress(ext, "evt.ring.pa", hc->EvtRingPa);
+    }
+#if defined(XHCI_FLAVOUR_QEMU)
+    XhciLogNote(ext, "qemu.evtring", hc->QemuEventRing);
+#endif
 
     imod = 0;
     status = hcdReadDword(hc, HCD_VALUE_IMOD, &imod);
@@ -516,6 +567,7 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
                                                  : 0UL;
     hc->StrictOn = (NT_SUCCESS(status) && value == 0) ? 0UL : 1UL;
     hc->Counters.StrictOn = hc->StrictOn;
+    HcdStrictStart(hc);
     XhciLogNote(ext, "strict.value",
                 NT_SUCCESS(status) ? value : 0xFFFFFFFFUL);
     XhciLogNote(ext, "strict.on", hc->StrictOn);
@@ -723,9 +775,10 @@ static VOID hcdFirmwareNote(PHCD_CONTROLLER hc)
 }
 /*
  * The force-Bulk-Only value (roadmap-hcd.md 31-A.3): 1 when XhciForceBulkOnly
- * is a nonzero REG_DWORD in the controller's driver key, the key every other
- * value of this driver lives in; 0 when it is zero. When it cannot be read -
- * absent, of another type, or no driver key at all - it is 1 (roadmap-hcd
+ * is a nonzero REG_DWORD, read as every other value of this driver is - the
+ * machine-wide key first, then the controller's driver key (hcdReadDword,
+ * task 42-A.17); 0 when it is zero. When it cannot be read - absent, of
+ * another type, or in neither key - it is 1 (roadmap-hcd
  * 37.2; issue 15). Every INF install path writes 0, so on an installed
  * system the value is unread only when it was deleted or mistyped by hand,
  * or a binary was copied over an install older than 34.1 - the conservative
@@ -743,6 +796,29 @@ ULONG HcdCtlForceBulkOnly(PHCD_CONTROLLER hc)
 
     value = 0;
     if (!NT_SUCCESS(hcdReadDword(hc, HCD_VALUE_FORCE_BOT, &value))) {
+        return 1;
+    }
+    return value != 0;
+}
+
+/*
+ * XhciBulkOnlyOwnId (roadmap-usb4 UASBOT.1; design record 13 section
+ * 10.7): 1 unless the value is a REG_DWORD 0, read as the force value is
+ * (hcdReadDword: the machine-wide key first) and as often - at each PDO's
+ * creation (hcdXportFlags) - so a change takes effect at the next plug.
+ * On, the Bulk-Only form of a device that offers UAS too answers its
+ * instance id with &BOT (XhciXportChoose's OwnId): a devnode of its own,
+ * which Windows matches by its Prot_50 ids, apart from the devnode the UAS
+ * form installed. 0 is the single devnode of the releases before. Absent
+ * is on, the value every INF writes. One value for every device on this
+ * controller. IRQL: PASSIVE_LEVEL.
+ */
+ULONG HcdCtlBulkOnlyOwnId(PHCD_CONTROLLER hc)
+{
+    ULONG value;
+
+    value = 1;
+    if (!NT_SUCCESS(hcdReadDword(hc, HCD_VALUE_BOT_OWN_ID, &value))) {
         return 1;
     }
     return value != 0;
@@ -1174,6 +1250,9 @@ static VOID hcdPirqQemuProbe(PHCD_CONTROLLER hc)
 }
 #endif
 
+static VOID hcdNoRouteStart(PHCD_CONTROLLER hc);
+static VOID hcdNoRouteStripDecide(PHCD_CONTROLLER hc);
+
 /*
  * The start's value and run: after the interrupt is connected and
  * XhciInitController has run, before XhciEnableInterrupts, so the start's
@@ -1201,6 +1280,7 @@ static VOID hcdPirqStart(PHCD_CONTROLLER hc)
         hcdPirqQemuProbe(hc);
     }
 #endif
+    hcdNoRouteStart(hc);
 }
 
 /*
@@ -1228,6 +1308,197 @@ VOID HcdPirqStartAttempt(PHCD_CONTROLLER hc)
     HcdDoorGateLeave(hc);
 }
 
+/*
+ * Task 47.33, part 2 (design record 18 sections 16.1 and 16.2): the
+ * chipset-routed GSI offer, run once per FDO in AddDevice's system thread,
+ * after the stack is attached, so the filter (which reads no registry and
+ * maps nothing) finds it made. Every NT kernel below 6.0, 32-bit 2000 and
+ * XP as well as XP x64: under an ACPI APIC HAL 16 + IAR is the PCH's own
+ * I/O APIC input; under the ACPI PC and Standard PC HALs no input is above
+ * 15, so the offer is refused or, granted, fails to connect or stays
+ * silent, each a polled start under mode 0. The driver cannot tell the
+ * HALs apart (section 16.2; the MPS HALs are left unresolved there). The
+ * location is the PDO's own (DevicePropertyBusNumber and
+ * DevicePropertyAddress), and 00:14.0's identity is compared with the
+ * controller's own configuration space before anything past it is read.
+ * Read-only. IRQL: PASSIVE_LEVEL.
+ */
+VOID HcdNoRouteAddDevice(PHCD_CONTROLLER hc)
+{
+    XHCI_PIRQ_IO io;
+    ULONG value;
+    ULONG bus;
+    ULONG address;
+    ULONG length;
+    ULONG own[2];
+    NTSTATUS status;
+
+    XhciPirqOfferClear(&hc->NoRoute);
+    hc->NoRouteFound = 0;
+    hc->NoRouteValue = XHCI_PIRQ_UNREAD;
+    hc->NoRouteOffered = 0;
+    hc->NoRouteGrant = HCD_NOROUTE_GRANT_NONE;
+    hc->QemuNoRouteGsi = XHCI_PIRQ_NO_GSI;
+    hc->QemuLineConnFail = 0;
+    hc->NoRouteStrip = 0;
+    hc->QemuNoRouteListed = 0;
+    hc->QemuStripFail = 0;
+    if (!IoIsWdmVersionAvailable(1, 0x10) || IoIsWdmVersionAvailable(6, 0)) {
+        return;
+    }
+    value = 0;
+    if (NT_SUCCESS(hcdReadDword(hc, HCD_VALUE_NOROUTE_IRQ, &value))) {
+        hc->NoRouteFound = 1;
+        hc->NoRouteValue = value;
+    }
+#if defined(XHCI_FLAVOUR_QEMU)
+    value = 0;
+    if (NT_SUCCESS(hcdReadDword(hc, HCD_VALUE_QEMU_LINE_CONN, &value)) &&
+        value == 1) {
+        hc->QemuLineConnFail = 1;
+    }
+    value = 0;
+    if (NT_SUCCESS(hcdReadDword(hc, HCD_VALUE_QEMU_NR_LISTED, &value)) &&
+        (value == 1 || value == 2)) {
+        hc->QemuNoRouteListed = value;
+    }
+    value = 0;
+    if (NT_SUCCESS(hcdReadDword(hc, HCD_VALUE_QEMU_STRIP_FAIL, &value)) &&
+        value >= 1 && value <= 3) {
+        hc->QemuStripFail = value;
+    }
+#endif
+#if defined(XHCI_FLAVOUR_QEMU)
+    value = 0;
+    if (NT_SUCCESS(hcdReadDword(hc, HCD_VALUE_QEMU_NOROUTE, &value))) {
+        /* No guest has a reviewed PCH: the qemu flavour's offer is the
+         * value itself (design record 18 section 16). */
+        hc->QemuNoRouteGsi = value;
+        hc->NoRoute.Mode = XhciPirqNoRouteMode(hc->NoRouteFound,
+                                               hc->NoRouteValue);
+        if (hc->NoRoute.Mode != XHCI_PIRQ_NR_OFF) {
+            hc->NoRoute.Decision = XHCI_PIRQ_O_QEMU;
+            hc->NoRoute.Gsi = value;
+        } else {
+            hc->NoRoute.Decision = XHCI_PIRQ_O_OFF;
+        }
+        hcdNoRouteStripDecide(hc);
+        return;
+    }
+#endif
+    bus = 0xFFFFFFFFUL;
+    address = 0xFFFFFFFFUL;
+    status = IoGetDeviceProperty(hc->Pdo, DevicePropertyBusNumber,
+                                 sizeof(bus), &bus, &length);
+    if (NT_SUCCESS(status)) {
+        status = IoGetDeviceProperty(hc->Pdo, DevicePropertyAddress,
+                                     sizeof(address), &address, &length);
+    }
+    if (!NT_SUCCESS(status)) {
+        bus = 0xFFFFFFFFUL;
+        address = 0xFFFFFFFFUL;
+    }
+    own[0] = XHCI_PIRQ_UNREAD;
+    own[1] = XHCI_PIRQ_UNREAD;
+    if (!hcdPswRead(hc, XHCI_PIRQ_CFG_ID, &own[0]) ||
+        !hcdPswRead(hc, XHCI_PIRQ_CFG_SUBSYSTEM, &own[1])) {
+        own[0] = XHCI_PIRQ_UNREAD;
+        own[1] = XHCI_PIRQ_UNREAD;
+    }
+    hcdPirqIo(hc, &io);
+    (VOID)XhciPirqOffer(&io, bus, address, own[0], own[1],
+                        XhciPirqNoRouteMode(hc->NoRouteFound,
+                                            hc->NoRouteValue),
+                        &hc->NoRoute);
+    hcdPirqUnmap(hc);
+    hcdNoRouteStripDecide(hc);
+}
+
+/*
+ * Task 47.33, design record 18 section 16.4: whether Windows 2000's filter
+ * takes the interrupt out of this controller's list - Windows 2000 itself
+ * (WDM 1.10 and not 1.20, XP's), the offer's run having passed its
+ * identity guards (XhciPirqW2kStrip) and the board on value 1's list, whatever the value's 1 or 2 (0 ends the
+ * run before it). The qemu flavour's XhciQemuNoRouteListed takes QEMU's
+ * controller, whose run XhciQemuNoRouteGsi stands in for, as listed.
+ * IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdNoRouteStripDecide(PHCD_CONTROLLER hc)
+{
+    ULONG decision;
+    ULONG listed;
+    ULONG isW2k;
+
+    decision = hc->NoRoute.Decision;
+    listed = XhciPirqNoRouteListed(hc->NoRoute.XhciId, hc->NoRoute.Subsystem);
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* 1: a listed board whose run passed every check; 2: one whose run
+     * ended at the chipset window's mapping (XHCI_PIRQ_O_MAP_FAILED), the
+     * record showing that decision and no GSI. */
+    if (decision == XHCI_PIRQ_O_QEMU && hc->QemuNoRouteListed == 2) {
+        hc->NoRoute.Decision = XHCI_PIRQ_O_MAP_FAILED;
+        hc->NoRoute.Gsi = XHCI_PIRQ_NO_GSI;
+        decision = XHCI_PIRQ_O_MAP_FAILED;
+        listed = 1;
+    } else if (decision == XHCI_PIRQ_O_QEMU && hc->QemuNoRouteListed) {
+        decision = XHCI_PIRQ_O_OFFERED;
+        listed = 1;
+    }
+#endif
+    isW2k = (IoIsWdmVersionAvailable(1, 0x10) &&
+             !IoIsWdmVersionAvailable(1, 0x20)) ? 1UL : 0UL;
+    hc->NoRouteStrip = XhciPirqW2kStrip(isW2k, decision, listed);
+}
+
+/*
+ * The start's record of the offer (task 47.33, part 2): the value, the
+ * run's findings and how this start's grant compares with what the filter
+ * offered, as notes in the snapshot. Whether the line delivers is the
+ * snapshot's own reading: InterruptsClaimed rising (ISR claims, which no
+ * backstop or poll drain counts) and no dead-line move (LineMoves). RCBA is an address: verbosity 4
+ * alone (design record 25 revision 12). IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdNoRouteStart(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+    PXHCI_PIRQ_OFFER st;
+
+    ext = &hc->Hc;
+    st = &hc->NoRoute;
+    if (!IoIsWdmVersionAvailable(1, 0x10) || IoIsWdmVersionAvailable(6, 0)) {
+        return;
+    }
+    /* What was granted, whatever the filter added: memory alone, the
+     * offered GSI (only when the filter wrote the clone in), or another
+     * line. */
+    if (!hc->HaveInterrupt || hc->IntRaw.Count == 0) {
+        hc->NoRouteGrant = HCD_NOROUTE_GRANT_NONE;
+    } else if (hc->NoRouteOffered && hc->IntRaw.Count == 1 &&
+               hc->IntRaw.Level == st->Gsi && hc->IntRaw.Vector == st->Gsi) {
+        hc->NoRouteGrant = HCD_NOROUTE_GRANT_OFFERED;
+    } else {
+        hc->NoRouteGrant = HCD_NOROUTE_GRANT_OTHER;
+    }
+    XhciLogNote(ext, "noroute.value",
+                hc->NoRouteFound ? hc->NoRouteValue : 0xFFFFFFFFUL);
+    XhciLogNote(ext, "noroute.mode", st->Mode);
+    XhciLogNote(ext, "noroute.decision", st->Decision);
+    XhciLogNote(ext, "noroute.xhci", st->XhciId);
+    XhciLogNote(ext, "noroute.subsystem", st->Subsystem);
+    XhciLogNote(ext, "noroute.lpc", st->LpcId);
+    XhciLogNoteAddress(ext, "noroute.rcba", st->Rcba);
+    XhciLogNote(ext, "noroute.d20ip", st->D20ip);
+    XhciLogNote(ext, "noroute.d20ir", st->D20ir);
+    XhciLogNote(ext, "noroute.pirq", st->Pirq);
+    XhciLogNote(ext, "noroute.gsi", st->Gsi);
+    XhciLogNote(ext, "noroute.offered", hc->NoRouteOffered);
+    XhciLogNote(ext, "noroute.grant", hc->NoRouteGrant);
+    XhciLogNote(ext, "noroute.strip", hc->NoRouteStrip);
+    XHCI_DBG_VALUE("hcd: no-route offer, decision", st->Decision);
+    XHCI_DBG_VALUE("hcd: no-route offer, GSI", st->Gsi);
+    XHCI_DBG_VALUE("hcd: no-route offer, grant", hc->NoRouteGrant);
+}
+
 /* --------------------------------------------------------------------- */
 /* Resources                                                              */
 /* --------------------------------------------------------------------- */
@@ -1248,6 +1519,13 @@ static NTSTATUS hcdParseResources(PHCD_CONTROLLER hc, PIRP irp)
 
     hc->HaveMemory = 0;
     hc->HaveInterrupt = 0;
+    /* A start granted no line (task 47.33's NT 5 copy) keeps nothing of
+     * an earlier start's. */
+    hc->IntVector = 0;
+    hc->IntIrql = 0;
+    hc->IntAffinity = 0;
+    hc->IntMode = LevelSensitive;
+    hc->IntShared = FALSE;
     hc->IntRaw.Count = 0;
     hc->IntRaw.Level = 0;
     hc->IntRaw.Vector = 0;
@@ -1298,7 +1576,8 @@ static NTSTATUS hcdParseResources(PHCD_CONTROLLER hc, PIRP irp)
                  * first word is WDK 7.1's u.MessageInterrupt.Raw, a
                  * reserved USHORT then MessageCount, so Level carries the
                  * count in 31:16; the run reports a message grant before
-                 * it reads Level, and XHCISNAP decodes it so. */
+                 * it reads Level, and XHCITR's snapshot reader decodes it
+                 * so. */
                 hc->IntRaw.Level = d->u.Interrupt.Level;
                 hc->IntRaw.Vector = d->u.Interrupt.Vector;
                 hc->IntRaw.Flags = d->Flags;
@@ -1920,10 +2199,40 @@ static NTSTATUS hcdConnect(PHCD_CONTROLLER hc)
     NTSTATUS status;
 
     if (hc->PollDelivery == XHCI_POLL_DELIVERY_LINE) {
-        return IoConnectInterrupt(&hc->Interrupt, hcdIsr, hc, NULL,
-                                  hc->IntVector, hc->IntIrql, hc->IntIrql,
-                                  hc->IntMode, hc->IntShared,
-                                  hc->IntAffinity, FALSE);
+#if defined(XHCI_FLAVOUR_QEMU)
+        status = hc->QemuLineConnFail
+                     ? STATUS_UNSUCCESSFUL
+                     : IoConnectInterrupt(&hc->Interrupt, hcdIsr, hc, NULL,
+                                          hc->IntVector, hc->IntIrql,
+                                          hc->IntIrql, hc->IntMode,
+                                          hc->IntShared, hc->IntAffinity,
+                                          FALSE);
+#else
+        status = IoConnectInterrupt(&hc->Interrupt, hcdIsr, hc, NULL,
+                                    hc->IntVector, hc->IntIrql, hc->IntIrql,
+                                    hc->IntMode, hc->IntShared,
+                                    hc->IntAffinity, FALSE);
+#endif
+        /* Task 47.33, part 2: on 2000, XP and XP x64 under mode 0 a line
+         * that cannot be connected (a chipset-routed GSI offered past the
+         * firmware's tables, or any other) no longer fails the start: it
+         * is polled, before the delivery is published and the poller
+         * opened, so nothing watches a line never connected. Mode 1 still
+         * fails, as asked. */
+        if (!NT_SUCCESS(status) && IoIsWdmVersionAvailable(1, 0x10) &&
+            !IoIsWdmVersionAvailable(6, 0) &&
+            hc->PollValues.Mode == XHCI_POLL_MODE_AUTO) {
+            XhciLogNote(&hc->Hc, "intr.line.connect.status", (ULONG)status);
+            hc->Interrupt = NULL;
+            hc->PollDelivery = XHCI_POLL_DELIVERY_POLL;
+            hc->PollReason = XHCI_POLL_R_AUTO_LINE_NOT_CONNECTED;
+            hc->Counters.IntrDelivery = hc->PollDelivery;
+            hc->Counters.IntrReason = hc->PollReason;
+            XhciLogNote(&hc->Hc, "intr.delivery", hc->PollDelivery);
+            XhciLogNote(&hc->Hc, "intr.reason", hc->PollReason);
+            return STATUS_SUCCESS;
+        }
+        return status;
     }
     if (hc->PollDelivery != XHCI_POLL_DELIVERY_MESSAGE) {
         return STATUS_SUCCESS;
@@ -2482,7 +2791,8 @@ ULONG HcdDrainPending(PHCD_CONTROLLER hc)
 }
 
 /*
- * Task 36.4 (issue 12, Finding 1): a drain for the bus's command path, which
+ * Task 36.4 (issue 12, the boot-time no-slot refusal): a drain for the
+ * bus's command path, which
  * met the engine busy with an earlier command whose completion may have
  * come with no interrupt - the start's No Op on the E7250, whose line
  * reached nothing, and which the backstop cannot drain while the thread
@@ -2576,6 +2886,8 @@ static ULONG hcdContainProof(PXHCI_EXTENSION ext)
     return proof;
 }
 
+/* hcdContainProof's answer as the proof-or-none the core takes. IRQL:
+ * PASSIVE_LEVEL. */
 static ULONG hcdContainProve(PXHCI_EXTENSION ext)
 {
     return hcdContainProof(ext) != XHCI_TOL_PROOF_NONE ? 1UL : 0UL;
@@ -2590,6 +2902,7 @@ static ULONG hcdContainProve(PXHCI_EXTENSION ext)
  */
 static const GUID hcdIsoGuid = XHCI_CM_ISO_GUID_INIT;
 
+/* The query's completion routine. IRQL: <= DISPATCH_LEVEL. */
 static NTSTATUS NTAPI hcdIsoDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
                                  PVOID Context)
 {
@@ -2606,13 +2919,18 @@ static VOID hcdIsoAcquire(PHCD_CONTROLLER hc)
     PIO_STACK_LOCATION next;
     KEVENT done;
     PIRP irp;
+    PUCHAR p;
+    ULONG i;
     NTSTATUS status;
 
     HcdCtlIsoRelease(hc);
     if (!IoIsWdmVersionAvailable(1, 0x10) || hc->LowerDevice == NULL) {
         return;
     }
-    RtlZeroMemory(&iface, sizeof(iface));
+    p = (PUCHAR)&iface;
+    for (i = 0; i < sizeof(iface); i++) {
+        p[i] = 0;
+    }
     irp = IoAllocateIrp(hc->LowerDevice->StackSize, FALSE);
     if (irp == NULL) {
         return;
@@ -2650,6 +2968,9 @@ static VOID hcdIsoAcquire(PHCD_CONTROLLER hc)
     XhciLogNote(&hc->Hc, "iso.held", hc->IsoHeldStarts);
 }
 
+/* The statement's interface given back, once; idempotent. IRQL:
+ * PASSIVE_LEVEL (the start, the stop once the thread is joined, the
+ * remove). */
 VOID HcdCtlIsoRelease(PHCD_CONTROLLER hc)
 {
     PINTERFACE_DEREFERENCE deref;
@@ -2900,7 +3221,10 @@ static NTSTATUS hcdThreadStart(PHCD_CONTROLLER hc)
     hc->ThreadStop = 0;
     hc->ThreadRunning = 0;
     hc->ThreadObject = NULL;
-    KeInitializeEvent(&hc->WorkEvent, SynchronizationEvent, FALSE);
+    /* WorkEvent is not initialized again here: it was at AddDevice
+     * (HcdControllerInitObjects), and its producers - the interrupt's DPC
+     * among them - are live by now; a wake left set from before only
+     * costs the new thread one pass. */
     KeInitializeEvent(&hc->ThreadExited, NotificationEvent, FALSE);
     status = PsCreateSystemThread(&handle, THREAD_ALL_ACCESS, NULL, NULL, NULL,
                                   hcdThread, hc);
@@ -2933,8 +3257,9 @@ static NTSTATUS hcdThreadStart(PHCD_CONTROLLER hc)
         hc->ThreadObject = NULL;
         hc->ThreadStop = 1;
         HcdThreadWake(hc);
-        (VOID)KeWaitForSingleObject(&hc->ThreadExited, Executive,
-                                    KernelMode, FALSE, NULL);
+        /* NT only (the reference above is), where the wait cannot end
+         * unsatisfied; checked as the Windows 98 join is all the same. */
+        (VOID)HcdWaitEvent(&hc->ThreadExited, 0);
         return status;
     }
     hc->ThreadRunning = 1;
@@ -2957,8 +3282,9 @@ static VOID hcdThreadStop(PHCD_CONTROLLER hc)
         ObDereferenceObject(hc->ThreadObject);
         hc->ThreadObject = NULL;
     } else {
-        (VOID)KeWaitForSingleObject(&hc->ThreadExited, Executive, KernelMode,
-                                    FALSE, NULL);
+        /* Windows 98 and ME: satisfied, not merely returned (HcdWaitEvent),
+         * since the stop frees what the thread is still using. */
+        (VOID)HcdWaitEvent(&hc->ThreadExited, 0);
     }
     XHCI_DBG_TEXT("hcd: controller thread has exited");
     hc->ThreadRunning = 0;
@@ -3158,6 +3484,7 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
+    hcdReadEventRing(hc);
     status = HcdDmaOpen(hc);
     if (!NT_SUCCESS(status)) {
         hcdRelease(hc);
@@ -3393,14 +3720,23 @@ static VOID hcdStopBody(PHCD_CONTROLLER hc)
     HcdCtlIsoRelease(hc);
     /* Record 15 section 4.2: the poller's service revoked and a moved
      * line's owed retirement contained by the stop itself, before anything
-     * is disabled or disconnected; still owed, it is recorded uncontained. */
+     * is disabled or disconnected; still owed, it is recorded uncontained.
+     *
+     * The power gate is held from here through the halt and the
+     * connectors' hand-back, and the lifetime stops being started inside
+     * it, after the containment, which reads ControllerStarted: a power
+     * IRP that waited for the gate then finds nothing started and touches
+     * no hardware (hcd_power.c), and one that took it first finished its
+     * suspend or resume before the halt. Left before the devices go and
+     * the threads and workers are joined, which a power path may be
+     * holding up. */
     HcdPowerGateEnter(hc);
     HcdPollRevoke(hc);
     /* Closed before the check, so no watcher can move behind it; a grant
      * meanwhile finds it CLOSED and arms nothing (record 15 section 5.2). */
     HcdPollClose(hc);
     (VOID)HcdPollContain(hc);
-    HcdPowerGateLeave(hc);
+    hc->ControllerStarted = 0;
     if (ext->LineMoved && !ext->LineRetired) {
         ext->LineRetireState = XHCI_POLL_RETIRED_UNCONTAINED;
         hc->Counters.LineRetireState = XHCI_POLL_RETIRED_UNCONTAINED;
@@ -3425,6 +3761,7 @@ static VOID hcdStopBody(PHCD_CONTROLLER hc)
     /* Task 34.3: once the controller has halted, so the disconnects the
      * hand-back makes are seen by no running xHCI. */
     hcdPswEnd(hc);
+    HcdPowerGateLeave(hc);
     /*
      * The devices go once the controller has halted, not before: freeing a
      * record completes its URBs (hcd_io.c, HcdIoDeviceGone), and a client
@@ -3461,8 +3798,8 @@ static VOID hcdStopBody(PHCD_CONTROLLER hc)
 }
 
 /*
- * The start and the stop, each under the door gate (hcd_door.c), so an
- * XHCISNAP window or a controller-information request never reads an
+ * The start and the stop, each under the door gate (hcd_door.c), so a
+ * snapshot window or a controller-information request never reads an
  * extension the start is zeroing or a BAR the stop is unmapping. The
  * controller thread never takes the gate, so the stop may wait for it
  * there. IRQL: PASSIVE_LEVEL.

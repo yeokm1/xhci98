@@ -987,8 +987,7 @@ static VOID cmEjDetachedLoop(PCM_CFGMG cfg, CM_EJ_REC *rec)
         if (what == 0) {
             break;
         }
-        pause.LowPart = (ULONG)(0UL - CM_EJ_DETACH_TICK * 10000UL);
-        pause.HighPart = -1;
+        CmRelativeMs(&pause, CM_EJ_DETACH_TICK);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &pause);
     }
     KeAcquireSpinLock(&cmEjLock, &irql);

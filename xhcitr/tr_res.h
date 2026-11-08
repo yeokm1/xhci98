@@ -22,6 +22,29 @@
 #define IDC_LV_R0               1010    /* xhci98: 1010..1014, level 0-4    */
 #define IDC_LV_R1               1020    /* xhcicm: 1020..1024               */
 #define IDC_LV_NOTE             1030
+#define IDD_SETTINGS            105     /* record 25 section 22 (47.35) */
+#define IDR_SILENT              106     /* src\silent.reg, RCDATA      */
+#define IDC_S_TAB               1101
+#define IDC_S_HEAD              1102
+#define IDC_S_RESTART           1103
+#define IDC_S_SCOPE_L           1104
+#define IDC_S_SCOPE             1105
+#define IDC_S_LIST              1106
+#define IDC_S_ADV               1107
+#define IDC_S_LEVEL             1108
+#define IDC_S_NOTE              1109
+#define IDC_S_CHOICE            1110
+#define IDC_S_NUM               1111
+#define IDC_S_RANGE             1112
+#define IDC_S_DEF               1113
+#define IDC_S_HK                1114    /* the quick save's hotkey      */
+#define IDC_S_HKKEY             1115
+#define IDC_S_HKNOTE            1116
+#define IDC_S_SND               1117    /* the quick save's sound       */
+#define IDC_S_LOGIN             1118    /* the tool's own tab (owner, 2026-11-07) */
+#define IDC_S_WARN              1119
+#define IDC_S_FAST              1120
+#define IDC_S_FASTWIN           1121
 
 #define IDM_REFRESH             40001
 #define IDM_SAVE                40002
@@ -39,6 +62,8 @@
 #define IDM_V_AUTO              40026
 #define IDM_LOGIN               40027
 #define IDM_LEVEL               40028
+#define IDM_SETTINGS            40032   /* the Settings window (47.35)   */
+#define IDM_QUICKSAVE           40033   /* the tray's quick save         */
 #define IDM_RMWARN              40029
 #define IDM_EJECT               40030
 #define IDM_PROPS               40031

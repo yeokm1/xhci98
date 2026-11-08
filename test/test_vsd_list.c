@@ -232,7 +232,7 @@ static void test_sg(void)
     CHECK(VsdBuild(&r, &io, runs, scratch, &n, &t) == VSD_OK && n == 2,
           "fragments apart: two runs");
 
-    /* The round-1 counterexample: sixteen 512-byte fragments and one of
+    /* A review's counterexample: sixteen 512-byte fragments and one of
      * 2 MiB - 8 KiB, each at page offset 4092, discontiguous frames. */
     frames(0x1000UL, 2);
     sg_setup(0x10000UL, 17);

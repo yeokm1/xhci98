@@ -176,9 +176,20 @@ ULONG XhciLinkDecide(PXHCI_LINK_PORT link, ULONG portsc, ULONG want,
     state = XhciLinkClassify(portsc);
     link->LastState = state;
     /* A trained link, or none at all, starts the warm-reset budget again:
-     * the next failure is a new connection's. */
-    if (state == XHCI_LINK_ENABLED || state == XHCI_LINK_DISCONNECTED ||
-        state == XHCI_LINK_POWERED_OFF) {
+     * the next failure is a new connection's. Disconnected with Cold
+     * Attach Status is not "none at all": it is the state the CAS warm
+     * reset below is charged in, so refilling there would let a CAS that
+     * stays or comes back after WPR be warm-reset at every look, with no
+     * give-up. A CAS-clear Disconnected reading between two such readings
+     * still refills: whether that is a recovery's passing state or a
+     * departure cannot be told from one PORTSC. The converse is left too: a
+     * give-up stands until one of these readings, so a device replugged
+     * between two looks, first seen Polling, that then fails to train is
+     * not warm-reset; one that trains to Enabled refills as ever. CSC is no
+     * cure - a CAS link's looks can keep carrying it. */
+    if (state == XHCI_LINK_ENABLED || state == XHCI_LINK_POWERED_OFF ||
+        (state == XHCI_LINK_DISCONNECTED &&
+         (portsc & XHCI_PORTSC_CAS) == 0)) {
         link->WarmResets = 0;
         link->GaveUp = 0;
     }

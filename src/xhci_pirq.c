@@ -405,3 +405,201 @@ ULONG XhciPirqRun(const XHCI_PIRQ_IO *io, ULONG when, ULONG delivery,
     io->Unmap(io->Context);
     return st->Decision;
 }
+
+/* ---- the chipset-routed GSI offer (task 47.33) ---------------------- */
+
+/*
+ * Value 1's allowlist (owner, 2026-11-06 and 2026-11-07): HP boards
+ * (subsystem vendor 103C, 00:14.0's 2Ch SSID 31:16) on the 7-series xHCI
+ * 1E31 whose firmware leaves the xHCI's decodes off and names no _PRT
+ * route for it (issue 25). 179B (EliteBook 8470p/8470w) is the owner's
+ * bench machine, read on 2026-11-07 under XP x64 (the grant of GSI 16,
+ * line delivery, busy EHCI sharers, cold and warm boots, disable and
+ * enable); 17A7 and 17AB (8570p; 17AB also names the ProBook 6570b) are
+ * an inference within the same 68ICE/68ICF firmware family; 17DF (2570p,
+ * 68ISB), 176C (8770w) and 176B (8570w, 68IAV like the 8770w) are the
+ * owner's choice without a bench on their family. The run's own checks
+ * still decide on each machine: a reviewed LPC (issue 12 section 5.1),
+ * INTA, and a readable D20IR giving the PIRQ; and the list order lets the
+ * PCI driver's own configuration win wherever its line can be granted.
+ * A storm, a polarity mismatch or a sharer's regression turns the default
+ * off again pending explanation.
+ */
+static const ULONG xhciPirqNoRouteBoards[] = {
+    0x179BUL,   /* EliteBook 8470p, 8470w (68ICF)                 */
+    0x17A7UL,   /* EliteBook 8570p (68ICF)                        */
+    0x17ABUL,   /* EliteBook 8570p, ProBook 6570b (68ICE)         */
+    0x17DFUL,   /* EliteBook 2570p (68ISB)                        */
+    0x176CUL,   /* EliteBook 8770w (68IAV)                        */
+    0x176BUL    /* EliteBook 8570w (68IAV)                        */
+};
+
+#define XHCI_PIRQ_NR_XHCI           0x1E318086UL    /* 7 series         */
+#define XHCI_PIRQ_NR_VENDOR         0x103CUL        /* HP               */
+
+ULONG XhciPirqNoRouteMode(ULONG found, ULONG value)
+{
+    if (found && value <= XHCI_PIRQ_NR_REVIEWED) {
+        return value;
+    }
+    return XHCI_PIRQ_NR_LISTED;
+}
+
+ULONG XhciPirqNoRouteListed(ULONG xhciId, ULONG subsystem)
+{
+    ULONG i;
+
+    if (xhciId != XHCI_PIRQ_NR_XHCI ||
+        (subsystem & 0xFFFFUL) != XHCI_PIRQ_NR_VENDOR) {
+        return 0;
+    }
+    for (i = 0; i < sizeof(xhciPirqNoRouteBoards) /
+                        sizeof(xhciPirqNoRouteBoards[0]);
+         i++) {
+        if (((subsystem >> 16) & 0xFFFFUL) == xhciPirqNoRouteBoards[i]) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* The identity guards passed (the location, 00:14.0's own identity, a
+ * reviewed controller, the list at value 1): every decision from the LPC's
+ * read to the offer. A later check's failure (an unread or unlisted LPC,
+ * RCBA, the window's mapping, the pin, D20IR) reads the route, not the
+ * board, and must not bring the line back into a listed board's list. */
+ULONG XhciPirqW2kStrip(ULONG isW2k, ULONG decision, ULONG listed)
+{
+    if (!isW2k || !listed) {
+        return 0UL;
+    }
+    return (decision >= XHCI_PIRQ_O_LPC_UNREAD &&
+            decision <= XHCI_PIRQ_O_OFFERED) ? 1UL : 0UL;
+}
+
+VOID XhciPirqOfferClear(PXHCI_PIRQ_OFFER st)
+{
+    if (st == NULL) {
+        return;
+    }
+    st->Decision = XHCI_PIRQ_O_NONE;
+    st->Mode = XHCI_PIRQ_UNREAD;
+    st->XhciId = XHCI_PIRQ_UNREAD;
+    st->Subsystem = XHCI_PIRQ_UNREAD;
+    st->Pin = XHCI_PIRQ_UNREAD;
+    st->LpcId = XHCI_PIRQ_UNREAD;
+    st->Rcba = XHCI_PIRQ_UNREAD;
+    st->D20ip = XHCI_PIRQ_UNREAD;
+    st->D20ir = XHCI_PIRQ_UNREAD;
+    st->Pirq = XHCI_PIRQ_UNREAD;
+    st->Gsi = XHCI_PIRQ_NO_GSI;
+}
+
+/* The registers past the LPC bridge, read-only; the page is the caller's
+ * to unmap. */
+static ULONG xhciPirqOfferRoute(const XHCI_PIRQ_IO *io, PXHCI_PIRQ_OFFER st)
+{
+    USHORT ir;
+
+    if (!io->Read32(io->Context, XHCI_PIRQ_D20IP, &st->D20ip)) {
+        st->D20ip = XHCI_PIRQ_UNREAD;
+    }
+    if ((st->D20ip & XHCI_PIRQ_D20IP_PIN) != XHCI_PIRQ_PIN_INTA ||
+        st->Pin != XHCI_PIRQ_PIN_INTA) {
+        return XHCI_PIRQ_O_PIN;
+    }
+    ir = 0xFFFFU;
+    if (!io->Read16(io->Context, XHCI_PIRQ_D20IR, &ir) || ir == 0xFFFFU) {
+        return XHCI_PIRQ_O_D20IR_UNREAD;
+    }
+    st->D20ir = (ULONG)ir;
+    st->Pirq = st->D20ir & XHCI_PIRQ_IAR;
+    st->Gsi = XHCI_PIRQ_GSI_BASE + st->Pirq;
+    return XHCI_PIRQ_O_OFFERED;
+}
+
+ULONG XhciPirqOffer(const XHCI_PIRQ_IO *io, ULONG bus, ULONG address,
+                    ULONG ownId, ULONG ownSubsystem, ULONG mode,
+                    PXHCI_PIRQ_OFFER st)
+{
+    UCHAR cfg[XHCI_PIRQ_LPC_BYTES];
+    ULONG base;
+    ULONG i;
+
+    if (st == NULL) {
+        return XHCI_PIRQ_O_BAD_PARAM;
+    }
+    XhciPirqOfferClear(st);
+    st->Mode = mode;
+    if (io == NULL || io->Slot == NULL || io->Map == NULL ||
+        io->Read32 == NULL || io->Read16 == NULL || io->Unmap == NULL) {
+        st->Decision = XHCI_PIRQ_O_BAD_PARAM;
+        return st->Decision;
+    }
+    if (mode == XHCI_PIRQ_NR_OFF) {
+        st->Decision = XHCI_PIRQ_O_OFF;
+        return st->Decision;
+    }
+    /* The PDO's location: bus 0, device 20, function 0 is 00:14.0, the
+     * only place the PCH's xHCI sits. */
+    if (bus != 0 || address != (XHCI_PIRQ_XHCI_DEVICE << 16)) {
+        st->Decision = XHCI_PIRQ_O_NOT_SLOT;
+        return st->Decision;
+    }
+    for (i = 0; i < XHCI_PIRQ_LPC_BYTES; i++) {
+        cfg[i] = 0xFF;
+    }
+    if (io->Slot(io->Context, XHCI_PIRQ_XHCI_DEVICE, 0, cfg,
+                 XHCI_PIRQ_SLOT_BYTES) < XHCI_PIRQ_SLOT_BYTES) {
+        st->Decision = XHCI_PIRQ_O_OWN_UNREAD;
+        return st->Decision;
+    }
+    st->XhciId = xhciPirqLe32(cfg, XHCI_PIRQ_CFG_ID);
+    st->Subsystem = xhciPirqLe32(cfg, XHCI_PIRQ_CFG_SUBSYSTEM);
+    st->Pin = (xhciPirqLe32(cfg, XHCI_PIRQ_CFG_INTERRUPT) >> 8) & 0xFFUL;
+    /* And the function there is this one, by its own space's identity. */
+    if (st->XhciId != ownId || st->Subsystem != ownSubsystem) {
+        st->Decision = XHCI_PIRQ_O_NOT_AT_SLOT;
+        return st->Decision;
+    }
+    if (!XhciPirqReviewed(st->XhciId)) {
+        st->Decision = XHCI_PIRQ_O_NOT_REVIEWED;
+        return st->Decision;
+    }
+    if (mode != XHCI_PIRQ_NR_REVIEWED &&
+        !XhciPirqNoRouteListed(st->XhciId, st->Subsystem)) {
+        st->Decision = XHCI_PIRQ_O_NOT_ADMITTED;
+        return st->Decision;
+    }
+
+    for (i = 0; i < XHCI_PIRQ_LPC_BYTES; i++) {
+        cfg[i] = 0xFF;
+    }
+    if (io->Slot(io->Context, XHCI_PIRQ_LPC_DEVICE, 0, cfg,
+                 XHCI_PIRQ_LPC_BYTES) < XHCI_PIRQ_LPC_BYTES) {
+        st->Decision = XHCI_PIRQ_O_LPC_UNREAD;
+        return st->Decision;
+    }
+    st->LpcId = xhciPirqLe32(cfg, XHCI_PIRQ_CFG_ID);
+    st->Rcba = xhciPirqLe32(cfg, XHCI_PIRQ_LPC_RCBA);
+    if (!XhciPirqPairListed(st->XhciId, st->LpcId)) {
+        st->Decision = XHCI_PIRQ_O_LPC_UNLISTED;
+        return st->Decision;
+    }
+    base = st->Rcba & XHCI_PIRQ_RCBA_BASE;
+    if ((st->Rcba & XHCI_PIRQ_RCBA_ENABLE) == 0 || base == 0 ||
+        base == XHCI_PIRQ_RCBA_BASE) {
+        st->Decision = XHCI_PIRQ_O_RCBA_INVALID;
+        return st->Decision;
+    }
+    if (!io->Map(io->Context, base + XHCI_PIRQ_WINDOW)) {
+        st->Decision = XHCI_PIRQ_O_MAP_FAILED;
+        return st->Decision;
+    }
+    st->Decision = xhciPirqOfferRoute(io, st);
+    io->Unmap(io->Context);
+    if (st->Decision != XHCI_PIRQ_O_OFFERED) {
+        st->Gsi = XHCI_PIRQ_NO_GSI;
+    }
+    return st->Decision;
+}

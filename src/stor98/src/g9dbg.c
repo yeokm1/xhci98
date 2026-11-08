@@ -274,7 +274,7 @@ VOID G9Summary(PHW_DEVICE_EXTENSION DevExt, const char *Why)
     G9Stage(G9S_SUMMARY, DevExt->G9RwCount);
 }
 
-// R4-2: does ScsiPortGetBusData work from this (runtime) callback on 9x?
+// G9: does ScsiPortGetBusData work from this (runtime) callback on 9x?
 VOID G9ProbeConfig(PHW_DEVICE_EXTENSION DevExt, const char *Where)
 {
     ULONG buf[2];

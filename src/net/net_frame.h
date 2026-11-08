@@ -3,7 +3,8 @@
  * drivers (design record 35 section 7, task 45.59 step S6): the transmit
  * split of an Ethernet frame into USB4 frames, the receive checks and
  * reassembly, and the receive segmentation of a TCP segment longer than
- * the adapter's maximum (section 7.4). Pure and DDK-free, host-tested by
+ * the adapter's maximum, or IPv4 fragmentation of another datagram
+ * longer than it (section 7.4). Pure and DDK-free, host-tested by
  * test\test_net_frame.c; no NDIS type, no allocation, no lock: shared
  * unchanged by xhcinet.sys (NDIS 5) and xhcinet6.sys (NDIS 6).
  *
@@ -158,13 +159,18 @@ ULONG NetRxFrame(NET_RX *Rx, const UCHAR *Frame, ULONG FrameLength,
 #define NET_SEGDROP_IPCSUM  3UL   /* the IPv4 header checksum           */
 #define NET_SEGDROP_TCPCSUM 4UL   /* the TCP checksum                   */
 #define NET_SEGDROP_FLAGS   5UL   /* SYN, RST or URG set                */
-#define NET_SEGDROP_FRAGMENT 6UL  /* an IPv4 fragment                   */
+#define NET_SEGDROP_FRAGMENT 6UL  /* no longer counted: a fragment is    */
+                                  /* fragmented further (kept for the   */
+                                  /* counters' indices)                 */
 #define NET_SEGDROP_PIECES  7UL   /* more pieces than NET_SEG_PIECES    */
-#define NET_SEGDROP_REASONS 8UL
+#define NET_SEGDROP_DF      8UL   /* IPv4 not TCP, Don't Fragment set   */
+#define NET_SEGDROP_REASONS 9UL
 
 /* With MaxFrame at least 1514 and headers of at most 60 + 60 bytes, a
- * piece carries at least 1380 bytes, so 65536 bytes need at most 48. */
+ * piece carries at least 1380 bytes, so 65536 bytes need at most 48; an
+ * IPv4 fragment at least 1440 (60 bytes of header), so at most 46. */
 #define NET_SEG_PIECES      64UL
+#define NET_IP4_HDR_MAX     60UL
 
 typedef struct _NET_SEG {
     const UCHAR *Frame; /* the original, unchanged                      */
@@ -172,19 +178,30 @@ typedef struct _NET_SEG {
     ULONG Ip6;          /* 1 for IPv6, 0 for IPv4                       */
     ULONG IpLen;        /* the IP header's length                       */
     ULONG TcpLen;       /* the TCP header's length                      */
-    ULONG Payload;      /* the TCP payload's bytes                      */
+    ULONG Payload;      /* the TCP payload's bytes; for Frag the IP's   */
     ULONG Piece;        /* the payload bytes of every piece but the last */
     ULONG Pieces;       /* how many                                     */
     ULONG Next;         /* the next piece to write                      */
     ULONG Sums[NET_SEG_PIECES]; /* each piece's payload sum, unfolded   */
+    /* IPv4 fragmentation (Frag 1; section 7.4, RFC 791 section 3.2):  */
+    ULONG Frag;         /* 1: IPv4 fragments, 0: the TCP split           */
+    ULONG FragFirst;    /* data bytes of the first piece, a multiple of 8 */
+    ULONG FragRest;     /* of every later piece but the last, too        */
+    ULONG FragOff;      /* the original's fragment offset, in bytes      */
+    ULONG FragMore;     /* the original's MF bit (0x2000) or 0           */
+    ULONG FragHdrLen;   /* the later pieces' IP header length            */
+    UCHAR FragHdr[NET_IP4_HDR_MAX]; /* that header: only copied options */
 } NET_SEG, *PNET_SEG;
 
 /*
  * Checks a Length-byte Ethernet frame longer than MaxFrame for the split
  * (section 7.4 steps 1 and 2: TCP over IPv4 not a fragment, or over IPv6
  * with no extension header, both checksums good, the stated lengths the
- * frame's, no SYN, RST or URG). Returns 1 and fills Seg, or 0 with *Why
- * one of NET_SEGDROP_*. Nothing is written.
+ * frame's, no SYN, RST or URG), or, for IPv4 that is not such TCP (another
+ * protocol, or already a fragment), for IPv4 fragmentation (Don't Fragment
+ * clear, the header checksum good, the total length the frame's, the
+ * options well formed). Returns 1 and fills Seg, or 0 with *Why one of
+ * NET_SEGDROP_*. Nothing is written.
  */
 ULONG NetSegBegin(NET_SEG *Seg, const UCHAR *Frame, ULONG Length,
                   ULONG MaxFrame, ULONG *Why);

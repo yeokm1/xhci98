@@ -1,4 +1,4 @@
-#Requires -Version 2.0
+#Requires -Version 4.0
 <#
 stage-ddk.ps1 - find the four Windows 98 SE DDK files XHCIDI.EXE is compiled
 and linked against, hold each to the SHA-256 docs\references\README.md
@@ -21,8 +21,9 @@ headers, all\BINS_DDK\ for the library); DDK98 names another root. Nothing
 of the DDK is tracked, and nothing staged here reaches the package: the
 image carries import thunks to SETUPX.DLL by ordinal, no DDK byte.
 
-With -VerifyOnly nothing is copied: the four files, and any copy already
-in obj\ (what the last build compiled against), are held to the hashes.
+With -VerifyOnly nothing is copied: the four files, and each copy in
+obj\ (what the last build compiled against, so each must be there), are
+held to the hashes.
 make-release.ps1 runs that before it stages XHCIDI.EXE (record 27
 section 3.3).
 
@@ -76,8 +77,12 @@ foreach ($w in $want) {
     if ($got -ne $hash) { Fail ("{0} hashes to {1}, not the {2} the README records" -f $found, $got, $hash) }
     $copy = Join-Path $obj $w.To
     if ($VerifyOnly) {
-        if ((Test-Path -LiteralPath $copy) -and
-            (Get-FileHash -LiteralPath $copy -Algorithm SHA256).Hash.ToUpperInvariant() -ne $hash) {
+        # The build's copy is what XHCIDI.EXE was compiled against: an
+        # absent one verifies nothing, so it fails.
+        if (-not (Test-Path -LiteralPath $copy -PathType Leaf)) {
+            Fail ("{0} is missing; rebuild (xhciinst\di\build.cmd)" -f $copy)
+        }
+        if ((Get-FileHash -LiteralPath $copy -Algorithm SHA256).Hash.ToUpperInvariant() -ne $hash) {
             Fail ("{0} is not the {1} the README records; rebuild (xhciinst\di\build.cmd)" -f $copy, $w.Member)
         }
         Write-Output ("verified {0} (SHA-256 as recorded)" -f $w.Member)

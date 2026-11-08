@@ -100,7 +100,7 @@ Which devices make it hang, as recorded:
 | A HID mouse | Package B, `release` flavour (install leg clause 6) | hang, over 9 minutes | `out\phase28\release\report-pkgB.md` |
 | A HID mouse | `1ed1ba6` (the 28-V.1 pre-read) | hang, in the earlier shape of section 5 | `out\phase28\pre\me\report-rerun.md`, "Other clauses" |
 | A stick only | Package B, `qemu` flavour | the re-enable completes, the stick works | `out\phase28\me-reenable\r4\` |
-| A stick only | the `2.0.0.0` release asset (install leg clause 6) | the re-enable completes | `out\phase32\asset\me\` (screenshots; the stick-only choice is written only in the session note `.claude\memory\owner-rulings-28-31-2026-10-04.md`, ~19:35) |
+| A stick only | the `2.0.0.0` release asset (install leg clause 6) | the re-enable completes | `out\phase32\asset\me\` (screenshots; the stick-only choice was written only in a session note of the owner's rulings of 2026-10-04, about 19:35, kept outside the tree; this row records it) |
 | Nothing | Package B, `qemu` flavour | the re-enable completes | `out\phase28\me-reenable\r5\`; `out\phase28\release\report-pkgB.md` |
 
 Package B is `p28-31-int` at `417199e` (`runs/run-28.md`); its `qemu` x86
@@ -584,7 +584,8 @@ Evidence, git-ignored, all on development host A:
   Windows 2000 legs.
 - `out\phase32\asset\me\` - the `2.0.0.0` asset leg on ME, whose clause 6
   was taken with a stick only; roadmap task 32.3 records the ten asset legs
-  as passing every clause without saying so, and only the session note
-  `.claude\memory\owner-rulings-28-31-2026-10-04.md` does.
+  as passing every clause without saying so, and only a session note of
+  the owner's rulings of 2026-10-04, kept outside the tree, did; this page
+  records it.
 - `out\post-release\issue5-ssflag\static\static-hub\dis-win7-x86.txt` - the
   Windows 7 `usbhub.sys` listing section 4.3 reads.

@@ -91,6 +91,9 @@
  * message granted on a controller the quirk applies to, never connected:
  * polled. */
 #define XHCI_POLL_R_MSI_AVOIDED                 19UL
+/* Task 47.33, part 2: 2000, XP and XP x64, mode 0, a line granted that
+ * IoConnectInterrupt refused: polled instead of a failed start. */
+#define XHCI_POLL_R_AUTO_LINE_NOT_CONNECTED     20UL
 
 /* The pin's read. */
 #define XHCI_POLL_PIN_NOT_READ          0UL

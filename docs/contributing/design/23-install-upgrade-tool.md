@@ -58,7 +58,7 @@ so an Update Driver by hand updates as before, and revision 42's helper
 `SYSTEM32\DRIVERS` by the run, revision 41's placement kept for
 `xhciuas.sys` and `xhcicm.sys`; a controller added after the install
 asks once for the disk, which the install directory answers); revision 43, 2026-10-24 (the 8, 8.1 and 10 legs of
-`runs/run-43-24.md`, Findings 2, 3, 4 and 9, the owner's decisions of
+`runs/run-43-24.md`, "Findings", the uninstall stopping part-way, the Stor98 update check, `/restage` and the uninstall's tunnel-port wait, the owner's decisions of
 2026-10-24: on NT a root hub is removed after the controllers; a tunnel
 port not present has its entry removed, with a warning, instead of
 stopping the uninstall; the driver-store check skips a source file the
@@ -592,7 +592,10 @@ stages it from `xhciinst\INSTALL.BAT`.
   `xhciinst\selftest.cmd` holds the import table to those two names
   (`xhciinst\check-imports.ps1`, which reads the PE import directory
   itself: every module name, whatever its characters, and no delay-load
-  table), the tool's import gate (section 11).
+  table), the tool's import gate (section 11); since 3.4.2.0 it also holds
+  every imported function to `xhciinst\xhciinst-imports.allow`, by profile
+  and architecture, the x86 rows the Windows 98 SE baseline, because a
+  module name alone lets an NT-only function through.
 - **A manifest** asking for elevation (`requireAdministrator`), embedded
   as resource 1 of type 24 through `xhciinst.rc`, as `xhcicln.manifest` is;
   98, ME, 2000 and XP ignore it, and on Vista and 7 every run asks, `/list`
@@ -1428,7 +1431,7 @@ too, without changing anything:
    only what this system's install copies, and the x86 package's
    `stor98.inf` names `stor98.mpd` for 98 SE and ME, which no NT install
    stages, so its absence read as "cannot be read" and left Stor98's
-   devices on 8 x86 and 10 x86 (`runs/run-43-24.md`, Finding 3). Any other
+   devices on 8 x86 and 10 x86 (`runs/run-43-24.md`, "Findings", the Stor98 update check). Any other
    file the stored package lacks still counts as unread.
 
 All equal: nothing to do, the store holds this package. Any difference is
@@ -2230,6 +2233,12 @@ rows of build-and-test's Tier 3 carried ids that are not PCI controllers'
 `0813`, VIA Labs' USB hub ids, for the VL805/VL806, whose PCI id is
 `1106:3483`), and were not taken; those rows were corrected at the
 batch 10 merge (`6bc0ea27`).
+
+**Note, 2026-11-06.** The user documents' tables of these names leave out
+the two virtual machines' controllers, `15AD:0778`/`0779` and `1B36:000D`
+(owner); `target-standing.md`, "The virtual machines' controllers in the
+name table", lists them, and `test/test_inst.c` holds each document to
+this table.
 
 #### 5.13.3 The NHI names
 
@@ -3197,6 +3206,7 @@ user-visible effect, off or on by default for a reason the user can judge
 | `XhciSelectiveSuspend` | `xhci98.inf`, the controller's | never (owner, 2026-10-15) | - | 0, 1 | put idle devices to sleep (off by default; read on the release notes' terms) |
 | `XhciSilentInstall` | `xhci98.inf`, the controller's | 98 SE and ME with an xHCI controller (owner, 2026-10-15); never on 2000 and later, where the window shows it greyed (record 26 section 5.4) | 0, 1 | 0, 1 on 98 and ME; refused on NT | install hubs, boot keyboards and mice and Bulk-Only storage with no Add New Hardware wizard; on is `tools\silent\silent-on.bat`'s effect, off `silent-off.bat`'s (section 8.4) |
 | `XhciForceBulkOnly` | `xhci98.inf`, the controller's | never (revision 37, D20 (b); the window's Advanced) | - | 0, 1 | Bulk-Only instead of UAS for a disk that offers both, from its next connection; a UAS-only disk is not affected |
+| `XhciBulkOnlyOwnId` | `xhci98.inf`, the controller's | never (UASBOT.1, owner 2026-11-08; the window's Advanced) | - | 0, 1 | a disk used as Bulk-Only gets its own Device Manager entry, apart from its UAS entry (design record 13 section 10.7.3); 0 one entry everywhere, as before 3.4.2.0 |
 | `XhciFastPollFsLs` | `xhci98.inf`, the controller's | never (owner, 2026-10-19; the window's "Advanced...") | - | 0, 2, 3, 4 (1 is not a mode) | poll a mouse faster than 1000 Hz, with SweetLow's hidusbf: off (0); a root-port mouse set to 31/62 Hz in hidusbf at 2000/4000 Hz (2) or 4000/8000 Hz (3); the rate the client chooses, codes 128 to 143 (4). Its caution: outside the xHCI specification for Low and Full Speed, read at the controller's start so restart after changing it, and with 4 the value set and Windows restarted before the filter's code |
 | `XhciCmMode` | `xhcicm.inf`, the NHI's | a present NHI `xhcicm.inf` matches | 0, 1 | 0 to 3 | the connection manager off or automatic (2 and 3 are the record 21 overrides, `/set` only) |
 | `XhciCmApprove` | `xhcicm.inf`, the NHI's | as `XhciCmMode` | 0, 1 | 0, 1 | approve Thunderbolt devices automatically |
@@ -3695,7 +3705,7 @@ after it, reports what was done, and tells the user to restart and run
    was removed and the run stopped (exit 4) with "connect the dock and run
    INSTALL.BAT /uninstall again", so a dock gone for good (sold, or a USB4
    port's controller replaced) left the uninstall unable to finish
-   (`runs/run-43-24.md`, Finding 9: on 10 x64 two tunnel bridges of two
+   (`runs/run-43-24.md`, "Findings", the uninstall's tunnel-port wait: on 10 x64 two tunnel bridges of two
    machines on one disk, each absent on the other, stopped seven runs).
    Since revision 43 (the owner, 2026-10-24) its filter name is removed
    and, when no other filter is left in its `UpperFilters`, its devnode,
@@ -3712,7 +3722,7 @@ after it, reports what was done, and tells the user to restart and run
    43 the root hubs after the controllers, `inst_remove_rank_nt`: on 8.1
    and 10 a root hub removed under its running controller came straight
    back, "Still there: USB\XHCI98_ROOT_HUB\...", `runs/run-43-24.md`,
-   Finding 2, and a controller's removal takes its root hub with it, so a
+   "Findings", the uninstall stopping part-way, and a controller's removal takes its root hub with it, so a
    root hub then not found in a fresh device list is "gone with its
    controller"; 98 SE and ME keep this order), each with
    `SetupDiCallClassInstaller(DIF_REMOVE)` and `DI_REMOVEDEVICE_GLOBAL`,
@@ -4334,7 +4344,7 @@ the user.
 | `xhciinst\inst_core.c`, `inst_core.h` | the pure half (section 10) |
 | `xhciinst\inst_bootp.c`, `inst_bootp.h` | the system disk's path (section 5.14), also linked by the mark service |
 | `xhciinst\xhciinst.rc`, `xhciinst.manifest` | the elevation manifest |
-| `xhciinst\build.cmd`, `selftest.cmd`, `check-imports.ps1` | the two builds; the self-test and the import check |
+| `xhciinst\build.cmd`, `selftest.cmd`, `check-imports.ps1`, `xhciinst-imports.allow` | the two builds; the self-test and the import check, with its list of imported functions |
 | `xhciinst\INSTALL.BAT` | staged at the package root |
 | `xhciinst\setup.c`, `setup.rc`, `setup.manifest` | `SETUP.EXE`, staged at the package root (revision 22; record 26 section 2) |
 | `xhciinst\README.TXT` | staged as `tools\xhciinst\readme.txt` |

@@ -74,6 +74,16 @@ static LONG hcdIoctlSeen[HCD_IOCTL_SLOTS];
 #define HCD_BUS_BANDWIDTH_FULL   12000UL
 #define HCD_BUS_BANDWIDTH_HIGH   400000UL
 
+/* The one total a PDO reports, through GET_BUS_INFO and the bus interface
+ * alike: a High- or SuperSpeed device the larger, there being no USB 3
+ * value here. IRQL: any. */
+static ULONG hcdBusBandwidth(ULONG speedClass)
+{
+    return (speedClass == XHCI_SPEED_HIGH || speedClass == XHCI_SPEED_SUPER)
+               ? HCD_BUS_BANDWIDTH_HIGH
+               : HCD_BUS_BANDWIDTH_FULL;
+}
+
 /*
  * The internal IOCTLs Windows XP onward adds, absent from the Windows 2000
  * DDK's usbioctl.h (and the NT 6.x ones from WDK 7.1's WNET headers): WDK
@@ -526,20 +536,34 @@ static NTSTATUS hcdTransferUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
  * refusal a client can retry from its completion routine does (batch
  * (c)).
  */
+static NTSTATUS hcdCopyAnswer(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
+                              PIRP irp, PURB urb, const HCD_IO_REQUEST *req,
+                              const UCHAR *from, ULONG fromLength);
+
 static NTSTATUS hcdFunctionConfig(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
                                   PIRP irp, PURB urb,
                                   const HCD_IO_REQUEST *req)
 {
-    PUCHAR to;
-    ULONG wLength;
-    ULONG n;
-    ULONG i;
-
     if (req->Setup[2] != 0) {
         /* A split device has one configuration (design record 13 section
          * 10.9). */
         return HcdIoRefuseLater(pdo, irp, urb, USBD_STATUS_INVALID_PARAMETER);
     }
+    return hcdCopyAnswer(pdo, hc, irp, urb, req, pdo->Config,
+                         pdo->ConfigLength);
+}
+
+/* The copy-out half of hcdFunctionConfig, shared with a ghost's answers
+ * (design record 13 section 10.5.2): `from`'s bytes, at most the URB's
+ * length and wLength, into the client's buffer. IRQL: <= DISPATCH_LEVEL. */
+static NTSTATUS hcdCopyAnswer(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
+                              PIRP irp, PURB urb, const HCD_IO_REQUEST *req,
+                              const UCHAR *from, ULONG fromLength)
+{
+    PUCHAR to;
+    ULONG n;
+    ULONG i;
+
     to = NULL;
     if (req->Mdl != NULL) {
         /* hcdFill's check (hcd_io.c): an MDL shorter than the length the
@@ -557,27 +581,181 @@ static NTSTATUS hcdFunctionConfig(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     } else {
         to = (PUCHAR)req->Buffer;
     }
-    wLength = (ULONG)req->Setup[6] | ((ULONG)req->Setup[7] << 8);
-    n = req->Length;
-    if (n > wLength) {
-        n = wLength;
-    }
-    if (n > pdo->ConfigLength) {
-        n = pdo->ConfigLength;
-    }
+    n = XhciFuncGhostCopyLength(
+        req->Length, (ULONG)req->Setup[6] | ((ULONG)req->Setup[7] << 8),
+        (from != NULL) ? fromLength : 0UL);
     if (to == NULL && n != 0) {
         XHCI_DBG_TEXT("hcd: function configuration read, buffer unmapped");
         hcdCount(&hc->Counters.UrbsMalformed);
         return HcdIoRefuseLater(pdo, irp, urb, USBD_STATUS_INVALID_PARAMETER);
     }
     for (i = 0; i < n; i++) {
-        to[i] = pdo->Config[i];
+        to[i] = from[i];
     }
     if (req->LengthOut != NULL) {
         *req->LengthOut = n;
     }
     urb->UrbHeader.Status = USBD_STATUS_SUCCESS;
     return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+}
+
+/*
+ * A ghost's SELECT_CONFIGURATION (design record 13 section 10.5.2, point
+ * 3): validated against the PDO's copy as the composite parent's select is
+ * (hcdCompSelect), then answered from the copy with a ghost pipe handle a
+ * pipe, which nothing resolves - a departed PDO has no device record, and
+ * every lookup of a handle goes through one. Nothing is configured. A
+ * refusal completes at the next tick. IRQL: <= DISPATCH_LEVEL.
+ */
+#define HCD_GHOST_IFACE_COOKIE(n)                                             \
+    ((USBD_INTERFACE_HANDLE)(ULONG_PTR)(0x48430000UL | (n)))
+#define HCD_GHOST_PIPE_COOKIE(a)                                              \
+    ((USBD_PIPE_HANDLE)(ULONG_PTR)(0x48470000UL | (a)))
+
+static NTSTATUS hcdGhostSelect(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
+                               PIRP irp, PURB urb)
+{
+    struct _URB_SELECT_CONFIGURATION *sc;
+    PUSBD_INTERFACE_INFORMATION ii;
+    XHCI_PIPE_IFACE iface;
+    const UCHAR *desc;
+    const UCHAR *c;
+    PUCHAR p;
+    PUCHAR end;
+    USBD_STATUS usbd;
+    ULONG entries;
+    ULONG answer;
+    ULONG total;
+    ULONG e;
+
+    sc = &urb->UrbSelectConfiguration;
+    if (sc->ConfigurationDescriptor == NULL) {
+        sc->ConfigurationHandle = NULL;
+        urb->UrbHeader.Status = USBD_STATUS_SUCCESS;
+        return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+    }
+    usbd = USBD_STATUS_INVALID_PARAMETER;
+    if (pdo->Config == NULL || pdo->ConfigLength < XHCI_PIPE_CONFIG_BYTES) {
+        goto refused;
+    }
+    desc = (const UCHAR *)sc->ConfigurationDescriptor;
+    total = (ULONG)desc[2] | ((ULONG)desc[3] << 8);
+    if (XhciPipeRecordCheck(desc, total, (ULONG)pdo->Config[5]) !=
+        XHCI_PIPE_OK) {
+        goto refused;
+    }
+    /* Every entry first, in the pure walk (xhci_pipe.c): inside the URB,
+     * an interface and alternate the copy carries, each once, room for its
+     * pipes. */
+    end = (PUCHAR)urb + urb->UrbHeader.Length;
+    answer = XhciPipeSelectWalk(
+        (const UCHAR *)&sc->Interface,
+        (ULONG)(end - (PUCHAR)&sc->Interface),
+        (ULONG)FIELD_OFFSET(USBD_INTERFACE_INFORMATION, Pipes),
+        (ULONG)sizeof(USBD_PIPE_INFORMATION), pdo->Config, pdo->ConfigLength,
+        &entries);
+    if (answer != XHCI_PIPE_OK) {
+        if (answer == XHCI_PIPE_TOO_SMALL) {
+            usbd = (USBD_STATUS)HCD_USBD_BUFFER_TOO_SMALL;
+        }
+        goto refused;
+    }
+    for (p = (PUCHAR)&sc->Interface; p < end; p += ii->Length) {
+        ii = (PUSBD_INTERFACE_INFORMATION)p;
+        (VOID)XhciPipeFindInterface(pdo->Config, pdo->ConfigLength,
+                                    ii->InterfaceNumber, ii->AlternateSetting,
+                                    &iface);
+        ii->Class = (UCHAR)iface.InterfaceClass;
+        ii->SubClass = (UCHAR)iface.InterfaceSubClass;
+        ii->Protocol = (UCHAR)iface.InterfaceProtocol;
+        ii->InterfaceHandle = HCD_GHOST_IFACE_COOKIE(iface.InterfaceNumber);
+        ii->NumberOfPipes = iface.EndpointCount;
+        for (e = 0; e < iface.EndpointCount; e++) {
+            c = pdo->Config + iface.EndpointOffset[e];
+            ii->Pipes[e].EndpointAddress = c[2];
+            ii->Pipes[e].PipeType = (USBD_PIPE_TYPE)(c[3] & 3);
+            ii->Pipes[e].MaximumPacketSize =
+                (USHORT)(((ULONG)c[4] | ((ULONG)c[5] << 8)) & 0x7FFUL);
+            ii->Pipes[e].Interval = c[6];
+            ii->Pipes[e].PipeHandle = HCD_GHOST_PIPE_COOKIE((ULONG)c[2]);
+        }
+    }
+    sc->ConfigurationHandle = (USBD_CONFIGURATION_HANDLE)pdo;
+    (VOID)InterlockedIncrement((PLONG)&hc->PdoGhostAnswers);
+    XHCI_DBG_VALUE("hcd: ghost answered SELECT_CONFIGURATION, interfaces",
+                   entries);
+    urb->UrbHeader.Status = USBD_STATUS_SUCCESS;
+    return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+
+refused:
+    XHCI_DBG_VALUE("hcd: ghost refused SELECT_CONFIGURATION, status",
+                   (ULONG)usbd);
+    return HcdIoRefuseLater(pdo, irp, urb, usbd);
+}
+
+/*
+ * A URB at a ghost (design record 13 section 10.5.2, point 3), before the
+ * dispatch's departed paths and the contained controller's hold: the
+ * device and configuration descriptors at index 0 answered from the
+ * copies, SELECT_CONFIGURATION answered as hcdGhostSelect does, a bulk,
+ * interrupt or isochronous transfer held on the PDO, as a contained
+ * controller's new requests are, so a stack that did start on a ghost
+ * pends rather than spinning on DEVICE_GONE, and every other request but
+ * ABORT_PIPE refused at the next tick, contained controller or not: a
+ * class driver's start waits for its control requests, so they are
+ * answered, never held. Returns 0, nothing done, for ABORT_PIPE, which
+ * the departed path answers. IRQL: <= DISPATCH_LEVEL.
+ */
+static ULONG hcdGhostUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc, PIRP irp,
+                         PURB urb, ULONG function, NTSTATUS *status)
+{
+    HCD_IO_REQUEST req;
+    ULONG which;
+
+    if (function == URB_FUNCTION_SELECT_CONFIGURATION) {
+        *status = hcdGhostSelect(pdo, hc, irp, urb);
+        return 1;
+    }
+    if (function == URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER ||
+        function == URB_FUNCTION_ISOCH_TRANSFER) {
+        if (HcdUrbIoRequest(urb, &req) != USBD_STATUS_SUCCESS) {
+            *status = hcdGoneLater(pdo, irp, urb);
+            return 1;
+        }
+        (VOID)InterlockedIncrement((PLONG)&hc->PdoGhostHeld);
+        XHCI_DBG_VALUE("hcd: ghost held a transfer, function", function);
+        *status = HcdIoHoldUnreadable(pdo, irp, urb, req.Handle,
+                                      HCD_IO_ENDPOINT_ANY);
+        return 1;
+    }
+    if (function == URB_FUNCTION_ABORT_PIPE) {
+        return 0;
+    }
+    which = XHCI_FUNC_GHOST_NONE;
+    if (hcdIsControl(function) &&
+        HcdUrbIoRequest(urb, &req) == USBD_STATUS_SUCCESS) {
+        which = XhciFuncGhostDescriptor(req.Setup);
+        if (which == XHCI_FUNC_GHOST_NONE) {
+            XHCI_DBG_VALUE("hcd: ghost refused a control request, "
+                           "bmRequestType/bRequest/wValue",
+                           ((ULONG)req.Setup[0] << 24) |
+                               ((ULONG)req.Setup[1] << 16) |
+                               ((ULONG)req.Setup[3] << 8) | req.Setup[2]);
+        }
+    }
+    if (which == XHCI_FUNC_GHOST_NONE) {
+        XHCI_DBG_VALUE("hcd: ghost refused, function", function);
+        *status = hcdGoneLater(pdo, irp, urb);
+        return 1;
+    }
+    (VOID)InterlockedIncrement((PLONG)&hc->PdoGhostAnswers);
+    XHCI_DBG_VALUE("hcd: ghost answered a descriptor, type", which);
+    *status = (which == XHCI_FUNC_GHOST_DEVICE)
+                  ? hcdCopyAnswer(pdo, hc, irp, urb, &req, pdo->DeviceDesc,
+                                  sizeof(pdo->DeviceDesc))
+                  : hcdCopyAnswer(pdo, hc, irp, urb, &req, pdo->Config,
+                                  pdo->ConfigLength);
+    return 1;
 }
 
 /* A control URB at a function PDO (design record 13 section 10.9): the
@@ -705,6 +883,79 @@ static ULONG hcdUnreadable(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
 static NTSTATUS hcdStaticStreamsUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
                                     PIRP irp, PURB urb, ULONG function);
 
+/*
+ * The least UrbHeader.Length a URB of `function` must state before any of
+ * its own fields is read here or by the thread: the end of the last field
+ * the bus reads (hcdControlRequest, HcdUrbIoRequest, the pipe requests,
+ * hcd_cfg.c's selects), never the whole structure, so a client that
+ * states its structure's size - as every usbd.sys and DDK builder does -
+ * always passes. 0 for a function with no rule here: the isochronous URB,
+ * GET_CURRENT_FRAME_NUMBER and the static-streams URBs check their own,
+ * and anything else is refused by function. A SELECT_CONFIGURATION's
+ * interface entries are hcd_cfg.c's (hcdCfgSelectOnce). IRQL: any.
+ */
+static ULONG hcdUrbMinLength(ULONG function)
+{
+    if (hcdIsFeature(function)) {
+        return (ULONG)FIELD_OFFSET(struct _URB_CONTROL_FEATURE_REQUEST,
+                                   Index) + sizeof(USHORT);
+    }
+    switch (function) {
+    case XHCI_PIPE_URB_CONTROL_TRANSFER:
+        return (ULONG)FIELD_OFFSET(struct _URB_CONTROL_TRANSFER,
+                                   SetupPacket) + 8UL;
+    case XHCI_PIPE_URB_GET_DESC_DEVICE:
+    case XHCI_PIPE_URB_SET_DESC_DEVICE:
+    case XHCI_PIPE_URB_GET_DESC_ENDPOINT:
+    case XHCI_PIPE_URB_SET_DESC_ENDPOINT:
+    case XHCI_PIPE_URB_GET_DESC_INTERFACE:
+    case XHCI_PIPE_URB_SET_DESC_INTERFACE:
+        return (ULONG)FIELD_OFFSET(struct _URB_CONTROL_DESCRIPTOR_REQUEST,
+                                   LanguageId) + sizeof(USHORT);
+    case XHCI_PIPE_URB_GET_STATUS_DEVICE:
+    case XHCI_PIPE_URB_GET_STATUS_INTERFACE:
+    case XHCI_PIPE_URB_GET_STATUS_ENDPOINT:
+    case XHCI_PIPE_URB_GET_STATUS_OTHER:
+        return (ULONG)FIELD_OFFSET(struct _URB_CONTROL_GET_STATUS_REQUEST,
+                                   Index) + sizeof(USHORT);
+    case XHCI_PIPE_URB_GET_INTERFACE:
+        return (ULONG)FIELD_OFFSET(
+                   struct _URB_CONTROL_GET_INTERFACE_REQUEST, Interface) +
+               sizeof(USHORT);
+    case XHCI_PIPE_URB_GET_CONFIGURATION:
+        return (ULONG)FIELD_OFFSET(
+            struct _URB_CONTROL_GET_CONFIGURATION_REQUEST, UrbLink);
+    case XHCI_PIPE_URB_VENDOR_DEVICE:
+    case XHCI_PIPE_URB_VENDOR_INTERFACE:
+    case XHCI_PIPE_URB_VENDOR_ENDPOINT:
+    case XHCI_PIPE_URB_VENDOR_OTHER:
+    case XHCI_PIPE_URB_CLASS_DEVICE:
+    case XHCI_PIPE_URB_CLASS_INTERFACE:
+    case XHCI_PIPE_URB_CLASS_ENDPOINT:
+    case XHCI_PIPE_URB_CLASS_OTHER:
+        return (ULONG)FIELD_OFFSET(
+                   struct _URB_CONTROL_VENDOR_OR_CLASS_REQUEST, Index) +
+               sizeof(USHORT);
+    case URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER:
+        return (ULONG)FIELD_OFFSET(struct _URB_BULK_OR_INTERRUPT_TRANSFER,
+                                   UrbLink);
+    case URB_FUNCTION_ABORT_PIPE:
+    case URB_FUNCTION_RESET_PIPE:
+    case XHCI_PIPE_URB_SYNC_RESET_PIPE:
+    case XHCI_PIPE_URB_SYNC_CLEAR_STALL:
+        return (ULONG)FIELD_OFFSET(struct _URB_PIPE_REQUEST, PipeHandle) +
+               sizeof(PVOID);
+    case URB_FUNCTION_SELECT_CONFIGURATION:
+        return (ULONG)FIELD_OFFSET(struct _URB_SELECT_CONFIGURATION,
+                                   Interface);
+    case URB_FUNCTION_SELECT_INTERFACE:
+        return (ULONG)FIELD_OFFSET(struct _URB_SELECT_INTERFACE, Interface) +
+               (ULONG)FIELD_OFFSET(USBD_INTERFACE_INFORMATION, Pipes);
+    default:
+        return 0;
+    }
+}
+
 static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
                              PIRP irp, PURB urb)
 {
@@ -733,6 +984,23 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
      * held request is measured against an abort by (hcd_io.c,
      * HcdIoStamp; reviewed and revised after 6dae92b). */
     HcdIoStamp(pdo, irp);
+    /* A URB too short for the fields its function is read by is refused
+     * before any of them is, the departed and abort shortcuts below
+     * included (hcdUrbMinLength). */
+    if ((ULONG)urb->UrbHeader.Length < hcdUrbMinLength(function)) {
+        XHCI_DBG_VALUE("hcd: URB refused, function/length",
+                       (function << 16) | urb->UrbHeader.Length);
+        if (hc != NULL) {
+            hcdCount(&hc->Counters.UrbsMalformed);
+        }
+        return HcdIoRefuseLater(pdo, irp, urb, USBD_STATUS_INVALID_PARAMETER);
+    }
+    /* Design record 13 section 10.5.2: a ghost's own answers first, before
+     * the contained controller's hold, since they touch no hardware. */
+    if (hc != NULL && pdo->Ghost && !pdo->Listed &&
+        hcdGhostUrb(pdo, hc, irp, urb, function, &status)) {
+        return status;
+    }
     if (function == URB_FUNCTION_ABORT_PIPE && (hc == NULL || !pdo->Listed)) {
         /*
          * On a PDO whose device has left - or an orphan - the abort is
@@ -756,7 +1024,15 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
         return status;
     }
     if (hc == NULL || !pdo->Listed) {
-        /* Orphaned, or its device has left: nothing on the bus answers. */
+        /* Orphaned, or its device has left: nothing on the bus answers. A
+         * SELECT_CONFIGURATION, which only a valid length reaches here,
+         * first hands back the departed device's held isochronous
+         * requests on 98 SE and ME (HcdIoIsoRelease, design record 13
+         * section 18.5); it is refused at the next tick as before. A
+         * ghost's own select was answered above (hcdGhostUrb). */
+        if (function == URB_FUNCTION_SELECT_CONFIGURATION) {
+            (VOID)HcdIoIsoRelease(pdo);
+        }
         return hcdGoneLater(pdo, irp, urb);
     }
     if (pdo->Function && hcdIsControl(function)) {
@@ -800,6 +1076,11 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
                 (VOID)HcdIoParkedRelease(pdo, 1);
                 urb->UrbHeader.Status = USBD_STATUS_SUCCESS;
                 return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+            }
+            /* A select whose device left after the check above, as the
+             * departed branch hands back (HcdIoIsoRelease). */
+            if (function == URB_FUNCTION_SELECT_CONFIGURATION) {
+                (VOID)HcdIoIsoRelease(pdo);
             }
             return hcdGoneLater(pdo, irp, urb);
         }
@@ -885,10 +1166,7 @@ static NTSTATUS hcdBusInfo(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
         return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
     }
     out->NotificationType = AcquireBusInfo;
-    out->TotalBandwidth = (pdo->SpeedClass == XHCI_SPEED_HIGH ||
-                           pdo->SpeedClass == XHCI_SPEED_SUPER)
-                              ? HCD_BUS_BANDWIDTH_HIGH
-                              : HCD_BUS_BANDWIDTH_FULL;
+    out->TotalBandwidth = hcdBusBandwidth(pdo->SpeedClass);
     out->ConsumedBandwidth = 0;
     out->ControllerNameLength = 0;
     return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
@@ -1349,18 +1627,16 @@ static NTSTATUS HCD_BUSIFFN hcdBusifBusInformation(PVOID context, ULONG level,
 {
     PHCD_DEVICE_PDO pdo;
     PHCD_CONTROLLER hc;
-    ULONG high;
+    ULONG total;
 
     pdo = hcdBusifEnter(context, &hc);
-    high = (pdo != NULL && pdo->SpeedClass == XHCI_SPEED_HIGH);
+    total = (pdo != NULL) ? hcdBusBandwidth(pdo->SpeedClass) : 0;
     hcdBusifLeave(context, pdo);
     if (pdo == NULL) {
         return STATUS_DEVICE_NOT_CONNECTED;
     }
-    switch (XhciPipeBusInformation(level,
-                                   high ? HCD_BUS_BANDWIDTH_HIGH
-                                        : HCD_BUS_BANDWIDTH_FULL,
-                                   0, (UCHAR *)buffer, length, actual)) {
+    switch (XhciPipeBusInformation(level, total, 0, (UCHAR *)buffer, length,
+                                   actual)) {
     case XHCI_PIPE_OK:
         return STATUS_SUCCESS;
     case XHCI_PIPE_TOO_SMALL:
@@ -2299,7 +2575,11 @@ static NTSTATUS hcdResumeStateIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
  * afresh - under the controller lock, and the IRP completed before this
  * returns, so nothing here holds the caller's memory. The device record is
  * the owner's identity, compared and never followed; while two live
- * devices hold both records a third is refused and counted. IRQL:
+ * devices hold both records a third is refused and counted. Since issue 26
+ * the same request carries the class driver's last failures
+ * (XHCI98_FAILURES), told apart by the first word: copied into the record
+ * the device already holds, refused STATUS_DEVICE_BUSY while it holds
+ * none (the next send comes after its telemetry has taken one). IRQL:
  * <= DISPATCH_LEVEL.
  */
 static NTSTATUS hcdTelemetryIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
@@ -2307,8 +2587,10 @@ static NTSTATUS hcdTelemetryIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
 {
     PHCD_UAS_TELE t;
     PHCD_USB_DEVICE dev;
+    PXHCI98_FAILURES f;
     PVOID owner;
     KIRQL oldIrql;
+    NTSTATUS status;
     ULONG i;
     ULONG lo;
     ULONG hi;
@@ -2327,6 +2609,31 @@ static NTSTATUS hcdTelemetryIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     owner = (PVOID)dev;
     HcdTscRead(&lo, &hi);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (rq != NULL && rq->Word[XHCI98_TELE_SIG] == XHCI98_FAIL_SIGNATURE) {
+        f = (PXHCI98_FAILURES)rq;
+        t = NULL;
+        for (i = 0; i < HCD_UAS_TELE_RECORDS && t == NULL; i++) {
+            if (hc->UasTele[i].Owner == owner) {
+                t = &hc->UasTele[i];
+            }
+        }
+        status = STATUS_SUCCESS;
+        if (f->Word[XHCI98_FAIL_VER] != XHCI98_FAIL_VERSION ||
+            f->Word[XHCI98_FAIL_SIZE] != sizeof(XHCI98_FAILURES) ||
+            dev->Gone) {
+            hc->Xstat.TeleRefused++;
+            status = STATUS_INVALID_PARAMETER;
+        } else if (t == NULL) {
+            status = STATUS_DEVICE_BUSY;
+        } else {
+            for (i = 0; i < XHCI98_FAIL_TOTAL_WORDS; i++) {
+                t->Fail[i] = f->Word[i];
+            }
+        }
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        (VOID)InterlockedDecrement((PLONG)&dev->Refs);
+        return HcdCompleteIrp(irp, status, 0);
+    }
     if (rq == NULL || rq->Word[XHCI98_TELE_SIG] != XHCI98_TELE_SIGNATURE ||
         rq->Word[XHCI98_TELE_VER] != XHCI98_TELE_VERSION ||
         rq->Word[XHCI98_TELE_SIZE] != sizeof(XHCI98_TELEMETRY) ||
@@ -2362,6 +2669,9 @@ static NTSTATUS hcdTelemetryIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
         t->Owner = owner;
         t->State = XHCI_SNAPSHOT_HCD_TELE_S_LIVE;
         t->Taken = 0;
+        for (i = 0; i < XHCI98_FAIL_TOTAL_WORDS; i++) {
+            t->Fail[i] = 0;
+        }
     }
     t->Slot = dev->SlotId;
     t->Taken++;

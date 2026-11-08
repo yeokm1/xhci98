@@ -54,6 +54,22 @@ static VOID hcdStrictMark(PHCD_CONTROLLER hc, ULONG slotId, ULONG enabled)
     }
 }
 
+/* A start's: the one-note-per-pair maps begin again with the counters
+ * the start zeroes (HcdCountersStart), so a restart's first violation of
+ * each pair is traced as the first lifetime's was. Before the thread
+ * runs. */
+VOID HcdStrictStart(PHCD_CONTROLLER hc)
+{
+    ULONG i;
+
+    for (i = 0; i < 64; i++) {
+        hc->StrictSeen[i][0] = 0;
+        hc->StrictSeen[i][1] = 0;
+        hc->StrictRefusalSeen[i] = 0;
+    }
+    HcdStrictForgetSlots(hc);
+}
+
 /* HCRST takes every slot without a Disable Slot (hcd_enum.c, the
  * invalidation and the stop). */
 VOID HcdStrictForgetSlots(PHCD_CONTROLLER hc)

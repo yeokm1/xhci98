@@ -147,6 +147,25 @@ ULONG XhciPipeFindInterface(const UCHAR *config, ULONG length,
                             ULONG interfaceNumber, ULONG alternate,
                             PXHCI_PIPE_IFACE iface);
 
+/*
+ * A SELECT_CONFIGURATION URB's interface entries checked against the
+ * configuration `config` (design record 13 section 10.5.2, a ghost's
+ * select): `entries` is the URB from its first USBD_INTERFACE_INFORMATION
+ * to its stated end, `bytes` long; each entry starts with its Length (a
+ * little-endian USHORT), its InterfaceNumber and its AlternateSetting, has
+ * `fixed` bytes before its pipes and `pipeBytes` a pipe (the caller's
+ * FIELD_OFFSET and sizeof). Every byte is an entry: a tail too short for
+ * one, an entry shorter than `fixed` or past the end, an interface number
+ * of 32 or more, one named twice, or one the configuration does not carry
+ * is XHCI_PIPE_REFUSED, as is no entry at all; an entry too short for its
+ * interface's pipes XHCI_PIPE_TOO_SMALL (the caller's buffer). XHCI_PIPE_OK
+ * with *count the entries. NULL pointers or `fixed`
+ * below 4: XHCI_PIPE_BAD_PARAM.
+ */
+ULONG XhciPipeSelectWalk(const UCHAR *entries, ULONG bytes, ULONG fixed,
+                         ULONG pipeBytes, const UCHAR *config,
+                         ULONG configLength, PULONG count);
+
 /* ------------------------------------------------------------------ */
 /* Endpoint parameters                                                  */
 /* ------------------------------------------------------------------ */
@@ -293,9 +312,9 @@ ULONG XhciPipeZeroBandwidth(const XHCI_PIPE_EP *ep);
 #define XHCI_ISO_PAGE_MIN_GRANT     16UL
 /* The events a pipe can add beyond its ring's TRBs while nothing drains:
  * one underrun for each of its records published meanwhile (hcd.h
- * HCD_PIPE_XFERS, 4) and the empty stretch already running. A pipe is
- * counted at its capacity plus this. */
-#define XHCI_ISO_EVENTS_OVER_TRBS   5UL
+ * HCD_ISO_PIPE_XFERS, 8: design record 13 section 11.9) and the empty
+ * stretch already running. A pipe is counted at its capacity plus this. */
+#define XHCI_ISO_EVENTS_OVER_TRBS   9UL
 
 /* Nonzero when `ep` is a candidate for a page (point 2): isochronous, not
  * zero-bandwidth, and serviced more than once a frame (Interval 0 to 2),
@@ -410,6 +429,7 @@ ULONG XhciPipeRebaseInterval(PXHCI_PIPE_EP ep, ULONG speed, ULONG bInterval);
  * the caller's byte (XhciPipeRebaseInterval). `caller` NULL, or no match,
  * is the device's own. Returns the parser's code.
  */
+/* Host-suite-only: no driver file calls it (test_pipe does). */
 ULONG XhciPipeFunctionEndpoint(const UCHAR *config, ULONG length,
                                ULONG offset, const UCHAR *caller,
                                ULONG interfaceNumber, ULONG alternate,
@@ -494,7 +514,8 @@ ULONG XhciPipeFastRetry(ULONG completionCode);
 #define XHCI_PIPE_CAP_CONTAINER_ID      0x04UL
 #define XHCI_PIPE_CAP_SUPERSPEED_PLUS   0x0AUL
 /* Sublink speed attributes kept from a SuperSpeedPlus capability: SSAC is
- * five bits, so up to 32; XHCISNAP needs the few a real device lists. */
+ * five bits, so up to 32; the snapshot reader needs the few a real device
+ * lists. */
 #define XHCI_PIPE_BOS_SUBLINKS          8UL
 
 typedef struct _XHCI_PIPE_BOS {
@@ -515,7 +536,8 @@ typedef struct _XHCI_PIPE_BOS {
 
 /*
  * Walk a BOS descriptor of `length` bytes and keep what the bus uses or
- * XHCISNAP shows. XHCI_PIPE_MALFORMED for a header that is not a BOS
+ * the snapshot reader shows. XHCI_PIPE_MALFORMED for a header that is not a
+ * BOS
  * descriptor, a wTotalLength below 5 or above `length`, a capability whose
  * bLength is below 3 or runs past wTotalLength, or a SuperSpeed or
  * SuperSpeedPlus capability shorter than its fixed part (10 and 12 bytes, the
@@ -677,6 +699,8 @@ typedef struct _XHCI_PIPE_ELEMENT {
  * that rounds down to nothing (the pages available hold less than one
  * packet).
  */
+/* Host-suite-only: the HCD's transfer path plans its own chunks (hcd_io.c,
+ * hcd_dma.c); no driver file calls this (test_pipe does). */
 ULONG XhciPipeSplit(ULONG pageOffset, ULONG length, ULONG maxPacketSize,
                     ULONG mapRegisters, ULONG maxElements,
                     PXHCI_PIPE_ELEMENT elements, PULONG count,

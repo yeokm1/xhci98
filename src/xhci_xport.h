@@ -53,6 +53,13 @@
  * UAS driver finds the Prot_62 setting and selects it; usbstor.sys selects
  * alternate 0, which is why only an alternate-0 Bulk-Only setting counts.
  *
+ * The Bulk-Only form's own instance id (roadmap-usb4 UASBOT.1; design
+ * record 13 section 10.7): a Bulk-Only choice (why 4 or 5, a device that
+ * offers UAS too) under XHCI_XPORT_F_BOT_OWN_ID sets OwnId, and the PDO's
+ * instance id then carries XHCI_INSTANCE_BOT (xhci_func.h), so the form is
+ * a devnode apart from the UAS form's and Windows matches its Prot_50 ids
+ * afresh. Every other outcome leaves OwnId 0 and the instance id as before.
+ *
  * DDK-free: part of the pure core. C89. IRQL: any.
  */
 
@@ -87,6 +94,7 @@
 #define XHCI_XPORT_F_SUPERSPEED 0x1UL /* enumerated at SuperSpeed or above  */
 #define XHCI_XPORT_F_HC_STREAMS 0x2UL /* the controller streams            */
 #define XHCI_XPORT_F_FORCE_BOT  0x4UL /* the force-Bulk-Only value is set  */
+#define XHCI_XPORT_F_BOT_OWN_ID 0x8UL /* XhciBulkOnlyOwnId is on (UASBOT.1) */
 
 /* The Mass Storage Class Specification Overview's subclass and protocol
  * codes; 31-0 transcribes UAS's. */
@@ -106,6 +114,7 @@ typedef struct _XHCI_XPORT {
     ULONG Protocol;         /* Transport is NONE                          */
     ULONG Alternate;        /* the setting the class driver will select   */
     ULONG ShortHardwareId;  /* 1: USB\VID_v&PID_p[&MI_nn] is exposed      */
+    ULONG OwnId;            /* 1: the instance id carries &BOT (UASBOT.1) */
 } XHCI_XPORT, *PXHCI_XPORT;
 
 /*

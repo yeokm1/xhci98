@@ -1110,6 +1110,9 @@ static int scsi_count(const char *want, const char *model, pf_u32 pci, int tier,
     PF_CMLOCATE locate = (cm != NULL) ? (PF_CMLOCATE)GetProcAddress(cm, "CM_Locate_DevNodeA") : NULL;
 
     if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "Enum\\SCSI", 0, KEY_READ, &scsi) != ERROR_SUCCESS) {
+        if (cm != NULL) {
+            FreeLibrary(cm);
+        }
         return 0;
     }
     for (i = 0; RegEnumKeyA(scsi, i, dn, sizeof(dn)) == ERROR_SUCCESS; i++) {
@@ -1349,8 +1352,9 @@ static unsigned __stdcall s98_thread(void *arg)
     return 0;
 }
 
-/* One counter read, never longer than 2 s for the caller; a read that does
- * not return keeps its thread and its buffer (record 29 section 6.2). */
+/* One counter read, never longer than 3 s for the caller (the wait below;
+ * on 9x one read is two aspi_exec calls); a read that does not return
+ * keeps its thread and its buffer (record 29 section 6.2). */
 static int s98_read(S98_ANSWER *a)
 {
     S98_REQ *rq;
@@ -1769,7 +1773,8 @@ static pf_u32 check_read(RUN *r, const unsigned char *buf, pf_u64 off, pf_u32 si
         }
         gen = r->map[blk];
         if (gen == PF_GEN_UNKNOWN) {
-            r->incomplete++;
+            /* complete_one calls this from every worker thread at once */
+            InterlockedIncrement((LONG *)&r->incomplete);
             continue;
         }
         if (pf_check(buf + i, n, r->runId, (off + i) / PF_UNIT, gen, &fb, &fg) != 0) {
@@ -1967,7 +1972,6 @@ static void worker_async(WORKER *w)
     int write = (s->op == PF_OP_WRITE);
     int depth = s->depth;
     OVERLAPPED ov[PF_MAX_DEPTH];
-    HANDLE ev[PF_MAX_DEPTH + 1];
     pf_u64 issued[PF_MAX_DEPTH];
     pf_u32 gens[PF_MAX_DEPTH];
     int k, stopping = 0, cancelled = 0;
@@ -2121,7 +2125,6 @@ static void worker_async(WORKER *w)
     for (k = 0; k < depth; k++) {
         CloseHandle(ov[k].hEvent);
     }
-    (void)ev;
 }
 
 static unsigned __stdcall worker_main(void *arg)
@@ -2530,7 +2533,16 @@ static int prepare(RUN *r, const PF_PLAN *pl, PF_ENV *env, char *why, size_t cap
         } else {
             memset(r->vbuf, 0, PF_PREP_CHUNK);
         }
-        SetFilePointer(h, (LONG)(off & 0xFFFFFFFFu), &hi, FILE_BEGIN);
+        /* Offsets are multiples of 512, so a low part of 0xFFFFFFFF is
+         * always the failure; nothing is written where the pointer was. */
+        if (SetFilePointer(h, (LONG)(off & 0xFFFFFFFFu), &hi, FILE_BEGIN) == 0xFFFFFFFF &&
+            GetLastError() != NO_ERROR) {
+            DWORD e = GetLastError();
+
+            CloseHandle(h);
+            err_text(e, why, cap);
+            return 0;
+        }
         if (!WriteFile(h, r->vbuf, PF_PREP_CHUNK, &got, NULL) || got != PF_PREP_CHUNK) {
             DWORD e = GetLastError();
 
@@ -2561,8 +2573,11 @@ static int prepare(RUN *r, const PF_PLAN *pl, PF_ENV *env, char *why, size_t cap
 
 /* The untimed verification of what a write step wrote (record 29 section 3.3) */
 /* All: every block but the unknown ones, the preparation's included; else
- * the blocks written since generation genStart. */
-static pf_u32 verify_since(RUN *r, pf_u32 genStart, int all, pf_u32 *firstBad)
+ * the blocks written since generation genStart. 0xFFFFFFFF when the file
+ * could not be read, with the failing call's error in *err (the open's, the
+ * seek's or the read's, ERROR_HANDLE_EOF for a short read), taken before
+ * anything else can change it. */
+static pf_u32 verify_since(RUN *r, pf_u32 genStart, int all, pf_u32 *firstBad, DWORD *err)
 {
     HANDLE h = open_test(r, 0, g_p.access == PF_ACC_UNBUF, 0);
     pf_u64 b = 0;
@@ -2574,7 +2589,9 @@ static pf_u32 verify_since(RUN *r, pf_u32 genStart, int all, pf_u32 *firstBad)
     }
 
     *firstBad = 0;
+    *err = NO_ERROR;
     if (h == INVALID_HANDLE_VALUE) {
+        *err = GetLastError();
         return 0xFFFFFFFFu;
     }
     r->verifyCut = 0;
@@ -2611,8 +2628,21 @@ static pf_u32 verify_since(RUN *r, pf_u32 genStart, int all, pf_u32 *firstBad)
             len = (DWORD)(g_plan.regionBytes - b * r->mapBlock);
         }
         hi = (LONG)(off >> 32);
-        SetFilePointer(h, (LONG)(off & 0xFFFFFFFFu), &hi, FILE_BEGIN);
-        if (!ReadFile(h, r->vbuf, len, &got, NULL) || got != len) {
+        /* A failed seek would read the blocks where the pointer was and
+         * check them as these: refused, not read. */
+        if (SetFilePointer(h, (LONG)(off & 0xFFFFFFFFu), &hi, FILE_BEGIN) == 0xFFFFFFFF &&
+            GetLastError() != NO_ERROR) {
+            *err = GetLastError();
+            CloseHandle(h);
+            return 0xFFFFFFFFu;
+        }
+        if (!ReadFile(h, r->vbuf, len, &got, NULL)) {
+            *err = GetLastError();
+            CloseHandle(h);
+            return 0xFFFFFFFFu;
+        }
+        if (got != len) {
+            *err = ERROR_HANDLE_EOF;
             CloseHandle(h);
             return 0xFFFFFFFFu;
         }
@@ -3112,16 +3142,17 @@ static unsigned __stdcall run_main(void *arg)
                 if (g_plan.steps[i].op == PF_OP_WRITE && g_p.verify && r->map != NULL && res.status == PF_ST_OK) {
                     pf_u32 fb;
                     pf_u32 bad;
+                    DWORD verr;
 
                     post_status("Verifying what was written");
-                    bad = verify_since(r, genStart, 0, &fb);
+                    bad = verify_since(r, genStart, 0, &fb, &verr);
                     if (bad == 0 && r->verifyCut) {
                         post_log("The verification was stopped before its end.");
                         res.status = PF_ST_STOPPED;
                     } else if (bad == 0xFFFFFFFFu) {
                         post_log("The verification could not read the file.");
                         res.status = PF_ST_FAILED;
-                        res.error = GetLastError();
+                        res.error = verr;
                     } else if (bad != 0) {
                         char line[200];
 
@@ -3171,9 +3202,10 @@ static unsigned __stdcall run_main(void *arg)
         pf_u32 fb;
         pf_u32 bad;
         pf_u32 inc0 = r->incomplete;
+        DWORD verr;
 
         post_status("Verifying the whole file");
-        bad = verify_since(r, 0, 1, &fb);
+        bad = verify_since(r, 0, 1, &fb, &verr);
         g_endUnchecked = r->incomplete - inc0;
         if (bad == 0 && r->verifyCut) {
             InterlockedExchange((LONG *)&g_endVerify, PF_EV_STOPPED);
@@ -3188,8 +3220,18 @@ static unsigned __stdcall run_main(void *arg)
         } else {
             InterlockedExchange((LONG *)&g_endVerify, bad == 0xFFFFFFFFu ? PF_EV_UNREAD : PF_EV_BAD);
             InterlockedExchange((LONG *)&g_runBad, 1);
-            post_log(bad == 0xFFFFFFFFu ? "The whole file's verification could not read the file." :
-                     "The whole file's verification found data errors.");
+            if (bad == 0xFFFFFFFFu) {
+                char line[400];
+                char e[256];
+
+                err_text(verr, e, sizeof(e));
+                sz_cpy(line, sizeof(line), "The whole file's verification could not read the file (");
+                sz_cat(line, sizeof(line), e);
+                sz_cat(line, sizeof(line), ").");
+                post_log(line);
+            } else {
+                post_log("The whole file's verification found data errors.");
+            }
         }
     }
     if (r->incomplete != 0) {

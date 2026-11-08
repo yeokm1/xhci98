@@ -30,8 +30,8 @@
  *
  * logsense - an admin command on demand: LOG SENSE of the informational
  * exceptions page (2Fh) through IOCTL_SCSI_PASS_THROUGH, which the engine
- * turns into an NVMe Get Log Page child on the admin queue (review round 2
- * P1-6 tests: a late admin completion of a quarantined child).
+ * turns into an NVMe Get Log Page child on the admin queue (it tests a late
+ * admin completion of a quarantined child).
  *
  *   logsense <physical drive number> [timeout s, default 10] [count, default 1]
  *

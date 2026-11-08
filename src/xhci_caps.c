@@ -440,8 +440,9 @@ XHCI_C_ASSERT(protocol_is_fully_compared,
  * uninitialized byte left for a byte-wise comparison to read, so what rules one
  * out now is not correctness but where the guarantee would come from: memcmp
  * would rest the answer on a compiler's layout of the structure, and would be
- * an import this driver has not decided to have (the reason xhci_dispatch.c
- * zeroes the registration packet by hand).
+ * an import this driver has not decided to have (the reason the miniport's
+ * xhci_dispatch.c, deleted 2026-10-02, zeroed its registration packet by
+ * hand).
  *
  * Returns 1 for equal, 0 for different or for a NULL argument.
  */
@@ -1001,8 +1002,8 @@ static ULONG xhciWindowHolds(ULONG mappedBytes, ULONG offset, ULONG need)
  * XHCI_HC_INFO is all ULONGs, which is what lets both of these be loops. A
  * struct assignment would do the same thing, but MSVC 6.0 may emit a memcpy
  * call for it, and this driver decides its import list deliberately rather
- * than by codegen accident (the same reason xhci_dispatch.c zeroes the
- * registration packet by hand).
+ * than by codegen accident (the same reason the miniport's xhci_dispatch.c,
+ * deleted 2026-10-02, zeroed its registration packet by hand).
  */
 XHCI_C_ASSERT(hc_info_is_whole_words,
               sizeof(XHCI_HC_INFO) % sizeof(ULONG) == 0);

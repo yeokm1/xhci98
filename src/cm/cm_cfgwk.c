@@ -443,8 +443,6 @@ static VOID cmWkLog(PCM_CFGWK w, const char *label, ULONG value)
     KeReleaseSpinLock(&w->Lock, irql);
 }
 
-/* The same for a value that is a devnode handle: an address record,
- * level 4 alone (CmLogNoteAddress). <= DISPATCH_LEVEL. */
 /* Task 46.13 (record 21 section 8.2): a claim's removal whose devnode a
  * sweep reading saw vanish: its result, the reading and where the child
  * was. <= DISPATCH_LEVEL. */
@@ -462,6 +460,8 @@ static VOID cmWkClaimTrace(PCM_CFGWK w, ULONG claim, ULONG cr)
     cmWkLog(w, "cm.vanish.cr.at", at);
 }
 
+/* The same for a value that is a devnode handle: an address record,
+ * level 4 alone (CmLogNoteAddress). <= DISPATCH_LEVEL. */
 static VOID cmWkLogAddress(PCM_CFGWK w, const char *label, ULONG value)
 {
     KIRQL irql;
@@ -1753,10 +1753,7 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
             if (answer != CM_NVLINK_RM_NONE) {
                 break;
             }
-            /* -CM_NVLINK_POLL_MS ms, relative, in 100 ns units, without
-             * 64-bit arithmetic. */
-            pause.LowPart = (ULONG)(0UL - CM_NVLINK_POLL_MS * 10000UL);
-            pause.HighPart = -1;
+            CmRelativeMs(&pause, CM_NVLINK_POLL_MS);
             (VOID)KeDelayExecutionThread(KernelMode, FALSE, &pause);
         }
         cmWkLog(w, "cm.nvlink.9x.remove-answer", (seq << 8) | answer);
@@ -1791,8 +1788,7 @@ removal:
             !CmNvlinkRetryAgain(cmWkSince(start))) {
             break;
         }
-        pause.LowPart = (ULONG)(0UL - CM_NVLINK_RETRY_MS * 10000UL);
-        pause.HighPart = -1;
+        CmRelativeMs(&pause, CM_NVLINK_RETRY_MS);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &pause);
     }
     if (cr == CMG_CR_SUCCESS) {
@@ -2107,18 +2103,6 @@ static VOID cmWkDiag(PCM_CFGWK w, ULONG bdf, PXHCI_TBT_BRNUM r, ULONG tries,
     KeReleaseSpinLock(&w->Lock, irql);
 }
 
-/*
- * PCI.VXD's configuration-space route, opened once: a read of `bdf` (a
- * member, which PCI.VXD knows) through _PCI_Read_Config must equal the
- * HAL's. A refusal stands for the worker's life and is logged once. A
- * member that does not answer through the HAL (no read, all ones, no
- * vendor, or Configuration Request Retry Status: the controller lost, as
- * when the USB Tree asks during a loss, or not ready yet), or stops
- * answering so before the guard's own read, gives no verdict:
- * nothing is latched, the route stays closed and is tried again at the
- * next need (record 21 section 6.1.2, task 44.54; read on ME, where such
- * an attempt during a loss turned the numbering off for the boot).
- */
 /* A function's identity dword that names a function: not all ones, and a
  * vendor neither 0, FFFFh nor 0001h (Configuration Request Retry Status:
  * not ready yet). */
@@ -2131,6 +2115,18 @@ static BOOLEAN cmWkIdAnswers(ULONG id)
                      vendor != 0xFFFFUL && vendor != 0x0001UL);
 }
 
+/*
+ * PCI.VXD's configuration-space route, opened once: a read of `bdf` (a
+ * member, which PCI.VXD knows) through _PCI_Read_Config must equal the
+ * HAL's. A refusal stands for the worker's life and is logged once. A
+ * member that does not answer through the HAL (no read, all ones, no
+ * vendor, or Configuration Request Retry Status: the controller lost, as
+ * when the USB Tree asks during a loss, or not ready yet), or stops
+ * answering so before the guard's own read, gives no verdict:
+ * nothing is latched, the route stays closed and is tried again at the
+ * next need (record 21 section 6.1.2, task 44.54; read on ME, where such
+ * an attempt during a loss turned the numbering off for the boot).
+ */
 static BOOLEAN cmWkPciRoute(PCM_CFGWK w, ULONG bdf)
 {
     ULONG id;
@@ -2245,10 +2241,7 @@ static VOID cmWkNumber(PCM_CFGWK w, ULONG i, ULONG gen, ULONG bridge)
             !(r.Outcome == XHCI_TBT_BRNUM_NONE && r.Functions == 0 && up)) {
             break;
         }
-        /* -CM_WK_NUMBER_WAIT_MS, relative, in 100 ns units, without
-         * 64-bit arithmetic. */
-        pause.LowPart = (ULONG)(0UL - CM_WK_NUMBER_WAIT_MS * 10000UL);
-        pause.HighPart = -1;
+        CmRelativeMs(&pause, CM_WK_NUMBER_WAIT_MS);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &pause);
     }
     cmWkDiag(w, bdf, &r, tries, flags);
@@ -3522,17 +3515,13 @@ PCM_CFGWK_PCI CmCfgwkPciAsk(PCM_CFGWK w, const CM_QPCI_IN *in,
 ULONG CmCfgwkPciTake(PCM_CFGWK_PCI req, ULONG waitMs, UCHAR *out,
                      PULONG reason)
 {
-    LARGE_INTEGER t;
     KIRQL irql;
     ULONG bytes;
     ULONG i;
 
-    /* -waitMs ms, relative, in 100 ns units, without 64-bit arithmetic
-     * (waitMs is far below the 429,496 ms one ULONG holds). */
-    t.LowPart = (ULONG)(0UL - waitMs * 10000UL);
-    t.HighPart = -1;
-    (VOID)KeWaitForSingleObject(&req->Done, Executive, KernelMode, FALSE,
-                                &t);
+    /* By the clock: the state below, not the wait's return, says whether
+     * the worker answered. */
+    (VOID)CmWaitEventMs(&req->Done, waitMs);
     KeAcquireSpinLock(&req->Lock, &irql);
     if (req->State == CM_WK_PCI_DONE) {
         bytes = req->Bytes;
@@ -3615,7 +3604,7 @@ static VOID cmWkOpen(PCM_CFGWK w)
     KeReleaseSpinLock(&w->Lock, irql);
 }
 
-static VOID cmWkThread(PVOID context)
+static VOID NTAPI cmWkThread(PVOID context)
 {
     PCM_CFGWK w;
     KIRQL irql;
@@ -4070,11 +4059,7 @@ static VOID cmWkThread(PVOID context)
         }
 #endif
         if (timed) {
-            /* waitMs relative, in 100 ns units (at most CM_WK_RETRY_MS, so
-             * the negated count fits the low word): CM_WK_TICK_MS is
-             * -2,000,000. */
-            tick.LowPart = 0UL - waitMs * 10000UL;
-            tick.HighPart = -1;
+            CmRelativeMs(&tick, waitMs);
 #if defined(XHCI_FLAVOUR_QEMU)
             waitStatus = KeWaitForSingleObject(&w->Wake, Executive,
                                                KernelMode, FALSE, &tick);
@@ -4122,7 +4107,6 @@ PCM_CFGWK CmCfgwkStart(struct _CM_NHI *nhi, const ULONG *bdf, ULONG members,
                        ULONG active, ULONG numbering, ULONG noIrq)
 {
     PCM_CFGWK w;
-    HANDLE handle;
     NTSTATUS status;
     ULONG i;
 
@@ -4159,14 +4143,12 @@ PCM_CFGWK CmCfgwkStart(struct _CM_NHI *nhi, const ULONG *bdf, ULONG members,
      * until the restart). Windows 98 SE and ME only. */
     CmDriverObject->DriverUnload = NULL;
     (VOID)InterlockedIncrement(&cmWkLive);
-    status = PsCreateSystemThread(&handle, THREAD_ALL_ACCESS, NULL, NULL,
-                                  NULL, cmWkThread, w);
+    status = CmThrSpawn(cmWkThread, w);
     if (!NT_SUCCESS(status)) {
         (VOID)InterlockedDecrement(&cmWkLive);
         CmFree(w);
         return NULL;
     }
-    (VOID)ZwClose(handle);
     return w;
 }
 
@@ -4393,8 +4375,8 @@ VOID CmCfgwkStop(PCM_CFGWK w, PCM_CFGWK_COUNTERS counters)
         counters->Detached = 1;
         return;
     }
-    (VOID)KeWaitForSingleObject(&w->Exited, Executive, KernelMode, FALSE,
-                                NULL);
+    /* Satisfied only: the block is freed next. */
+    (VOID)CmWaitEvent(&w->Exited, 0);
     *counters = w->C;
     cmWkNiCounters(w, counters);
     CmCfgmgClose(&w->Cfgmg);
@@ -4417,9 +4399,7 @@ VOID CmCfgwkDrain(VOID)
     LARGE_INTEGER step;
     ULONG n;
 
-    /* 100 ms relative, in 100 ns units: -1,000,000. */
-    step.LowPart = 0xFFF0BDC0UL;
-    step.HighPart = -1;
+    CmRelativeMs(&step, 100);
     for (n = 0; n < 50UL && cmWkLive != 0; n++) {
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &step);
     }

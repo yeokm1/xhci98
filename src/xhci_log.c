@@ -3,10 +3,11 @@
  * 11-V.9 (the producer set and the per-code budget) and 13-L.2 (the three
  * switches, and the removal of the file sink and all of its path handling).
  *
- * See src/xhci_log.h for why a ring is the only shape that survives the two
- * constraints (no `Zw*` without Win98 evidence, and no PASSIVE-level worker
- * available to this driver at all), and for the split between this file and the
- * DDK half in src/xhci_dispatch.c.
+ * See src/xhci_log.h for why a ring is the shape that survived the
+ * miniport's two constraints (no `Zw*` without Win98 evidence, and no
+ * PASSIVE-level worker available to the miniport at all). The DDK half was
+ * the miniport's src/xhci_dispatch.c; under the host controller driver it is
+ * src/hcd_log.c, whose controller-thread sink runs at PASSIVE_LEVEL.
  *
  * **The rule task 13-L.2 added, and it is the one to keep in mind reading the
  * rest: RECORDING IS NOT EMISSION.** `Enabled` is a function of the verbosity
@@ -28,8 +29,9 @@
  *   supplies and sized.
  *
  *   **It refuses rather than grows.** The ring is fixed, the record length is
- *   capped, and both overruns are counted. There is no allocation anywhere in
- *   this driver (AGENTS.md) and this file is not the place to introduce one.
+ *   capped, and both overruns are counted. The driver allocates pool only at
+ *   its lifetime-scoped sites (src/hcd_pool.c; AGENTS.md), never on a logging
+ *   path, and this file is not the place to introduce one.
  *
  * ## The lock, and why there is none here
  *

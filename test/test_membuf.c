@@ -973,6 +973,75 @@ static void test_pool_claim_rehome(void)
     CHECK_EQ(XhciPoolReleaseDevice(&pool, 7UL), 1UL, "the rest released");
 }
 
+/*
+ * Task 47.30 (design record 13 section 11.10, point 2): where the larger
+ * event ring sits in its block, from the block's physical address. Every
+ * page phase of a 64 KiB line for the 16 KiB block, then the 32 KiB one,
+ * which always has a window; an unaligned base; the refusals.
+ */
+static void test_event_ring_window(void)
+{
+    ULONG page;
+    ULONG pa;
+    ULONG off;
+    ULONG ok;
+    ULONG seg;
+
+    seg = XHCI_EVENT_RING_BIG_BYTES;
+    CHECK_EQ(seg, 16384, "the segment is 16 KiB");
+    for (page = 0; page < 16; page++) {
+        pa = 0x00350000UL + page * 4096UL;
+        off = 0xDEADUL;
+        ok = XhciEventRingWindow(pa, XHCI_EVENT_RING_BIG_BLOCK, seg, &off);
+        if (page <= 12) {
+            CHECK_EQ(ok, 1, "16 KiB from pages 0-12 of a 64 KiB line");
+            CHECK_EQ(off, 0, "at the block's start");
+        } else {
+            CHECK_EQ(ok, 0, "16 KiB from pages 13-15 crosses");
+        }
+        off = 0xDEADUL;
+        ok = XhciEventRingWindow(pa, XHCI_EVENT_RING_BIG_WIDE, seg, &off);
+        CHECK_EQ(ok, 1, "32 KiB always has a window");
+        if (page <= 12) {
+            CHECK_EQ(off, 0, "at its start where that fits");
+        } else {
+            CHECK_EQ(off, (16UL - page) * 4096UL, "at the 64 KiB line");
+        }
+        CHECK((((pa + off) & 0xFFFFUL) + seg) <= 0x10000UL,
+              "the window crosses no line");
+        CHECK(off + seg <= XHCI_EVENT_RING_BIG_WIDE, "inside the block");
+    }
+    /* An unaligned base: rounded up to 64 bytes. */
+    CHECK_EQ(XhciEventRingWindow(0x00350010UL, XHCI_EVENT_RING_BIG_WIDE, seg,
+                                 &off), 1, "an unaligned base");
+    CHECK_EQ(off, 48, "its first 64-byte boundary");
+    /* Unaligned, 15 KiB short of the line: the line, still in 32 KiB. */
+    CHECK_EQ(XhciEventRingWindow(0x0035C410UL, XHCI_EVENT_RING_BIG_WIDE, seg,
+                                 &off), 1, "unaligned near a line");
+    CHECK_EQ(off, 0x00360000UL - 0x0035C410UL, "at the line");
+    /* Unaligned, 16 KiB from the line less 16 bytes, 16 KiB block: none. */
+    CHECK_EQ(XhciEventRingWindow(0x0035C010UL, XHCI_EVENT_RING_BIG_BLOCK,
+                                 seg, &off), 0, "no window in 16 KiB");
+    /* Refusals. */
+    CHECK_EQ(XhciEventRingWindow(0, XHCI_EVENT_RING_BIG_WIDE, seg, &off), 0,
+             "no base");
+    CHECK_EQ(XhciEventRingWindow(0x00350000UL, 0, seg, &off), 0,
+             "no block");
+    CHECK_EQ(XhciEventRingWindow(0x00350000UL, 8192, seg, &off), 0,
+             "a block smaller than the segment");
+    CHECK_EQ(XhciEventRingWindow(0x00350000UL, XHCI_EVENT_RING_BIG_WIDE,
+                                 65537UL, &off), 0, "a segment past 64 KiB");
+    CHECK_EQ(XhciEventRingWindow(0xFFFF9000UL, XHCI_EVENT_RING_BIG_WIDE, seg,
+                                 &off), 0, "a block past 4 GB's end");
+    CHECK_EQ(XhciEventRingWindow(0xFFFF8000UL, XHCI_EVENT_RING_BIG_WIDE, seg,
+                                 &off), 1, "a block ending at 4 GB's last byte");
+    CHECK_EQ(XhciEventRingWindow(0xFFFF8000UL, XHCI_EVENT_RING_BIG_BLOCK,
+                                 seg, &off), 1, "the last 16 KiB below 4 GB");
+    CHECK_EQ(off, 0, "at its start");
+    CHECK_EQ(XhciEventRingWindow(0x00350000UL, XHCI_EVENT_RING_BIG_WIDE, seg,
+                                 NULL), 0, "no output");
+}
+
 int main(void)
 {
     test_declared_size();
@@ -990,6 +1059,7 @@ int main(void)
     test_pool_claim_rehome();
     test_resource_base();
     test_context_strides();
+    test_event_ring_window();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

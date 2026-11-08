@@ -1,5 +1,9 @@
 # 05 - Locking, IRQL, and Lock Order
 
+> **Status: the `1.2.0.0` miniport's record** (branch `1.2.0.0`): the
+> contexts it excludes are `usbport.sys`'s. The host controller driver's lock
+> model is design record 13 section 5.
+
 Phase 4 task 9, consumed by Phases 5-8. This is the miniport's complete
 synchronization design: which lock covers what, in which order, which contexts
 are excluded from which, and what the port, endpoint and transfer state that
@@ -350,7 +354,7 @@ One kind of lost read-back is not a failure. The DPC re-arms after its final
 interrupt the moment `IE` lands, and the ISR, which the controller lock does
 not exclude, clears `IE` again before the read-back. The escalation that
 followed reset a working controller on 32-bit XP with one vCPU, during
-isochronous audio behind a virtual hub (run-24 finding 2; `runs/run-24.md`,
+isochronous audio behind a virtual hub (run-24's second defect, the interrupter re-arm on one CPU; `runs/run-24.md`,
 "Round 5 on the fixed build"). A claim makes usbport queue its interrupt DPC
 again, and that pass re-arms, so `XhciRearmInterrupter` now takes an advance
 of `InterruptsClaimed` since a snapshot read before the write as delivery

@@ -22,7 +22,7 @@ rem      the cut's other text refusals, the changelog entry for the
 rem      version, and the content rules of the batches the cut publishes
 rem   1. XHCI_EXTRA_DEFINES is unset - the HCD has no diagnostic builds
 rem   2. the import gate's evidence-manifest regression tests, and its
-rem      three-flavor FLAVORS-column tests
+rem      FLAVORS-column tests (release, qemu and the retired words)
 rem   3. the INF gate's own regression tests, then scripts\inf-gate\check-inf.ps1
 rem      on src\xhci98.inf - the binary and the INF are deployed together and
 rem      neither setup engine reports a malformed one usefully
@@ -89,9 +89,12 @@ rem      scripts\import-gate\xhcinet-imports.allow on x86, the default amd64
 rem      rules over xhcinet-imports-amd64.allow), the frame-pointer check and
 rem      the flavour marker check, and its two INFs' own gate
 rem      (scripts\inf-gate\check-net-inf.ps1, self-tested first, over
-rem      src\net\xhcinet.inf and xhcinet-amd64.inf on every build). It is not
-rem      yet in the gated record or the source stamp: the package carries it
-rem      from step S10 (record 35 section 9.3), which adds both
+rem      src\net\xhcinet.inf and xhcinet-amd64.inf on every build). It is
+rem      hashed into the gated record and shipped. It has no source stamp of
+rem      its own (source-stamp.ps1 takes no -Driver for it): make-release.ps1
+rem      holds the published image to this build by hash and to its sources
+rem      by time, and the gated record's input rules (package-common.ps1)
+rem      include those sources
 rem  14c. the fifth binary, xhcinet6.sys - the NDIS 6.20 miniport of
 rem      Thunderbolt networking for 8, 8.1 and 10 (task 45.59 step S7,
 rem      record 35 section 7.9), built from src\net\ndis6 after xhcinet.sys
@@ -101,10 +104,10 @@ rem      one kit here with NDIS 6.20), so every build needs tools\WinDDK71
 rem      (or WDKROOT): its import gate (-GateProfile net6 over
 rem      scripts\import-gate\xhcinet6-imports.allow or
 rem      xhcinet6-imports-amd64.allow) and the flavour marker check. Its INF
-rem      sections are 14b's two INFs'. Not yet in the gated record or the
-rem      source stamp, as 14b
+rem      sections are 14b's two INFs'. In the gated record, with no source
+rem      stamp, as 14b
 rem  14a. Stor98 (src\stor98; roadmap-usb4 task 42-A.30), which the package
-rem      bundles from this build since 3.1.0.0: its two INFs held to
+rem      bundles from this build since 3.1.0.0: its three INFs held to
 rem      src\xhci_version.h's DriverVer (scripts\inf-gate\check-stor98-inf.ps1,
 rem      self-tested first) beside the other INF gates; on the x86 run its
 rem      host unit suite (src\stor98\tests\unit\build.cmd) after this
@@ -186,8 +189,13 @@ rem   only release is staged.
 rem
 rem   The DDK and MSVC 6.0 both live inside this repository - tools\ntddk and
 rem   tools\MSVC600 - and are found relative to this script, so a
-rem   clone builds wherever it is unpacked and nothing is installed under C:\.
-rem   Set DDKROOT to build against a DDK somewhere else.
+rem   clone builds wherever it is unpacked, at a path with no space (one
+rem   with a space is refused at once), and nothing is installed under C:\.
+rem   Set DDKROOT to build this tree's 32-bit drivers against a DDK
+rem   somewhere else, and WDKROOT for WDK 7.1 (the -amd64 leg, xhcihlpr.sys
+rem   and xhcinet6.sys). Stor98's build reads neither: it takes MSVC 6.0,
+rem   both kits and the 98 DDK headers from STOR98_TOOLS, by default tools\
+rem   (src\stor98\scripts\build.cmd).
 rem   Add -NoTargetEvidence after the flavor to skip the gate's target-file
 rem   evidence steps on a host that has none staged.
 rem
@@ -210,11 +218,12 @@ rem
 rem WHAT AN amd64 BUILD IS GATED ON, since roadmap task 21.3 closed: the import
 rem gate enforces xhci98-imports-amd64.allow and resolves every pair against
 rem authenticated NT 5.2 amd64 baselines (winxp64-baselines.expected), and the
-rem INF gates run over all eight production INFs on every build, whichever
+rem INF gates run over all thirteen production INFs on every build, whichever
 rem architecture is being built: check-inf.ps1 over src\xhci98.inf (-Arch
 rem x86) and src\xhci98-amd64.inf (-Arch amd64), check-uas-inf.ps1 over the
-rem two UAS INFs and check-cm-inf.ps1 over the four connection manager INFs
-rem (steps 3, 12 and 14 above). All of them, always, because each x86/amd64
+rem two UAS INFs, check-cm-inf.ps1 over the four connection manager INFs,
+rem check-net-inf.ps1 over the two networking INFs and check-stor98-inf.ps1
+rem over Stor98's three (steps 3, 12, 14, 14b and 14a above). All of them, always, because each x86/amd64
 rem pair is one release and either drifting from the other is silent on the
 rem target; scripts\inf-gate\test-inf-checks.ps1 also compares the two
 rem xhci98 INFs directly.
@@ -233,6 +242,13 @@ rem Normalize the repo root rather than carrying "scripts\.." through every
 rem derived path: DDKROOT is one of them and reaches setenv.bat, whose own
 rem derived paths are printed in error messages a developer has to read.
 for %%I in ("%~dp0..") do set "REPO=%%~fI"
+rem A REPOSITORY PATH WITH A SPACE IS REFUSED HERE, before anything has run.
+rem Every toolchain this run uses defaults to one under %REPO%\tools, the
+rem DDK's and the WDK's setenv.bat take their root verbatim and unquoted,
+rem and Stor98's build, which every run makes, refuses such a path outright
+rem (src\stor98\scripts\build.cmd) - so an 8.3 short name for the DDK alone,
+rem which this script once tried, could never have carried the run through.
+for /f "tokens=2 delims= " %%S in ("%REPO%") do goto repospace
 set "FLAVORS=%~1"
 rem Two optional switches in either order after the flavor, because -amd64 and
 rem -NoTargetEvidence are independent and a caller should not have to remember
@@ -284,6 +300,15 @@ if not exist "%REPO%\out" mkdir "%REPO%\out"
 set "GATEDLOCK=%REPO%\out\gated-%ARCH%.lock"
 mkdir "%GATEDLOCK%" 2>nul
 if errorlevel 1 goto gatedlocked
+rem And the tree's own lock, beside it: the two architectures' runs write the
+rem same build logs (src\buildfre.log and .err, and each sub-driver's), so an
+rem x86 and an amd64 run in one tree at once delete and fail on each other's
+rem .err, and the frame-pointer check can read the other's log. The
+rem per-architecture lock stays, because the gated record and the tools that
+rem take it from outside (package-common.ps1) are per architecture.
+set "TREELOCK=%REPO%\out\gated-tree.lock"
+mkdir "%TREELOCK%" 2>nul
+if errorlevel 1 goto treelocked
 set "GATEDTOK=%RANDOM%%RANDOM%%RANDOM%%RANDOM%%RANDOM%"
 > "%GATEDLOCK%\run.txt" echo %GATEDTOK%
 set "GATEDTOK="
@@ -309,7 +334,18 @@ rem ------------------------------------------------------------------
 :gatedcleanup
 for %%F in (%FLAVORS%) do if exist "%REPO%\out\gated-%ARCH%-%%F.pending" del "%REPO%\out\gated-%ARCH%-%%F.pending"
 if exist "%GATEDLOCK%" rmdir /s /q "%GATEDLOCK%"
+if exist "%TREELOCK%" rmdir /s /q "%TREELOCK%"
 exit /b 0
+
+:treelocked
+rmdir /s /q "%GATEDLOCK%"
+echo ERROR: "%TREELOCK%" exists: another build-driver.cmd run holds this
+echo tree, for the other architecture - both write the same build logs. Wait
+echo for it to finish. If none is running - a run that was interrupted with
+echo Ctrl+C leaves the lock behind - delete the directory:
+echo   rmdir /s /q "%TREELOCK%"
+endlocal
+exit /b 1
 
 :gatedlocked
 echo ERROR: "%GATEDLOCK%" exists: another build-driver.cmd run for %ARCH% holds
@@ -365,8 +401,9 @@ rem DDKROOT pointing at tools\ntddk was being called with `x64 WNET`, which the
 rem Win2000 DDK does not have.  The run then died at :nooutput naming the wrong
 rem cause entirely (the audit of 2026-09-16).  WDKROOT is this leg's own
 rem override - the SAME name the import gate honours, so one
-rem variable redirects the whole 64-bit toolchain rather than each script
-rem having its own.
+rem variable redirects the 64-bit toolchain of this tree's drivers rather
+rem than each script having its own (Stor98's build takes STOR98_TOOLS
+rem instead; see the usage above).
 rem
 rem A LABEL RATHER THAN A PARENTHESISED BLOCK, which is this file's idiom for
 rem every other refusal and is not a style choice here: cmd ends an `if (`
@@ -407,20 +444,14 @@ if not exist "%DDKROOT%\bin\setenv.bat" goto noddk
 rem setenv.bat takes BASEDIR verbatim, so DDKROOT is passed unquoted at the
 rem build line below or every derived path would carry literal quotes - which
 rem means a DDKROOT containing a space is split into two arguments and the DDK
-rem derives its paths from the first half. Now that the DDK lives in the repo
-rem this is reachable without an override - a clone under "My Documents" hits it
-rem - so try the 8.3 short name before refusing. That works only where the
-rem volume still generates one (8dot3 creation is off on many non-system
-rem volumes), hence the re-check afterwards rather than trusting the expansion:
-rem %%~sfI silently returns the long path when there is no short name.
-for /f "delims= " %%S in ("%DDKROOT%") do set "DDKFIRST=%%S"
-if "%DDKFIRST%"=="%DDKROOT%" goto ddkpathok
-for %%I in ("%DDKROOT%") do set "DDKROOT=%%~sfI"
-for /f "delims= " %%S in ("%DDKROOT%") do set "DDKFIRST=%%S"
-if not "%DDKFIRST%"=="%DDKROOT%" goto ddkspace
+rem derives its paths from the first half. The repository's own path is
+rem refused with a space at the top (:repospace), so only a DDKROOT override
+rem outside it can hold one here: :shortpath tries its 8.3 short name before
+rem refusing, and the re-check afterwards is the proof the short name names
+rem the same DDK.
+call :shortpath DDKROOT
+if errorlevel 1 goto ddkspace
 if not exist "%DDKROOT%\bin\setenv.bat" goto ddkspace
-:ddkpathok
-set "DDKFIRST="
 echo DDK: %DDKROOT%
 
 rem The checks that need no DDK, at once (roadmap-usb4 task 45.3;
@@ -926,6 +957,11 @@ if "%OBJDIR%"=="" goto badflavor
 set "HLPRWDK=%REPO%\tools\WinDDK71"
 if not "%WDKROOT%"=="" set "HLPRWDK=%WDKROOT%"
 if not exist "%HLPRWDK%\bin\setenv.bat" goto hlprnowdk
+rem Passed unquoted to setenv.bat below, as DDKROOT is: a WDKROOT with a
+rem space is shortened, or refused.
+call :shortpath HLPRWDK
+if errorlevel 1 goto hlprspace
+if not exist "%HLPRWDK%\bin\setenv.bat" goto hlprspace
 set "HLPRALLOW=%REPO%\scripts\import-gate\xhcihlpr-imports.allow"
 set "HLPRSYS=%REPO%\src\hlpr\%OBJDIR%\i386\xhcihlpr.sys"
 set "HLPRLOG=%REPO%\src\hlpr\build%OBJDIR:obj=%"
@@ -971,6 +1007,15 @@ echo.
 echo ERROR: xhcihlpr.sys, the x86 helper, builds with WDK 7.1 and none was
 echo found at "%HLPRWDK%". Unpack it into tools\WinDDK71 or set WDKROOT
 echo (design record 18 sections 8.1 and 15.10; docs\contributing\build-and-test.md).
+endlocal
+exit /b 1
+
+:hlprspace
+echo.
+echo ERROR: the WDK path contains a space and has no usable 8.3 short name:
+echo   %HLPRWDK%
+echo WDK 7.1's setenv.bat takes its root verbatim and cannot be quoted. Set
+echo WDKROOT to a copy of WDK 7.1 at a path without a space.
 endlocal
 exit /b 1
 
@@ -1199,6 +1244,9 @@ if "%OBJDIR%"=="" goto badflavor
 set "NET6WDK=%REPO%\tools\WinDDK71"
 if not "%WDKROOT%"=="" set "NET6WDK=%WDKROOT%"
 if not exist "%NET6WDK%\bin\setenv.bat" goto net6nowdk
+call :shortpath NET6WDK
+if errorlevel 1 goto net6space
+if not exist "%NET6WDK%\bin\setenv.bat" goto net6space
 set "NET6ENV=x86 WIN7 no_oacr"
 set "NET6ALLOW=%REPO%\scripts\import-gate\xhcinet6-imports.allow"
 if /i "%ARCH%"=="amd64" set "NET6ENV=x64 WIN7 no_oacr"
@@ -1239,6 +1287,15 @@ echo found at "%NET6WDK%". Unpack it into tools\WinDDK71 or set WDKROOT.
 endlocal
 exit /b 1
 
+:net6space
+echo.
+echo ERROR: the WDK path contains a space and has no usable 8.3 short name:
+echo   %NET6WDK%
+echo WDK 7.1's setenv.bat takes its root verbatim and cannot be quoted. Set
+echo WDKROOT to a copy of WDK 7.1 at a path without a space.
+endlocal
+exit /b 1
+
 :net6buildfail
 echo.
 echo ERROR: the %FLAVOR% build of xhcinet6.sys failed. See "%NET6LOG%.log" and
@@ -1255,8 +1312,8 @@ exit /b 1
 
 rem ------------------------------------------------------------------
 rem :checkfpo "<build log>" - on the x86 release build of xhci98.sys,
-rem xhciuas.sys and xhcicm.sys (MSVC 6.0), every compile kept frame
-rem pointers (/Oy-; task 45.45, design record 08 section 14). Nothing to
+rem xhciuas.sys, xhcicm.sys and xhcinet.sys (MSVC 6.0), every compile kept
+rem frame pointers (/Oy-; task 45.45, design record 08 section 14). Nothing to
 rem check on amd64 (WDK 7.1) or in the qemu flavour.
 rem ------------------------------------------------------------------
 :checkfpo
@@ -1399,12 +1456,48 @@ echo.
 echo ERROR: the DDK path contains a space and has no usable 8.3 short name:
 echo   %DDKROOT%
 echo The DDK's setenv.bat takes BASEDIR verbatim and cannot be quoted, so a
-echo path with a space is split and every derived path is wrong. Either clone
-echo this repository to a path without a space, or install the DDK to one and
-echo point DDKROOT at it:
+echo path with a space is split and every derived path is wrong. Install the
+echo DDK to a path without a space and point DDKROOT (WDKROOT on the -amd64
+echo leg) at it:
 echo   powershell -ExecutionPolicy Bypass -File scripts\install-w2kddk-cabs.ps1 -DdkPath C:\NTDDK
 endlocal
 exit /b 1
+
+:repospace
+echo.
+echo ERROR: the repository path contains a space:
+echo   %REPO%
+echo The DDK's and WDK's setenv.bat take their root unquoted, every toolchain
+echo defaults to one under tools\, and Stor98's build refuses such a path.
+echo Clone this repository to a path without a space.
+endlocal
+exit /b 1
+
+rem ------------------------------------------------------------------
+rem :shortpath NAME - the variable NAME, if its value holds a space, set to
+rem that path's 8.3 short name; errorlevel 1 when the short name still holds
+rem one. A short name exists only where the volume generates them (8dot3
+rem creation is off on many non-system volumes), and %%~sfI silently returns
+rem the long path when there is none, hence the re-check rather than trusting
+rem the expansion. The caller checks the shortened path still names its kit.
+:shortpath
+call set "SPVAL=%%%~1%%"
+set "SPFIRST="
+for /f "delims= " %%S in ("%SPVAL%") do set "SPFIRST=%%S"
+if "%SPFIRST%"=="%SPVAL%" goto shortpathok
+for %%I in ("%SPVAL%") do set "SPVAL=%%~sfI"
+set "SPFIRST="
+for /f "delims= " %%S in ("%SPVAL%") do set "SPFIRST=%%S"
+if not "%SPFIRST%"=="%SPVAL%" (
+    set "SPVAL="
+    set "SPFIRST="
+    exit /b 1
+)
+set "%~1=%SPVAL%"
+:shortpathok
+set "SPVAL="
+set "SPFIRST="
+exit /b 0
 
 :noddk
 echo.

@@ -20,8 +20,10 @@
  * answers - so a device moved to another port keeps its devnode - and
  * otherwise the device's place: the root port, with the Route String above
  * it for a device behind hubs (XhciHubInstanceKey). A function adds its
- * MI_nn to either (XhciFuncInstanceId). A serial a listed PDO of the same
- * VID and PID already carries is not used again (hcdSerialTakenLocked).
+ * MI_nn to either (XhciFuncInstanceId), and the Bulk-Only form of a device
+ * that offers UAS too adds &BOT (UASBOT.1, XhciBulkOnlyOwnId). A serial a
+ * listed PDO of the same VID and PID already carries is not used again
+ * (hcdSerialTakenLocked).
  *
  * Hubs (task 33.4; design record 13 section 10.11). The bus serves every
  * hub itself (hcd_hub.c), and since 33.4 also presents each as a devnode: a
@@ -55,12 +57,10 @@
  * Its disable and enable re-present the functions in place
  * (HcdDevicePdoRepresentFunctions) rather than cycle the port.
  *
- * The URB contract is 26-A.5's, in hcd_urb.c: IRP_MJ_INTERNAL_DEVICE_CONTROL
- * reaches it, and until the transfer path lands every URB is refused, so a
- * class driver binds and its start fails.
+ * The URB contract is 26-A.5's, in hcd_urb.c (IRP_MJ_INTERNAL_DEVICE_CONTROL
+ * reaches it), and the transfers are hcd_io.c's.
  *
- * IRQL: PASSIVE_LEVEL, except HcdDevicePdoList (<= DISPATCH_LEVEL inside the
- * lock it takes).
+ * IRQL: PASSIVE_LEVEL, except where a function says otherwise.
  */
 
 #include "hcd.h"
@@ -326,11 +326,13 @@ static NTSTATUS hcdCompositeQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
 }
 
 /* Any PDO's instance id (task 33.2; xhci_func.c): its serial id, a
- * function's with &nn, or the location form - "303" for port 3's MI_03. */
+ * function's with &nn, or the location form - "303" for port 3's MI_03 -
+ * and &BOT after either for the Bulk-Only form of a device that offers UAS
+ * too, XhciBulkOnlyOwnId on (UASBOT.1; Xport.OwnId, fixed at creation). */
 static NTSTATUS hcdInstanceQueryId(PHCD_DEVICE_PDO pdo, PIRP irp)
 {
-    char text[XHCI_SERIAL_ID_BYTES + 3];
-    WCHAR buf[XHCI_SERIAL_ID_BYTES + 3];
+    char text[XHCI_INSTANCE_ID_BYTES];
+    WCHAR buf[XHCI_INSTANCE_ID_BYTES];
     PWCHAR out;
     ULONG used;
     ULONG i;
@@ -339,7 +341,8 @@ static NTSTATUS hcdInstanceQueryId(PHCD_DEVICE_PDO pdo, PIRP irp)
     if (XhciFuncInstanceId(pdo->SerialId, pdo->InstanceKey,
                            pdo->Function ? pdo->Func.FirstInterface
                                          : XHCI_INSTANCE_NO_MI,
-                           text, sizeof(text), &used) != XHCI_FUNC_OK) {
+                           pdo->Xport.OwnId, text, sizeof(text),
+                           &used) != XHCI_FUNC_OK) {
         return HcdCompleteIrp(irp, STATUS_UNSUCCESSFUL, 0);
     }
     for (i = 0; i < used; i++) {
@@ -1091,7 +1094,8 @@ static ULONG hcdBytesEqual(const UCHAR *a, const UCHAR *b, ULONG n)
 /* Whether PDO `old` stands for the same device as the freshly built `nu`,
  * its instance id aside (hcdDormantFindLocked weighs that): the device
  * descriptor, the (filtered) configuration, the function, the speed and
- * the transport decision. The parent too - except a function's, which is
+ * the transport decision, its instance form (Xport.OwnId) included. The
+ * parent too - except a function's, which is
  * its own group's composite parent (task 36.43): the old one names the
  * dormant parent, which a revival keeps, the new one a parent never
  * listed, so the chains' first PDOs compare it for the group. PdoListLock
@@ -1742,8 +1746,9 @@ static VOID hcdDormantWait(PHCD_DEVICE_PDO pdo)
 }
 
 /* The transport inputs that are the controller's (31-A.3): whether it
- * streams, and the force value, read at each PDO's creation so a change
- * takes effect at the next enumeration. Thread only. */
+ * streams, the force value and XhciBulkOnlyOwnId (UASBOT.1), read at each
+ * PDO's creation so a change takes effect at the next enumeration. Thread
+ * only. */
 static ULONG hcdXportFlags(PHCD_CONTROLLER hc)
 {
     ULONG xportFlags;
@@ -1763,6 +1768,9 @@ static ULONG hcdXportFlags(PHCD_CONTROLLER hc)
     hc->UsbdxMaxStreams = XhciUsbdxMaxStreams(entries);
     if (HcdCtlForceBulkOnly(hc)) {
         xportFlags |= XHCI_XPORT_F_FORCE_BOT;
+    }
+    if (HcdCtlBulkOnlyOwnId(hc)) {
+        xportFlags |= XHCI_XPORT_F_BOT_OWN_ID;
     }
     return xportFlags;
 }
@@ -2902,8 +2910,17 @@ static ULONG hcdPdoStarted(PHCD_DEVICE_PDO pdo)
         return 0;
     }
     KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+    /* PnP sends a START only to a devnode it has built, so from here on
+     * IoGetDeviceProperty may be asked of this PDO; before, on Windows
+     * 2000, it is a bugcheck (0xCA, parameter 1 = 2), and the PDO is
+     * listed well before PnP's relations answer reaches it. Kept once set:
+     * the devnode stays while the object does. */
+    pdo->PnpStarted = 1;
     listed = pdo->Listed;
     if (listed) {
+        /* A listed PDO is never a ghost (design record 13 section
+         * 10.5.2, point 5). */
+        pdo->Ghost = 0;
         pdo->RemoveReceived = 0;
         /* PnP started it again, so it has not forgotten it after all: it
          * is carried again, and a cycle already asked takes it as an
@@ -2929,16 +2946,60 @@ static ULONG hcdPdoStarted(PHCD_DEVICE_PDO pdo)
 }
 
 /*
- * IRP_MN_REMOVE_DEVICE, already completed. The lifecycle above decides: an
- * orphan deletes itself; a gone PDO that PnP has seen reported missing (or
- * never saw) moves to RemovedPdos, once, for the next relations answer to
- * delete, and its port is told PDO_REMOVED; a listed PDO stays (a disable),
- * as does a gone one whose absence PnP has not yet been told - the
- * relations answer that omits it moves it to RemovedPdos, since this
- * REMOVE has come (HcdDevicePdoRelations), or the parent's release deletes
- * it.
- * Nothing here reads the PDO once it is on RemovedPdos: on Windows 2000 a
- * relations answer on another thread may delete it from then on. IRQL:
+ * Design record 13 section 10.5.2 (task 47.10): on 98 SE and ME, a START
+ * hcdPdoStarted refused because the device has left - read again here,
+ * under the lock, so a device that left after hcdPdoStarted's own read is
+ * taken too - is answered success for a device or function PDO with a
+ * controller, no REMOVE since it was last listed or started and no
+ * selective suspend quarantine (hcd_susp.c, never started again). The PDO
+ * becomes a ghost: its URB admission reopened (a STOP before it closed it),
+ * no device interface, no port notice, no selective suspend; hcd_urb.c
+ * answers its class driver's first requests from the copies. Returns 1
+ * for a ghost; 0 changes nothing. IRQL: PASSIVE_LEVEL.
+ */
+static ULONG hcdPdoGhostStart(PHCD_DEVICE_PDO pdo)
+{
+    PHCD_CONTROLLER hc;
+    KIRQL oldIrql;
+    ULONG nt;
+    ULONG ghost;
+
+    hc = pdo->Controller;
+    if (hc == NULL) {
+        return 0;
+    }
+    nt = IoIsWdmVersionAvailable(1, 0x10) ? 1UL : 0UL;
+    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+    ghost = XhciFuncGhostStart(nt, 0, pdo->Listed,
+                               (pdo->Hub || pdo->Composite) ? 1UL : 0UL,
+                               pdo->RemoveReceived,
+                               pdo->IdleQuarantined ? 1UL : 0UL);
+    if (ghost) {
+        pdo->Ghost = 1;
+        pdo->PnpStarted = 1;
+        pdo->Closing = 0;
+    }
+    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    if (ghost) {
+        (VOID)InterlockedIncrement((PLONG)&hc->PdoGhostStarts);
+        XhciLogNote(&hc->Hc, "pdo.ghost", pdo->Serial);
+    }
+    return ghost;
+}
+
+/*
+ * IRP_MN_REMOVE_DEVICE, before the IRP completes and inside the dispatch's
+ * Busy pin (HcdDevicePdoPnp). The lifecycle above decides: an orphan is
+ * deleted by the dispatch once the IRP is complete (this returns 1); a
+ * gone PDO that PnP has seen reported missing (or never saw) moves to
+ * RemovedPdos, once, for the next relations answer to delete, and its
+ * port is told PDO_REMOVED; a listed PDO stays (a disable), as does a
+ * gone one whose absence PnP has not yet been told - the relations answer
+ * that omits it moves it to RemovedPdos, since this REMOVE has come
+ * (HcdDevicePdoRelations), or the parent's release deletes it.
+ * Nothing here reads the PDO once it is on RemovedPdos but the port's
+ * number, taken before: on Windows 2000 a relations answer on another
+ * thread may delete it from then on, once the pin is let go. IRQL:
  * PASSIVE_LEVEL.
  */
 /* An orphan's REMOVE: retired on Windows 98 (above), deleted now
@@ -2952,7 +3013,7 @@ static VOID hcdPdoOrphanRemoved(PHCD_DEVICE_PDO pdo)
     }
 }
 
-static VOID hcdPdoRemoved(PHCD_DEVICE_PDO pdo)
+static ULONG hcdPdoRemoved(PHCD_DEVICE_PDO pdo)
 {
     PHCD_CONTROLLER hc;
     KIRQL oldIrql;
@@ -2962,12 +3023,11 @@ static VOID hcdPdoRemoved(PHCD_DEVICE_PDO pdo)
     if (pdo->Deleted || pdo->DeletePending) {
         /* A REMOVE again while a reference keeps the object: already
          * deleted or to be, and the controller may be gone. */
-        return;
+        return 0;
     }
     hc = pdo->Controller;
     if (hc == NULL) {
-        hcdPdoOrphanRemoved(pdo);
-        return;
+        return 1;
     }
     deleteIt = 0;
     port = pdo->Port;
@@ -2993,10 +3053,12 @@ static VOID hcdPdoRemoved(PHCD_DEVICE_PDO pdo)
     }
     KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
     if (deleteIt == 2) {
-        hcdPdoOrphanRemoved(pdo);
-    } else if (deleteIt == 1) {
+        return 1;
+    }
+    if (deleteIt == 1) {
         hcdPortNotify(hc, hc->PortPdoRemoved, port);
     }
+    return 0;
 }
 
 static NTSTATUS hcdDeviceCapabilities(PHCD_DEVICE_PDO pdo, PIRP irp)
@@ -3167,6 +3229,7 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
     PIO_STACK_LOCATION stack;
     PDEVICE_RELATIONS rel;
     PWCHAR text;
+    ULONG orphan;
     ULONG n;
 
     stack = IoGetCurrentIrpStackLocation(irp);
@@ -3192,6 +3255,13 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
             hcdDormantWait(pdo);
         }
         if (!hcdPdoStarted(pdo)) {
+            if (hcdPdoGhostStart(pdo)) {
+                XHCI_DBG_VALUE("hcd: START answered, device gone (ghost), "
+                               "port",
+                               pdo->Port);
+                pdo->Common.PnpState = HCD_PNP_STARTED;
+                return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+            }
             XHCI_DBG_VALUE("hcd: START refused, device gone, port",
                            pdo->Port);
             return HcdCompleteIrp(irp, STATUS_UNSUCCESSFUL, 0);
@@ -3226,10 +3296,27 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
         pdo->Common.PnpState = HCD_PNP_REMOVED;
         HcdDoorDeviceStop(pdo, 0);
         hcdPdoQuiesce(pdo, 1);
+        pdo->Ghost = 0;
         HcdSuspPdoRundown(pdo);
         hcdPdoFunctionRelease(pdo);
+        /*
+         * The bookkeeping that reads the controller before the IRP
+         * completes, and both inside a Busy pin taken once the quiesce has
+         * waited Busy out: the completion may let PnP go on to a parent's
+         * removal on another thread - an upper driver can complete a
+         * pended REMOVE from a worker - whose release (HcdDevicePdoReleaseAll)
+         * or a relations answer's deletion waits the pin out before it
+         * clears Controller or deletes this PDO. Past the pin nothing reads
+         * the PDO but an orphan's own deletion, which no other path owns
+         * (its parent's release found no REMOVE received and left it).
+         */
+        (VOID)InterlockedIncrement(&pdo->Busy);
+        orphan = hcdPdoRemoved(pdo);
         HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
-        hcdPdoRemoved(pdo);
+        (VOID)InterlockedDecrement(&pdo->Busy);
+        if (orphan) {
+            hcdPdoOrphanRemoved(pdo);
+        }
         return STATUS_SUCCESS;
 
     case IRP_MN_QUERY_ID:

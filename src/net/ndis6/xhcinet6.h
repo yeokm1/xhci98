@@ -137,7 +137,8 @@ NDIS_STATUS Net6CmAcquire(PNET6_ADAPTER a);           /* PASSIVE */
 VOID Net6CmRelease(PNET6_ADAPTER a);                  /* PASSIVE */
 NDIS_STATUS Net6CmOpen(PNET6_ADAPTER a);              /* PASSIVE */
 VOID Net6CmClose(PNET6_ADAPTER a);                    /* PASSIVE */
-VOID Net6CmQuery(PNET6_ADAPTER a, PXHCI_CM_NET_INFO i); /* <= DISPATCH */
+/* 1 when the connection manager answered, else 0 and *i zeroed. */
+ULONG Net6CmQuery(PNET6_ADAPTER a, PXHCI_CM_NET_INFO i); /* <= DISPATCH */
 VOID Net6CmLog(PNET6_ADAPTER a, const char *label, ULONG value);
 
 /* n6_data.c - the data path. */

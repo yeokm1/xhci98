@@ -253,6 +253,49 @@ ULONG XhciComputeLayout(ULONG contextSize,
     return XHCI_LAYOUT_OK;
 }
 
+/*
+ * Task 47.30 (design record 13 section 11.10, point 2). The block's own
+ * physical address decides, not an offset in it: the allocator promises
+ * page alignment at most, and a 16 KiB segment at a page-aligned base still
+ * crosses a 64 KiB line from three of the sixteen pages before one. So the
+ * window starts at the block's first 64-byte boundary, or, when a segment
+ * there would cross a line, at that line; either fits or there is none.
+ */
+ULONG XhciEventRingWindow(ULONG blockPA, ULONG blockBytes,
+                          ULONG segmentBytes, ULONG *offset)
+{
+    ULONG start;
+    ULONG lead;
+    ULONG line;
+
+    if (offset == NULL || blockPA == 0 || blockBytes == 0 ||
+        segmentBytes == 0 || segmentBytes > 65536UL ||
+        blockPA > 0xFFFFFFFFUL - (blockBytes - 1UL)) {
+        return 0;
+    }
+    lead = (64UL - (blockPA & 63UL)) & 63UL;
+    if (lead >= blockBytes) {
+        return 0;
+    }
+    start = blockPA + lead;
+    if ((start & 0xFFFFUL) > 0x10000UL - segmentBytes) {
+        /* The next 64 KiB line: 64-byte aligned, and a segment of at most
+         * 64 KiB from it crosses none. Below the block's end, since the
+         * segment from `start` reached past it. */
+        line = (start | 0xFFFFUL) + 1UL;
+        if (line == 0) {
+            return 0;
+        }
+        lead += line - start;
+        start = line;
+    }
+    if (lead > blockBytes || blockBytes - lead < segmentBytes) {
+        return 0;
+    }
+    *offset = lead;
+    return 1;
+}
+
 ULONG XhciDeviceContextOffset(const XHCI_HC_LAYOUT *layout,
                               ULONG slotId,
                               ULONG *offset)
@@ -310,14 +353,6 @@ VOID XhciPoolInit(PXHCI_RING_POOL pool)
     pool->AcquireFailuresFairness = 0;
     pool->AcquireFailuresCap = 0;
     pool->PeakInUse = 0;
-#ifdef XHCI_FIX_NO_RING_REUSE
-    /* Candidate W2's rotation cursor. Reset here rather than left to the
-     * extension's initial zeroing, because this function also runs on the
-     * reinitialisation path, where every ring has just been reclaimed and the
-     * rotation should start from a known index rather than from wherever the
-     * previous generation stopped. */
-    pool->NextScan = 0;
-#endif
 }
 
 ULONG XhciPoolDeviceCount(const XHCI_RING_POOL *pool, ULONG deviceRef)
@@ -426,51 +461,6 @@ ULONG XhciPoolAcquireReserved(PXHCI_RING_POOL pool,
         return XHCI_POOL_UNFAIR;
     }
 
-#ifdef XHCI_FIX_NO_RING_REUSE
-    /*
-     * **EXPERIMENTAL, bench candidate W2 for Finding 3** (HANDOFF.md open item
-     * 1). Built only under the define; the scan below it is the shipping one.
-     *
-     * The shipping scan is **first-fit from zero**, so the ring index a device
-     * releases at teardown is the one handed to the very next device that asks.
-     * If the wedge is a ring reused while the controller is still reading it -
-     * because a Stop Endpoint was never shown to have worked - then that
-     * immediate handover is the moment it happens, and this rotation is the
-     * cheapest possible test of it: it changes no lifetime, frees nothing late,
-     * leaks nothing, and only moves *which* free index is chosen.
-     *
-     * `NextScan` advances past every grant, so a freed index is not revisited
-     * until the rotation wraps. Thirty-two rings against a five-plug recipe
-     * taking two or three apiece is roughly ten grants, so the bench test never
-     * wraps and the separation is total for the duration of the recipe.
-     *
-     * This is a DIAGNOSTIC, not a proposed fix. Wrapping still reuses, so it
-     * narrows the window rather than closing it; what it buys is a clean answer
-     * to "is immediate ring reuse the mechanism at all", which no reasoning
-     * about the quiesce path can give.
-     */
-    for (i = 0; i < XHCI_MAX_POOL_RINGS; i++) {
-        ULONG slot;
-
-        slot = pool->NextScan + i;
-        if (slot >= XHCI_MAX_POOL_RINGS) {
-            slot -= XHCI_MAX_POOL_RINGS;
-        }
-        if (pool->Owner[slot] == 0) {
-            pool->Owner[slot] = deviceRef;
-            pool->InUse++;
-            if (pool->InUse > pool->PeakInUse) {
-                pool->PeakInUse = pool->InUse;
-            }
-            pool->NextScan = slot + 1;
-            if (pool->NextScan >= XHCI_MAX_POOL_RINGS) {
-                pool->NextScan = 0;
-            }
-            *poolIndex = slot;
-            return XHCI_POOL_OK;
-        }
-    }
-#else
     for (i = 0; i < XHCI_MAX_POOL_RINGS; i++) {
         if (pool->Owner[i] == 0) {
             pool->Owner[i] = deviceRef;
@@ -482,7 +472,6 @@ ULONG XhciPoolAcquireReserved(PXHCI_RING_POOL pool,
             return XHCI_POOL_OK;
         }
     }
-#endif
 
     /*
      * Unreachable now that XhciPoolFree counts `Owner[]` directly - a nonzero

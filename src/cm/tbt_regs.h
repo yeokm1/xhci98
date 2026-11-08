@@ -524,10 +524,12 @@
 /* The DROM's layout (USB4 DROM Specification; Linux eeprom.c struct
  * tb_drom_header, TB_DROM_HEADER_SIZE, USB4_DROM_HEADER_SIZE, struct
  * tb_drom_entry_header): byte 13 the revision, entries from byte 16 in a
- * USB4 DROM (revision 3) and from byte 22 in the Thunderbolt 3 compatible
- * one (revision 1). An entry: length, then index 5:0, adapter disabled 6
- * (adapter entries only), adapter entry 7 (else generic). */
-#define TBT_DROM_REV_TBT3           1UL
+ * USB4 DROM (revision 3) and from byte 22 in a TBT3 product's (revision 2)
+ * and a TBT3-Compatible USB4 product's (revision 1; USB4 DROM
+ * Specification section 8). An entry: length, then index 5:0, adapter
+ * disabled 6 (adapter entries only), adapter entry 7 (else generic). */
+#define TBT_DROM_REV_TBT3_COMPAT    1UL
+#define TBT_DROM_REV_TBT3           2UL
 #define TBT_DROM_REV_USB4           3UL
 #define TBT_DROM_ENTRIES_TBT3       22UL
 #define TBT_DROM_ENTRIES_USB4       16UL
@@ -655,6 +657,10 @@
  * ADP_CS_5_DHP agree. */
 #define TBT_ADP5_MAX_IN_HOP(v)      ((ULONG)(v) & 0x7FUL)
 #define TBT_ADP5_MAX_OUT_HOP(v)     (((ULONG)(v) >> 11) & 0x7FUL)
+/* The same fields at the Thunderbolt 3 width, 11 bits each (10:0, 21:11),
+ * read on a Thunderbolt 3 router only. */
+#define TBT_ADP5_MAX_IN_HOP_TBT3(v)  ((ULONG)(v) & 0x7FFUL)
+#define TBT_ADP5_MAX_OUT_HOP_TBT3(v) (((ULONG)(v) >> 11) & 0x7FFUL)
 #define TBT_ADP5_LCA(v)             (((ULONG)(v) >> 22) & 0x7FUL)
 #define TBT_ADP5_DHP                0x80000000UL
 
@@ -778,6 +784,10 @@
  * the specification's Output HopID is 6:0). */
 #define TBT_PATH0_OUT_HOP(v)        ((ULONG)(v) & 0x7FUL)
 #define TBT_PATH0_OUT_HOP_MASK      0x0000007FUL
+/* The field at the Thunderbolt 3 width (10:0), cleared whole when an entry
+ * of a Thunderbolt 3 router is rewritten; USB4's bits 10:7 are reserved
+ * and kept as read. */
+#define TBT_PATH0_OUT_HOP_MASK_TBT3 0x000007FFUL
 #define TBT_PATH0_OUT_ADP(v)        (((ULONG)(v) >> 11) & 0x3FUL)
 #define TBT_PATH0_OUT_ADP_SHIFT     11
 #define TBT_PATH0_OUT_ADP_MASK      0x0001F800UL

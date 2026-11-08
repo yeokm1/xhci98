@@ -512,13 +512,13 @@ static int xhci_irq_source_off(CTRL *c)
     c->irq_isr_count = irq_count;
     c->irq_foreign_count = irq_foreign;
     if (!ok) {
-        /* Don't clobber a more specific C4 failure note already recorded by
-         * the caller; only describe the teardown fault when C4 had passed. */
-        if (c->v_irq != V_FAIL)
-            sprintf(c->irq_note, "DPMI %s failed (AX=%04X)",
-                    irq_error_step() ? irq_error_step() : "IRQ teardown",
-                    irq_error_code());
-        c->v_irq = V_FAIL;
+        /* Recorded apart from C4: what C4 saw stands (a PASS or a POLL is
+         * still that), and the tool's own teardown step is said on its
+         * own line. main.c runs no C6 or C8 with the hook still in place. */
+        c->irq_teardown_failed = 1;
+        sprintf(c->irq_teardown_note, "DPMI %s failed (AX=%04X)",
+                irq_error_step() ? irq_error_step() : "IRQ teardown",
+                irq_error_code());
     }
     return ok;
 }
@@ -614,6 +614,7 @@ int qual_irq(CTRL *c)
                 irq_error_step() ? irq_error_step() : "IRQ install",
                 irq_error_code());
         c->v_irq = V_FAIL;
+        c->irq_tool_failed = 1;
         return 0;
     }
 
@@ -689,6 +690,7 @@ int qual_irq(CTRL *c)
                 irq_error_step() ? irq_error_step() : "IRQ unmask",
                 irq_error_code());
         c->v_irq = V_FAIL;
+        c->irq_tool_failed = 1;
         xhci_irq_source_off(c);
         return 0;
     }
@@ -758,7 +760,7 @@ const char *speed_name(u32 psiv)
     case 1:  return "Full-Speed (12 Mb/s)";
     case 2:  return "Low-Speed (1.5 Mb/s)";
     case 3:  return "High-Speed (480 Mb/s)";
-    case 4:  return "SuperSpeed (out of scope!)";
+    case 4:  return "SuperSpeed (not tested here)";
     default: return "unknown speed ID";
     }
 }
@@ -780,7 +782,7 @@ static const char *speed_class_name(int speed_class)
     case USB_SPEED_LOW:   return "Low-Speed (1.5 Mb/s)";
     case USB_SPEED_FULL:  return "Full-Speed (12 Mb/s)";
     case USB_SPEED_HIGH:  return "High-Speed (480 Mb/s)";
-    case USB_SPEED_SUPER: return "SuperSpeed (out of scope!)";
+    case USB_SPEED_SUPER: return "SuperSpeed (not tested here)";
     default:              return "unknown speed";
     }
 }
@@ -896,7 +898,7 @@ int qual_ports(CTRL *c, int wait_secs)
     int port, connected, resets_ok;
     u32 v, ms;
 
-    /* power up managed USB2 ports only; USB3 ports stay unpowered */
+    /* power up the USB2 ports C6 exercises; USB3 ports stay unpowered */
     if (c->ppc) {
         for (port = 1; port <= c->maxports; port++) {
             if (port_is_usb2(c, port))

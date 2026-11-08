@@ -11,7 +11,8 @@
  * working interrupt: the driver polls it - task 36.10), 4 = --log-stamp
  * refused before any hardware access: the DOS clock is not a date and time,
  * the minute's 26 names are all taken, or the log cannot be created (task
- * 38.1).
+ * 38.1). --edd (task 47.24) answers 1 when its read is done and 2 when it
+ * refuses (a usage error, or Windows running).
  */
 
 #include <stdio.h>
@@ -73,6 +74,13 @@ static unsigned stamp_year, stamp_month, stamp_day;
 static unsigned stamp_hour, stamp_minute, stamp_second;
 /* Task 36.11: the GSI to compare the Intel PCH routing against, -1 none. */
 static long opt_gsi         = -1;
+/* Task 47.24 (owner, 2026-11-06): the EDD 3.0 device path of each disk unit,
+ * read from the firmware before any controller is touched. A mode of its
+ * own: beside it only the report modifiers are taken, so opt_ctrl_seen
+ * records any option that names controller work. */
+static int opt_edd         = 0;
+static int opt_ctrl_seen   = 0;
+static EDD_UNIT edd_units[EDD_UNIT_COUNT];
 
 static int is_family_word(const char *name)
 {
@@ -187,6 +195,8 @@ static void print_usage(void)
            "  --done-flag FILE   create FILE only on normal completion\n"
            "  --gsi N            with --quick or --probe-only: compare the\n"
            "                     Intel PCH routing against GSI/IRQ N\n"
+           "  --edd              read each disk's EDD device path (INT 13h\n"
+           "                     41h/48h) and stop; no controller is touched\n"
            "  --help, -h, /?     detailed standalone help\n",
            TOOL_VERSION);
 }
@@ -207,13 +217,18 @@ static void print_help(void)
             "  XHCIQUAL                      read-only quick scan\n"
             "  XHCIQUAL [xhci|ehci|ohci|all] [options]\n"
             "  XHCIQUAL --scan TYPE [--scan TYPE ...] [options]\n"
+            "  XHCIQUAL --edd [--log FILE] [--no-page]\n"
             "  XHCIQUAL --help [--no-page]\n\n");
     qprintf("THE NO-ARGUMENT DEFAULT\n"
             "  With no arguments at all this tool does a READ-ONLY quick\n"
             "  scan: no PCI configuration writes, no ownership taken, one\n"
-            "  screen. It has three honest outcomes, because a read-only\n"
+            "  screen. It has four honest outcomes, because a read-only\n"
             "  pass cannot observe C2, C3 or C4:\n"
             "    LOOKS QUALIFIED  subject to the active tests\n"
+            "    LOOKS QUALIFIED WITH CAVEATS\n"
+            "                     as above, but Interrupt Pin 0: no line\n"
+            "                     interrupt, so the driver polls it; or\n"
+            "                     no USB2 ports, which C6/C8 need\n"
             "    DISQUALIFIED     a read-only pass genuinely sees this\n"
             "    CANNOT SAY       a state this pass may not change is in\n"
             "                     the way (not in D0, or MSE clear)\n"
@@ -256,7 +271,7 @@ static void print_help(void)
             "  --scan TYPE       repeat to combine families\n\n");
     qprintf("OPTIONS\n"
             "  --quick           read-only quick scan (the no-argument\n"
-            "                    default), one screen, three outcomes\n"
+            "                    default), one screen, four outcomes\n"
             "  --full            the full active run across all families -\n"
             "                    what no arguments used to mean\n"
             "  --probe-only      read-only discovery; leaves PCI MSE/INTx "
@@ -305,14 +320,30 @@ static void print_help(void)
             "                    run, read only, on the reviewed Intel\n"
             "                    7/8/9-series and C610 xHCIs alone\n"
             "  --help, -h, /?    show this help and return success\n\n");
+    qprintf("EDD DEVICE PATHS (--edd)\n"
+            "  Asks the firmware, through INT 13h 41h and 48h, how it names\n"
+            "  each disk unit 80h-87h: the EDD 3.0 device path (key BEDDh,\n"
+            "  host bus, interface, PCI bus/device/function), and whether\n"
+            "  that function is an xHCI. Reads only: no disk write but the\n"
+            "  log, and the run ends before any USB controller is touched.\n"
+            "  Run it from MS-DOS itself: start the computer, choose\n"
+            "  \"Command prompt only\" in the Startup Menu, no EMM386.\n"
+            "  Refused in a Windows MS-DOS Prompt (exit 2). Only --log,\n"
+            "  --log-stamp, --serial, --no-page, --no-sysinfo and\n"
+            "  --done-flag may go with it. Each unit is named on the screen\n"
+            "  and in the log before its call, so a hang shows where.\n"
+            "  The device path's own bytes (a USB serial number) are not\n"
+            "  printed.\n\n");
     qprintf("OUTPUT AND EXIT CODES\n"
             "  FACT lines describe controllers; xHCI DEV lines describe USB.\n"
             "  0 = active criteria met (OHCI may have documented C4 WARN)\n"
             "  1 = not qualified, or probe-only run\n"
             "  2 = usage error, or no selected controller found\n"
             "  3 = QUALIFIED WITH CAVEATS: no working interrupt, so\n"
-            "      xhci98.sys polls it (or an MSI-capable OS)\n"
-            "  4 = --log-stamp refused; nothing was read\n\n"
+            "      xhci98.sys polls it (or an MSI-capable OS), or no\n"
+            "      USB2 ports, so C6/C8 could not run\n"
+            "  4 = --log-stamp refused; nothing was read\n"
+            "  --edd: 1 = read done, 2 = refused or usage error\n\n"
             "Keep all LOG files, BIOS settings, device model/speed, and a\n"
             "photo plus last printed line for any fault or freeze.\n");
 }
@@ -348,11 +379,15 @@ static int parse_args(int argc, char **argv)
         if (strcmp(a, "help") == 0 || strcmp(a, "h") == 0 ||
             strcmp(a, "?") == 0) {
             opt_help = 1;
+        } else if (strcmp(a, "edd") == 0) {
+            opt_edd = 1;
         } else if (is_family_word(a)) {
+            opt_ctrl_seen = 1;
             if (!select_family(a))
                 return 0;
         } else if (strcmp(a, "scan") == 0 ||
                    strcmp(a, "controller") == 0) {
+            opt_ctrl_seen = 1;
             if (i + 1 >= argc || !select_family(argv[++i])) {
                 print_usage();
                 return 0;
@@ -361,6 +396,7 @@ static int parse_args(int argc, char **argv)
                    strncmp(a, "controller=", 11) == 0) {
             const char *name;
 
+            opt_ctrl_seen = 1;
             name = (a[0] == 's') ? a + 5 : a + 11;
             if (!select_family(name)) {
                 print_usage();
@@ -368,8 +404,10 @@ static int parse_args(int argc, char **argv)
             }
         } else if (strcmp(a, "probe-only") == 0 ||
                    strcmp(a, "no-active") == 0) {
+            opt_ctrl_seen = 1;
             opt_probe_only = 1;
         } else if (strcmp(a, "full") == 0) {
+            opt_ctrl_seen = 1;
             /* The old no-argument behaviour, spelled out. It selects nothing
              * on its own - every default it names is already the default - so
              * its whole job is to be an argument, which is what takes the run
@@ -382,11 +420,15 @@ static int parse_args(int argc, char **argv)
              * --serial, and any script that wants the read-only screen without
              * depending on "no arguments" staying the way to get it. */
             opt_quick = 1;
+            opt_ctrl_seen = 1;
         } else if (strcmp(a, "poll-only") == 0) {
+            opt_ctrl_seen = 1;
             opt_poll_only = 1;
         } else if (strcmp(a, "irq-selftest") == 0) {
+            opt_ctrl_seen = 1;
             opt_irq_selftest = 1;
         } else if (strcmp(a, "set-intel-ports") == 0) {
+            opt_ctrl_seen = 1;
             opt_set_intel = 1;
         } else if (strcmp(a, "serial") == 0) {
             opt_serial = 1;
@@ -414,27 +456,41 @@ static int parse_args(int argc, char **argv)
         } else if (strncmp(a, "done-flag=", 10) == 0 && a[10] != '\0') {
             opt_done_flag = a + 10;
         } else if (strcmp(a, "gsi") == 0) {
+            opt_ctrl_seen = 1;
             if (i + 1 >= argc || !parse_gsi(argv[++i])) {
                 print_usage();
                 return 0;
             }
         } else if (strncmp(a, "gsi=", 4) == 0) {
+            opt_ctrl_seen = 1;
             if (!parse_gsi(a + 4)) {
                 print_usage();
                 return 0;
             }
         } else if (strcmp(a, "no-devid") == 0) {
+            opt_ctrl_seen = 1;
             opt_no_devid = 1;
         } else if (strcmp(a, "no-sysinfo") == 0) {
             opt_no_sysinfo = 1;
         } else if (strcmp(a, "no-page") == 0) {
             opt_no_page = 1;
         } else if (strcmp(a, "no-wait") == 0) {
+            opt_ctrl_seen = 1;
             opt_wait_secs = 0;
         } else {
             print_usage();
             return 0;
         }
+    }
+    /* Task 47.24: --edd is a whole mode, and the firmware's answer means
+     * nothing once a controller has been touched, so nothing that names
+     * controller work may stand beside it. --help beside --edd wins over
+     * every conflict below, as the help branch comes first. */
+    if (opt_edd && opt_help)
+        return 1;
+    if (opt_edd && opt_ctrl_seen) {
+        print_usage();
+        return 0;
     }
     if (opt_irq_selftest) {
         if (opt_probe_only || opt_poll_only || opt_set_intel ||
@@ -694,6 +750,8 @@ static int run_quick_scan(void)
 {
     int n, i, shown, hidden;
     int worst;
+    int pinCaveat = 0;
+    int portsCaveat = 0;
 
     qprintf("XHCIQUAL %s - quick scan (read-only)\n", TOOL_VERSION);
     print_stamp_header();
@@ -791,7 +849,7 @@ static int run_quick_scan(void)
             if (xhci_map(c)) {
                 xhci_read_caps(c);
                 mmio_ok = c->mmio_ok;
-                usb2_ports = c->usb2_ports;
+                usb2_ports = quick_ports_arg(c);
             }
             *p = c->pci;
         } else {
@@ -805,7 +863,8 @@ static int run_quick_scan(void)
             /* A legacy controller has no Supported Protocol list to count USB2
              * ports from, and its ports are USB 2.0 or slower by construction.
              * Answering 1 keeps the shared classifier from reporting a
-             * disqualifier that does not apply to it.
+             * caveat (a disqualifier until TL-7, 2026-11-06) that does not
+             * apply to it.
              *
              * **So the "one classifier, so the quick scan and the full run
              * cannot disagree" claim holds for xHCI only** - the 2026-09-07
@@ -827,6 +886,12 @@ static int run_quick_scan(void)
         outcome = quick_classify(p, mmio_ok, usb2_ports, 0);
         if (quick_rank(outcome) > quick_rank(worst))
             worst = outcome;
+        if (outcome == QUICK_CAVEATS) {
+            if (p->ipin == 0)
+                pinCaveat = 1;
+            if (usb2_ports == 0)
+                portsCaveat = 1;
+        }
 
         {
             const char *why;
@@ -908,9 +973,14 @@ static int run_quick_scan(void)
         /* Task 36.10: a controller with no line interrupt is not refused;
          * the driver polls it. The active run says the rest. */
         qprintf("Verdict: LOOKS QUALIFIED WITH CAVEATS, subject to the "
-                "active tests (C2/C3/C4):\n"
-                "  no line interrupt, so xhci98.sys polls (or an "
-                "MSI-capable OS).\n");
+                "active tests (C2/C3/C4):\n");
+        if (pinCaveat)
+            qprintf("  no line interrupt, so xhci98.sys polls (or an "
+                    "MSI-capable OS).\n");
+        /* TL-7 (owner, 2026-11-06): the tool's limit, not a fault. */
+        if (portsCaveat)
+            qprintf("  no USB2 protocol ports, so C6 and C8 cannot "
+                    "exercise it (not a fault).\n");
     } else {
         qprintf("Verdict: LOOKS QUALIFIED, subject to the active tests "
                 "(C2/C3/C4), which this\n"
@@ -926,6 +996,34 @@ static int run_quick_scan(void)
     /* Same convention as every other read-only mode: 1, because no
      * qualification verdict was reached. Only a full active run returns 0. */
     return 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* Task 47.24 - --edd, the EDD 3.0 device path of each disk unit       */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Design record 37's Q1: does the firmware name the USB disk it presents by
+ * an EDD 3.0 device path on the xHCI? Its answer is the firmware's own only
+ * while the firmware still owns the controller, so this runs before any
+ * controller code: main() takes this branch before the quick scan and the
+ * full run, and nothing ahead of it reads PCI or a controller (the INT 24h
+ * chain, the done flag, the arguments, the stamped log's DOS calls and the
+ * report's sinks). edd_run (edd.c) is the order: the environment, INT 13h,
+ * then PCI reads; sysprobe.c makes the calls.
+ */
+static int run_edd(void)
+{
+    EDD_OPS ops;
+    QPRINTF_FN detail;
+
+    qprintf("XHCIQUAL %s (build %s) - EDD device paths, read only\n",
+            TOOL_VERSION, TOOL_BUILD);
+    print_stamp_header();
+    report_flush();
+    detail = report_logging() ? qlogprintf : qprintf;
+    edd_dos_ops(&ops, &sysinfo, opt_no_sysinfo, qprintf, detail);
+    return edd_run(&ops, edd_units, qprintf, detail);
 }
 
 /* enable MMIO decode (+ bus mastering for active runs); A2 verdict */
@@ -977,6 +1075,29 @@ int main(int argc, char **argv)
         return finish_normally(0);
     }
     active = !opt_probe_only;
+
+    /* Task 47.24: before the quick scan and the full run, so no controller
+     * is touched before the firmware is asked. */
+    if (opt_edd) {
+        int rc;
+
+        if (!open_report())
+            return finish_normally(4);
+        rc = run_edd();
+        if (rc == 2) {
+            /* Refused: its own last lines say so; no "Done". */
+            print_stamp_tail();
+        } else if (opt_log_stamp) {
+            qprintf("Done.\n");
+            print_stamp_tail();
+        } else if (opt_log_name != 0) {
+            qprintf("Done. Report copied to %s.\n", opt_log_name);
+        } else {
+            qprintf("Done.\n");
+        }
+        report_close();
+        return finish_normally(rc);
+    }
 
     if (opt_quick) {
         int rc;
@@ -1102,9 +1223,19 @@ int main(int argc, char **argv)
                             qprintf("  C4 IRQ:     %-4s  %s (ISR count "
                                     "%lu)\n", verdict_name(c->v_irq),
                                     c->irq_note, c->irq_isr_count);
+                            if (c->irq_teardown_failed)
+                                qprintf("  C4 hook:    FAIL  %s\n",
+                                        c->irq_teardown_note);
                         }
                         report_flush();
                         if (opt_irq_selftest) {
+                            qprintf("  C6 ports:   SKIP  %s\n", c->port_note);
+                        } else if (c->irq_teardown_failed) {
+                            /* The hook still in place is what crashed the
+                             * E460 at C6's first port reset. */
+                            c->v_port = V_SKIP;
+                            strcpy(c->port_note, "C4's interrupt hook could "
+                                   "not be removed; C6 not run");
                             qprintf("  C6 ports:   SKIP  %s\n", c->port_note);
                         } else if (c4_lets_ports(c->v_irq, opt_poll_only)) {
                             qual_intel_ports(c, opt_set_intel);

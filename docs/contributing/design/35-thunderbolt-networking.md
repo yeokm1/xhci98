@@ -1,6 +1,18 @@
 # Design Record 35 - Thunderbolt Networking: a Host-to-Host Link
 
-Status: revision 13, 2026-11-01: the packaging and the installer as
+Status: revision 17, 2026-11-08: the 98 SE and ME install of the
+network adapter copies nothing and Setup places `xhcinet.sys` itself
+(sections 8.2 and 9.5), the owner's decision of that day, reviewed and
+revised.
+Revision 16, 2026-11-08: the service comes up again after a
+replug on an ASM4242 host router (section 5.1, record 22 section 18.9),
+reviewed and revised.
+Revision 15, 2026-11-08: no end-to-end flow control offered on
+an ASM4242 host router (section 5.3), reviewed and revised.
+Revision 14, 2026-11-08: Windows 11's inbox USB4 networking
+read in the emulator (section 2.5) and the receive IPv4 fragmentation
+it asked for (section 7.4), reviewed and revised.
+Revision 13, 2026-11-01: the packaging and the installer as
 built, steps S10 and S11 (section 9.5, with section 9.3 amended),
 reviewed and revised.
 Revision 12, 2026-11-01: the early UUID answer held until this
@@ -532,6 +544,21 @@ behaviour beyond what USB4NET defines; under the hardware support rule
 Windows peer is therefore expected to interoperate only in so far as it
 follows IDS chapter 5, and it is read on the owner's bench (section
 11.4), never claimed before.
+
+Read in `usb4-emu` (revision 14, 2026-11-08) [emu]: Windows 11 Pro
+26100 on the `usb4-generic` host, its inbox USB4 connection manager,
+cabled to 98 SE on the Alpine Ridge firmware model. With nothing
+installed, Windows bound its own "USB4(TM) P2P Network Adapter"
+(`usb4p2pnetadapter.inf`) to this driver's service
+(`USB4\VEN_0000&DEV_00000001&PROT_USB4NET`), up about 11 s after the
+plug, reporting 20 Gb/s and an MTU of 62000, with a link-local
+address and the Public network profile (its firewall then refuses an
+inbound ping). Ping and TCP both ways passed; IPv4 datagrams above 98
+SE's MTU were lost until section 7.4's receive fragmentation, or until
+Windows' MTU was set to 1500 by hand. Microsoft documents the adapter
+as its implementation of USB4NET and says it also works with a
+Thunderbolt 3 peer; this reading is the emulator's, the owner's bench
+(section 11.4) still owed.
 
 ### 2.6 This tree at `9ca3cca1` [code]
 
@@ -1478,7 +1505,11 @@ driver. **Order down**: the link down to the network driver (no new
 sends accepted), the transmit ring drained or 500 ms, the path entries'
 Valid cleared with record 22 section 6.8's Pending Packets wait (500 ms,
 then 2 us), then each ring disabled by Guide 5.7.3 and its memory kept
-until the next service or the stop. CL states are never enabled by this
+until the next service or the stop. On the ASM4242's host router the
+Host Interface adapter's entry (the transmit entry) is drained once it
+reads Valid 0: that adapter's Pending Packets never clear there, which
+kept the entry quarantined and every later connection of the port
+deferred (revision 16; record 22 section 18.9). CL states are never enabled by this
 driver (record 22 section 1.3), so nothing is turned off for the service
 as Linux does.
 
@@ -1521,13 +1552,27 @@ common buffer:
   (Table 12-21's note), so the transmit ring takes all its bits in one
   write and the receive ring's E2E bits go in a second write, which the
   Spec does not forbid for a receive ring [inf]. This driver advertises
-  bit 0 on every host; `XhciCmNetE2E` 0 (section 8.1) withdraws it. A peer may enable it on
+  bit 0 on every host but the ASM4242's (below); `XhciCmNetE2E` 0 (section 8.1) withdraws it. A peer may enable it on
   its receive ring alone (section 2.4 point 9, as observed of Linux):
   its frames then arrive with no credits used, which a receive ring with
   E2E enabled is taken to accept as any frame while it has a descriptor
   posted, the credits only pacing a sender that waits for them [inf]; a
   frame that finds no descriptor is that sender's loss, counted, and the
   S5 and S9 legs read both.
+- **No E2E on an ASM4242** (revision 15, 2026-11-08): on the ASMedia
+  ASM4242's host router (`ROUTER_CS_0` 174C:2428, the identity record 22
+  section 18.8 keys on) the software connection manager withdraws
+  `prtcstns` bit 0 from the block it serves, so neither side enables E2E
+  (IDS 5.1.5.4), as the firmware CM does on Falcon Ridge (section 4.3).
+  `usb4-emu` models the ASM4242's transmit-ring quirk from a public
+  `thunderbolt-net` patch: a transmit ring other than ring 0 with E2E
+  enabled never completes a descriptor. Read there [emu]: 98 SE on the
+  Alpine Ridge model cabled to XP on the ASM4242 model, both blocks
+  advertising 7, came up through login and both paths with credits
+  granted both ways, yet the XP end's transmit ring never put a frame on
+  the link and no ping was answered. The withdrawal is logged at each
+  start of the service's rings (`cm.net.e2e.off`, the host router's id);
+  `XhciCmNetE2E` keeps its meaning elsewhere.
 - **Sizes**: `XhciCmNetRxFrames` and `XhciCmNetTxFrames` descriptors
   (section 8.1, 128 each by default, 32 to 1024: the floor leaves room
   for the 17 frames of the largest packet, section 7.2, beside the one
@@ -1816,7 +1861,11 @@ A 4 KiB copy per USB4 frame is the cost (section 7.4).
   callback running to end (logged after 1 s and 5 s); the engine's logout
   runs as section 4.2 has it and the rings come down when it ends.
   `QueryInfo` answers `XHCI_CM_NET_E_STATE` until this start's MAC is
-  read.
+  read. Both miniports ask for it at their initialisation for up to 5 s
+  (`NetCmIfMacWait`, `net_cmif.c`) and fail the initialisation without
+  one (`net.mac.none`), never registering an all-zero address; an
+  adapter keeps that MAC until its halt, and a later start of the NHI
+  that reads another is logged at link up (`net.mac.moved`).
 - **The rings** are set up by `RingsUp` on ring 1 as section 5.3 says:
   the transmit ring's base and size, then its control in one write (Valid,
   E2E where used); the receive ring's base, size (Data Buffer Size 0),
@@ -2045,8 +2094,33 @@ side's MTU: `thunderbolt-net` does (section 7.4).
      piece; FIN and PSH are kept on the last piece only and CWR on the
      first only (RFC 3168); and the TCP checksum is computed again per
      piece.
-  Every other frame longer than the maximum (UDP, other protocols, a
-  malformed header) is dropped and counted.
+- **Receive IPv4 fragmentation** (revision 14, 2026-11-08): an IPv4
+  frame longer than the maximum that the split above does not take -
+  another protocol (UDP, ICMP), or a datagram that is already a
+  fragment - is split into IPv4 fragments of at most the maximum before
+  indication, as any node may fragment a datagram whose Don't Fragment
+  flag is clear (RFC 791 sections 2.3 and 3.2), and the receiving stack
+  reassembles it. Read in `usb4-emu` (section 2.5): Windows 11's
+  inbox USB4 P2P adapter came up with an MTU of 62000 and sends what
+  fits it whole, so a 3000-byte ping from it to 98 SE went unanswered
+  until its MTU was set to 1500 by hand [emu]; Linux with a raised MTU
+  does the same. Checked first, nothing rewritten: the header checksum,
+  the total length against the frame, the options well formed, and a
+  datagram that could exist (a fragment with More Fragments carries a
+  multiple of 8 bytes; offset, data and header within 65535). Don't
+  Fragment set: dropped and counted (no ICMP is sent; this driver
+  originates no IP traffic). The first fragment carries the original
+  header whole; every later one only the options whose copied flag is
+  set, zero-padded to a multiple of 4 (RFC 791 section 3.1); each
+  fragment's data is the largest multiple of 8 that fits, the last
+  taking the rest; the offset is the original's plus the bytes before
+  it, More Fragments is set on every fragment but the last, which keeps
+  the original's, the identification is kept, and the header checksum is
+  computed again. The data is copied unchanged, so no upper-layer
+  checksum is touched. IPv6 is never fragmented on the way (RFC 8200
+  section 4.5).
+  Every other frame longer than the maximum (IPv6 other than the TCP
+  split's, other EtherTypes, a malformed header) is dropped and counted.
   The rules are RFC 791, 9293, 3168 (CWR) and 8200's, written for this
   code from those RFCs, not from any implementation. The cost is one
   checksum pass over the payload, beside section 6.3's copy.
@@ -2250,7 +2324,7 @@ INF and install media"):
 
 | Section | Systems | Image | Notes |
 |---|---|---|---|
-| undecorated | 98 SE, ME | `xhcinet.sys` | net-class 9x keys (section 7.8), `DevLoader=*ndis`, the values of section 8.3 under `HKR`, the `Ndi\params` subkeys for the Advanced page |
+| undecorated | 98 SE, ME | `xhcinet.sys` | net-class 9x keys (section 7.8), `DevLoader=*ndis`, the values of section 8.3 under `HKR`, the `Ndi\params` subkeys for the Advanced page; from revision 17 no file copied: Setup places the image (section 9.5) |
 | `.NTx86` | 2000, XP, Vista, 7 | `xhcinet.sys` | `AddService=xhcinet`, `Characteristics` `NCF_PHYSICAL` and `NCF_HAS_UI`, the other keys NDIS reads for a WDM miniport (read from the 2000 DDK's network INF documentation in S6), the values, `Ndi\params` |
 | `.NTx86.6.2` | 8, 8.1, 10 | `xhcinet6.sys` | `AddService=xhcinet` with the NDIS 6 image, `*IfType`, `*MediaType`, `*PhysicalMediaType`, the values, `Ndi\params` |
 | `.NTamd64` | XP x64 to 7 x64 | `xhcinet.sys` (x64) | as `.NTx86` |
@@ -2479,9 +2553,9 @@ the table:
 | `xhcinet.cat` | - | - | `cm\tbnet\` |
 
 `98-me\` carries no `xhcinet6.sys`: 98 SE and ME install
-`[Net.Dev]`, whose one copy is `xhcinet.sys`
-(`[Net.CopyFiles9x]`), and a family holds only what its systems
-install (record 36 section 2). The INF still names `xhcinet6.sys` in
+`[Net.Dev]`, whose one image is `xhcinet.sys` (copied by
+`[Net.CopyFiles9x]` until revision 17, placed by Setup since), and a
+family holds only what its systems install (record 36 section 2). The INF still names `xhcinet6.sys` in
 its `[SourceDisksFiles]`, for the `.NTx86.6.2` models; a name the
 family carries nowhere is skipped by `PKG-FAMILY`'s family filter and
 by the installer's package check, record 36 section 3.1's rule for
@@ -2542,7 +2616,8 @@ network driver's own:
   the local copy on `DevicePath`, where the hardware wizard finds them
   when the adapter appears, and a present adapter goes through the
   helper as every 98 slot's device does (the helper's "anything to do"
-  test names the slot).
+  test names the slot). From revision 17 Setup also places
+  `SYSTEM\xhcinet.sys` itself, before the helper's jobs (below).
 - *`XhciCmNet`*: after the installs and the table's values, the write
   `inst_tbnet_decide` decides: a `REG_DWORD` into each present NHI's
   driver key (the `xhcicm.inf` devices, read again after the installs)
@@ -2573,7 +2648,9 @@ network driver's own:
   both its images on NT (`xhcinet.sys` and `xhcinet6.sys` in
   `System32\Drivers`, each deleted only once the service is gone or
   absent, as every service's file is), and on 98 SE and ME
-  `SYSTEM\xhcinet.sys` goes with the files of `SYSTEM32\DRIVERS`.
+  `SYSTEM\xhcinet.sys` goes with the files of `SYSTEM32\DRIVERS` (from
+  revision 17 with its placement record, and a queued replacement
+  withdrawn first).
   `XhciCmNet` is deleted from `Services\USB` by name, beside the
   table's machine-wide values (this replaces section 9.1's "when its
   value is the one this installer wrote": the uninstall removes the
@@ -2591,6 +2668,45 @@ network driver's own:
   decision's; the page's Next and Back take it into the window's state,
   and the Summary lists "Thunderbolt networking: on" or "off" when it
   writes.
+
+**Revision 17 (2026-11-08): no copy on 98 SE and ME.** Read on 98 SE
+in the emulator (task 47.44's legs; observed only, no Microsoft binary
+read): after Setup's restart the hardware wizard installed the adapter
+from the INF's copy in `INF\OTHER`, resolved `[SourceDisksNames]`'s disk
+1 under Windows' own source path (`C:\WIN98`) and asked for the "xhci98
+xHCI Host Controller Disk" for any copy row of the 9x sections, whatever
+was already at the destination (also with `xhcinet.sys` already in
+`SYSTEM`, and with copy flag 16); `C:\XHCI98` typed answered it. With no
+`CopyFiles` in `[Net.Dev]` or `[Net.Ndis]` (the section the
+`Ndi\Install` keys name, which netdi runs) it did not ask. ME did not
+ask either way. So, the owner's decision of 2026-11-08:
+
+- `xhcinet.inf`'s `[Net.Dev]` and `[Net.Ndis]` copy nothing
+  (`[Net.Ndis]` stays, empty, as the `Ndi\Install` keys' target), and
+  `[Net.CopyFiles9x]` is gone; the NT sections and the 64-bit file are
+  unchanged. The INF gate's NET9X-NOCOPY refuses a `CopyFiles`, an
+  `Include` or a `Needs` in the 9x install section or a section its
+  `Ndi\Install` keys name.
+- On 98 SE and ME Setup places `xhcinet.sys` in `SYSTEM` whenever
+  networking is in the run, through the placement of `xhciuas.sys` and
+  `xhcicm.sys` (record 26 section 5.0, drafts 68, 69 and 75;
+  `sys_9x`, the folder per file from `inst_place9x_dir`): before the
+  helper's jobs; refused as its version group is (`INST_GROUP_NET`); a
+  missing file copied at once; a file in place that is not the
+  package's (the one an earlier release's INF copied, which NDIS.VXD may
+  hold) replaced at the next start through `WININIT.INI`, with the
+  restart asked for; the placement's SHA-256 recorded under
+  `HKLM\Software\xhci98\Placed9x`. `XhciCmNet` 1 is written only once it
+  is placed or queued ("its driver could not be copied to the SYSTEM
+  folder" otherwise). The uninstall withdraws a queued replacement,
+  deletes the file and its record (the record also when the file is
+  already gone).
+- What is given up: an install of the network adapter by hand on 98 SE
+  and ME (Device Manager, Have Disk, `cm\tbnet\`) with no Setup run
+  copies no driver, so the adapter cannot load until `xhcinet.sys` is
+  copied to `SYSTEM`. The readme's networking section says so. Keeping
+  that route too would have taken a second 9x INF with copy rows,
+  ranked against this one by the setup engine; not taken.
 
 **Not done.** The four connection-manager values of section 8.1 beside
 `XhciCmNet` (`XhciCmNetPollMs`, `XhciCmNetRxFrames`,

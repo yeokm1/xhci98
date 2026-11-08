@@ -21,7 +21,7 @@ before that latch closed. The instrument built to read the register that
 settled it is [issue 1](01-windows-98-log-capture.md)'s log channel.
 
 The full bench record is [run-13e.md](../contributing/runs/run-13e.md)
-(Findings 3, O, Q, R, S, T, U, V) and the repair design is
+(its two unexplained episodes and Findings O, Q, R, S, T, U, V) and the repair design is
 [design record 07](../contributing/design/07-controller-recovery-in-place.md).
 
 ---
@@ -32,8 +32,9 @@ Batch 13-E, Windows 98 SE + NUSB 3.3 on the E460, `xhci98.sys` `0.0.0.4`.
 After some device churn the machine reached a state where nothing enumerated
 anywhere, not behind the hub and not on a root port that bypasses the hub.
 Leaf devices vanished on their own, and a hub physically unplugged still
-showed in Device Manager after a Refresh. That last symptom became Finding
-3's signature. Only a cold boot recovered it.
+showed in Device Manager after a Refresh. That last symptom became the
+signature of the deaf root port (`run-13e.md`). Only a cold boot recovered
+it.
 
 It was reduced to a recipe (lessons.md):
 
@@ -266,7 +267,7 @@ From lessons.md:
 
 ## Sources
 
-`docs/contributing/runs/run-13e.md` (Finding 3 and Findings O, Q, R, S, T, U,
+`docs/contributing/runs/run-13e.md` (its two unexplained episodes and Findings O, Q, R, S, T, U,
 V; stage P8 P14s replication; stage P9);
 `docs/contributing/runs/run-13e-evidence/`; `docs/contributing/lessons.md`'s
 hot-plug-events entry;

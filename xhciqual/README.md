@@ -146,7 +146,7 @@ which kind of entry it is:
   `XhciControlLinkNoOp`, `XhciIsochSpuriousSuccess` and
   `XhciAmdSuspendBitClear`. The line says Linux lists the controller; what
   the driver does on a given machine also depends on the value set in its
-  registry key, which `XHCISNAP` reports.
+  registry key, which the driver's snapshot (`XHCITR /snapshot`) reports.
 - **A Linux flag the driver covers without a value of its own** names the
   flag and says `covered` (`XHCI_SPURIOUS_SUCCESS`, `XHCI_AVOID_BEI`,
   `XHCI_ZHAOXIN_HOST`), or states what it is (`XHCI_PME_STUCK_QUIRK`).
@@ -253,6 +253,22 @@ every printed line is checked for each.
 letter rather than the one past the highest, all 26 taken (refused, with
 every letter asked about and none past `Z`), and a clock that is not a
 date and time.
+`xhciqual/test/test_edd.c` (roadmap-usb4 task 47.24) covers `edd.c`,
+`--edd`: it drives the whole mode, `edd_run`, with fake operations that
+record every call, and checks the order (a refusal, or no buffer, makes no
+INT 13h and no PCI access; every INT 13h is made with the buffer allocated,
+prepared afresh and its progress line flushed; the buffer is freed once,
+before the first PCI read; a unit whose 41h fails gets no 48h), the
+environment refusals (Windows, Windows NT's MS-DOS, a check DPMI could not
+make), and the decode: SeaBIOS's 1Ah answer with no path, a final-layout
+USB path on 00:14.0 with a good and a bad checksum, the earlier 42h layout,
+a firmware that writes past the 42h buffer, a failed call holding a
+valid-looking path, a keyed but invalid 4Ah answer beside a valid 42h one,
+two valid answers that disagree, the size word 1Eh and FFFFh, a
+final-layout path in a 42h buffer, other interfaces, classes, host buses
+and addresses. A serial number is planted in every USB path and checked
+absent from the output, every line is held to 79 columns, and the decode
+runs on a buffer that ends on a guard page.
 `xhciqual/test/test_quirks.c` (roadmap task 38.10) covers `quirks.c`:
 for each quirk the driver takes, every id design record 20 section 3.1
 lists carries its flag and prints its registry value and Linux flag, and
@@ -325,8 +341,8 @@ screen ends on the verdict and does not print a next command:
 | Outcome | Means |
 |---|---|
 | `LOOKS QUALIFIED` | no read-only disqualifier; the active tests still decide |
-| `LOOKS QUALIFIED WITH CAVEATS` | as above, but `Interrupt Pin = 0`: the controller has no line interrupt, so `xhci98.sys` polls it (or an MSI-capable OS takes a message interrupt); the line says whether it offers MSI. Since 2.2.0.3 (roadmap-hcd task 36.10) |
-| `DISQUALIFIED` | something a read-only pass genuinely sees: no xHCI function at all, BAR0 above 4 GB or unassigned, a dead MMIO window with no excuse, or no USB2 protocol ports. `Interrupt Pin = 0` was one until 2.2.0.3 |
+| `LOOKS QUALIFIED WITH CAVEATS` | as above, but `Interrupt Pin = 0`: the controller has no line interrupt, so `xhci98.sys` polls it (or an MSI-capable OS takes a message interrupt); the line says whether it offers MSI. Since 2.2.0.3 (roadmap-hcd task 36.10). Or no USB2 protocol ports: C6 and C8 cannot exercise such a controller, a limit of this tool and not a disqualification of the controller or of the driver, which drives SuperSpeed too (since 3.4.2.0; owner, 2026-11-06) |
+| `DISQUALIFIED` | something a read-only pass genuinely sees: no xHCI function at all, BAR0 above 4 GB, unassigned or an I/O-space BAR, or a dead MMIO window with no excuse. `Interrupt Pin = 0` was one until 2.2.0.3, and no USB2 protocol ports until 3.4.2.0 |
 | `CANNOT SAY` | a state this pass may not change is in the way: the controller is not in D0, or Memory Space Enable is clear |
 
 The `Probe safety: PASS - no PCI configuration writes.` line is printed rather
@@ -340,7 +356,8 @@ scan means "not qualified here", not "something went wrong", and a
 `LOOKS QUALIFIED` screen comes with it. **2** is a usage error: an argument
 this tool does not know, or a bad value for one. **3** (from 2.2.0.3) is a
 full active run whose controllers were all qualified and at least one only
-**QUALIFIED WITH CAVEATS** - no working interrupt, so the driver polls it;
+**QUALIFIED WITH CAVEATS** - no working interrupt, so the driver polls it,
+or no USB2 protocol ports, so C6 and C8 could not exercise it (3.4.2.0);
 see "What a verdict means". **4** (from roadmap-hcd task 38.1) is a
 `--log-stamp` run refused before anything was read: the DOS clock is not a
 date and time, the minute's 26 names are all taken, or the log cannot be
@@ -519,8 +536,8 @@ strips any run of leading `-` or `/` from an option, so `/scan` and `-scan`
 are read as `--scan`. `print_usage()` omits `--controller`; this table is the
 complete one.
 
-Other flags. Only `--quick`, `--probe-only` and its alias `--no-active` select
-a read-only run; `--no-page`, `--serial`, `--log`, `--done-flag` and `--help`
+Other flags. Only `--quick`, `--probe-only` and its alias `--no-active`, and
+`--edd`, select a read-only run; `--no-page`, `--serial`, `--log`, `--done-flag` and `--help`
 are modifiers that say what to do with the report. A modifier on its own does
 NOT make the run read-only, because any argument at all turns off the
 no-argument quick scan (`opt_quick = (argc == 1)` in `main.c`), so
@@ -602,8 +619,15 @@ no-argument quick scan (`opt_quick = (argc == 1)` in `main.c`), so
   `--quick` or `--probe-only` for a read-only run. The name is built by
   `stamp.c`, a pure function of the clock's fields and an "exists"
   predicate (and, for the create, `stamp_create` with an injected create),
-  and is the scheme `XHCISNAP` uses for its own outputs.
+  and is the scheme XHCITR's snapshot files use (`XHCITR /snapshot`;
+  `XHCISNAP` up to 3.0.0.0).
   `QUALREP.BAT` below is its caller.
+- `--edd` (roadmap-usb4 task 47.24, owner 2026-11-06): ask the firmware,
+  through INT 13h 41h and 48h, for each disk unit's EDD 3.0 device path,
+  and stop before any controller is touched. A mode of its own: only
+  `--log`, `--log-stamp`, `--serial`, `--no-page`, `--no-sysinfo`,
+  `--done-flag` and `--help` may go with it, and anything else is a usage
+  error (exit 2). See "EDD device paths (`--edd`)" below.
 - `--gsi N`, also `--gsi=N` (N decimal, 0 to 255): compare the Intel PCH
   routing against N, the interrupt Windows reports for the controller
   ("Intel PCH interrupt routing" below). It is accepted only beside
@@ -648,9 +672,9 @@ The ISR disables and acknowledges xHCI, re-masks the line, increments its
 locked counter, sends EOI, and returns with an explicit 32-bit `IRETD`.
 Teardown restores the prior protected-mode vector before restoring the saved
 PIC masks. C6/C8 do not run and the result is `IRQ SELF-TEST PASS/FAILED`,
-not a full machine qualification verdict. A controller with a static
-disqualifier (no USB 2.0 ports, for example) whose self-test gates all pass
-closes `NOT QUALIFIED - every IRQ self-test gate passed`, not `FAILED`.
+not a full machine qualification verdict. A controller with no USB 2.0
+protocol port whose self-test gates all pass closes `IRQ SELF-TEST PASS`
+with that caveat (exit 3; a static disqualifier until 3.4.2.0).
 
 ```bat
 XHCIQUAL xhci --irq-selftest --no-page --log XIRQ.LOG
@@ -660,8 +684,10 @@ XHCIQUAL xhci --irq-selftest --no-page --log XIRQ.LOG
 
 QUALIFIED = C2 reset, C3 family-specific DMA proof, and C4 legacy-IRQ
 delivery all PASS, with C1 handoff either PASS or a recorded firmware warning
-and a non-empty root-port set. For xHCI the USB2 protocol topology is also
-required; the context size is reported beside the verdict (`csz` in the
+and a non-empty root-port set. An xHCI controller with no USB2 protocol
+port is QUALIFIED WITH CAVEATS at best: C6 and C8 use those ports and
+cannot exercise it, a limit of this tool and not a fault (until 3.4.2.0 it
+disqualified); the context size is reported beside the verdict (`csz` in the
 controller block) and is not a condition of it. OHCI currently returns QUALIFIED WITH
 WARNINGS when SOF assertion passes and PCI INTx status is either observed or
 unavailable on a pre-PCI-2.3 interface, because CPU ISR delivery is not
@@ -696,8 +722,8 @@ outcome as "IRQ SELF-TEST: NO WORKING INTERRUPT", also exit 3.
 DISQUALIFIED on, from `verdict.c` (xHCI), `legacy.c` (EHCI/OHCI),
 `mmiodiag.c` and `main.c`: C4 fails (as above), PCI
 2.3 INTx status fails, C3 never completes, C2 reset fails, cleanup could not
-quiesce the controller, the controller reports no root ports, no USB2 protocol
-ports (B7 empty, xHCI only), BAR0 above 4 GB, BAR0 unassigned, PCI Memory
+quiesce the controller, the controller reports no root ports, BAR0 above
+4 GB, BAR0 unassigned, PCI Memory
 Space Enable could not be set, BAR0 MMIO not accessible with MSE set, and -
 in the quick scan - no xHCI function present at all.
 
@@ -800,7 +826,7 @@ from a stock Win98 boot floppy by keeping only `IO.SYS`, `MSDOS.SYS`,
 
 ### What the matrix covers
 
-The matrix stands at 54 cases: one standalone-help case, the isolated xHCI
+The matrix stands at 55 cases: one standalone-help case, the isolated xHCI
 IRQ self-test, 28 controller/device cases (since 2026-10-18 one is OHCI
 under `--poll-only`, whose C4 still runs and reads WARN), two `--probe-only` cases (one
 scanning xHCI alone, one scanning xHCI, EHCI and OHCI together), one
@@ -840,9 +866,18 @@ the quick scan (the one screen line and the block on the serial line), and
 `--probe-only` with a `pci-bridge` at `00:1C.0`, which is named from
 configuration space with `no entry`.
 
+Since roadmap-usb4 task 47.24, one runs `--edd` with a USB stick on the
+xHCI at power-on (`edd_seabios`): SeaBIOS rel-1.17.0 names the staged C:
+on the PIIX IDE (unit 80h) by a full EDD 3.0 path, `ATA` on PCI `00:01.1`
+in both layouts with good checksums, while its size word says 1Eh - the
+case that shows why the size word must not decide - and answers the stick
+(unit 81h) with 1Ah bytes and no path; the other units must read `absent or
+unsupported`, with no PCI configuration write and no controller test run. `-PortBase N` gives case i
+the monitor port N + i, for a host whose free port range is narrow.
+
 The cases cover all eight controller presence masks, empty and attached
-variants, HS storage, FS HID, OHCI HID/storage, a USB hub, an unmanaged
-SuperSpeed-only xHCI attachment, mixed devices across multiple controllers,
+variants, HS storage, FS HID, OHCI HID/storage, a USB hub, a
+SuperSpeed-only xHCI attachment (which C6 and C8 do not exercise), mixed devices across multiple controllers,
 combined family selectors, a selected-but-absent family, and `--log ohci`
 log-name/selector disambiguation. Five `--poll-only` cases (xHCI empty, xHCI
 HS storage, an xHCI hub that generates repeated port-status-change events,
@@ -1431,3 +1466,78 @@ System: QEMU Standard PC (i440FX + PIIX, 1996); BIOS rel-1.17.0-0-gb52ca86e094d
 CPU: QEMU Virtual CPU version 2.5+; RAM 63 MB; DOS 7.10
 Found 3 USB host controller(s).
 ```
+
+## EDD device paths (`--edd`)
+
+Roadmap-usb4 task 47.24 (owner, 2026-11-06), for design record 37's Q1
+(`docs/contributing/design/37-win9x-bios-usb-disk-after-takeover.md`,
+sections 4.1 and 10): does the firmware name a USB disk it presents at
+power-on by an EDD 3.0 device path that points at the xHCI? `XHCIQUAL
+--edd` asks it, through INT 13h function 41h (BX=55AAh) and function 48h,
+for each hard-disk unit from 80h to 87h, and stops. Floppy units 00h and
+01h and CD units E0h and up are not asked, and the report says so. It is
+off by default: `XHCIQUAL` with no arguments is still the quick scan.
+
+- **Before any controller.** `main()` takes the mode before the quick scan
+  and the full run, and nothing ahead of it reads PCI or a controller (the
+  INT 24h chain, the done flag, the arguments, the stamped log's DOS calls,
+  the report's sinks), so the handoff's USBLEGSUP and the EHCI and OHCI
+  legacy registers are never touched and the firmware still owns every
+  controller when it answers. The PCI reads it makes - the xHCI scan, and
+  the vendor, device and class at each address a path names - come after
+  the last INT 13h call, with the buffer freed; `Probe safety` counts the
+  writes, which must be none.
+- **MS-DOS itself.** INT 2Fh 1600h and INT 21h 3306h come first: Windows
+  running (an MS-DOS Prompt, where INT 13h is Windows' own) or Windows NT's
+  MS-DOS (true version 5.50) is refused with exit 2 before any disk is
+  asked, and so is a host that cannot make either call. DPMI 0400h says
+  whether reflected interrupts run in real or virtual-8086 mode; virtual-8086
+  mode (EMM386 or another memory manager) is a warning. Run it at "Command
+  prompt only" after a cold start (`hardware-testing.md`, "ThinkPad P14s Gen
+  1 - does the firmware name its USB stick?"). "Restart in MS-DOS mode" is
+  not that: Windows has run, and `xhci98.sys` has taken the controller.
+- **The calls.** Through DPMI 0300h (`sysprobe.c`, `edd_dos_ops`), with a
+  real-mode stack of 4 KiB and a buffer of the tool's own in one DPMI 0100h
+  block, DS:SI a real segment and offset, freed with 0101h. For each unit,
+  41h; when it answers (carry clear, BX=AA55h), 48h twice, first with a
+  4Ah-byte buffer (the final EDD 3.0 layout), then 42h (the earlier one),
+  each cleared afresh with its size word set and guard bytes after it up to
+  200h. When 41h does not answer, the unit is "absent or unsupported" and
+  48h is not asked; 48h is asked whatever 41h's version and bits say, and
+  they qualify the answer. A call the DPMI host did not make prints as
+  `DPMI error`, never as a BIOS answer. Before each call the unit and
+  function are printed and flushed to the screen, the log and the serial
+  line, so a call that never returns shows where it stopped: a DPMI call has
+  no time-out. A guard byte that changed is reported; a write past 200h
+  cannot be seen.
+- **The decode** (`edd.c`, pure): the offsets of T13 project 1386D revision
+  5 section 6.8 and Phoenix's EDD 3.0, with the field and bit names of
+  Linux's `include/uapi/linux/edd.h` (`struct edd_device_params`,
+  `EDD_EXT_*`, `EDD_INFO_*`; GPL-2.0 WITH Linux-syscall-note; facts only,
+  nothing copied). A 48h answer counts only with carry clear and AH 00h; a
+  path only with key BEDDh at 1Eh, a length of 2Ch (checksum at 49h, over
+  1Eh-49h) or 24h (checksum at 41h, over 1Eh-41h) that fits the buffer
+  given, and a checksum that holds. The size word returned is printed and
+  never decides. Each unit's answer is the better of its two trials, and two
+  valid answers that disagree say so.
+- **The report.** On the screen, in the log and on the serial line: a line
+  per call, the PCI xHCI functions, `Probe safety`, and one line per unit in
+  Q1's terms, `EDD device path, per unit:` - for example `unit 82h: named
+  as USB on the xHCI at 00:14.0`, or on SeaBIOS `unit 82h: no device path
+  (size word 001Ah, no key BEDDh): not named`. In the log (on the screen when
+  there is none), per unit and trial: 41h's registers and CX bits, 48h's
+  CF, AH and size word, the flags and geometry, the key, length and layout,
+  the host bus and PCI address with that function's id and class, whether
+  it is an xHCI and in the scan, the interface, the checksum byte and sum
+  with PASS or FAIL, the guard, and the raw bytes. **No identifiers:** the
+  device path at 38h-47h can carry a serial number (the USB form does), so
+  its bytes are never printed: the decode says zero or nonzero (withheld)
+  for each half, and the dump prints each byte as `00` or `xx`.
+- Exit 1 when the read is done, 2 when it is refused or the command line is
+  wrong.
+
+A firmware can answer 48h for a USB disk, or for a disk on an AHCI
+controller, with 26 bytes and no path, and still name an IDE disk by a full
+path; a unit it does not name reads `not named`, which says nothing about
+the disk itself. Whether a machine's firmware names its USB stick is what
+the mode is for.

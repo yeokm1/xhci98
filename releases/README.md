@@ -95,6 +95,59 @@ publish a version with no entry in it and embeds the file into each release, so
 every published directory carries the history up to and including itself, and
 no version can ship that a user cannot tell apart from the one before it.
 
+What a cut produces today, drawn from `3.4.1.0/` (the family layout of
+roadmap-usb4 task 45.44 and design record 36, from `3.4.0.0`):
+
+```
+releases/
+  README.md              this file (maintainer-facing, stays markdown)
+  history.md             the changelog - hand-written, one entry per version
+  3.4.1.0/
+    readme.txt           generated - the standalone install and usage guide
+    LICENSE              copied from the repository root; the readme cites it
+    SETUP.EXE            the installer's window, from 3.1.0.0 (record 26)
+    INSTALL.BAT          the window, or with /console the console tool, from
+                         tools\xhciinst\ (design records 23 and 26)
+    INTEGRATE.TXT        which folder to give nLite, NTLite or DISM
+    downloads.txt        the record of the downloads cut (not uploaded)
+    drvpack.txt          the driver pack's record (not uploaded)
+    otherpkgs.txt        the other drivers' record (not uploaded)
+    wdmfree-pin.txt      the free set's pin, copied (not uploaded)
+    98-me/               Windows 98 SE and ME
+      xhci98.inf, xhci98.sys, xhciuas.inf, xhciuas.sys
+      cm/                xhcicm.inf, xhcicm.sys, XHCIPFW.VXD; tbnet/ with
+                         xhcinet.inf and xhcinet.sys
+      stor98/            stor98.inf (the 9x INF), stor98.mpd, S98VSD.VXD and
+                         the stor98-*.txt notices
+    nt-x86/              32-bit Windows 2000 to 10
+      xhci98.inf, xhci98.sys, xhcihlpr.sys, xhciuas.inf, xhciuas.sys,
+      txtsetup.oem       (the root files are the F6 floppy)
+      cm/                xhcicm.inf, xhcicm.sys, xhcicmf.inx (the filter's
+                         one copy), xhcihlpr.sys, XHCIPFW.SYS; tbnet/ with
+                         xhcinet.inf, xhcinet.sys and xhcinet6.sys
+      stor98/            stor98.inf, stor98.sys and the notices
+    nt-x64/              64-bit XP x64 to 10: the same less xhcihlpr.sys and
+                         XHCIPFW, plus xhci98-test.cer and a .cat beside each
+                         INF (xhcicmf.cat beside xhcicmf.inx)
+    tools/
+      portsw/            portsw.vbs, portsw-on.bat and portsw-off.bat - the
+                         Intel port switchover
+      silent/            SILENT.REG, SILENT.VBS, silent-on.bat and
+                         silent-off.bat - the silent install's settings
+      xhciinst/          XHCIINST.EXE, XHCIIN64.EXE, XHCIWIZ.EXE,
+                         XHCIWZ64.EXE and XHCIDI.EXE - the installer
+      xhcimark/          XHCIMARK.EXE, XHCIMK64.EXE - the safe-removal mark
+                         service, from 3.1.0.0
+      xhciqual/          XHCIQUAL.EXE, XHCIQUAL.MAP and QUALREP.BAT - the DOS
+                         "will this machine work" checker
+      xhcitr/            XHCITR.EXE, XHCITR64.EXE - the USB tree tool and the
+                         snapshot reader
+```
+
+The block below is `3.0.0.0/`, kept because every cut up to `3.3.0.0` had
+its flavour-directory shape (`release-x86/`, `release-x64/` and, up to
+`3.3.0.0`, `debug-x86/` and `debug-x64/`):
+
 ```
 releases/
   README.md              this file (maintainer-facing, stays markdown)
@@ -143,40 +196,47 @@ releases/
                          Intel port switchover
 ```
 
-Each of the five tool directories also carries a generated `readme.txt` and a
-generated `NOTICE.TXT`, the third-party notices for what is statically linked
-into its executables (for `XHCIQUAL.EXE`, a DOS/32A executable, that extender
-and the Open Watcom C runtime).
+Each tool directory holding an executable (in `3.4.1.0` `xhciinst\`,
+`xhcimark\`, `xhciqual\` and `xhcitr\`; `xhcisnap\` up to `3.0.0.0` and
+`xhcicln\` from `2.4.0.0` to `3.2.0.0` in their releases) also carries a
+generated `readme.txt` and a generated `NOTICE.TXT`, the third-party notices
+for what is statically linked into its executables (for `XHCIQUAL.EXE`, a
+DOS/32A executable, that extender and the Open Watcom C runtime).
 
 The upload set is this tree zipped, less the release's records (from
-3.2.0.0, see "What actually gets uploaded"). Since 3.1.0.0 (roadmap-usb4 task
-42-A.30) the `release-x86\` and `release-x64\` directories here also hold the
-Stor98 that `scripts\build-driver.cmd` built from `src\stor98` with the
-drivers, at the same version and date (`stor98.inf`, `stor98.mpd` and
-`stor98.sys` on x86, `stor98.inf` and `stor98.sys` on x64, and
-`stor98-LICENSE.txt`, `stor98-NOTICE.txt` and `stor98-readme.txt`); the x64
-`stor98.sys` is signed with the other x64 drivers. `make-release.ps1
--NoStor98` cuts without it, and the debug directories never carry it. In
-3.0.0.0 a pinned Stor98 release (0.4.0.0) was added to the upload set alone.
-See "What actually gets uploaded" below.
+3.2.0.0, see "What actually gets uploaded"), with the download's `USBDRV\`
+added. From 3.4.0.0 the Stor98 files are in each family folder's `stor98\`
+(the first block); from 3.1.0.0 (roadmap-usb4 task 42-A.30) to 3.3.0.0 the
+`release-x86\` and `release-x64\` directories held the Stor98 that
+`scripts\build-driver.cmd` built from `src\stor98` with the drivers, at the
+same version and date (`stor98.inf`, `stor98.mpd` and `stor98.sys` on x86,
+`stor98.inf` and `stor98.sys` on x64, and `stor98-LICENSE.txt`,
+`stor98-NOTICE.txt` and `stor98-readme.txt`); the x64 `stor98.sys` is signed
+with the other x64 drivers. `make-release.ps1 -NoStor98` cuts without it,
+and the debug directories of those releases never carried it. In 3.0.0.0 a
+pinned Stor98 release (0.4.0.0) was added to the upload set alone. See "What
+actually gets uploaded" below.
 
 That is the schema a release cut today has: the generated readme sends the
 reader to a licence, so the directory has to carry one, and the tools are the
 published files that are not only this project's code, so each tool directory
 carries the notices for what is linked into it.
 
-Read the block above as what a cut produces today (it is drawn from
-`3.0.0.0/`). Because a version directory is written once, a directory cut
-before a piece of that schema existed keeps the shape it was cut with, and the
-way to tell is to look in it rather than here.
+The first block is what a cut produces today; the second is `3.0.0.0/`'s.
+Because a version directory is written once, a directory cut before a piece
+of that schema existed keeps the shape it was cut with, and the way to tell
+is to look in it rather than here.
 
-Each tool directory is absent under its skip switch, its `NOTICE.TXT` with it:
-`tools\xhciqual\` under `-SkipQualtool`, `tools\xhcisnap\` under
-`-SkipSnapTool`, `tools\xhcicln\` under `-SkipCleanTool` (up to 3.2.0.0),
-`tools\xhcitr\` under `-SkipTrayTool`, and `tools\xhciinst\` and
-`INSTALL.BAT` under `-SkipInstallTool`. None of them belongs in a real cut: a
-release cut with `-SkipSnapTool` publishes a driver whose read channel nobody
-can open, which on Windows 98 is the whole of what a user could have sent back.
+Each tool directory is absent under its skip switch, its `NOTICE.TXT` with
+it: `tools\xhciqual\` under `-SkipQualtool`, `tools\xhcimark\` under
+`-SkipMarkTool`, `tools\xhcitr\` under `-SkipTrayTool`, and
+`tools\xhciinst\` and `INSTALL.BAT` under `-SkipInstallTool`
+(`-SkipDiHelper` leaves out `XHCIDI.EXE` alone). Two switches are retired
+with their tools: `-SkipSnapTool` (`tools\xhcisnap\`, up to 3.0.0.0) and
+`-SkipCleanTool` (`tools\xhcicln\`, up to 3.2.0.0). None of them belongs in
+a real cut: a release cut with `-SkipTrayTool` publishes a driver whose
+snapshot nobody can read, which on Windows 98 is the whole of what a user
+could have sent back.
 
 The published files are `readme.txt`, not `README.md`. They are read on the
 target machine, in Windows 98's Notepad or DOS `EDIT`, where a `.md` file is
@@ -190,10 +250,10 @@ The INFs name only this project's own files in `[SourceDisksFiles]`:
 `src\xhci98.inf` names `xhci98.sys`, `xhcihlpr.sys` and itself, the UAS INF
 `xhciuas.sys` and itself, the connection manager's `xhcicm.sys` and itself,
 and its filter INF `xhcicm.sys`. A published directory carries those files,
-`txtsetup.oem` and, on x64, the certificate (the block above), and so does the
-release download, and since 3.1.0.0 a `release-` directory the Stor98 files
-as well. `src\xhci98-amd64.inf`
-names the same files less `xhcihlpr.sys`, and
+`txtsetup.oem` and, on x64, the certificate and the catalogs (the blocks
+above), and so does the release download, and since 3.1.0.0 the Stor98 files
+as well (from 3.4.0.0 in each family folder's `stor98\`).
+`src\xhci98-amd64.inf` names the same files less `xhcihlpr.sys`, and
 `scripts\inf-gate\test-inf-checks.ps1` compares the two files'
 `[SourceDisksFiles]` directly, the helper excepted, so that the 64-bit media
 cannot quietly grow another.
@@ -240,12 +300,11 @@ an INF or a package that names one of those Microsoft files (`OS-MEDIA`,
 `PKG-MSFILE`), so the download cannot drift back. From `3.2.0.0` one other
 exception is decided, and kept out of this tracked tree: NUSB 3.3's seven
 Windows 98 SE storage files, unmodified, from the driver pack, in the upload
-set only, at the download's root as `NUSB33\` (roadmap-usb4
-task 43.3; legal-provenance.md section 5). What this tree holds of it is
-`<version>\drvpack.txt`: whether the download carries the pack, and if it
-does, the pack's revision and each file's hash, from which `-UploadSetOnly`
-rebuilds the download. A cut is refused while any of the seven names is
-here or among the tracked files.
+set only, as `USBDRV\NUSB33\` (roadmap-usb4 task 43.3; legal-provenance.md
+section 5). What this tree holds of it is `<version>\drvpack.txt`: whether
+the download carries the pack, and if it does, the pack's revision and each
+file's hash, from which `-UploadSetOnly` rebuilds the download. A cut is
+refused while any of the seven names is here or among the tracked files.
 
 ```
 powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Flavor release
@@ -282,38 +341,52 @@ does - `-Arch amd64` writes `out\pkg-release-amd64\`, around
   `make-release.ps1 -UploadSetOnly -Version <version>` as the repair.
 - **From `3.2.0.0`, up to three of these pairs, one per download**
   (roadmap-usb4 task 43.48; design record 26 section 6.7): the base pair
-  above, carrying `NUSB33\`; `upload-<version>-free\` and
-  `xhci98-<version>-free.zip`, which add `WDMFREE\` (the usb-wdm-free
+  above, carrying `USBDRV\NUSB33\`; `upload-<version>-free\` and
+  `xhci98-<version>-free.zip`, which add `USBDRV\FREE\` (the usb-wdm-free
   drivers `scripts\package\wdmfree-pin.txt` names); and
   `upload-<version>-nonfree\` and `xhci98-<version>-nonfree.zip`, which add
-  `NONFREE\` (the `non-free/` folder of usb-wdm-nonfree at the tag
+  `USBDRV\NONFREE\` (the `non-free/` folder of usb-wdm-nonfree at the tag
   `package-common.ps1` pins, from the `-DriverPackRoot` checkout). Each
-  holds the one before and its own `readme.txt`, rendered from the
-  published one (download 1's), whose "THIS DOWNLOAD" section, contents and
+  holds the one before and its own `readme.txt`, rendered from the published
+  one (download 1's), whose "THIS DOWNLOAD" section, contents and
   Microsoft-files paragraph it replaces. While the pin names no release the
-  cut makes no `-free` pair, and the `-nonfree` one carries no `WDMFREE\`
-  (proposal for the owner); `-NoNonFree` and `-NoWdmFree` leave a pair out.
-  Each set's `SHA256.TXT` is held to the hash the installer carries
-  (`INST_NONFREE_SUMS`, `INST_WDMFREE_SUMS` in `xhciinst\inst_core.h`),
-  so a pin and the installer change together. `releases\<version>\
-  downloads.txt` records the pairs cut and each set's tag, commit and
-  hashes, with a copy of the free pin beside it, and `-UploadSetOnly`
-  rebuilds every recorded pair from them. Upload every zip of the cut.
+  cut makes no `-free` pair, and the `-nonfree` one carries no
+  `USBDRV\FREE\` (proposal for the owner); `-NoNonFree` and `-NoWdmFree`
+  leave a pair out. Each set's `SHA256.TXT` is held to the hash the
+  installer carries (`INST_NONFREE_SUMS`, `INST_WDMFREE_SUMS` in
+  `xhciinst\inst_core.h`), so a pin and the installer change together.
+  `releases\<version>\ downloads.txt` records the pairs cut and each set's
+  tag, commit and hashes, with a copy of the free pin beside it, and
+  `-UploadSetOnly` rebuilds every recorded pair from them. Upload every zip
+  of the cut.
 
 The assembly gates each published directory as the install media it is
 (`check-inf.ps1 -PackageDir`, under the architecture that directory is for:
-every file the INF names present, and no Microsoft file beside them), refuses
-a file the INF does not name, and
-writes the archive's entry names with forward slashes so that `unzip` on a
-Linux or macOS host unpacks it into directories. Do not hand-assemble the
-asset.
+every file the INF names present, and no Microsoft file beside them),
+refuses a file the INF does not name, runs `PKG-MSFILE`'s Microsoft-file
+name list over the whole upload root as well (`check-inf.ps1
+-MsFileScanDir`), holds the root to the files the cut writes (`readme.txt`,
+`LICENSE`, `SETUP.EXE`, `INSTALL.BAT`, `INTEGRATE.TXT`), the family folders,
+`tools\` and `USBDRV\` and each `tools\<name>\` to the files the cut stages
+there, checks each x64 driver's embedded signature against the pinned test
+certificate (a catalog cannot vouch for it: a PE image's catalog digest
+leaves the certificate table out) and `xhci98-test.cer` as that
+certificate's public half, and writes the archive's entry names with forward
+slashes so that `unzip` on a Linux or macOS host unpacks it into
+directories. Do not hand-assemble the asset.
 
 ## release or debug
 
-`release-x86/` is the build to install (`release-x64/` on 64-bit Windows, when
-a cut carries one). What this section is about is the flavour half of the name;
-the architecture half decides nothing else, and the paragraphs below are true of
-both.
+From `3.4.0.0` a cut publishes one build, `release`, re-laid by Windows
+family into `98-me/`, `nt-x86/` and `nt-x64/` (roadmap-usb4 tasks 45.44 and
+45.45, design record 36), and has no `debug` directory; `AGENTS.md`, "Build
+flavours", is the current rule. This section and the table below describe
+the flavour directories as they were cut up to `3.3.0.0`, which those
+releases keep, and the miniport's log sink as it stood then. Up to
+`3.3.0.0`, `release-x86/` is the build to install (`release-x64/` on 64-bit
+Windows, when a cut carries one). What this section is about is the flavour
+half of the name; the architecture half decides nothing else, and the
+paragraphs below are true of both.
 
 `release` is the build to install. No per-line tracing: none of the
 `XHCI_DBG_*` sites compile into it, so it does not carry the `0xE9` debug
@@ -414,16 +487,17 @@ undecorated models section outright and the 32-bit engines skip a
 `[Manufacturer]` line decorated `NTamd64`, so the wrong directory offers no
 driver at all rather than installing a binary that cannot load.
 
-**An ordinary cut publishes all four directories.** `make-release.ps1 -Arch`
+**An ordinary cut up to `3.3.0.0` published all four directories** (two from
+task 45.45; from `3.4.0.0` the family folders). `make-release.ps1 -Arch`
 defaults to `x86,x64` since the owner's instruction of 2026-09-09, on the
 strength of roadmap task 21.5: the amd64 package installed through
-`src\xhci98-amd64.inf`'s `.NTamd64` half on a Windows XP Professional x64 SP2
-guest and passed every checkpoint clause on the `qemu` flavour, and then the
-`release` flavour - the one this publisher actually stages - was installed and
-read separately on the same guest, because a flavour that is never published
-cannot stand in for one that is. It defaulted to `x86` alone until that ran.
-`scripts\package\test-package.ps1` asserts the default, so changing it back is
-as deliberate an act as changing it forwards was.
+`src\xhci98-amd64.inf`'s `.NTamd64` half on a Windows XP Professional x64
+SP2 guest and passed every checkpoint clause on the `qemu` flavour, and then
+the `release` flavour - the one this publisher actually stages - was
+installed and read separately on the same guest, because a flavour that is
+never published cannot stand in for one that is. It defaulted to `x86` alone
+until that ran. `scripts\package\test-package.ps1` asserts the default, so
+changing it back is as deliberate an act as changing it forwards was.
 
 **Read the x64 half of a cut as narrowly as its evidence is**: three guests
 (Windows XP x64, Vista x64 and Windows 7 x64), all virtual machines, and
@@ -470,9 +544,10 @@ because a release directory can end up on media a Windows 98 setup engine has
 to read.
 
 `docs/using/release-notes.md` is the user-facing document: requirements, the
-qualifier to run first, install steps per target, the diagnostic settings and
-the `XHCISNAP` report tool that reads them back, and the known limitations.
-Read it before installing anything.
+qualifier to run first, install steps per target, the diagnostic settings
+and the snapshot that reads them back (`XHCITR /snapshot`, from `3.1.0.0`;
+`XHCISNAP` before), and the known limitations. Read it before installing
+anything.
 
 ## Cutting a release
 
@@ -585,23 +660,25 @@ being published as. An existing version directory is never overwritten without
 
 Bumping the version is a separate step. The number and the release date are
 edited in `src\xhci_version.h`, and two kinds of copy that cannot include a
-header are changed to match: the `DriverVer` of every `*.inf` under `src\`,
-`src\uas\` and `src\cm\` (eight files: `xhci98.inf`, `xhci98-amd64.inf`,
-`xhciuas.inf`, `xhciuas-amd64.inf`, `xhcicm.inf`, `xhcicm-amd64.inf`,
-`xhcicmf.inf` and `xhcicmf-amd64.inf`), and the `assemblyIdentity` version in
-`xhcitr\xhcitr.manifest`. Three gates check them against the header on every
-build (rule BOTH-VERSION in each): `scripts\inf-gate\check-inf.ps1` the two
-`xhci98` INFs and the manifest, `scripts\inf-gate\check-uas-inf.ps1` the two
-UAS INFs and `scripts\inf-gate\check-cm-inf.ps1` the four connection manager
-INFs; the self-tests also check the two `xhci98` INFs against each other. Five
-tools expand the header's macro - `xhciqual/qual.h`, `xhcisnap/xhcisnap.c`,
-`xhciinst/xhciinst.c`, `xhcicln/xhcicln.c` (up to 3.2.0.0) and
-`xhcitr/xhcitr.c` - because each is published inside the release directory
-and prints or compares its version,
-and `make-release.ps1` throws on a staged tool older than its sources or the
-header, or on a tool source that has stopped expanding it.
-`docs/contributing/build-and-test.md`, "Versioning the driver", is the
-authority.
+header are changed to match: the `DriverVer` of all thirteen package INFs
+(the two `xhci98`, two `xhciuas`, four connection manager and two networking
+INFs, and Stor98's three), and the `assemblyIdentity` version of the four
+manifests (`xhcitr\xhcitr.manifest`, `xhciinst\setup.manifest`,
+`xhciinst\xhciwiz.manifest` and `xhciperf\xhciperf.manifest`);
+`src\xhci_version.h`'s header lists every one. Five gates check the INFs
+against the header on every build: `scripts\inf-gate\check-inf.ps1` the two
+`xhci98` INFs and `xhcitr.manifest`, `check-uas-inf.ps1` the two UAS INFs,
+`check-cm-inf.ps1` the four connection manager INFs, `check-net-inf.ps1` the
+two networking INFs and `check-stor98-inf.ps1` Stor98's three; the
+self-tests also check the two `xhci98` INFs against each other, and the
+other three manifests no gate reads. The tools published inside the release
+directory expand the header's macro (`xhciqual/qual.h`,
+`xhciinst/inst_eng.c`, `xhcitr/xhcitr.c` and the mark service; up to 3.0.0.0
+`xhcisnap/xhcisnap.c` and up to 3.2.0.0 `xhcicln/xhcicln.c`) because each
+prints or compares its version, and `make-release.ps1` throws on a staged
+tool older than its sources or the header, or on a tool source that has
+stopped expanding it. `docs/contributing/build-and-test.md`, "Versioning the
+driver", is the authority.
 
 A TEST build is cut by the same script with `-TestLabel`, for example
 `-TestLabel "bench pending"`: the generated `readme.txt` then opens with a

@@ -3,7 +3,8 @@
  * (design record 31 section 5, roadmap-usb4 task 44.3): the CONFIGMG
  * worker (cm_cfgwk.c) gives every NVMe-class devnode below an active
  * member the id PCI\XHCI98_TUNNEL&CC_010802 with Add_ID, as a compatible
- * id, and re-runs the install of one that has no driver. This file holds
+ * id, then reads the devnode back and logs it; it re-runs no install
+ * (record 31 section 5.2 has why that was dropped). This file holds
  * the id list's test, the step's decisions and the per-boot record of the
  * devnodes the worker has dealt with. DDK-free and host-tested
  * (test\test_cm_tagid.c).

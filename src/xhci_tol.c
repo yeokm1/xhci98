@@ -199,6 +199,37 @@ ULONG XhciTolHaltConfirmed(ULONG epState)
             epState == XHCI_EP_STATE_ERROR) ? 1UL : 0UL;
 }
 
+ULONG XhciTolStopRest(const XHCI_TOL_STOP_IO *io, PULONG state,
+                      PULONG restops)
+{
+    ULONG code;
+    ULONG s;
+    ULONG again;
+
+    *restops = 0;
+    code = io->Stop(io->Context);
+    for (;;) {
+        s = io->State(io->Context);
+        *state = s;
+        if (code != XHCI_CC_SUCCESS && code != XHCI_CC_CONTEXT_STATE_ERROR) {
+            return XHCI_TOL_STOP_GIVEUP;
+        }
+        again = (s == XHCI_EP_STATE_RUNNING ||
+                 (code == XHCI_CC_CONTEXT_STATE_ERROR &&
+                  s == XHCI_EP_STATE_STOPPED)) ? 1UL : 0UL;
+        if (!again) {
+            return XHCI_TOL_STOP_REST;
+        }
+        if (*restops >= XHCI_TOL_STOP_RESTOPS) {
+            return (s == XHCI_EP_STATE_RUNNING) ? XHCI_TOL_STOP_GIVEUP
+                                                : XHCI_TOL_STOP_REST;
+        }
+        (*restops)++;
+        io->Wait(io->Context);
+        code = io->Stop(io->Context);
+    }
+}
+
 ULONG XhciTolCycleReason(ULONG tolerance, ULONG claimed, ULONG unattributed,
                          ULONG code, ULONG isoch, ULONG hasDevice,
                          ULONG pipeOpen)

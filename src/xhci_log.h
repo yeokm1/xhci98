@@ -41,8 +41,9 @@
  *     E460 - but because **the file sink never wrote a byte on any real
  *     machine, on either target**: task 11-V.7 ran on the 2a and 2b guests, so
  *     both halves of its record are virtual-machine readings. The log file
- *     itself moved to ring 3, where `XHCISNAP` writes it and names it from the
- *     command line.
+ *     itself moved to ring 3, where the snapshot reader writes it and names it
+ *     from the command line (`XHCISNAP` then; XHCITR's `/snapshot` since
+ *     `3.1.0.0`).
  *   - **`XhciLogEnable` was retired earlier**, by 11-V.9. A redundant master
  *     switch is how two switches end up disagreeing.
  *
@@ -81,7 +82,8 @@
  * snapshot channel reads the extension off a running machine from user mode -
  * through a door `usbport.sys` owns, which is why this driver can use it
  * without owning a driver object of its own. So on Windows 98 the answer is
- * `XHCISNAP`, not a sink; on Windows 2000 the DebugView sink also works at a
+ * the snapshot reader (XHCITR `/snapshot`), not a sink; on Windows 2000 the
+ * DebugView sink also works at a
  * stop that is a Device Manager disable. `docs/using/release-notes.md`.
  *
  * ## The shape is forced, not chosen
@@ -321,7 +323,8 @@
  *     and a schema bump, and both are bigger mechanisms than the thing they
  *     would gate. Design record 08 section 13.2.
  *   - **Publication** is gated here: what the PASSIVE flush hands to DebugView,
- *     and what `XHCISNAP`'s plain-text companion prints. The tier boundary
+ *     and what the snapshot reader's plain-text companion prints. The tier
+ *     boundary
  *     between 3 and 4 is addresses, and it is a *publication* line rather than
  *     a transport or a security one - it is about what a maintainer may
  *     reasonably ask a stranger to paste into a public issue.
@@ -374,7 +377,8 @@
  * The cost of the default is real and it is paid in the tool rather than by the
  * user: a capture of a bug that has already happened cannot be re-taken at a
  * higher level, so an intermittent fault needs a second reproduction.
- * `XHCISNAP` sets the value from ring 3 - no import, no `Set` service, no boot
+ * XHCITR sets the value from ring 3 (View > Logging level; `XHCISNAP` did
+ * before `3.1.0.0`) - no import, no `Set` service, no boot
  * path - and there is exactly one value to set, so the published sequence is
  * four steps and `regedit` appears nowhere in it.
  */
@@ -552,7 +556,8 @@ VOID XhciLogAppend(PXHCI_LOG log,
  * **This is what makes "no addresses below the top level" a property of the
  * driver rather than a promise in a document**, and it exists because the
  * promise was made first and was not true: the ladder's tier boundary between
- * 3 and 4 is addresses, `XHCISNAP`'s plain-text companion is what a stranger
+ * 3 and 4 is addresses, the snapshot reader's plain-text companion is what a
+ * stranger
  * pastes into a public issue, and two records written as soon as recording is
  * on - the `USBPORT_RESOURCES` pointer at the start and the mapped register
  * base after it - carried exactly what that boundary is drawn around. After

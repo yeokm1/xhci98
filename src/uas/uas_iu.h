@@ -558,4 +558,53 @@ ULONG UasSmartResult(const UAS_SMART_PLAN *plan, PUCHAR out, ULONG room,
                      ULONG senseLength, PULONG outBytes,
                      PULONG driverError);
 
+/*
+ * Issue 26 (2026-11-07): ATA PASS-THROUGH answered by this driver for a
+ * device whose XhciUasNoAtaPassThrough is set, never sent to it, as
+ * Linux's uas.c does under US_FL_NO_ATA_1X. UasNoAtaCdb is 1 for a CDB
+ * this answers: ATA PASS-THROUGH (16), 85h, and (12), A1h, by the
+ * operation code alone, as Linux tests cmnd[0]. UasInvalidCdbSense writes
+ * the answer's sense into sense (room bytes): fixed format, ILLEGAL
+ * REQUEST, INVALID FIELD IN CDB (5/24/00), Linux's
+ * usb_stor_sense_invalidCDB; returns the bytes written, at most
+ * UAS_INVALID_CDB_SENSE.
+ */
+#define UAS_INVALID_CDB_SENSE       18UL
+
+ULONG UasNoAtaCdb(const UCHAR *cdb, ULONG cdbLength);
+ULONG UasInvalidCdbSense(PUCHAR sense, ULONG room);
+
+/*
+ * Issue 26: one failure's four words for the record the bus keeps
+ * (xhci98_xfer.h, XHCI98_FAILURES): w[0..3] as that header lays them out.
+ * The sense key, ASC and ASCQ are read from sense (senseLength bytes,
+ * fixed 70h/71h or descriptor 72h/73h format); no sense, or one too short
+ * to hold them, gives key FFh and ASC and ASCQ 0. The timeout is held at
+ * 255; each other field is cut to its width.
+ */
+/*
+ * Issue 26, XhciUasFastReset (owner, 2026-11-07; default 0, and at 0
+ * nothing below is asked). UasFastResetDue: 1 when a command's timeout goes
+ * straight to the device reset instead of another ABORT TASK - an ABORT
+ * TASK the device answered (armed) at second abortAt, no command ended GOOD
+ * since (progress 0), now within UAS_FAST_WINDOW seconds of it, and the
+ * command started at or after it (startedAt). UasFinalCancelDue: 1 when a
+ * command whose final IU is in has waited UAS_FAST_CANCEL_WAIT seconds for
+ * its data transfer's cancel, which then asks for transport recovery, not
+ * an ABORT TASK. Seconds are the class driver's own one-second count;
+ * each comparison is modular, so the count may wrap.
+ */
+#define UAS_FAST_WINDOW             120UL
+#define UAS_FAST_CANCEL_WAIT        5UL
+
+ULONG UasFastResetDue(ULONG fast, ULONG armed, ULONG progress, ULONG now,
+                      ULONG abortAt, ULONG startedAt);
+ULONG UasFinalCancelDue(ULONG fast, ULONG final, ULONG dataOutstanding,
+                        ULONG waited);
+
+VOID UasFailPack(PULONG w, ULONG event, ULONG origin, ULONG tag,
+                 ULONG opcode, ULONG srbStatus, ULONG scsiStatus,
+                 const UCHAR *sense, ULONG senseLength, ULONG slotState,
+                 ULONG xfers, ULONG timeout, ULONG length);
+
 #endif /* UAS_IU_H */

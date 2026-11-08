@@ -1,9 +1,9 @@
 #
 # sources - Windows 2000 DDK (x86) and WDK 7.1 (amd64) build description
-# for xhcicm.sys, the Thunderbolt 3 connection manager (design record 21;
-# roadmap-usb4.md task 39-A.1), a second driver beside xhci98.sys with its
-# own INFs (xhcicm.inf for the NHI, xhcicmf.inf for the NT tunnel-bridge
-# filter, and their -amd64 twins).
+# for xhcicm.sys, the Thunderbolt and USB4 connection manager (design
+# records 21 and 22; roadmap-usb4.md task 39-A.1), a second driver beside
+# xhci98.sys with its own INFs (xhcicm.inf for the NHI, xhcicmf.inf for
+# the NT tunnel-bridge filter, and their -amd64 twins).
 #
 # Build with scripts\build-driver.cmd, which builds this directory after
 # src\uas for every flavour and runs the import gate on the result against
@@ -89,7 +89,8 @@ SOURCES=cm_vals.c      \
         cm_dsd.c       \
         cm_irq.c       \
         cm_breq.c      \
-        cm_iso.c               cm_rirq.c      \
+        cm_iso.c       \
+        cm_rirq.c      \
         cm_netr.c      \
         cm_marks.c     \
         cm_tagid.c     \
@@ -109,7 +110,8 @@ SOURCES=cm_vals.c      \
         cm_cfgwk.c     \
         cm_filt.c      \
         cm_dsdos.c     \
-        cm_live.c              cm_rirqos.c    \
+        cm_live.c      \
+        cm_rirqos.c    \
         cm_net.c       \
         cm_pwrr.c      \
         cm_nvlinkos.c  \
@@ -120,7 +122,9 @@ SOURCES=cm_vals.c      \
         cm_status.c    \
         cm_qpci.c      \
         cm_qacpi.c     \
-        cm_statos.c            cm_query.c             cm_qryos.c     \
+        cm_statos.c    \
+        cm_query.c     \
+        cm_qryos.c     \
         xhcicm.rc
 
 !IF "$(XHCI_EXTRA_DEFINES)" != ""

@@ -440,6 +440,257 @@ ULONG XhciMsiInjNoLine(const UCHAR *list, const XHCI_MSI_WALK *walk,
     return xhciMsiRewrite(list, walk, 1, out, capacity);
 }
 
+/*
+ * One configuration at `cfg` for the NT 5 append: its interrupt
+ * descriptors in *dropped and its interrupt runs in *runs. Returns 0 for a
+ * configuration the append refuses: a message member, a configuration
+ * priority (ConfigData), a list opening on an alternative, or a run mixing
+ * an interrupt with another type.
+ */
+static ULONG xhciMsiNoIntrCheck(const UCHAR *cfg, ULONG *dropped,
+                                ULONG *runs)
+{
+    const UCHAR *d;
+    ULONG count;
+    ULONG j;
+    ULONG runIntr;
+    ULONG runOther;
+
+    count = xhciMsiRd32(cfg + XHCI_MSI_RL_COUNT);
+    *dropped = 0;
+    *runs = 0;
+    runIntr = 0;
+    runOther = 0;
+    for (j = 0; j < count; j++) {
+        d = cfg + XHCI_MSI_RL_HEADER + j * XHCI_MSI_RD_SIZE;
+        if (((ULONG)d[XHCI_MSI_RD_OPTION] & XHCI_MSI_OPTION_ALTERNATIVE) ==
+            0) {
+            runIntr = 0;
+            runOther = 0;
+        } else if (j == 0) {
+            return 0;
+        }
+        if ((ULONG)d[XHCI_MSI_RD_TYPE] == XHCI_MSI_TYPE_CONFIGDATA) {
+            /* A configuration priority: the copies' preference against the
+             * lower list's would be the PnP manager's, not the order. */
+            return 0;
+        }
+        if ((ULONG)d[XHCI_MSI_RD_TYPE] == XHCI_MSI_TYPE_INTERRUPT) {
+            if (xhciMsiIsMessage(d)) {
+                return 0;
+            }
+            if (!runIntr) {
+                (*runs)++;
+            }
+            runIntr = 1;
+            (*dropped)++;
+        } else {
+            runOther = 1;
+        }
+        if (runIntr && runOther) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+ULONG XhciMsiAppendNt5(const UCHAR *list, const XHCI_MSI_WALK *walk,
+                       ULONG gsi, ULONG memory, PUCHAR out, ULONG capacity)
+{
+    const UCHAR *cfg;
+    const UCHAR *d;
+    ULONG count;
+    ULONG dropped;
+    ULONG runs;
+    ULONG size;
+    ULONG cfgOut;
+    ULONG kept;
+    ULONG inRun;
+    ULONG j;
+
+    /* The shape XP's PCI driver gives (one configuration) alone: with one
+     * list, the copies behind it are tried only once the list with the
+     * line has failed, in the order written. */
+    if (walk->Verdict != XHCI_MSI_WALK_OK || walk->Lists != 1 ||
+        (gsi == XHCI_MSI_NO_GSI && !memory)) {
+        return 0;
+    }
+    cfg = list + XHCI_MSI_RRL_HEADER;
+    count = xhciMsiRd32(cfg + XHCI_MSI_RL_COUNT);
+    /* A configuration with no interrupt is already the choice a copy
+     * would add (a list rewritten once is two lists). The clone takes one
+     * interrupt run, never more, so it never asks for two interrupts; the
+     * memory-only copy drops every run. */
+    if (!xhciMsiNoIntrCheck(cfg, &dropped, &runs) || dropped == 0 ||
+        dropped >= count) {
+        return 0;
+    }
+    if (runs != 1) {
+        gsi = XHCI_MSI_NO_GSI;
+        if (!memory) {
+            return 0;
+        }
+    }
+    /* At most the walked list's size twice more: no wrap below 1 GB. */
+    if (walk->Used > 0x3FFFFFFFUL) {
+        return 0;
+    }
+    size = walk->Used;
+    if (gsi != XHCI_MSI_NO_GSI) {
+        size += XHCI_MSI_RL_HEADER + (count - dropped + 1) * XHCI_MSI_RD_SIZE;
+    }
+    if (memory) {
+        size += XHCI_MSI_RL_HEADER + (count - dropped) * XHCI_MSI_RD_SIZE;
+    }
+    if (out == NULL) {
+        return size;
+    }
+    if (size > capacity) {
+        return 0;
+    }
+    /* The lower list as given, then the clone with the GSI, then the copy
+     * without the line. */
+    xhciMsiCopy(out, list, walk->Used);
+    size = walk->Used;
+    if (gsi != XHCI_MSI_NO_GSI) {
+        cfgOut = size;
+        xhciMsiCopy(out + cfgOut, cfg, XHCI_MSI_RL_HEADER);
+        size += XHCI_MSI_RL_HEADER;
+        kept = 0;
+        inRun = 0;
+        for (j = 0; j < count; j++) {
+            d = cfg + XHCI_MSI_RL_HEADER + j * XHCI_MSI_RD_SIZE;
+            if ((ULONG)d[XHCI_MSI_RD_TYPE] == XHCI_MSI_TYPE_INTERRUPT) {
+                /* The run's head alone, whole (its option, share and
+                 * flags), its range narrowed to the GSI. */
+                if (!inRun) {
+                    xhciMsiCopy(out + size, d, XHCI_MSI_RD_SIZE);
+                    xhciMsiWr32(out + size + XHCI_MSI_RD_U, gsi);
+                    xhciMsiWr32(out + size + XHCI_MSI_RD_U + 4, gsi);
+                    size += XHCI_MSI_RD_SIZE;
+                    kept++;
+                    inRun = 1;
+                }
+                continue;
+            }
+            inRun = 0;
+            xhciMsiCopy(out + size, d, XHCI_MSI_RD_SIZE);
+            size += XHCI_MSI_RD_SIZE;
+            kept++;
+        }
+        xhciMsiWr32(out + cfgOut + XHCI_MSI_RL_COUNT, kept);
+    }
+    if (memory) {
+        cfgOut = size;
+        xhciMsiCopy(out + cfgOut, cfg, XHCI_MSI_RL_HEADER);
+        size += XHCI_MSI_RL_HEADER;
+        kept = 0;
+        for (j = 0; j < count; j++) {
+            d = cfg + XHCI_MSI_RL_HEADER + j * XHCI_MSI_RD_SIZE;
+            if ((ULONG)d[XHCI_MSI_RD_TYPE] == XHCI_MSI_TYPE_INTERRUPT) {
+                continue;
+            }
+            xhciMsiCopy(out + size, d, XHCI_MSI_RD_SIZE);
+            size += XHCI_MSI_RD_SIZE;
+            kept++;
+        }
+        xhciMsiWr32(out + cfgOut + XHCI_MSI_RL_COUNT, kept);
+    }
+    xhciMsiWr32(out, size);
+    xhciMsiWr32(out + XHCI_MSI_RRL_ALTERNATIVES,
+                1UL + (gsi != XHCI_MSI_NO_GSI ? 1UL : 0UL) +
+                    (memory ? 1UL : 0UL));
+    return size;
+}
+
+ULONG XhciMsiStripNt5(const UCHAR *list, const XHCI_MSI_WALK *walk,
+                      PUCHAR out, ULONG capacity)
+{
+    const UCHAR *cfg;
+    const UCHAR *d;
+    ULONG count;
+    ULONG dropped;
+    ULONG runs;
+    ULONG size;
+    ULONG kept;
+    ULONG j;
+
+    if (walk->Verdict != XHCI_MSI_WALK_OK || walk->Lists != 1) {
+        return 0;
+    }
+    cfg = list + XHCI_MSI_RRL_HEADER;
+    count = xhciMsiRd32(cfg + XHCI_MSI_RL_COUNT);
+    if (!xhciMsiNoIntrCheck(cfg, &dropped, &runs) || dropped == 0 ||
+        dropped >= count) {
+        return 0;
+    }
+    size = XHCI_MSI_RRL_HEADER + XHCI_MSI_RL_HEADER +
+           (count - dropped) * XHCI_MSI_RD_SIZE;
+    if (out == NULL) {
+        return size;
+    }
+    if (size > capacity) {
+        return 0;
+    }
+    /* The list's header (interface, bus, slot) as given, then the one
+     * configuration's header and its descriptors but the interrupts, in
+     * order. */
+    xhciMsiCopy(out, list, XHCI_MSI_RRL_HEADER);
+    xhciMsiCopy(out + XHCI_MSI_RRL_HEADER, cfg, XHCI_MSI_RL_HEADER);
+    size = XHCI_MSI_RRL_HEADER + XHCI_MSI_RL_HEADER;
+    kept = 0;
+    for (j = 0; j < count; j++) {
+        d = cfg + XHCI_MSI_RL_HEADER + j * XHCI_MSI_RD_SIZE;
+        if ((ULONG)d[XHCI_MSI_RD_TYPE] == XHCI_MSI_TYPE_INTERRUPT) {
+            continue;
+        }
+        xhciMsiCopy(out + size, d, XHCI_MSI_RD_SIZE);
+        size += XHCI_MSI_RD_SIZE;
+        kept++;
+    }
+    xhciMsiWr32(out + XHCI_MSI_RRL_HEADER + XHCI_MSI_RL_COUNT, kept);
+    xhciMsiWr32(out, size);
+    xhciMsiWr32(out + XHCI_MSI_RRL_ALTERNATIVES, 1);
+    return size;
+}
+
+ULONG XhciMsiNt5LineShape(const UCHAR *list, const XHCI_MSI_WALK *walk)
+{
+    const UCHAR *cfg;
+    const UCHAR *d;
+    ULONG count;
+    ULONG dropped;
+    ULONG runs;
+    ULONG j;
+
+    if (walk->Verdict != XHCI_MSI_WALK_OK || walk->Lists != 1) {
+        return 0;
+    }
+    cfg = list + XHCI_MSI_RRL_HEADER;
+    count = xhciMsiRd32(cfg + XHCI_MSI_RL_COUNT);
+    if (!xhciMsiNoIntrCheck(cfg, &dropped, &runs) || runs != 1) {
+        return 0;
+    }
+    for (j = 0; j < count; j++) {
+        d = cfg + XHCI_MSI_RL_HEADER + j * XHCI_MSI_RD_SIZE;
+        if ((ULONG)d[XHCI_MSI_RD_TYPE] == XHCI_MSI_TYPE_INTERRUPT) {
+            /* The run's head: shared, level-sensitive (LATCHED clear). */
+            return ((ULONG)d[XHCI_MSI_RD_SHARE] == XHCI_MSI_SHARE_SHARED &&
+                    (xhciMsiRd16(d + XHCI_MSI_RD_FLAGS) &
+                     XHCI_MSI_FLAG_LATCHED) == 0)
+                       ? 1UL
+                       : 0UL;
+        }
+    }
+    return 0;
+}
+
+ULONG XhciMsiAppendNoIntr(const UCHAR *list, const XHCI_MSI_WALK *walk,
+                          PUCHAR out, ULONG capacity)
+{
+    return XhciMsiAppendNt5(list, walk, XHCI_MSI_NO_GSI, 1, out, capacity);
+}
+
 ULONG XhciMsiAdmitted(const UCHAR *list, const XHCI_MSI_WALK *walk)
 {
     const UCHAR *cfg;

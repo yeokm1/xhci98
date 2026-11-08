@@ -190,6 +190,30 @@ BOOLEAN NvmeVwcFeature(IN PHW_DEVICE_EXTENSION DevExt, IN BOOLEAN Set)
 }
 
 //
+// NvmeIdentifyIocs - Send Identify CNS 06h, CSI 00h: the NVM Command Set's
+// I/O Command Set specific Identify Controller, whose byte 0 is the Verify
+// Size Limit (47.22). Optional: its refusal changes nothing
+// (NvmeBringupAdminDone).
+//
+BOOLEAN NvmeIdentifyIocs(IN PHW_DEVICE_EXTENSION DevExt)
+{
+    NVME_COMMAND cmd;
+
+    RtlZeroMemory(&cmd, sizeof(NVME_COMMAND));
+
+    cmd.CDW0.Fields.Opcode = NVME_ADMIN_IDENTIFY;
+    cmd.CDW0.Fields.Flags = 0;
+    cmd.CDW0.Fields.CommandId = ADMIN_CID_IDENTIFY_IOCS;
+    cmd.NSID = 0;
+    cmd.PRP1 = DevExt->UtilityBufferPhys.QuadPart;
+    cmd.PRP2 = 0;
+    cmd.CDW10 = NVME_CNS_IOCS_CONTROLLER;
+    cmd.CDW11 = 0;                  // CSI 00h (NVM), bits 31:24
+
+    return NvmeSubmitAdminCommand(DevExt, &cmd);
+}
+
+//
 // NvmeIdentifyNamespace - Send Identify Namespace command (NSID 1; namespace
 // selection is PLAN 1.9)
 //

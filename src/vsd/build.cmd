@@ -93,8 +93,8 @@ if /i not "%FLAV%"=="qemu" (
             echo S98VSD.VXD: wdis could not disassemble %%F.obj
             exit /b 1
         )
-        findstr /r /i /c:"[ 	]out[sbwd]*[ 	]" /c:"[ 	]out$" %O%\%%F.dis >nul && (
-            echo S98VSD.VXD: %%F.obj has an OUT instruction in the release build
+        findstr /r /i /c:"[ 	]out[sbwd]*[ 	]" /c:"[ 	]out$" /c:"[ 	]in[sbwd]*[ 	]" /c:"[ 	]in$" %O%\%%F.dis >nul && (
+            echo S98VSD.VXD: %%F.obj has a port instruction in the release build
             exit /b 1
         )
         findstr /r /c:"^0000 " %O%\%%F.dis >nul || (

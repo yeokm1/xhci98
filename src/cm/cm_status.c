@@ -171,6 +171,20 @@ static ULONG cmStIcmGen(const TBT_ICM *icm, const TBT_ICM_DEVICE *d)
     }
 }
 
+/* A router the software connection manager read: a Thunderbolt router's
+ * generation (1 to 3, TbtHwTbtGeneration) or a USB4 router's version in
+ * 15:8 (record 22 section 19.10 item 5). */
+static ULONG cmStU4Gen(const TBT_U4_ROUTER *r)
+{
+    if (!r->Present) {
+        return CM_ST_GEN_UNKNOWN;
+    }
+    if (r->Tbt3) {
+        return CM_ST_GEN_TBT3 | ((r->TbtGen & 0xFFUL) << 8);
+    }
+    return CM_ST_GEN_USB4 | ((r->Usb4Version & 0xFFUL) << 8);
+}
+
 static VOID cmStIcm(UCHAR *buf, const CM_STATUS_IN *in, const TBT_ICM *icm,
                     ULONG *count, ULONG *flags)
 {
@@ -258,14 +272,7 @@ static VOID cmStU4(UCHAR *buf, const TBT_U4CM *u4,
                 r->Present ? ((r->Vendor & 0xFFFFUL) |
                               ((r->Device & 0xFFFFUL) << 16))
                            : CM_ST_UNKNOWN);
-        if (!r->Present) {
-            cmStPut(e, CM_ST_E_GEN, CM_ST_GEN_UNKNOWN);
-        } else if (r->Tbt3) {
-            cmStPut(e, CM_ST_E_GEN, CM_ST_GEN_TBT3);
-        } else {
-            cmStPut(e, CM_ST_E_GEN,
-                    CM_ST_GEN_USB4 | ((r->Usb4Version & 0xFFUL) << 8));
-        }
+        cmStPut(e, CM_ST_E_GEN, cmStU4Gen(r));
         cmStPut(e, CM_ST_E_LANES, lanes);
         cmStPut(e, CM_ST_E_TUNNELS,
                 cmStTunnel(&p->Pcie, p->PcieFailed, p->Ejected) |
@@ -315,14 +322,7 @@ static VOID cmStU4(UCHAR *buf, const TBT_U4CM *u4,
                 r->Present ? ((r->Vendor & 0xFFFFUL) |
                               ((r->Device & 0xFFFFUL) << 16))
                            : CM_ST_UNKNOWN);
-        if (!r->Present) {
-            cmStPut(e, CM_ST_E_GEN, CM_ST_GEN_UNKNOWN);
-        } else if (r->Tbt3) {
-            cmStPut(e, CM_ST_E_GEN, CM_ST_GEN_TBT3);
-        } else {
-            cmStPut(e, CM_ST_E_GEN,
-                    CM_ST_GEN_USB4 | ((r->Usb4Version & 0xFFUL) << 8));
-        }
+        cmStPut(e, CM_ST_E_GEN, cmStU4Gen(r));
         cmStPut(e, CM_ST_E_LANES, lanes);
         cmStPut(e, CM_ST_E_TUNNELS,
                 cmStTunnel(&k->Pcie, k->PcieFailed, k->Ejected) |
@@ -441,6 +441,9 @@ ULONG CmStatusBuild(UCHAR *buf, const CM_STATUS_IN *in, const TBT_ICM *icm,
     }
     if ((in->Handover & 0x200UL) != 0) {
         flags |= CM_ST_F_HO_ECAMOFF;
+    }
+    if ((in->Handover & 0x400UL) != 0) {
+        flags |= CM_ST_F_HO_SAMEOFF;
     }
     cmStPut(buf, CM_ST_O_FLAGS, flags);
     cmStPut(buf, CM_ST_O_ECHO, in->Echo);

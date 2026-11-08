@@ -10,8 +10,8 @@ heads and the integration commits are replayed on top; they are kept separate fo
 
 | Step | Commit | What |
 |---|---|---|
-| merge | `523c809` | `engine` at `b01fc59` (cleared by Codex: round 5 plus D3 write-through on Me, the Me gone-deadline fix, and the two hooks taken from here as `80fe1ee` and `63b6aac`) |
-| merge | `177f604` | `qual-9x` at `cf56ccd` (interface 3 cleared by Codex, adoption-ready; its `nvme98cm.h` and `cm9x`); conflicts below |
+| merge | `523c809` | `engine` at `b01fc59` (cleared by review: the fifth review plus D3 write-through on Me, the Me gone-deadline fix, and the two hooks taken from here as `80fe1ee` and `63b6aac`) |
+| merge | `177f604` | `qual-9x` at `cf56ccd` (interface 3 cleared by review, adoption-ready; its `nvme98cm.h` and `cm9x`); conflicts below |
 | own | `a9a552a` | stage codes: the 9x stand-ins moved above the engine's (`q9log.py` of `cf56ccd` renumbered the same way) |
 | own | `e626aea` | the 9x MD-4 pool provider (`src/pool9x.c`, `NVME98_DMA_POOL` on 9x) |
 | own | `d420eff` | the 9x interface 3 link-state receiver (evidence 2) |
@@ -19,7 +19,7 @@ heads and the integration commits are replayed on top; they are kept separate fo
 | own | `27c3855` | this note |
 | own | `70d785c` | the 9x removal transaction (REMOVE_PENDING, RemoveAck; MD-5) |
 | own | `330402d` | this note: the removal transaction and its first tests |
-| own | `b697254` | removal transaction: fixes for the Codex review of `9732ca8` (P1-1 to P2-6) |
+| own | `b697254` | removal transaction: fixes for the review of `9732ca8` ("Review of `9732ca8`", below) |
 | own | `fe12163` | cm9x `Overlap 3` (identity change during an open request), on the `cf56ccd` cm9x |
 | own | `37bc81f` | test option `ShnPrime` |
 | own | `c969b25` | the RemoveAck stage marks an outcome that was not published |
@@ -28,7 +28,7 @@ heads and the integration commits are replayed on top; they are kept separate fo
 
 Earlier states are kept as branches: `int-0.2-try1` (engine `c8504c6`, qual-9x `f40f6d1`),
 `int-0.2-try2` (engine `105064a`, qual-9x `f40f6d1`), `int-0.2-try3` (engine `105064a`,
-qual-9x `a79d154`: the state Codex reviewed at `9732ca8`, plus the first fix round) and
+qual-9x `a79d154`: the state reviewed at `9732ca8`, plus its first fixes) and
 `int-0.2-try4` (engine `b01fc59`, qual-9x `a79d154`, the review fixes). `int-0.2` is
 rebuilt from `main` each time with the merges redone and the own commits replayed. The
 int-only copies of the engine hooks were dropped when `engine` took them (`81d845a`
@@ -109,7 +109,7 @@ allocation records out of it as before.
 |---|---|
 | Acquire (HwFindAdapter, after the DMA negotiation, before any CC write) | Reads the CM proof, gets the boot block (fail closed if it is this boot's but no longer checks out), runs the rendezvous (needed for E1, and the link-state channel), takes a token, settles records whose owner is gone, then claims a **FREE** record (fresh zeroed block, budget charged) or a **RELEASED** one that passes validation (fields, PTEs, metadata). It never takes a record that a previous load may still reach, and writes only the metadata page. The record is left **RESERVED**. No boot block, lock, token, record or budget: the find fails before CC.EN; there is no fallback to the uncached extension. |
 | PagePa | The page's own PTE (`_CopyPageTable`), which must be the page the contiguous record names; the metadata page is never translated. |
-| Note | The engine notes per carved block; the record follows the most exposed block: any block **OWNED** -> record OWNED (from RESERVED or ISOLATED); no block OWNED and one **ISOLATED** -> ISOLATED; every block relinquished -> **QUARANTINED** if any block is QUARANTINED, else **RELEASED**, then the instance ends. Relinquish comes only from `PlatDmaRelinquish` at the end of `EngStop` (round-3 N2), so RELEASED is never published while a block is held. |
+| Note | The engine notes per carved block; the record follows the most exposed block: any block **OWNED** -> record OWNED (from RESERVED or ISOLATED); no block OWNED and one **ISOLATED** -> ISOLATED; every block relinquished -> **QUARANTINED** if any block is QUARANTINED, else **RELEASED**, then the instance ends. Relinquish comes only from `PlatDmaRelinquish` at the end of `EngStop` (the record states of `platform.h`), so RELEASED is never published while a block is held. |
 | HoldsPastRemoval | TRUE: the boot block outlives the `.mpd`. |
 
 Records whose owner is gone (found by the next load of any function): OWNED ->
@@ -128,7 +128,7 @@ makes the engine keep a 250 ms timer while a channel is bound (R10); without it 
 adapter missed the CM's 3 s wait. The MD-5 removal transaction (REMOVE_PENDING, RemoveAck)
 is described below ("Removal transaction").
 
-This closes the round-2 P1-1 blocker (9x DMA quarantine held only until the `.mpd`
+This closes the second review's blocker (9x DMA quarantine held only until the `.mpd`
 unload) for the 9x build: quarantined memory now stays owned for the boot.
 
 ## Smoke test (trial, 2026-10-15)
@@ -208,17 +208,17 @@ Script `<vm-dir>\int\rm9x.sh` (local). Same results on both systems.
 | FAILED (RDY never clears after CC.EN=0) | outcome 3 at the 5 s disable cap (detail 07); the CM **isolates first** (E303): teardown, DOWN_QUIESCED applied and acknowledged (decoder PASS), record ISOLATED -> RELEASED; re-arrival verifies |
 | CM timeout (AckTimeoutMs 300, SHST delayed 1.5 s) | the CM gives up (E3FF) and isolates first; nvme98 sees presence lost in the SHST wait and writes FAILED late (logged by the CM, verdict unchanged); DOWN_QUIESCED applied (decoder PASS), RELEASED; re-arrival verifies |
 
-## Review of `9732ca8` (Codex) and the fixes (`8877684` and after)
+## Review of `9732ca8` and the fixes (`8877684` and after)
 
-| Finding | Fix |
+| Issue | Fix |
 |---|---|
-| P1-1 the shutdown shortcut credited a SHUTDOWN whose SHST timed out (`SHN_DONE` is set either way) | The engine keeps this shutdown episode's explicit results: `ShnFlushOk` (its Flush succeeded and covered every write) and `ShnShstOk` (SHST complete seen), cleared at re-enable and at every start. The transaction credits drain and SHST only with `ShnShstOk` and SHST complete in CSTS at its decision, and Flush only with `ShnFlushOk` and no write since; otherwise ISOLATED_NOT_CLEAN after the disable. |
-| P1-2 the ISR kept consuming and dispatching after the drain, and after FAILED | New hook `PlatCmRemoveGate`, checked in `EngDispatchEx` and `EngInterrupt`: during the drain admitted work may finish; from the Flush on nothing is dispatched (undispatched work stays frozen and completes NO_DEVICE at isolation); from CC.SHN on, and in FAILED until presence is lost, the ISR consumes nothing, so requests stay held until isolation. |
-| P1-3 (hypothesis) a claim was published before its owner identity, so an overlapping find of another function could take the claimant for gone | A claim now carries the full owner identity (token and function) from its first publication under the boot-block lock (`P9Claim`), and installation rechecks ownership under the lock (`P9TakeLocked`). Whether the 9x ports can overlap two functions' `HwFindAdapter` was not established; the fix does not depend on it. |
-| P2-4 a budget-forced disable underflowed `now - RmStepMs` and failed at once | `now` is refreshed after the forced step change, as `q9x.c` did. |
-| P2-5 invalid entry observations did not invalidate an open transaction | One validating read (`P9EntryRead`: R6c, R5e, R8d) shared by the link-state poll and the transaction; identity loss (or another generation) during a transaction suppresses the acknowledgement. The transaction still isolates the controller. |
-| P2-6 pre-acknowledgement requests could get ERROR at the engine's BUSY limit | The transaction completes them BUSY itself, without a limit (R9d). |
-| N2 contract | Relinquish happens at the end of `EngStop` or at a removal transaction's acknowledged disable, after the queue gates close (accepted). `platform.h`, `platform.c`, `pool9x.c` and PLAN updated. |
+| Shutdown credit: the shutdown shortcut credited a SHUTDOWN whose SHST timed out (`SHN_DONE` is set either way) | The engine keeps this shutdown episode's explicit results: `ShnFlushOk` (its Flush succeeded and covered every write) and `ShnShstOk` (SHST complete seen), cleared at re-enable and at every start. The transaction credits drain and SHST only with `ShnShstOk` and SHST complete in CSTS at its decision, and Flush only with `ShnFlushOk` and no write since; otherwise ISOLATED_NOT_CLEAN after the disable. |
+| Drain gate: the ISR kept consuming and dispatching after the drain, and after FAILED | New hook `PlatCmRemoveGate`, checked in `EngDispatchEx` and `EngInterrupt`: during the drain admitted work may finish; from the Flush on nothing is dispatched (undispatched work stays frozen and completes NO_DEVICE at isolation); from CC.SHN on, and in FAILED until presence is lost, the ISR consumes nothing, so requests stay held until isolation. |
+| Claim identity (hypothesis): a claim was published before its owner identity, so an overlapping find of another function could take the claimant for gone | A claim now carries the full owner identity (token and function) from its first publication under the boot-block lock (`P9Claim`), and installation rechecks ownership under the lock (`P9TakeLocked`). Whether the 9x ports can overlap two functions' `HwFindAdapter` was not established; the fix does not depend on it. |
+| Forced-disable time: a budget-forced disable underflowed `now - RmStepMs` and failed at once | `now` is refreshed after the forced step change, as `q9x.c` did. |
+| Entry validation: invalid entry observations did not invalidate an open transaction | One validating read (`P9EntryRead`: R6c, R5e, R8d) shared by the link-state poll and the transaction; identity loss (or another generation) during a transaction suppresses the acknowledgement. The transaction still isolates the controller. |
+| BUSY without a limit: pre-acknowledgement requests could get ERROR at the engine's BUSY limit | The transaction completes them BUSY itself, without a limit (R9d). |
+| Relinquish contract | Relinquish happens at the end of `EngStop` or at a removal transaction's acknowledged disable, after the queue gates close (accepted). `platform.h`, `platform.c`, `pool9x.c` and PLAN updated. |
 
 Internal choices taken while the maintainer was away (recommended options, logged here):
 
@@ -270,7 +270,7 @@ transaction with the review fixes and the interface 3 accounting. Never pushed.
 | F shutdown episode then remove (`ShnPrime`) | partial | partial | 1 (SHST timed out) gave outcome 2 without SHST credit on the `try4` round; on the final round both cases ran with the wrong option loaded (the D2 re-plug read the registry before the script changed it) and with the eject's own writes outside the episode's Flush; `5249604` makes the prime run the episode's Flush and `rm9x5.sh` orders the option changes; **rerun F** |
 | G shared-line ISR during and after the drain | pass: drain timed out with a read held, then SHN and disable; no child submitted after the drain; the probe ISR returned FALSE in steps 4 and 5 | pass | the read was held at fetch; no fragment was waiting for dispatch, so the dispatch gate was not challenged |
 | H budget-forced disable | not reached (the drain timed out, so no Flush step: 4.5 s < 5.5 s); outcome 2 with RDY=0 | same | the budget path is covered by S (`BudgetSkewMs`) below |
-| S `BudgetSkewMs` 5600 | pass: outcome 2, detail 18 (budget, RDY=0), not FAILED (P2-4) | pass | |
+| S `BudgetSkewMs` 5600 | pass: outcome 2, detail 18 (budget, RDY=0), not FAILED (forced-disable time) | pass | |
 | I identity loss mid-transaction | pass: 0x126 reason 20, outcome decided but not published (0x12C bit 7), CM E3FF isolates first | pass | |
 | J BUSY without a limit | final round: no I/O landed in the window (0 BUSY); `try3`/`try4` rounds of the same code: 138 and 144 BUSY, one SRB 96 times, no BUSY-limit error | same | rerun J with a longer transaction |
 | K overlap during an open transaction | pass: 0x12E logged, the first request acknowledged (C1EA) | pass | |

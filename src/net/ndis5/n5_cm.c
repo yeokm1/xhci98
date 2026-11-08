@@ -78,14 +78,14 @@ VOID NetCmClose(PNET_ADAPTER a)
 }
 
 /* IRQL: <= DISPATCH_LEVEL. */
-VOID NetCmQuery(PNET_ADAPTER a, PNET_CM_INFO i)
+ULONG NetCmQuery(PNET_ADAPTER a, PNET_CM_INFO i)
 {
     if (a->CmHeld) {
-        NetCmIfQuery(&a->Cm, i);
-    } else {
-        NetZero(i, sizeof(*i));
-        i->Size = sizeof(*i);
+        return NetCmIfQuery(&a->Cm, i);
     }
+    NetZero(i, sizeof(*i));
+    i->Size = sizeof(*i);
+    return 0;
 }
 
 /* IRQL: <= DISPATCH_LEVEL. */

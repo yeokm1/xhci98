@@ -52,6 +52,7 @@ ULONG XhciMsiCapRead(const UCHAR *config);
 
 #define XHCI_MSI_TYPE_INTERRUPT     2UL     /* CmResourceTypeInterrupt    */
 #define XHCI_MSI_TYPE_DEVPRIVATE    0x81UL  /* CmResourceTypeDevicePrivate */
+#define XHCI_MSI_TYPE_CONFIGDATA    0x80UL  /* CmResourceTypeConfigData   */
 #define XHCI_MSI_OPTION_ALTERNATIVE 0x08UL  /* IO_RESOURCE_ALTERNATIVE    */
 #define XHCI_MSI_FLAG_MESSAGE       0x0002UL /* CM_RESOURCE_INTERRUPT_MESSAGE */
 
@@ -136,6 +137,54 @@ ULONG XhciMsiKeepMessage(const UCHAR *list, const XHCI_MSI_WALK *walk,
 ULONG XhciMsiInjNoLine(const UCHAR *list, const XHCI_MSI_WALK *walk,
                        PUCHAR out, ULONG capacity);
 
+/*
+ * Windows 2000, XP and XP x64 (task 47.33): the one configuration the
+ * lower drivers gave, as given, then a copy of it with its interrupt runs
+ * removed, so the PnP manager can grant the memory alone where no line can
+ * be given (a decode-disabled controller that the firmware's _PRT does not
+ * name). Sizing and writing as XhciMsiStrip; 0 (no rewrite) for a list the
+ * walk refused, one of more than one configuration (a rewritten one among
+ * them), one with a message member, a configuration priority
+ * (ConfigData), a run opening on an alternative or a run that mixes an
+ * interrupt with another type, one with no interrupt, or one whose copy
+ * would hold no descriptor.
+ */
+ULONG XhciMsiAppendNoIntr(const UCHAR *list, const XHCI_MSI_WALK *walk,
+                          PUCHAR out, ULONG capacity);
+
+/*
+ * The same, with the chipset-routed GSI offer (task 47.33, part 2): the
+ * lower configuration as given; then, `gsi` not XHCI_MSI_NO_GSI, a clone
+ * of it whose one interrupt run is replaced by the run's head with its
+ * minimum and maximum set to `gsi`; then, `memory` nonzero, the copy
+ * without the interrupt. Admission as XhciMsiAppendNoIntr; the clone only
+ * for exactly one interrupt run (with more, the memory copy alone); 0 when
+ * neither copy is asked or can be made. Sizing and writing as
+ * XhciMsiStrip.
+ */
+#define XHCI_MSI_NO_GSI             0xFFFFFFFFUL
+ULONG XhciMsiAppendNt5(const UCHAR *list, const XHCI_MSI_WALK *walk,
+                       ULONG gsi, ULONG memory, PUCHAR out, ULONG capacity);
+
+/* 1 when the walked list is one configuration whose one interrupt run is
+ * headed by a shared, level-sensitive line: the shape the GSI clone keeps
+ * the head of (a PCI INTx). */
+#define XHCI_MSI_SHARE_SHARED       3UL     /* CmResourceShareShared      */
+#define XHCI_MSI_FLAG_LATCHED       0x0001UL /* CM_RESOURCE_INTERRUPT_LATCHED */
+ULONG XhciMsiNt5LineShape(const UCHAR *list, const XHCI_MSI_WALK *walk);
+
+/*
+ * Windows 2000 on a listed board (task 47.33; design record 18 section
+ * 16.4): the walked list's one configuration with every interrupt run
+ * removed, as the list's only configuration, so that no interrupt of this
+ * device is arbitrated. The same shape rules as XhciMsiAppendNt5's copy;
+ * 0 for a refused shape, a configuration with no interrupt (nothing to
+ * remove) or one of interrupts alone. `out` NULL sizes only; capacity
+ * short writes nothing.
+ */
+ULONG XhciMsiStripNt5(const UCHAR *list, const XHCI_MSI_WALK *walk,
+                      PUCHAR out, ULONG capacity);
+
 /* The filter's outcome (section 4.2). */
 #define XHCI_MSI_OUT_NONE           0UL     /* no filter yet              */
 #define XHCI_MSI_OUT_LOWER_FAILED   1UL
@@ -150,6 +199,18 @@ ULONG XhciMsiInjNoLine(const UCHAR *list, const XHCI_MSI_WALK *walk,
 #define XHCI_MSI_OUT_REPLACED       10UL
 #define XHCI_MSI_OUT_NO_MEMORY      11UL
 #define XHCI_MSI_OUT_REPLACED_MESSAGE 12UL  /* mode 3: the message kept   */
+#define XHCI_MSI_OUT_NO_INTR_ADDED  13UL    /* NT 5: no-interrupt copies
+                                             * appended (task 47.33)      */
+#define XHCI_MSI_OUT_GSI_ADDED      14UL    /* NT 5: the GSI clone and the
+                                             * no-interrupt copy          */
+#define XHCI_MSI_OUT_GSI_ONLY       15UL    /* NT 5, mode 1: the GSI clone
+                                             * alone                      */
+#define XHCI_MSI_OUT_LINE_REMOVED   16UL    /* 2000, a listed board: the
+                                             * line removed, the only
+                                             * configuration (16.4)       */
+#define XHCI_MSI_OUT_STRIP_FAILED   17UL    /* 2000, a listed board: no
+                                             * removal could be made; no
+                                             * list returned at all       */
 
 /* The outcome for a classified list when the strip is asked for and
  * enabled: REPLACED for a REPLACEABLE list, else the kept outcome. */

@@ -30,6 +30,7 @@
 //
 // handling NVME completions
 #include "nvme2k.h"
+#include "vfychk.h"
 #include "utils.h"
 #include "nsfmt.h"
 
@@ -47,9 +48,14 @@ VOID NvmeCompleteLogPage(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK 
             PNVME_SMART_INFO nvmeSmart = (PNVME_SMART_INFO)prpBuffer;
             UCHAR pageCode = ScsiGetLogPageCodeFromSrb(Srb);
             ULONG bytesWritten = 0;
+            // Allocation length, CDB bytes 7-8: the page is cut there too.
+            ULONG alloc = ((ULONG)Srb->Cdb[7] << 8) | Srb->Cdb[8];
 
+            if (alloc > Srb->DataTransferLength) {
+                alloc = Srb->DataTransferLength;
+            }
             if (NvmeLogPageToScsiLogPage(nvmeSmart, pageCode, Srb->DataBuffer,
-                                         Srb->DataTransferLength, &bytesWritten)) {
+                                         alloc, &bytesWritten)) {
                 Srb->DataTransferLength = bytesWritten;
                 Srb->SrbStatus = SRB_STATUS_SUCCESS;
             } else {
@@ -82,25 +88,9 @@ VOID NvmeCompleteLogPage(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK 
             Srb->DataTransferLength = 0;
             Srb->SrbStatus = SRB_STATUS_ERROR;
         }
-    } else if (Srb->Function == SRB_FUNCTION_IO_CONTROL) {
-        // SMART IOCTL
-        PSRB_IO_CONTROL srbControl = (PSRB_IO_CONTROL)Srb->DataBuffer;
-        PSENDCMDOUTPARAMS sendCmdOut = (PSENDCMDOUTPARAMS)((PUCHAR)Srb->DataBuffer + sizeof(SRB_IO_CONTROL));
-
-        if (status == NVME_SC_SUCCESS && prpBuffer) {
-            NvmeSmartToAtaSmart((PNVME_SMART_INFO)prpBuffer, (PATA_SMART_DATA)sendCmdOut->bBuffer);
-            sendCmdOut->cBufferSize = 512;
-            RtlZeroMemory(&sendCmdOut->DriverStatus, sizeof(DRIVERSTATUS));
-            srbControl->ReturnCode = 0;
-            Srb->SrbStatus = SRB_STATUS_SUCCESS;
-        } else {
-            sendCmdOut->cBufferSize = 0;
-            sendCmdOut->DriverStatus.bDriverError = 1;
-            sendCmdOut->DriverStatus.bIDEError = 0x04;  // Aborted
-            srbControl->ReturnCode = 1;
-            Srb->SrbStatus = SRB_STATUS_ERROR;
-        }
     } else {
+        // No other request reaches a Get Log Page (the SCSIDISK SMART IOCTL
+        // is refused before any, HandleIO_SCSIDISK).
         Srb->SrbStatus = SRB_STATUS_ERROR;
     }
 }
@@ -128,6 +118,29 @@ static VOID NvmeBringupWtDone(IN PHW_DEVICE_EXTENSION DevExt, IN BOOLEAN Verifie
     DevExt->AdminChainDone = TRUE;
 }
 
+#ifndef NVME2K_W9X
+// The running Windows' version (47.31): KUSER_SHARED_DATA's NtMajorVersion
+// (0x26C) and NtMinorVersion (0x270) (ntddk.h), at the fixed kernel address
+// clock.c reads InterruptTime from; resident, no OS service.
+#if defined(_M_AMD64) || defined(_AMD64_)
+#define CPL_SHARED_DATA     ((volatile UCHAR *)0xFFFFF78000000000ULL)
+#else
+#define CPL_SHARED_DATA     ((volatile UCHAR *)0xFFDF0000)
+#endif
+static BOOLEAN NvmeNativeView(IN ULONG Lbads)
+{
+    ULONG major = *(volatile ULONG *)(CPL_SHARED_DATA + 0x26C);
+    ULONG minor = *(volatile ULONG *)(CPL_SHARED_DATA + 0x270);
+
+    return RmwNativeView(1, major, minor, Lbads);
+}
+#else
+static BOOLEAN NvmeNativeView(IN ULONG Lbads)
+{
+    return RmwNativeView(0, 0, 0, Lbads);
+}
+#endif
+
 static VOID NvmeBringupAdminDone(IN PHW_DEVICE_EXTENSION DevExt, IN USHORT commandId, IN USHORT status,
                                  IN ULONG dw0)
 {
@@ -151,6 +164,22 @@ static VOID NvmeBringupAdminDone(IN PHW_DEVICE_EXTENSION DevExt, IN USHORT comma
     if (commandId == ADMIN_CID_GET_VWC) {
         NvmeBringupWtDone(DevExt, (BOOLEAN)((status & 0x7FF) == NVME_SC_SUCCESS && DevExt->VwcSetStatus == 0 &&
                                             (dw0 & 1) == 0), dw0);
+        return;
+    }
+    if (commandId == ADMIN_CID_IDENTIFY_IOCS) {
+        // Optional (47.22): the Verify Size Limit when the controller has
+        // the structure; any refusal leaves it unknown and the bring-up goes
+        // on. Its own completion consumed, the buffer is free for Identify
+        // Namespace.
+        DevExt->IocsPending = FALSE;
+        if ((status & 0x7FF) == NVME_SC_SUCCESS) {
+            DevExt->Vsl = (UCHAR)VfyIocsVsl(id);
+        }
+        DBGSTAGE(STG_VFY_IOCS, (ULONG)(status & 0x7FF) | ((ULONG)DevExt->Vsl << 16) |
+                 ((ULONG)(DevExt->Oncs & 0xFF) << 24));
+        if (!NvmeIdentifyNamespace(DevExt)) {
+            DevExt->AdminError = commandId | 0xFFFF0000;
+        }
         return;
     }
     if ((status & 0x7FF) != NVME_SC_SUCCESS) {
@@ -184,8 +213,19 @@ static VOID NvmeBringupAdminDone(IN PHW_DEVICE_EXTENSION DevExt, IN USHORT comma
                 DevExt->NumberOfNamespaces = ctrlData->NumberOfNamespaces;
                 DevExt->Mdts = id[77];      // MDTS, byte 77
                 DevExt->Vwc = (BOOLEAN)(id[525] & 1);   // VWC, byte 525 bit 0
+                DevExt->Oncs = (USHORT)(id[520] | ((USHORT)id[521] << 8));  // ONCS, bytes 520-521
                 DevExt->SMARTEnabled = TRUE;
-                if (!NvmeIdentifyNamespace(DevExt)) {
+                // 47.22: the Verify Size Limit next (CNS 06h), unless that
+                // probe once went unanswered in this extension; then the
+                // namespace. The fields above are saved before the buffer is
+                // reused.
+                if (!DevExt->SkipIocsProbe) {
+                    DevExt->IocsPending = TRUE;
+                    if (!NvmeIdentifyIocs(DevExt)) {
+                        DevExt->IocsPending = FALSE;
+                        DevExt->AdminError = commandId | 0xFFFF0000;
+                    }
+                } else if (!NvmeIdentifyNamespace(DevExt)) {
                     DevExt->AdminError = commandId | 0xFFFF0000;
                 }
             }
@@ -198,11 +238,23 @@ static VOID NvmeBringupAdminDone(IN PHW_DEVICE_EXTENSION DevExt, IN USHORT comma
                 // format, a block size not served, metadata, protection) is
                 // refused, never served under another size (PLAN 1.1,
                 // src/nsfmt.h). The refusal fails the bring-up: no disk.
-                ULONGLONG nsze;
+                ULONGLONG nsze, exposed = 0;
                 ULONG bs, why;
                 UCHAR lbads;
+                BOOLEAN native = FALSE;
 
                 why = NsDecodeFormat(id, &nsze, &bs, &lbads);
+                // The view first (PLAN "4 KiB-sector namespaces", 47.31): the
+                // native 4096-byte sectors on Windows 8 and later, 512-byte
+                // sectors otherwise; then the count in that view's sectors
+                // (a namespace whose count does not fit 64 bits has last
+                // sectors no LBA could name).
+                if (why == NSF_OK) {
+                    native = NvmeNativeView(lbads);
+                    if (!RmwExposedCount(nsze, native ? 0 : (ULONG)lbads - NSF_LBADS_MIN, &exposed)) {
+                        why = NSF_TOO_LARGE;
+                    }
+                }
                 if (why != NSF_OK) {
                     DBGSTAGE(STG_NS_REFUSED, why | ((ULONG)id[26] << 8) | ((ULONG)lbads << 16) |
                              ((ULONG)id[29] << 24));
@@ -211,6 +263,15 @@ static VOID NvmeBringupAdminDone(IN PHW_DEVICE_EXTENSION DevExt, IN USHORT comma
                 }
                 DevExt->NamespaceSizeInBlocks = nsze;
                 DevExt->NamespaceBlockSize = bs;
+                DevExt->SectorShift = (UCHAR)(lbads - NSF_LBADS_MIN);
+                DevExt->LbaShift = (UCHAR)(native ? 0 : DevExt->SectorShift);
+                DevExt->ExposedBytes = native ? bs : RMW_SECTOR;
+                DevExt->ExposedBlocks = exposed;
+                DBGSTAGE(STG_NS_VIEW, (ULONG)lbads | ((ULONG)native << 8) | ((ULONG)DevExt->LbaShift << 16));
+                // VERIFY by NVMe Verify (47.22): ONCS bit 7, or a Verify Size
+                // Limit, which advertises the command with ONCS bit 7 clear
+                // (NVM Command Set 1.0d, 3.2.5).
+                DevExt->VerifyCmd = (BOOLEAN)((DevExt->Oncs & NVME_ONCS_VERIFY) != 0 || DevExt->Vsl != 0);
                 if (DevExt->WtMode == PLAT_WT_CACHEOFF && DevExt->Vwc) {
                     // Write-through (PLAN D3): the cache is switched off in
                     // every bring-up (a reset or re-enable may restore it).

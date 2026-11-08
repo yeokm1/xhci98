@@ -530,11 +530,33 @@ if ($Boot) {
     # (assigned inside the -Xfer branch below; left $null when nothing is staged
     # so the banner further down cannot report a file that is not there.)
     if ($Xfer) {
-        $xferDir = if ($WorkDir -ne "") { Join-Path $WorkDir "xfer" } else { Join-Path $vmDir "xfer-p10" }
-        if (-not (Test-Path $xferDir)) { New-Item -ItemType Directory -Path $xferDir -Force | Out-Null }
         $pkgDir = Get-QemuPackageDir -Repo $repo -Arch $arch
         $pkgProblem = Get-QemuPackageProblem -Repo $repo -Arch $arch
         $qemuSys = Join-Path $pkgDir "xhci98.sys"
+        if (($isFresh -or $XferPackage) -and $null -ne $pkgProblem) { throw $pkgProblem }
+        $addSrc = $null
+        $addName = $null
+        if ($XferAdd -ne "") {
+            $addSrc = Resolve-RepoPath $XferAdd
+            if (-not (Test-Path -LiteralPath $addSrc -PathType Container)) { throw ("-XferAdd directory not found: {0}" -f $addSrc) }
+            $addName = (Split-Path -Leaf $addSrc)
+            if ($addName -notmatch '^[A-Za-z0-9_]{1,8}$') { throw ("-XferAdd directory name '{0}' is not a plain 8.3 name; Windows 98 reads the transfer drive as FAT" -f $addName) }
+        }
+        # A NEW DIRECTORY EVERY RUN, NEVER AN OLD ONE EMPTIED.  This used to be
+        # `<WorkDir>\xfer` (or `xfer-p10` beside the images), cleared with a
+        # recursive delete before each package copy - so a `-WorkDir` that
+        # already held an unrelated `xfer` folder lost its contents without a
+        # question.  A name is no proof of ownership, so the staging directory
+        # is now made fresh, with a time stamp and this process's id in its
+        # name, and New-Item without -Force refuses if it exists.  QEMU reads
+        # it live for as long as the guest runs, so it is left in place
+        # afterwards; delete old ones by hand.
+        $xferParent = if ($WorkDir -ne "") { $WorkDir } else { $vmDir }
+        $xferName = "xhci98-xfer-{0}-{1}" -f (Get-Date).ToString("yyyyMMdd-HHmmss", [Globalization.CultureInfo]::InvariantCulture), $PID
+        $xferDir = Join-Path $xferParent $xferName
+        if (Test-Path -LiteralPath $xferDir) { throw ("transfer directory {0} already exists; refusing to reuse it" -f $xferDir) }
+        New-Item -ItemType Directory -Path $xferDir | Out-Null
+        Write-Host ("transfer drive directory (new for this run): {0}" -f $xferDir)
         $staged = Join-Path $xferDir "XHCI98.SYS"
         # A FRESH GUEST GETS THE WHOLE PACKAGE, NOT A LOOSE .SYS.  A Phase 10
         # image already has the driver installed and only needs the binary
@@ -545,8 +567,6 @@ if ($Boot) {
         # package directory is copied as make-package.ps1 laid it
         # out, and the guest is pointed at the directory, never at a file.
         if ($isFresh -or $XferPackage) {
-            if ($null -ne $pkgProblem) { throw $pkgProblem }
-            Get-ChildItem -LiteralPath $xferDir -Force | Remove-Item -Recurse -Force
             Copy-Item -Path (Join-Path $pkgDir "*") -Destination $xferDir -Recurse -Force
             $staged = Join-Path $xferDir "xhci98.sys"
             Write-Host ("transfer drive carries the whole qemu package from {0}:" -f $pkgDir)
@@ -554,27 +574,19 @@ if ($Boot) {
         } elseif ($null -eq $pkgProblem) {
             Copy-Item -LiteralPath $qemuSys -Destination $staged -Force
         } else {
-            # **The stale file is DELETED, not left behind.** This directory
-            # persists between runs, so a missing package used to mean the guest
-            # was handed whatever the last run staged - which after the 13-L.1
-            # split may be the debug binary that produces no identity line, and
-            # the operator would have been told the drive carried nothing
-            # while it carried the wrong driver under the right name. Removing
-            # it makes the guest's copy step fail loudly instead.
-            if (Test-Path $staged) { Remove-Item -LiteralPath $staged -Force }
+            # No package: the drive carries no driver, so the guest's copy step
+            # fails loudly.  (The directory is new, so no earlier run's
+            # XHCI98.SYS - possibly a retired flavour that produces no
+            # identity line - can be on it under the right name.)
             $staged = $null
-            Write-Warning ("{0} Any XHCI98.SYS left on the transfer drive by an earlier run has been removed, so the drive carries no driver." -f $pkgProblem)
+            Write-Warning ("{0} The transfer drive carries no driver." -f $pkgProblem)
         }
         # The extra directory rides in a subdirectory so it can never shadow a
         # package file, and the 8.3 name is what the guest will see it as.
-        if ($XferAdd -ne "") {
-            $addSrc = Resolve-RepoPath $XferAdd
-            if (-not (Test-Path -LiteralPath $addSrc)) { throw ("-XferAdd directory not found: {0}" -f $addSrc) }
-            $addName = (Split-Path -Leaf $addSrc)
-            if ($addName -notmatch '^[A-Za-z0-9_]{1,8}$') { throw ("-XferAdd directory name '{0}' is not a plain 8.3 name; Windows 98 reads the transfer drive as FAT" -f $addName) }
+        if ($null -ne $addSrc) {
             $addDst = Join-Path $xferDir $addName
-            if (Test-Path -LiteralPath $addDst) { Remove-Item -LiteralPath $addDst -Recurse -Force }
-            New-Item -ItemType Directory -Path $addDst -Force | Out-Null
+            if (Test-Path -LiteralPath $addDst) { throw ("-XferAdd directory name '{0}' is also a name in the staged package; rename it" -f $addName) }
+            New-Item -ItemType Directory -Path $addDst | Out-Null
             Copy-Item -Path (Join-Path $addSrc "*") -Destination $addDst -Recurse -Force
             Write-Host ("transfer drive also carries {0}\ from {1}:" -f $addName, $addSrc)
             foreach ($f in (Get-ChildItem -LiteralPath $addDst -File)) { Write-Host ("  {0,-16} {1,9:N0} B" -f $f.Name, $f.Length) }

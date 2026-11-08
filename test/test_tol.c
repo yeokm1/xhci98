@@ -1787,6 +1787,174 @@ static void test_quirk_caps(void)
              "value 0: off");
 }
 
+/*
+ * Issue 26: the bounded Stop Endpoint (XhciTolStopRest) against a scripted
+ * controller - each Stop answers the next code, each read the next state.
+ * 3.4.1.0 issued one Stop and handed back whatever the context read: a
+ * Context State Error with the endpoint then Running left the cancel
+ * paused with nothing owed (the stranded pause), so the first vectors
+ * below fail against that behaviour.
+ */
+typedef struct _STOP_SCRIPT {
+    ULONG Codes[8];
+    ULONG States[8];
+    ULONG NCodes;
+    ULONG NStates;
+    ULONG Stops;
+    ULONG Reads;
+    ULONG Waits;
+} STOP_SCRIPT;
+
+static ULONG stopCmd(PVOID context)
+{
+    STOP_SCRIPT *s = (STOP_SCRIPT *)context;
+    ULONG i = (s->Stops < s->NCodes) ? s->Stops : s->NCodes - 1;
+
+    s->Stops++;
+    return s->Codes[i];
+}
+
+static ULONG stopState(PVOID context)
+{
+    STOP_SCRIPT *s = (STOP_SCRIPT *)context;
+    ULONG i = (s->Reads < s->NStates) ? s->Reads : s->NStates - 1;
+
+    s->Reads++;
+    return s->States[i];
+}
+
+static VOID stopWait(PVOID context)
+{
+    ((STOP_SCRIPT *)context)->Waits++;
+}
+
+static ULONG stopRun(STOP_SCRIPT *s, PULONG state, PULONG restops)
+{
+    XHCI_TOL_STOP_IO io;
+
+    io.Stop = stopCmd;
+    io.State = stopState;
+    io.Wait = stopWait;
+    io.Context = s;
+    s->Stops = 0;
+    s->Reads = 0;
+    s->Waits = 0;
+    return XhciTolStopRest(&io, state, restops);
+}
+
+static void stopScript(STOP_SCRIPT *s, ULONG n, const ULONG *codes,
+                       const ULONG *states)
+{
+    ULONG i;
+
+    for (i = 0; i < n; i++) {
+        s->Codes[i] = codes[i];
+        s->States[i] = states[i];
+    }
+    s->NCodes = n;
+    s->NStates = n;
+}
+
+static void test_stop_rest(void)
+{
+    STOP_SCRIPT s;
+    ULONG state;
+    ULONG restops;
+    ULONG v;
+    static const ULONG cOk[1] = { XHCI_CC_SUCCESS };
+    static const ULONG sStopped[1] = { XHCI_EP_STATE_STOPPED };
+    static const ULONG cCseOk[2] = { XHCI_CC_CONTEXT_STATE_ERROR,
+                                     XHCI_CC_SUCCESS };
+    static const ULONG sRunStop[2] = { XHCI_EP_STATE_RUNNING,
+                                       XHCI_EP_STATE_STOPPED };
+    static const ULONG cOkOk[2] = { XHCI_CC_SUCCESS, XHCI_CC_SUCCESS };
+    static const ULONG cCse[1] = { XHCI_CC_CONTEXT_STATE_ERROR };
+    static const ULONG sRun[1] = { XHCI_EP_STATE_RUNNING };
+    static const ULONG cCseCseOk[3] = { XHCI_CC_CONTEXT_STATE_ERROR,
+                                        XHCI_CC_CONTEXT_STATE_ERROR,
+                                        XHCI_CC_SUCCESS };
+    static const ULONG sStopStopStop[3] = { XHCI_EP_STATE_STOPPED,
+                                            XHCI_EP_STATE_STOPPED,
+                                            XHCI_EP_STATE_STOPPED };
+    static const ULONG cTrb[1] = { XHCI_CC_TRB_ERROR };
+    static const ULONG cNone[1] = { 0 };
+    static const ULONG sHalt[1] = { XHCI_EP_STATE_HALTED };
+
+    /* The plain case: one Stop, Stopped, no wait. */
+    stopScript(&s, 1, cOk, sStopped);
+    v = stopRun(&s, &state, &restops);
+    CHECK_EQ(v, XHCI_TOL_STOP_REST, "stop: success, rest");
+    CHECK_EQ(state, XHCI_EP_STATE_STOPPED, "stop: success, Stopped");
+    CHECK_EQ(restops, 0, "stop: success, no restop");
+    CHECK_EQ(s.Stops, 1, "stop: success, one Stop");
+    CHECK_EQ(s.Waits, 0, "stop: success, no wait");
+
+    /* The stranded pause (issue 26): Context State Error, the context
+     * then Running - a restart raced the Stop. Stopped again after a wait,
+     * and Stopped is what comes back, not Running. */
+    stopScript(&s, 2, cCseOk, sRunStop);
+    v = stopRun(&s, &state, &restops);
+    CHECK_EQ(v, XHCI_TOL_STOP_REST, "race: rest");
+    CHECK_EQ(state, XHCI_EP_STATE_STOPPED, "race: Stopped after the restop");
+    CHECK_EQ(restops, 1, "race: one restop");
+    CHECK_EQ(s.Stops, 2, "race: two Stops");
+    CHECK_EQ(s.Waits, 1, "race: one wait");
+
+    /* A Stop that succeeded and an endpoint read Running after it (a
+     * device's ERDY on another stream): stopped again too. */
+    stopScript(&s, 2, cOkOk, sRunStop);
+    v = stopRun(&s, &state, &restops);
+    CHECK_EQ(v, XHCI_TOL_STOP_REST, "restart after success: rest");
+    CHECK_EQ(state, XHCI_EP_STATE_STOPPED,
+             "restart after success: Stopped");
+    CHECK_EQ(restops, 1, "restart after success: one restop");
+
+    /* An endpoint that keeps running: given up after the restops, never
+     * handed back as if it were at rest. */
+    stopScript(&s, 1, cCse, sRun);
+    v = stopRun(&s, &state, &restops);
+    CHECK_EQ(v, XHCI_TOL_STOP_GIVEUP, "runs on: given up");
+    CHECK_EQ(state, XHCI_EP_STATE_RUNNING, "runs on: Running");
+    CHECK_EQ(restops, XHCI_TOL_STOP_RESTOPS, "runs on: every restop spent");
+    CHECK_EQ(s.Stops, XHCI_TOL_STOP_RESTOPS + 1, "runs on: Stops bounded");
+    CHECK_EQ(s.Waits, XHCI_TOL_STOP_RESTOPS, "runs on: waits bounded");
+
+    /* Context State Error with the endpoint read Stopped: it may be about
+     * to run (a doorbell rung before the pause), so stopped again until a
+     * Stop succeeds. */
+    stopScript(&s, 3, cCseCseOk, sStopStopStop);
+    v = stopRun(&s, &state, &restops);
+    CHECK_EQ(v, XHCI_TOL_STOP_REST, "about to run: rest");
+    CHECK_EQ(state, XHCI_EP_STATE_STOPPED, "about to run: Stopped");
+    CHECK_EQ(restops, 2, "about to run: two restops");
+
+    /* ... and when every Stop says Context State Error with the endpoint
+     * Stopped, it is taken as Stopped once the restops are spent. */
+    stopScript(&s, 1, cCse, sStopped);
+    v = stopRun(&s, &state, &restops);
+    CHECK_EQ(v, XHCI_TOL_STOP_REST, "stays stopped: rest");
+    CHECK_EQ(state, XHCI_EP_STATE_STOPPED, "stays stopped: Stopped");
+    CHECK_EQ(restops, XHCI_TOL_STOP_RESTOPS, "stays stopped: restops spent");
+
+    /* A Stop that failed outright, or never completed: given up at once,
+     * no restop. */
+    stopScript(&s, 1, cTrb, sRun);
+    v = stopRun(&s, &state, &restops);
+    CHECK_EQ(v, XHCI_TOL_STOP_GIVEUP, "TRB error: given up");
+    CHECK_EQ(s.Stops, 1, "TRB error: one Stop");
+    stopScript(&s, 1, cNone, sStopped);
+    v = stopRun(&s, &state, &restops);
+    CHECK_EQ(v, XHCI_TOL_STOP_GIVEUP, "no completion: given up");
+    CHECK_EQ(restops, 0, "no completion: no restop");
+
+    /* Halted (a halt raced the Stop): at rest, for the quiesce's reset. */
+    stopScript(&s, 1, cCse, sHalt);
+    v = stopRun(&s, &state, &restops);
+    CHECK_EQ(v, XHCI_TOL_STOP_REST, "halted: rest");
+    CHECK_EQ(state, XHCI_EP_STATE_HALTED, "halted: Halted");
+    CHECK_EQ(restops, 0, "halted: no restop");
+}
+
 int main(void)
 {
     test_proof();
@@ -1817,6 +1985,7 @@ int main(void)
     test_save_publish();
     test_shut();
     test_start();
+    test_stop_rest();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

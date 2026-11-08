@@ -1954,6 +1954,19 @@ a build that was never made.
         if ($Arch -eq "amd64") {
             foreach ($r in @("nt", "nt\xhcicmf.inf", "nt\xhcicm.sys")) { $retiredRel[$r] = $true }
         }
+        # And every name a package of this architecture can hold, from the
+        # one table of them (package-common.ps1's $script:FamilyLayout, each
+        # flat file and its folder): a previous run's package that this run
+        # stages less of - its catalogs and certificate after a signed cut,
+        # Stor98's files before -NoStor98 - is still this script's own, and
+        # is replaced. Anything else stops the run, as before.
+        if ($script:FamilyLayout.ContainsKey($Arch)) {
+            foreach ($flat in @($script:FamilyLayout[$Arch].Keys)) {
+                $retiredRel[$flat] = $true
+                $parent = Split-Path -Parent $flat
+                if ($parent -ne "") { $retiredRel[$parent] = $true }
+            }
+        }
         $foreign = @()
         foreach ($f in (Get-ChildItem -LiteralPath $OutDir -Recurse -Force)) {
             $rel = $f.FullName.Substring($OutDir.Length).TrimStart('\')

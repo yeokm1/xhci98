@@ -16,9 +16,11 @@ rem with "Bad command or file name", skipping their :logerr safety branches.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0test\check-bat-eol.ps1"
 if errorlevel 1 exit /b 1
 
-rem Guard: host-side unit tests for the pure PCIINFO -> text logic in
-rem mmiodiag.c. Seconds, and the QEMU matrix cannot reach any of that code
-rem (SeaBIOS always leaves MSE set and no emulated controller exposes a PM
+rem Guard: the host-side unit tests (test\run-host-tests.cmd: seven suites,
+rem the pure PCIINFO -> text logic in mmiodiag.c, the verdict, the routing,
+rem the system description, the report name, --edd and the quirk table).
+rem Seconds, and the QEMU matrix cannot reach most of that code (SeaBIOS
+rem always leaves MSE set and no emulated controller exposes a PM
 rem capability), so this is its only automated coverage. Skipped by:
 rem   build.cmd NOHOSTTEST
 rem If this step reports the test binary was "blocked by your organization's

@@ -18,13 +18,19 @@
 ; the NT keys its "Installation Requirements" for a physical adapter.
 ; Facts only; no DDK sample INF is copied.
 ;
+; The 98 SE and ME sections copy nothing (record 35 section 9.5, revision
+; 17): the adapter installs from the INF's copy in INF\OTHER after Setup's
+; restart, and there any copy asked for the disk at Windows' own source
+; path. Setup places xhcinet.sys in SYSTEM, where DeviceVxDs finds it; an
+; install by hand needs it copied there first.
+;
 [Version]
 Signature="$CHICAGO$"
 Compatible=1
 Class=Net
 ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=11/05/2026,3.4.1.0
+DriverVer=11/08/2026,3.4.2.0
 
 ; NTx86 for XP, Vista and 7 beside NTx86.6.2: Vista's and 7's driver store
 ; stages only the files of the decorated models sections once the line
@@ -57,14 +63,12 @@ xhcinet6.sys=1
 
 [DestinationDirs]
 DefaultDestDir=12
-Net.CopyFiles9x=11
 Net.CopyFiles=12
 Net6.CopyFiles=12
 
 ; ---- 98 SE and ME: NDIS.VXD loads the WDM miniport ----
 [Net.Dev]
 AddReg=Net.Reg9x,Net.Values,Net.Params
-CopyFiles=Net.CopyFiles9x
 
 [Net.Reg9x]
 HKR,,DevLoader,,*ndis
@@ -83,10 +87,6 @@ HKR,Ndi\Install,ndis4,,Net.Ndis
 HKR,Ndi\Install,ndis5,,Net.Ndis
 
 [Net.Ndis]
-CopyFiles=Net.CopyFiles9x
-
-[Net.CopyFiles9x]
-xhcinet.sys
 
 ; ---- Windows 2000, XP, Vista and 7: the NDIS 5.0 image ----
 ; NCF_PHYSICAL | NCF_HAS_UI; BusType 15 (PNPBus), the adapter being a child

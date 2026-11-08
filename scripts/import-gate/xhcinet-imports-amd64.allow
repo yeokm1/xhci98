@@ -22,6 +22,7 @@ ntoskrnl.exe!KeAcquireSpinLockRaiseToDpc     all  required  nt52-amd64-export; N
 ntoskrnl.exe!IoFreeMdl                       all  required  nt52-amd64-export; NdisQueryBuffer and NdisFreeBuffer are these on amd64
 ntoskrnl.exe!KeReleaseSpinLock               all  required  nt52-amd64-export; NdisAcquireSpinLock and NdisReleaseSpinLock are these on amd64
 ntoskrnl.exe!MmMapLockedPages                all  required  nt52-amd64-export; NdisQueryBuffer and NdisFreeBuffer are these on amd64
+ntoskrnl.exe!MmMapLockedPagesSpecifyCache    all  required  nt52-amd64-export; NdisQueryBufferSafe is this on amd64 (the send path, MmGetSystemAddressForMdlSafe)
 ntoskrnl.exe!IofCallDriver                   all  required  nt52-amd64-export
 ntoskrnl.exe!IoAllocateIrp                   all  required  nt52-amd64-export
 ntoskrnl.exe!IoFreeIrp                       all  required  nt52-amd64-export

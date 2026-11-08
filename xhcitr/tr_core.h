@@ -46,6 +46,15 @@ typedef struct _TR_TEXT {
 
 void tr_text_init(TR_TEXT *t, char *buf, size_t cap);
 void tr_put(TR_TEXT *t, const char *s);
+
+/* What a cut text ends with (tr_text_mark_cut), CR LF included. */
+#define TR_CUT_MARK             "\r\n[cut: the text did not fit]\r\n"
+
+/* When t overflowed: its end given up, at a line break where one is near,
+ * so that TR_CUT_MARK fits whole, and the mark written there. Overflow
+ * stays set. Nothing when it did not, or Cap cannot hold the mark. */
+void tr_text_mark_cut(TR_TEXT *t);
+
 /* tr_put for a message box (task 43.63): each line break of a text laid
  * out for the 80-column console becomes a space, and the box wraps it. */
 void tr_put_box(TR_TEXT *t, const char *s);
@@ -329,6 +338,11 @@ void tr_link_text(TR_U32 kind, TR_U32 lanes, const TR_EXT *x, char *out,
 /* 1 for a Thunderbolt 3 router: the record's generation says so, or a
  * USB4 Version of major 0 (a Thunderbolt 3 router behind a USB4 host). */
 int tr_gen_tbt3(TR_U32 gen);
+/* The report's line for the status record's flags word when the handover
+ * was not sent because the firmware has a known build's handover code in
+ * another build and XhciCmAsm4242Structural is 0 (CM_ST_F_HO_SAMEOFF,
+ * record 32 section 12.8.11, task 47.29); NULL otherwise. */
+const char *tr_ho_same_text(TR_U32 flags);
 
 /* tr_link_text, but a Thunderbolt 3 router's lane-adapter rate is worded
  * "Thunderbolt 3, 20 Gbit/s per lane, x2 (40 Gbit/s)", never as a USB4
@@ -569,6 +583,10 @@ void tr_port_path(char *out, size_t cap, const char *parent, TR_U32 port);
 
 /* ---- the command line (record 25 section 7.3) ----------------------------- */
 
+/* /set's Name=Value arguments: at most this many, each this long. */
+#define TR_SET_ARGS             48
+#define TR_SET_ARG_CHARS        80
+
 typedef struct _TR_OPTS {
     int Tray;
     int Eject;
@@ -585,9 +603,22 @@ typedef struct _TR_OPTS {
     char AcpiDir[TR_PATH_CHARS];
     int Level[2];               /* per TR_LV_XHCI98 / TR_LV_XHCICM: 0-4,
                                  * or -1 for not asked                      */
+    int Set;                    /* /set (record 25 section 22)             */
+    int SetShow;                /* /set /show                              */
+    int SetRequest;             /* /set /request: the window's elevated run */
+    int SetCount;
+    char SetArg[TR_SET_ARGS][TR_SET_ARG_CHARS]; /* each Name=Value as given */
+    int SetOn;                  /* /on <instance id>                       */
+    int SetYes;                 /* /yes: a change that asks first goes on  */
+    char SetOnId[TR_ID_CHARS];
 } TR_OPTS;
 
-/* XHCITR [/tray] [/eject id=<instance id> [/result <section>]
+/* /set Name=Value [Name=Value ...] [/on <instance id>], /set /show, and
+ * /set /request /result <section> (the Settings window's elevated run,
+ * whose changes come in the section) are the forms of /set (record 25
+ * section 22); its names and values are checked by tr_set.c, not here.
+ *
+ * XHCITR [/tray] [/eject id=<instance id> [/result <section>]
  * [/confirmed <digest>]] [/setlevel xhci98=<n> xhcicm=<n> [/result
  * <section>]] [/report <file>] [/acpi <folder>] [/selftest]. Switches
  * start with '/' or
@@ -1117,6 +1148,11 @@ void tr_bkind_step(TR_BKIND *b, int ev);
  * is on. */
 int tr_bkind_fast(const TR_BKIND *b, int reports);
 
+/* 1 while a balloon of the tracked kind may still be up or waiting: shown,
+ * among those waiting, or among the waiting whose kinds were not kept
+ * (task 47.35: the quick save's, taken away before the next is sent). */
+int tr_bkind_outstanding(const TR_BKIND *b);
+
 /* 98 SE's tooltip for the icon after a long hover (record 25 section 7.1,
  * task 43.72). Its shell (shell32.dll 4.72) shows the icon's tooltip once
  * per entry; a pointer that stays on the icon until the tooltip times out
@@ -1213,11 +1249,17 @@ int tr_res_text(TR_TEXT *t, TR_U32 type, const unsigned char *d, size_t n,
 void tr_report_node(TR_TEXT *t, int depth, const char *label,
                     const char *details);
 
+/* The bytes tr_report_node writes for these arguments, its terminating NUL
+ * included: a TR_TEXT of this Cap holds the node whole. */
+size_t tr_report_node_bytes(int depth, const char *label,
+                            const char *details);
+
 /* ---- the elevated stop of a unit not marked removable (section 6.6) ------ */
 
 /* NT: 1 when a unit's stop is to be offered with administrator rights
  * before it is tried: the unit is not marked removable (inst_unit_not_marked)
- * and this process is not an administrator (Vista and 7: not elevated). */
+ * and this process is not an administrator (Vista and later: not
+ * elevated). */
 int tr_elev_needed(int nt, int notMarked, int isAdmin);
 
 /* The digest of the devnode list the window's user confirmed, passed on
@@ -1451,5 +1493,23 @@ const char *tr_eject_open_text(int kind);
 int tr_snap_named(const char *head, char *name, size_t cap);
 void tr_snap_saved(int rc, const char *folder, const char *name,
                    const char *head, char *out, size_t cap);
+
+/* Task 47.30 (design record 13 section 11.10, Part B, point 2): the
+ * driver's `at` notes and the isochronous table's times are the system
+ * time in units of 1,024 x 100 ns, its low 32 bits. tr_at_age: how many
+ * such units `at` lies before the snapshot's own system time (100 ns,
+ * nowLo/nowHi), taking it as the latest such time not after it - exact
+ * for a time younger than 2^32 units (5.09 days) with no clock change
+ * between. */
+TR_U32 tr_at_age(TR_U32 nowLo, TR_U32 nowHi, TR_U32 at);
+/* tr_at_utc: the time of day, UTC, `age` units before the system time
+ * nowLo/nowHi (100 ns since 1601, UTC, as the snapshot carries it), as
+ * "hh:mm:ss.mmm" (out at least 13 bytes): the event's own time, not the
+ * time this tool started. */
+void tr_at_utc(char *out, size_t cap, TR_U32 nowLo, TR_U32 nowHi, TR_U32 age);
+/* "at=XXXXXXXX" (eight hexadecimal digits, nothing after): 1 with the
+ * value, 2 for "at=00000000" (the driver's "no sample": no gap measured,
+ * or no dry event, before the close), 0 for any other line. */
+int tr_at_line(const char *line, TR_U32 *value);
 
 #endif /* TR_CORE_H */

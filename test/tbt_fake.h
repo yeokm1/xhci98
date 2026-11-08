@@ -100,6 +100,7 @@ typedef struct FAKE {
 
     FAKE_FRAME RxQ[FAKE_RXQ];
     unsigned long RxQCount;
+    unsigned long RxQRefused;       /* fakeQueue calls too long for a frame */
     unsigned long RxDropped;
     unsigned long RxPosted;
 
@@ -251,6 +252,12 @@ static void fakeQueue(unsigned long pdf, const unsigned long *dw,
     if (g_fake.RxQCount >= FAKE_RXQ) {
         return;
     }
+    /* The words and their CRC must fit one frame; a longer request is the
+     * test's mistake, refused and counted rather than written past it. */
+    if (words > (FAKE_FRAME_BYTES - 4) / 4) {
+        g_fake.RxQRefused++;
+        return;
+    }
     /* Kept in arrival order: by time, and in queueing order for equal
      * times. */
     /* With the clock stopped, everything arrives now. */
@@ -266,7 +273,7 @@ static void fakeQueue(unsigned long pdf, const unsigned long *dw,
     fr->Pdf = pdf;
     fr->AtUs = at;
     fr->Flags = flags;
-    for (i = 0; i < words && 4 * i + 8 <= FAKE_FRAME_BYTES; i++) {
+    for (i = 0; i < words; i++) {
         fakePutBe(fr->Bytes + 4 * i, dw[i]);
     }
     crc = fakeCrc(fr->Bytes, 4 * words);

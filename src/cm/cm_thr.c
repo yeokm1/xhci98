@@ -46,8 +46,6 @@
 #include "cm_call.h"
 #include "cm_pwrr.h"
 
-/* 100 ns units per millisecond, for the relative due times. */
-#define CM_CLOCK_UNITS_PER_MS 10000UL
 /* The most ticks one clock read counts: 2^32 us / 15625 us at the usual
  * period's largest, well under the 32-bit product's limit for any period
  * up to 15.6 ms. */
@@ -123,8 +121,7 @@ static NTSTATUS cmConfigOnce(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
     CM_SET_COMPLETION_ALWAYS(irp, cmConfigDone, &done);
     status = IoCallDriver(nhi->Common.Pdo, irp);
     if (status == STATUS_PENDING) {
-        (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE,
-                                    NULL);
+        (VOID)CmWaitEvent(&done, 0);
     }
     status = irp->IoStatus.Status;
     *info = (ULONG)irp->IoStatus.Information;
@@ -468,20 +465,6 @@ static VOID cmStall(PVOID context, ULONG microseconds)
     }
 }
 
-/* A relative due time of `ms` milliseconds in 100 ns units, negative, from
- * 32-bit arithmetic (hcd_svc.c's HcdRelativeMs). */
-static VOID cmRelativeMs(PLARGE_INTEGER due, ULONG ms)
-{
-    ULONG ticks;
-
-    if (ms > 400000UL) {
-        ms = 400000UL;
-    }
-    ticks = ms * CM_CLOCK_UNITS_PER_MS;
-    due->LowPart = 0UL - ticks;
-    due->HighPart = (ticks == 0) ? 0 : -1;
-}
-
 static VOID cmSleep(PVOID context, ULONG milliseconds)
 {
     LARGE_INTEGER due;
@@ -501,7 +484,7 @@ static VOID cmSleep(PVOID context, ULONG milliseconds)
         part = (milliseconds > CM_NVLINK_PEND_MS && CmNvlinkPending())
                    ? CM_NVLINK_PEND_MS
                    : milliseconds;
-        cmRelativeMs(&due, part);
+        CmRelativeMs(&due, part);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
         CmNvlinkStep((PCM_NHI)context);
         ((PCM_NHI)context)->StepUs = cmClockUs(context);
@@ -671,8 +654,7 @@ VOID CmThrRunPnp(PCM_NHI nhi, ULONG work)
     if (!CmThrQueue(nhi, work, NULL)) {
         return;
     }
-    (VOID)KeWaitForSingleObject(&nhi->PnpDone, Executive, KernelMode, FALSE,
-                                NULL);
+    (VOID)CmWaitEvent(&nhi->PnpDone, 0);
 }
 
 /* Power IRPs this driver holds (pended, or a device IRP requested for a
@@ -781,7 +763,6 @@ VOID CmRegLeave(PCM_NHI nhi)
 
 VOID CmRegCloseWait(PCM_NHI nhi)
 {
-    LARGE_INTEGER timeout;
     KIRQL irql;
     ULONG busy;
 
@@ -795,9 +776,7 @@ VOID CmRegCloseWait(PCM_NHI nhi)
     if (busy == 0) {
         return;
     }
-    timeout.QuadPart = -(LONGLONG)(CM_REG_CLOSE_WAIT_MS * 10000UL);
-    if (KeWaitForSingleObject(&nhi->RegIdle, Executive, KernelMode, FALSE,
-                              &timeout) != STATUS_SUCCESS) {
+    if (!CmWaitEventMs(&nhi->RegIdle, CM_REG_CLOSE_WAIT_MS)) {
         /* The residual: the access in progress goes on beside what
          * follows the IRP (the bound's reason above). */
         nhi->RegCloseTimeouts++;
@@ -827,8 +806,7 @@ VOID CmPowerDrain(PCM_NHI nhi)
     KeAcquireSpinLock(&nhi->WorkLock, &irql);
     nhi->Removing = 1;
     KeReleaseSpinLock(&nhi->WorkLock, irql);
-    (VOID)KeWaitForSingleObject(&nhi->PowerIdle, Executive, KernelMode,
-                                FALSE, NULL);
+    (VOID)CmWaitEvent(&nhi->PowerIdle, 0);
     KeAcquireSpinLock(&nhi->WorkLock, &irql);
     KeReleaseSpinLock(&nhi->WorkLock, irql);
 }
@@ -912,14 +890,14 @@ static VOID NTAPI cmThread(PVOID context)
             /* With the ring interrupt armed the wait runs to the
              * maintenance pass's deadline, not for a fresh period
              * (record 21 section 4.5.3); otherwise as it always did. */
-            cmRelativeMs(&due, CmRirqTimed(nhi) ? CmRirqLeft(nhi, period)
+            CmRelativeMs(&due, CmRirqTimed(nhi) ? CmRirqLeft(nhi, period)
                                                 : period);
             nhi->ThreadWait = CM_Q_WAIT_TIMED;
             (VOID)KeWaitForSingleObject(&nhi->WorkEvent, Executive,
                                         KernelMode, FALSE, &due);
         } else if (CmLiveWaitMs(&nhi->Live) != 0) {
             /* No transport, but a monitored state: the slow probes. */
-            cmRelativeMs(&due, CmNvlinkPending() &&
+            CmRelativeMs(&due, CmNvlinkPending() &&
                                        CmLiveWaitMs(&nhi->Live) >
                                            CM_NVLINK_PEND_MS
                                    ? CM_NVLINK_PEND_MS
@@ -930,7 +908,7 @@ static VOID NTAPI cmThread(PVOID context)
         } else if (nhi->OscDeferred) {
             /* The start's activation deferred: its tries, by the clock
              * (cm_nhi.c, CmNhiDeferPass). */
-            cmRelativeMs(&due, nhi->Values.Value[CM_VAL_POLL_IDLE_MS]);
+            CmRelativeMs(&due, nhi->Values.Value[CM_VAL_POLL_IDLE_MS]);
             nhi->ThreadWait = CM_Q_WAIT_TIMED;
             (VOID)KeWaitForSingleObject(&nhi->WorkEvent, Executive,
                                         KernelMode, FALSE, &due);
@@ -938,7 +916,7 @@ static VOID NTAPI cmThread(PVOID context)
             /* Not polling, but a stor98 acknowledgement wait pending: the
              * passes that step it, every 50 ms until it ends (task
              * 42-A.12; R10). */
-            cmRelativeMs(&due, CM_NVLINK_PEND_MS);
+            CmRelativeMs(&due, CM_NVLINK_PEND_MS);
             nhi->ThreadWait = CM_Q_WAIT_TIMED;
             (VOID)KeWaitForSingleObject(&nhi->WorkEvent, Executive,
                                         KernelMode, FALSE, &due);
@@ -1042,9 +1020,10 @@ static VOID NTAPI cmThread(PVOID context)
         /* The query device's snapshot, inert when the wait at the top of
          * the loop will have no timeout. */
         CmQueryPublish(nhi, CmThrInertNext(nhi));
-        /* The checked flavours' emission (decision D12), from here at
-         * PASSIVE_LEVEL after each pass that recorded something; the
-         * release flavour's CmLogEmit does nothing. */
+        /* The emission, from here at PASSIVE_LEVEL after each pass that
+         * recorded something: in every flavour when XhciCmLogDebugView is
+         * 1, and always in the qemu flavour (cm_log.c, the owner's
+         * decision of 2026-10-16). */
         CmLogEmit(nhi, XHCI_LOG_REASON_PERIODIC);
     }
     (VOID)KeSetEvent(&nhi->ThreadExited, IO_NO_INCREMENT, FALSE);
@@ -1094,8 +1073,7 @@ NTSTATUS CmThrStart(PCM_NHI nhi)
         nhi->ThreadReferenceFailures++;
         nhi->ThreadObject = NULL;
         (VOID)CmThrQueue(nhi, CM_WORK_EXIT, NULL);
-        (VOID)KeWaitForSingleObject(&nhi->ThreadExited, Executive,
-                                    KernelMode, FALSE, NULL);
+        (VOID)CmWaitEvent(&nhi->ThreadExited, 0);
         return status;
     }
     nhi->ThreadRunning = 1;
@@ -1116,8 +1094,7 @@ VOID CmThrStop(PCM_NHI nhi)
         ObDereferenceObject(nhi->ThreadObject);
         nhi->ThreadObject = NULL;
     } else {
-        (VOID)KeWaitForSingleObject(&nhi->ThreadExited, Executive,
-                                    KernelMode, FALSE, NULL);
+        (VOID)CmWaitEvent(&nhi->ThreadExited, 0);
     }
     nhi->ThreadRunning = 0;
 }

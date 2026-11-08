@@ -69,6 +69,23 @@
  * HcdTscRead alone takes no IRQL step.
  */
 VOID HcdTscRead(PULONG lo, PULONG hi);
+/*
+ * Task 47.30 (design record 13 section 11.10, point 9): how a start reached
+ * its event ring, bits 23:16 of the evt.ring note. XhciEventRingTrbs 256
+ * asks for the in-block ring (HCD_EVT_ROUTE_VALUE); the qemu flavour's
+ * XhciQemuEventRing 1 does too (HCD_EVT_ROUTE_TEST), 2 takes the wide
+ * block whatever the first one's placement, 3 has both requests read as
+ * refused.
+ */
+#define HCD_EVT_ROUTE_BLOCK     0UL /* the 16 KiB block                  */
+#define HCD_EVT_ROUTE_WIDE      1UL /* the 32 KiB block's window         */
+#define HCD_EVT_ROUTE_REFUSED   2UL /* no block: the in-block ring       */
+#define HCD_EVT_ROUTE_TEST      3UL /* the qemu value's in-block ring    */
+#define HCD_EVT_ROUTE_VALUE     4UL /* XhciEventRingTrbs 256             */
+#define HCD_EVT_QEMU_NONE       0UL
+#define HCD_EVT_QEMU_SMALL      1UL
+#define HCD_EVT_QEMU_WIDE       2UL
+#define HCD_EVT_QEMU_REFUSE     3UL
 VOID HcdTscStamp(PXHCI_XSTAT_STAMP s);
 
 /* One class driver's telemetry (IOCTL_XHCI98_TELEMETRY, xhci98_xfer.h):
@@ -86,9 +103,16 @@ typedef struct _HCD_UAS_TELE {
     ULONG TscLo;
     ULONG TscHi;
     ULONG Word[XHCI98_TELE_WORDS];
+    /* Issue 26: the same device's last failures (XHCI98_FAILURES, its
+     * count then its ring), all 0 until one comes; zeroed when another
+     * device takes the record. */
+    ULONG Fail[XHCI98_FAIL_TOTAL_WORDS];
 } HCD_UAS_TELE, *PHCD_UAS_TELE;
 XHCI_C_ASSERT(hcd_uas_tele_words,
               XHCI98_TELE_WORDS == XHCI_SNAPSHOT_HCD_TELE_BODY_WORDS);
+XHCI_C_ASSERT(hcd_uas_fail_words,
+              XHCI98_FAIL_RECORDS * XHCI98_FAIL_WORDS + 1 ==
+                  XHCI_SNAPSHOT_HCD_UFAIL_RECORD_WORDS);
 
 #define HCD_KIND_CONTROLLER_FDO 0x43464448UL /* 'HDFC' */
 #define HCD_KIND_ROOTHUB_PDO    0x50524448UL /* 'HDRP' */
@@ -188,11 +212,21 @@ typedef struct _HCD_IO_REQUEST {
 } HCD_IO_REQUEST, *PHCD_IO_REQUEST;
 /* Windows 2000 DDK incSbdi.h:312: a success-class value there. */
 #define HCD_USBD_CANCELED           ((LONG)0x00010000L)
+/* What a record marked CancelRequested completes with: the status of the
+ * abort that marked it (HcdIoPipeCancelAll, HcdIoPipeMarkAll) - a resume's
+ * DEV_NOT_RESPONDING, say - or CANCELED for its IRP's own cancel. */
+#define HCD_XFER_CANCEL_STATUS(x)                                           \
+    ((x)->CancelStatus != 0 ? (x)->CancelStatus : HCD_USBD_CANCELED)
 #define HCD_PIPE_XFERS      4UL
 /* A stream's pipe (31-A.1) carries fewer: one request per stream at a time
  * is UAS's whole use of one (a tag per stream), and one more lets the next
  * be mapped while the first is on the ring. */
 #define HCD_STREAM_XFERS    2UL
+/* An isochronous pipe carries more (record 13 section 11.9, task 47.5):
+ * every record is a request a client has handed over, so a stream of
+ * short requests is held on the ring rather than waiting unmapped. The
+ * event budget counts one underrun for each (XHCI_ISO_EVENTS_OVER_TRBS). */
+#define HCD_ISO_PIPE_XFERS  8UL
 /* Data elements per chunk (xhci_pipe.h XHCI_PIPE_CHUNK_ELEMENTS), and the
  * one slot the SG list's own declaration already holds beyond them. */
 #define HCD_SG_ELEMENTS     32UL
@@ -222,9 +256,10 @@ XHCI_C_ASSERT(hcd_iso_block_tail,
 #define HCD_XFER_HELD       4UL     /* mapped, waiting for its pipe       */
 
 /* Record 13 section 11.8, point 3: the event budget counts one underrun
- * for each record a pipe can publish while nothing drains, and one more. */
+ * for each record an isochronous pipe can publish while nothing drains,
+ * and one more (section 11.9). */
 XHCI_C_ASSERT(hcd_iso_events_over_trbs,
-              XHCI_ISO_EVENTS_OVER_TRBS == HCD_PIPE_XFERS + 1UL);
+              XHCI_ISO_EVENTS_OVER_TRBS == HCD_ISO_PIPE_XFERS + 1UL);
 
 typedef struct _HCD_XFER {
     XHCI_TRANSFER Xfer;             /* first: CONTAINING_RECORD target    */
@@ -249,6 +284,8 @@ typedef struct _HCD_XFER {
     PULONG LengthOut;               /* the URB's TransferBufferLength      */
     struct _HCD_DEVICE_PDO *Pdo;    /* whose stack sent it: its REMOVE waits */
     ULONG CancelRequested;          /* its IRP was cancelled (hcd_io.c)  */
+    LONG CancelStatus;              /* an abort's own status for it, 0 for
+                                     * CANCELED (HCD_XFER_CANCEL_STATUS) */
     ULONG ShortOk;                  /* USBD_SHORT_TRANSFER_OK was set     */
     ULONG Isoch;                    /* URB_FUNCTION_ISOCH_TRANSFER        */
     ULONG Asap;                     /* USBD_START_ISO_TRANSFER_ASAP       */
@@ -261,6 +298,11 @@ typedef struct _HCD_XFER {
     ULONG ChunksPublished;
     XHCI_XSTAT_STAMP Retire;
     XHCI_XSTAT_STAMP MapQueued;
+    /* Task 47.30 (design record 13 section 11.10, Part B), an isochronous
+     * record's: the stamp at its claim, and whether its IRP had waited on
+     * the pipe's Waiting list; controller lock. */
+    XHCI_XSTAT_STAMP IsoClaim;
+    ULONG IsoWaited;
     /* 36.24 (design record 13 section 11.6), controller lock: the wide
      * entry an eligible record claimed when it was filled (hcdFill), given
      * back when its first mapping does not promote or at its completion;
@@ -419,11 +461,16 @@ typedef struct _HCD_PIPE {
                                      * pipe's doorbell; controller lock   */
     ULONG Seq;                      /* the last submission's order         */
     XHCI_PIPE_EP Ep;                /* its descriptor, decoded (xhci_pipe) */
-    PHCD_ISO_BLOCK Iso;             /* isochronous: HCD_PIPE_XFERS blocks,
+    PHCD_ISO_BLOCK Iso;             /* isochronous: XferCount blocks,
                                      * IsoBlockBytes apart (hcdIsoBlock)  */
     ULONG IsoBlockBytes;            /* one block at IsoMaxPackets          */
     ULONG IsoMaxPackets;            /* a request's packet bound: 62 on a
                                      * pool ring, up to 128 on a page     */
+    ULONG IsoRecordsPeak;           /* the most records out at once
+                                     * (section 11.9's iso.recs);
+                                     * controller lock                    */
+    XHCI_ISO_TIMING IsoTiming;      /* section 11.10's stream timing;
+                                     * controller lock                    */
     /* Record 13 section 11.8 (the thread's; read under the controller
      * lock): the ring page this pipe's ring lives in, NULL on a pool
      * ring, and what the pipe adds to the event budget's IsoCapOut - its
@@ -470,15 +517,24 @@ typedef struct _HCD_PIPE {
     struct _HCD_PIPE *RetainNext;
     ULONG Pinned;
     ULONG XferCount;                /* records in Xfers: a stream's pipe is
-                                     * allocated short (HCD_STREAM_XFERS) */
+                                     * allocated short (HCD_STREAM_XFERS),
+                                     * an isochronous one long
+                                     * (HCD_ISO_PIPE_XFERS)               */
     HCD_XFER Xfers[HCD_PIPE_XFERS]; /* last: see XferCount                */
 } HCD_PIPE, *PHCD_PIPE;
 
-/* The bytes of a stream's pipe: the records past HCD_STREAM_XFERS are not
- * allocated, and nothing reads past XferCount. */
-#define HCD_STREAM_PIPE_BYTES                                                \
-    ((ULONG)(FIELD_OFFSET(HCD_PIPE, Xfers) +                                 \
-             HCD_STREAM_XFERS * sizeof(HCD_XFER)))
+/* The bytes of a pipe with `n` records. A stream's pipe is allocated with
+ * HCD_STREAM_XFERS and an isochronous pipe with HCD_ISO_PIPE_XFERS (record
+ * 13 section 11.9), the declared HCD_PIPE_XFERS being every other pipe's,
+ * the embedded Ep0Pipe's among them: nothing reads Xfers past XferCount. */
+#define HCD_PIPE_BYTES(n)                                                    \
+    ((ULONG)(FIELD_OFFSET(HCD_PIPE, Xfers) + (n) * sizeof(HCD_XFER)))
+#define HCD_STREAM_PIPE_BYTES HCD_PIPE_BYTES(HCD_STREAM_XFERS)
+#define HCD_ISO_PIPE_BYTES    HCD_PIPE_BYTES(HCD_ISO_PIPE_XFERS)
+XHCI_C_ASSERT(hcd_iso_pipe_bytes, HCD_ISO_PIPE_BYTES >= sizeof(HCD_PIPE));
+/* hcdCfgCancelPipe's walk holds two TDs a record of an ordinary pipe; an
+ * isochronous record is one TD group (hcd_cfg.c). */
+XHCI_C_ASSERT(hcd_cancel_tds, 2UL * HCD_PIPE_XFERS >= HCD_ISO_PIPE_XFERS);
 
 /*
  * An endpoint's open streams (hcd_cfg.c, 31-A.1): the plan, the one common
@@ -566,7 +622,7 @@ typedef struct _HCD_USB_DEVICE {
     /* SuperSpeed (29-A.1, 29-A.3): the link rate the port trained at, in
      * kbit/s, whether it is SuperSpeedPlus, and the BOS descriptor, kept
      * whole (pool; NULL when none was read) with what XhciPipeParseBos
-     * made of it - for the endpoint rules and XHCISNAP (29-A.6). */
+     * made of it - for the endpoint rules and the snapshot (29-A.6). */
     ULONG RateKbps;
     ULONG Plus;
     /* Its own SuperSpeed link's rank (XHCI_SS_RANK_*, xhci_sshub.h): on a
@@ -750,6 +806,9 @@ typedef struct _HCD_DEVICE_PDO {
     ULONG Reported;                 /* returned in a BusRelations answer    */
     ULONG MissingReported;          /* omitted from one since it was gone   */
     ULONG RemoveReceived;           /* PnP's IRP_MN_REMOVE_DEVICE seen      */
+    ULONG PnpStarted;               /* a START seen: PnP has its devnode, so
+                                     * its properties may be asked (the
+                                     * door's driver key, hcd_door.c)     */
     ULONG DeletePending;            /* on RemovedPdos, deleted at the next
                                      * relations answer (hcd_pdo.c)       */
     ULONG Dormant;                  /* listed with no device: stopped by PnP
@@ -766,6 +825,10 @@ typedef struct _HCD_DEVICE_PDO {
     ULONG Deleted;                 /* IoDeleteDevice called: once only     */
     ULONG Serial;                   /* the name's number; a port waits on it */
     ULONG Closing;                  /* stopping or removed: URBs refused  */
+    ULONG Ghost;                    /* 98 SE and ME: started after its
+                                     * device left, answering from its
+                                     * copies (design record 13 section
+                                     * 10.5.2); PdoListLock when set     */
     volatile LONG UrbsPending;      /* URB IRPs pended here and not yet
                                      * completed; REMOVE waits for 0      */
     volatile LONG CancelsUnserved;  /* waiting IRPs cancelled with no
@@ -784,6 +847,17 @@ typedef struct _HCD_DEVICE_PDO {
      * list under the cancel spin lock, each still counted in UrbsPending. */
     LIST_ENTRY ParkedIrps;
     ULONG ParkedCount;
+    /* Set once, on 98 SE and ME, by a SELECT_CONFIGURATION reaching the
+     * PDO after its device left (HcdIoIsoRelease, design record 13
+     * section 18.5), under the cancel spin lock: from then on a departed
+     * device's isochronous request is completed CANCELED rather than held.
+     * Never cleared: a departed PDO is deleted at its REMOVE. */
+    ULONG IsoReleased;
+    /* Whether that release applies here - 98 SE or ME - read once at the
+     * PDO's creation at PASSIVE_LEVEL (HcdIoRefusedInit), since
+     * IoIsWdmVersionAvailable is PASSIVE_LEVEL only and a select may be
+     * submitted at DISPATCH_LEVEL. */
+    ULONG IsoReleaseOn;
     /* Abort horizons (HcdIoAbortMark, hcd_io.c), under the cancel spin
      * lock: every URB IRP is stamped at its dispatch with the next value
      * of SubmitSeq - a 64-bit count as a Lo/Hi pair; the IRP keeps its low
@@ -1373,6 +1447,22 @@ typedef struct _HCD_CONTROLLER {
     ULONG CommonBytes;
     volatile ULONG CommonBufferPinned;
     ULONG CommonBuffersKept;
+    /* Task 47.30 (design record 13 section 11.10, Part A): the larger event
+     * ring's block, as allocated (freed by these), and the window in it the
+     * ring uses, NULL and 0 when the start runs the in-block ring; set by
+     * HcdDmaOpen, cleared by HcdDmaClose, read by HcdSvcEventRing. EvtWanted
+     * is XhciEventRingTrbs as the start read it (1 the larger ring, 0 the
+     * in-block one) and EvtRoute how the start reached its ring
+     * (HCD_EVT_ROUTE_*). Outside the extension a start zeroes; not
+     * serialized. */
+    PVOID EvtBlockVa;
+    PHYSICAL_ADDRESS EvtBlockPa;
+    ULONG EvtBlockBytes;
+    PVOID EvtRingVa;
+    ULONG EvtRingPa;
+    ULONG EvtWanted;
+    ULONG EvtValueRaw;
+    ULONG EvtRoute;
 
     /* The service layer (hcd_svc.c). */
     ULONG ConfigLastStatus;
@@ -1466,6 +1556,13 @@ typedef struct _HCD_CONTROLLER {
     ULONG MapBusy;
     ULONG MapInCall;
     ULONG MapRefusals;
+    /* Where the outstanding channel request is (HCD_MAP_PHASE_*, under
+     * MapLock), and the quarantine of a request a fail-closed stop left
+     * with the HAL (hcd_dma.c, HcdDmaMapDrain): sticky for the FDO's life,
+     * so no start runs on it and its REMOVE keeps the device object. */
+    ULONG MapPhase;
+    ULONG MapQuarantined;
+    ULONG MapsQuarantinedLate;      /* the HAL called a quarantined one  */
     KDPC MapDpc;
     KDPC MapDoneDpc;                /* the execution routine's release   */
     volatile LONG MapDpcsInFlight;
@@ -1530,6 +1627,12 @@ typedef struct _HCD_CONTROLLER {
     ULONG IsoPageLargestTrbs;
     ULONG IsoPageLargestPackets;
     ULONG IsoBeiTds;
+    /* Design record 13 section 10.5.2 (task 47.10): departed PDOs started
+     * on 98 SE and ME, the requests their ghosts answered from the copies,
+     * and the transfers they held. Interlocked; not serialized. */
+    ULONG PdoGhostStarts;
+    ULONG PdoGhostAnswers;
+    ULONG PdoGhostHeld;
     XHCI_TRB IsoTrbs[XHCI_XFER_MAX_ISO_PAGE_TRBS];
     ULONG IsoTdLengths[XHCI_XFER_MAX_ISO_PAGE_PACKETS];
     ULONG WaitingKicks;            /* a waiter started by admission or a
@@ -1806,6 +1909,9 @@ typedef struct _HCD_CONTROLLER {
      * it - 1 makes every non-zero-bandwidth isochronous pipe a candidate
      * for a ring page, so QEMU's Full Speed audio reaches one in a leg. */
     ULONG QemuIsoRing;
+    /* Record 13 section 11.10, point 9: XhciQemuEventRing as the start
+     * read it, before HcdDmaOpen (HCD_EVT_QEMU_*). */
+    ULONG QemuEventRing;
     /* Record 15 section 7.2.12, leg T3: XhciQemuSuspHoldDx as the start
      * read it - 1 keeps the selective-suspend executor from claiming a
      * child's pended Dx, so a stop can meet it still pended. */
@@ -1855,6 +1961,12 @@ typedef struct _HCD_CONTROLLER {
      * HcdInjSelectConfigure). */
     ULONG InjSetInterface;
     ULONG InjSelectConfig;
+    /* Issue 26: fault 1A's Stops still to answer, and the endpoint whose
+     * next context read answers Running (Reads 1, 0 none). InjLock. */
+    ULONG InjStopRace;
+    ULONG InjStopRaceSlot;
+    ULONG InjStopRaceDci;
+    ULONG InjStopRaceReads;
     ULONG InjBulkStream;            /* 36.22: the held TD's stream, 0 none */
     /* BULK_TIMEOUT: armed to lose the target endpoint's
      * next TD's completion events; once one is lost, every event inside
@@ -2014,6 +2126,28 @@ typedef struct _HCD_CONTROLLER {
      * door gate and at a return to D0 under the power gate. */
     XHCI_PIRQ_STATE Pirq;
     PVOID PirqVa;
+    /* The chipset-routed GSI offer (task 47.33, part 2; hcd_ctl.c,
+     * xhci_pirq.h): XhciIntelNoRouteIrq as AddDevice read it, the offer
+     * AddDevice's run made (on 2000, XP and XP x64), whether a filter
+     * wrote it into the requirements (1 offered), the last start's
+     * classification of its grant (HCD_NOROUTE_GRANT_*), and whether
+     * Windows 2000's filter takes the interrupt out of the list (1; record
+     * 18 section 16.4). The qemu flavour's injections beside them.
+     * PASSIVE_LEVEL, AddDevice, the filter and the start, each a PnP
+     * system-thread context. */
+    ULONG NoRouteFound;
+    ULONG NoRouteValue;
+    XHCI_PIRQ_OFFER NoRoute;
+    ULONG NoRouteOffered;
+    ULONG NoRouteGrant;
+    ULONG QemuNoRouteGsi;       /* XHCI_PIRQ_NO_GSI unless injected       */
+    ULONG QemuLineConnFail;
+    ULONG NoRouteStrip;
+    ULONG QemuNoRouteListed;    /* 1: QEMU's controller taken as listed;
+                                 * 2: the same, its run ended at a failed
+                                 * mapping                                */
+    ULONG QemuStripFail;        /* 1 no memory, 2 a refused shape, 3 a
+                                 * refused walk                           */
     /* Selective suspend (design record 14; hcd_susp.c). SuspOn: the
      * switch, XhciSelectiveSuspend, read at start (36.33; 0 until then).
      * PowerEpoch and PowerDown: the controller's session and its leaving
@@ -2100,7 +2234,7 @@ typedef struct _HCD_CONTROLLER {
      * SilentClasses table and the query's status, written by each start's
      * hcdReadSilent while no controller thread exists, read with no lock
      * by the thread's hcdSilentDecide. On NT the gate stays 0 and the table
-     * empty. Outside Hc, so XHCISNAP's dump layout is untouched. */
+     * empty. Outside Hc, so the snapshot's dump layout is untouched. */
     ULONG SilentGate;
     NTSTATUS SilentStatus;
     XHCI_SILENT Silent;
@@ -2269,12 +2403,21 @@ VOID HcdCtlIsoRelease(PHCD_CONTROLLER hc);
 VOID HcdPowerGateEnter(PHCD_CONTROLLER hc);
 VOID HcdPowerGateLeave(PHCD_CONTROLLER hc);
 ULONG HcdCtlForceBulkOnly(PHCD_CONTROLLER hc);
+ULONG HcdCtlBulkOnlyOwnId(PHCD_CONTROLLER hc);
 ULONG HcdDrainPending(PHCD_CONTROLLER hc);
 ULONG HcdCommandDrain(PHCD_CONTROLLER hc);
 VOID HcdPswRoute(PHCD_CONTROLLER hc);
 VOID HcdPswRelease(PHCD_CONTROLLER hc);
 VOID HcdPirqResume(PHCD_CONTROLLER hc);
 VOID HcdPirqStartAttempt(PHCD_CONTROLLER hc);
+VOID HcdNoRouteAddDevice(PHCD_CONTROLLER hc);
+
+/* The start's classification of the grant against the offer (task
+ * 47.33, part 2; the note noroute.grant). */
+#define HCD_NOROUTE_GRANT_NONE      0UL     /* memory alone                */
+#define HCD_NOROUTE_GRANT_OFFERED   1UL     /* the offered GSI             */
+#define HCD_NOROUTE_GRANT_OTHER     2UL     /* another line (the lower
+                                             * configuration's, mostly)   */
 ULONG HcdCtlDrainAdmitted(PHCD_CONTROLLER hc);
 
 /* hcd_poll.c (design record 15) */
@@ -2492,6 +2635,7 @@ VOID HcdStrictBefore(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
 VOID HcdStrictAfter(PHCD_CONTROLLER hc, const HCD_STRICT_SNAP *snap,
                     ULONG code, ULONG control);
 VOID HcdStrictForgetSlots(PHCD_CONTROLLER hc);
+VOID HcdStrictStart(PHCD_CONTROLLER hc);
 
 /* hcd_dev.c */
 ULONG HcdDevRetryReplay(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG token);
@@ -2644,8 +2788,9 @@ NTSTATUS HcdIoRefuseLater(struct _HCD_DEVICE_PDO *pdo, PIRP irp, PVOID urb,
                           LONG usbd);
 VOID HcdIoRefusedInit(struct _HCD_DEVICE_PDO *pdo);
 ULONG HcdIoPark(struct _HCD_DEVICE_PDO *pdo, PIRP irp, PVOID urb,
-                PVOID handle, PVOID endpoint);
+                PVOID handle, PVOID endpoint, ULONG departed);
 ULONG HcdIoParkedRelease(struct _HCD_DEVICE_PDO *pdo, ULONG aborted);
+ULONG HcdIoIsoRelease(struct _HCD_DEVICE_PDO *pdo);
 /* HcdIoPark's endpoint for a request whose endpoint cannot be named any
  * more (35-T.6): an abort of any pipe of the PDO covers it. */
 #define HCD_IO_ENDPOINT_ANY ((PVOID)(ULONG_PTR)1)
@@ -2663,6 +2808,9 @@ NTSTATUS HcdDmaOpen(PHCD_CONTROLLER hc);
 VOID HcdDmaClose(PHCD_CONTROLLER hc);
 VOID HcdDmaInitObjects(PHCD_CONTROLLER hc);
 VOID HcdDmaMapQueue(PHCD_CONTROLLER hc, PHCD_XFER x);
+#define HCD_MAP_PHASE_IDLE      0UL     /* no channel request outstanding  */
+#define HCD_MAP_PHASE_ASKED     1UL     /* asked, its routine not entered  */
+#define HCD_MAP_PHASE_ROUTINE   2UL     /* entered, its release DPC owed   */
 VOID HcdDmaMapKick(PHCD_CONTROLLER hc);
 VOID HcdDmaUnmap(PHCD_CONTROLLER hc, PHCD_XFER x);
 VOID HcdDmaMapDrain(PHCD_CONTROLLER hc);

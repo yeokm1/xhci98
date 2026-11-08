@@ -152,6 +152,119 @@ ULONG XhciXstatInterval(PXHCI_XSTAT_TIME t, PULONG discarded, PULONG crossed,
     return 1;
 }
 
+ULONG XhciXstatSpan(const XHCI_XSTAT_STAMP *from, const XHCI_XSTAT_STAMP *to,
+                    PULONG counts)
+{
+    ULONG d;
+    ULONG hi;
+    ULONG borrow;
+
+    if (!XhciXstatStamped(from) || !XhciXstatStamped(to)) {
+        return XHCI_XSTAT_SPAN_NONE;
+    }
+    if (from->Cpu != to->Cpu) {
+        return XHCI_XSTAT_SPAN_CROSSED;
+    }
+    borrow = (to->Lo < from->Lo) ? 1UL : 0UL;
+    if (to->Hi < from->Hi || (to->Hi == from->Hi && borrow)) {
+        return XHCI_XSTAT_SPAN_BACKWARD;
+    }
+    d = to->Lo - from->Lo;
+    hi = to->Hi - from->Hi - borrow;
+    *counts = (hi != 0) ? 0xFFFFFFFFUL : d;
+    return XHCI_XSTAT_SPAN_OK;
+}
+
+ULONG XhciXstatSysUnits(ULONG lo, ULONG hi)
+{
+    ULONG v;
+
+    /* 0 is the `at` notes' "no sample" (a GapAt or DryAt never stamped),
+     * so a time that lands on it reads one unit (102.4 us) later. */
+    v = (hi << 22) | (lo >> 10);
+    return (v != 0) ? v : 1UL;
+}
+
+ULONG XhciIsoTimingPublish(PXHCI_ISO_TIMING t, const XHCI_XSTAT_STAMP *claim,
+                           const XHCI_XSTAT_STAMP *now, ULONG waited,
+                           ULONG before, ULONG after)
+{
+    ULONG lag;
+    ULONG lagKind;
+    ULONG gap;
+    ULONG gapKind;
+    ULONG longest;
+
+    lag = 0;
+    lagKind = XhciXstatSpan(claim, now, &lag);
+    if (lagKind == XHCI_XSTAT_SPAN_OK) {
+        if (lag > t->LagMax) {
+            t->LagMax = lag;
+        }
+    } else if (lagKind == XHCI_XSTAT_SPAN_CROSSED) {
+        t->Crossed++;
+    } else if (lagKind == XHCI_XSTAT_SPAN_BACKWARD) {
+        t->Backward++;
+    }
+    if (waited) {
+        t->Waited++;
+    }
+    if (before == 0) {
+        t->PubOnEmpty++;
+    } else if (t->Publications == t->PubOnEmpty || before < t->FillMin) {
+        /* The first publication onto a non-empty ring sets the floor. */
+        t->FillMin = before;
+    }
+    t->Publications++;
+    if (after > t->FillMax) {
+        t->FillMax = after;
+    }
+    longest = 0;
+    gap = 0;
+    gapKind = XhciXstatSpan(&t->LastPub, now, &gap);
+    if (gapKind == XHCI_XSTAT_SPAN_OK) {
+        if ((t->GapFlags & XHCI_ISOT_F_GAP) == 0 || gap > t->GapMax) {
+            t->GapMax = gap;
+            t->GapLag = (lagKind == XHCI_XSTAT_SPAN_OK) ? lag : 0UL;
+            t->GapFlags = XHCI_ISOT_F_GAP |
+                          (waited ? XHCI_ISOT_F_WAITED : 0UL) |
+                          ((lagKind == XHCI_XSTAT_SPAN_OK)
+                               ? 0UL
+                               : XHCI_ISOT_F_LAG_UNMEASURED);
+            longest = 1;
+        }
+    } else if (gapKind == XHCI_XSTAT_SPAN_CROSSED) {
+        t->Crossed++;
+    } else if (gapKind == XHCI_XSTAT_SPAN_BACKWARD) {
+        t->Backward++;
+    }
+    if (XhciXstatStamped(now)) {
+        t->LastPub = *now;
+    }
+    return longest;
+}
+
+VOID XhciIsoTimingDry(PXHCI_ISO_TIMING t, ULONG at)
+{
+    t->Dry++;
+    t->DryAt = at;
+}
+
+ULONG XhciIsoTimingGapLagNote(const XHCI_ISO_TIMING *t)
+{
+    ULONG v;
+
+    v = (t->GapLag > XHCI_ISOT_NOTE_COUNT_MAX) ? XHCI_ISOT_NOTE_COUNT_MAX
+                                                : t->GapLag;
+    if ((t->GapFlags & XHCI_ISOT_F_WAITED) != 0) {
+        v |= XHCI_ISOT_NOTE_WAITED;
+    }
+    if ((t->GapFlags & XHCI_ISOT_F_LAG_UNMEASURED) != 0) {
+        v |= XHCI_ISOT_NOTE_UNMEASURED;
+    }
+    return v;
+}
+
 VOID XhciXstatUrb(PXHCI_XSTAT s, ULONG length, ULONG chunks)
 {
     s->Urbs++;

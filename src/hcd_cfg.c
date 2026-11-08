@@ -179,6 +179,16 @@ NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
              * reset from its completion routine: completed now. */
             return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
         }
+        /* A select that reached the device as it left: on a departed PDO
+         * (unlisted before the drain marks the device gone, design record
+         * 13 section 10.5) it hands back the held isochronous requests as
+         * the departed branch does (HcdIoIsoRelease, section 18.5). A
+         * stop's or a reset's drain leaves the PDO listed and is not a
+         * departure. No lock is held here. */
+        if (urb->UrbHeader.Function == URB_FUNCTION_SELECT_CONFIGURATION &&
+            !pdo->Listed) {
+            (VOID)HcdIoIsoRelease(pdo);
+        }
         return HcdIoRefuseLater(pdo, irp, urb, HCD_USBD_DEVICE_GONE);
     }
     if (hc->ShutLatched) {
@@ -436,7 +446,7 @@ static VOID hcdCfgHoldUnreadable(PHCD_USB_DEVICE dev, PIRP irp, PURB urb)
     XhciControllerLockAcquire(&dev->Controller->Hc, &oldIrql);
     endpoint = hcdCfgHeldEndpoint(dev, handle);
     XhciControllerLockRelease(&dev->Controller->Hc, oldIrql);
-    if (!HcdIoPark(pdo, irp, urb, handle, endpoint)) {
+    if (!HcdIoPark(pdo, irp, urb, handle, endpoint, 1)) {
         (VOID)HcdIoRefuseLater(pdo, irp, urb, HCD_USBD_CANCELED);
         (VOID)InterlockedDecrement(&pdo->UrbsPending);
     }
@@ -721,8 +731,10 @@ static ULONG hcdCfgFault(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
          * device with no PDO yet keeps the reset. The mark stays until
          * the device is gone (HcdCfgDeviceGone), so a caller's second
          * fault for the same failure (hcdCfgReset after hcdCfgQuiesce)
-         * finds the cycle already owed and requests no reset (Codex,
-         * 4d865ccd); the cycle is queued once. */
+         * finds the cycle already owed and requests no reset (reviewed
+         * and revised after 4d865ccd); the cycle is queued once. Issue
+         * 26 (2026-11-07) sends a Stop Endpoint given up the same way
+         * (hcdCfgStopBounded). */
         if (dev->Pdo != NULL && dev->Hub == NULL) {
             if (!hc->StreamDeqCycled) {
                 hc->StreamDeqCycled = 1;
@@ -1190,7 +1202,9 @@ static ULONG hcdCfgRingless(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 static VOID hcdCfgIsoCountReturn(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
 {
     KIRQL oldIrql;
+    LARGE_INTEGER now;
     ULONG count;
+    ULONG sys;
 
     count = pipe->IsoCount;
     if (count == 0) {
@@ -1203,6 +1217,36 @@ static VOID hcdCfgIsoCountReturn(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
     XhciLogNote(&hc->Hc, "iso.page.free",
                 (pipe->Device->SlotId << 24) |
                     ((pipe->Dci & 0xFFUL) << 16) | (count & 0xFFFFUL));
+    /* Section 11.9: the most records the pipe had out at once, and its
+     * count, so a leg reads what depth its client used. */
+    XhciLogNote(&hc->Hc, "iso.recs",
+                (pipe->Device->SlotId << 24) |
+                    ((pipe->Dci & 0xFFUL) << 16) |
+                    ((pipe->IsoRecordsPeak & 0xFFUL) << 8) |
+                    (pipe->XferCount & 0xFFUL));
+    XHCI_DBG_VALUE("hcd: iso pipe records, slot/DCI/peak/count",
+                   (pipe->Device->SlotId << 24) |
+                       ((pipe->Dci & 0xFFUL) << 16) |
+                       ((pipe->IsoRecordsPeak & 0xFFUL) << 8) |
+                       (pipe->XferCount & 0xFFUL));
+    /* Section 11.10, Part B, point 2: the stream's timing, after iso.recs
+     * names the pipe - the longest gap and when it ended, that gap's own
+     * request, the longest wait, the dry events and the last one's time,
+     * and the close's time - in one hold of the lock, so no other record
+     * falls between a value and its time. */
+    KeQuerySystemTime(&now);
+    sys = XhciXstatSysUnits(now.LowPart, (ULONG)now.HighPart);
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    XhciLogNoteLocked(&hc->Hc, "iso.gap", pipe->IsoTiming.GapMax);
+    XhciLogNoteLocked(&hc->Hc, "at", pipe->IsoTiming.GapAt);
+    XhciLogNoteLocked(&hc->Hc, "iso.gap.lag",
+                      XhciIsoTimingGapLagNote(&pipe->IsoTiming));
+    XhciLogNoteLocked(&hc->Hc, "iso.lag", pipe->IsoTiming.LagMax);
+    XhciLogNoteLocked(&hc->Hc, "iso.dry", pipe->IsoTiming.Dry);
+    XhciLogNoteLocked(&hc->Hc, "at", pipe->IsoTiming.DryAt);
+    XhciLogNoteLocked(&hc->Hc, "iso.close", pipe->IsoTiming.Publications);
+    XhciLogNoteLocked(&hc->Hc, "at", sys);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
 }
 
 /*
@@ -1246,7 +1290,7 @@ static ULONG hcdCfgIsoPage(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     bytes = 0;
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     if (wanted) {
-        grant = XhciPipeIsoGrant(ext->Layout.EventRingTrbs, hc->IsoCapOut,
+        grant = XhciPipeIsoGrant(ext->EventRing.Trbs, hc->IsoCapOut,
                                  borrow, XHCI_XFER_MAX_ISO_TRBS);
         trbs = XhciPipeIsoRingTrbs(grant, XHCI_XFER_MAX_ISO_TRBS);
         bytes = XhciPipeIsoPageBytes(
@@ -1382,18 +1426,26 @@ static PHCD_PIPE hcdCfgPipeNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG answer;
     ULONG index;
     ULONG offset;
+    ULONG bytes;
     ULONG i;
 
     ext = &hc->Hc;
-    pipe = (PHCD_PIPE)HcdPoolAlloc(sizeof(HCD_PIPE));
+    /* Record 13 section 11.9: an isochronous pipe carries more records. */
+    bytes = (ep->TransferType == XHCI_PIPE_XFER_ISOCH)
+                ? HCD_ISO_PIPE_BYTES
+                : (ULONG)sizeof(HCD_PIPE);
+    pipe = (PHCD_PIPE)HcdPoolAlloc(bytes);
     if (pipe == NULL) {
         *usbd = HCD_USBD_NO_MEMORY;
         return NULL;
     }
-    for (i = 0; i < sizeof(HCD_PIPE); i++) {
+    for (i = 0; i < bytes; i++) {
         ((PUCHAR)pipe)[i] = 0;
     }
-    HcdIoPipeInit(pipe, dev);
+    HcdIoPipeInitCount(pipe, dev,
+                       (ep->TransferType == XHCI_PIPE_XFER_ISOCH)
+                           ? HCD_ISO_PIPE_XFERS
+                           : HCD_PIPE_XFERS);
     pipe->Ep = *ep;
     pipe->Dci = ep->Dci;
     pipe->EndpointAddress = ep->Address;
@@ -1449,7 +1501,7 @@ static PHCD_PIPE hcdCfgPipeNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             }
         }
         pipe->IsoBlockBytes = XhciXferIsoBlockBytes(pipe->IsoMaxPackets);
-        pipe->Iso = (PHCD_ISO_BLOCK)HcdPoolAlloc(HCD_PIPE_XFERS *
+        pipe->Iso = (PHCD_ISO_BLOCK)HcdPoolAlloc(pipe->XferCount *
                                                  pipe->IsoBlockBytes);
         if (pipe->Iso == NULL) {
             *usbd = HCD_USBD_NO_MEMORY;
@@ -1973,6 +2025,17 @@ static LONG hcdCfgSelectOnce(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     sc = &urb->UrbSelectConfiguration;
     cd = sc->ConfigurationDescriptor;
     XHCI_DBG_VALUE("hcd: select, URB length", urb->UrbHeader.Length);
+    /* The fixed part was checked at the dispatch (hcd_urb.c,
+     * hcdUrbMinLength); a configuration needs one whole interface entry's
+     * fixed part as well, or the loop below would open nothing and still
+     * send SET_CONFIGURATION. Refused before the old configuration is
+     * taken down. The unconfigure (no descriptor) needs none. */
+    if (cd != NULL &&
+        (ULONG)urb->UrbHeader.Length <
+            (ULONG)FIELD_OFFSET(struct _URB_SELECT_CONFIGURATION, Interface) +
+                (ULONG)FIELD_OFFSET(USBD_INTERFACE_INFORMATION, Pipes)) {
+        return HCD_USBD_INVALID_PARAMETER;
+    }
     XHCI_DBG_VALUE("hcd: select, ConfigurationDescriptor",
                    (ULONG)(ULONG_PTR)cd);
     XHCI_DBG_VALUE("hcd: select, first interface length/number/alternate",
@@ -2099,7 +2162,11 @@ static LONG hcdCfgSelectOnce(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         p += ii->Length;
     }
 
-    if (usbd == XHCI_USBD_STATUS_SUCCESS && mask != 0) {
+    if (usbd != XHCI_USBD_STATUS_SUCCESS) {
+        /* Refused before any Configure Endpoint: the pipes built so far
+         * were never enabled, so they are freed below, never published. */
+        mask = 0;
+    } else if (mask != 0) {
         code = HCD_CFG_NOT_ISSUED;
         if (XhciPipeConfigurePlan(0, 0, mask, &plan) == XHCI_PIPE_OK) {
             code = hcdCfgConfigureAdd(hc, dev, &plan, add, 1);
@@ -2150,7 +2217,8 @@ static LONG hcdCfgSelectOnce(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         dev->Selected = NULL;
         dev->SelectedLength = 0;
         if (mask != 0) {
-            /* Enabled, then refused by the device: take them back down. */
+            /* Enabled by Configure Endpoint, then refused by the device:
+             * take them back down. */
             XhciControllerLockAcquire(&hc->Hc, &oldIrql);
             for (dci = 2; dci < 32; dci++) {
                 dev->Pipes[dci] = add[dci];
@@ -3519,6 +3587,103 @@ static ULONG hcdCfgSetDequeueCode(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * State Error. */
 #define HCD_CFG_DEQ_RETRIES 2UL
 
+/* Issues 24 and 26: a device whose stream's dequeue the controller
+ * refused, or whose endpoint would not be brought to rest, is marked, so
+ * that its failure cycles the device alone and not the controller
+ * (hcdCfgFault). Thread only. */
+static VOID hcdCfgStreamMark(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    if (hc->StreamDeqRefused != dev) {
+        hc->StreamDeqRefused = dev;
+        hc->StreamDeqCycled = 0;
+    }
+}
+
+/* Issue 26: the bounded Stop Endpoint's callbacks (xhci_tol.h,
+ * XhciTolStopRest). Thread only, powered. */
+typedef struct _HCD_CFG_STOP {
+    PHCD_CONTROLLER Hc;
+    PHCD_USB_DEVICE Dev;
+    ULONG Dci;
+} HCD_CFG_STOP, *PHCD_CFG_STOP;
+
+static ULONG hcdCfgStopCmd(PVOID context)
+{
+    PHCD_CFG_STOP s;
+    XHCI_TRB trb;
+    ULONG control;
+
+    s = (PHCD_CFG_STOP)context;
+    if (XhciTrbStopEndpoint(&trb, s->Dev->SlotId, s->Dci, 0) !=
+        XHCI_RING_OK) {
+        return 0;
+    }
+    return hcdCfgCommand(s->Hc, s->Dev, &trb, &control);
+}
+
+static ULONG hcdCfgStopState(PVOID context)
+{
+    PHCD_CFG_STOP s;
+
+    s = (PHCD_CFG_STOP)context;
+    return hcdCfgEpState(s->Hc, s->Dev, s->Dci);
+}
+
+/* One millisecond: Linux allows a restarting endpoint up to 100 ms over
+ * its retries (xhci-ring.c, the Stop Endpoint completion). */
+static VOID hcdCfgStopWait(PVOID context)
+{
+    LARGE_INTEGER due;
+
+    UNREFERENCED_PARAMETER(context);
+    due.LowPart = (ULONG)-10000L;
+    due.HighPart = -1;
+    (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+}
+
+/*
+ * Issue 26 (2026-11-07): Stop Endpoint for `dci`, bounded
+ * (XhciTolStopRest). Returns the state the endpoint reads after it, or
+ * XHCI_EP_STATE_RUNNING when it was given up - a Stop that failed, or an
+ * endpoint that kept running - which the caller treats as a failed
+ * command (hcdCfgFault); the device is marked first, so that only it is
+ * cycled, not the controller, as for issue 24's refused dequeue. In 3.4.1.0 one Stop answered
+ * Context State Error with the context then Running left a cancel paused
+ * with nothing owed, and every later transfer on the endpoint held: a UAS
+ * drive's reads timed out until it was unplugged (issue 26). Thread only,
+ * powered.
+ */
+static ULONG hcdCfgStopBounded(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                               ULONG dci)
+{
+    HCD_CFG_STOP ctx;
+    XHCI_TOL_STOP_IO io;
+    ULONG state;
+    ULONG restops;
+    ULONG verdict;
+    ULONG value;
+
+    ctx.Hc = hc;
+    ctx.Dev = dev;
+    ctx.Dci = dci;
+    io.Stop = hcdCfgStopCmd;
+    io.State = hcdCfgStopState;
+    io.Wait = hcdCfgStopWait;
+    io.Context = &ctx;
+    verdict = XhciTolStopRest(&io, &state, &restops);
+    value = (dev->SlotId << 16) | ((dci & 0xFFUL) << 8) |
+            ((restops & 0xFUL) << 4) | (state & 0xFUL);
+    if (restops != 0) {
+        XhciLogNote(&hc->Hc, "cfg.stop.again", value);
+    }
+    if (verdict == XHCI_TOL_STOP_GIVEUP) {
+        XhciLogNote(&hc->Hc, "cfg.stop.giveup", value);
+        hcdCfgStreamMark(hc, dev);
+        return XHCI_EP_STATE_RUNNING;
+    }
+    return state;
+}
+
 /*
  * hcdCfgSetDequeueCode as success or failure. A stream's command refused
  * with Context State Error is retried by the state the endpoint reads now,
@@ -3531,20 +3696,37 @@ static ULONG hcdCfgSetDequeueCode(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * Halted, Stopped or Error read again: no retry. A Halted endpoint's
  *   reset is the whole endpoint's and owes every stream's settling and
  *   repair (hcdCfgQuiesce: hcdCfgRetrySettleAll, hcdCfgRecoverDequeue),
- *   which a retry inside one stream's dequeue cannot give (Codex's review
- *   of 5215323d); the device's cycle below recovers it instead. At most HCD_CFG_DEQ_RETRIES, each with its position read again.
+ *   which a retry inside one stream's dequeue cannot give (reviewed and
+ *   revised after 5215323d); the device's cycle below recovers it instead.
+ *   At most HCD_CFG_DEQ_RETRIES, each with its position read again.
  *   Still refused, the device is marked so that its failure cycles it, not
  *   the controller (hcdCfgFault). Thread only.
  */
 static ULONG hcdCfgSetDequeueOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                  PHCD_PIPE pipe)
 {
-    XHCI_TRB trb;
-    ULONG control;
     ULONG code;
     ULONG state;
     ULONG tries;
 
+    if (pipe->StreamId != 0) {
+        /* Issue 26: never a stream's Set TR Dequeue on an endpoint read
+         * Running - a conforming controller refuses it (xHCI 4.6.10), and
+         * one that took it could keep its own dequeue for the stream. The
+         * endpoint is stopped again first, bounded; one that will not stay
+         * stopped fails the command, and its device alone is cycled. */
+        state = hcdCfgEpState(hc, dev, pipe->Dci);
+        if (state == XHCI_EP_STATE_RUNNING) {
+            XhciLogNote(&hc->Hc, "cfg.deq.running",
+                        (dev->SlotId << 16) | (pipe->Dci << 8) |
+                        (pipe->StreamId << 4) | (state & 0xFUL));
+            if (hcdCfgStopBounded(hc, dev, pipe->Dci) ==
+                XHCI_EP_STATE_RUNNING) {
+                hcdCfgStreamMark(hc, dev);
+                return 0;
+            }
+        }
+    }
     code = hcdCfgSetDequeueCode(hc, dev, pipe);
     for (tries = 0; code == XHCI_CC_CONTEXT_STATE_ERROR &&
                     pipe->StreamId != 0 && tries < HCD_CFG_DEQ_RETRIES;
@@ -3557,9 +3739,8 @@ static ULONG hcdCfgSetDequeueOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             if (hc->QemuStreamQuirk) {
                 hc->Counters.QemuStreamRestops++;
             }
-            if (XhciTrbStopEndpoint(&trb, dev->SlotId, pipe->Dci, 0) !=
-                    XHCI_RING_OK ||
-                hcdCfgCommand(hc, dev, &trb, &control) != XHCI_CC_SUCCESS) {
+            if (hcdCfgStopBounded(hc, dev, pipe->Dci) !=
+                XHCI_EP_STATE_STOPPED) {
                 break;
             }
         } else {
@@ -3572,10 +3753,7 @@ static ULONG hcdCfgSetDequeueOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                     (dev->SlotId << 16) | (pipe->Dci << 8) |
                     (pipe->StreamId << 4) |
                     (hcdCfgEpState(hc, dev, pipe->Dci) & 0xFUL));
-        if (hc->StreamDeqRefused != dev) {
-            hc->StreamDeqRefused = dev;
-            hc->StreamDeqCycled = 0;
-        }
+        hcdCfgStreamMark(hc, dev);
     }
     if (code == XHCI_CC_SUCCESS && pipe->StreamId != 0) {
         /* The stream's own failure, if it had one, is discharged: a later
@@ -4009,23 +4187,18 @@ static VOID hcdCfgRetrySettleAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
 static ULONG hcdCfgQuiesce(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                            PHCD_PIPE pipe)
 {
-    XHCI_TRB trb;
-    ULONG control;
-    ULONG code;
     ULONG state;
 
     state = hcdCfgEpState(hc, dev, pipe->Dci);
     if (state == XHCI_EP_STATE_RUNNING) {
-        code = 0;
-        if (XhciTrbStopEndpoint(&trb, dev->SlotId, pipe->Dci, 0) ==
-            XHCI_RING_OK) {
-            code = hcdCfgCommand(hc, dev, &trb, &control);
-        }
-        if (code != XHCI_CC_SUCCESS && code != XHCI_CC_CONTEXT_STATE_ERROR) {
+        /* Issue 26: bounded, and never Running back to the caller without
+         * the fault that makes the device's teardown or the controller's
+         * recovery settle what the caller paused. */
+        state = hcdCfgStopBounded(hc, dev, pipe->Dci);
+        if (state == XHCI_EP_STATE_RUNNING) {
             (VOID)hcdCfgFault(hc, dev);
             return XHCI_EP_STATE_RUNNING;
         }
-        state = hcdCfgEpState(hc, dev, pipe->Dci);
     }
     if (state == XHCI_EP_STATE_HALTED) {
         /* Reset Endpoint keeps the controller's retry position in the
@@ -4667,7 +4840,10 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                              PHCD_PIPE pipe)
 {
     /* Two TDs a record since 36.24: three one-TD records and a pipelined
-     * fourth fit the ring together (section 11.6, point 6). */
+     * fourth fit the ring together (section 11.6, point 6). An
+     * isochronous record is one TD group, so its pipe's eight records
+     * (HCD_ISO_PIPE_XFERS, section 11.9) fit as well (hcd.h,
+     * hcd_cancel_tds). */
     PXHCI_TRANSFER cancelled[2 * HCD_PIPE_XFERS];
     PXHCI_TRANSFER t;
     PXHCI_TRANSFER head;
@@ -4702,11 +4878,13 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             if (x->Promoted) {
                 x->Mapped = 0;
                 x->State = HCD_XFER_ON_RING;
-                HcdIoWideStop(hc, x, HCD_USBD_CANCELED);
+                HcdIoWideStop(hc, x, HCD_XFER_CANCEL_STATUS(x));
                 continue;
             }
             x->Engine = 0;
-            x->Status = HCD_USBD_CANCELED;
+            /* CANCELED, or the status of the abort that marked it
+             * (HcdIoPipeMarkAll), whichever came first. */
+            x->Status = HCD_XFER_CANCEL_STATUS(x);
             x->State = HCD_XFER_DONE;
             InsertTailList(&hc->DoneList, &x->Link);
         }
@@ -4746,7 +4924,9 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             }
         }
         (VOID)XhciXferQueueRemove(pipe->Queue, t);
-        t->UsbdStatus = HCD_USBD_CANCELED;
+        t->UsbdStatus = HcdIoXferOf(t)->CancelRequested
+                            ? HCD_XFER_CANCEL_STATUS(HcdIoXferOf(t))
+                            : HCD_USBD_CANCELED;
         if (!HcdIoXferOf(t)->CancelRequested) {
             hc->Xpipe.Taken++;
         }

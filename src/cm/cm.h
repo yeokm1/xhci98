@@ -1,11 +1,11 @@
 /*
- * cm.h - xhcicm.sys, the Thunderbolt 3 connection manager (design record
- * 21; roadmap-usb4.md Phase 39), a second binary beside xhci98.sys with
- * its own INFs, allowlists and INF gate, built from src\cm as xhciuas.sys
- * is built from src\uas.
+ * cm.h - xhcicm.sys, the Thunderbolt and USB4 connection manager (design
+ * records 21 and 22; roadmap-usb4.md Phases 39 onward), a second binary
+ * beside xhci98.sys with its own INFs, allowlists and INF gate, built from
+ * src\cm as xhciuas.sys is built from src\uas.
  *
- * TWO ROLES IN ONE BINARY (record 21 section 3.2), told apart in AddDevice
- * by the PDO's hardware ids (cm_vals.c, CmClassifyIds):
+ * THREE ROLES IN ONE BINARY (record 21 section 3.2), told apart in
+ * AddDevice by the PDO's hardware ids (cm_vals.c, CmClassifyIds):
  *
  *   [CM_NHI]     the NHI's function driver, every target (xhcicm.inf):
  *                cm_nhi.c (PnP, the start's selection and the stop),
@@ -29,22 +29,18 @@
  *                device whose LowerFilters value the mark service wrote:
  *                cm_filt.c.
  *
- * FILES. cm_entry.c (DriverEntry, AddDevice, the dispatch table),
- * cm_nhi.c, cm_thr.c, cm_power.c, cm_reenum.c (the re-enumeration and
- * safe eject of cm_reenum.h, tasks 39-A.5 and 39-A.8, with its pure half
- * cm_ports.c and the CONFIGMG calls of cm_cfgmg.c), cm_filt.c, cm_reg.c (the one
- * registry site), cm_log.c (the shared log ring of src\xhci_log.c and its
- * emission, decision D12), cm_pool.c (the one pool and DMA site,
- * AGENTS.md's named-sites rule), cm_vals.c (pure: roles and value rules),
- * and the pure core tbt_ring.c, tbt_icm.c, tbt_hw.c, tbt_u4cm.c and
- * tbt_topo.c.
+ * FILES. docs/contributing/source-files.md says what each file of this
+ * directory is.
  *
- * Beside the roles, a fourth kind of device object, no PnP role: the
- * query device of a started NHI (CM_KIND_QUERY; cm_qryos.c, design record
- * 25 section 4), a named control device the dispatch routines tell apart
- * by its Kind before anything else; its answer is built by cm_query.c.
- * And a fifth, the network PDO (CM_KIND_NETPDO; cm_net.c, design record 35
- * section 6): the NHI FDO's one child while XhciCmNet is 1, a bus role.
+ * Beside the roles, three further kinds of device object. The query
+ * device of a started NHI (CM_KIND_QUERY; cm_qryos.c, design record 25
+ * section 4), a named control device with no PnP role, which the dispatch
+ * routines tell apart by its Kind before anything else; its answer is
+ * built by cm_query.c. The network PDO (CM_KIND_NETPDO; cm_net.c, design
+ * record 35 section 6): the NHI FDO's one child while XhciCmNet is 1, a
+ * bus role. And a member filter (CM_KIND_MEMBER; cm_oscnt.c, design
+ * record 32 section 12.8.15.7), NT only: the ASM4242 upstream port's and
+ * xHCI's filter of the platform's USB4 handover.
  *
  * IRQL: as each file's header says; every PnP object this driver creates
  * is DO_POWER_PAGABLE (the filter copies its lower device's power flags).
@@ -141,8 +137,8 @@ typedef VOID (*CM_U4_UP_HOOK)(PVOID context, const TBT_U4_ACTION *action);
 typedef ULONG (*CM_U4_DOWN_HOOK)(PVOID context,
                                  const TBT_U4_LINKDOWN *info);
 
-/* The head of both extensions: Kind is the first field, read by the
- * dispatch routines before they know which role a device object plays. */
+/* The head of every extension: Kind is the first field, read by the
+ * dispatch routines before they know which kind a device object is. */
 typedef struct _CM_COMMON {
     ULONG Kind;
     PDEVICE_OBJECT Self;
@@ -174,6 +170,7 @@ typedef struct _CM_OSC_MEMBER {
     PDEVICE_OBJECT Pdo;
     PDEVICE_OBJECT Lower;
     ULONG BusHeld;          /* the upstream port: Bus taken at its start   */
+    ULONG BusTaking;        /* a query into Bus under way: its one taker   */
     ULONG BusStatus;        /* ... and its query's last status (logged)    */
     BUS_INTERFACE_STANDARD Bus;
 } CM_OSC_MEMBER, *PCM_OSC_MEMBER;
@@ -882,6 +879,22 @@ extern PDRIVER_OBJECT CmDriverObject;
 NTSTATUS CmCompleteIrp(PIRP irp, NTSTATUS status, ULONG_PTR information);
 NTSTATUS CmForwardSync(PCM_COMMON common, PIRP irp);
 VOID CmZero(PVOID p, ULONG n);
+/* 100 ns units in a millisecond: a relative due time's scale. */
+#define CM_CLOCK_UNITS_PER_MS 10000UL
+/* A relative due time of `ms` milliseconds (0 a poll, held to 400 s),
+ * from 32-bit arithmetic. Any IRQL. */
+VOID CmRelativeMs(PLARGE_INTEGER due, ULONG ms);
+/* The unsatisfied returns a gate's wait (CmWaitEvent) takes before it is
+ * abandoned: hcd.h's HCD_GATE_WAIT_BOUND. */
+#define CM_GATE_WAIT_BOUND 100UL
+/* A wait that returns only once the event satisfied it (bound 0), or
+ * after `bound` unsatisfied returns in a row; the count of unsatisfied
+ * returns, below `bound` when the event was taken. IRQL: PASSIVE_LEVEL. */
+ULONG CmWaitEvent(PKEVENT event, ULONG bound);
+/* A wait of at most `ms` milliseconds by the clock that an unsatisfied
+ * early return does not end: TRUE when the event satisfied it. IRQL:
+ * PASSIVE_LEVEL. */
+BOOLEAN CmWaitEventMs(PKEVENT event, ULONG ms);
 
 /* cm_nhi.c */
 NTSTATUS CmNhiAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo,
@@ -982,6 +995,11 @@ BOOLEAN CmThrQueue(PCM_NHI nhi, ULONG work, PIRP irp);
 BOOLEAN CmThrQueueOrRecord(PCM_NHI nhi, ULONG work, PIRP irp,
                            DEVICE_POWER_STATE state);
 VOID CmThrRunPnp(PCM_NHI nhi, ULONG work);
+/* A system thread at `routine` with `context`, its handle closed at once:
+ * cm_thr.c is the one site of ZwClose for the threads it does not join by
+ * handle (the call workers, cm_callwk.c; the CONFIGMG worker, cm_cfgwk.c).
+ * PASSIVE_LEVEL. */
+NTSTATUS CmThrSpawn(VOID (NTAPI *routine)(PVOID), PVOID context);
 VOID CmThrAccessors(PCM_NHI nhi);
 ULONG CmCfgRead32(PCM_NHI nhi, ULONG offset);
 /* One BAR0 DW under the PROBE class (the monitor's and the validation's
@@ -1078,6 +1096,11 @@ ULONG CmOscReport(PCM_NHI nhi);
 #define CM_OSCN_F_NOROUTE   0x80UL
 #define CM_OSCN_F_EXPIRED   0x100UL
 #define CM_OSCN_F_ECAMOFF   0x200UL     /* 113h: ECAM needs reads 1      */
+/* Every system: the same handover code in another build (tier 3) refused
+ * because XhciCmAsm4242Structural is 0 (0Eh; on NT 110h with cm.osc.read
+ * 0Eh), set at that refusal alone and cleared at each start (record 32
+ * section 12.8.11, task 47.29). */
+#define CM_OSCN_F_SAMEOFF   0x400UL
 /* CmOscntHandover's and CmOscntRetry's answer: done (sent, refused, or
  * nothing to do), or deferred (record 32 section 12.8.15.16). */
 #define CM_OSCN_DONE        0UL

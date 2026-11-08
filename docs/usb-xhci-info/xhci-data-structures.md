@@ -132,7 +132,7 @@ p.392).
 |---|---|---|---|
 | 0 | CCS | RO | Current Connect Status |
 | 1 | PED | RW1C | Port Enabled. Writing 1 *disables* the port |
-| 2 | TM | RO | Tunneled Mode (revision 1.2b; RsvdZ in 1.2). USB3 protocol ports only; "RsvdZ for a USB2 protocol port" (p.372), which is every port this driver manages, so it is still written as 0 |
+| 2 | TM | RO | Tunneled Mode (revision 1.2b; RsvdZ in 1.2). USB3 protocol ports only; "RsvdZ for a USB2 protocol port" (p.372) and read-only on a USB3 one, so it is written as 0 on both |
 | 3 | OCA | RO | Over-current Active |
 | 4 | PR | RW1S | Port Reset - write 1 to start reset; reads 1 while resetting |
 | 8:5 | PLS | RW | Port Link State (write only with LWS = 1). USB2 in-use values: 0 = U0, 3 = U3/suspend, 15 = Resume |
@@ -168,12 +168,13 @@ USB3 Specification is initiated and the PR flag is set to `1`" (p.379).
 WPR is belt-and-braces here rather than the same hazard as PR. The same page
 says "this flag shall always return `0` when read", so a read never carries a
 set WPR and an ordinary read-modify-write cannot replay one, unlike PR, which
-does read back as 1 while a reset runs. And this driver manages USB2 protocol
-ports only, where p.379 says the bit "shall be RsvdZ" outright. So the mask is
+does read back as 1 while a reset runs. And on a USB2 protocol port p.379 says
+the bit "shall be RsvdZ" outright. So the mask is
 protecting against a composed write (a value built from something other than
 a fresh read), not against replaying a bit the hardware handed back. Keep it
-cleared; do not write a poll of WPR, and do not reason that PR's read-back
-behaviour applies to it.
+cleared in every neutral write - the one write that sets it is a USB3 port's
+warm reset, on purpose (`XhciPortscWarmReset`, task 29-A.2); do not write a
+poll of WPR, and do not reason that PR's read-back behaviour applies to it.
 
 A software-initiated power-off produces no change bits at all, and the same
 goes for a disable. Every change bit in the table above carries the exclusion
@@ -359,13 +360,43 @@ is VM-observable and only the success path is bare-metal-only.
 #### ISR/DPC rules
 
 - ISR: read USBSTS; if EINT = 0 the interrupt is not ours. Clear EINT (write 1), then clear IMAN.IP (write IMAN with IP = 1). Both are RW1C. EINT is a summary of IP 0->1 transitions, not the INTx line source; IMAN.IP holds INTx asserted. Acknowledge this pair once and defer Event Ring work. Do not copy a generic PCI ISR's status-drain loop into the xHCI path.
-  - This driver's ISR writes IE as 0, not as 1. That costs no delivery: the xHC sets EHB when it sets IP and cannot set IP again while EHB is set, so no interrupt can be generated in the window the ISR opens whatever IE holds. What it buys is that the ISR, which runs at DIRQL and cannot take the miniport's DISPATCH-level controller lock, moves IE in the same direction every masking path does, so it can never re-publish an enable a concurrent mask has just cleared. IE is re-raised only by the DPC's re-arm, under the lock and only while usbport still wants interrupts. See `docs/contributing/implementation-invariants.md`, "Interrupt Ordering", and `src/xhci_evt.c` (`XhciIsr`).
+  - This driver's ISR writes IE as 0, not as 1. That costs no delivery: the
+    xHC sets EHB when it sets IP and cannot set IP again while EHB is set,
+    so no interrupt can be generated in the window the ISR opens whatever IE
+    holds. What it buys is that the ISR, which runs at DIRQL and cannot take
+    the DISPATCH-level controller lock, moves IE in the same direction every
+    masking path does, so it can never re-publish an enable a concurrent
+    mask has just cleared. IE is re-raised only by the DPC's re-arm, under
+    the lock and only while interrupts are wanted (under the miniport, while
+    usbport still wanted them; the HCD owns its interrupt object and that
+    decision itself). See `docs/contributing/implementation-invariants.md`,
+    "Interrupt Ordering", and `src/xhci_evt.c` (`XhciIsr`).
 - DPC: after draining events, write ERDP = (current dequeue physical address) | EHB(bit 3) to clear Event Handler Busy. EHB gating is architectural, not controller-specific: the xHC sets EHB = 1 whenever it sets IP, and IP shall not be set again while EHB = 1 (spec 4.17.2 interrupt-assertion conditions, 4.17.5 IP rules, 5.5.2.3.3 EHB field). A drain in progress therefore cannot be re-interrupted by its own interrupter, and forgetting the final EHB = 1 write silences the interrupter permanently.
 - During a long drain, also write ERDP periodically (e.g. every 32 events), not only at the end: the xHC detects a full event ring from the software-advertised dequeue pointer, so a stale ERDP during an event burst causes Event Ring Full (completion code 21) even though the DPC is consuming events. EHB is RW1C, so put 0 in bit 3 on these intermediate writes. That preserves EHB = 1, keeping interrupts suppressed mid-drain; writing 1 would clear it. Only the final write after the ring is empty carries bit 3 = 1.
-- With PCI pin-based interrupts (this driver's only mode), the INTx line stays asserted while IMAN.IP = 1 (spec 5.5.2.1). It is a level-triggered line, so clearing IP in the ISR is mandatory or the machine hangs in an interrupt storm.
+- With PCI pin-based interrupts (the miniport's only mode; one of the HCD's
+  three, beside a message and polling, design record 15), the INTx line
+  stays asserted while IMAN.IP = 1 (spec 5.5.2.1). It is a level-triggered
+  line, so clearing IP in the ISR is mandatory or the machine hangs in an
+  interrupt storm.
 - IP is managed by 4.17.5 (p.270): set when IPE goes to 1 with IMODC = 0 and EHB = 0, or when IMODC reaches 0 with EHB = 0 and IPE = 1; with MSI or MSI-X enabled the xHC clears it itself "when the PCI Dword write generated by the Interrupt assertion is complete"; with pin interrupts only software clears it. So under a message IP cannot show a lost interrupt, and under a pin an IP left standing with IE and INTE set is an INTx held asserted that no ISR has acknowledged (design record 15 section 4.2).
 - IE = 0 leaves the Interrupter "prohibited from generating interrupts" (Table 5-38, p.391) and INTE = 0 stops host system interrupts (Table 5-20, p.360). Neither stops the xHC writing Event TRBs, which follow the Cycle bit and the advertised ERDP alone (4.9.4, p.162), so the event ring can be drained by polling with both enables clear (design record 15 section 4.1).
-- IMOD: IMODI 15:0 in 250 ns units, IMODC 31:16 a counter, both RW, reset IMODI 4000 = 1 ms (Table 5-39, p.392). Since roadmap task 23.4 every start writes IMODI from the `XhciImodInterval250ns` registry value at the end of the event-ring programming, before R/S: 10 to 4000 as given, anything else replaced by 4000; the INFs write 500 (125 us), which read at nearly twice the Bulk-Only throughput of 4000 on bare metal - 500 was not on task 23.3's ladder, and the reading is task 23.5's silent pass, which fills 23.3's missing rung against 23.3's own 4000 control. Until then the start never wrote it and ran at the reset value. The other write is the Save/Restore resume path, which writes back the value read at the save (the restore list below requires IMOD to be written before CRS). It wrote 0 there until the 2026-09-05 audit's F10, silently removing the moderation the isochronous builder's IOC-per-TD policy relies on after every successful restore. QEMU stores IMOD and reads it back but never consults it, and resets it to 0 rather than 4000 (task 23.3).
+- IMOD: IMODI 15:0 in 250 ns units, IMODC 31:16 a counter, both RW, reset
+  IMODI 4000 = 1 ms (Table 5-39, p.392). Since roadmap task 23.4 every start
+  writes IMODI from the `XhciImodInterval250ns` registry value at the end of
+  the event-ring programming, before R/S: 10 to 4000 as given, anything else
+  replaced by 4000; the INFs write 160 (40 us, Linux's value; the release
+  notes, "XhciImodInterval250ns", have the reading that chose it). Under the
+  `1.x` miniport they wrote 500 (125 us), which read at nearly twice the
+  Bulk-Only throughput of 4000 on bare metal - 500 was not on task 23.3's
+  ladder, and the reading is task 23.5's silent pass, which fills 23.3's
+  missing rung against 23.3's own 4000 control. Until then the start never
+  wrote it and ran at the reset value. The other write is the Save/Restore
+  resume path, which writes back the value read at the save (the restore
+  list below requires IMOD to be written before CRS). It wrote 0 there until
+  the 2026-09-05 audit's F10, silently removing the moderation the
+  isochronous builder's IOC-per-TD policy relies on after every successful
+  restore. QEMU stores IMOD and reads it back but never consults it, and
+  resets it to 0 rather than 4000 (task 23.3).
 
 ## 5. Doorbell Registers (BAR0 + DBOFF, spec 5.6)
 
@@ -1474,15 +1505,19 @@ session 1".
 
 ### Streams (spec 4.12, 5.3.6, 5.6, 6.2.3, 6.2.4, 6.4.2.1, 6.4.3.9) - task 31-0's static notes
 
-Written for roadmap task 31-A.1, primary streams in the bus (`src/xhci_stream.h`,
-`src/hcd_cfg.c`; the private request a class driver opens them with is
-`src/xhci98_streams.h`). **Unlike the rest of this file, the rows below were
-not transcribed from the local PDF, which was not at hand when they were
-written**; they are the reading Linux's `xhci-mem.c` and `xhci.c` (interface
-documentation, `external/README.md`) agree with, and every row marked "to
-verify" is the first thing a reader with the PDF checks. Nothing here has been
-observed on a controller: QEMU's model streams, but this tree enumerates no
-SuperSpeed device until Phase 29's work lands, so the path has run nowhere.
+Written for roadmap task 31-A.1, primary streams in the bus
+(`src/xhci_stream.h`, `src/hcd_cfg.c`; the private request a class driver
+opens them with is `src/xhci98_streams.h`). **Unlike the rest of this file,
+the rows below were not transcribed from the local PDF, which was not at
+hand when they were written**; they are the reading Linux's `xhci-mem.c` and
+`xhci.c` (interface documentation, `external/README.md`) agree with, and
+every row marked "to verify" is the first thing a reader with the PDF
+checks. That paragraph is as it was written for task 31-A.1. Streams have
+run since: UAS with streams ships from `2.0.0.0`, read in QEMU and on real
+controllers (roadmap-hcd Phase 31 and its run record), so the execution
+status above is history. The "to verify" marks below are still the text's
+own: none of the eleven rows has been checked against the PDF since, and
+each stays marked until a reader with the specification checks it.
 
 Only primary streams with a Linear Stream Array are used: no Secondary Stream
 Arrays (HCCPARAMS1.NSS is not consulted), a Stream ID is an index into the one
@@ -1512,14 +1547,21 @@ entries (31 streams) per endpoint; never fewer than 4 entries; the grant is
 the smallest of the request, 2^MaxStreams and the array size less one; one
 page-aligned common buffer per stream endpoint holding the array at offset 0
 and one 64-TRB ring per stream at a multiple of its own size, so no ring
-crosses a page or a 64 KB boundary; and a fresh Configure Endpoint (with a
-CLEAR_FEATURE(ENDPOINT_HALT) to the device, as RESET_PIPE does) whenever streams
-are installed or removed.
+crosses a page or a 64 KB boundary; or, since task 36.25 when the drive's
+transfers are promoted to the big layout (`XhciWideMap`, design record 13
+section 11.7), one 1024-TRB (16 KiB) ring per stream
+(`XHCI_STREAM_BIG_RING_TRBS`), the first at the first 16 KiB-aligned
+physical address past the array, each 16 KiB-aligned so none crosses a 64 KB
+boundary (`src/xhci_stream.h`, `XhciStreamLayoutPlaced`); and a fresh
+Configure Endpoint (with a CLEAR_FEATURE(ENDPOINT_HALT) to the device, as
+RESET_PIPE does) whenever streams are installed or removed.
 
 ### Event Ring Segment Table entry (spec 6.5)
 
 16 bytes: DW0/1 = segment base (64-byte aligned), DW2 = segment size in TRBs
-`15:0` (16-4096; use 256), DW3 = RsvdZ.
+`15:0` (16-4096; this driver uses 1024 in a segment of its own, or 256 in
+the controller block where that is refused or `XhciEventRingTrbs` is 256:
+design record 13 section 11.10), DW3 = RsvdZ.
 
 ## 9. C89 skeleton guidance for `src/xhci.h`
 
@@ -2343,15 +2385,17 @@ before completing the command - which is also why 1.2c calls the input field
 ### 11.7 Remote wake masks (USB 3.2 10.16.2.10, Table 10-18)
 
 SetPortFeature(PORT_REMOTE_WAKE_MASK) with wIndex 15:8 = the conditions on
-this downstream port that may make the hub signal remote wake upstream:
-bit 0 Conn_RWEnable (connect), bit 1 Disconn_RWEnable (disconnect), bit 2
+this downstream port that may make the hub signal remote wake upstream: bit
+0 Conn_RWEnable (connect), bit 1 Disconn_RWEnable (disconnect), bit 2
 OC_RWEnable (over-current), bits 7:3 reserved; each takes effect only if
 Function Remote Wake is also enabled, and an event masked off is still
 reported as a change after the resume. After power-on or a hub reset the
 mask is zero, every source disabled (Table 10-18 and the paragraph after it,
-USB 3.2 p.454-455; verified). This driver suspends no hub (selective suspend
-is not on the roadmap, design record 13 section 10.2), so it sets no mask;
-the values are transcribed so a later phase starts from them.
+USB 3.2 p.454-455; verified). Selective suspend shipped in `2.3.0.0`, off by
+default (`XhciSelectiveSuspend`, design record 14), and it suspends devices,
+not hubs: hub idle is outside that design (record 14, its scope), so the
+driver sets no mask; the values are transcribed so a later phase starts from
+them.
 
 ### 11.8 What the driver does with this (task 30-A.1)
 
@@ -2380,5 +2424,7 @@ the values are transcribed so a later phase starts from them.
   driver warm-resets on the link state alone, so it does not depend on it.
 - The bench unit's own answers (`05E3:0610` and `05E3:0612`,
   `test-equipment.md`): its descriptor bytes, bcdUSB, whether it carries a
-  SuperSpeedPlus capability, and what it reports on a hot-plug - 30-E.1's
-  reading, the first execution of this whole path.
+  SuperSpeedPlus capability, and what it reports on a hot-plug. 30-E.1, the
+  first execution of this whole path, was taken at the bench after the
+  `2.0.0.0` cut, but no per-device reading of these answers was recorded
+  (`roadmap-hcd.md`, Phase 30), so they stay unknown.

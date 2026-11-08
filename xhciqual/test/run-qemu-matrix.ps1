@@ -3,7 +3,11 @@ param(
     [string]$BootImage = "",
     [string]$BootImageUrl = "",
     [int]$TimeoutSeconds = 20,
-    [string[]]$CaseName = @()
+    [string[]]$CaseName = @(),
+    # The monitor port of case i is PortBase + i; 0 keeps the default, a port
+    # derived from this process's id (a host whose free range is narrow sets
+    # its own).
+    [int]$PortBase = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -296,6 +300,14 @@ $cases = @(
     # no entry: the hot-add case of WIN98-TEST.md.
     (Case "pir_probe" @("-device","qemu-xhci,id=hc,msi=off,msix=off") "xhciqual --serial --no-page xhci --probe-only" @('PCI IRQ routing table ($PIR, read only): at F',"version 1.0","slot entries, checksum OK; router 00:01.0, compatible 8086:122E","  1   00:01 ","00:1C: NO ENTRY","no function at 00:1C.0 in configuration space","Probe safety: PASS - no PCI configuration writes.","Done.")),
     (Case "pir_quick" @("-device","qemu-xhci,id=hc,msi=off,msix=off") $quick @('PCI IRQ routing table ($PIR, read only): at F',"checksum OK; router 00:01.0","00:1C: NO ENTRY","LOOKS QUALIFIED","Probe safety: PASS - no PCI configuration writes.") "" "" 0 @() @('IRQ table: $PIR at F',"00:1C NOT LISTED")),
+    # Roadmap-usb4 task 47.24: --edd, with a USB stick SeaBIOS presents as a
+    # disk at power-on: unit 80h the staged C: on the PIIX IDE, 81h the
+    # stick. SeaBIOS rel-1.17.0 names the IDE disk by a full EDD 3.0 path
+    # (ATA on PCI 00:01.1, in both layouts) while its size word says 1Eh -
+    # the case that shows the size word must not decide - and answers the
+    # stick with 1Ah bytes and no path. No PCI configuration write, no
+    # controller test run.
+    (Case "edd_seabios" @("-device","qemu-xhci,id=hc,msi=off,msix=off","-drive","if=none,id=ud,file=$usbImage,format=raw","-device","usb-storage,drive=ud,bus=hc.0,port=1") "xhciqual --serial --no-page --edd" @("EDD device paths, read only","not asked:","unit 80h, function 41h... AH=30h BX=AA55h","unit 80h, function 48h, 4Ah buffer... CF=0 AH=00h size word 001Eh","unit 80h, function 48h, 42h buffer... CF=0 AH=00h size word 001Eh","unit 81h, function 41h... AH=30h BX=AA55h","unit 81h, function 48h, 4Ah buffer... CF=0 AH=00h size word 001Ah","unit 81h, function 48h, 42h buffer... CF=0 AH=00h size word 001Ah","unit 82h, function 41h... CF=1","unit 87h, function 41h... CF=1","PCI: xHCI ","Probe safety: PASS - no PCI configuration writes.","==== Unit 80h ====","key BEDDh, path length 2Ch (the final EDD 3.0 layout), checksum at 49h","key BEDDh, path length 24h (the earlier EDD 3.0 layout), checksum at 41h","bytes 1Eh-49h sum to 00h: PASS","bytes 1Eh-41h sum to 00h: PASS","key 0000h at 1Eh, not BEDDh: no device path","guard: unchanged","EDD device path, per unit:","unit 80h: not USB: interface ""ATA"", host bus ""PCI "" 00:01.1","unit 81h: no device path (size word 001Ah, no key BEDDh): not named","absent or unsupported, 48h not asked","Done.") "" "" 0 @("named as USB","C1 handoff","Running ")),
     (Case "pir_bridge_1c" @("-device","pci-bridge,id=br1c,chassis_nr=1,addr=1c.0","-device","qemu-xhci,id=hc,msi=off,msix=off") "xhciqual --serial --no-page xhci --probe-only" @('PCI IRQ routing table ($PIR, read only): at F',"00:1C: NO ENTRY","    00:1C.0 1B36:0001 bridge, pin INTA line ",": no entry","Probe safety: PASS - no PCI configuration writes.","Done."))
 )
 if ($CaseName.Count -ne 0) {
@@ -307,7 +319,11 @@ $failures = @()
 for ($index=0; $index -lt $cases.Count; $index++) {
     $case = $cases[$index]
     $stderrPath = Join-Path $testDir ('stderr-' + $case.Name + '.log')
-    $port = 20000 + ([Diagnostics.Process]::GetCurrentProcess().Id % 30000) + $index
+    if ($PortBase -gt 0) {
+        $port = $PortBase + $index
+    } else {
+        $port = 20000 + ([Diagnostics.Process]::GetCurrentProcess().Id % 30000) + $index
+    }
     $serialPath = Join-Path $testDir ("serial-" + $case.Name + ".log")
     $vgaPath = Join-Path $testDir ("vga-" + $case.Name + ".bin")
     Remove-Item -LiteralPath $serialPath,$vgaPath -Force -ErrorAction SilentlyContinue

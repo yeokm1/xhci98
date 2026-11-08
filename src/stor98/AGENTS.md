@@ -77,14 +77,18 @@ they were written with; do not rewrite them. Apart from those, the rename record
 - **Decode the namespace correctly.** FLBAS selects an LBA format; the block size comes
   from that format's LBADS. Never misreport it.
 - **4 KiB-sector drives must work, not be refused** (maintainer decision). A 4 KiB
-  namespace is never refused. The OS is to see 512-byte sectors, the driver translating
-  with read-modify-write for unaligned writes; that translation is planned (docs/PLAN.md
-  1.7, "4 KiB-sector namespaces"), not implemented, and until it lands the OS sees the
-  namespace's own block size (src/nsfmt.h).
+  namespace is never refused. The OS sees 512-byte sectors, the driver translating
+  with read-modify-write for unaligned writes (docs/PLAN.md 1.7, "4 KiB-sector
+  namespaces"; src/rmw.h; since xhci98 3.4.2.0) - except on Windows 8, 8.1 and 10,
+  where a 4 KiB namespace shows its native 4096-byte sectors as Windows' own driver
+  does (owner, 2026-11-06; the same section, "Two views").
 - **One source tree, all targets.** Windows 9x-specific code (VMM calls, PTE handling) is
   confined to the 9x build; amd64 uses compiler intrinsics, no inline assembly.
 - **Every fix gets a test in the emulator** (see docs/TESTING.md), including the 4 KiB
   sector, surprise-removal-during-I/O and tunnel-reconnect cases.
+- **No review labels.** Tracked files do not name the review tool, a review round or a
+  finding number (owner, 2026-11-06; xhci98's rule, which its `scripts\check-text.ps1`
+  holds for this tree too): cite the date, the commit, the PLAN section or the subject.
 
 ## Toolchains
 

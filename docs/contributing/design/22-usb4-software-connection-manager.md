@@ -103,6 +103,21 @@ this instance stops or suspends; a new section 6.2.5 names the code and
 the vectors. Sections 1.3, 5.1, 6.2.2, 7.1, 7.3, 11, 12, 15 (U33) and
 16 follow it.
 
+Revised 2026-11-06 (task 47.21, was 45.21; a design, reviewed and
+revised): section 19.10, new - what the emulator can still read of
+section 19 (Titan Ridge, the other systems Apple supports, a device of
+another generation, a tunnel the Mac's firmware built), and the router's
+generation in the status record and the tools' words.
+
+Revised 2026-11-06 (task 47.32, a design for the owner, reviewed and
+revised): section 9.3 gains "Once a boot" and 9.3.1 - value 2 cleans
+this driver's own tunnel once a boot, not again after a restart of the
+NHI's stack.
+
+Revised 2026-11-08 (Thunderbolt networking on the ASM4242, reviewed and
+revised): section 18.9 - on the ASM4242's host router, Pending Packets
+on the Host Interface adapter's path entries are read as 0.
+
 The sources, and the tag each fact carries below:
 
 - **[spec]** the USB4 Specification 2.0 ("Spec") and the USB4 Connection
@@ -3832,6 +3847,98 @@ surprise-removes whatever the operating system has behind the tunnel:
   start, as Windows 11 and Linux's default do. The README says this may
   remove a mounted volume.
 
+**Once a boot (task 47.32, a design put to the owner).** On 7 x86, on a
+cold start, Windows stops and starts the NHI's stack once after the first
+start (task 47.21's legs; 45.58 read the same restart). The successor
+finds the tunnel its predecessor has just rebuilt, matches it to the
+predecessor's record (section 9.4, `Own`) and, value 2 cleaning every
+preserved port, cleans it again: the drive behind it goes and comes back
+twice (`runs/run-47.md`, "47.21"). Value 2 is meant for what was there
+before this driver; the design below makes it clean this driver's own
+tunnel once, as section 9.3.1 sets out with the options.
+
+#### 9.3.1 The rule, and the options
+
+The rule is all or nothing for the start: a start with value 2 cleans
+nothing (it leaves every port as found, as value 0 would) when **all**
+of the following hold;
+if any fails, the start cleans exactly as before, every port with tunnel
+state, through the Host Router Reset on a version 2 host. Leaving a whole
+start alone, never one port beside a cleaned one, keeps the domain reset
+and the per-port sequence as they are.
+
+1. **The record says this boot's value 2 cleaning has run.** A new field
+   of section 9.4's record, `Cleaned`, which an instance hands on only
+   when it ran at value 2 and either ran the cleaning or was itself left
+   alone under this rule. An instance at value 0 or 1 hands no
+   `Cleaned`, so 2, then 0, then 2 cleans at the last start. No record
+   (none handed, its age past `CM_U4_CARRY_MS`, its slot emptied by a
+   surprise removal, a real reboot) means the cleaning has not run.
+2. **Every port's tunnels are its own** (section 9.4): no port HELD,
+   with or without tunnel state (a HELD port is always cleaned, and on a
+   version 2 host that is the domain's reset); on every port with any
+   tunnel state, the PCIe tunnel `Own`, a USB3 tunnel up and preserved
+   `Own` too, no DisplayPort tunnel preserved, its discovery complete
+   (`Discovered`), no host-side entry quarantined and no sweep owed.
+3. **Nothing else on either router.** A read-only inventory of the
+   host router's adapters of each port with tunnel state (both lane
+   adapters, its PCIe Down and USB3 Down adapters, each DP adapter) and
+   of the whole depth 1 device router (every adapter, its upstream and
+   downstream lanes and its protocol adapters alike), each adapter's
+   path entries from HopID 8 to its Max Input HopID and each protocol
+   adapter's Path Enable: the Valid entries are exactly those of the
+   port's own verified tunnels, and the enabled protocol adapters
+   exactly their ends. An extra Valid entry, an entry left pending, an
+   entry that could not be read, or an enable no owned tunnel explains,
+   anywhere there, fails the test: it is what this driver's sweep would
+   have cleared, a failed child's leftover included (a child that has
+   since gone or locked leaves no link, but may leave its parent's
+   protocol adapter or lanes holding entries).
+4. **No chained link anywhere.** The record names no kid, and discovery
+   found no link on any port. A chained child's adoption runs later, at
+   the poll (record 34 section 6.9), with checks no start-time read
+   repeats, so a domain with a chain is cleaned as before, whatever its
+   children's state: a half-built child is cleaned, at the cost of a
+   second cleaning of a chain's tunnels when the stack restarts.
+
+What this gives and what it does not. It removes the second cleaning
+that 47.21 read: a restart of the NHI's stack moments after the first
+start, the predecessor's tunnels matched whole. It is bounded by the
+record: a restart more than `CM_U4_CARRY_MS` (120 s) after the
+predecessor's stop, or after a surprise removal, cleans again, because
+no ownership evidence survives it (the record is also what section 9.4's
+own matching needs). The record lives in the driver's memory on every
+system. On NT the image stays loaded for the boot once its callbacks are
+registered (`cm_nvlinkos.c`: no `DriverUnload` then), so a disable and
+enable within the age keeps it; a real reboot clears it. A resume
+(section 11) is not a start: its verification and rebuild are unchanged,
+and a hibernation's restored memory changes nothing about that; a stack
+rebuilt after a failed D0 had its slot emptied by the surprise removal
+and cleans as a first start. The same code runs on 98 SE and ME.
+
+The options put to the owner:
+
+- **(a) The record's flag and the four tests, the start left whole or
+  cleaned whole** (recommended): no new storage, nothing new written to
+  the registry, a chain or any doubt cleaned as today; the second
+  cleaning is gone for the case read, a restart within 120 s.
+- **(b) The same, with the record's age raised for this purpose** (the
+  record kept for the boot while `Cleaned` is set): "once a boot" for a
+  later restart too, at the cost of matching tunnels against a record
+  that may be many minutes old (section 9.4's matching reads every
+  identity again, so a replaced device does not match, but the record's
+  age was chosen as a bound on that).
+- **(c) No change**: document that value 2 may clean again when Windows
+  restarts the stack, and that value 1 cleans only what does not verify.
+
+Taken: option (a) (owner, 2026-11-06). Coded in `tbt_u4cm.c`
+(`tbtU4PreOsOnce`, its inventory `tbtU4OnceInventory`, `Cleaned` in
+`TbtU4GetCarry`), logged as `u4.preos.once` (1 left whole, else the
+first test that failed in bits 15:8 and its port in 7:4), with no
+counter of its own (the counter block and its names are XHCITR's too);
+host vectors `test_u4cm` `test_preos_once`. A port
+with `HostResidual` fails test 2 whatever its tunnel state.
+
 Cleaning one port, the Linux and Windows 11 sequence restricted to it:
 
 1. The orderly PCIe teardown of Guide 5.3.2, both ends reachable: Path
@@ -5223,6 +5330,51 @@ invalid for PCIe, and 7 is no USB4 requirement.
   the thirteen log lines; on with an Intel host or another device: the
   gate closed; on with a pre-OS tunnel: preserved, nothing written).
 
+### 18.9 Pending Packets on the Host Interface adapter
+
+A public Linux patch on the kernel mailing list ("thunderbolt: Stop
+waiting on a path pending bit that never clears", v3, tested on two
+ASM4242 boards) reports that this host router's Host Interface adapter
+sets Pending Packets (PATH_CS_1 bit 28) on a path entry whose Valid is
+cleared and never clears it, so a connection manager that waits for it
+(Guide 5.2.2, section 6.8 here) waits out its whole timeout at every
+teardown; the patch stops waiting there. `usb4-emu` models it as the
+`asm4242` host model's quirk a (`asm-quirk-pending`, on by default; the
+bit cleared again when the entry is made valid or the router reset, its
+inference). Not read on the hardware bench.
+
+What it did to this driver [emu]: the network service's transmit entry
+is the Host Interface adapter's entry at the ring's HopID (record 35
+section 5.1). At an unplug its Valid clear waited out the 500 ms drain
+and the entry was quarantined (section 7.3, `u4.quarantine` 0x00050001:
+adapter 5, HopID 1); the quarantine is lifted only by a read of Valid 0
+and Pending Packets 0, which never came. The entry, pending with its
+output at the port's lane 0 adapter, kept that lane busy in the lane
+scan, so every later connection of the port was deferred
+(`u4.connect.deferred`, Guide 7.1's no-path-through-the-port rule) and
+nothing was sent on the link again until the driver restarted. With the
+model's quirk off, the same replug recovered.
+
+So on this router only (ROUTER_CS_0 `174C:2428`, the identity section
+18.8 and record 35 section 5.3 key on), and on its Host Interface adapter
+only, every read of a path entry returns Pending Packets as 0
+(`tbtU4PpStuck` in `tbtU4RdN`): every reader - the drain, the HopID and
+credit scan, the quarantine's retry, the sweeps - takes an entry there as
+drained once it reads Valid 0, as the patch does. The bit is counted
+(`PendingIgnored`) and the first one logged per instance (`u4.asm.pp`,
+the adapter in bits 16 and up, the HopID below). Every other router and
+adapter keeps the wait and the quarantine. On that adapter the bit
+tells nothing either way, so the wait could prove nothing there; the
+service's own order down (record 35 section 5.1) stops new sends and
+gives the transmit ring up to 500 ms to drain before the entry's Valid
+is cleared (what is still outstanding then is counted, `cm.net.tx.left`,
+and dropped with the ring), and the receive entry, at the lane adapter,
+keeps the drain.
+Host vectors: `test_u4xd`'s `test_asm_replug_pp` (the identity, the
+fabric's bit stuck: nothing quarantined, the service up again after a
+replug) and `test_pp_stuck_other` (the same fabric under another
+identity: the entry quarantined, no second service).
+
 ## 19. Thunderbolt 1, 2 and 3 hosts on Apple Macs (task 45.21)
 
 Added 2026-10-29 for `roadmap-usb4.md` task 45.21 (the owner, the
@@ -5619,6 +5771,118 @@ active only with a registry value set (an INF default 0) until 45-E.11 has
 read a Mac. Recommended: (a) - inert, a Mac's Thunderbolt does nothing at
 all, the profile is reached only on the ids and subsystems above, and (b)
 adds a value every INF path must write.
+
+### 19.10 What is left for the emulator, and how it is read (task 47.21, 2026-11-06)
+
+Task 47.21 (roadmap Phase 47; was 45.21) continues where 45.21 and 45.58
+stopped. Before it: section 19.9's code and its host vectors for every
+row, and q35 legs on 7 x86 and 10 x64 with the Alpine, Falcon, Cactus and
+Light Ridge models (`runs/run-45.md`, "45.21 (code)" and "45.58"). The
+hardware stays 45-E.11, and the release notes keep "Not claimed: Apple
+machines" until it (section 19.8, Q5). What the emulator can still read,
+each item a leg, an emulator change or a code change:
+
+1. **Titan Ridge.** No leg has run `tb3-apple-titan-ridge`: its q35
+   switch (`usb4-tr-*`), the host router `15EA`, PCIe Down 8 and 9 (item
+   4 of section 19.4). Legs on 7 x86 and 10 x64, as 45.58's: the
+   install, the enclosure at power-on on port A, an unplug, a plug on
+   port B.
+2. **The rest of section 19.2's systems.** 7 x64, 8 x64 and 8.1 x64 have
+   no leg. One host each, by the generation of the Macs Apple supported
+   that system on (section 19.2): Light Ridge on 7 x64 (the Macs of
+   2011), Cactus Ridge on 8 x64 and Falcon Ridge on 8.1 x64 (Boot Camp
+   5's Macs of 2012 to 2014). Each leg as item 1's; the x64 images signed
+   in the guest with a throwaway certificate (design record 19's route
+   for a clone without the key).
+3. **A device of another generation** (section 19.4 item 8). Behind the
+   Alpine Ridge host, a Falcon Ridge (`156D`, generation 2, a link
+   controller) and a Port Ridge (`1549`, generation 1, none) device
+   router; behind the Cactus Ridge host, a generation 3 device router
+   (the model's default `15D3`). The first two are the older device on a
+   later Mac (on a real Mac through Apple's Thunderbolt 3 to Thunderbolt
+   2 adapter, which the emulator does not model: it links the two
+   routers directly [emu]). The link bonds as Linux bonds it, and as
+   `tbtU4BondPossible` does: where the device router's link controller
+   reports bonding possible (its upstream port's PORT_ATTR BE, so
+   generation 2 and later) and both lane 0 adapters list two lanes
+   ([linux] `switch.c` `tb_switch_lane_bonding_possible`,
+   `tb_port_width_supported`, `lc.c` `tb_lc_lane_bonding_possible`); the
+   host's own link controller is not asked. So the Port Ridge device's
+   link stays two single lanes, and the Falcon Ridge device's and, on
+   the emulator, the generation 3 device's on Cactus Ridge bond: the
+   model's Cactus Ridge lane adapters are Alpine Ridge's image and list
+   two lanes [emu]; whether a real generation 1 host's do is [unread].
+   Legs on 7 x86.
+4. **Tunnels the Mac's firmware built** (section 9 on this row; section
+   19.4 item 7). Linux's software connection manager discovers the boot
+   firmware's tunnels on a Thunderbolt host and keeps them (`tb.c`
+   `tb_start`: discovery is skipped only on a USB4 host being reset), and
+   resets an Apple host at a resume to "remove any PCIe devices the
+   firmware might have setup" (`tb_resume_noirq`) [linux]. Whether a
+   Mac's firmware builds a PCIe tunnel to a device attached at power-on,
+   and in what state it leaves the routers, is [unread]. `usb4-emu`'s
+   firmware connection manager (`preos-cm`, section 9.1) configures USB4
+   routers only, so section 9's discovery has not been read on this row
+   with a tunnel this driver did not build: 45.58's "found at start" was
+   its own tunnel, adopted across a restart of the NHI's stack.
+   - **The emulator change**: `preos-cm=on` accepted on the
+     `tb*-apple-*` profiles (off by default, as today), the firmware
+     running the sequence Linux's software connection manager runs on a
+     Thunderbolt router [linux, inferred for a Mac's firmware]: the host
+     router and each device router at depth 1 enumerated by one write of
+     ROUTER_CS_1 to 4 with Valid, Notification Timeout 255 and no CMUV
+     (`switch.c` `tb_switch_configure`), their Plug Events made active
+     (`tb_plug_events_active`), the link controller's port-configured
+     marks set at both ends from generation 2 (`tb_switch_configure_link`,
+     `lc.c` `tb_lc_configure_port`), the lanes bonded by item 3's rule
+     (`tb_switch_lane_bonding_enable`), and the
+     PCIe tunnel built between the host's PCIe Down adapter of that port
+     (section 19.4 item 4's map; Light Ridge the first free one) and the
+     device's PCIe Up adapter on HopID 8 both ways, as the model's USB4
+     firmware does; then its own hot-plug events consumed. The lane
+     HopIDs (8 down, 9 up) and the credits are [emu] (the USB4
+     firmware's). Its TMU is left as it comes up (section 19.4 item 6).
+     Nothing in this repository changes with it.
+   - **The legs** (7 x86; one 10 x64): Alpine Ridge (generation 3) and
+     Cactus Ridge (generation 1), the enclosure at power-on, each with
+     `XhciCmPreOsCleanup` 0 (expected: the port UP and preserved, the
+     disk on Stor98 with no re-enumeration, `u4.host` adopted), 1
+     (expected: the same, nothing cleaned, since the tunnel verifies) and
+     2 (expected: the port cleaned - the link controller's Downstream
+     Port Reset on Alpine Ridge, the paths torn down alone on Cactus
+     Ridge, whose device router then stays enumerated and is adopted as
+     it is at the fresh connect (section 9.2's "no tunnel state") - and
+     the tunnel rebuilt); an unplug and a plug after each. A leg that
+     does not read as expected is a finding, fixed here if it is this
+     driver's.
+5. **The router's generation in the status record and the tools' words**
+   (45.58's finding: `XHCIINST /devices` called a Port Ridge and a Falcon
+   Ridge device router "Thunderbolt 3"). The record's `CM_ST_E_GEN` keeps
+   its layout; on an entry of kind `CM_ST_GEN_TBT3`, bits 15:8, which no
+   writer has set until now, carry the router's Thunderbolt generation
+   (1, 2 or 3, the router's `TbtGen` from its device id,
+   `tb_switch_get_generation` [linux]) where the software connection
+   manager has read the router - its host-port entries (kind 2) and the
+   chained routers it enumerated (kind 3 with the router read) - and 0
+   elsewhere (an ICM entry, a deeper link's entry with no router read,
+   and every record of an earlier driver), read as Thunderbolt 3 as
+   before. So the record's version does
+   not change and an earlier tool reads a new record as it did. `XHCIINST
+   /devices` and XHCITR's generation line then say "Thunderbolt 1" or
+   "Thunderbolt 2" for a router of generation 1 or 2, and "Thunderbolt 3"
+   for 3 or 0, as today. XHCITR's "running as Thunderbolt 2", which it
+   says of every router behind a Falcon Ridge host, is not said of a
+   generation 1 router there, which is "Thunderbolt 1" alone: a link runs
+   at the lower generation of its two ends [inferred]. Host vectors in
+   `test_cm_status` and `test_tr`; the owner reads the new words (task
+   46.18's rule).
+
+Not in this task, as before: the Mac itself (45-E.11); 98 SE to Vista
+(section 19.2, Q2); DisplayPort (Q3); the ids 98 SE and ME give a Light
+or Cactus Ridge NHI (section 19.3); whether a Mac's firmware rebuilds a
+tunnel at a resume (section 19.4 item 7); and the release notes' "Not
+claimed: Apple machines" (Q5), for which the run record carries a draft
+for the owner.
 
 ## Appendix A. The binary readings behind `legal-provenance.md` section 4
 

@@ -246,7 +246,7 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources);
  * arrives on an ordinary running machine, and the latch was terminal
  * (docs/usb-xhci-info/usbport-miniport-abi.md, the two subsections after the
  * `UsbPortInvalidateController(RESET)` box; docs/contributing/runs/run-13e.md,
- * Finding S).
+ * the root-cause section: "The driver marks its own controller failed").
  *
  * This is `XhciResumeController`'s reinitialization branch, reached from the
  * latch instead of from a power IRP: drop every device record (completing the
@@ -415,7 +415,8 @@ VOID XhciFrameSample(PXHCI_EXTENSION ext);
  * expressed in are a measure of somebody else's timer rather than of time: the
  * E460 polls this miniport at 36-80 ms, so a 64-poll budget sized to be 32 s
  * was 2.3-5.1 s - at or under the 5 s watchdog it was meant to sit far behind
- * (docs/contributing/runs/run-13e.md, Finding V).
+ * (docs/contributing/runs/run-13e.md, the section confirming the poll-rate
+ * repair).
  *
  * **A second entry point rather than an output of XhciFrameSample**, which is
  * next to it in the poll and reads the same register. The two axes answer
@@ -488,8 +489,9 @@ ULONG XhciUnmaskInterrupts(PXHCI_EXTENSION ext);
  * both enables and this function has no evidence about USBCMD.INTE.
  *
  * Returns 1 if IE was observed set, or if an ISR claim since the write has
- * handed delivery to the DPC it queued (run-24 finding 2; not proof the write
- * landed); 0 means the caller owes an escalation once the controller lock is
+ * handed delivery to the DPC it queued (run-24.md, the interrupter re-arm on
+ * one CPU; not proof the write landed); 0 means the caller owes an escalation
+ * once the controller lock is
  * released, for the same reason a refused unmask does.
  * IRQL: DISPATCH_LEVEL, controller lock held.
  */
@@ -719,9 +721,9 @@ typedef struct _XHCI_PORT_TIMEOUT {
 
 /*
  * How many events one DPC pass will consume before it stops and lets the next
- * interrupt collect the rest. Four laps of the event ring is far more than any
- * real burst - the ring holds 256 - and the bound exists only so that a
- * controller producing events faster than software consumes them cannot own a
+ * interrupt collect the rest. Four laps of the in-block event ring, one of the
+ * larger (task 47.30), is far more than any real burst, and the bound exists
+ * only so that a controller producing events faster than software consumes them cannot own a
  * CPU at DISPATCH_LEVEL indefinitely. Stopping early is safe: xhciPublishErdp
  * still releases Event Handler Busy, and a non-empty ring re-asserts the
  * interrupter by itself (spec 4.17.5, p.270). A pass that reaches the bound
@@ -735,7 +737,19 @@ typedef struct _XHCI_PORT_TIMEOUT {
  * walk of a ring nothing is refilling. The two were separated in a later
  * revision; a change to this value has to be argued for both.
  */
-#define XHCI_DPC_MAX_EVENTS     (XHCI_EVENT_RING_TRBS * 4UL)
+#define XHCI_DPC_MAX_EVENTS     1024UL
+/*
+ * Task 47.30 (design record 13 section 11.10, point 7): the value it had as
+ * four laps of the 256-entry ring, kept as a literal now that a ring may
+ * have 1,024 entries, so a pass's bound is unchanged. One lap of the larger
+ * ring still fits it: a full producer ring holds TRBs - 1 events, so a pass
+ * that starts on a full ring drains it, and the restore's walk of a ring
+ * nothing refills ends on the Cycle Bit before the bound.
+ */
+XHCI_C_ASSERT(dpc_bound_covers_a_full_big_ring,
+              XHCI_DPC_MAX_EVENTS >= XHCI_EVENT_RING_BIG_TRBS);
+XHCI_C_ASSERT(dpc_bound_covers_a_full_ring,
+              XHCI_DPC_MAX_EVENTS >= XHCI_EVENT_RING_TRBS);
 
 /*
  * How often the dequeue pointer is published mid-drain. The xHC decides the
@@ -828,6 +842,9 @@ ULONG XhciEventDiscardStale(PXHCI_EXTENSION ext, PULONG fatalEvent);
  */
 VOID XhciEnableInterrupts(PXHCI_EXTENSION ext);
 VOID XhciDisableInterrupts(PXHCI_EXTENSION ext);
+/* The miniport's FlushInterrupts callback, which usbport called; nothing in
+ * the HCD calls it, and the DDK build's /OPT:REF leaves it out of the
+ * image. */
 VOID XhciFlushInterrupts(PXHCI_EXTENSION ext);
 
 /* ------------------------------------------------------------------ */
@@ -1052,7 +1069,8 @@ VOID XhciSlotInvalidateAll(PXHCI_EXTENSION ext, ULONG controllerStopped);
  *
  * **Every threshold below is in milliseconds on XHCI_EXTENSION.PollClockMs,
  * and none of them may be expressed in polls again.** Task 13-R.3.5, and the
- * measurement behind it is docs/contributing/runs/run-13e.md, **Finding V**:
+ * measurement behind it is docs/contributing/runs/run-13e.md, **the section
+ * confirming the poll-rate repair**:
  * this clock read 354,364 ms against 6,461 HealthPolls on the ThinkPad E460, so
  * its CheckController period is **36-80 ms** - 36 ms while idle, ~75 ms while
  * the bus is busy. It is not a constant even on one machine.
@@ -1068,9 +1086,10 @@ VOID XhciSlotInvalidateAll(PXHCI_EXTENSION ext, ULONG controllerStopped);
  * dump ever taken from that machine, and this driver had been escalating to a
  * controller reset on commands that were merely slow.
  *
- * **Finding U put the period at ~1 ms and that was an inference, not a
- * reading** - 971,359 polls divided by a session nobody timed. Finding V
- * measured it. The defect is unchanged and the repair is unchanged; the
+ * **The run sheet's earlier section, on the repair confirmed at scale, put
+ * the period at ~1 ms and that was an inference, not a reading** - 971,359
+ * polls divided by a session nobody timed. The later section measured it.
+ * The defect is unchanged and the repair is unchanged; the
  * magnitude was overstated by one to two orders of magnitude, and the
  * discrepancy against that poll count is recorded there as open.
  *
@@ -1185,7 +1204,8 @@ VOID XhciSlotInvalidateAll(PXHCI_EXTENSION ext, ULONG controllerStopped);
  *
  * **It bounds CONSECUTIVE FAILURES, not lifetime attempts**, and that
  * distinction is a correction the E460 made rather than a
- * refinement (run-13e.md, Finding T). Bounding the lifetime total meant three
+ * refinement (run-13e.md, the section on the attempt cap, "the wedge that is
+ * left is this project's own bound"). Bounding the lifetime total meant three
  * recoveries that all *worked* exhausted the budget, so the fourth incident -
  * an ordinary new fault, retrying nothing - had no recovery available and the
  * port stayed dead. A successful recovery resets the count, which is what the
@@ -1243,10 +1263,11 @@ typedef struct _XHCI_COMMAND_TIMEOUT {
  *
  * Refuses a TRB type outside the architected command range 9-23 (Table 6-91),
  * and refuses with XHCI_CMD_NO_TIMER - **before** enqueuing anything - if there
- * is no async timer service to time the command with. Otherwise arms a bounded
- * timeout through XhciAsyncTimerArm *after* dropping the interior lock -
- * or, from an `armMode` of XHCI_ARM_DEFER on the Version 300 tier, owes it
- * to the next XhciCommandDrainOwedArm. IRQL: <= DISPATCH_LEVEL.
+ * is no async timer service to time the command with, which under the HCD
+ * cannot happen (XhciAsyncTimerAvailable). Otherwise arms a bounded timeout
+ * through XhciAsyncTimerArm *after* dropping the interior lock; a refused arm
+ * leaves the command issued and untimed, counted in CommandTimerFailures.
+ * IRQL: <= DISPATCH_LEVEL.
  */
 ULONG XhciCommandSubmit(PXHCI_EXTENSION ext,
                         const XHCI_TRB *command,
@@ -1328,7 +1349,8 @@ ULONG XhciControllerUpdateFlags(PXHCI_EXTENSION ext,
  * **`XhciLogNoteAddress` is the third, and which one a call site uses is a
  * decision about PUBLICATION rather than about locking.** A record whose value
  * is a kernel address is a **level-4** record: the ladder's boundary between 3
- * and 4 is addresses, and `XHCISNAP`'s plain-text companion - the file a
+ * and 4 is addresses, and the snapshot reader's plain-text companion - the
+ * file a
  * stranger pastes into a public issue - is built out of the ring. Logging an
  * address through the ordinary form puts it in a level-2 capture and defeats
  * that boundary wherever it is documented, which is what two of these call
@@ -1389,6 +1411,12 @@ ULONG XhciAsyncTimerAvailable(VOID);
  * Where a timer may be armed (roadmap 24.4; design record 05, "Where a timer
  * may be armed").
  *
+ * **Under the HCD the two modes are one**: the timer service is the driver's
+ * own (hcd_svc.c, HcdSvcArmTimer), its slot lock innermost, so every arm is
+ * made at once and nothing is owed (XhciAsyncTimerArm). The modes are still
+ * passed, as the record of each site's context; what follows is the
+ * miniport's account, under usbport's two services.
+ *
  * On NT 6.x the legacy `UsbPortRequestAsyncCallback` skips usbport's
  * timer-list lock and assumes its caller holds it, so an arm from any
  * context that does not hold it races the timer DPC's unlink and free on
@@ -1438,18 +1466,6 @@ ULONG XhciAsyncTimerArm(PXHCI_EXTENSION ext,
                         PVOID context,
                         ULONG contextLength,
                         XHCI_ASYNC_TIMER_CALLBACK *callback);
-
-/*
- * Make the command watchdog arm a DEFER context left owed, if the command it
- * watches is still outstanding. Called by every UNLOCKED drain - the slot
- * layer's, which the event DPC, the poll and the root-hub status queries all
- * reach. Idempotent and cheap when nothing is owed; nothing is ever owed on
- * the 200 tier.
- *
- * IRQL: <= DISPATCH_LEVEL, an XHCI_ARM_UNLOCKED context, controller lock
- * released.
- */
-VOID XhciCommandDrainOwedArm(PXHCI_EXTENSION ext);
 
 /*
  * Put the engine at idle for a new start and publish this start's epoch, under

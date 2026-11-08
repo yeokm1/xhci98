@@ -190,6 +190,10 @@ static NTSTATUS NTAPI hcdAddDevice(PDRIVER_OBJECT DriverObject,
      * XhciMsiAvoid for this FDO's first requirements filter, through the PCI
      * PDO now that the stack exists. */
     HcdQuirkAddDevice(hc);
+    /* Task 47.33, part 2 (design record 18 section 16): on 64-bit XP and
+     * Server 2003 the chipset-routed GSI offer for this FDO's requirements
+     * filters, read now that the stack exists. */
+    HcdNoRouteAddDevice(hc);
     HcdSerialControllerAdd(hc);
     fdo->Flags |= DO_POWER_PAGABLE;
     fdo->Flags &= ~DO_DEVICE_INITIALIZING;
@@ -291,9 +295,10 @@ static NTSTATUS NTAPI hcdDispatchOther(PDEVICE_OBJECT DeviceObject, PIRP Irp)
          major == IRP_MJ_CLEANUP)) {
         return HcdDoorCreateClose(Irp);
     }
-    /* WMI (finding D4): this driver registers no WMI provider, so its FDOs
-     * pass IRP_MJ_SYSTEM_CONTROL down - the controller's below, with the
-     * rest - and its PDOs complete it with the status it came with. Driver
+    /* WMI (design record 18 section 11.2): this driver registers no WMI
+     * provider, so its FDOs pass IRP_MJ_SYSTEM_CONTROL down - the
+     * controller's below, with the rest - and its PDOs complete it with the
+     * status it came with. Driver
      * Verifier's started-stack WMI test stops with C9 0x220 when an FDO
      * completes it instead. */
     if (major == IRP_MJ_SYSTEM_CONTROL) {

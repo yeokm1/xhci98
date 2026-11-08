@@ -22,6 +22,94 @@
 #include "hcd.h"
 #include "xhci_hw.h"
 
+/*
+ * Task 47.30 (design record 13 section 11.10, point 2): the larger event
+ * ring's block. 16 KiB first; when it has no 64 KiB-safe window
+ * (XhciEventRingWindow) it is given back and 32 KiB asked for once, which
+ * always has one. A refusal, a block above 4 GB or no window leaves the
+ * start on the in-block ring, which every start carves anyway, so nothing
+ * here can fail the start. IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdDmaEventRingOpen(PHCD_CONTROLLER hc)
+{
+    PHYSICAL_ADDRESS pa;
+    PVOID va;
+    ULONG bytes;
+    ULONG offset;
+    ULONG pass;
+    ULONG first;
+    ULONG refuse;
+
+    hc->EvtBlockVa = NULL;
+    hc->EvtBlockPa.LowPart = 0;
+    hc->EvtBlockPa.HighPart = 0;
+    hc->EvtBlockBytes = 0;
+    hc->EvtRingVa = NULL;
+    hc->EvtRingPa = 0;
+    if (!hc->EvtWanted) {
+        hc->EvtRoute = HCD_EVT_ROUTE_VALUE;
+        return;
+    }
+    first = 0;
+    refuse = 0;
+#if defined(XHCI_FLAVOUR_QEMU)
+    if (hc->QemuEventRing == HCD_EVT_QEMU_SMALL) {
+        hc->EvtRoute = HCD_EVT_ROUTE_TEST;
+        return;
+    }
+    first = (hc->QemuEventRing == HCD_EVT_QEMU_WIDE) ? 1UL : 0UL;
+    refuse = (hc->QemuEventRing == HCD_EVT_QEMU_REFUSE) ? 1UL : 0UL;
+#endif
+    hc->EvtRoute = HCD_EVT_ROUTE_REFUSED;
+    for (pass = first; pass < 2; pass++) {
+        bytes = (pass == 0) ? XHCI_EVENT_RING_BIG_BLOCK
+                            : XHCI_EVENT_RING_BIG_WIDE;
+        va = hc->Dma->DmaOperations->AllocateCommonBuffer(hc->Dma, bytes,
+                                                          &pa, TRUE);
+        if (va == NULL) {
+            return;
+        }
+        if (pa.HighPart == 0 && !refuse &&
+            XhciEventRingWindow(pa.LowPart, bytes, XHCI_EVENT_RING_BIG_BYTES,
+                                &offset)) {
+            hc->EvtBlockVa = va;
+            hc->EvtBlockPa = pa;
+            hc->EvtBlockBytes = bytes;
+            hc->EvtRingVa = (PVOID)((PUCHAR)va + offset);
+            hc->EvtRingPa = pa.LowPart + offset;
+            hc->EvtRoute = (pass == 0) ? HCD_EVT_ROUTE_BLOCK
+                                       : HCD_EVT_ROUTE_WIDE;
+            return;
+        }
+        hc->Dma->DmaOperations->FreeCommonBuffer(hc->Dma, bytes, pa, va,
+                                                 TRUE);
+        if (pa.HighPart != 0) {
+            return;
+        }
+    }
+}
+
+/* Its release with the controller block, under the same pin rule: a bus
+ * master that may still run keeps it, counted. IRQL: PASSIVE_LEVEL. */
+static VOID hcdDmaEventRingClose(PHCD_CONTROLLER hc)
+{
+    if (hc->EvtBlockVa != NULL) {
+        if (hc->CommonBufferPinned) {
+            hc->CommonBuffersKept++;
+        } else {
+            hc->Dma->DmaOperations->FreeCommonBuffer(
+                hc->Dma, hc->EvtBlockBytes, hc->EvtBlockPa, hc->EvtBlockVa,
+                TRUE);
+        }
+    }
+    hc->EvtBlockVa = NULL;
+    hc->EvtBlockPa.LowPart = 0;
+    hc->EvtBlockPa.HighPart = 0;
+    hc->EvtBlockBytes = 0;
+    hc->EvtRingVa = NULL;
+    hc->EvtRingPa = 0;
+}
+
 NTSTATUS HcdDmaOpen(PHCD_CONTROLLER hc)
 {
     DEVICE_DESCRIPTION desc;
@@ -84,6 +172,7 @@ NTSTATUS HcdDmaOpen(PHCD_CONTROLLER hc)
             hc->Dma, HCD_SCRATCH_BYTES, hc->ScratchPa, hc->ScratchVa, TRUE);
         hc->ScratchVa = NULL;
     }
+    hcdDmaEventRingOpen(hc);
     return STATUS_SUCCESS;
 }
 
@@ -92,6 +181,7 @@ VOID HcdDmaClose(PHCD_CONTROLLER hc)
     if (hc->Dma == NULL) {
         return;
     }
+    hcdDmaEventRingClose(hc);
     if (hc->CommonVa != NULL) {
         if (hc->CommonBufferPinned) {
             /* A bus master that may still be running holds this block's
@@ -194,28 +284,35 @@ static VOID hcdMapStart(PHCD_CONTROLLER hc)
     PLIST_ENTRY entry;
     PHCD_XFER x;
     KIRQL oldIrql;
+    KIRQL raised;
     NTSTATUS status;
 
     KeAcquireSpinLock(&hc->MapLock, &oldIrql);
-    if (hc->MapBusy || IsListEmpty(&hc->MapQueue)) {
+    if (hc->MapBusy || hc->MapQuarantined || IsListEmpty(&hc->MapQueue)) {
         KeReleaseSpinLock(&hc->MapLock, oldIrql);
         return;
     }
     entry = RemoveHeadList(&hc->MapQueue);
     hc->MapBusy = 1;
     hc->MapInCall = 1;
+    hc->MapPhase = HCD_MAP_PHASE_ASKED;
     KeReleaseSpinLock(&hc->MapLock, oldIrql);
 
     x = CONTAINING_RECORD(entry, HCD_XFER, Link);
-    KeRaiseIrql(DISPATCH_LEVEL, &oldIrql);
+    KeRaiseIrql(DISPATCH_LEVEL, &raised);
     status = hc->Dma->DmaOperations->AllocateAdapterChannel(
         hc->Dma, hc->Common.Self, x->MapCount, hcdMapExecute, x);
+    /* Under the lock, so the drain's quarantine never sees a request still
+     * inside this call as one only the HAL holds. */
+    KeAcquireSpinLock(&hc->MapLock, &oldIrql);
     hc->MapInCall = 0;
-    KeLowerIrql(oldIrql);
+    KeReleaseSpinLock(&hc->MapLock, oldIrql);
+    KeLowerIrql(raised);
     if (!NT_SUCCESS(status)) {
         hc->MapRefusals++;
         KeAcquireSpinLock(&hc->MapLock, &oldIrql);
         hc->MapBusy = 0;
+        hc->MapPhase = HCD_MAP_PHASE_IDLE;
         KeReleaseSpinLock(&hc->MapLock, oldIrql);
         x->MapBase = NULL;
         if (x->Probe) {
@@ -252,6 +349,7 @@ static VOID NTAPI hcdMapDoneDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
     hc = (PHCD_CONTROLLER)Context;
     KeAcquireSpinLock(&hc->MapLock, &oldIrql);
     hc->MapBusy = 0;
+    hc->MapPhase = HCD_MAP_PHASE_IDLE;
     KeReleaseSpinLock(&hc->MapLock, oldIrql);
     hcdMapStart(hc);
     (VOID)InterlockedDecrement(&hc->MapDpcsInFlight);
@@ -389,10 +487,28 @@ static IO_ALLOCATION_ACTION NTAPI hcdMapExecute(PDEVICE_OBJECT DeviceObject,
     ULONG decision;
     ULONG promoted;
     ULONG final;
+    ULONG quarantined;
 
     UNREFERENCED_PARAMETER(Irp);
     hc = (PHCD_CONTROLLER)DeviceObject->DeviceExtension;
     x = (PHCD_XFER)Context;
+    /* Entered, or quarantined by a fail-closed stop that could not wait
+     * for it (HcdDmaMapDrain): decided under the lock the drain decides
+     * under. A quarantined request touches nothing but this FDO's
+     * extension, which its REMOVE keeps - not the record, the adapter
+     * pointer the stop dropped, or the pump - and hands the registers it
+     * was just given straight back. */
+    KeAcquireSpinLock(&hc->MapLock, &oldIrql);
+    quarantined = hc->MapQuarantined;
+    if (quarantined) {
+        hc->MapsQuarantinedLate++;
+    } else {
+        hc->MapPhase = HCD_MAP_PHASE_ROUTINE;
+    }
+    KeReleaseSpinLock(&hc->MapLock, oldIrql);
+    if (quarantined) {
+        return DeallocateObject;
+    }
     if (hc->MapInCall) {
         hc->MapsSynchronous++;
     } else {
@@ -542,18 +658,70 @@ VOID HcdDmaInitObjects(PHCD_CONTROLLER hc)
     KeInitializeDpc(&hc->MapDpc, hcdMapDpc, hc);
     KeInitializeDpc(&hc->MapDoneDpc, hcdMapDoneDpc, hc);
     hc->MapBusy = 0;
+    hc->MapPhase = HCD_MAP_PHASE_IDLE;
+    hc->MapQuarantined = 0;
     hc->MapDpcsInFlight = 0;
 }
 
-/* At a stop, before the adapter goes: no pump DPC or channel request may
- * still be live. IRQL: PASSIVE_LEVEL. */
+/* How many 1 ms waits - each a clock tick at most, so at least 0.1 s and
+ * under 2 s - a fail-closed stop gives a channel request the HAL still
+ * holds before it quarantines it (HcdDmaMapDrain). */
+#define HCD_MAP_QUARANTINE_ROUNDS 100UL
+
+/*
+ * At a stop, before the adapter goes: no pump DPC or channel request may
+ * still be live. IRQL: PASSIVE_LEVEL.
+ *
+ * One case cannot be waited out. A stop that could not prove the
+ * controller stopped mastering (CommonBufferPinned) keeps every record and
+ * the map registers its mapped ones hold (HcdIoDeviceDrain), so a channel
+ * request the HAL queued for want of registers may never be granted, and
+ * there is no way to withdraw one (AllocateAdapterChannel has no cancel
+ * before DMA version 3). Once it has stayed asked, with nothing of the
+ * pump running, through HCD_MAP_QUARANTINE_ROUNDS waits, it is quarantined
+ * instead, under MapLock, so its routine either had entered already - and
+ * is waited for - or will find the mark: the pump stays closed, the HAL's
+ * late call hands its registers back and touches nothing else
+ * (hcdMapExecute), no start runs on this FDO again (hcd_pnp.c), and its
+ * REMOVE keeps the device object, whose wait block the HAL still holds
+ * and whose extension the late call reads, for the life of the system,
+ * as the kept common buffer and adapter are. Not run: it needs real map
+ * registers (2000 under PAE, 32-bit Vista to 10 with memory above 4 GB)
+ * and a controller that would not stop.
+ */
 VOID HcdDmaMapDrain(PHCD_CONTROLLER hc)
 {
     LARGE_INTEGER due;
+    KIRQL oldIrql;
+    ULONG asked;
+    ULONG busy;
 
-    while (hc->MapDpcsInFlight != 0 || hc->MapBusy) {
+    asked = 0;
+    for (;;) {
+        busy = 1;
+        if (hc->MapDpcsInFlight == 0) {
+            KeAcquireSpinLock(&hc->MapLock, &oldIrql);
+            busy = hc->MapBusy;
+            if (busy && hc->CommonBufferPinned && !hc->MapInCall &&
+                hc->MapPhase == HCD_MAP_PHASE_ASKED) {
+                asked++;
+                if (asked >= HCD_MAP_QUARANTINE_ROUNDS) {
+                    hc->MapQuarantined = 1;
+                    busy = 0;
+                }
+            } else {
+                asked = 0;
+            }
+            KeReleaseSpinLock(&hc->MapLock, oldIrql);
+        }
+        if (!busy) {
+            break;
+        }
         HcdRelativeMs(&due, 1);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
+    if (hc->MapQuarantined) {
+        XhciLogNote(&hc->Hc, "dma.map.quarantined", asked);
     }
 }
 
@@ -614,7 +782,7 @@ static ULONG hcdWideCheck(PHCD_CONTROLLER hc)
      * nothing else mapped, a grant of 16 is never short. */
     waited = 0;
     for (;;) {
-        due.QuadPart = -10000000;       /* 1 s */
+        HcdRelativeMs(&due, 1000);
         if (KeWaitForSingleObject(&hc->WideProbeEvent, Executive,
                                   KernelMode, FALSE, &due) ==
             STATUS_SUCCESS) {

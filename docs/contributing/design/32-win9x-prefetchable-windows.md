@@ -1,6 +1,10 @@
 # Design Record 32 - Prefetchable Windows Above 4 GB Closed Before Windows 98 SE and ME Read Them
 
-Status: draft 15, 2026-11-03: section 12.8.16, new - the DSDT and every
+Status: draft 16, 2026-11-06: section 11.5.5, new - 10 read again (task
+47.14): a boot-start upper filter of the root bus, installed with its
+image path written as `REG_EXPAND_SZ`, acts before the PCI driver reads
+the bridges at every start read, as on 8 and 8.1; 10's role and code
+stay planned. Draft 15, 2026-11-03: section 12.8.16, new - the DSDT and every
 SSDT read by `xhci98.sys` on the user's request for XHCITR (task 46.21,
 the owner's option B). Draft 14, 2026-11-03: section 12.8.14, new - the tables
 the handover's discovery read kept for XHCITR (task 46.21). Draft 13,
@@ -1271,6 +1275,42 @@ and the console's question as on Vista and 7, `INST_PFW_SYS_SEEN`):
   order of changes and the readme's recovery above.
 - **Q12**: coded in `3.4.0.0` once this section converged.
 
+#### 11.5.5 10 read again (task 47.14, 2026-11-06)
+
+Task 47.14 (PFW8.1's reading, the owner, 2026-11-06) read 10 x86 again
+with section 11.5.1's probe image (`pfwflt.sys`, the same SHA-256
+`37ffe267...0a8a`), installed differently in two ways: the service's
+`ImagePath` written by `reg add` as `REG_EXPAND_SZ`
+`System32\drivers\pfwflt.sys` (45.9's `.reg` file had left `ImagePath`
+unwritten, so the default path served), and `pfwflt` named in the `UpperFilters` of
+`ACPI\PNP0A08\0` alone, no `LowerFilters` - the one position section
+11.5.2's filter role takes. Service `Type` 1, `Start` 0, `ErrorControl`
+0, `Group` `PnP Filter`; fast startup off; the 4G-off layout with the
+ORICO at power-on, two processors, each start cold (`runs/run-47.md`,
+"47.14 A filter in the PCI root bus's stack on the 32-bit 10: read
+again") [emu]:
+
+| Start | Trace | `DriverEntry` | `AddDevice` | start | step's close of the root port | PCI driver's probe of the root port | Result |
+|---|---|---|---|---|---|---|---|
+| a, b | RW | 14 603 | 14 606 | 14 609 | 31 189 | 32 328 | the desktop; every bridge 0; the NHI and `fw_cfg` 28 |
+| c | W | - | - | - | 446 | 593 | the same |
+
+The debug console showed 8's and 8.1's upper-filter sequence at every
+start (`IRP_MN_QUERY_LEGACY_BUS_INFORMATION`,
+`IRP_MN_FILTER_RESOURCE_REQUIREMENTS`, `IRP_MN_START_DEVICE` to the
+filter first; the step closing nine bridges). So on 10 a boot-start
+upper filter of the root bus is initialised and acts before the PCI
+driver reads the bridges at every start read, as on 8 and 8.1 [emu], and
+section 11.5.1's 10 row describes that install, not the place [inf].
+Named as both filters, as 45.9 had it, with the corrected image path, a
+fourth start did the same (the lower filter's `AddDevice` over the ACPI
+driver's object at line 14 606, the upper filter's at 14 609, the step's
+close at 31 192 before the probe at 32 334) [emu], so the lower filter
+was not what stopped 45.9's starts; the difference left is the
+service's `ImagePath`, absent in 45.9's install and written here [inf].
+The filter role's use on 10 (section 11.5.2 gives 10 none) stays planned
+work, its design and code (PFW8.1).
+
 ## 12. The USB4 host's own functions on an IRQ 98 SE and ME cannot give (task 46.11)
 
 Draft 3, 2026-11-03: the owner's answer to Q1 (option A, always, with
@@ -2013,6 +2053,25 @@ unchanged: the amd64 `xhcicm.inf` has no 98 SE and ME install and writes
 neither value. The text is the owner's to rephrase (task 46.18's rule);
 the draft is in `runs/run-46.md`.
 
+**Bit 26, the refusal at `XhciCmAsm4242Structural` 0** (task 47.29,
+owner 2026-11-06; reviewed and revised). A start that found the same
+handover code in another build (tier 3) and did not send it because the
+value is 0 (refusal `0Eh`; on NT `110h`, `cm.osc.read` `0Eh`) sets bit 26
+of the flags word, on every system. It is set at that refusal alone and
+cleared at each start (an NT start's every attempt clears it too):
+tier 3 with bit 19 clear does not say it, since a start at value 1 can
+still end unsent (the mailbox busy, a reply not given, the guard). A
+reader that knows no such bit reads 0; the version stays 1 (the
+connection manager's handover word, `CmOscReport`, carries it as bit 10,
+`CM_OSCN_F_SAMEOFF`). XHCITR's report then says, below its stage line
+(`tr_ho_same_text`): "Handover not sent: this firmware is not a known
+build, but has the same handover code. To try it, set the Thunderbolt
+setting for such firmware to yes." - the owner's draft, for the owner
+to rephrase (task 46.18's rule). On 2000 to 10 the value is only a row
+under the installer's Advanced settings (12.8.15.12), which nothing else
+names; 98 SE and ME have the installer's question. Read on the
+emulator's build 2 tables (`runs/run-47.md`, "47.29").
+
 #### 12.8.12 What the log says, for a board not yet read (draft 5)
 
 The connection manager's notes (`XHCITR`'s report carries them), so
@@ -2237,7 +2296,8 @@ unchanged: the port is never a tunnel port or a domain member.
 
 **Its role.** `cmAddDevice` gives that id, above the PCI driver's FDO, a
 role of its own, the mailbox port (`CM_ROLE_MAILBOX`, an extension of
-kind `CM_KIND_MAILBOX`), decided before `CmRoleDecide`, with a dispatch
+kind `CM_KIND_MAILBOX`; design names, not in the tree under them, the NT
+route as built being section 12.8.15's), decided before `CmRoleDecide`, with a dispatch
 of its own (not `cm_filt.c`'s bridge path, which publishes, reads
 relations and attaches children for every bridge). Every PnP and power
 request passes down unchanged but for two things. At a start that
@@ -2989,7 +3049,7 @@ sender and a deferred start) is withdrawn.
 
 ##### 12.8.15.11 E: a known board's command, no firmware memory read
 
-**The identity** (`CmOscProfileMatch`, one pure function in
+**The identity** (`CmOscpMatch` (designed as `CmOscProfileMatch`), one pure function in
 `src\cm\cm_oscp.c`, compiled into `xhcicm.sys` and into the installer,
 to be host-tested, with the SMBIOS decoder below shared by both): a
 board is known when all of these equal one profile's:
@@ -3026,7 +3086,7 @@ memory is mapped. The answer is decoded with bounds:
 - the instance's data: `Used20CallingMethod`, major, minor, DMI
   revision, a 32-bit length, then that many table bytes, the length
   inside the instance;
-- the SMBIOS walk (`CmOscSmbios`, pure, shared with the installer):
+- the SMBIOS walk (`CmOscpSmbios` (designed as `CmOscSmbios`), pure, shared with the installer):
   each structure's formatted length at least 4 and inside the tables,
   every field read (type 0: vendor at `04h`, version at `05h`, date at
   `08h`; type 2: manufacturer at `04h`, product at `05h`) inside that
@@ -3098,7 +3158,7 @@ Written so that the installer can be built from this section alone;
   by `GetSystemFirmwareTable` `RSMB` from XP x64 and Vista, and on
   32-bit XP by WMI's same raw class, `MSSmBios_RawSMBiosTables` in the
   `root\WMI` namespace, its `SMBiosData` bytes) and calls the same
-  `CmOscProfileMatch`, those bytes decoded by the shared `CmOscSmbios`,
+  `CmOscpMatch` (designed as `CmOscProfileMatch`), those bytes decoded by the shared `CmOscpSmbios` (designed as `CmOscSmbios`),
   so Setup's classification is the driver's; on 2000 neither has a
   route and every board is unknown in both:
   - the classification is shown in the report and the log (and, as
@@ -3333,7 +3393,7 @@ under `XhciCmAsm4242Reads`); 98 SE and ME unchanged.
   boot (Q21); on NT bits 18:16 also take 4, a known board's profile (E),
   and bit 19 means what it means on 98 SE and ME; a reader that knows
   none of these reads 0; the version stays 1.
-- **Host vectors** (the guard's pure decision, `CmOscGuard`): no marker
+- **Host vectors** (the guard's pure decision, the `CmOscg*` routines (designed as `CmOscGuard`)): no marker
   (send allowed, marker to write); a marker of each kind (skip, clear);
   a read failure (skip); a write or flush failure (no send); the router
   answering (clear); an inert start (keep); an inert start then a
@@ -4139,6 +4199,62 @@ refused `113h` in the log, status bit 25 (record 24 section 3; free
 until now, a reader that knows it not reads 0, the version stays 1)
 and XHCITR's report line "Handover not sent: on this Windows it needs
 the firmware reads setting set to yes."
+
+#### 12.8.17 Read on the emulator: ME's fault legs and the structural row on NT (task 47.13)
+
+2026-11-06, reviewed and revised. What task 47.13 read on the emulator
+(`runs/run-47.md`, "47.13"); nothing of the driver, the INFs or the
+installer changed.
+
+**ME.** 12.8.8's legs on ME had waited for an ME without ACPI, since
+98 SE with ACPI stopped at "While initializing device CONFIGMG: Windows
+protection error" with the emulator's tables ("46.12"). ME with ACPI
+(the q35 base) stops the same way on build 1 `--osi`'s tables as
+`usb4-emu`'s script writes them by default, with QEMU's own `\_SB._OSC`
+left out (`acpi-sb-osc=off`), and starts with `--externals-ifzero` (the
+tables' `External`s inside `If (Zero)`, the methods' bytes unchanged),
+the cure of Windows 7 x86's bug check `A5` (12.8.15.17). With ACPI on,
+the driver found the tables, the known build (tier 2) and the mailbox
+as on 98 SE without ACPI. The legs read on ME ended as on 98 SE: the
+command sent once and a disable and enable sending nothing again; the
+mailbox busy from the reset (`107h`) and for good (not accepted), a
+hold of 300 ms, a reply never given and the start after it; the release
+flavour declining the tables (tier 1); build 2 refused at 0 (`0Eh`) and
+sent at 1, build 3 declined (`0Dh`), the data naming another root port
+(`0Bh`) and `XhciCmAsm4242Handover` 0 ("46.12" and "46.12 The 9x
+fault legs"). Not read on ME: a tunnelled drive hot-plugged after the
+handover, and the installer's question. One leg more, a hold past the
+driver's wait (1500 ms): the command not accepted
+within 1000 ms, no query, the reply register left as the model later
+wrote it (12.8.5: written 0 only once a reply came); the model then took
+the command and made the handover, so the router answered and the start
+went active while the log says the handover failed (`FFFFFFFEh`). The
+stated rule holds (no second attempt); a firmware that answers late is
+served by that chance alone.
+
+**The structural row on NT, as built.** 12.8.15.12 said the row would
+keep `INST_APPLY_9X_CM` until both `xhcicm` INFs wrote the value on every
+system with the read path. Both did from 3.4.1.0 (`[Cm.Values]`, the INF
+gate's every-path row), and the row has applied on 2000 to 10
+(`INST_APPLY_CM`) since: on 10 x86 the install wrote
+`XhciCmAsm4242Handover` 1, `XhciCmAsm4242Structural` 0 and
+`XhciCmAsm4242Reads` 0 in the NHI's driver key, `/set
+XhciCmAsm4242Structural=1` was taken and written under `Services\USB`
+(which the driver read over the driver key), and the Thunderbolt
+settings' Advanced list showed the row with the machine-wide value, not
+greyed. The read path then gave 12.8.15.17's table on 10 x86 (route B,
+the routines through the helper): build 2 at 0 tier 3 refused
+(`cm.osc.read` `0Eh`, `110h`, no pointer of `\CPNV` followed, no
+mailbox command sent; the probe of 12.8.15.16 had read the command
+dword before the read path, as at every start), at 1 sent and the
+router answering; build 3 tier 1 refused
+(`0Dh`) at 1; build 4 tier 3, sent at 1 and refused at 0.
+
+Not shown by the report: a start refused at tier 3 with the value 0
+says only "Stage: failed" in XHCITR's report (the status record's tier
+is there, no line names it), while 98 SE and ME have the installer's
+question for it; the owner chose that XHCITR say so (2026-11-06,
+roadmap-usb4 47.29; `runs/run-47.md`, "47.13").
 
 ### 12.9 The emulator's reading (task 46.11 step 2, 2026-11-03)
 

@@ -337,6 +337,16 @@ static ULONG hcdIsoEvent(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG slotId,
 }
 
 /* The pipe a Transfer Event names, or NULL. Controller lock held. */
+/* Task 47.30 (design record 13 section 11.10, Part B, point 2): the system
+ * time in the `at` note's units (XhciXstatSysUnits). IRQL: any. */
+static ULONG hcdSysUnitsNow(VOID)
+{
+    LARGE_INTEGER now;
+
+    KeQuerySystemTime(&now);
+    return XhciXstatSysUnits(now.LowPart, (ULONG)now.HighPart);
+}
+
 static PHCD_PIPE hcdEventPipe(PHCD_CONTROLLER hc, ULONG slotId, ULONG dci)
 {
     PHCD_USB_DEVICE dev;
@@ -379,6 +389,7 @@ static VOID hcdStreamHaltDrain(PHCD_CONTROLLER hc, PHCD_PIPE endpoint,
     hc->CancelWork = 1;
     XhciLogNoteLocked(&hc->Hc, "tol.stream.halt",
                       (slotId << 16) | (dci << 8) | cc);
+    XhciLogNoteLocked(&hc->Hc, "at", hcdSysUnitsNow());
     HcdThreadWake(hc);
 }
 
@@ -433,6 +444,8 @@ static VOID hcdTolCountEvent(PXHCI_EXTENSION ext, ULONG slotId, ULONG dci,
     if (XhciLogErrorBudget(&ext->Log, cc)) {
         XhciLogNoteLocked(ext, "xfer.error",
                           (slotId << 16) | (dci << 8) | cc);
+        /* Record 13 section 11.10: when, in the same lock hold. */
+        XhciLogNoteLocked(ext, "at", hcdSysUnitsNow());
     } else {
         ext->LogErrorsOverBudget++;
     }
@@ -539,6 +552,12 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
     }
     endpoint = NULL;
     pipe = hcdEventPipe(hc, slotId, dci);
+    cc = XHCI_TRB_GET_COMPLETION(event->Status);
+    if (pipe != NULL && pipe->Iso != NULL &&
+        (cc == XHCI_CC_RING_UNDERRUN || cc == XHCI_CC_RING_OVERRUN)) {
+        /* Record 13 section 11.10: the stream ran dry, and when. */
+        XhciIsoTimingDry(&pipe->IsoTiming, hcdSysUnitsNow());
+    }
     if (pipe != NULL &&
         XhciXferEventHighRefused(pipe->Queue, event->Control, event->Param1)) {
         /* A TRB pointer above 4 GB names no ring of this driver; its low

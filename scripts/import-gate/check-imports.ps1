@@ -536,7 +536,7 @@ function Read-AllowFile {
             continue
         }
         if ($line -match "^\[(\w+)\]$") {
-            $section = $Matches[1].ToLower()
+            $section = $Matches[1].ToLowerInvariant()
             continue
         }
 
@@ -548,7 +548,7 @@ function Read-AllowFile {
             if ($fields[0] -notmatch "^([^!]+)!(.+)$") {
                 throw "$Path line ${lineNo}: '$($fields[0])' is not MODULE!SYMBOL"
             }
-            $flavors = $fields[1].ToLower()
+            $flavors = $fields[1].ToLowerInvariant()
             # "both" was this column's word for "every flavor" while there were
             # two of them. Task 13-L.1 made three, so the word is "all" and
             # "both" is refused rather than reinterpreted: a row silently read
@@ -566,7 +566,7 @@ function Read-AllowFile {
             if ($flavors -notin @("release", "qemu", "all")) {
                 throw "$Path line ${lineNo}: FLAVORS must be release, qemu or all"
             }
-            $requirement = $fields[2].ToLower()
+            $requirement = $fields[2].ToLowerInvariant()
             if ($requirement -notin @("required", "optional")) {
                 throw "$Path line ${lineNo}: REQUIREMENT must be required or optional"
             }
@@ -582,7 +582,7 @@ function Read-AllowFile {
             # without it is unrestricted.
             $sites = @()
             if ($notes -match "^SITES=(\S*)") {
-                $sites = @($Matches[1].ToLower() -split "," | Where-Object { $_ -ne "" })
+                $sites = @($Matches[1].ToLowerInvariant() -split "," | Where-Object { $_ -ne "" })
                 if ($sites.Count -eq 0 -or @($sites | Where-Object { $_ -notmatch "^[a-z0-9_]+\.obj$" }).Count -gt 0) {
                     throw "$Path line ${lineNo}: SITES= must list object file names (name.obj), comma separated"
                 }
@@ -753,7 +753,7 @@ function Get-Win98Precedent {
             if (-not $pair.ByName) {
                 continue
             }
-            $key = $pair.Module.ToLower() + "!" + $pair.Symbol
+            $key = $pair.Module.ToLowerInvariant() + "!" + $pair.Symbol
             if (-not $map.ContainsKey($key)) {
                 $map[$key] = @()
             }
@@ -857,6 +857,40 @@ function Join-CSplices {
     return [regex]::Replace($joined, "(?m)^[ \t]*#[ \t]*(undef|ifdef|ifndef)\b[^\r\n]*", " ")
 }
 
+function Get-RepoIncludeClosure {
+    # The repository's own headers $Files reach through #include "...",
+    # transitively: each name resolved against the including file's own
+    # directory first, then each of $SearchDirs (the image's directory and its
+    # sources' INCLUDES), as the compiler looks; a name that resolves to no
+    # file under $Root is a DDK or runtime header and is not followed.
+    param([string[]]$Files, [string[]]$SearchDirs, [string]$Root)
+    $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+    $seen = @{}
+    $out = @()
+    $queue = New-Object System.Collections.Queue
+    foreach ($f in $Files) { if (Test-Path -LiteralPath $f -PathType Leaf) { $queue.Enqueue([System.IO.Path]::GetFullPath($f)) } }
+    while ($queue.Count -gt 0) {
+        $f = $queue.Dequeue()
+        $text = [System.IO.File]::ReadAllText($f)
+        $text = [regex]::Replace($text, '(?s)/\*.*?\*/', ' ')
+        foreach ($m in [regex]::Matches($text, '(?m)^[ \t]*#[ \t]*include[ \t]*"([^"\r\n]+)"')) {
+            $name = $m.Groups[1].Value.Replace('/', '\')
+            $found = $null
+            foreach ($d in @((Split-Path -Parent $f)) + @($SearchDirs)) {
+                $cand = [System.IO.Path]::GetFullPath((Join-Path $d $name))
+                if (Test-Path -LiteralPath $cand -PathType Leaf) { $found = $cand; break }
+            }
+            if ($null -eq $found -or -not $found.StartsWith($rootFull, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+            $key = $found.ToLowerInvariant()
+            if ($seen.ContainsKey($key)) { continue }
+            $seen[$key] = $true
+            $out += $found
+            $queue.Enqueue($found)
+        }
+    }
+    return $out
+}
+
 function Test-ImportSitesFromSource {
     param(
         [string]$ImagePath,
@@ -866,29 +900,52 @@ function Test-ImportSitesFromSource {
 
     $srcDir = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $ImagePath))
     $checked = 0
-    # A restricted name in a header, at any depth below the sources, can reach
-    # any object through a macro, and no per-file scan can attribute it, so
-    # none is allowed in one (task 26-A.2).
-    foreach ($header in @(Get-ChildItem -LiteralPath $srcDir -Filter "*.h" -File -Recurse -ErrorAction SilentlyContinue)) {
-        $headerText = Join-CSplices ([System.IO.File]::ReadAllText($header.FullName))
-        foreach ($row in $SiteRows) {
-            if ($headerText -cmatch ("\b" + [regex]::Escape($row.Symbol) + "\b")) {
-                Add-Failure "$($row.Module)!$($row.Symbol) is named in the header $($header.FullName): a macro there could reach any object, so a SITES-restricted name may not appear in a header (source scan, the objects being LTCG)."
-            }
-        }
-    }
     # A SOURCES entry may name a file of another directory by path (src\cm's
     # ..\xhci_log.c, roadmap-usb4.md task 39-A.1): its object is found by the
-    # path the build compiled, not by the directory the image is in.
+    # path the build compiled, not by the directory the image is in. The list
+    # is read as source-stamp.ps1 reads it, the end of the file included.
     $byPath = @{}
+    $includeDirs = @($srcDir)
     $sourcesFile = Join-Path $srcDir "sources"
     if (Test-Path -LiteralPath $sourcesFile) {
-        $m = [regex]::Match([System.IO.File]::ReadAllText($sourcesFile), '(?ms)^SOURCES\s*=(.*?)(?:\r?\n\r?\n|\r?\n[A-Z])')
+        $sourcesText = [System.IO.File]::ReadAllText($sourcesFile)
+        $m = [regex]::Match($sourcesText, '(?ms)^SOURCES\s*=(.*?)(?:\r?\n\r?\n|\r?\n[A-Z]|\r?\n?\z)')
         if ($m.Success) {
             foreach ($tok in ([regex]::Replace($m.Groups[1].Value, '\\[ \t]*\r?\n', ' ') -split '\s+')) {
                 if ($tok -match '\.c$') {
                     $byPath[[System.IO.Path]::GetFileNameWithoutExtension($tok).ToLowerInvariant()] = Join-Path $srcDir $tok
                 }
+            }
+        }
+        $im = [regex]::Match($sourcesText, '(?m)^INCLUDES\s*=([^\r\n]*)')
+        if ($im.Success) {
+            foreach ($d in ($im.Groups[1].Value -split '[;\s]+')) {
+                if ($d -ne "" -and $d -notmatch '\$\(') { $includeDirs += (Join-Path $srcDir $d) }
+            }
+        }
+    }
+    # A restricted name in a header can reach any object through a macro, and
+    # no per-file scan can attribute it, so none is allowed in one (task
+    # 26-A.2): every header at any depth below the sources, and every header
+    # of this repository the compiled sources include, wherever it is - a
+    # sub-driver's ..\xhci_*.h and the networking images' headers two levels
+    # up included.
+    $compiled = @()
+    foreach ($obj in $Objects) {
+        $stem = [System.IO.Path]::GetFileNameWithoutExtension($obj.Name)
+        $compiled += $(if ($byPath.ContainsKey($stem.ToLowerInvariant())) { $byPath[$stem.ToLowerInvariant()] } else { Join-Path $srcDir ($stem + ".c") })
+    }
+    $headers = @{}
+    foreach ($h in @(Get-ChildItem -LiteralPath $srcDir -Filter "*.h" -File -Recurse -ErrorAction SilentlyContinue)) { $headers[$h.FullName.ToLowerInvariant()] = $h.FullName }
+    # The repository root bounds the closure ($repo; the self-tests, which
+    # load this function alone, set their own or fall back to the sources).
+    $closureRoot = if ((Test-Path variable:repo) -and -not [string]::IsNullOrEmpty($repo)) { $repo } else { $srcDir }
+    foreach ($h in @(Get-RepoIncludeClosure -Files $compiled -SearchDirs $includeDirs -Root $closureRoot)) { $headers[$h.ToLowerInvariant()] = $h }
+    foreach ($headerPath in @($headers.Values | Sort-Object)) {
+        $headerText = Join-CSplices ([System.IO.File]::ReadAllText($headerPath))
+        foreach ($row in $SiteRows) {
+            if ($headerText -cmatch ("\b" + [regex]::Escape($row.Symbol) + "\b")) {
+                Add-Failure "$($row.Module)!$($row.Symbol) is named in the header ${headerPath}: a macro there could reach any object, so a SITES-restricted name may not appear in a header (source scan, the objects being LTCG)."
             }
         }
     }
@@ -906,7 +963,7 @@ function Test-ImportSitesFromSource {
                 continue
             }
             $checked++
-            if ($row.Sites -notcontains $obj.Name.ToLower()) {
+            if ($row.Sites -notcontains $obj.Name.ToLowerInvariant()) {
                 Add-Failure "$($row.Module)!$($row.Symbol) is named in $source, but its allowlist row restricts it to SITES=$($row.Sites -join ',') (design record 13 section 7.5; a source scan, the objects being LTCG)."
             }
         }
@@ -952,7 +1009,7 @@ function Test-ImportSites {
                 continue
             }
             $checked++
-            if ($row.Sites -notcontains $obj.Name.ToLower()) {
+            if ($row.Sites -notcontains $obj.Name.ToLowerInvariant()) {
                 Add-Failure "$($row.Module)!$($row.Symbol) is referenced from $($obj.Name), but its allowlist row restricts it to SITES=$($row.Sites -join ',') (design record 13 section 7.5)."
             }
         }
@@ -1084,7 +1141,7 @@ function Test-Net98Rows {
             if ($row.Notes -notmatch '(^|[;\s])bc-header([;\s]|$)') {
                 Add-Failure "net98: NDIS.SYS!$($row.Symbol) carries no bc-header tag."
             } elseif ($null -ne $headerText -and
-                      $headerText -notmatch ('(?m)^[ \t]*[A-Za-z_][\w \t\*]*\r?\n[ \t]*' + [regex]::Escape($row.Symbol) + '\s*\(')) {
+                      $headerText -cnotmatch ('(?m)^[ \t]*[A-Za-z_][\w \t\*]*\r?\n[ \t]*' + [regex]::Escape($row.Symbol) + '\s*\(')) {
                 # A prototype as the header writes them: the return type on
                 # its own line, the name at the head of the next. A macro
                 # (#define NAME) or a commented signature is not one.
@@ -1144,7 +1201,7 @@ function Test-Net6Rows {
             if ($row.Notes -notmatch '(^|[;\s])ndis620-header([;\s]|$)') {
                 Add-Failure "net6: NDIS.SYS!$($row.Symbol) carries no ndis620-header tag."
             } elseif ($null -ne $headerText -and
-                      $headerText -notmatch ('(?m)^[ \t]*[A-Za-z_][\w \t\*]*\r?\n[ \t]*' + [regex]::Escape($row.Symbol) + '\s*\(')) {
+                      $headerText -cnotmatch ('(?m)^[ \t]*[A-Za-z_][\w \t\*]*\r?\n[ \t]*' + [regex]::Escape($row.Symbol) + '\s*\(')) {
                 Add-Failure "net6: NDIS.SYS!$($row.Symbol) is tagged ndis620-header but WDK 7.1's ndis.h declares no routine of that name."
             }
             continue
@@ -1276,7 +1333,7 @@ function Test-Image {
             continue
         }
 
-        $matched[($row.Module.ToLower() + "!" + $row.Symbol)] = $true
+        $matched[($row.Module.ToLowerInvariant() + "!" + $row.Symbol)] = $true
 
         $evidence = @()
 
@@ -1319,7 +1376,7 @@ function Test-Image {
         }
 
         if ($null -ne $Precedent) {
-            $key = $pair.Module.ToLower() + "!" + $pair.Symbol
+            $key = $pair.Module.ToLowerInvariant() + "!" + $pair.Symbol
             if ($Precedent.Map.ContainsKey($key)) {
                 $evidence += "win98-precedent " + (($Precedent.Map[$key] | Sort-Object -Unique) -join "/")
             }
@@ -1421,7 +1478,7 @@ function Test-Image {
         if ($row.Flavors -ne "all" -and $row.Flavors -ne $ImageFlavor) {
             continue
         }
-        if (-not $matched.ContainsKey(($row.Module.ToLower() + "!" + $row.Symbol))) {
+        if (-not $matched.ContainsKey(($row.Module.ToLowerInvariant() + "!" + $row.Symbol))) {
             Add-Failure "$($row.Module)!$($row.Symbol) is required in the $ImageFlavor build but is not imported ($($row.Source))."
         }
     }
@@ -1464,6 +1521,7 @@ try {
     # run never touches it and never warns about baselines it does not need.
     $rulesByArch = @{ "x86" = $rules }
     $script:nt52 = $null
+    $script:amd64Sets = @()
 
     $images = @()
     if ($Image.Count -gt 0) {
@@ -1789,6 +1847,12 @@ Fix it one of these ways:
                     $script:nt52 = Get-Win2kBaseline -Dir $Amd64Dir -Dumpbin $imageDumpbin `
                         -ManifestRows $amd64Manifest -Label "NT 5.2 amd64" `
                         -ExtractSwitch "-Force -Amd64Iso <path>"
+                    # Which sets were really loaded, so that neither the
+                    # summary nor an import's evidence names one that was not
+                    # (the net6 run below merges the 8.1 and 10 sets into the
+                    # same table, NT 5.2's or a new one).
+                    $script:amd64Sets = @()
+                    if ($null -ne $script:nt52) { $script:amd64Sets += "NT 5.2 amd64" }
                     if ($GateProfile -eq "net6") {
                         # xhcinet6.sys x64 (record 35 section 7.9): every
                         # committed 8.1 and 10 x64 set required on top of
@@ -1809,19 +1873,26 @@ Fix it one of these ways:
                                     $script:nt52[$provider][$binary] = $extra.Baseline[$provider][$binary]
                                 }
                             }
+                            foreach ($set in $sets) {
+                                if ($extra.Missing -notcontains $set.Label) { $script:amd64Sets += $set.Label }
+                            }
                         }
                     }
-                    if ($null -eq $script:nt52) {
-                        Add-Warning "none of the authenticated NT 5.2 amd64 kernel/HAL baselines are present in '$Amd64Dir' - the resolution half of the amd64 gate did not run."
-                    } else {
-                        Write-Ok ("NT 5.2 amd64 baseline: kernels {0}; HAL {1} (versions, lengths and SHA256 authenticated)" -f `
+                    if ($script:amd64Sets -notcontains "NT 5.2 amd64") {
+                        Add-Warning "none of the authenticated NT 5.2 amd64 kernel/HAL baselines are present in '$Amd64Dir' - the NT 5.2 half of the amd64 gate's resolution did not run."
+                    }
+                    if ($script:amd64Sets.Count -gt 0) {
+                        Write-Ok ("amd64 baselines {0}: kernels {1}; HAL {2} (versions, lengths and SHA256 authenticated)" -f `
+                            ($script:amd64Sets -join ", "), `
                             (($script:nt52["ntoskrnl.exe"].Keys | Sort-Object) -join ", "), `
                             (($script:nt52["hal.dll"].Keys | Sort-Object) -join ", "))
+                    } else {
+                        $script:nt52 = $null
                     }
                 }
             }
             Test-Image -Path $path -ImageFlavor $imageFlavor -Rules $rulesByArch["amd64"] -Dumpbin $imageDumpbin `
-                -Win2k $script:nt52 -BaselineLabel $(if ($GateProfile -eq "net6") { "NT 5.2 amd64 / 8.1 / 10 x64" } else { "NT 5.2 amd64" }) `
+                -Win2k $script:nt52 -BaselineLabel $(if (@($script:amd64Sets).Count -gt 0) { $script:amd64Sets -join " / " } else { "NT 5.2 amd64" }) `
                 -Precedent $null -NtkernText $null -ImageArch "amd64"
         } else {
             Test-Image -Path $path -ImageFlavor $imageFlavor -Rules $rules -Dumpbin $imageDumpbin `

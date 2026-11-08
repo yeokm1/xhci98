@@ -428,19 +428,20 @@ ULONG HcdSsHubPortReset(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     if (kind == XHCI_SSHUB_RESET_NONE) {
         return 0;
     }
+    /* An older reset's change cleared first, so the one that ends this
+     * reset is this reset's (XhciSsHubResetProgress), as the USB 2.0 hub
+     * port's reset does - and before the warm budget is charged, so a
+     * clear the hub refuses sends no reset and spends nothing. */
+    stale = change & (XHCI_SSHUB_C_PORT_RESET | XHCI_SSHUB_C_BH_PORT_RESET);
+    if (stale != 0 && hcdSsHubClear(hc, hub, n, stale) != stale) {
+        return 0;
+    }
     if (kind == XHCI_SSHUB_RESET_WARM && !hcdSsHubWarmAllowed(hc, hub, n)) {
         return 0;
     }
     XHCI_DBG_VALUE("hcd: SS hub port reset, hub/port/warm/link",
                    (hub->Index << 24) | (n << 16) | (kind << 8) |
                        XhciSsHubLinkState(status));
-    /* An older reset's change cleared first, so the one that ends this
-     * reset is this reset's (XhciSsHubResetProgress), as the USB 2.0 hub
-     * port's reset does. */
-    stale = change & (XHCI_SSHUB_C_PORT_RESET | XHCI_SSHUB_C_BH_PORT_RESET);
-    if (stale != 0 && hcdSsHubClear(hc, hub, n, stale) != stale) {
-        return 0;
-    }
     if (!hcdSsHubFeature(hc, hub, n, 1,
                          kind == XHCI_SSHUB_RESET_WARM
                              ? XHCI_SSHUB_FEAT_BH_PORT_RESET
@@ -608,6 +609,7 @@ ULONG HcdSsHubPortRecover(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
     ULONG change;
     ULONG warmSeen;
     ULONG progress;
+    ULONG stale;
 
     q = HcdHubPort(hc, hub, n);
     if (!q->HubSsRecover) {
@@ -621,6 +623,16 @@ ULONG HcdSsHubPortRecover(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
         XHCI_DBG_VALUE("hcd: SS hub port still held, warm reset deferred",
                        (hub->Index << 8) | n);
         hub->Changed |= 1UL << n;
+        return 0;
+    }
+    /* As HcdSsHubPortReset: an older reset's change cleared first, so the
+     * one that ends this warm reset is its own, and a clear the hub
+     * refuses sends nothing and charges nothing. */
+    if (!HcdHubPortStatus(hc, hub, n, &status, &change)) {
+        return 0;
+    }
+    stale = change & (XHCI_SSHUB_C_PORT_RESET | XHCI_SSHUB_C_BH_PORT_RESET);
+    if (stale != 0 && hcdSsHubClear(hc, hub, n, stale) != stale) {
         return 0;
     }
     if (!hcdSsHubWarmAllowed(hc, hub, n) ||

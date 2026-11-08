@@ -956,6 +956,276 @@ static void test_reset(void)
     XhciPirqReset(NULL);
 }
 
+/* ---- the chipset-routed GSI offer (task 47.33) ----------------------- */
+
+/* The HP EliteBook 8470p (issue 25; the owner's QUALREP): xHCI 8086:1E31,
+ * subsystem 103C:179B, pin INTA (line 10), LPC 8086:1E55, RCBA FED1C000,
+ * D20IP INTA, D20IR 3210 (INTA to PIRQA). */
+#define HP8470_XHCI      0x1E318086UL
+#define HP8470_SUBSYSTEM 0x179B103CUL
+#define HP8470_LPC       0x1E558086UL
+/* DevicePropertyAddress for a slot number written as the PCI_SLOT_NUMBER
+ * the tests used to name (device 4:0, function 7:5). */
+#define OFFER_AT(slot) ((((ULONG)(slot) & 0x1FUL) << 16) | \
+                        (((ULONG)(slot) >> 5) & 0x7UL))
+
+static void fakeHp(FAKE_PC *f, XHCI_PIRQ_IO *io, ULONG subsystem)
+{
+    XHCI_PIRQ_IRQ irq;
+
+    fakeInit(f, io, &irq);
+    f->OwnId = HP8470_XHCI;
+    f->OwnBar0 = 0xD4720004UL;
+    f->OwnSubsystem = subsystem;
+    f->OwnInterrupt = 0x0000010AUL;
+    fakeSlots(f);
+    fakeLpc(f, HP8470_LPC, 0xFED1C001UL, 0x0A0A050AUL, 0x800A800BUL);
+    f->D20ip = 0x00000021UL;
+    f->D20ir = 0x3210U;
+    f->Count = 0;
+}
+
+static void test_offer(void)
+{
+    FAKE_PC f;
+    XHCI_PIRQ_IO io;
+    XHCI_PIRQ_OFFER st;
+    XHCI_PIRQ_IRQ irq;
+
+    /* Windows 2000's strip (record 18 section 16.4): 2000, the run's
+     * identity guards passed, a listed board - all three. */
+    CHECK_EQ(XhciPirqW2kStrip(1, XHCI_PIRQ_O_OFFERED, 1), 1,
+             "2000, offered, listed: stripped");
+    CHECK_EQ(XhciPirqW2kStrip(0, XHCI_PIRQ_O_OFFERED, 1), 0,
+             "XP or XP x64: never");
+    CHECK_EQ(XhciPirqW2kStrip(1, XHCI_PIRQ_O_OFFERED, 0), 0,
+             "2000, an unlisted board (value 2): not stripped");
+    CHECK_EQ(XhciPirqW2kStrip(1, XHCI_PIRQ_O_OFF, 1), 0,
+             "value 0: not stripped");
+    CHECK_EQ(XhciPirqW2kStrip(1, XHCI_PIRQ_O_D20IR_UNREAD, 1), 1,
+             "D20IR unread, listed: still stripped");
+    CHECK_EQ(XhciPirqW2kStrip(1, XHCI_PIRQ_O_MAP_FAILED, 1), 1,
+             "the window's mapping failed, listed: still stripped");
+    CHECK_EQ(XhciPirqW2kStrip(1, XHCI_PIRQ_O_LPC_UNREAD, 1), 1,
+             "the LPC unread, listed: still stripped");
+    CHECK_EQ(XhciPirqW2kStrip(1, XHCI_PIRQ_O_RCBA_INVALID, 1), 1,
+             "RCBA invalid, listed: still stripped");
+    CHECK_EQ(XhciPirqW2kStrip(1, XHCI_PIRQ_O_PIN, 1), 1,
+             "another pin, listed: still stripped");
+    CHECK_EQ(XhciPirqW2kStrip(1, XHCI_PIRQ_O_LPC_UNLISTED, 1), 1,
+             "an unreviewed pair, listed: still stripped");
+    CHECK_EQ(XhciPirqW2kStrip(0, XHCI_PIRQ_O_MAP_FAILED, 1), 0,
+             "XP, the mapping failed: never");
+    CHECK_EQ(XhciPirqW2kStrip(1, XHCI_PIRQ_O_MAP_FAILED, 0), 0,
+             "2000, the mapping failed, unlisted: not stripped");
+    CHECK_EQ(XhciPirqW2kStrip(1, XHCI_PIRQ_O_NOT_REVIEWED, 1), 0,
+             "an unreviewed controller: not stripped");
+    CHECK_EQ(XhciPirqW2kStrip(1, XHCI_PIRQ_O_OWN_UNREAD, 1), 0,
+             "00:14.0's header unread: not stripped");
+    CHECK_EQ(XhciPirqW2kStrip(1, XHCI_PIRQ_O_NOT_SLOT, 1), 0,
+             "not at 00:14.0: not stripped");
+    CHECK_EQ(XhciPirqW2kStrip(1, XHCI_PIRQ_O_NONE, 1), 0,
+             "the run not made: not stripped");
+    CHECK_EQ(XhciPirqW2kStrip(1, XHCI_PIRQ_O_NOT_AT_SLOT, 1), 0,
+             "not the function at 00:14.0: not stripped");
+    CHECK_EQ(XhciPirqW2kStrip(1, XHCI_PIRQ_O_QEMU, 1), 0,
+             "the qemu injection alone: not stripped");
+
+    CHECK_EQ(XhciPirqNoRouteMode(1, 0), XHCI_PIRQ_NR_OFF, "0 off");
+    CHECK_EQ(XhciPirqNoRouteMode(1, 1), XHCI_PIRQ_NR_LISTED, "1 table");
+    CHECK_EQ(XhciPirqNoRouteMode(1, 2), XHCI_PIRQ_NR_REVIEWED, "2 any");
+    CHECK_EQ(XhciPirqNoRouteMode(1, 3), XHCI_PIRQ_NR_LISTED, "3 is 1");
+    CHECK_EQ(XhciPirqNoRouteMode(0, 0), XHCI_PIRQ_NR_LISTED, "absent is 1");
+    CHECK_EQ(XhciPirqNoRouteListed(HP8470_XHCI, HP8470_SUBSYSTEM), 1,
+             "the 8470p");
+    CHECK_EQ(XhciPirqNoRouteListed(HP8470_XHCI, 0x17A7103CUL), 1,
+             "the 8570p (17A7)");
+    CHECK_EQ(XhciPirqNoRouteListed(HP8470_XHCI, 0x17AB103CUL), 1,
+             "the 8570p (17AB)");
+    CHECK_EQ(XhciPirqNoRouteListed(HP8470_XHCI, 0x17DF103CUL), 1,
+             "the 2570p");
+    CHECK_EQ(XhciPirqNoRouteListed(HP8470_XHCI, 0x176C103CUL), 1,
+             "the 8770w");
+    CHECK_EQ(XhciPirqNoRouteListed(HP8470_XHCI, 0x176B103CUL), 1,
+             "the 8570w");
+    CHECK_EQ(XhciPirqNoRouteListed(HP8470_XHCI, 0x1815103CUL), 0,
+             "the 2170p (1815): not listed");
+    CHECK_EQ(XhciPirqNoRouteListed(HP8470_XHCI, 0x179B1028UL), 0,
+             "179B under another vendor");
+    CHECK_EQ(XhciPirqNoRouteListed(0x1E318087UL, HP8470_SUBSYSTEM), 0,
+             "another vendor's 1E31");
+    /* The 8470p at value 1: offered, its own D20IR deciding the GSI. */
+    fakeHp(&f, &io, HP8470_SUBSYSTEM);
+    CHECK_EQ(XhciPirqOffer(&io, 0, OFFER_AT(20), f.OwnId,
+                           f.OwnSubsystem, XHCI_PIRQ_NR_LISTED, &st),
+             XHCI_PIRQ_O_OFFERED, "8470p at 1: offered");
+    CHECK_EQ(st.Gsi, 16, "8470p at 1: GSI 16");
+    CHECK_EQ(fakeCount(&f, 'w'), 0, "8470p at 1: nothing written");
+    CHECK_EQ(f.Mapped, 0, "8470p at 1: nothing left mapped");
+    /* The 8570w at value 1, offered; every guard still in force: an
+     * unlisted LPC refuses it. */
+    fakeHp(&f, &io, 0x176B103CUL);
+    CHECK_EQ(XhciPirqOffer(&io, 0, OFFER_AT(20), f.OwnId,
+                           f.OwnSubsystem, XHCI_PIRQ_NR_LISTED, &st),
+             XHCI_PIRQ_O_OFFERED, "8570w at 1: offered");
+    fakeHp(&f, &io, 0x176B103CUL);
+    fakeLpc(&f, 0x1E4F8086UL, 0xFED1C001UL, 0x0A0A050AUL, 0x800A800BUL);
+    CHECK_EQ(XhciPirqOffer(&io, 0, OFFER_AT(20), f.OwnId,
+                           f.OwnSubsystem, XHCI_PIRQ_NR_LISTED, &st),
+             XHCI_PIRQ_O_LPC_UNLISTED, "8570w, unlisted LPC: refused");
+    CHECK_EQ(XhciPirqNoRouteListed(HP8470_XHCI, 0x062D1028UL), 0,
+             "a Dell subsystem");
+    CHECK_EQ(XhciPirqNoRouteListed(0x8C318086UL, HP8470_SUBSYSTEM), 0,
+             "an HP 8-series xHCI: not value 1's");
+
+    /* The 8470p at value 2: PIRQA, GSI 16, read-only. */
+    fakeHp(&f, &io, HP8470_SUBSYSTEM);
+    CHECK_EQ(XhciPirqOffer(&io, 0, OFFER_AT(20), f.OwnId,
+                           f.OwnSubsystem, XHCI_PIRQ_NR_REVIEWED, &st),
+             XHCI_PIRQ_O_OFFERED, "8470p: offered");
+    CHECK_EQ(st.Gsi, 16, "GSI 16");
+    CHECK_EQ(st.Pirq, 0, "PIRQA");
+    CHECK_EQ(st.LpcId, HP8470_LPC, "the LPC read");
+    CHECK_EQ(st.D20ir, 0x3210, "D20IR read");
+    CHECK_EQ(fakeCount(&f, 'w'), 0, "nothing written");
+    CHECK_EQ(fakeCount(&f, 'o'), 0, "no own-config IRP: the bus-data path");
+    CHECK_EQ(f.Maps, 1, "mapped once");
+    CHECK_EQ(f.Unmaps, 1, "and unmapped");
+    CHECK_EQ(f.Mapped, 0, "nothing left mapped");
+
+    /* An HP board no list names (the 2170p's 1815): no offer at 1; at 2
+     * its own D20IR decides the GSI. */
+    fakeHp(&f, &io, 0x1815103CUL);
+    CHECK_EQ(XhciPirqOffer(&io, 0, OFFER_AT(20), f.OwnId,
+                           f.OwnSubsystem, XHCI_PIRQ_NR_LISTED, &st),
+             XHCI_PIRQ_O_NOT_ADMITTED, "unknown HP subsystem at 1: none");
+    fakeHp(&f, &io, 0x1815103CUL);
+    f.D20ir = 0x3215U;
+    CHECK_EQ(XhciPirqOffer(&io, 0, OFFER_AT(20), f.OwnId,
+                           f.OwnSubsystem, XHCI_PIRQ_NR_REVIEWED, &st),
+             XHCI_PIRQ_O_OFFERED, "unknown HP subsystem at 2: offered");
+    CHECK_EQ(st.Gsi, 21, "IAR 5: PIRQF, GSI 21");
+
+    /* Not HP at value 1: no offer; at value 2, any reviewed pair. */
+    fakeHp(&f, &io, 0x062D1028UL);
+    CHECK_EQ(XhciPirqOffer(&io, 0, OFFER_AT(20), f.OwnId,
+                           f.OwnSubsystem, XHCI_PIRQ_NR_LISTED, &st),
+             XHCI_PIRQ_O_NOT_ADMITTED, "non-HP at 1: not admitted");
+    CHECK_EQ(st.Gsi, XHCI_PIRQ_NO_GSI, "no GSI");
+    CHECK_EQ(f.Maps, 0, "nothing mapped");
+    fakeHp(&f, &io, 0x062D1028UL);
+    CHECK_EQ(XhciPirqOffer(&io, 0, OFFER_AT(20), f.OwnId,
+                           f.OwnSubsystem, XHCI_PIRQ_NR_REVIEWED, &st),
+             XHCI_PIRQ_O_OFFERED, "non-HP at 2: offered");
+
+    /* The E7250 (a reviewed 9-series pair, Dell): value 2 only. */
+    fakeInit(&f, &io, &irq);
+    f.Count = 0;
+    CHECK_EQ(XhciPirqOffer(&io, 0, OFFER_AT(20), f.OwnId,
+                           f.OwnSubsystem, XHCI_PIRQ_NR_LISTED, &st),
+             XHCI_PIRQ_O_NOT_ADMITTED, "E7250 at 1: not admitted");
+    f.Count = 0;
+    CHECK_EQ(XhciPirqOffer(&io, 0, OFFER_AT(20), f.OwnId,
+                           f.OwnSubsystem, XHCI_PIRQ_NR_REVIEWED, &st),
+             XHCI_PIRQ_O_OFFERED, "E7250 at 2: offered");
+    CHECK_EQ(st.Gsi, 16, "its D20IR 3210: GSI 16");
+
+    /* Value 0, and every check in order (at value 2, past value 1's
+     * list). */
+    fakeHp(&f, &io, HP8470_SUBSYSTEM);
+    CHECK_EQ(XhciPirqOffer(&io, 0, OFFER_AT(20), f.OwnId,
+                           f.OwnSubsystem, XHCI_PIRQ_NR_OFF, &st),
+             XHCI_PIRQ_O_OFF, "value 0: off");
+    CHECK_EQ(f.Count, 0, "value 0 reads nothing");
+    CHECK_EQ(XhciPirqOffer(&io, 0, OFFER_AT(3), f.OwnId,
+                           f.OwnSubsystem, XHCI_PIRQ_NR_REVIEWED, &st),
+             XHCI_PIRQ_O_NOT_SLOT, "another slot");
+    CHECK_EQ(XhciPirqOffer(&io, 1, OFFER_AT(20), f.OwnId,
+                           f.OwnSubsystem, XHCI_PIRQ_NR_REVIEWED, &st),
+             XHCI_PIRQ_O_NOT_SLOT, "another bus");
+    CHECK_EQ(XhciPirqOffer(&io, 0, OFFER_AT(20 | (1 << 5)), f.OwnId,
+                           f.OwnSubsystem, XHCI_PIRQ_NR_REVIEWED, &st),
+             XHCI_PIRQ_O_NOT_SLOT, "function 1");
+    CHECK_EQ(f.Count, 0, "nothing read for another location");
+    CHECK_EQ(XhciPirqOffer(&io, 0, OFFER_AT(20), f.OwnId, 0x17A7103CUL,
+                           XHCI_PIRQ_NR_REVIEWED, &st),
+             XHCI_PIRQ_O_NOT_AT_SLOT, "00:14.0 another function's");
+    CHECK_EQ(f.Maps, 0, "nothing past it");
+    f.Slot14Bytes = 8;
+    CHECK_EQ(XhciPirqOffer(&io, 0, OFFER_AT(20), f.OwnId,
+                           f.OwnSubsystem, XHCI_PIRQ_NR_REVIEWED, &st),
+             XHCI_PIRQ_O_OWN_UNREAD, "00:14.0 short");
+    fakeHp(&f, &io, HP8470_SUBSYSTEM);
+    f.OwnId = 0x000D1B36UL;
+    fakeSlots(&f);
+    CHECK_EQ(XhciPirqOffer(&io, 0, OFFER_AT(20), f.OwnId,
+                           f.OwnSubsystem, XHCI_PIRQ_NR_REVIEWED, &st),
+             XHCI_PIRQ_O_NOT_REVIEWED, "QEMU's xHCI: not reviewed");
+    CHECK_EQ(fakeCount(&f, 's'), 1, "no LPC read");
+    fakeHp(&f, &io, HP8470_SUBSYSTEM);
+    f.Slot1FBytes = 0x40;
+    CHECK_EQ(XhciPirqOffer(&io, 0, OFFER_AT(20), f.OwnId,
+                           f.OwnSubsystem, XHCI_PIRQ_NR_REVIEWED, &st),
+             XHCI_PIRQ_O_LPC_UNREAD, "LPC short");
+    fakeHp(&f, &io, HP8470_SUBSYSTEM);
+    fakeLpc(&f, 0x8C4F8086UL, 0xFED1C001UL, 0, 0);
+    CHECK_EQ(XhciPirqOffer(&io, 0, OFFER_AT(20), f.OwnId,
+                           f.OwnSubsystem, XHCI_PIRQ_NR_REVIEWED, &st),
+             XHCI_PIRQ_O_LPC_UNLISTED, "an 8-series LPC beside 1E31");
+    fakeHp(&f, &io, HP8470_SUBSYSTEM);
+    fakeLpc(&f, HP8470_LPC, 0xFED1C000UL, 0, 0);
+    CHECK_EQ(XhciPirqOffer(&io, 0, OFFER_AT(20), f.OwnId,
+                           f.OwnSubsystem, XHCI_PIRQ_NR_REVIEWED, &st),
+             XHCI_PIRQ_O_RCBA_INVALID, "RCBA not enabled");
+    fakeHp(&f, &io, HP8470_SUBSYSTEM);
+    f.FailKind = 'm';
+    CHECK_EQ(XhciPirqOffer(&io, 0, OFFER_AT(20), f.OwnId,
+                           f.OwnSubsystem, XHCI_PIRQ_NR_REVIEWED, &st),
+             XHCI_PIRQ_O_MAP_FAILED, "map refused");
+    CHECK_EQ(f.Unmaps, 0, "nothing to unmap");
+    fakeHp(&f, &io, HP8470_SUBSYSTEM);
+    f.D20ip = 0x00000022UL;
+    CHECK_EQ(XhciPirqOffer(&io, 0, OFFER_AT(20), f.OwnId,
+                           f.OwnSubsystem, XHCI_PIRQ_NR_REVIEWED, &st),
+             XHCI_PIRQ_O_PIN, "D20IP: INTB");
+    CHECK_EQ(f.Unmaps, 1, "unmapped after a refusal");
+    CHECK_EQ(st.Gsi, XHCI_PIRQ_NO_GSI, "no GSI");
+    fakeHp(&f, &io, HP8470_SUBSYSTEM);
+    f.OwnInterrupt = 0x0000020AUL;
+    fakeSlots(&f);
+    CHECK_EQ(XhciPirqOffer(&io, 0, OFFER_AT(20), f.OwnId,
+                           f.OwnSubsystem, XHCI_PIRQ_NR_REVIEWED, &st),
+             XHCI_PIRQ_O_PIN, "own pin INTB");
+    fakeHp(&f, &io, HP8470_SUBSYSTEM);
+    f.FailKind = 'h';
+    f.FailWhere = XHCI_PIRQ_D20IR;
+    CHECK_EQ(XhciPirqOffer(&io, 0, OFFER_AT(20), f.OwnId,
+                           f.OwnSubsystem, XHCI_PIRQ_NR_REVIEWED, &st),
+             XHCI_PIRQ_O_D20IR_UNREAD, "D20IR refused");
+    fakeHp(&f, &io, HP8470_SUBSYSTEM);
+    f.D20ir = 0xFFFFU;
+    CHECK_EQ(XhciPirqOffer(&io, 0, OFFER_AT(20), f.OwnId,
+                           f.OwnSubsystem, XHCI_PIRQ_NR_REVIEWED, &st),
+             XHCI_PIRQ_O_D20IR_UNREAD, "D20IR all ones");
+    CHECK_EQ(st.Gsi, XHCI_PIRQ_NO_GSI, "no GSI");
+    fakeHp(&f, &io, HP8470_SUBSYSTEM);
+    f.D20ir = 0x321FU;
+    CHECK_EQ(XhciPirqOffer(&io, 0, OFFER_AT(20), f.OwnId,
+                           f.OwnSubsystem, XHCI_PIRQ_NR_REVIEWED, &st),
+             XHCI_PIRQ_O_OFFERED, "IAR 7 with bit 3 set");
+    CHECK_EQ(st.Gsi, 23, "PIRQH, GSI 23: IAR alone");
+    io.Slot = NULL;
+    CHECK_EQ(XhciPirqOffer(&io, 0, OFFER_AT(20), f.OwnId,
+                           f.OwnSubsystem, XHCI_PIRQ_NR_REVIEWED, &st),
+             XHCI_PIRQ_O_BAD_PARAM, "no slot reader");
+    CHECK_EQ(XhciPirqOffer(NULL, 0, OFFER_AT(20), f.OwnId,
+                           f.OwnSubsystem, XHCI_PIRQ_NR_REVIEWED, &st),
+             XHCI_PIRQ_O_BAD_PARAM, "no io");
+    CHECK_EQ(XhciPirqOffer(&io, 0, OFFER_AT(20), f.OwnId,
+                           f.OwnSubsystem, XHCI_PIRQ_NR_REVIEWED, NULL),
+             XHCI_PIRQ_O_BAD_PARAM, "no record");
+}
+
 int main(void)
 {
     test_mode();
@@ -970,6 +1240,7 @@ int main(void)
     test_write();
     test_latch();
     test_reset();
+    test_offer();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

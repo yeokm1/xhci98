@@ -34,8 +34,12 @@ Using it
                 misalignment test some disks refuse), Scattered (the
                 buffer's pages spread over memory as far as a program can;
                 the Stor98 page shows whether they were).
-  Pattern       Verifiable (every block checked after it is written),
-                Random, or Zeros.
+  Pattern       Verifiable (a pattern that can be checked), Random, or
+                Zeros.
+  Verify        with Verifiable: after each write test, what it wrote is
+                read back and checked. More... adds checking the data
+                during the timed reads, the whole file at the end, and
+                stopping on a data error.
   Depth         requests at once (Windows 2000 and later). On Windows 98
                 and ME file I/O waits for each request, so the depth is 1
                 there.
