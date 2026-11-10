@@ -237,6 +237,12 @@ int main(void)
            "read, disabled, still ready (a disable in progress): left");
     expect(PciScanFirmwareState(PCISCAN_READ_OK, 0xFFFFFFFFUL, 0xFFFFFFFFUL) == PCISCAN_FW_NO_ANSWER,
            "read, no answer (all ones): left");
+    expect(PciScanFirmwareState(PCISCAN_READ_OK, 0xFFFFFFFFUL, 0) == PCISCAN_FW_NO_ANSWER,
+           "CC alone all ones: no answer, never set up");
+    expect(PciScanFirmwareState(PCISCAN_READ_OK, 0, 0xFFFFFFFFUL) == PCISCAN_FW_NO_ANSWER,
+           "CSTS alone all ones: no answer");
+    expect(PciScanFirmwareState(PCISCAN_READ_OK, 0xFFFFFFFFUL, 0x00000001UL) == PCISCAN_FW_NO_ANSWER,
+           "CC all ones, CSTS ready: no answer, never set up");
     expect(PciScanFirmwareState(PCISCAN_READ_NONE, 0, 0) == PCISCAN_FW_UNREADABLE,
            "registers not reached (decode on or off): left");
     expect(PciScanFirmwareState(PCISCAN_READ_NOT_RESTORED, 0, 0) == PCISCAN_FW_NOT_RESTORED,
@@ -330,6 +336,127 @@ int main(void)
         how = PciScanReadFirmware(&f.Io, 0x0004, &cc, &csts, &on);
         expect(how == PCISCAN_READ_NOT_RESTORED && FakeLog(&f, "EC"),
                "short enable write and short write-back: not put back, left");
+    }
+
+    /* 9x (PLAN "Taking a controller the BIOS set up"): the user's option */
+    {
+        static const struct { const char *s; int want; } args[] = {
+            { NULL, PCISCAN_TAKE_NONE },
+            { "", PCISCAN_TAKE_NONE },
+            { "stortakefirmware=1", PCISCAN_TAKE_TAKE },
+            { "STORTAKEFIRMWARE=1", PCISCAN_TAKE_TAKE },
+            { "StorTakeFirmware=1;", PCISCAN_TAKE_TAKE },
+            { "stortakefirmware=0", PCISCAN_TAKE_LEAVE },
+            { "drv-as;stortakefirmware=1", PCISCAN_TAKE_TAKE },
+            { "a=1;stortakefirmware=1;b=2", PCISCAN_TAKE_TAKE },
+            { "notstortakefirmware=1", PCISCAN_TAKE_NONE },
+            { "x;notstortakefirmware=1", PCISCAN_TAKE_NONE },
+            { " stortakefirmware=1", PCISCAN_TAKE_NONE },
+            { "stortakefirmware =1", PCISCAN_TAKE_NONE },
+            { "stortakefirmware= 1", PCISCAN_TAKE_NONE },
+            { "stortakefirmware=", PCISCAN_TAKE_NONE },
+            { "stortakefirmware=;", PCISCAN_TAKE_NONE },
+            { "stortakefirmware=1x", PCISCAN_TAKE_NONE },
+            { "stortakefirmware=01", PCISCAN_TAKE_NONE },
+            { "stortakefirmware=10", PCISCAN_TAKE_NONE },
+            { "stortakefirmware=2", PCISCAN_TAKE_NONE },
+            { "stortakefirmware=1 ", PCISCAN_TAKE_NONE },
+            { "stortakefirmware", PCISCAN_TAKE_NONE },
+            { "stortakefirmware=1;stortakefirmware=1", PCISCAN_TAKE_TAKE },
+            { "stortakefirmware=1;stortakefirmware=0", PCISCAN_TAKE_LEAVE },
+            { "stortakefirmware=0;stortakefirmware=1", PCISCAN_TAKE_LEAVE },
+            { "stortakefirmware=2;stortakefirmware=1", PCISCAN_TAKE_TAKE },
+            { "stortakefirmware=1x;stortakefirmware=0", PCISCAN_TAKE_LEAVE },
+            { ";;stortakefirmware=1", PCISCAN_TAKE_TAKE },
+            { "stortakefirmware=1=1", PCISCAN_TAKE_NONE },
+            { "storgonems=5000;stortakefirmware=1;storwriteidlems=10", PCISCAN_TAKE_TAKE },
+            { "stortakefirmwar=1", PCISCAN_TAKE_NONE },
+        };
+        static const unsigned char d1[4] = { 1, 0, 0, 0 };
+        static const unsigned char d0[4] = { 0, 0, 0, 0 };
+        static const unsigned char d2[4] = { 2, 0, 0, 0 };
+        static const unsigned char d101[4] = { 1, 1, 0, 0 };
+        static const unsigned char dhi[4] = { 1, 0, 0, 1 };
+        static const int states[5] = { PCISCAN_FW_TAKE, PCISCAN_FW_SET_UP, PCISCAN_FW_NO_ANSWER,
+                                       PCISCAN_FW_UNREADABLE, PCISCAN_FW_NOT_RESTORED };
+        static const int argv3[3] = { PCISCAN_TAKE_NONE, PCISCAN_TAKE_LEAVE, PCISCAN_TAKE_TAKE };
+        static const int glob2[2] = { PCISCAN_TAKE_LEAVE, PCISCAN_TAKE_TAKE };
+        char what[96];
+        unsigned i;
+        int a, g, st, src, take, want, wsrc, me, refused;
+
+        for (i = 0; i < sizeof(args) / sizeof(args[0]); i++) {
+            sprintf(what, "AdapterSettings \"%s\": %d", args[i].s ? args[i].s : "(none)", args[i].want);
+            expect(PciScanTakeArg(args[i].s) == args[i].want, what);
+        }
+
+        expect(PciScanTakeGlobal(0, 4, d1, 4) == PCISCAN_TAKE_LEAVE, "global absent: leave");
+        expect(PciScanTakeGlobal(1, 4, d1, 4) == PCISCAN_TAKE_TAKE, "global DWORD 1: take");
+        expect(PciScanTakeGlobal(1, 4, d0, 4) == PCISCAN_TAKE_LEAVE, "global DWORD 0: leave");
+        expect(PciScanTakeGlobal(1, 4, d2, 4) == PCISCAN_TAKE_LEAVE, "global DWORD 2: leave");
+        expect(PciScanTakeGlobal(1, 4, d101, 4) == PCISCAN_TAKE_LEAVE, "global DWORD 0101h: leave");
+        expect(PciScanTakeGlobal(1, 4, dhi, 4) == PCISCAN_TAKE_LEAVE, "global DWORD 01000001h: leave");
+        expect(PciScanTakeGlobal(1, 4, d1, 2) == PCISCAN_TAKE_LEAVE, "global DWORD of 2 bytes: leave");
+        expect(PciScanTakeGlobal(1, 1, (const unsigned char *)"1", 2) == PCISCAN_TAKE_TAKE, "global \"1\" with its zero: take");
+        expect(PciScanTakeGlobal(1, 1, (const unsigned char *)"1", 1) == PCISCAN_TAKE_TAKE, "global \"1\" without its zero: take");
+        expect(PciScanTakeGlobal(1, 1, (const unsigned char *)"0", 2) == PCISCAN_TAKE_LEAVE, "global \"0\": leave");
+        expect(PciScanTakeGlobal(1, 1, (const unsigned char *)"01", 3) == PCISCAN_TAKE_LEAVE, "global \"01\": leave");
+        expect(PciScanTakeGlobal(1, 1, (const unsigned char *)"1 ", 3) == PCISCAN_TAKE_LEAVE, "global \"1 \": leave");
+        expect(PciScanTakeGlobal(1, 1, (const unsigned char *)" 1", 3) == PCISCAN_TAKE_LEAVE, "global \" 1\": leave");
+        expect(PciScanTakeGlobal(1, 1, (const unsigned char *)"1x", 3) == PCISCAN_TAKE_LEAVE, "global \"1x\": leave");
+        expect(PciScanTakeGlobal(1, 1, (const unsigned char *)"", 1) == PCISCAN_TAKE_LEAVE, "global \"\": leave");
+        expect(PciScanTakeGlobal(1, 3, d1, 4) == PCISCAN_TAKE_LEAVE, "global REG_BINARY 1: leave");
+        expect(PciScanTakeGlobal(1, 4, NULL, 4) == PCISCAN_TAKE_LEAVE, "global with no data: leave");
+
+        /* Every firmware state against every decision and source. */
+        for (st = 0; st < 5; st++) {
+            for (a = 0; a < 3; a++) {
+                for (g = 0; g < 2; g++) {
+                    take = PciScanTakeSetting(argv3[a], glob2[g], &src);
+                    want = argv3[a] != PCISCAN_TAKE_NONE ? argv3[a] : glob2[g];
+                    wsrc = argv3[a] != PCISCAN_TAKE_NONE ? PCISCAN_TAKESRC_ADAPTER : PCISCAN_TAKESRC_GLOBAL;
+                    sprintf(what, "state %d arg %d global %d: decision and source", states[st], argv3[a], glob2[g]);
+                    expect(take == want && src == wsrc, what);
+                    sprintf(what, "state %d arg %d global %d: taken only when not set up, or set up and taken",
+                            states[st], argv3[a], glob2[g]);
+                    expect(PciScanFirmwareTake(states[st], take) ==
+                           (states[st] == PCISCAN_FW_TAKE ||
+                            (states[st] == PCISCAN_FW_SET_UP && want == PCISCAN_TAKE_TAKE)), what);
+                }
+            }
+        }
+        expect(PciScanTakeSetting(PCISCAN_TAKE_LEAVE, PCISCAN_TAKE_TAKE, &src) == PCISCAN_TAKE_LEAVE &&
+               src == PCISCAN_TAKESRC_ADAPTER, "the controller's 0 against a global 1: left, the controller's");
+        expect(PciScanTakeSetting(PCISCAN_TAKE_TAKE, PCISCAN_TAKE_LEAVE, &src) == PCISCAN_TAKE_TAKE &&
+               src == PCISCAN_TAKESRC_ADAPTER, "the controller's 1 against a global 0: taken, the controller's");
+        expect(PciScanTakeSetting(PCISCAN_TAKE_NONE, PCISCAN_TAKE_LEAVE, &src) == PCISCAN_TAKE_LEAVE &&
+               src == PCISCAN_TAKESRC_GLOBAL, "no setting anywhere: left");
+        expect(!PciScanFirmwareTake(PCISCAN_FW_NO_ANSWER, PCISCAN_TAKE_TAKE), "no answer is never taken");
+        expect(!PciScanFirmwareTake(PCISCAN_FW_SET_UP, PCISCAN_TAKE_LEAVE), "set up, option off: left");
+        expect(PciScanFirmwareTake(PCISCAN_FW_SET_UP, PCISCAN_TAKE_TAKE), "set up, option on: taken");
+
+        /* Windows Me never takes (xhci98 48.28): every decision on both
+         * systems, from every source. */
+        for (a = 0; a < 3; a++) {
+            for (g = 0; g < 2; g++) {
+                for (me = 0; me < 2; me++) {
+                    take = PciScanTakeSetting(argv3[a], glob2[g], &src);
+                    want = take;
+                    take = PciScanTakeMe(take, me, &refused);
+                    sprintf(what, "arg %d global %d me %d: Me never takes, and says when it set a take aside",
+                            argv3[a], glob2[g], me);
+                    expect(take == (me ? PCISCAN_TAKE_LEAVE : want) &&
+                           refused == (me && want == PCISCAN_TAKE_TAKE), what);
+                    sprintf(what, "arg %d global %d me %d: a set-up controller on Me is left", argv3[a], glob2[g], me);
+                    expect(PciScanFirmwareTake(PCISCAN_FW_SET_UP, take) ==
+                           (!me && want == PCISCAN_TAKE_TAKE), what);
+                    expect(PciScanFirmwareTake(PCISCAN_FW_TAKE, take), "a controller not set up is taken on Me too");
+                }
+            }
+        }
+        refused = 7;
+        expect(PciScanTakeMe(PCISCAN_TAKE_LEAVE, 1, &refused) == PCISCAN_TAKE_LEAVE && refused == 0,
+               "Me, nothing to set aside: refused 0");
     }
 
     printf("%d failure(s)\n", failures);

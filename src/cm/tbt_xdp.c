@@ -274,11 +274,13 @@ ULONG TbtNetBuildLogin(PULONG out, const TBT_ROUTE *route,
     return 23;
 }
 
-/* IDS Table 5-6: "Responder MAC Address Hi is most significant 4 bytes";
- * the MAC as a 48-bit number, its first byte the most significant, so DW
- * 19 holds bytes 0 to 3 and DW 20 bytes 4 and 5 in its low half. Linux
- * packs the bytes otherwise and never reads the field (record 35 section
- * 2.4 point 8). */
+/* IDS Table 5-6: "Responder MAC Address Hi is most significant 4 bytes":
+ * DW 19 holds the MAC's first four bytes and DW 20 its last two, each DW's
+ * bytes taken from its least significant end, so the first byte is bits
+ * 7:0 of DW 19. Windows 11 packs it so (its Login Responses on the
+ * owner's bench, 2026-11-10) and so does Linux, which copies the six bytes
+ * over the two DWs in host order before each DW goes out big-endian
+ * (record 35 section 2.1). */
 ULONG TbtNetBuildLoginResponse(PULONG out, const TBT_ROUTE *route,
                                const TBT_UUID *requester,
                                const TBT_UUID *responder, ULONG requestId,
@@ -287,9 +289,9 @@ ULONG TbtNetBuildLoginResponse(PULONG out, const TBT_ROUTE *route,
     tbtNetHeader(out, route, requester, responder, TBT_NET_LOGIN_RESP,
                  requestId, 25);
     out[17] = status;
-    out[18] = ((ULONG)mac6[0] << 24) | ((ULONG)mac6[1] << 16) |
-              ((ULONG)mac6[2] << 8) | (ULONG)mac6[3];
-    out[19] = ((ULONG)mac6[4] << 8) | (ULONG)mac6[5];
+    out[18] = (ULONG)mac6[0] | ((ULONG)mac6[1] << 8) |
+              ((ULONG)mac6[2] << 16) | ((ULONG)mac6[3] << 24);
+    out[19] = (ULONG)mac6[4] | ((ULONG)mac6[5] << 8);
     out[20] = 6;
     return 25;
 }
@@ -431,12 +433,13 @@ ULONG TbtXdpDecode(ULONG pdf, const ULONG *dw, ULONG words, PTBT_XDP_PKT p)
                 return p->Kind;
             }
             p->NetStatus = dw[17];
-            p->Mac[0] = (UCHAR)(dw[18] >> 24);
-            p->Mac[1] = (UCHAR)(dw[18] >> 16);
-            p->Mac[2] = (UCHAR)(dw[18] >> 8);
-            p->Mac[3] = (UCHAR)dw[18];
-            p->Mac[4] = (UCHAR)(dw[19] >> 8);
-            p->Mac[5] = (UCHAR)dw[19];
+            /* The first byte in bits 7:0 of DW 19 (the builder above) */
+            p->Mac[0] = (UCHAR)dw[18];
+            p->Mac[1] = (UCHAR)(dw[18] >> 8);
+            p->Mac[2] = (UCHAR)(dw[18] >> 16);
+            p->Mac[3] = (UCHAR)(dw[18] >> 24);
+            p->Mac[4] = (UCHAR)dw[19];
+            p->Mac[5] = (UCHAR)(dw[19] >> 8);
             p->MacLength = dw[20];
             break;
         case TBT_NET_LOGOUT:
@@ -936,10 +939,23 @@ static VOID tbtBuildLocal(PTBT_XDP_PEER p)
 
 static VOID tbtStartState(PTBT_XDP_PEER p, ULONG state)
 {
+    p->ReadOwed = FALSE;
     p->State = state;
     p->Sub = 0;
     tbtSlotReset(&p->Disc, tbtNow(p));
     tbtLog(p, "cm.xdp.state", state);
+}
+
+/* Record 35 section 3.18: the peer's notification that came while ours
+ * was out, read now that ours is answered or given up. */
+static VOID tbtStartProps(PTBT_XDP_PEER p);
+
+static VOID tbtReadOwed(PTBT_XDP_PEER p)
+{
+    if (p->ReadOwed && p->State == TBT_XDP_S_READY) {
+        tbtStartProps(p);
+    }
+    p->ReadOwed = FALSE;
 }
 
 static VOID tbtStartProps(PTBT_XDP_PEER p)
@@ -947,6 +963,47 @@ static VOID tbtStartProps(PTBT_XDP_PEER p)
     p->RemoteGot = 0;
     p->RemoteWords = 0;
     tbtStartState(p, TBT_XDP_S_PROPS);
+}
+
+static VOID tbtStartLogout(PTBT_XDP_PEER p);
+
+/* A read made afresh, counted across reads (record 35 section 3.18): a
+ * peer that notifies, or changes its block, during every read would hold
+ * the engine in PROPS, so after TBT_XDP_RESENDS of them since the last
+ * block adopted the read fails instead. The block it would have given is
+ * not taken, and a service the peer may have withdrawn meanwhile ends. */
+static BOOLEAN tbtPropsRestart(PTBT_XDP_PEER p)
+{
+    if (p->PropsRestarts < TBT_XDP_RESENDS) {
+        p->PropsRestarts++;
+        return TRUE;
+    }
+    tbtLog(p, "cm.xdp.props.spin", p->PropsRestarts);
+    p->ReadOwed = FALSE;
+    p->State = TBT_XDP_S_ERROR;
+    p->Disc.Active = FALSE;
+    p->Disc.Armed = FALSE;
+    if (p->NetState != TBT_NET_S_OFF || p->PathsUp) {
+        tbtStartLogout(p);
+    }
+    return FALSE;
+}
+
+/* The read out has ended - completed, refused or given up - after the
+ * peer's notification was answered: its outcome may predate the change,
+ * and the peer sends no other, so one read afresh (record 35 section
+ * 3.18). Starting it clears the latch, so a failing peer fails once more
+ * and no further; tbtPropsRestart bounds the reads made afresh. */
+static BOOLEAN tbtPropsAgain(PTBT_XDP_PEER p, ULONG why)
+{
+    if (p->State != TBT_XDP_S_PROPS || !p->ReadOwed) {
+        return FALSE;
+    }
+    tbtLog(p, "cm.xdp.props.again", why);
+    if (tbtPropsRestart(p)) {
+        tbtStartProps(p);
+    }
+    return TRUE;
 }
 
 /* Bonding abandoned, or never possible: lane 1 off where it was usable
@@ -1050,6 +1107,7 @@ static VOID tbtStartLogin(PTBT_XDP_PEER p)
     p->LoginSentOk = FALSE;
     p->LoginSlow = FALSE;
     p->LoginIdle = FALSE;
+    p->LoginIdLogged = FALSE;
     tbtSlotReset(&p->Net, now);
     p->Net.Type = TBT_XDP_NET_TYPE(TBT_NET_LOGIN);
     p->Net.FirstId = p->NextRequestId;
@@ -1159,6 +1217,13 @@ VOID TbtXdpPeerStart(PTBT_XDP_PEER p)
     tbtServiceDown(p, TRUE);
     p->WaitPeer = FALSE;
     p->RemoteValid = FALSE;
+    /* Record 35 section 3.18: a Properties Changed Notification to every
+     * new peer, sent once ready, as Linux does - its first read may have
+     * had the far firmware's properties, and nothing else may tell it to
+     * read again. */
+    p->ChangedOwed = TRUE;
+    p->ChangedSends = 0;
+    p->PropsRestarts = 0;
     if (p->FirmwareCm && p->HaveRemote) {
         /* Run-45 45-E.15: the firmware answers the far end's UUID Request
          * itself, and a far software CM that gave up before this host's
@@ -1179,6 +1244,9 @@ VOID TbtXdpPeerStart(PTBT_XDP_PEER p)
 static VOID tbtDiscFailed(PTBT_XDP_PEER p)
 {
     tbtLog(p, "cm.xdp.fail", p->State);
+    if (tbtPropsAgain(p, 1)) {
+        return;
+    }
     switch (p->State) {
     case TBT_XDP_S_LINK:
     case TBT_XDP_S_BOND_LOW:
@@ -1303,16 +1371,19 @@ static VOID tbtDiscTick(PTBT_XDP_PEER p, ULONG now)
     if (!p->Disc.Armed || !tbtReached(now, p->Disc.DueMs)) {
         return;
     }
-    if (p->State == TBT_XDP_S_READY && p->Disc.Tries > TBT_XDP_RESENDS) {
+    if (p->State == TBT_XDP_S_READY &&
+        (p->Disc.Tries > TBT_XDP_RESENDS || p->ChangedSends > TBT_XDP_RESENDS)) {
         /* IDS 3.3 gives a Changed Notification ten resends and no more. */
         p->ChangedOwed = FALSE;
         p->Disc.Active = FALSE;
         p->Disc.Armed = FALSE;
         tbtLog(p, "cm.xdp.changed.none", 0);
+        tbtReadOwed(p);
         return;
     }
     if (p->State == TBT_XDP_S_READY) {
         p->ChangedOwed = FALSE;
+        p->ChangedSends++;
     }
     tbtDiscSend(p, now);
 }
@@ -1335,6 +1406,7 @@ static VOID tbtNetTick(PTBT_XDP_PEER p, ULONG now)
             /* Not given up (record 35 section 4.1, revision 8): the
              * idle rate from here, logged once. */
             tbtLog(p, "cm.net.login.none", p->Net.Tries);
+            TbtXdpPeerLogCounters(p);
             p->LoginIdle = TRUE;
         }
         p->Net.LastId = p->NextRequestId;
@@ -1393,6 +1465,65 @@ VOID TbtXdpPeerTick(PTBT_XDP_PEER p)
     tbtNetTick(p, now);
 }
 
+/* A dropped packet (record 35 section 3.12): counted by the caller, the
+ * first TBT_XDP_DROPS_LOGGED logged with their reason, and the four UUIDs
+ * once, at the first that is a UUID mismatch. */
+static VOID tbtUuidLog(PTBT_XDP_PEER p, ULONG which, const TBT_UUID *u)
+{
+    ULONG w;
+
+    for (w = 0; w < 4; w++) {
+        tbtLog(p, "cm.xdp.uuidw", ((which * 8 + w * 2) << 16) | (u->Dw[w] & 0xFFFFUL));
+        tbtLog(p, "cm.xdp.uuidw", ((which * 8 + w * 2 + 1) << 16) |
+                                  ((u->Dw[w] >> 16) & 0xFFFFUL));
+    }
+}
+
+static VOID tbtDrop(PTBT_XDP_PEER p, ULONG reason, ULONG pdf, ULONG kind,
+                    const TBT_XDP_PKT *k)
+{
+    if (p->DropsLogged >= TBT_XDP_DROPS_LOGGED) {
+        return;
+    }
+    p->DropsLogged++;
+    tbtLog(p, "cm.xdp.drop", (reason << 16) | ((pdf & 0xFUL) << 12) |
+                             ((kind & 0xFUL) << 8) |
+                             ((k != NULL ? k->Type : 0UL) & 0xFFUL));
+    if (k == NULL) {
+        return;
+    }
+    if (reason == TBT_XDP_DROP_ROUTE) {
+        tbtLog(p, "cm.xdp.drop.route", k->Route.Lo & 0x00FFFFFFUL);
+    } else if (reason == TBT_XDP_DROP_LOGIN_RESP) {
+        tbtLog(p, "cm.xdp.drop.id", k->RequestId & 0x00FFFFFFUL);
+    } else if ((reason == TBT_XDP_DROP_PAIR || reason == TBT_XDP_DROP_LOGIN_UUID ||
+                reason == TBT_XDP_DROP_LOGOUT_UUID) && !p->UuidsLogged) {
+        p->UuidsLogged = TRUE;
+        tbtUuidLog(p, TBT_XDP_UUIDW_LOCAL, &p->Local);
+        tbtUuidLog(p, TBT_XDP_UUIDW_REMOTE, &p->Remote);
+        tbtUuidLog(p, TBT_XDP_UUIDW_REQUESTER, &k->Requester);
+        tbtUuidLog(p, TBT_XDP_UUIDW_RESPONDER, &k->Responder);
+    }
+}
+
+static ULONG tbtSat12(ULONG v)
+{
+    return v > 0xFFFUL ? 0xFFFUL : v;
+}
+
+VOID TbtXdpPeerLogCounters(PTBT_XDP_PEER p)
+{
+    tbtLog(p, "cm.xdp.n.rx", p->Counters.Received & 0x00FFFFFFUL);
+    tbtLog(p, "cm.xdp.n.malformed", p->Counters.Malformed & 0x00FFFFFFUL);
+    tbtLog(p, "cm.xdp.n.strays", p->Counters.Strays & 0x00FFFFFFUL);
+    tbtLog(p, "cm.xdp.n.errors", p->Counters.ErrorsReceived & 0x00FFFFFFUL);
+    tbtLog(p, "cm.net.n.logins", (tbtSat12(p->Counters.LoginsSent) << 12) |
+                                 tbtSat12(p->Counters.LoginsReceived));
+    tbtLog(p, "cm.net.n.loginfail", (tbtSat12(p->Counters.LoginFailures) << 12) |
+                                    tbtSat12(p->Counters.LoginsRefused));
+    tbtLog(p, "cm.net.n.loginid", p->Counters.LoginIdOther & 0x00FFFFFFUL);
+}
+
 /* The block has been read whole. */
 static VOID tbtPropsComplete(PTBT_XDP_PEER p)
 {
@@ -1400,6 +1531,9 @@ static VOID tbtPropsComplete(PTBT_XDP_PEER p)
     BOOLEAN hadNet = (BOOLEAN)(p->RemoteValid && p->RemoteInfo.Network);
 
     p->Counters.PropsReads++;
+    if (tbtPropsAgain(p, 0)) {
+        return;
+    }
     if (TbtXdpPropsParse(p->RemoteBlock, p->RemoteWords, &info) != TBT_OK) {
         p->Counters.PropsRefused++;
         tbtLog(p, "cm.xdp.props.bad", info.FaultOffset);
@@ -1410,6 +1544,7 @@ static VOID tbtPropsComplete(PTBT_XDP_PEER p)
     }
     p->RemoteInfo = info;
     p->RemoteValid = TRUE;
+    p->PropsRestarts = 0;
     p->State = TBT_XDP_S_READY;
     p->Disc.Active = FALSE;
     p->Disc.Armed = FALSE;
@@ -1441,6 +1576,9 @@ static VOID tbtOnPropsResponse(PTBT_XDP_PEER p, const TBT_XDP_PKT *k)
         if (k->BlockSize == 0 || k->BlockSize > TBT_XDP_PROPS_MAX) {
             p->Counters.PropsRefused++;
             tbtLog(p, "cm.xdp.props.size", k->BlockSize);
+            if (tbtPropsAgain(p, 2)) {
+                return;
+            }
             p->State = TBT_XDP_S_ERROR;
             p->Disc.Active = FALSE;
             p->Disc.Armed = FALSE;
@@ -1452,6 +1590,9 @@ static VOID tbtOnPropsResponse(PTBT_XDP_PEER p, const TBT_XDP_PKT *k)
                k->BlockSize != p->RemoteWords) {
         /* IDS 3.2: changed mid-read, read again from the start. */
         tbtLog(p, "cm.xdp.props.gen", k->Generation);
+        if (!tbtPropsRestart(p)) {
+            return;
+        }
         p->RemoteGot = 0;
         p->Disc.Active = FALSE;
         tbtSlotArm(&p->Disc, tbtNow(p));
@@ -1484,8 +1625,19 @@ static VOID tbtOnDiscResponse(PTBT_XDP_PEER p, const TBT_XDP_PKT *k)
 {
     ULONG want;
 
+    if (k->Type == TBT_XDP_ERROR) {
+        /* Whatever it answers: an Error Response to a USB4NET request
+         * comes here too, with no discovery request out (section 3.12). */
+        p->Counters.ErrorsReceived++;
+        if (p->ErrsLogged < TBT_XDP_DROPS_LOGGED) {
+            p->ErrsLogged++;
+            tbtLog(p, "cm.xdp.err.rx", ((k->Error & 0xFFFFUL) << 8) | (k->Sn & 0xFFUL));
+        }
+    }
     if (!p->Disc.Active || k->Sn != p->Disc.Sn) {
         p->Counters.Strays++;
+        tbtDrop(p, TBT_XDP_DROP_DISC_NONE, TBT_PDF_XDOMAIN_RESP,
+                TBT_XDP_K_DISCOVERY, k);
         return;
     }
     switch (p->Disc.Type) {
@@ -1503,6 +1655,7 @@ static VOID tbtOnDiscResponse(PTBT_XDP_PEER p, const TBT_XDP_PKT *k)
         p->Disc.Active = FALSE;
         if (p->State == TBT_XDP_S_READY) {
             p->Disc.Armed = FALSE;
+            tbtReadOwed(p);
             return;
         }
         tbtDiscFailed(p);
@@ -1510,6 +1663,8 @@ static VOID tbtOnDiscResponse(PTBT_XDP_PEER p, const TBT_XDP_PKT *k)
     }
     if (k->Type != want) {
         p->Counters.Strays++;
+        tbtDrop(p, TBT_XDP_DROP_DISC_TYPE, TBT_PDF_XDOMAIN_RESP,
+                TBT_XDP_K_DISCOVERY, k);
         return;
     }
 
@@ -1575,6 +1730,7 @@ static VOID tbtOnDiscResponse(PTBT_XDP_PEER p, const TBT_XDP_PKT *k)
     case TBT_XDP_S_READY:
         p->Disc.Active = FALSE;
         p->Disc.Armed = FALSE;
+        tbtReadOwed(p);
         return;
     default:
         return;
@@ -1634,13 +1790,27 @@ static VOID tbtOnDiscRequest(PTBT_XDP_PEER p, const TBT_XDP_PKT *k)
                 tbtServiceDown(p, TRUE);
                 p->Remote = k->Src;
                 p->WaitPeer = FALSE;
+                p->ChangedOwed = TRUE;  /* section 3.18 */
+                p->ChangedSends = 0;
+                p->PropsRestarts = 0;
                 tbtStartProps(p);
             } else {
                 TbtXdpPeerStart(p);
             }
             return;
         }
-        if (p->State == TBT_XDP_S_READY || p->State == TBT_XDP_S_ERROR) {
+        if ((p->State == TBT_XDP_S_READY && p->Disc.Active &&
+             p->Disc.Type == TBT_XDP_CHANGED) ||
+            p->State == TBT_XDP_S_PROPS) {
+            /* After our own is answered, or after the read out now, whose
+             * answer may predate the change (3.18). */
+            p->ReadOwed = TRUE;
+        } else if (p->State == TBT_XDP_S_ERROR && !p->HaveRemote) {
+            /* Given up before the peer's UUID was known: the whole
+             * handshake again, not a read addressed to no one (record 35
+             * section 3.18). */
+            TbtXdpPeerStart(p);
+        } else if (p->State == TBT_XDP_S_READY || p->State == TBT_XDP_S_ERROR) {
             tbtStartProps(p);
         }
         return;
@@ -1783,10 +1953,24 @@ static VOID tbtOnLogout(PTBT_XDP_PEER p, const TBT_XDP_PKT *k)
 static VOID tbtOnNetResponse(PTBT_XDP_PEER p, const TBT_XDP_PKT *k)
 {
     if (k->Type == TBT_NET_LOGIN_RESP) {
-        if (p->NetState != TBT_NET_S_LOGIN || p->LoginSentOk ||
-            !p->Net.Active || !tbtIdUsed(&p->Net, k->RequestId)) {
+        if (p->NetState != TBT_NET_S_LOGIN || p->LoginSentOk || !p->Net.Active) {
             p->Counters.Strays++;
+            tbtDrop(p, TBT_XDP_DROP_LOGIN_RESP, TBT_PDF_XDOMAIN_RESP,
+                    TBT_XDP_K_NET, k);
             return;
+        }
+        if (!tbtIdUsed(&p->Net, k->RequestId)) {
+            /* Record 35 section 4.5 (the owner's bench, 2026-11-09):
+             * Windows 11 answers a Login with a Request ID of its own
+             * counter, not the Login's; Linux checks no response's id
+             * either. Matched by its type, route, protocol UUID and UUID
+             * pair while a Login is out, as a Logout Response is; the
+             * first such answer of a login is logged. */
+            p->Counters.LoginIdOther++;
+            if (!p->LoginIdLogged) {
+                p->LoginIdLogged = TRUE;
+                tbtLog(p, "cm.net.login.id", k->RequestId & 0x00FFFFFFUL);
+            }
         }
         if (k->NetStatus != 0) {
             p->Counters.LoginFailures++;
@@ -1815,12 +1999,15 @@ static VOID tbtOnNetResponse(PTBT_XDP_PEER p, const TBT_XDP_PKT *k)
          * section 2.4 point 1): not checked. */
         if (p->NetState != TBT_NET_S_LOGOUT || !p->Net.Active) {
             p->Counters.Strays++;
+            tbtDrop(p, TBT_XDP_DROP_LOGOUT_RESP, TBT_PDF_XDOMAIN_RESP,
+                    TBT_XDP_K_NET, k);
             return;
         }
         tbtLogoutDone(p);
         return;
     }
     p->Counters.Strays++;
+    tbtDrop(p, TBT_XDP_DROP_NET_TYPE, TBT_PDF_XDOMAIN_RESP, TBT_XDP_K_NET, k);
 }
 
 BOOLEAN TbtXdpPeerOnPacket(PTBT_XDP_PEER p, ULONG pdf, const ULONG *dw,
@@ -1835,10 +2022,12 @@ BOOLEAN TbtXdpPeerOnPacket(PTBT_XDP_PEER p, ULONG pdf, const ULONG *dw,
     p->Counters.Received++;
     if (kind == TBT_XDP_K_MALFORMED) {
         p->Counters.Malformed++;
+        tbtDrop(p, TBT_XDP_DROP_MALFORMED, pdf, kind, NULL);
         return TRUE;
     }
     if (!TbtRouteEqual(&k.Route, &p->Route)) {
         p->Counters.Strays++;
+        tbtDrop(p, TBT_XDP_DROP_ROUTE, pdf, kind, &k);
         return TRUE;
     }
     if (kind == TBT_XDP_K_DISCOVERY) {
@@ -1857,12 +2046,15 @@ BOOLEAN TbtXdpPeerOnPacket(PTBT_XDP_PEER p, ULONG pdf, const ULONG *dw,
      * requests on PDF 7 (record 35 section 2.4 point 1). */
     if (!p->HaveRemote || !tbtNetPair(p, &k)) {
         p->Counters.Strays++;
+        tbtDrop(p, p->HaveRemote ? TBT_XDP_DROP_PAIR : TBT_XDP_DROP_NOREMOTE, pdf,
+                kind, &k);
         return TRUE;
     }
     if (k.Type == TBT_NET_LOGIN) {
         if (!(TbtUuidEqual(&k.Requester, &p->Remote) &&
               TbtUuidEqual(&k.Responder, &p->Local))) {
             p->Counters.Strays++;
+            tbtDrop(p, TBT_XDP_DROP_LOGIN_UUID, pdf, kind, &k);
             return TRUE;
         }
         tbtOnLogin(p, &k);
@@ -1870,6 +2062,7 @@ BOOLEAN TbtXdpPeerOnPacket(PTBT_XDP_PEER p, ULONG pdf, const ULONG *dw,
         if (!(TbtUuidEqual(&k.Requester, &p->Remote) &&
               TbtUuidEqual(&k.Responder, &p->Local))) {
             p->Counters.Strays++;
+            tbtDrop(p, TBT_XDP_DROP_LOGOUT_UUID, pdf, kind, &k);
             return TRUE;
         }
         tbtOnLogout(p, &k);
@@ -1911,6 +2104,13 @@ VOID TbtXdpPeerSetNetWanted(PTBT_XDP_PEER p, BOOLEAN wanted, ULONG prtcstns)
     if (p->HaveRemote && p->State != TBT_XDP_S_IDLE &&
         p->State != TBT_XDP_S_LOOP) {
         p->ChangedOwed = TRUE;
+        p->ChangedSends = 0;
+        if (p->State == TBT_XDP_S_READY && p->Disc.Active &&
+            p->Disc.Type == TBT_XDP_CHANGED) {
+            /* A new notification owed while one is out: a fresh budget
+             * for it, ReadOwed kept (record 35 section 3.18). */
+            p->Disc.Tries = 0;
+        }
     }
 }
 
@@ -1933,6 +2133,7 @@ VOID TbtXdpPeerEnd(PTBT_XDP_PEER p, BOOLEAN gone)
     tbtXdpZero(&p->Disc, sizeof(p->Disc));
     tbtXdpZero(&p->Net, sizeof(p->Net));
     p->ChangedOwed = FALSE;
+    p->ReadOwed = FALSE;
     p->Ending = FALSE;
     p->State = TBT_XDP_S_IDLE;
 }

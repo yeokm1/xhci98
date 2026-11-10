@@ -58,6 +58,17 @@ static struct {
     ULONG ClockAtKind;      /* the clock jumps at this kind ...          */
     ULONG ClockBy;          /* ... by this much                          */
     ULONG AllAsIrq;         /* the every-type read reports IRQ types     */
+    ULONG UseStr;           /* BINDING from Dl and Pd, by the op's kind  */
+    const char *Dl;
+    const char *Pd;
+    ULONG LastFnKind;       /* the kind the last BINDING asked for       */
+    ULONG OtherDn;          /* devnodes from here (64 K) answer OtherHdr2 */
+    ULONG OtherHdr2;        /* ... as their class dword (a bridge, ...)  */
+    ULONG Dn2;              /* a second function of the same header ...  */
+    ULONG Hash2;
+    ULONG Status2;          /* ... with a status of its own ...          */
+    ULONG Problem2;
+    ULONG NoBind2;          /* ... and its binding not written yet       */
 } f;
 
 static CM_NI_MEMBER mem;
@@ -191,8 +202,19 @@ static VOID exec(const CM_NI_OP *op, CM_NI_RES *res)
         for (i = 0; i < 16; i++) {
             res->Val[i] = f.Hdr[i];
         }
+        if (f.OtherDn != 0 && op->Dn >= f.OtherDn &&
+            op->Dn < f.OtherDn + 0x10000UL) {
+            res->Val[2] = f.OtherHdr2;
+            res->Val[3] = 0x00010000UL;     /* a type 1 header */
+        }
         break;
     case CM_NI_OP_STATUS:
+        if (f.Dn2 != 0 && op->Dn == f.Dn2) {
+            res->Status = f.Status2;
+            res->Problem = f.Problem2;
+            res->Hash = f.Hash2;
+            break;
+        }
         if (!f.Present) {
             res->Cr = CM_NI_CR_NO_SUCH_DEVNODE;
             break;
@@ -202,7 +224,17 @@ static VOID exec(const CM_NI_OP *op, CM_NI_RES *res)
         res->Hash = f.Hash;
         break;
     case CM_NI_OP_BINDING:
+        f.LastFnKind = op->FnKind;
         res->Bind = f.Bind;
+        if (f.UseStr) {
+            res->Bind = CmNiBindFlagsKind(op->FnKind, f.Dl != NULL, f.Dl,
+                                          f.Dl != NULL ? strlen(f.Dl) : 0,
+                                          f.Pd != NULL, f.Pd,
+                                          f.Pd != NULL ? strlen(f.Pd) : 0);
+        }
+        if (f.Dn2 != 0 && op->Dn == f.Dn2 && f.NoBind2) {
+            res->Bind = 0;
+        }
         break;
     case CM_NI_OP_PORT_INTR:
         res->Val[0] = f.PortIntr;
@@ -289,6 +321,13 @@ static VOID exec(const CM_NI_OP *op, CM_NI_RES *res)
         break;
     case CM_NI_OP_REPROCESS:
         f.Reprocessed++;
+        if (f.Dn2 != 0 && op->Dn == f.Dn2) {
+            if (f.StartOnReprocess && allocatable()) {
+                f.Status2 = CM_NI_DN_STARTED;
+                f.Problem2 = 0;
+            }
+            break;
+        }
         if (f.StartOnReprocess && allocatable()) {
             f.Status = CM_NI_DN_STARTED;
             f.Problem = 0;
@@ -512,15 +551,592 @@ static VOID test_rules(VOID)
     pass();
     CHECK_EQ(st(), CM_NI_S_PENDING, "the record not read: pending");
 
-    /* The window closes on a pending entry. */
+    /* The window closes on a pending entry (its installer record not
+     * read: not waiting for its driver, record 28 section 14.3). */
     model();
-    f.Bind = 0;
+    ctx.Stor98 = CM_NI_STOR98_FAILED;
     start();
     pass();
     ctx.Now += CM_NOIRQ_WINDOW_MS;
     pass();
     CHECK_EQ(why(), CM_NI_W_NOT_IN_TIME, "not read in time");
     CHECK(!CmNiWindow(&mem), "the window closed");
+    /* ... and on one whose header read fails. */
+    model();
+    f.FailKind = CM_NI_OP_HEADER;
+    f.FailCr = CM_NI_CR_FAILURE;
+    start();
+    pass();
+    ctx.Now += CM_NOIRQ_WINDOW_MS;
+    pass();
+    CHECK_EQ(why(), CM_NI_W_NOT_IN_TIME, "header failing: not read in time");
+    CHECK(!CmNiWindow(&mem), "header failing: the window closed");
+    /* ... and on one whose binding read fails. */
+    model();
+    f.FailKind = CM_NI_OP_BINDING;
+    f.FailCr = CM_NI_CR_FAILURE;
+    start();
+    pass();
+    CHECK_EQ(mem.Dev[0].WaitDrv, 0, "binding failing: not waiting");
+    ctx.Now += CM_NOIRQ_WINDOW_MS;
+    pass();
+    CHECK_EQ(why(), CM_NI_W_NOT_IN_TIME, "binding failing: not read in time");
+
+    /* Section 14: an entry PENDING for its binding holds the window up to
+     * CM_NOIRQ_HOLD_MS from its opening, and no further. */
+    model();
+    f.Bind = 0;
+    start();
+    pass();
+    CHECK_EQ(mem.Dev[0].WaitDrv, 1, "its binding not written: installing");
+    for (ctx.Now = 1000 + 5000; ctx.Now <= 1000 + 30000; ctx.Now += 5000) {
+        pass();
+    }
+    CHECK_EQ(st(), CM_NI_S_PENDING, "held past 10 s, read again each pass");
+    CHECK(CmNiWindow(&mem), "the window open");
+    CHECK_EQ(mem.C.Held, 1, "the window counted held once");
+    for (; ctx.Now <= 1000 + CM_NOIRQ_HOLD_MS - 1; ctx.Now += 5000) {
+        pass();
+    }
+    ctx.Now = 1000 + CM_NOIRQ_HOLD_MS - 1;
+    pass();
+    CHECK_EQ(st(), CM_NI_S_PENDING, "still held just before the bound");
+    ctx.Now = 1000 + CM_NOIRQ_HOLD_MS;
+    pass();
+    CHECK_EQ(why(), CM_NI_W_NOT_IN_TIME, "the bound: not read in time");
+    CHECK(!CmNiWindow(&mem), "closed at the bound, the last hold notwithstanding");
+    CHECK_EQ(mem.C.Held, 1, "still one window held");
+
+    /* A pass delayed past 10 s (a call that blocked) with no walk reading:
+     * the entry's own last reading holds the window, and once bound it is
+     * admitted. */
+    model();
+    f.Bind = 0;
+    start();
+    pass();
+    ctx.Now += CM_NOIRQ_WINDOW_MS + 5000;
+    pass();
+    CHECK_EQ(st(), CM_NI_S_PENDING, "a delayed pass: still pending");
+    CHECK(CmNiWindow(&mem), "... the window held by its last reading");
+    f.Bind = CM_NI_BIND_OK;
+    ctx.Now += CM_NOIRQ_WINDOW_MS + 5000;
+    pass();
+    CHECK_EQ(st(), CM_NI_S_ATTEMPTED, "bound at last: admitted");
+}
+
+static VOID memonly(VOID);
+
+/* An xHCI controller on xhci98.sys (record 28 section 14). */
+static VOID xhci(VOID)
+{
+    model();
+    f.Lc[0].N = 1;                  /* the memory descriptor alone */
+    f.Hdr[0] = 0x11001B73UL;        /* an FL1100                   */
+    f.Hdr[2] = 0x0C033010UL;        /* 0C0330h, revision 10h       */
+    f.Hdr[15] = 0x000001FFUL;       /* pin INTA, line FFh          */
+    f.UseStr = 1;
+    f.Dl = "*NTKERN";
+    f.Pd = "xhci98.sys";
+    ctx.Stor98 = CM_NI_STOR98_NONE; /* no installer record read    */
+}
+
+static VOID test_xhci(VOID)
+{
+    ULONG d[CM_NI_DIAG_WORDS];
+    ULONG t0;
+    ULONG k;
+
+    /* The memory-only form for an xHCI function, no installer record. */
+    xhci();
+    start();
+    pass();
+    CHECK_EQ(st(), CM_NI_S_ATTEMPTED, "xhci: reprocessed");
+    CHECK_EQ(mem.Dev[0].Kind, CM_NI_KIND_XHCI, "xhci: its kind");
+    CHECK_EQ(f.LastFnKind, CM_NI_KIND_XHCI, "xhci: the binding by kind");
+    CHECK_EQ(f.Calls[CM_NI_OP_BINDING], 2, "xhci: rule 4 read, then again");
+    CHECK_EQ(f.Calls[CM_NI_OP_ADD_EMPTY], 0, "xhci: nothing added");
+    CHECK_EQ(f.Reprocessed, 1, "xhci: one Reprocess_DevNode");
+    CHECK_EQ(mem.C.MemOnly, 1, "xhci: the memory-only form");
+    ctx.Now += 200;
+    pass();
+    CHECK_EQ(st(), CM_NI_S_DONE, "xhci: started");
+    CHECK_EQ(mem.Dev[0].Line, 0xFF, "xhci: line FFh kept");
+    CmNiDiag(&mem, d);
+    CHECK_EQ(d[4] >> 24, CM_NI_KIND_XHCI, "xhci: the kind in the diagnostic");
+    CHECK_EQ((d[4] >> 8) & 0xFF, CM_NI_S_DONE, "xhci: done in the diagnostic");
+
+    /* An NVMe's diagnostic carries kind 0. */
+    memonly();
+    start();
+    pass();
+    CmNiDiag(&mem, d);
+    CHECK_EQ(d[4] >> 24, CM_NI_KIND_NVME, "nvme: kind 0");
+
+    /* Not its driver: Stor98's pair on an xHCI function, xhci98.sys's on
+     * an NVMe one, another NTMPDriver. */
+    xhci();
+    f.Dl = "*IOS";
+    f.Pd = "stor98.mpd";
+    start();
+    pass();
+    CHECK_EQ(why(), CM_NI_W_NOT_STOR98, "xhci: Stor98's pair refused");
+    CHECK_EQ(f.Reprocessed, 0, "xhci: not reprocessed");
+    memonly();
+    f.UseStr = 1;
+    f.Dl = "*NTKERN";
+    f.Pd = "xhci98.sys";
+    start();
+    pass();
+    CHECK_EQ(why(), CM_NI_W_NOT_STOR98, "nvme: xhci98.sys's pair refused");
+    xhci();
+    f.Pd = "other.sys";
+    start();
+    pass();
+    CHECK_EQ(why(), CM_NI_W_NOT_STOR98, "xhci: another NTMPDriver");
+    xhci();
+    f.Pd = NULL;
+    start();
+    pass();
+    CHECK_EQ(st(), CM_NI_S_PENDING, "xhci: one value alone: pending");
+
+    /* An IRQ descriptor: the added configuration is not taken. */
+    xhci();
+    f.Lc[0].N = 2;
+    start();
+    pass();
+    CHECK_EQ(why(), CM_NI_W_CONFIG, "xhci: an IRQ descriptor refused");
+    CHECK_EQ(f.Calls[CM_NI_OP_ADD_EMPTY], 0, "xhci: nothing created");
+    CHECK_EQ(mem.C.Attempts, 0, "xhci: no attempt counted");
+    /* Memory only at another configuration problem. */
+    xhci();
+    f.Problem = 0x0C;
+    start();
+    pass();
+    CHECK_EQ(why(), CM_NI_W_CONFIG, "xhci: memory only at 12 refused");
+
+    /* On the port's pin: line set, header; line FFh, interrupt. */
+    xhci();
+    f.Hdr[15] = 0x0000010AUL;
+    CmNiOpenWindow(&mem, 1, ctx.Now);
+    CmNiSeen(&mem, DN, HASH, BDF(8, 0, 0), 0);
+    pass();
+    CHECK_EQ(why(), CM_NI_W_HEADER, "xhci: routed, line set: header");
+    xhci();
+    CmNiOpenWindow(&mem, 1, ctx.Now);
+    CmNiSeen(&mem, DN, HASH, BDF(8, 0, 0), 0);
+    pass();
+    CHECK_EQ(why(), CM_NI_W_INTERRUPT, "xhci: on the port's pin: interrupt");
+    CHECK_EQ(f.Reprocessed, 0, "xhci: routable, not reprocessed");
+
+    /* Another class (the dock's I210): header. */
+    xhci();
+    f.Hdr[2] = 0x02000003UL;
+    start();
+    pass();
+    CHECK_EQ(why(), CM_NI_W_HEADER, "020000h: header");
+
+    /* The binding read again before the reprocess, now another driver. */
+    xhci();
+    start();
+    CmNiPass(&mem, &ctx);
+    for (k = 0; k < 64; k++) {
+        CM_NI_OP op;
+        CM_NI_RES res;
+
+        if (!CmNiNext(&mem, &ctx, &op)) {
+            break;
+        }
+        if (op.Kind == CM_NI_OP_BINDING && mem.Dev[0].Step != 3) {
+            f.Pd = "other.sys";
+        }
+        exec(&op, &res);
+        CmNiTake(&mem, &ctx, &res);
+    }
+    CHECK_EQ(why(), CM_NI_W_ADMISSION, "xhci: another driver meanwhile");
+    CHECK_EQ(f.Reprocessed, 0, "xhci: not reprocessed meanwhile");
+
+    /* Section 14.3: the window held while the driver is installed; the
+     * binding at 40 s, then the admission over further passes. */
+    xhci();
+    f.Dl = NULL;
+    f.Pd = NULL;
+    t0 = ctx.Now;
+    start();
+    pass();
+    CHECK_EQ(st(), CM_NI_S_PENDING, "hold: no driver yet");
+    CHECK_EQ(mem.Dev[0].WaitDrv, 1, "hold: waiting for its driver");
+    for (k = 0; k < 40; k++) {
+        ctx.Now += 1000;
+        pass();
+    }
+    CHECK(CmNiWindow(&mem), "hold: the window open at 40 s");
+    CHECK_EQ(st(), CM_NI_S_PENDING, "hold: still pending at 40 s");
+    f.Dl = "*NTKERN";
+    f.Pd = "xhci98.sys";
+    f.FailKind = CM_NI_OP_LC_LIST;  /* the admission spans a pass */
+    f.FailCr = CM_NI_CR_FAILURE;
+    ctx.Now += 1000;
+    pass();
+    CHECK_EQ(st(), CM_NI_S_PENDING, "hold: bound, a list read failed");
+    CHECK_EQ(mem.Dev[0].WaitDrv, 0, "hold: no longer waiting");
+    f.FailKind = 0;
+    ctx.Now += 5000;
+    pass();
+    CHECK_EQ(st(), CM_NI_S_ATTEMPTED, "hold: admitted 6 s later");
+    CHECK_EQ(f.Reprocessed, 1, "hold: reprocessed");
+    /* Past the last waiting pass's 10 s, the window closes. */
+    ctx.Now = t0 + 41000 + CM_NOIRQ_WINDOW_MS;
+    pass();
+    CHECK(!CmNiWindow(&mem), "hold: closed 10 s after the last wait");
+
+    /* The binding late, and the next pass past those 10 s: not in time. */
+    xhci();
+    f.Dl = NULL;
+    f.Pd = NULL;
+    start();
+    pass();
+    ctx.Now += 30000;
+    pass();
+    f.Dl = "*NTKERN";
+    f.Pd = "xhci98.sys";
+    f.FailKind = CM_NI_OP_LC_LIST;
+    f.FailCr = CM_NI_CR_FAILURE;
+    ctx.Now += 1000;
+    pass();
+    f.FailKind = 0;
+    ctx.Now += CM_NOIRQ_WINDOW_MS;
+    pass();
+    CHECK_EQ(why(), CM_NI_W_NOT_IN_TIME, "hold: admitted too late");
+
+    /* A driver that never comes: held to the bound, then not in time. */
+    xhci();
+    f.Dl = NULL;
+    f.Pd = NULL;
+    t0 = ctx.Now;
+    start();
+    pass();
+    while (ctx.Now - t0 < CM_NOIRQ_HOLD_MS - 1000) {
+        ctx.Now += 1000;
+        pass();
+    }
+    CHECK_EQ(st(), CM_NI_S_PENDING, "never: pending a second before the bound");
+    CHECK(CmNiWindow(&mem), "never: open a second before the bound");
+    ctx.Now += 1000;
+    pass();
+    CHECK_EQ(why(), CM_NI_W_NOT_IN_TIME, "never: not in time at the bound");
+    CHECK(!CmNiWindow(&mem), "never: closed at the bound");
+
+    /* An installation problem holds it too (an NVMe drive's wizard). */
+    model();
+    f.Problem = 0x1C;
+    start();
+    pass();
+    CHECK_EQ(mem.Dev[0].WaitDrv, 1, "problem 28: waiting");
+    ctx.Now += CM_NOIRQ_WINDOW_MS + 1000;
+    pass();
+    CHECK(CmNiWindow(&mem), "problem 28: held past 10 s");
+    f.Problem = 0x1D;
+    ctx.Now += 1000;
+    pass();
+    CHECK_EQ(st(), CM_NI_S_ATTEMPTED, "problem 28 then 29: admitted");
+
+    /* The deadline reset by a reopening and by a new generation. */
+    xhci();
+    f.Dl = NULL;
+    f.Pd = NULL;
+    start();
+    pass();
+    ctx.Now += 50000;
+    pass();
+    CHECK_EQ(mem.HaveHold, 1, "reset: a waiting pass recorded");
+    CmNiOpenWindow(&mem, 1, ctx.Now);
+    CHECK_EQ(mem.HaveHold, 0, "reset: by a reopening");
+    CHECK_EQ(mem.WindowFrom, ctx.Now, "reset: from the reopening");
+    ctx.Now += 1000;
+    pass();
+    CHECK_EQ(mem.HaveHold, 1, "reset: still waiting, recorded again");
+    CmNiOpenWindow(&mem, 2, ctx.Now);
+    CHECK_EQ(mem.HaveHold, 0, "reset: by a new generation");
+    CHECK_EQ(mem.Dev[0].WaitDrv, 0, "reset: the entry pending afresh");
+
+    /* The hold across the clock's wrap. */
+    xhci();
+    f.Dl = NULL;
+    f.Pd = NULL;
+    ctx.Now = 0xFFFFC000UL;
+    start();
+    pass();
+    for (k = 0; k < 30; k++) {
+        ctx.Now += 1000;
+        pass();
+    }
+    CHECK(CmNiWindow(&mem), "wrap: held across the wrap");
+    f.Dl = "*NTKERN";
+    f.Pd = "xhci98.sys";
+    ctx.Now += 1000;
+    pass();
+    CHECK_EQ(st(), CM_NI_S_ATTEMPTED, "wrap: admitted after the wrap");
+    ctx.Now += CM_NOIRQ_WINDOW_MS;
+    pass();
+    CHECK(!CmNiWindow(&mem), "wrap: closed 10 s after the last wait");
+
+    /* Section 14.5: ten devnodes below one member, nine of them refused
+     * by their headers; the function still reached. */
+    {
+        ULONG w;
+        ULONG hdr;
+        ULONG e;
+
+        xhci();
+        f.OtherDn = 0x5000UL;
+        f.OtherHdr2 = 0x06040002UL;     /* a PCI-to-PCI bridge */
+        CmNiOpenWindow(&mem, 1, ctx.Now);
+        for (w = 0; w < 4; w++) {
+            CmNiWalkBegin(&mem);
+            for (k = 0; k < 9; k++) {
+                CmNiSeen(&mem, 0x5000UL + k, 0x9000UL + k, BDF(5, k, 0), 0);
+            }
+            CmNiSeen(&mem, DN, HASH, FN, 0);
+            CmNiWalkDone(&mem, 1);
+            pass();
+            ctx.Now += 200;
+        }
+        CHECK(mem.C.NoRoom != 0, "room: the entries ran out at first");
+        e = CM_NOIRQ_DEVICES;
+        for (k = 0; k < CM_NOIRQ_DEVICES; k++) {
+            if (mem.Dev[k].Used && mem.Dev[k].Dn == DN) {
+                e = k;
+            }
+        }
+        CHECK(e < CM_NOIRQ_DEVICES, "room: the function has an entry");
+        CHECK(e < CM_NOIRQ_DEVICES &&
+              (mem.Dev[e].State == CM_NI_S_ATTEMPTED ||
+               mem.Dev[e].State == CM_NI_S_DONE),
+              "room: the function reprocessed");
+        CHECK_EQ(f.Reprocessed, 1, "room: one reprocess");
+        hdr = f.Calls[CM_NI_OP_HEADER];
+        CmNiWalkBegin(&mem);
+        for (k = 0; k < 9; k++) {
+            CmNiSeen(&mem, 0x5000UL + k, 0x9000UL + k, BDF(5, k, 0), 0);
+        }
+        CmNiWalkDone(&mem, 1);
+        pass();
+        CHECK_EQ(f.Calls[CM_NI_OP_HEADER], hdr,
+                 "room: a refused devnode not read again");
+        /* A reused handle is judged afresh. */
+        CmNiWalkBegin(&mem);
+        CmNiSeen(&mem, 0x5000UL, 0x7777UL, BDF(5, 0, 0), 0);
+        CmNiWalkDone(&mem, 0);
+        pass();
+        CHECK_EQ(f.Calls[CM_NI_OP_HEADER], hdr + 1,
+                 "room: a reused handle read afresh");
+        /* A new generation reads every devnode once more. */
+        CmNiOpenWindow(&mem, 2, ctx.Now);
+        CHECK_EQ(mem.SkipDn[0], 0, "room: the list emptied");
+        hdr = f.Calls[CM_NI_OP_HEADER];
+        CmNiWalkBegin(&mem);
+        CmNiSeen(&mem, 0x5001UL, 0x9001UL, BDF(5, 1, 0), 0);
+        CmNiWalkDone(&mem, 0);
+        pass();
+        CHECK(f.Calls[CM_NI_OP_HEADER] > hdr,
+              "room: read again at a new generation");
+        /* An incomplete walk keeps a line it did not meet; a complete one
+         * takes it off, and the devnode is read afresh when it is back. */
+        pass();
+        CmNiWalkBegin(&mem);
+        CmNiWalkDone(&mem, 0);
+        k = 0;
+        for (w = 0; w < CM_NOIRQ_SKIPS; w++) {
+            if (mem.SkipDn[w] == 0x5001UL) {
+                k = 1;
+            }
+        }
+        CHECK_EQ(k, 1, "room: kept after an incomplete walk");
+        CmNiWalkBegin(&mem);
+        CmNiWalkDone(&mem, 1);
+        k = 0;
+        for (w = 0; w < CM_NOIRQ_SKIPS; w++) {
+            if (mem.SkipDn[w] == 0x5001UL) {
+                k = 1;
+            }
+        }
+        CHECK_EQ(k, 0, "room: taken off by a complete walk");
+        hdr = f.Calls[CM_NI_OP_HEADER];
+        CmNiWalkBegin(&mem);
+        CmNiSeen(&mem, 0x5001UL, 0x9001UL, BDF(5, 1, 0), 0);
+        CmNiWalkDone(&mem, 0);
+        pass();
+        CHECK_EQ(f.Calls[CM_NI_OP_HEADER], hdr + 1, "room: back, read afresh");
+        /* A full list overwrites its oldest line. */
+        for (k = 0; k < CM_NOIRQ_SKIPS + 2; k++) {
+            CmNiWalkBegin(&mem);
+            CmNiSeen(&mem, 0x6000UL + k, 0xA000UL + k, BDF(5, k & 31, 0), 0);
+            CmNiWalkDone(&mem, 0);
+            pass();
+            pass();
+        }
+        CHECK(mem.SkipNext < CM_NOIRQ_SKIPS, "room: the next line in range");
+        k = 0;
+        for (w = 0; w < CM_NOIRQ_SKIPS; w++) {
+            if (mem.SkipDn[w] == 0x6000UL + CM_NOIRQ_SKIPS + 1) {
+                k = 1;
+            }
+        }
+        CHECK_EQ(k, 1, "room: the newest kept over the oldest");
+        /* After a complete walk keeps one line, a refusal takes a free
+         * line, not the kept one. */
+        CmNiWalkBegin(&mem);
+        CmNiSeen(&mem, 0x6000UL + CM_NOIRQ_SKIPS + 1,
+                 0xA000UL + CM_NOIRQ_SKIPS + 1, BDF(5, 1, 0), 0);
+        CmNiWalkDone(&mem, 1);
+        CmNiWalkBegin(&mem);
+        CmNiSeen(&mem, 0x7000UL, 0xB000UL, BDF(5, 2, 0), 0);
+        CmNiWalkDone(&mem, 0);
+        pass();
+        pass();
+        k = 0;
+        for (w = 0; w < CM_NOIRQ_SKIPS; w++) {
+            if (mem.SkipDn[w] == 0x6000UL + CM_NOIRQ_SKIPS + 1 ||
+                mem.SkipDn[w] == 0x7000UL) {
+                k++;
+            }
+        }
+        CHECK_EQ(k, 2, "room: a free line taken after pruning");
+    }
+
+    /* An entry with a journal refused by its header keeps its entry. */
+    xhci();
+    start();
+    pass();
+    ctx.Now += 200;
+    pass();
+    CHECK_EQ(st(), CM_NI_S_DONE, "journal: started first");
+    f.Hdr[15] = 0x0000010AUL;       /* its line reads set since */
+    CmNiOpenWindow(&mem, 2, ctx.Now);
+    pass();
+    CHECK_EQ(why(), CM_NI_W_HEADER, "journal: refused by its header");
+    ctx.Now += 200;
+    pass();
+    CHECK(mem.Dev[0].Used, "journal: its entry kept");
+    CHECK_EQ(mem.SkipDn[0], 0, "journal: not on the refused list");
+
+    /* Section 14.6: the reprocess held 80 s (a wizard open), then read
+     * started: DONE, not timeout. */
+    xhci();
+    f.ClockAtKind = CM_NI_OP_REPROCESS;
+    f.ClockBy = 80000UL;
+    start();
+    pass();
+    CHECK_EQ(st(), CM_NI_S_ATTEMPTED, "held: attempted after the hold");
+    CHECK_EQ(mem.Dev[0].Credit, 80000UL, "held: 80 s credited");
+    CHECK(CmNiWindow(&mem), "held: the window credited too");
+    ctx.Now += 200;
+    pass();
+    CHECK_EQ(st(), CM_NI_S_DONE, "held: started, done");
+    /* The window's deadline moved by the hold: still open 9 s after it,
+     * closed 10 s after. */
+    xhci();
+    f.ClockAtKind = CM_NI_OP_REPROCESS;
+    f.ClockBy = 80000UL;
+    start();
+    pass();
+    f.ClockAtKind = 0;
+    ctx.Now += 9000UL;
+    pass();
+    CHECK(CmNiWindow(&mem), "held: the window open 9 s after the hold");
+    ctx.Now += 1200UL;
+    pass();
+    CHECK(!CmNiWindow(&mem), "held: closed 10 s after the hold");
+    /* The bound: a hold past CM_NOIRQ_HOLD_MS counts as before. */
+    xhci();
+    f.ClockAtKind = CM_NI_OP_REPROCESS;
+    f.ClockBy = CM_NOIRQ_HOLD_MS + CM_NOIRQ_TXN_MS + 1;
+    start();
+    pass();
+    CHECK_EQ(why(), CM_NI_W_TIMEOUT, "held: past the bound, timeout");
+    CHECK_EQ(mem.Credit <= CM_NOIRQ_HOLD_MS, 1, "held: window bound");
+    /* A call held less than 2 s is not credited. */
+    xhci();
+    f.ClockAtKind = CM_NI_OP_REPROCESS;
+    f.ClockBy = CM_NI_BLOCK_MS;
+    start();
+    pass();
+    CHECK_EQ(mem.Dev[0].Credit, 0, "held: 2 s not credited");
+    CHECK_EQ(mem.Credit, 0, "held: nor the window");
+    /* The walk held: credited through CmNiCredit; a new window starts with
+     * none. */
+    xhci();
+    f.Bind = 0;
+    f.UseStr = 0;
+    start();
+    pass();
+    ctx.Now += 50000UL;
+    CmNiCredit(&mem, 50000UL, ctx.Now);
+    CHECK_EQ(mem.Credit, 50000UL, "held: a walk's hold credited");
+    pass();
+    CHECK(CmNiWindow(&mem), "held: the window open after it");
+    CmNiOpenWindow(&mem, 2, ctx.Now);
+    CHECK_EQ(mem.Credit, 0, "held: a new window has no credit");
+    CmNiCredit(&mem, 50000UL, ctx.Now);
+    CHECK_EQ(mem.Credit, 0, "held: nothing before the opening");
+
+    /* Each attempt has its own allowance: a second generation's attempt
+     * on the same entry is credited again. */
+    xhci();
+    f.StartOnReprocess = 0;
+    f.ClockAtKind = CM_NI_OP_REPROCESS;
+    f.ClockBy = 80000UL;
+    start();
+    pass();
+    CHECK_EQ(mem.Dev[0].Credit, 80000UL, "allowance: the first attempt's");
+    ctx.Now += CM_NOIRQ_TXN_MS + 1000UL;
+    pass();
+    CHECK_EQ(why(), CM_NI_W_TIMEOUT, "allowance: the first runs out");
+    f.ClockAtKind = CM_NI_OP_REPROCESS;
+    f.ClockBy = 80000UL;
+    CmNiOpenWindow(&mem, 2, ctx.Now);
+    pass();
+    CHECK_EQ(st(), CM_NI_S_ATTEMPTED, "allowance: a second attempt");
+    CHECK_EQ(mem.Dev[0].Credit, 80000UL, "allowance: credited afresh");
+    /* A waiting pass made while a call was outstanding is not moved. */
+    xhci();
+    start();
+    mem.HaveHold = 1;
+    mem.HoldAt = mem.WindowFrom + 70000UL;
+    CmNiCredit(&mem, 80000UL, mem.WindowFrom + 81000UL);
+    CHECK_EQ(mem.HoldAt, mem.WindowFrom,
+             "waitat: not before the moved opening");
+    ctx.Now = mem.WindowFrom + CM_NOIRQ_WINDOW_MS - 100UL;
+    pass();
+    CHECK(CmNiWindow(&mem), "waitat: open within 10 s of the opening");
+    ctx.Now += 200UL;
+    pass();
+    CHECK(!CmNiWindow(&mem), "waitat: closed after, not held");
+    CHECK_EQ(mem.Credit, 80000UL, "waitat: the window credited");
+    /* A call begun before the window's opening: a waiting pass made
+     * during it is not moved past the new opening. */
+    xhci();
+    ctx.Now = 0xFFFF0000UL;
+    CmNiOpenWindow(&mem, 1, ctx.Now + 100000UL);
+    mem.HaveHold = 1;
+    mem.HoldAt = ctx.Now + CM_NOIRQ_HOLD_MS + 90000UL;
+    CmNiCredit(&mem, CM_NOIRQ_HOLD_MS + 200000UL,
+               ctx.Now + CM_NOIRQ_HOLD_MS + 200000UL);
+    CHECK_EQ(mem.Credit, CM_NOIRQ_HOLD_MS, "waitat: credit saturated");
+    CHECK_EQ(mem.HoldAt, mem.WindowFrom,
+             "waitat: a pre-opening call keeps the wait at the opening");
+    ctx.Now = 0;
+
+    /* The binding flags by kind. */
+    CHECK_EQ(CmNiBindFlagsKind(CM_NI_KIND_XHCI, 1, "*NTKERN", 8, 1,
+                               "XHCI98.SYS", 11), CM_NI_BIND_OK,
+             "xhci pair, case not significant");
+    CHECK_EQ(CmNiBindFlagsKind(CM_NI_KIND_XHCI, 1, "*IOS", 5, 1,
+                               "stor98.mpd", 11),
+             CM_NI_BIND_DL | CM_NI_BIND_PD, "Stor98's pair for xhci");
+    CHECK_EQ(CmNiBindFlagsKind(CM_NI_KIND_NVME, 1, "*IOS", 5, 1,
+                               "stor98.mpd", 11), CM_NI_BIND_OK,
+             "Stor98's pair for nvme");
 }
 
 static VOID irqcase(ULONG out, ULONG portNone, ULONG wantState,
@@ -1061,7 +1677,7 @@ static VOID test_memonly(VOID)
     /* The window closed before the form is reached: not in time. */
     memonly();
     f.ClockAtKind = CM_NI_OP_RD_READ;
-    f.ClockBy = CM_NOIRQ_WINDOW_MS + 1;
+    f.ClockBy = CM_NOIRQ_HOLD_MS + CM_NOIRQ_WINDOW_MS + 1;
     start();
     pass();
     CHECK_EQ(why(), CM_NI_W_NOT_IN_TIME, "not read in time");
@@ -1227,7 +1843,7 @@ static VOID test_budgets_and_late(VOID)
      * marks the journalled configuration committed. */
     model();
     f.ClockAtKind = CM_NI_OP_SET_PRI;
-    f.ClockBy = CM_NOIRQ_TXN_MS + 1;
+    f.ClockBy = CM_NOIRQ_HOLD_MS + CM_NOIRQ_TXN_MS + 1;
     start();
     pass();
     CHECK_EQ(why(), CM_NI_W_TIMEOUT, "the budget spent");
@@ -1243,7 +1859,7 @@ static VOID test_budgets_and_late(VOID)
     /* A late Add_Empty_Log_Conf: journalled uncommitted, ignored. */
     model();
     f.ClockAtKind = CM_NI_OP_ADD_EMPTY;
-    f.ClockBy = CM_NOIRQ_TXN_MS + 1;
+    f.ClockBy = CM_NOIRQ_HOLD_MS + CM_NOIRQ_TXN_MS + 1;
     start();
     pass();
     CHECK_EQ(why(), CM_NI_W_TIMEOUT, "timeout at step 1");
@@ -1307,7 +1923,7 @@ static VOID test_window_walk_port(VOID)
      * nothing. */
     model();
     f.ClockAtKind = CM_NI_OP_LC_LIST;
-    f.ClockBy = CM_NOIRQ_WINDOW_MS + 1;
+    f.ClockBy = CM_NOIRQ_HOLD_MS + CM_NOIRQ_WINDOW_MS + 1;
     start();
     pass();
     CHECK_EQ(why(), CM_NI_W_NOT_IN_TIME, "the window closed meanwhile");
@@ -1467,6 +2083,449 @@ static VOID test_readings(VOID)
     CHECK_EQ(irq.Valid, 0, "NONE with no stage: no record, as before");
 }
 
+/* Record 28 section 14: the window held while a descendant is being
+ * installed. */
+static VOID test_hold(VOID)
+{
+    ULONG t0;
+
+    CHECK(CmNiInstalling(CM_NI_DN_HAS_PROBLEM, 0x01), "problem 1 installing");
+    CHECK(CmNiInstalling(CM_NI_DN_HAS_PROBLEM, 0x08), "problem 8 installing");
+    CHECK(CmNiInstalling(CM_NI_DN_HAS_PROBLEM, 0x12), "problem 18 installing");
+    CHECK(CmNiInstalling(CM_NI_DN_HAS_PROBLEM, 0x1C), "problem 28 installing");
+    CHECK(!CmNiInstalling(CM_NI_DN_HAS_PROBLEM, 0x1D), "problem 29 is not");
+    CHECK(!CmNiInstalling(CM_NI_DN_HAS_PROBLEM, 0), "no problem number: not");
+    CHECK(!CmNiInstalling(0, 0x1C), "28 without DN_HAS_PROBLEM: not");
+    CHECK(!CmNiInstalling(CM_NI_DN_STARTED, 0), "started: not");
+    CHECK(CmNiWalkInstalling(0, CM_NI_DN_HAS_PROBLEM | CM_NI_DN_STARTED, 1,
+                             0),
+          "ME's new bridge during its wizard (problem 1, started)");
+    CHECK(CmNiWalkInstalling(0, 0, 0, CM_NI_CR_NO_SUCH_VALUE),
+          "no problem yet, no Driver value: installing");
+    CHECK(!CmNiWalkInstalling(0, CM_NI_DN_STARTED, 0, 0),
+          "started, its Driver value read: not");
+    CHECK(!CmNiWalkInstalling(0x13, 0, 0, 0x13),
+          "both reads failed: nothing said");
+    CHECK(!CmNiWalkInstalling(0, CM_NI_DN_HAS_PROBLEM, 0x1D, 0x1A),
+          "problem 29, a Driver value too long for the room: not");
+
+    /* The walk meets a bridge being installed: the window held, no entry
+     * of its own needed. */
+    model();
+    CmNiOpenWindow(&mem, 1, ctx.Now);
+    t0 = ctx.Now;
+    ctx.Now = t0 + 9000;
+    ctx.WalkHold = CM_NI_HOLD_BRIDGE | 0x01FFUL;
+    pass();
+    ctx.WalkHold = 0;
+    ctx.Now = t0 + 15000;
+    pass();
+    CHECK(CmNiWindow(&mem), "held at 9 s: open at 15 s");
+    ctx.Now = t0 + 9000 + CM_NOIRQ_WINDOW_MS - 1;
+    pass();
+    CHECK(CmNiWindow(&mem), "open until 10 s after the last hold");
+    ctx.Now = t0 + 9000 + CM_NOIRQ_WINDOW_MS;
+    pass();
+    CHECK(!CmNiWindow(&mem), "closed 10 s after the last hold");
+    CHECK_EQ(mem.C.Held, 1, "held once");
+
+    /* A hold with the window closed does nothing. */
+    ctx.WalkHold = CM_NI_HOLD_BRIDGE | 0x01FFUL;
+    ctx.Now += 1000;
+    pass();
+    CHECK(!CmNiWindow(&mem), "a closed window is not reopened by a hold");
+    CHECK_EQ(mem.C.Held, 1, "not counted");
+
+    /* The function appears late (its parent bridge installed meanwhile):
+     * seen in the held window, admitted and started. */
+    model();
+    CmNiOpenWindow(&mem, 1, ctx.Now);
+    t0 = ctx.Now;
+    ctx.WalkHold = CM_NI_HOLD_BRIDGE | 0x01FFUL;
+    for (ctx.Now = t0; ctx.Now < t0 + 120000; ctx.Now += 5000) {
+        pass();
+    }
+    CHECK(CmNiWindow(&mem), "held for two minutes of an install");
+    ctx.WalkHold = 0;
+    CmNiSeen(&mem, DN, HASH, FN, 0);
+    pass();
+    CHECK_EQ(st(), CM_NI_S_ATTEMPTED, "the late function admitted");
+    ctx.Now += 200;
+    pass();
+    CHECK_EQ(st(), CM_NI_S_DONE, "and started");
+
+    /* Each opening has its own bound. */
+    model();
+    CmNiOpenWindow(&mem, 1, ctx.Now);
+    t0 = ctx.Now;
+    ctx.WalkHold = CM_NI_HOLD_BRIDGE | 0x01FFUL;
+    ctx.Now = t0 + CM_NOIRQ_HOLD_MS - 1;
+    pass();
+    CHECK(CmNiWindow(&mem), "open just before the bound");
+    ctx.Now = t0 + CM_NOIRQ_HOLD_MS;
+    pass();
+    CHECK(!CmNiWindow(&mem), "closed at the bound");
+    CmNiOpenWindow(&mem, 2, ctx.Now);
+    ctx.Now += 30000;
+    pass();
+    CHECK(CmNiWindow(&mem), "a new opening: held again");
+    CHECK_EQ(mem.C.Held, 2, "two windows held");
+    ctx.WalkHold = 0;
+
+    /* Problem 29 with Stor98 bound and no installation reading holds
+     * nothing: admitted at once as before (test_started). An entry whose
+     * rule 2 read an installation problem holds it. */
+    model();
+    f.Problem = 0x1C;
+    start();
+    pass();
+    CHECK_EQ(st(), CM_NI_S_PENDING, "problem 28: pending");
+    CHECK_EQ(mem.Dev[0].WaitDrv, 1, "... for an installation");
+    t0 = ctx.Now;
+    for (ctx.Now = t0 + 5000; ctx.Now <= t0 + 15000; ctx.Now += 5000) {
+        pass();
+    }
+    CHECK_EQ(st(), CM_NI_S_PENDING, "held past 10 s");
+    f.Problem = 0x1D;
+    ctx.Now += 200;
+    pass();
+    CHECK_EQ(st(), CM_NI_S_ATTEMPTED, "its driver bound, problem 29: admitted");
+}
+
+/* The entry of devnode `dn`, or CM_NOIRQ_DEVICES. */
+static ULONG entryOf(ULONG dn)
+{
+    ULONG k;
+
+    for (k = 0; k < CM_NOIRQ_DEVICES; k++) {
+        if (mem.Dev[k].Used && mem.Dev[k].Dn == dn) {
+            return k;
+        }
+    }
+    return CM_NOIRQ_DEVICES;
+}
+
+/* Record 28 section 14: the cases of the two readings together. */
+static VOID test_combined(VOID)
+{
+    ULONG t0;
+    ULONG k;
+    ULONG e;
+    ULONG e2;
+    ULONG what;
+    ULONG value;
+    ULONG lines;
+
+    /* Only a bridge's installation is the walk's to read (section 14.3
+     * item 1). */
+    CHECK(CmNiIsBridge(0x06040002UL), "060400h: a bridge");
+    CHECK(CmNiIsBridge(0x06040102UL), "060401h (subtractive): a bridge");
+    CHECK(!CmNiIsBridge(0x02000003UL), "020000h (the I210): not");
+    CHECK(!CmNiIsBridge(0x0C033010UL), "0C0330h: not");
+    CHECK(!CmNiIsBridge(0x06090000UL), "060900h: not");
+    CHECK(!CmNiIsBridge(0xFFFFFFFFUL), "a read of all ones: not");
+
+    /* A chained NVMe behind two bridges being installed: the walk holds
+     * while the bridges' wizard runs (no function devnode yet), the
+     * function appears after a minute and waits for Stor98's binding (its
+     * entry holds), then is admitted and started; one hold logged, by the
+     * bridge. */
+    memonly();
+    f.Bind = 0;
+    t0 = ctx.Now;
+    CmNiOpenWindow(&mem, 1, t0);
+    ctx.WalkHold = CM_NI_HOLD_BRIDGE | (2UL << 8) | 0x1CUL;
+    for (ctx.Now = t0; ctx.Now < t0 + 60000; ctx.Now += 5000) {
+        pass();
+    }
+    CHECK(CmNiWindow(&mem), "chain: held through the bridges' wizard");
+    ctx.WalkHold = 0;
+    CmNiSeen(&mem, DN, HASH, FN, 0);
+    pass();
+    CHECK_EQ(st(), CM_NI_S_PENDING, "chain: the NVMe met, not bound yet");
+    CHECK_EQ(mem.Dev[0].WaitDrv, 1, "chain: waiting for Stor98");
+    for (k = 0; k < 6; k++) {
+        ctx.Now += 5000;
+        pass();
+    }
+    CHECK(CmNiWindow(&mem), "chain: held by the entry past the walk's 10 s");
+    CHECK_EQ(st(), CM_NI_S_PENDING, "chain: still pending");
+    f.Bind = CM_NI_BIND_OK;
+    ctx.Now += 5000;
+    pass();
+    CHECK_EQ(st(), CM_NI_S_ATTEMPTED, "chain: bound, admitted");
+    ctx.Now += 200;
+    pass();
+    CHECK_EQ(st(), CM_NI_S_DONE, "chain: started");
+    CHECK_EQ(mem.C.Held, 1, "chain: one window held");
+    lines = 0;
+    while (CmNiLogNext(&mem, &what, &value)) {
+        lines++;
+        CHECK_EQ(what, CM_NI_LOG_HOLD, "chain: the hold's line");
+        CHECK_EQ(value, CM_NI_HOLD_BRIDGE | 0x021CUL,
+                 "chain: by a bridge, depth 2, problem 28");
+    }
+    CHECK_EQ(lines, 1, "chain: one line");
+    ctx.Now += CM_NOIRQ_WINDOW_MS;
+    pass();
+    CHECK(!CmNiWindow(&mem), "chain: closed 10 s after the last hold");
+
+    /* The same with the NVMe's devnode never appearing: the bridges' hold
+     * alone, to the bound. */
+    memonly();
+    t0 = ctx.Now;
+    CmNiOpenWindow(&mem, 1, t0);
+    ctx.WalkHold = CM_NI_HOLD_BRIDGE | (1UL << 8) | CM_NI_HOLD_NO_DRIVER;
+    for (ctx.Now = t0; ctx.Now < t0 + CM_NOIRQ_HOLD_MS; ctx.Now += 10000) {
+        pass();
+    }
+    CHECK(CmNiWindow(&mem), "chain: open just before the bound");
+    ctx.Now = t0 + CM_NOIRQ_HOLD_MS;
+    pass();
+    CHECK(!CmNiWindow(&mem), "chain: closed at the bound");
+    ctx.WalkHold = 0;
+
+    /* Two xHCI controllers of one member (the TS3 Plus's second FL1100 and
+     * its ASM1142): the first bound and attempted while the second still
+     * waits for xhci98.inf's binding and holds the window; both started.
+     * The hold logged once, by the entry. */
+    xhci();
+    f.Dn2 = DN + 1;
+    f.Hash2 = HASH + 1;
+    f.Status2 = CM_NI_DN_HAS_PROBLEM;
+    f.Problem2 = 0x1D;
+    f.NoBind2 = 1;
+    t0 = ctx.Now;
+    CmNiOpenWindow(&mem, 1, t0);
+    CmNiSeen(&mem, DN, HASH, FN, 0);
+    CmNiSeen(&mem, f.Dn2, f.Hash2, BDF(10, 2, 0), 0);
+    pass();
+    e = entryOf(DN);
+    e2 = entryOf(f.Dn2);
+    CHECK(e < CM_NOIRQ_DEVICES && e2 < CM_NOIRQ_DEVICES, "two: two entries");
+    CHECK_EQ(mem.Dev[e].State, CM_NI_S_ATTEMPTED, "two: the first attempted");
+    CHECK_EQ(mem.Dev[e2].State, CM_NI_S_PENDING, "two: the second pending");
+    CHECK_EQ(mem.Dev[e2].WaitDrv, 1, "two: ... waiting for its driver");
+    for (k = 0; k < 8; k++) {
+        ctx.Now += 5000;
+        pass();
+    }
+    CHECK_EQ(mem.Dev[e].State, CM_NI_S_DONE, "two: the first started");
+    CHECK(CmNiWindow(&mem), "two: held by the second at 40 s");
+    CHECK_EQ(mem.Dev[e2].State, CM_NI_S_PENDING, "two: the second waits");
+    f.NoBind2 = 0;
+    ctx.Now += 5000;
+    pass();
+    CHECK_EQ(mem.Dev[e2].State, CM_NI_S_ATTEMPTED,
+             "two: the second bound, admitted");
+    ctx.Now += 200;
+    pass();
+    CHECK_EQ(mem.Dev[e2].State, CM_NI_S_DONE, "two: the second started");
+    CHECK_EQ(f.Reprocessed, 2, "two: two reprocesses");
+    CHECK_EQ(mem.C.MemOnly, 2, "two: both the memory-only form");
+    CHECK(CmNiLogNext(&mem, &what, &value), "two: a line owed");
+    CHECK_EQ(what, CM_NI_LOG_HOLD, "two: the hold's line");
+    CHECK_EQ(value, CM_NI_HOLD_ENTRY | BDF(10, 2, 0),
+             "two: by the entry, at its location");
+    CHECK(!CmNiLogNext(&mem, &what, &value), "two: one line");
+
+    /* The second's wait crossed by a held call (the I210's wizard): the
+     * call's time credited, the window still held afterwards, and the
+     * credit's line. */
+    xhci();
+    f.Dn2 = DN + 1;
+    f.Hash2 = HASH + 1;
+    f.Status2 = CM_NI_DN_HAS_PROBLEM;
+    f.Problem2 = 0x1D;
+    f.NoBind2 = 1;
+    t0 = ctx.Now;
+    CmNiOpenWindow(&mem, 1, t0);
+    CmNiSeen(&mem, f.Dn2, f.Hash2, BDF(10, 2, 0), 0);
+    pass();
+    CHECK_EQ(mem.Dev[0].WaitDrv, 1, "credit: waiting");
+    while (CmNiLogNext(&mem, &what, &value)) {
+    }
+    ctx.Now += 80000UL;
+    CmNiCredit(&mem, 80000UL, ctx.Now);
+    CHECK_EQ(mem.C.Credited, 1, "credit: counted");
+    CHECK(CmNiLogNext(&mem, &what, &value) && what == CM_NI_LOG_CREDIT &&
+          value == 80000UL, "credit: its line, the held ms");
+    CHECK_EQ(mem.Credit, 80000UL, "credit: the window credited");
+    pass();
+    CHECK(CmNiWindow(&mem), "credit: open after the held call");
+    /* The bound is counted on the window's own time: the opening moved by
+     * the credit. */
+    while (ctx.Now - t0 < 80000UL + CM_NOIRQ_HOLD_MS - 10000UL) {
+        ctx.Now += 10000;
+        pass();
+    }
+    CHECK(CmNiWindow(&mem), "credit: open at the bound plus the credit, less");
+    ctx.Now = t0 + 80000UL + CM_NOIRQ_HOLD_MS;
+    pass();
+    CHECK(!CmNiWindow(&mem), "credit: closed at the bound plus the credit");
+    CHECK_EQ(mem.Dev[0].Why, CM_NI_W_NOT_IN_TIME, "credit: not in time");
+
+    /* The worker's other work blocked 80 s between two ticks (the
+     * marking, held by the I210's wizard): handed over as a credit, the
+     * first controller's attempt survives and the second, met only after,
+     * is admitted inside the window. */
+    xhci();
+    f.StartOnReprocess = 0;
+    f.Dn2 = DN + 1;
+    f.Hash2 = HASH + 1;
+    f.Status2 = CM_NI_DN_HAS_PROBLEM;
+    f.Problem2 = 0x1D;
+    t0 = ctx.Now;
+    CmNiOpenWindow(&mem, 1, t0);
+    CmNiSeen(&mem, DN, HASH, FN, 0);
+    pass();
+    e = entryOf(DN);
+    CHECK_EQ(mem.Dev[e].State, CM_NI_S_ATTEMPTED, "gap: the first attempted");
+    ctx.Now += 80000UL;
+    CmNiCredit(&mem, 80000UL - 200UL, ctx.Now);
+    CmNiSeen(&mem, f.Dn2, f.Hash2, BDF(10, 2, 0), 0);
+    f.StartOnReprocess = 1;
+    pass();
+    e2 = entryOf(f.Dn2);
+    CHECK(mem.Dev[e].State == CM_NI_S_ATTEMPTED ||
+          mem.Dev[e].State == CM_NI_S_DONE, "gap: the first not timed out");
+    CHECK(e2 < CM_NOIRQ_DEVICES &&
+          mem.Dev[e2].State == CM_NI_S_ATTEMPTED, "gap: the second admitted");
+
+    /* A member whose only unfinished devnode is a function of another
+     * class with no driver (the I210): refused by its header, the walk
+     * holds nothing for it, and the window closes at 10 s. */
+    xhci();
+    f.OtherDn = 0x5000UL;
+    f.OtherHdr2 = 0x02000003UL;
+    t0 = ctx.Now;
+    CmNiOpenWindow(&mem, 1, t0);
+    CmNiWalkBegin(&mem);
+    CmNiSeen(&mem, 0x5000UL, 0x9000UL, BDF(11, 3, 0), 0);
+    CmNiWalkDone(&mem, 1);
+    pass();
+    CHECK_EQ(mem.C.Refused[CM_NI_W_HEADER], 1, "i210: refused by its header");
+    ctx.Now = t0 + CM_NOIRQ_WINDOW_MS;
+    pass();
+    CHECK(!CmNiWindow(&mem), "i210: closed at 10 s");
+    CHECK_EQ(mem.C.Held, 0, "i210: never held");
+}
+
+/* Record 28 section 14.3 item 1, 98 SE's one-at-a-time enumeration
+ * (runs/run-48.md, "48.36, the dock's first plug on 98 SE"): a device
+ * answering on a walked secondary bus with no devnode placed holds; and
+ * section 14.4's close lines. */
+static VOID test_unenumerated(VOID)
+{
+    ULONG met[4];
+    ULONG what;
+    ULONG value;
+    ULONG t0;
+
+    /* The dock's switch: five downstream ports answer on bus 5. */
+    met[0] = BDF(5, 0, 0);
+    CHECK(CmNiUnenumerated(5, 0x1FUL, met, 1, 4),
+          "bus 5: ports 1 to 4 answer with no devnode");
+    met[1] = BDF(5, 1, 0);
+    met[2] = BDF(5, 2, 0);
+    met[3] = BDF(5, 3, 0);
+    CHECK(CmNiUnenumerated(5, 0x1FUL, met, 4, 4),
+          "bus 5: port 4 still without one");
+    CHECK(!CmNiUnenumerated(5, 0x0FUL, met, 4, 4),
+          "bus 5: every answering device placed");
+    met[3] = BDF(5, 3, 2);
+    CHECK(!CmNiUnenumerated(5, 0x0FUL, met, 4, 4),
+          "another function of the device counts for it");
+    met[3] = BDF(6, 3, 0);
+    CHECK(CmNiUnenumerated(5, 0x0FUL, met, 4, 4),
+          "the same device on another bus does not");
+    CHECK(!CmNiUnenumerated(5, 0, met, 4, 4), "nothing answers: no hold");
+    CHECK(!CmNiUnenumerated(0, 0x1FUL, met, 1, 4), "bus 0: not read");
+    CHECK(!CmNiUnenumerated(5, 0x1FUL, met, 5, 4),
+          "the walk's locations not kept whole: no hold");
+    CHECK(CmNiUnenumerated(5, 0x80000000UL, met, 0, 4),
+          "device 31, nothing met");
+    CHECK(CmNiAwaited(0x06040000UL) && CmNiAwaited(0x06040100UL),
+          "a bridge is waited for");
+    CHECK(CmNiAwaited(0x01080200UL) && CmNiAwaited(0x0C033001UL),
+          "an NVMe drive and an xHCI controller are waited for");
+    CHECK(!CmNiAwaited(0x02000003UL), "a network function is not (the I210)");
+    CHECK(!CmNiAwaited(0x0C032000UL), "nor an EHCI controller");
+    CHECK(!CmNiAwaited(0xFFFFFFFFUL), "nor a read that failed");
+
+    /* The first plug as read: 04:00 being installed for 60 s, then its
+     * first child alone placed and the others not yet enumerated for 90
+     * s (the FL1100's wizard), held throughout; then nothing holds and
+     * the window closes 10 s after the last hold, its lines owed. */
+    model();
+    CmNiOpenWindow(&mem, 1, ctx.Now);
+    t0 = ctx.Now;
+    ctx.WalkHold = CM_NI_HOLD_BRIDGE | 0x0101UL;
+    for (ctx.Now = t0; ctx.Now <= t0 + 60000UL; ctx.Now += 5000) {
+        pass();
+    }
+    ctx.WalkHold = CM_NI_HOLD_BRIDGE | CM_NI_HOLD_NO_CHILD;
+    for (; ctx.Now <= t0 + 150000UL; ctx.Now += 5000) {
+        pass();
+    }
+    CHECK(CmNiWindow(&mem), "plug: held past two minutes");
+    while (CmNiLogNext(&mem, &what, &value)) {
+    }
+    ctx.WalkHold = 0;
+    ctx.Now = t0 + 150000UL + CM_NOIRQ_WINDOW_MS - 1;
+    pass();
+    CHECK(CmNiWindow(&mem), "plug: open until 10 s after the last hold");
+    ctx.Now = t0 + 150000UL + CM_NOIRQ_WINDOW_MS;
+    pass();
+    CHECK(!CmNiWindow(&mem), "plug: closed 10 s after the last hold");
+    CHECK(CmNiLogNext(&mem, &what, &value) && what == CM_NI_LOG_CLOSE,
+          "plug: the close's line");
+    CHECK_EQ(value, (CM_NI_CLOSE_AFTER_HOLD << 24) | (160UL << 12) | 10UL,
+             "plug: after a hold, 160 s from the opening, 10 from the hold");
+    CHECK(CmNiLogNext(&mem, &what, &value) && what == CM_NI_LOG_CLOSE_HOLD,
+          "plug: the last hold's line");
+    CHECK_EQ(value, CM_NI_HOLD_BRIDGE | CM_NI_HOLD_NO_CHILD,
+             "plug: the last hold an unenumerated device");
+    CHECK(!CmNiLogNext(&mem, &what, &value), "plug: two lines");
+
+    /* Never held: closed at 10 s, the hold line 0. */
+    model();
+    CmNiOpenWindow(&mem, 1, ctx.Now);
+    t0 = ctx.Now;
+    ctx.Now = t0 + CM_NOIRQ_WINDOW_MS;
+    pass();
+    CHECK(!CmNiWindow(&mem), "unheld: closed at 10 s");
+    CHECK(CmNiLogNext(&mem, &what, &value) && what == CM_NI_LOG_CLOSE &&
+          value == ((CM_NI_CLOSE_UNHELD << 24) | (10UL << 12) | 10UL),
+          "unheld: its close line");
+    CHECK(CmNiLogNext(&mem, &what, &value) &&
+          what == CM_NI_LOG_CLOSE_HOLD && value == 0,
+          "unheld: no hold");
+
+    /* Held to the bound: the bound's reason, the seconds held at FFFh. */
+    model();
+    CmNiOpenWindow(&mem, 1, ctx.Now);
+    t0 = ctx.Now;
+    ctx.WalkHold = CM_NI_HOLD_BRIDGE | 0x02FFUL;
+    for (ctx.Now = t0; ctx.Now < t0 + CM_NOIRQ_HOLD_MS; ctx.Now += 5000UL) {
+        pass();
+    }
+    while (CmNiLogNext(&mem, &what, &value)) {
+    }
+    ctx.Now = t0 + CM_NOIRQ_HOLD_MS;
+    pass();
+    ctx.WalkHold = 0;
+    CHECK(!CmNiWindow(&mem), "bound: closed");
+    CHECK(CmNiLogNext(&mem, &what, &value) && what == CM_NI_LOG_CLOSE &&
+          (value >> 24) == CM_NI_CLOSE_BOUND &&
+          ((value >> 12) & 0xFFFUL) == 0x708UL,
+          "bound: its reason, 1800 s from the opening");
+    CHECK(CmNiLogNext(&mem, &what, &value) &&
+          what == CM_NI_LOG_CLOSE_HOLD &&
+          value == (CM_NI_HOLD_BRIDGE | 0x02FFUL),
+          "bound: the last hold a bridge with no Driver value");
+}
+
 int main(void)
 {
     test_started();
@@ -1479,6 +2538,10 @@ int main(void)
     test_budgets_and_late();
     test_window_walk_port();
     test_readings();
+    test_hold();
+    test_xhci();
+    test_combined();
+    test_unenumerated();
     printf("test_cm_noirq: %d checks, %d failures\n", checks, failures);
     return failures;
 }

@@ -201,12 +201,6 @@ static const struct {
       "installed starts.\n\n"
       "Restart Windows later: to save your work or follow the steps first. "
       "Restart before using the devices." },
-    { INST_HELP_FINISH_SHUT, "Finish",
-      "What was done, what is left, and where the log file is.\n\n"
-      "Shut down now: Finish shuts Windows down; "
-      "start it again yourself. Stor98's update, or the storage drivers' "
-      "copy, needs a fresh start rather than a restart.\n\n"
-      "Shut down later: to save your work first." },
     { INST_HELP_FINISH_NONE, "Finish",
       "No changes were made, so no restart is needed. The last line above "
       "says why. Finish closes Setup." },
@@ -264,8 +258,7 @@ int inst_help_topic(int kind, int uninstall, int variant)
         if (uninstall) {
             return INST_HELP_UFINISH;
         }
-        return variant == INST_FV_SHUT ? INST_HELP_FINISH_SHUT
-                                       : INST_HELP_FINISH;
+        return INST_HELP_FINISH;
     default:
         return -1;
     }

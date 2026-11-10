@@ -178,9 +178,22 @@ rem The OS supplies usbd.sys and usbui.dll through the INF's LayoutFile. The
 rem HCD replaces usbport.sys and usbhub.sys, and the INF gate refuses an INF
 rem that fetches either (OS-HCDREPLACED).
 rem
-rem Usage:  scripts\build-driver.cmd [release|qemu|all]
+rem Usage:  scripts\build-driver.cmd [release|qemu|all|stor98]
 rem                                  [-amd64] [-NoTargetEvidence]
 rem                                                       (default: release)
+rem
+rem   "stor98" in the flavor's place builds and gates Stor98 alone, for the
+rem   run's architecture (roadmap-usb4 task 48.9): the text checks, then
+rem   Stor98's INF gate and interface header with their self-tests and, on
+rem   the x86 run, its unit suite (scripts\build-steps.ps1 -Stor98Only),
+rem   then the images step 14a builds (win9x stor98.mpd and x86 stor98.sys,
+rem   or the amd64 stor98.sys), each gated as there (:gatestor98) once for
+rem   each flavour's record. A record of this architecture that is there
+rem   is amended - its Stor98 hashes replaced - only when it was written at
+rem   this commit from a clean tree and the tree is still clean; otherwise
+rem   it is deleted, since it no longer names the Stor98 images the tree
+rem   holds (scripts\package\write-gated-manifest.ps1 -Amend). No other
+rem   binary is built, gated or touched.
 rem
 rem   "release" is the default deliberately: widening it would build a binary
 rem   that must never be published on every ordinary run.  "all" is the two,
@@ -274,6 +287,11 @@ rem skip stand in an "all" build too; a cut never sets it, and
 rem XHCI98_FULL_SELFTESTS=1 set by the caller still wins (owner, 2026-10-30).
 if /i "%FLAVORS%"=="all" if not "%XHCI98_SELFTEST_SKIP_OK%"=="1" set "XHCI98_FULL_SELFTESTS=1"
 if /i "%FLAVORS%"=="all" set "FLAVORS=release qemu"
+rem The Stor98-only run (task 48.9): both flavours' records, which each name
+rem the Stor98 images, are amended or deleted (:stor98only).
+set "S98ONLY="
+if /i "%FLAVORS%"=="stor98" set "S98ONLY=1"
+if defined S98ONLY set "FLAVORS=release qemu"
 if /i "%FLAVORS%"=="release" set "FLAVORS=release"
 if /i "%FLAVORS%"=="qemu" set "FLAVORS=qemu"
 rem Validate both arguments here, before the self-tests and the host suite
@@ -378,6 +396,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\check-text.ps1"
 if errorlevel 1 goto textfail
 call :steptime STEPT0 "text checks"
+if defined S98ONLY goto stor98only
 
 rem The DDK output directory for the target architecture - build.exe's own
 rem <arch> component, and the one place this script turns ARCH into a path.
@@ -487,6 +506,7 @@ rem its free build whatever this project's flavour - for this architecture,
 rem then gated in each flavour below (:gatestor98). The images it replaces
 rem (this architecture's only; the other run's stay) are deleted first, so a
 rem failed build cannot leave an old one to gate.
+:s98build
 echo.
 echo === build Stor98 (free, %ARCH%) ===
 call :stepclock STEPT0
@@ -499,6 +519,7 @@ for %%T in (%S98IMAGES%) do if exist "%REPO%\src\stor98\out\free\%%T" del "%REPO
 call "%REPO%\src\stor98\scripts\build.cmd" "%S98TARGETS%" free
 if errorlevel 1 goto stor98fail
 call :steptime STEPT0 "build Stor98"
+if defined S98ONLY goto s98records
 
 rem S98VSD.VXD (task 43.46, design record 30 section 6.4), the Windows 98
 rem SE and ME IOS layer for Stor98's disks, on the x86 run: the release
@@ -891,6 +912,45 @@ call :gated -Capture -Name %~2 -Image "%S98IMG%"
 if errorlevel 1 exit /b 1
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\source-stamp.ps1" -Driver %~3 -Write "%REPO%\src\stor98\out\free\%~1"
+exit /b %errorlevel%
+
+rem ------------------------------------------------------------------
+rem :stor98only - the Stor98-only run (task 48.9; the usage above): its
+rem checks that need no DDK, then the Stor98 build above (:s98build), then
+rem each flavour's record amended or deleted (:s98records). Reached by goto
+rem from :mainbody, in its scope, so the Stor98 build's refusals are the
+rem ordinary run's.
+rem ------------------------------------------------------------------
+:stor98only
+echo.
+echo === Stor98 alone (%ARCH%): its checks that need no DDK ===
+call :stepclock STEPT0
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\build-steps.ps1" -Arch %ARCH% -Stor98Only
+if errorlevel 1 goto stepsfail
+call :steptime STEPT0 "Stor98's checks that need no DDK"
+goto s98build
+
+:s98records
+for %%F in (release qemu) do (
+    call :s98record %%F
+    if errorlevel 1 goto stor98gatefail
+)
+echo.
+echo Stor98 alone (%ARCH%): built and gated; no other binary was built.
+call :steptime RUNT0 "the whole run"
+endlocal
+exit /b 0
+
+:s98record
+set "FLAVOR=%~1"
+echo.
+echo === Stor98 alone: the %FLAVOR% %ARCH% record ===
+call :gated -Begin -Amend
+if errorlevel 1 exit /b 1
+call :gatestor98
+if errorlevel 1 exit /b 1
+call :gated -Finish -Amend
 exit /b %errorlevel%
 
 :pfwsysfail

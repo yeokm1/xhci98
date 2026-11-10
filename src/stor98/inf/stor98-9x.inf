@@ -43,7 +43,7 @@ Signature="$CHICAGO$"
 Class=SCSIAdapter
 ClassGUID={4D36E97B-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=11/08/2026,3.4.2.0
+DriverVer=11/10/2026,3.4.3.0
 
 [DestinationDirs]
 ; DIRID 12: Windows\System\IoSubsys on Windows 9x, system32\drivers on NT.
@@ -93,6 +93,9 @@ HKLM,"System\CurrentControlSet\Services\stor98",StorIntWatchdog,0x00010003,1
 HKLM,"System\CurrentControlSet\Services\stor98",StorGoneMs,0x00010003,5000
 HKLM,"System\CurrentControlSet\Services\stor98",StorWriteIdleMs,0x00010003,1000
 HKLM,"System\CurrentControlSet\Services\stor98",StorHold9xMs,0x00010003,4000
+; StorTakeFirmware is read on 98 SE alone: Stor98 ignores it on ME, where
+; taking a controller the BIOS set up can hang Windows' start (xhci98 48.28)
+HKLM,"System\CurrentControlSet\Services\stor98",StorTakeFirmware,0x00010003,0
 
 [Strings]
 Provider="Yeo Kheng Meng"

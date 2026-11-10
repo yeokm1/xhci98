@@ -662,3 +662,42 @@ function Remove-LegStick {
     param([int]$QmpPort)
     $null = Invoke-Qmp -Port $QmpPort -Command 'device_del' -Arguments @{ id = 'stick' } -AllowError
 }
+
+# An audio leg (release-legs.psd1 Audio): QEMU's usb-audio on the controller,
+# its output to the run's -audiodev none (Get-LegAudioBackends), which
+# consumes the samples at the device's rate and plays nothing on the host.
+function Get-LegAudioBackends {
+    return @('-audiodev', 'none,id=xhsnd')
+}
+
+function Add-LegAudio {
+    param([int]$QmpPort)
+    $null = Invoke-Qmp -Port $QmpPort -Command 'device_add' -Arguments @{
+        driver = 'usb-audio'; id = 'xhaudio'; bus = 'xh.0'; audiodev = 'xhsnd'
+    }
+}
+
+# WAVCHK.EXE, the guest's playback check, built by wavchk\build.cmd; an
+# audio leg cannot run without it.
+function Get-LegWavChk {
+    $p = Join-Path (Split-Path -Parent $PSScriptRoot) 'wavchk\WAVCHK.EXE'
+    if (-not (Test-Path -LiteralPath $p)) { throw "an audio leg needs ${p}: run scripts\vm-matrix\wavchk\build.cmd" }
+    return $p
+}
+
+# The WAV the guest plays: 2 s of a 440 Hz tone, 22050 Hz, 16-bit, mono, made
+# here so that no recording is carried.
+function New-LegToneWav {
+    param([string]$Path)
+    $rate = 22050; $n = 2 * $rate; $bytes = 2 * $n
+    $ms = New-Object IO.MemoryStream
+    $w = New-Object IO.BinaryWriter $ms
+    $w.Write([Text.Encoding]::ASCII.GetBytes('RIFF')); $w.Write([int](36 + $bytes)); $w.Write([Text.Encoding]::ASCII.GetBytes('WAVE'))
+    $w.Write([Text.Encoding]::ASCII.GetBytes('fmt ')); $w.Write([int]16); $w.Write([int16]1); $w.Write([int16]1)
+    $w.Write([int]$rate); $w.Write([int](2 * $rate)); $w.Write([int16]2); $w.Write([int16]16)
+    $w.Write([Text.Encoding]::ASCII.GetBytes('data')); $w.Write([int]$bytes)
+    for ($i = 0; $i -lt $n; $i++) { $w.Write([int16][math]::Round(8000 * [math]::Sin(2 * [math]::PI * 440 * $i / $rate))) }
+    $w.Flush()
+    [IO.File]::WriteAllBytes($Path, $ms.ToArray())
+    $w.Dispose()
+}

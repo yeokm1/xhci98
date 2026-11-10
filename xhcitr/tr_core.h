@@ -306,6 +306,23 @@ int tr_query_new_pass(const TR_QUERY *a, const TR_QUERY *b);
 /* 1 when both answers are of the same start and content generation. */
 int tr_query_same_content(const TR_QUERY *a, const TR_QUERY *b);
 
+/* The watch after an eject (record 24 section 5.2): 1 when `now` may
+ * stand as the watch's current reading of the port - eject-ready as
+ * tr_query_eject_ready reads it (not stopping, not inert, stage active,
+ * answering) and published at least CM_Q_NEW_PASSES passes after `pre`,
+ * the answer read immediately before the call, in the same start
+ * (tr_query_new_pass): tr_query_watch_new; and its age, with the time
+ * the tool held it on top (tr_query_age_within: heldMs from before the
+ * call that read it to the decision, as the driver samples the age
+ * inside the call), under CM_Q_CURRENT_MS. A query answer is the
+ * driver's cached snapshot, so a snapshot whose publication stopped
+ * would otherwise read the same through the whole watch; only `pre`'s
+ * epoch and pass are read. */
+int tr_query_watch_new(const TR_QUERY *pre, const TR_QUERY *now);
+int tr_query_age_within(TR_U32 ageMs, TR_U32 heldMs);
+int tr_query_watch_current(const TR_QUERY *pre, const TR_QUERY *now,
+                           TR_U32 heldMs);
+
 typedef struct _TR_EXT {
     TR_U32 Rate;                /* Gbit/s per lane, 0 unknown              */
     TR_U32 Width;               /* lanes, 0 unknown                        */
@@ -1153,6 +1170,170 @@ int tr_bkind_fast(const TR_BKIND *b, int reports);
  * (task 47.35: the quick save's, taken away before the next is sent). */
 int tr_bkind_outstanding(const TR_BKIND *b);
 
+/* ---- The USB drive notice (record 25 section 7.8, task 48.17) ------------
+ *
+ * Optional, off by default, per user: a balloon (98 SE: the tooltip's last
+ * event and the tool's pop-up) when a USB drive on an xhci98.sys controller
+ * is connected or removed. A drive is a port holding a storage record in
+ * its controller's query answer (section 19), so a drive with no storage
+ * driver counts; the impure half (xhcitr.c, stor_*) reads the model, this
+ * half keeps the set, the queue, the gates and the texts. */
+
+/* The per-user DWORD under HKCU\Software\xHCI98\XHCITR (item 1): only a
+ * REG_DWORD 1 is on. haveValue: a REG_DWORD of 4 bytes was read. */
+#define TR_STOR_VALUE   "StorageNotice"
+int tr_stor_on(int haveValue, TR_U32 value);
+
+#define TR_STOR_MAX         64      /* drives kept (item 7)                  */
+#define TR_STOR_NAME        160
+#define TR_STOR_PATH        64
+#define TR_STOR_GATHER_MS   1500UL  /* a burst across refreshes (item 8)     */
+#define TR_STOR_GAP_MS      5000UL  /* after any other balloon of the tool's */
+#define TR_STOR_SETTLE_MS   3000UL  /* a devnode, then room for the letter   */
+#define TR_STOR_HOLD_MS     10000UL /* the arrivals' hold at most            */
+#define TR_STOR_RESUME_MS   15000UL /* quiet after a resume (item 6)         */
+#define TR_STOR_FAST_MS     (TR_BS_NOSHOW_MS + TR_BS_WAIT_MS)
+
+/* One attachment's key (item 4): tr_fast_key's, then "|s<slot>". */
+void tr_stor_key(char *out, size_t cap, const char *ctrlKey, const char *path,
+                 unsigned int vid, unsigned int pid, TR_U32 slot);
+
+/* A name and its rank (item 9), best last. label: the tree's label of the
+ * device's devnode (NULL or "" without one); product: its product string
+ * (NULL or "" unknown). The rank is TR_SN_LETTER when the label is a
+ * specific one with a drive letter in it ("(F:)"). */
+#define TR_SN_VIDPID    0
+#define TR_SN_CLASS     1
+#define TR_SN_PRODUCT   2
+#define TR_SN_LABEL     3
+#define TR_SN_LETTER    4
+int tr_stor_name(char *out, size_t cap, const char *label,
+                 const char *product, unsigned int vid, unsigned int pid);
+
+/* A kept drive (item 7). */
+typedef struct _TR_STOR_ENT {
+    char Key[TR_FAST_KEY];
+    char Ctrl[TR_FAST_KEY];     /* the controller's key                    */
+    char Path[TR_STOR_PATH];    /* the port path                           */
+    unsigned int Vid;
+    unsigned int Pid;
+    TR_U32 Slot;
+    char Name[TR_STOR_NAME];
+    int Rank;                   /* TR_SN_*                                 */
+    int Asked;                  /* the product string was asked            */
+    char Prod[128];             /* its answer, "" when none                */
+} TR_STOR_ENT;
+
+typedef struct _TR_STOR_SET {
+    TR_STOR_ENT E[TR_STOR_MAX];
+    int N;
+} TR_STOR_SET;
+
+/* A queued group (item 8): N drives, the first TR_STOR_MAX kept. */
+typedef struct _TR_STOR_GRP {
+    int N;
+    int Kept;
+    char Key[TR_STOR_MAX][TR_FAST_KEY];
+    char Ctrl[TR_STOR_MAX][TR_FAST_KEY];
+    char Name[TR_STOR_MAX][TR_STOR_NAME];
+    TR_U32 First;               /* GetTickCount of its first event         */
+} TR_STOR_GRP;
+
+typedef struct _TR_STOR_Q {
+    TR_STOR_GRP Rm;
+    TR_STOR_GRP Arr;
+} TR_STOR_Q;
+
+/* This refresh's counted drives, as the impure half read them. */
+typedef struct _TR_STOR_OBS {
+    char Key[TR_FAST_KEY];
+    char Ctrl[TR_FAST_KEY];
+    char Path[TR_STOR_PATH];
+    unsigned int Vid;
+    unsigned int Pid;
+    TR_U32 Slot;
+    char Name[TR_STOR_NAME];
+    int Rank;
+    int Asked;
+    char Prod[128];
+} TR_STOR_OBS;
+
+/* One refresh (items 5 to 8). gone[i] for set entry i not among obs: 1
+ * gone, 0 unknown (kept, no notice). quietAll: the whole refresh is taken
+ * silently (the first, the first after turning it on, a sleep); quietCtrl
+ * the nq controllers taken silently in it (answering again). A gone drive
+ * whose arrival is still queued leaves the arrivals, with no removal; any
+ * other gone drive, not quiet, joins the removals; a new drive, not quiet,
+ * joins the arrivals; a new drive past TR_STOR_MAX is not kept. An entry
+ * still present takes the observation's name where its rank is not lower.
+ * Returns the events queued. */
+int tr_stor_step(TR_STOR_SET *set, const int *gone, const TR_STOR_OBS *obs,
+                 int nobs, const char (*quietCtrl)[TR_FAST_KEY], int nq,
+                 int quietAll, TR_STOR_Q *q, TR_U32 nowMs);
+
+/* Every queued drive of controller ctrl dropped (a quiet rebase, item 6). */
+void tr_stor_q_drop_ctrl(TR_STOR_Q *q, const char *ctrl);
+/* Everything queued dropped (a suspend, turning it off). */
+void tr_stor_q_clear(TR_STOR_Q *q);
+/* A queued group's drive by key: its index, -1 none. */
+int tr_stor_grp_find(const TR_STOR_GRP *g, const char *key);
+/* A queued group's drive i taken out (the count with it). */
+void tr_stor_grp_del(TR_STOR_GRP *g, int i);
+
+/* What decides a send (item 8), at Now. */
+typedef struct _TR_STOR_GATE {
+    TR_U32 Now;
+    int Ready;                  /* the icon is there and the notice on     */
+    int Quiet;                  /* asleep, or within TR_STOR_RESUME_MS     */
+    int HaveOther;              /* another balloon was sent ...            */
+    TR_U32 OtherAt;             /* ... at this tick                        */
+    int FastOwed;               /* the faster notice owed or held          */
+    int FastWatch;              /* its re-send watch is open ...           */
+    TR_U32 FastAt;              /* ... for its balloon sent at this tick   */
+    int ArrNamed;               /* every queued arrival has its devnode    */
+} TR_STOR_GATE;
+
+#define TR_SQ_NONE      0
+#define TR_SQ_RM        1       /* the removals are due                    */
+#define TR_SQ_ARR       2       /* the arrivals are due                    */
+int tr_stor_due(const TR_STOR_Q *q, const TR_STOR_GATE *g);
+
+/* A group's balloon (item 10): title (at least 64 bytes) and text (cap
+ * 256 for szInfo), every name of it counted, two named at most, a name
+ * cut so that the text fits. removal: "removed" rather than "connected". */
+void tr_stor_text(char *title, size_t tcap, char *text, size_t cap,
+                  const TR_STOR_GRP *g, int removal);
+
+/* The tick's poll (item 3): each xhci98 controller's storage part size
+ * (XHQ_O_XPORT_BYTES), TR_STOR_POLL_NONE where it gave none, by the
+ * controller's key, as the last tick read it. */
+#define TR_STOR_POLL_NONE   0xFFFFFFFFUL
+typedef struct _TR_STOR_POLL {
+    char Key[TR_STOR_MAX][TR_FAST_KEY];
+    TR_U32 Bytes[TR_STOR_MAX];
+    int N;
+} TR_STOR_POLL;
+
+/* now against base, then now made the base: 1 (a refresh owed) when a
+ * controller in both reads another size, or one in now has no baseline
+ * (the first tick after the tray started or the notice was turned on, or
+ * a controller new to the model): a drive may have come or gone since the
+ * refresh that last counted it, which no tick saw. */
+int tr_stor_poll_step(TR_STOR_POLL *base, const TR_STOR_POLL *now);
+
+/* Whether the drive balloon's watch takes the shell as one that answers
+ * (item 10, section 7.7 item 9): one that sent a NIN_BALLOON* message in
+ * this session (answered), or XP and later (NT 5.1 up), whose shell holds
+ * a balloon behind its Found New Hardware ones without a word. */
+int tr_stor_answers(int answered, int nt, TR_U32 major, TR_U32 minor);
+
+/* The drive balloon's watch at one event (item 10): tr_bsend_step's
+ * answer, except that while held (the Settings window holds the model) a
+ * tick waits, the watch as it is, so that the re-send is judged against
+ * the model read again at the window's close. */
+int tr_stor_resend_due(TR_BSEND *s, int ev, TR_U32 nowMs, int answers,
+                       int held);
+
 /* 98 SE's tooltip for the icon after a long hover (record 25 section 7.1,
  * task 43.72). Its shell (shell32.dll 4.72) shows the icon's tooltip once
  * per entry; a pointer that stays on the icon until the tooltip times out
@@ -1481,6 +1662,11 @@ TR_U32 tr_eject_watch_ms(int kind);
 
 /* The line when the bound passed with the tunnel not closed. */
 const char *tr_eject_open_text(int kind);
+
+/* The same, with inst_pcie_unbound's answer for the watch: when it is 1,
+ * the connection manager cannot close that port's tunnel whoever
+ * confirms the eject, and inst_pcie_unbound_text says so instead. */
+const char *tr_eject_end_text(int kind, int unbound);
 
 /* File > Save Snapshot... (record 25 section 15 item 8, revision 25; task
  * 46.4). tr_snap_named: 1 with the file name /snapshot gave its set, read

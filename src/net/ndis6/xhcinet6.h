@@ -140,6 +140,9 @@ VOID Net6CmClose(PNET6_ADAPTER a);                    /* PASSIVE */
 /* 1 when the connection manager answered, else 0 and *i zeroed. */
 ULONG Net6CmQuery(PNET6_ADAPTER a, PXHCI_CM_NET_INFO i); /* <= DISPATCH */
 VOID Net6CmLog(PNET6_ADAPTER a, const char *label, ULONG value);
+ULONG Net6TxErrorTotal(PNET6_ADAPTER a);              /* any */
+ULONG Net6RxErrorTotal(PNET6_ADAPTER a);              /* any */
+VOID NTAPI Net6CbStats(PVOID ctx, PXHCI_CM_NET_STATS s);       /* PASSIVE */
 
 /* n6_data.c - the data path. */
 MINIPORT_SEND_NET_BUFFER_LISTS Net6SendNbls;

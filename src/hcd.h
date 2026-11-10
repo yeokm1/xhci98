@@ -231,6 +231,31 @@ typedef struct _HCD_IO_REQUEST {
  * one slot the SG list's own declaration already holds beyond them. */
 #define HCD_SG_ELEMENTS     32UL
 
+/*
+ * Task 48.33 (design record 13 section 11.11): every transfer's data
+ * staged through common buffer the driver owns (hcd_stage.c). A TD holds
+ * at most HCD_STAGE_TD_SLABS slabs of 64 KiB, two elements each at most
+ * (cut at the 64 KB line), so HCD_SG_ELEMENTS covers it. The window MDLs
+ * map at most HCD_STAGE_WINDOW bytes of a client's MDL at a time.
+ */
+#define HCD_STAGE_TD_SLABS  16UL
+#define HCD_STAGE_WINDOWS   4UL
+#define HCD_STAGE_WINDOW    0x10000UL
+#define HCD_STAGE_S_NONE        0UL
+#define HCD_STAGE_S_WAITING     1UL /* on StageQueue                      */
+#define HCD_STAGE_S_FILLING     2UL /* its OUT copy running               */
+#define HCD_STAGE_S_READY       3UL /* filled, or an IN, not published    */
+#define HCD_STAGE_S_PUBLISHED   4UL /* on the ring                        */
+#define HCD_STAGE_S_DRAINING    5UL /* its IN copy-out running            */
+#define HCD_STAGE_S_COPY_PENDING 6UL /* a copy-out that could not map, on
+                                      * StageCopyQueue                    */
+#define HCD_STAGE_K_NONE        0UL
+#define HCD_STAGE_K_SMALL       1UL /* the record's own small buffer      */
+#define HCD_STAGE_K_SHARED      2UL /* slabs of the shared pool           */
+#define HCD_STAGE_K_RESERVE     3UL /* its pipe's reserve                 */
+#define HCD_STAGE_K_CONTROL     4UL /* the controller's control slab      */
+#define HCD_STAGE_K_ISO         5UL /* its isochronous share              */
+
 /* An isochronous record's request in the transfer engine's input format
  * (xhci_usbport.h), which the engine was written against and no usbport
  * builds here: one per record of an isochronous pipe, allocated with the
@@ -250,10 +275,10 @@ XHCI_C_ASSERT(hcd_iso_block_tail,
                       sizeof(USBPORT_ISO_PACKET));
 
 #define HCD_XFER_FREE       0UL
-#define HCD_XFER_MAPPING    1UL     /* in the map pump                    */
+#define HCD_XFER_MAPPING    1UL     /* in staging or the map pump         */
 #define HCD_XFER_ON_RING    2UL     /* published; the engine owns it      */
 #define HCD_XFER_DONE       3UL     /* retired, on the done list          */
-#define HCD_XFER_HELD       4UL     /* mapped, waiting for its pipe       */
+#define HCD_XFER_HELD       4UL     /* staged or not, waiting for its pipe */
 
 /* Record 13 section 11.8, point 3: the event budget counts one underrun
  * for each record an isochronous pipe can publish while nothing drains,
@@ -326,6 +351,40 @@ typedef struct _HCD_XFER {
         USBPORT_SCATTER_GATHER_LIST List;
         USBPORT_SCATTER_GATHER_ELEMENT More[HCD_SG_ELEMENTS];
     } Sg;
+    /* Task 48.33 (design record 13 section 11.11; hcd_stage.c): the TD's
+     * staging, StageState HCD_STAGE_S_* and StageKind HCD_STAGE_K_* under
+     * StageLock; StageSeg the addresses of its segments, StageSegBytes
+     * each one's size (the last may be shorter); StageSlab the pool's
+     * indices of the slabs it holds. SysVa: the URB's TransferBuffer, NULL
+     * for an MDL. SmallVa and SmallPa: the record's own small buffer,
+     * given with its pipe. StageEvent: the TD retired by its Transfer
+     * Event, not taken off (controller lock). StageCopied: the IN chunk's
+     * copy-out done; StageAbandon: a copy-out ended by a cancel or a drain
+     * before it could map; StageFailAt: the first failed mapping of this
+     * chunk (StageMapFails of them), on the controller's tolerance clock,
+     * which no wall-clock change moves. StagePage: an isochronous share's
+     * page offset, hcdIsoFill's fragment cut. */
+    ULONG StageState;
+    ULONG StageKind;
+    ULONG StageCount;
+    ULONG StageSegBytes;
+    PUCHAR StageSeg[HCD_STAGE_TD_SLABS];
+    ULONG StageSegPa[HCD_STAGE_TD_SLABS];
+    USHORT StageSlab[HCD_STAGE_TD_SLABS];
+    ULONG StageEvent;
+    ULONG StageCopied;
+    ULONG StageAbandon;
+    ULONG StageWaited;              /* counted once as waiting            */
+    ULONG StageMoved;               /* bytes its copies moved, failed or
+                                     * not: the passes' 1 MiB bound      */
+    ULONG StageMapFails;
+    ULONG StageFailAt;              /* the tolerance clock's tick (100 ms) */
+    ULONG StageIsoBase;             /* isochronous: packet 0's offset, the
+                                     * share's byte 0                     */
+    PUCHAR SysVa;
+    PUCHAR SmallVa;
+    ULONG SmallPa;
+    ULONG StagePage;
 } HCD_XFER, *PHCD_XFER;
 
 #define HCD_REFILL_NONE     0UL
@@ -516,6 +575,30 @@ typedef struct _HCD_PIPE {
      * outcome requested). */
     struct _HCD_PIPE *RetainNext;
     ULONG Pinned;
+    /* Task 48.33 (design record 13 section 11.11.1; hcd_stage.c): the
+     * pipe's staging, taken when it opens and given back when it is freed.
+     * StageVa: its block - the records' small buffers, then its page
+     * reserve, or an isochronous pipe's shares - StageOwn when the pipe
+     * allocated it (a stream's is a slice of its endpoint's block).
+     * ReserveKind HCD_STAGE_RES_*: a page (ReserveVa, inside the block) or
+     * a slab, the pool's ReserveSlab or one allocated for it (ReserveOwnVa).
+     * ReserveBusy: a TD holds it, StageBlockPass: the admission pass that
+     * found its head unable to move, both under StageLock. IsoShareBytes:
+     * an isochronous record's share. */
+    PUCHAR StageVa;
+    PHYSICAL_ADDRESS StagePa;
+    ULONG StageBytes;
+    ULONG StageOwn;
+    ULONG ReserveKind;
+    PUCHAR ReserveVa;
+    ULONG ReservePa;
+    ULONG ReserveBytes;
+    ULONG ReserveSlab;
+    PUCHAR ReserveOwnVa;
+    PHYSICAL_ADDRESS ReserveOwnPa;
+    ULONG ReserveBusy;
+    ULONG StageBlockPass;
+    ULONG IsoShareBytes;
     ULONG XferCount;                /* records in Xfers: a stream's pipe is
                                      * allocated short (HCD_STREAM_XFERS),
                                      * an isochronous one long
@@ -571,6 +654,11 @@ typedef struct _HCD_STREAMS {
     PXHCI_RING Ring[XHCI_STREAM_MAX_ENTRIES];
     struct _HCD_PIPE *Pipe[XHCI_STREAM_MAX_ENTRIES];
     struct _HCD_STREAMS *Next;      /* the device's StreamsRetired list    */
+    /* Task 48.33: every stream's staging - its records' small buffers and
+     * its page reserve - in one block of the endpoint's (hcd_stage.c). */
+    PUCHAR StageVa;
+    PHYSICAL_ADDRESS StagePa;
+    ULONG StageBytes;
 } HCD_STREAMS, *PHCD_STREAMS;
 
 /* A device the bus has addressed (hcd_enum.c; design record 13 section
@@ -1113,6 +1201,11 @@ typedef struct _HCD_PORT {
      * default ID - and, on a USB3 protocol port, its link's record. */
     ULONG LinkPsiv;
     XHCI_LINK_PORT Link;
+    /* A USB3 root port's failing link (issue 29, design record 13 section
+     * 21): its failures in the window, sent to USB 2.0 past the limit. */
+    XHCI_LINK_FLAP Flap;
+    /* A SuperSpeed hub's port: its pending send's failed attempts. */
+    XHCI_LINK_DISABLE HubSsDisable;
     /* A SuperSpeed hub's port (30-A.1, hcd_sshub.c): the link its last
      * reset left, from the extended port status on a SuperSpeedPlus hub
      * (zero otherwise), for the Protocol Speed ID its device is given;
@@ -1246,6 +1339,10 @@ typedef struct _HCD_HUB {
     ULONG RearmPorts;
     ULONG RearmArmed;
     KTIMER RearmTimer;
+    /* Issue 29 (design record 13 section 21.5): ports whose send to the
+     * hub's USB 2.0 half failed on the wire and is tried again on the
+     * same tick (bit n port n; HcdHubFlapSend). */
+    ULONG DisablePorts;
 } HCD_HUB, *PHCD_HUB;
 
 /*
@@ -1267,6 +1364,8 @@ typedef struct _HCD_HUB {
 #define HCD_HOLD_REASON_UAS_NO_STREAMS  1UL /* 31-A.3: UAS-only, no streams */
 #define HCD_HOLD_REASON_SSP_REFUSED     2UL /* 29-A.1's SuperSpeedPlus value */
 #define HCD_HOLD_REASON_OTHER           3UL
+#define HCD_HOLD_REASON_LINK_FLAP       4UL /* issue 29: the bus's own, for a
+                                             * link that keeps failing     */
 
 typedef struct _HCD_HOLD {
     ULONG Used;             /* claimed                                   */
@@ -1545,12 +1644,102 @@ typedef struct _HCD_CONTROLLER {
     ULONG UsbdxStreamCloses;
     ULONG UsbdxStreamRefused;
 
-    /* The map pump (hcd_dma.c, design record 13 section 11.3): records
-     * waiting for map registers, one AllocateAdapterChannel outstanding at
-     * a time, restarted from MapDpc; MapLock is innermost and is never held
-     * across a DMA_OPERATIONS call. DoneList (controller lock) holds the
-     * records the event DPC retired, completed by the deferred work after
-     * the lock's release (hcd_io.c). */
+    /* DoneList (controller lock) holds the records the event DPC retired,
+     * completed by the deferred work after the lock's release (hcd_io.c).
+     *
+     * Task 48.33 (design record 13 section 11.11; hcd_stage.c): staging.
+     * StageLock is taken inside the controller lock, never the reverse, and
+     * no copy runs under either. StageQueue holds the TDs waiting for
+     * staging in arrival order, StageCopyQueue the IN copy-outs that could
+     * not map. The shared pool's slabs (StageSlabCount of them, allocated
+     * at the start), the control slab, the window MDLs. StageClosed: no
+     * admission (set by an unproven stop and at every stop's drain).
+     * StageOwners, StageDpcsInFlight and StageTimerSet: the processors'
+     * staging work the stop joins (HcdStageDrain). */
+    KSPIN_LOCK StageLock;
+    LIST_ENTRY StageQueue;
+    LIST_ENTRY StageCopyQueue;
+    struct _HCD_STAGE_SLAB *StageSlabs;
+    ULONG StageSlabCount;
+    ULONG StageSlabsFree;
+    PUCHAR StageCtlVa;
+    PHYSICAL_ADDRESS StageCtlPa;
+    ULONG StageCtlBusy;
+    PMDL StageWin[HCD_STAGE_WINDOWS];
+    ULONG StageWinBusy[HCD_STAGE_WINDOWS];
+    ULONG StageNt;                  /* NT: the window maps may fail       */
+    volatile LONG StageClosed;
+    ULONG StagePassBusy;
+    ULONG StagePassAgain;
+    ULONG StagePassNo;
+    volatile LONG StageOwners;
+    volatile LONG StageDpcsInFlight;
+    volatile LONG StageTimerSet;
+    ULONG StageTimerArmed;
+    ULONG StageRetryMs;
+    KDPC StageDpc;
+    KTIMER StageTimer;
+    KDPC StageTimerDpc;
+    /* XhciStagePoolKiB as the start read it (StagePoolFound 0: absent or
+     * another type), and the qemu flavour's test switches. */
+    ULONG StagePoolFound;
+    ULONG StagePoolValue;
+    /* XhciDmaStaging as the start read it (owner, 2026-11-10): 1 stages
+     * every transfer (hcd_stage.c); 0, the default, maps the clients'
+     * buffers through the map pump as 3.4.2.0 did, and a stop that cannot
+     * prove the controller stopped keeps their requests (xhci_stage.c,
+     * XhciStagingOn). Fixed for the start's life. */
+    ULONG Staging;
+    ULONG QemuStagePool;
+    ULONG QemuStageFault;
+    ULONG StageMapInject;
+    /* XhciQemuStageMapProbe (qemu only): the bound of the one probe of how
+     * many window mappings can be held at once, its own window MDLs (one a
+     * mapping, StageProbeMdls of them) and the address each holds, and
+     * whether it is still to run (record 13 section 11.11.4). */
+    ULONG QemuMapProbe;
+    PMDL *StageProbeMdl;
+    PVOID *StageProbeVa;
+    ULONG StageProbeMdls;
+    volatile LONG StageProbeArmed;
+    /* The readings (record 13 section 11.11.9), noted at the stop. */
+    ULONG StageSlabsShort;
+    ULONG StageSlabsHigh;
+    ULONG StageNoReserve;
+    ULONG StageWaits;
+    ULONG StageControlWaits;
+    ULONG StageReserveTakes;
+    ULONG StageSmallTakes;
+    ULONG StageSharedTakes;
+    ULONG StageMapFails;
+    ULONG StageGiveups;
+    ULONG StageWindowMaps;
+    ULONG StageCopyBytesLo;
+    ULONG StageCopyBytesHi;
+    ULONG StageCopyTicks;
+    ULONG StageCopyLongest;
+    ULONG StageTdBytesMax;
+    ULONG StageTdElementsMax;
+    ULONG StageForeignAddress;
+    /* The qemu flavour's reading of the copies' sources (record 13 section
+     * 11.11.11): copies through a URB's TransferBuffer, through an MDL's
+     * MappedSystemVa, and those whose address lay below 0x80000000. */
+    ULONG StageDirectBuffer;
+    ULONG StageDirectMdl;
+    ULONG StageDirectLow;
+    ULONG IsoStageRefused;
+    /* Task 48.33 (record 13 section 11.11.6, step 4): an unproven stop
+     * released every child PDO's held requests (HcdIoParkCloseAll), and
+     * none is held again until the next start; read under the cancel spin
+     * lock by HcdIoPark. */
+    volatile LONG ParkClosed;
+    /* The map pump (hcd_dma.c, design record 13 section 11.3), run only
+     * with XhciDmaStaging 0: records waiting for map registers, one
+     * AllocateAdapterChannel outstanding at a time, restarted from MapDpc;
+     * MapLock is innermost and is never held across a DMA_OPERATIONS
+     * call. DoneList (controller lock) holds the records the event DPC
+     * retired, completed by the deferred work after the lock's release
+     * (hcd_io.c). */
     KSPIN_LOCK MapLock;
     LIST_ENTRY MapQueue;
     ULONG MapBusy;
@@ -1633,6 +1822,10 @@ typedef struct _HCD_CONTROLLER {
     ULONG PdoGhostStarts;
     ULONG PdoGhostAnswers;
     ULONG PdoGhostHeld;
+    /* URBs whose UrbHeader.Length stops short of the fields the bus reads
+     * for their function, served all the same (hcd_urb.c, hcdSubmitUrb;
+     * owner, 2026-11-10). Interlocked. */
+    ULONG UrbsHeaderShort;
     XHCI_TRB IsoTrbs[XHCI_XFER_MAX_ISO_PAGE_TRBS];
     ULONG IsoTdLengths[XHCI_XFER_MAX_ISO_PAGE_PACKETS];
     ULONG WaitingKicks;            /* a waiter started by admission or a
@@ -1730,6 +1923,7 @@ typedef struct _HCD_CONTROLLER {
     volatile LONG ResumeKeepPending;
     ULONG ResumeKeepOn;
     ULONG LinkKeepOn;               /* task 45.41: XhciLinkKeep, at start   */
+    ULONG SsFlapFallback;           /* issue 29: XhciSsFlapFallback, at start */
     ULONG ResumeKept;               /* devices restored in place          */
     ULONG ResumeKeepRefused;        /* not kept, by XhciEnumResumeKeep    */
     ULONG ResumeKeepFailed;         /* kept, then dropped: the restore
@@ -2597,7 +2791,8 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
 VOID HcdHubCollect(PHCD_CONTROLLER hc, PHCD_HUB hub);
 VOID HcdHubRearm(PHCD_CONTROLLER hc, PHCD_HUB hub);
 VOID HcdHubXferRetired(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
-VOID HcdHubPortDisable(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n);
+ULONG HcdHubPortDisable(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n);
+VOID HcdHubFlapSend(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n);
 ULONG HcdHubPathPresent(PHCD_CONTROLLER hc, PHCD_PORT q);
 VOID HcdHubClearTt(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                    ULONG endpointAddress, ULONG type, ULONG addressZero);
@@ -2807,6 +3002,8 @@ VOID HcdIoIsoRefused(PVOID urb, LONG usbd);
 NTSTATUS HcdDmaOpen(PHCD_CONTROLLER hc);
 VOID HcdDmaClose(PHCD_CONTROLLER hc);
 VOID HcdDmaInitObjects(PHCD_CONTROLLER hc);
+/* The map pump, with XhciDmaStaging 0 alone (design record 13 section
+ * 11.3). */
 VOID HcdDmaMapQueue(PHCD_CONTROLLER hc, PHCD_XFER x);
 #define HCD_MAP_PHASE_IDLE      0UL     /* no channel request outstanding  */
 #define HCD_MAP_PHASE_ASKED     1UL     /* asked, its routine not entered  */
@@ -2815,12 +3012,69 @@ VOID HcdDmaMapKick(PHCD_CONTROLLER hc);
 VOID HcdDmaUnmap(PHCD_CONTROLLER hc, PHCD_XFER x);
 VOID HcdDmaMapDrain(PHCD_CONTROLLER hc);
 /* 36.24: the register-free check and the wide pool at a start, and their
- * end at a stop (after HcdDmaMapDrain). IRQL: PASSIVE_LEVEL. */
+ * end at a stop (after HcdDmaMapDrain). With staging, task 48.33 withdrew
+ * promotion (design record 13 section 11.11.2, as built): the pool is
+ * made only with XhciDmaStaging 0. IRQL: PASSIVE_LEVEL. */
 VOID HcdDmaWideOpen(PHCD_CONTROLLER hc);
 VOID HcdDmaWideClose(PHCD_CONTROLLER hc);
+/* Every common buffer after the controller's block: charged to the boot
+ * ledger first, checked whole below 4 GB, NULL when either refuses; freed,
+ * or kept and its charge turned kept while the controller may still be
+ * mastering (CommonBufferPinned). HcdDmaStreamKeep keeps one a caller
+ * cannot free. IRQL: PASSIVE_LEVEL. */
 PVOID HcdDmaStreamAlloc(PHCD_CONTROLLER hc, ULONG bytes, PPHYSICAL_ADDRESS pa);
 VOID HcdDmaStreamFree(PHCD_CONTROLLER hc, ULONG bytes, PHYSICAL_ADDRESS pa,
                       PVOID va);
+VOID HcdDmaStreamKeep(PHCD_CONTROLLER hc, ULONG bytes);
+/* The boot ledger (Q-STG.3; record 13 section 11.11.6), from DriverEntry.
+ * IRQL: PASSIVE_LEVEL. */
+VOID HcdDmaLedgerInit(PDRIVER_OBJECT driver);
+
+/* hcd_stage.c (task 48.33; design record 13 section 11.11) */
+/* A slab of the shared pool. State HCD_STAGE_SLAB_*, under StageLock. */
+typedef struct _HCD_STAGE_SLAB {
+    PUCHAR Va;
+    PHYSICAL_ADDRESS Pa;
+    ULONG State;
+} HCD_STAGE_SLAB, *PHCD_STAGE_SLAB;
+#define HCD_STAGE_SLAB_FREE     0UL
+#define HCD_STAGE_SLAB_TD       1UL     /* a TD holds it                   */
+#define HCD_STAGE_SLAB_RESERVE  2UL     /* a bulk pipe's reserve           */
+#define HCD_STAGE_RES_NONE      0UL
+#define HCD_STAGE_RES_PAGE      1UL
+#define HCD_STAGE_RES_SLAB      2UL
+/* The qemu flavour's switches (exempt from the registry rule):
+ * XhciQemuStagePool, the shared pool's slabs at most (absent: the
+ * value's); XhciQemuStageFault, bit 0 every stop's quiesce reported not
+ * proven, bits 15:8 window mappings failed (255 all of them);
+ * XhciQemuStageMapProbe, the first window copy first maps its span through
+ * that many window MDLs of the probe's own without unmapping, stopping at
+ * the first failure, reports the count on the 0xE9 channel and unmaps them
+ * (at most the cap below); XhciQemuStageFault bit 1, on Windows 98 and ME
+ * only, an MDL's copy through a window even when the MDL has a system
+ * address, so that MmMapLockedPages and the probe are reached there. */
+#define HCD_STAGE_QEMU_PROBE_MAX 0x8000UL
+#define HCD_STAGE_QEMU_POOL_NONE 0xFFFFFFFFUL
+#define HCD_STAGE_QEMU_UNPROVEN  0x00000001UL
+#define HCD_STAGE_QEMU_WINDOW98  0x00000002UL
+#define HCD_STAGE_QEMU_MAPFAIL(v) (((v) >> 8) & 0xFFUL)
+VOID HcdStageInitObjects(PHCD_CONTROLLER hc);
+NTSTATUS HcdStageOpen(PHCD_CONTROLLER hc);
+VOID HcdStageDrain(PHCD_CONTROLLER hc);
+VOID HcdStageClose(PHCD_CONTROLLER hc);
+VOID HcdStageCloseAdmission(PHCD_CONTROLLER hc);
+LONG HcdStagePipeOpen(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
+VOID HcdStagePipeClose(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
+ULONG HcdStageStreamsOpen(PHCD_CONTROLLER hc, PHCD_STREAMS st);
+VOID HcdStageStreamsClose(PHCD_CONTROLLER hc, PHCD_STREAMS st);
+ULONG HcdStageMulti(PHCD_XFER x);
+VOID HcdStageSubmit(PHCD_CONTROLLER hc, PHCD_XFER x);
+ULONG HcdStageIsoFill(PHCD_CONTROLLER hc, PHCD_XFER x);
+ULONG HcdStageComplete(PHCD_CONTROLLER hc, PHCD_XFER x, PULONG budget);
+ULONG HcdIoParkCloseAll(PHCD_CONTROLLER hc);
+VOID HcdStageCancelLocked(PHCD_CONTROLLER hc, PHCD_XFER x, LONG usbd);
+VOID HcdStagePublishedLocked(PHCD_CONTROLLER hc, PHCD_XFER x);
+VOID HcdStageNotes(PHCD_CONTROLLER hc);
 
 /* hcd_svc.c (the services themselves are in hcd_svc.h) */
 VOID HcdRelativeMs(PLARGE_INTEGER due, ULONG milliseconds);
@@ -3093,15 +3347,21 @@ VOID HcdPoolInit(VOID);
 PVOID HcdPoolAlloc(ULONG bytes);
 PVOID HcdPoolAllocRequirements(ULONG bytes);
 VOID HcdPoolFree(PVOID p);
+PMDL HcdPoolWindowMdl(ULONG bytes);
+VOID HcdPoolWindowMdlFree(PMDL mdl);
 ULONG HcdPoolOutstandingCount(VOID);
 PVOID HcdPoolAllocHandedOff(ULONG bytes);
+
+/* IRP_MN_QUERY_BUS_INFORMATION for a root hub, hub, device (`function` 0)
+ * or function PDO (hcd_pdo.c, task 48.13). PASSIVE_LEVEL. */
+NTSTATUS HcdPdoBusInformation(PIRP irp, ULONG function);
 VOID HcdPoolFreeForeign(PVOID p);
 PVOID HcdPoolAllocClient(ULONG bytes);
 VOID HcdPoolFreeClient(PVOID p);
 PVOID HcdPoolAllocAcpi(ULONG bytes);
 VOID HcdPoolFreeAcpi(PVOID p);
 ULONG HcdPoolClientCount(VOID);
-PMDL HcdPoolMdlBuild(PVOID va, ULONG bytes);
 VOID HcdPoolMdlFree(PMDL mdl);
+PMDL HcdPoolMdlBuild(PVOID va, ULONG bytes);
 
 #endif /* HCD_H */

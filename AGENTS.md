@@ -301,6 +301,14 @@ xhciperf/       XHCIPERF (`XHCIPERF.EXE`, `XHCIPF64.EXE`), a file-based
                 at every gated build and not shipped (owner, 2026-10-23;
                 roadmap-usb4 task 43.50, design record 29);
                 `xhciperf/README.TXT` is its guide. Tracked.
+tbspeed/        TBSPEED (`TBSPEED.EXE`), a TCP throughput reading between
+                two computers with no thread at all, and TBTHREAD
+                (`TBTHREAD.EXE`), a report of which thread creations
+                succeed: developer diagnostics for the Thunderbolt
+                networking bench, built by `tbspeed/build.cmd` (MSVC 6.0,
+                static runtime), the pure half host-tested (`test_tbs`),
+                never in a package; usage in each source's header.
+                Tracked.
 images/         The pictures `README.md` embeds. Tracked.
 docs/           The documentation tree: using/ (release notes, the release
                 acceptance test), contributing/ (roadmap, architecture,
@@ -691,9 +699,10 @@ covers the four, the three retired 1.0.0.0 media names and `usbhub20.sys`. A
 name list cannot see the same bytes under a name nobody thought of; what closes
 that is the packager refusing to publish anything it did not itself stage.
 Since 2.4.0.0 it refuses the CD's compressed names too (`USBD.SY_`): the
-32-bit `txtsetup.oem`'s Windows 2000 F6 entry names `usbd.sys`,
-`hidclass.sys` and `hidparse.sys`, which the user copies from their own
-Windows 2000 CD to the floppy - the media still carries none of them
+32-bit `txtsetup.oem`'s "files from CD" F6 entry (Windows 2000 and,
+from 3.4.3.0, XP) names `usbd.sys`, `hidclass.sys` and `hidparse.sys`,
+which the user copies from their own Windows 2000 or XP CD to the
+floppy - the media still carries none of them
 (`OEM-W2K` holds that entry's shape).
 `legal-provenance.md` section 5 records why. **One exception is decided for
 `3.2.0.0`** (owner, 2026-10-20): NUSB 3.3's seven Windows 98 SE storage
@@ -1030,6 +1039,8 @@ UTF-8.
 - Do not take a SuperSpeed or SuperSpeedPlus field, encoding or state transition from memory. Take it from `docs/usb-xhci-info/xhci-data-structures.md` sections 10 and 11, checked against xHCI 1.2c and USB 3.2 (roadmap-hcd tasks 29-0 and 30-0), and record in `docs/contributing/target-standing.md` what no vehicle has read.
 - Do not attempt to make a USB 3.x logical port operate at USB 2.0 speeds; it is electrically impossible.
 - Do not write against a guessed function-driver contract. What a target's class drivers send a USB PDO, and what the property pages and `XHCITR`'s snapshot (`XHCISNAP` up to `3.0.0.0`) send the door, is read per target and recorded in design record 13 sections 6 and 8; a contract taken from the DDK headers alone, or one target's assumed for another's, is what Phase 25 exists to prevent.
+- Do not add a refusal of what a client sends without evidence that Windows' own USB stack refuses the same input (owner, 2026-11-10, after GitHub issue 32 / `docs/issues/30-w2k-usbaudio-select-interface-header.md`). A check that is safer but stricter than usbport breaks a driver Windows tolerates: `3.4.2.0` refused Windows 2000 `usbaudio.sys`'s SELECT_INTERFACE for a header length usbport never reads, and no USB audio played on 2000. The evidence is a reading on a target or ReactOS's usbport as a behaviour reference (`external/reactos/usbport`). Without it, a new rule starts as count-and-log only, and becomes a refusal only after the logs show that no real caller trips it. A bound that keeps the driver from reading or writing outside a caller's buffer is not a refusal of this kind: bound the read by the request's own lengths, as usbport does, rather than refuse the request.
+- Do not review a hardening change for safety alone (owner, 2026-11-10). Its review also asks which real caller it would refuse or change, and searches `docs/contributing/runs/`, `docs/issues/` and the code's comments for earlier incidents on the same field or path: issue 30's field had broken 2000's audio the same way in October (`runs/run-26.md`, c15), and the comment saying so sat one function after the new rule.
 - Do not bring `usbport.sys`, `usbhub.sys` or a composite parent back underneath or beside the HCD, and do not bind the root hub to `USB\ROOT_HUB`: the bus owns the root hub, hubs and composite splitting (`roadmap-hcd.md`, decisions table).
 - Do not place a SET_ADDRESS setup packet on a transfer ring. xHCI forbids software-issued SET_ADDRESS (spec section 4.5.4.1: the xHC blocks it and completes the TRB with TRB Error). The bus addresses a device with the Address Device command in its own enumeration state machine (design record 13 section 5.3), and a SET_ADDRESS a client sends is never put on a ring.
 - Do not use undocumented Win98 kernel internals without documenting why there is no other option.

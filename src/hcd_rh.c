@@ -397,6 +397,9 @@ NTSTATUS HcdRootHubPdoPnp(PHCD_ROOTHUB_PDO pdo, PIRP irp)
     case IRP_MN_QUERY_CAPABILITIES:
         return hcdRootHubCapabilities(irp);
 
+    case IRP_MN_QUERY_BUS_INFORMATION:
+        return HcdPdoBusInformation(irp, 0);
+
     case IRP_MN_QUERY_PNP_DEVICE_STATE:
         return HcdCompleteIrp(irp, STATUS_SUCCESS,
                               irp->IoStatus.Information);

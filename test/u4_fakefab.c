@@ -848,6 +848,27 @@ static void fabRouterWrite(FAB *f, int ri, unsigned long addr, unsigned long v)
         r->Rcs[4] = (old & 0xFF000000UL) | (v & 0x0000FFFFUL);
         return;
     }
+    if (addr == 5 && !r->Tbt3) {
+        /* Spec 8.2.1.1: a host router's wake enables are hardwired 0;
+         * Sleep Ready follows Enter Sleep (record 22 section 11.1). */
+        if (ri == 0) {
+            v &= ~0x0000000EUL;
+        }
+        if (r->SlpStuck) {
+            v &= ~1UL;
+        }
+        if (r->SlpNoClear) {
+            v |= old & 1UL;
+        }
+        if ((v & 1UL) != 0 && (old & 1UL) == 0) {
+            r->SlpWrites++;
+        }
+        if ((v & 1UL) != 0 && !r->NoSleepReady) {
+            r->Rcs[6] |= 1UL;
+        } else if ((v & 1UL) == 0) {
+            r->Rcs[6] &= ~1UL;
+        }
+    }
     r->Rcs[addr] = v;
     if (addr == 3 && (v & 0x80000000UL) && !(old & 0x80000000UL)) {
         fabEnumerated(f, ri);
@@ -893,6 +914,9 @@ static void fabAdapterWrite(FAB *f, int ri, unsigned a, unsigned long addr,
     if (t == 1 && addr == FAB_CAP_LANE + 1) {
         /* Lane Adapter Configuration Capability: R/W fields 15:0, 30. */
         ad->Cs[addr] = (old & ~0x4000FFFFUL) | (v & 0x4000FFFFUL);
+        if (r->ClxStuck) {
+            ad->Cs[addr] |= old & 0x00001C00UL;
+        }
         if ((v & 0x4000UL) && laneState(ad) == 2 && !r->Lane1NoDisable) {
             setLaneState(ad, 0);    /* Lane Disable: Disabled */
         }
@@ -2193,7 +2217,7 @@ static void fabResetRouter(FAB *f, int d)
     r->Rcs[3] = 0;
     r->Rcs[4] &= 0xFF000000UL;
     r->Rcs[5] = 0;
-    r->Rcs[6] &= ~0x03000000UL;
+    r->Rcs[6] &= ~0x03000001UL;
     r->Rcs[26] = 0;
     r->RrPending = 0;
     r->ReconnectPending = 0;

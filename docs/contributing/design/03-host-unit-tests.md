@@ -567,6 +567,18 @@ accumulates the project's bug history.
   run this again" on every run. Anything that classifies a run by what it did
   not print needs the same question asked of it: what else produces that
   silence?
+- An antivirus product that takes a freshly linked suite for malware is the
+  other launch that never ran (2026-11-09: Microsoft Defender called a
+  `test_xhq.exe` build `Trojan:Win32/Killav!pz`, a heuristic false
+  positive). The exe cannot be read after the link, and its launch prints
+  "The system cannot execute the specified program." with exit 9020. The
+  runner reads the exe before the launch, checks that exit and that message,
+  and reads it again after a launch that printed nothing and exited 5 (access
+  denied) or 225 (a virus found); a suite that started and died, then lost
+  its exe, is still a crash. Any of those reports the suite as blocked (inconclusive), naming
+  `Get-MpThreatDetection` as the read-only check. Unlike a reputation block, a
+  re-run meets the same detection; clearing it is the host owner's decision,
+  and the runner changes no host setting.
 - Run before every deploy to either VM; a failing vector is cheaper than a
   guest reboot, and far cheaper than a Win2000 bugcheck-and-recover cycle.
   This is mechanical rather than a convention: `scripts\build-driver.cmd` runs

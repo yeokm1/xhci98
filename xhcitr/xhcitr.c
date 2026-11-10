@@ -54,6 +54,7 @@
 #include "tr_core.h"
 #include "tr_log.h"
 #include "tr_pci.h"
+#include "tr_net.h"
 #include "tr_diag.h"
 #include "tr_acpi.h"
 #include "../src/xhci_acpi.h"
@@ -71,6 +72,7 @@ static void set_block(TR_TEXT *t);
 static void settings_dialog(HWND owner, int tab, int dn);
 static void set_snapshot_file(const char *dir, char *box, size_t cap);
 static int setOpen;     /* the Settings window is open (one at a time) */
+static int setMissed;   /* a refresh asked for while it was open (48.17) */
 static void hk_fill(HWND dlg, int state);
 static void hk_changed(HWND dlg);
 static void quick_save(void);
@@ -130,7 +132,6 @@ typedef TR_NIDA TR_NID;
 #define TR_CM_DRP_ADDRESS           0x0000001DUL
 #define TR_CM_DEVCAP_REMOVABLE      0x00000004UL
 #define TR_CM_DEVCAP_SURPRISEOK     0x00000080UL
-#define TR_DN_REMOVABLE             0x00004000UL
 #define TR_UI_NOT_OK                0x00000001UL
 #define TR_LIVE_ACTIVE              1UL     /* CM_LIVE_ACTIVE (cm_live.h) */
 
@@ -287,6 +288,9 @@ typedef struct _NHI {
     char Why[160];
     MK_MARKS *M;            /* the marks answer (NT; 42-A.5)               */
     int MAnswered;          /* 1 read, 0 not served, -1 failed             */
+    unsigned char *NBuf;    /* the networking answer (record 35 section 17) */
+    TR_QNET N;
+    int NAnswered;          /* 1 read, 0 not served, -1 failed             */
 } NHI;
 
 typedef struct _UCTRL {
@@ -365,6 +369,9 @@ typedef struct _UPORT {
                                LOG_HCD or LOG_CM (record 25 section 3.6) */
 #define K_DIAG      14      /* the PCI and bridge diagnostics (record 25
                                section 20, revision 23)                  */
+#define K_NET       15      /* Thunderbolt networking (record 35 section
+                               17): A the NHI, B -1 the service, else
+                               the link entry                            */
 
 typedef struct _TNODE {
     int Parent;
@@ -494,8 +501,13 @@ static void details_usb_eject(TR_TEXT *t, int d);
 static void usb_derive(void);
 static void log_node_add(int parentT, int which, int index, const char *id);
 static void pci_node_add(int parentT, int which, int index, const char *id);
+static void net_node_add(int parentT, int k, const char *id);
+static void net_read_nhi(NHI *h);
+static void details_net(TR_TEXT *t, int k, int link);
 static void say(const char *text, int warn);
 static void fast_scan(void);
+static void stor_scan(void);
+static int stor_setting(void);
 static int fast_port(int k, TR_FAST *f, int ask);
 static void fast_in(int k, TR_FAST_IN *in0, int ask);
 static void fast_name(int k, char *out, size_t cap);
@@ -1351,6 +1363,8 @@ static void nhi_free(void)
         nhi[k].QBuf = NULL;
         free(nhi[k].M);
         nhi[k].M = NULL;
+        free(nhi[k].NBuf);
+        nhi[k].NBuf = NULL;
     }
     nhiCount = 0;
 }
@@ -1431,6 +1445,21 @@ static int mksvc_state(void)
     return r;
 }
 
+/* The NHI's networking answer (record 35 section 17), asked of the query
+ * device that answered for it, kept only for the same start. */
+static void net_read_nhi(NHI *h)
+{
+    unsigned long err;
+
+    h->NAnswered = tr_net_read(h->QName, envNt, &h->NBuf, &h->N, &err);
+    if (h->NAnswered == 1 &&
+        (h->N.EpochLo != h->Q.EpochLo || h->N.EpochHi != h->Q.EpochHi)) {
+        free(h->NBuf);
+        h->NBuf = NULL;
+        h->NAnswered = -1;
+    }
+}
+
 /* Each NHI's state: its query when the mapping holds, else the registry
  * record, shown only (record 25 section 4.2). */
 static void nhi_read(NHI *h)
@@ -1442,6 +1471,9 @@ static void nhi_read(NHI *h)
 
     free(h->QBuf);
     h->QBuf = NULL;
+    free(h->NBuf);
+    h->NBuf = NULL;
+    h->NAnswered = -1;
     h->HaveQ = 0;
     h->HaveRec = 0;
     h->R = NULL;
@@ -1466,6 +1498,7 @@ static void nhi_read(NHI *h)
                 h->MAnswered = -1;
             }
         }
+        net_read_nhi(h);
         return;
     }
     tr_copy(h->Why, h->QName[0] ? "its query device did not answer for it"
@@ -2613,6 +2646,7 @@ static void build_tb(int root)
         if (t >= 0) {
             log_node_add(t, LOG_CM, k, h->Id);
             pci_node_add(t, LOG_CM, k, h->Id);
+            net_node_add(t, k, h->Id);
         }
         if (t < 0 || h->R == NULL) {
             continue;
@@ -3019,6 +3053,7 @@ static void refresh_model(int withUsb)
     /* The Settings window holds indexes into gw: no new walk until it
      * closes (refresh_window after it runs this again). */
     if (setOpen) {
+        setMissed = 1;
         return;
     }
     model_free_usb();
@@ -3059,6 +3094,7 @@ static void refresh_model(int withUsb)
         }
     }
     fast_scan();
+    stor_scan();
     if (hTray != NULL) {
         /* Every model refresh, by whichever path: the controllers listed
          * may have changed (record 25 section 7.2.1 items 3 and 5). */
@@ -3318,9 +3354,8 @@ static void details_unit(TR_TEXT *t, int dn)
             tr_printf(t, "  %s\n", clause);
         }
     } else if (!envNt) {
-        tr_printf(t, "  %s\n", (gw.N[u].Status & TR_DN_REMOVABLE)
-                                  ? "Marked removable by the Thunderbolt driver."
-                                  : "Not marked removable.");
+        tr_printf(t, "  %s\n",
+                  inst_removable_9x_text((INST_U32)gw.N[u].Status, 1));
     }
     tr_put(t, "  Devices that stop with it:\n");
     for (i = u; i < gw.Count; i++) {
@@ -3425,6 +3460,9 @@ static void details_nhi(TR_TEXT *t, int k)
     if (inst_get32(R, CM_ST_O_FW_VERSION) != CM_ST_UNKNOWN) {
         tr_printf(t, "  Firmware version:    0x%08lX\n",
                   (unsigned long)inst_get32(R, CM_ST_O_FW_VERSION));
+    }
+    if (h->HaveQ && h->NAnswered == 1 && !tr_qnet_show(&h->N)) {
+        tr_put(t, "  Thunderbolt networking: off\n");
     }
     if (h->HaveQ) {
         /* The embedded record's own generation is stamped only by the
@@ -4060,6 +4098,91 @@ static void details_log(TR_TEXT *t, int index, int which)
 }
 
 /* ======================================================================== */
+/* Thunderbolt networking (record 35 section 17, task 48.18)                 */
+/* ======================================================================== */
+
+/* The node, and one child a link, under NHI k when its answer at this
+ * refresh has networking on or a link listed; labelled with the state. */
+static void net_node_add(int parentT, int k, const char *id)
+{
+    const NHI *h = &nhi[k];
+    char label[200];
+    char key[280];
+    char sub[16];
+    int t;
+    int i;
+
+    if (!h->HaveQ || h->NAnswered != 1 || !tr_qnet_show(&h->N)) {
+        return;
+    }
+    tr_qnet_label(&h->N, label, sizeof(label));
+    tr_key(key, sizeof(key), "TN", id, NULL);
+    t = add_tnode(parentT, K_NET, k, -1, 0, -1, label, key);
+    if (t < 0) {
+        return;
+    }
+    for (i = 0; i < h->N.LinkCount; i++) {
+        tr_qnet_link_label(&h->N, i, label, sizeof(label));
+        tr_sprintf(sub, sizeof(sub), "%d", i);
+        tr_key(key, sizeof(key), "TL", id, sub);
+        add_tnode(t, K_NET, k, i, 0, -1, label, key);
+    }
+}
+
+/* Read again when shown (as the PCI answer is), for the start the tree's
+ * answer came from; the IP address asked of Windows by the MAC. */
+static void details_net(TR_TEXT *t, int k, int link)
+{
+    const NHI *n = &nhi[k];
+    unsigned char *b = NULL;
+    unsigned long err = 0;
+    char ip[400];
+    TR_QNET q;
+    int r;
+
+    tr_printf(t, "%s\n\n", dn_name(&gw.N[n->Node]));
+    if (!n->HaveQ) {
+        tr_printf(t, "Thunderbolt networking\n  It cannot be read: %s.\n",
+                  n->Why[0] ? n->Why : "the driver did not answer");
+        return;
+    }
+    r = tr_net_read(n->QName, envNt, &b, &q, &err);
+    if (r == 1 && (q.EpochLo != n->Q.EpochLo || q.EpochHi != n->Q.EpochHi)) {
+        tr_put(t, "Thunderbolt networking\n  The controller has restarted "
+                  "since the tree was read: press F5.\n");
+    } else if (r == 1) {
+        int now = -1;
+
+        if (link >= 0 && n->NAnswered == 1 && link < n->N.LinkCount) {
+            /* The same link and peer as the tree's entry, wherever the
+             * new answer lists it. */
+            now = tr_qnet_link_match(&q, n->N.Link[link]);
+        }
+        if (link < 0 && (q.Flags & CM_QN_F_MAC) && q.Svc != NULL) {
+            tr_net_ip(q.Svc + CM_QN_S_MAC, ip, sizeof(ip));
+            tr_qnet_text(t, &q, -1, ip, 0);
+        } else if (link < 0) {
+            tr_qnet_text(t, &q, -1, NULL, 0);
+        } else if (now >= 0) {
+            tr_qnet_text(t, &q, now, NULL, 0);
+        } else {
+            tr_put(t, "Thunderbolt networking\n  This link is no longer listed, "
+                      "or another computer is on it: press F5.\n");
+        }
+    } else if (r == 0) {
+        tr_put(t, "Thunderbolt networking\n  Not served by this xhcicm.sys: "
+                  "it is older than this tool.\n");
+    } else if (err != 0) {
+        tr_printf(t, "Thunderbolt networking\n  It could not be read (error "
+                     "%lu).\n", err);
+    } else {
+        tr_put(t, "Thunderbolt networking\n  The driver's answer is not one "
+                  "this tool reads.\n");
+    }
+    free(b);
+}
+
+/* ======================================================================== */
 /* PCI configuration (record 25 sections 3.6 and 4.7, revision 12)           */
 /* ======================================================================== */
 
@@ -4400,6 +4523,9 @@ static void details_of(TR_TEXT *t, int i, int fetch)
         break;
     case K_DIAG:
         details_diag(t);
+        break;
+    case K_NET:
+        details_net(t, n->A, n->B);
         break;
     default:
         tr_printf(t, "%s\n", n->Label);
@@ -4846,39 +4972,50 @@ static int ej_single(const WALK *w, int u)
  * as tr_eject_watch_ms gives the watch's kind (TR_EJW_*). The mark
  * service's watch outlasts the installer's wait for the tool to end
  * (INST_TRAY_CLOSE_MS), so it ends at the installer's quit event and sets
- * *quit; the tool then shows no answer and ends at its next poll. */
-static const char *ej_watch_tunnel(const EJREQ *q, int kind, int *quit)
+ * *quit; the tool then shows no answer and ends at its next poll. A
+ * read counts as the watch's last word on a port the driver does not
+ * know only when tr_query_watch_current finds it published by this start
+ * after `pre`, the answer read immediately before the call: a cached
+ * answer whose publication stalled keeps the plain line. */
+static const char *ej_watch_tunnel(const EJREQ *q, int kind, int before,
+                                   const TR_QUERY *pre, int *quit)
 {
     DWORD start = GetTickCount();
     DWORD bound = (DWORD)tr_eject_watch_ms(kind);
+    int named = 0;
 
     *quit = 0;
 
     for (;;) {
         unsigned char *b;
         TR_QUERY a;
+        int fresh = 0;
+        int pcie = INST_PCIE_UNNAMED;
+        TR_U32 age = CM_Q_UNKNOWN;
+        DWORD readAt = GetTickCount();
         if (ej_query(q, &b, &a)) {
-            TR_U32 n = inst_get32(a.Rec, CM_ST_O_ROUTER_COUNT);
-            TR_U32 r;
             int usb4 = inst_get32(a.Rec, CM_ST_O_CM) == CM_ST_CM_USB4;
-            int closed = 0;
-            for (r = 0; r < n; r++) {
-                const unsigned char *e = a.Rec + CM_ST_HDR_BYTES + r * CM_ST_ENTRY_BYTES;
-                if (inst_get32(e, CM_ST_E_BRIDGE) == q->PortBdf &&
-                    (inst_get32(e, CM_ST_E_TUNNELS) & 0xFUL) == CM_ST_TUN_EJECTED) {
-                    closed = 1;
-                }
-            }
+            pcie = inst_port_pcie(a.Rec, q->PortBdf);
+            fresh = tr_query_watch_new(pre, &a);
+            age = a.AgeMs;
             free(b);
             if (!usb4) {
                 return NULL;
             }
-            if (closed) {
+            if (pcie == INST_PCIE_CLOSED) {
                 return "The PCIe tunnel was closed.";
+            }
+            if (pcie == INST_PCIE_NAMED) {
+                named = 1;
             }
         }
         if (GetTickCount() - start >= bound) {
-            return tr_eject_open_text(kind);
+            /* The age as of the decision: the driver sampled it inside
+             * the call, so the time since before the call is added. */
+            fresh = fresh && tr_query_age_within(
+                                 age, (TR_U32)(GetTickCount() - readAt));
+            return tr_eject_end_text(
+                kind, inst_pcie_unbound(before, named, fresh, pcie));
         }
         if (kind == TR_EJW_SERVICE && quit_asked()) {
             *quit = 1;
@@ -6380,7 +6517,7 @@ static void set_now(const TRS_ROW *r, int scope, char *out, size_t cap)
     int i = trs_s98(r);
 
     if (trs_state(r, &setEnv) == TRS_GREY) {
-        tr_sprintf(out, cap, "(%s)", trs_only(r) != NULL ? trs_only(r)
+        tr_sprintf(out, cap, "(%s)", trs_only(r, &setEnv) != NULL ? trs_only(r, &setEnv)
                                                          : "another system's");
         return;
     }
@@ -7217,7 +7354,7 @@ static void set_fill_choice(HWND dlg)
                                    ? "Note: " : "", caution);
     }
     if (trs_state(r, &setEnv) == TRS_GREY) {
-        tr_printf(&t, " (%s.)", trs_only(r) != NULL ? trs_only(r) : "");
+        tr_printf(&t, " (%s.)", trs_only(r, &setEnv) != NULL ? trs_only(r, &setEnv) : "");
     } else if (trs_loc(r) != TRS_LOC_DRIVER || r->Tab == TRS_TAB_S98) {
         tr_put(&t, " It is one value for the whole computer.");
     } else if (!editable && setScope >= 0) {
@@ -7745,8 +7882,8 @@ static void set_show_tab(HWND dlg)
     static const int drv[] = { IDC_S_SCOPE_L, IDC_S_SCOPE, IDC_S_LIST,
                                IDC_S_ADV, IDC_S_LEVEL, IDC_S_NOTE, IDC_S_DEF };
     static const int tool[] = { IDC_S_LOGIN, IDC_S_WARN, IDC_S_FAST,
-                                IDC_S_FASTWIN, IDC_S_HK, IDC_S_HKKEY,
-                                IDC_S_HKNOTE, IDC_S_SND };
+                                IDC_S_FASTWIN, IDC_S_STOR, IDC_S_HK,
+                                IDC_S_HKKEY, IDC_S_HKNOTE, IDC_S_SND };
     int own = setTab == TRS_TABS;
     int i;
 
@@ -7928,6 +8065,7 @@ static BOOL CALLBACK settings_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         case IDC_S_WARN:
         case IDC_S_FAST:
         case IDC_S_FASTWIN:
+        case IDC_S_STOR:
             set_tool_option(dlg, LOWORD(wp));
             return TRUE;
         case IDC_S_HKKEY:
@@ -7979,6 +8117,7 @@ static void settings_dialog(HWND owner, int tab, int dn)
     set_env(&setEnv);
     setOpen = 1;
     setToolRefresh = 0;
+    setMissed = 0;
     DialogBoxA(hInst, MAKEINTRESOURCEA(IDD_SETTINGS), owner,
                (DLGPROC)settings_proc);
     setOpen = 0;
@@ -7990,9 +8129,13 @@ static void settings_dialog(HWND owner, int tab, int dn)
         if (hTree != NULL) {
             SetFocus(hTree);
         }
-    } else if (setToolRefresh) {
+    } else if (setToolRefresh || setMissed || stor_setting()) {
+        /* or a devnode change came while it was open, or, with the drive
+         * notice on, a drive with no driver may have come or gone unseen
+         * (record 25 section 7.8 item 3) */
         refresh_model(0);
     }
+    setMissed = 0;
     fastQuiet = 0;
     if (setToolRefresh) {
         tray_update();
@@ -8260,6 +8403,8 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
     const char *why;
     const char *text;
     const char *tunnelNote = NULL;
+    int pciePre = INST_PCIE_UNNAMED;
+    TR_QUERY qPre;
     DWORD start;
     DWORD cr;
     int u;
@@ -8274,6 +8419,7 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
     *rights = 0;
     tr_text_init(&t, msg, cap);
     memset(&w, 0, sizeof(w));
+    memset(&qPre, 0, sizeof(qPre));
     if (envNt && api.Eject == NULL) {
         tr_put(&t, "This Windows does not offer the call that stops a device.");
         return INST_EXIT_REFUSED;
@@ -8398,6 +8544,14 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
         TR_QUERY q4;
         int same = ej_query(q, &b4, &q4) && tr_query_eject_ready(&q4, &why) &&
                    tr_query_same_content(&q3, &q4);
+        if (same) {
+            /* The port as the record shows it with the unit present, for
+             * the watch's last line (inst_pcie_unbound). */
+            pciePre = inst_port_pcie(q4.Rec, q->PortBdf);
+            qPre = q4;
+            qPre.Base = NULL;
+            qPre.Rec = NULL;
+        }
         free(b4);
         if (!same) {
             tr_put(&t, "The Thunderbolt device list changed just now; nothing "
@@ -8478,7 +8632,7 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
                 ej_unlock(m);
                 m = NULL;
             }
-            tunnelNote = ej_watch_tunnel(q, kind, &quit);
+            tunnelNote = ej_watch_tunnel(q, kind, pciePre, &qPre, &quit);
             if (quit) {
                 /* Windows stopped the unit; the installer ends the tool. */
                 code = INST_EXIT_DONE;
@@ -8555,10 +8709,24 @@ static void ej_elevated(HWND owner, const char *unitId)
 }
 
 static void tray_balloon(const char *title, const char *text, int warn);
+/* A balloon's kind: TRAY_BK_OTHER, the "can run faster" notice's, or the
+ * USB drive notice's (record 25 section 7.8). */
+#define TRAY_BK_OTHER   0
+#define TRAY_BK_FAST    1
+#define TRAY_BK_DRIVE   2
 static void tray_balloon_as(const char *title, const char *text, int warn,
-                            int fast);
+                            int kind);
 static int tray_balloon_send(const char *title, const char *text, int warn,
-                             int fast);
+                             int kind);
+/* The drive notice's view of the other balloons (section 7.8 item 8). */
+static TR_BSEND storSend;       /* the drive balloon's re-send watch        */
+static TR_BKIND storKind;       /* whether the balloon shown is the drive's */
+static int storHaveOther;       /* another balloon of the tool's was sent ... */
+static DWORD storOtherAt;       /* ... at this tick                         */
+static DWORD fastSentAt;        /* the faster notice's balloon sent         */
+static int storSuspended;       /* from PBT_APMSUSPEND to the resume        */
+static int storResumeQuiet;     /* within TR_STOR_RESUME_MS of the resume   */
+static DWORD storResumeTick;
 static void tray_balloon_clear(void);
 
 /* ======================================================================== */
@@ -10006,7 +10174,7 @@ static void fast_announce(void)
     if (!fastOn) {
         return;
     }
-    tray_balloon_as(TR_FAST_TITLE, fastText, 0, 1);
+    tray_balloon_as(TR_FAST_TITLE, fastText, 0, TRAY_BK_FAST);
 }
 
 /* Item 9 (task 43.66): what the shell said of the notice's balloon, or the
@@ -10032,7 +10200,7 @@ static void fast_balloon_event(int ev)
              * szInfo with NIF_INFO removes the icon's balloon (the
              * documented way), so the re-send cannot show beside it. */
             tray_balloon_clear();
-            (void)tray_balloon_send(TR_FAST_TITLE, fastText, 0, 1);
+            (void)tray_balloon_send(TR_FAST_TITLE, fastText, 0, TRAY_BK_FAST);
         } else {
             (void)tr_bsend_step(&fastSend, TR_BE_DROP, GetTickCount(),
                                 answers);
@@ -10123,6 +10291,525 @@ static void fast_scan(void)
     /* The icon follows in refresh_model's tray_red, which reads this set
      * (section 7.2.1 items 2 and 5). */
     fast_announce();
+}
+
+/* ---- The USB drive notice (record 25 section 7.8, task 48.17) ------------ */
+
+static TR_STOR_SET storSet;     /* the drives kept (item 7)                 */
+static TR_STOR_Q storQ;         /* the notices queued (item 8)              */
+static TR_STOR_OBS storObs[TR_STOR_MAX * 2];
+static int storFirst = 1;       /* the next scan only records (item 6)      */
+static char storCtrlOk[TR_STOR_MAX][TR_FAST_KEY];   /* answered last scan */
+static int storCtrlOkN;
+static DWORD storScanAt;        /* the last scan's tick                     */
+static char storTitle[64];
+static char storText[256];      /* the last drive balloon, for its re-send  */
+static TR_STOR_GRP storSent;    /* its drives, by key                       */
+static int storSentArr;         /* it was the arrivals'                     */
+static TR_STOR_POLL storPoll;   /* the last tick's reading (item 3)         */
+
+/* The user's setting (item 1). */
+static int stor_setting(void)
+{
+    DWORD v;
+    int have = fast_dword(HKEY_CURRENT_USER, TR_SETTINGS_KEY, TR_STOR_VALUE,
+                          &v);
+
+    return tr_stor_on(have, v);
+}
+
+static void stor_set(int on)
+{
+    HKEY k;
+    DWORD disp;
+    DWORD v = on ? 1UL : 0UL;
+
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, TR_SETTINGS_KEY, 0, NULL, 0,
+                        KEY_WRITE, NULL, &k, &disp) != ERROR_SUCCESS) {
+        return;
+    }
+    RegSetValueExA(k, TR_STOR_VALUE, 0, REG_DWORD, (const BYTE *)&v, sizeof(v));
+    RegCloseKey(k);
+    /* toggled while the Settings window holds the poll: its first tick
+     * after the close has no baseline, and refreshes (item 3) */
+    storPoll.N = 0;
+}
+
+/* Turned off, or a suspend: nothing kept owed. */
+static void stor_drop_all(void)
+{
+    tr_stor_q_clear(&storQ);
+    (void)tr_bsend_step(&storSend, TR_BE_DROP, GetTickCount(), 0);
+}
+
+static void stor_clear(void)
+{
+    storPoll.N = 0;
+    storSet.N = 0;
+    storCtrlOkN = 0;
+    storFirst = 1;
+    stor_drop_all();
+}
+
+static void stor_ctrl_key(int c, char *out)
+{
+    tr_copy(out, uc[c].DrvKey[0] ? uc[c].DrvKey : uc[c].Path, TR_FAST_KEY);
+}
+
+/* Controller c's query answered in this refresh (fast_top_read asked it). */
+static int stor_ctrl_ok(int c)
+{
+    return uc[c].Ours && uc[c].XqState == 1;
+}
+
+static int stor_find_ctrl(const char *key)
+{
+    char k[TR_FAST_KEY];
+    int c;
+
+    for (c = 0; c < ucCount; c++) {
+        stor_ctrl_key(c, k);
+        if (strcmp(k, key) == 0) {
+            return c;
+        }
+    }
+    return -1;
+}
+
+static int stor_find_port(int c, const char *path)
+{
+    int k;
+
+    for (k = 0; k < upCount; k++) {
+        if (up[k].Ctrl == c && strcmp(up[k].Path, path) == 0) {
+            return k;
+        }
+    }
+    return -1;
+}
+
+/* Item 2: 1 a drive (with its record's Slot ID, 0 for the version 1
+ * answer's class-08 case), 0 not one, or no record yet. */
+static int stor_record(int k, TR_U32 *slot)
+{
+    TR_XPORT r;
+    int v = uport_xport(&up[k], &r);
+
+    *slot = 0;
+    if (v == 1) {
+        *slot = r.Slot;
+        return 1;
+    }
+    if (v < 0 && up[k].Conn.Dev[4] == 0x08) {
+        return 1;
+    }
+    return 0;
+}
+
+/* Port k counts (item 2), its controller answering. */
+static int stor_port(int k, TR_U32 *slot)
+{
+    const UPORT *p = &up[k];
+
+    if (!stor_ctrl_ok(p->Ctrl) || !p->HaveConn ||
+        p->Conn.Status != TR_CS_CONNECTED || p->Conn.IsHub) {
+        return 0;
+    }
+    return stor_record(k, slot);
+}
+
+/* The port whose drive has this key in the model, or -1. */
+static int stor_port_of_key(const char *key)
+{
+    char ck[TR_FAST_KEY];
+    char k2[TR_FAST_KEY];
+    TR_U32 slot;
+    int k;
+
+    for (k = 0; k < upCount; k++) {
+        if (!stor_port(k, &slot)) {
+            continue;
+        }
+        stor_ctrl_key(up[k].Ctrl, ck);
+        tr_stor_key(k2, sizeof(k2), ck, up[k].Path, fast_vid(&up[k]),
+                    fast_pid(&up[k]), slot);
+        if (strcmp(k2, key) == 0) {
+            return k;
+        }
+    }
+    return -1;
+}
+
+/* Item 5: 1 gone, 0 unknown, for a kept drive not counted in this refresh. */
+static int stor_gone(const TR_STOR_ENT *e)
+{
+    char path[TR_STOR_PATH];
+    char *dot;
+    const UPORT *p;
+    TR_U32 slot;
+    int c = stor_find_ctrl(e->Ctrl);
+    int k;
+
+    if (c < 0 || !stor_ctrl_ok(c)) {
+        return 0;
+    }
+    k = stor_find_port(c, e->Path);
+    if (k >= 0) {
+        p = &up[k];
+        if (!p->HaveConn) {
+            return 0;
+        }
+        if (p->Conn.Status != TR_CS_CONNECTED || p->Conn.IsHub ||
+            fast_vid(p) != e->Vid || fast_pid(p) != e->Pid) {
+            return 1;
+        }
+        if (stor_record(k, &slot) == 1) {
+            return slot != e->Slot;
+        }
+        return 0;               /* the same device, no record (yet) */
+    }
+    tr_copy(path, e->Path, sizeof(path));
+    while ((dot = strrchr(path, '.')) != NULL) {
+        *dot = '\0';
+        k = stor_find_port(c, path);
+        if (k < 0) {
+            continue;
+        }
+        p = &up[k];
+        if (!p->HaveConn) {
+            return 0;
+        }
+        return p->Conn.Status != TR_CS_CONNECTED || !p->Conn.IsHub;
+    }
+    return 0;
+}
+
+/* Port k's name for the notice (item 9), its product string asked once
+ * per key where the devnode gives no specific name. */
+static void stor_name(int k, TR_STOR_OBS *o)
+{
+    UPORT *p = &up[k];
+    char label[160];
+    const char *prod = NULL;
+    int i;
+
+    label[0] = '\0';
+    if (p->Dn >= 0) {
+        usb_label(p->Dn, label, sizeof(label));
+    }
+    for (i = 0; i < storSet.N; i++) {
+        if (strcmp(storSet.E[i].Key, o->Key) == 0 && storSet.E[i].Asked) {
+            o->Asked = 1;
+            tr_copy(o->Prod, storSet.E[i].Prod, sizeof(o->Prod));
+            break;
+        }
+    }
+    if (p->Prod[0] != '\0') {
+        prod = p->Prod;
+    } else if (p->HaveStr[1]) {
+        prod = p->Str[1];
+    } else if (o->Asked) {
+        prod = o->Prod;
+    } else if ((label[0] == '\0' || tr_name_generic(label)) &&
+               p->Conn.Dev[15] != 0 && !fast_tt(k)) {
+        /* string 0 for the first language, then iProduct, as section 7.7
+         * item 4's request */
+        unsigned char *b = NULL;
+        unsigned int lang = 0x0409;
+        DWORD n = usb_desc(p->Hub, p->Conn.Port, 3, 0, 0, 255, &b);
+
+        if (n >= 4) {
+            lang = (unsigned int)b[2] | ((unsigned int)b[3] << 8);
+        }
+        free(b);
+        b = NULL;
+        n = usb_desc(p->Hub, p->Conn.Port, 3, p->Conn.Dev[15], lang, 255, &b);
+        (void)tr_dec_string(b, n, o->Prod, sizeof(o->Prod));
+        free(b);
+        o->Asked = 1;
+        prod = o->Prod;
+    }
+    o->Rank = tr_stor_name(o->Name, sizeof(o->Name), label, prod, o->Vid,
+                           o->Pid);
+}
+
+static void stor_try_send(void);
+
+/* At the end of every model refresh (item 3). */
+static void stor_scan(void)
+{
+    static char quiet[TR_STOR_MAX][TR_FAST_KEY];
+    static char okNow[TR_STOR_MAX][TR_FAST_KEY];
+    static int gone[TR_STOR_MAX];
+    DWORD now = GetTickCount();
+    int quietAll;
+    int nq = 0;
+    int nOk = 0;
+    int n = 0;
+    int c;
+    int i;
+    int k;
+
+    if (hTray == NULL) {
+        return;
+    }
+    if (!stor_setting()) {
+        if (storSet.N > 0 || !storFirst || storQ.Rm.N > 0 || storQ.Arr.N > 0) {
+            stor_clear();
+        }
+        return;
+    }
+    if (storResumeQuiet && now - storResumeTick >= TR_STOR_RESUME_MS) {
+        storResumeQuiet = 0;
+    }
+    quietAll = storFirst || storSuspended || storResumeQuiet;
+    for (c = 0; c < ucCount && nOk < TR_STOR_MAX; c++) {
+        if (!stor_ctrl_ok(c)) {
+            continue;
+        }
+        stor_ctrl_key(c, okNow[nOk]);
+        for (i = 0; i < storCtrlOkN; i++) {
+            if (strcmp(storCtrlOk[i], okNow[nOk]) == 0) {
+                break;
+            }
+        }
+        if (i == storCtrlOkN && nq < TR_STOR_MAX) {
+            /* answering again (or first seen): taken silently */
+            tr_copy(quiet[nq], okNow[nOk], TR_FAST_KEY);
+            tr_stor_q_drop_ctrl(&storQ, okNow[nOk]);
+            /* an arrival balloon of its drives is not sent again */
+            for (i = 0; storSentArr && i < storSent.Kept; i++) {
+                if (strcmp(storSent.Ctrl[i], okNow[nOk]) == 0) {
+                    (void)tr_bsend_step(&storSend, TR_BE_DROP, now, 0);
+                    break;
+                }
+            }
+            nq++;
+        }
+        nOk++;
+    }
+    for (k = 0; k < upCount && n < (int)(sizeof(storObs) / sizeof(storObs[0]));
+         k++) {
+        TR_STOR_OBS *o = &storObs[n];
+        TR_U32 slot;
+
+        if (!stor_port(k, &slot)) {
+            continue;
+        }
+        memset(o, 0, sizeof(*o));
+        stor_ctrl_key(up[k].Ctrl, o->Ctrl);
+        tr_copy(o->Path, up[k].Path, sizeof(o->Path));
+        o->Vid = fast_vid(&up[k]);
+        o->Pid = fast_pid(&up[k]);
+        o->Slot = slot;
+        tr_stor_key(o->Key, sizeof(o->Key), o->Ctrl, o->Path, o->Vid, o->Pid,
+                    slot);
+        stor_name(k, o);
+        n++;
+    }
+    for (i = 0; i < storSet.N; i++) {
+        gone[i] = stor_gone(&storSet.E[i]);
+    }
+    (void)tr_stor_step(&storSet, gone, storObs, n,
+                       (const char (*)[TR_FAST_KEY])quiet, nq, quietAll,
+                       &storQ, now);
+    memcpy(storCtrlOk, okNow, sizeof(okNow));
+    storCtrlOkN = nOk;
+    storFirst = 0;
+    /* Sent from the tick, never from inside the refresh that is still
+     * building the model (stor_try_send may refresh). */
+    storScanAt = GetTickCount();
+}
+
+/* Item 3's trigger where Windows gives none: each second, while the notice
+ * is on, each xhci98 controller's query header alone (no device request);
+ * a storage part whose size changed asks for a refresh, as a devnode change
+ * does. 98 SE broadcasts no devnode change for a device with no driver (a
+ * stick's plug only once the Add New Hardware wizard is dismissed, its
+ * unplug not at all), which is the notice's main case. */
+static void stor_poll(void)
+{
+    static TR_STOR_POLL now;
+    int c;
+
+    if (setOpen) {
+        return;     /* the baseline kept: the first tick after it compares */
+    }
+    if (hTray == NULL || !stor_setting()) {
+        storPoll.N = 0;
+        return;
+    }
+    now.N = 0;
+    for (c = 0; c < ucCount && now.N < TR_STOR_MAX; c++) {
+        unsigned char b[XHQ_HDR_BYTES];
+        DWORD got = 0;
+        HANDLE h;
+
+        if (!uc[c].Ours) {
+            continue;
+        }
+        stor_ctrl_key(c, now.Key[now.N]);
+        now.Bytes[now.N] = TR_STOR_POLL_NONE;
+        h = open_device(uc[c].Path);
+        if (h != INVALID_HANDLE_VALUE) {
+            memset(b, 0, sizeof(b));
+            if (DeviceIoControl(h, XHQ_IOCTL, NULL, 0, b, sizeof(b), &got,
+                                NULL) && got >= XHQ_HDR_BYTES_V2) {
+                now.Bytes[now.N] = inst_get32(b, XHQ_O_XPORT_BYTES);
+            }
+            CloseHandle(h);
+        }
+        now.N++;
+    }
+    if (tr_stor_poll_step(&storPoll, &now)) {
+        SetTimer(hTray, TIMER_CHANGE, 500, NULL);
+    }
+}
+
+/* Every queued arrival has its devnode in the model (item 8's hold). */
+static int stor_named(void)
+{
+    int i;
+    int k;
+
+    for (i = 0; i < storQ.Arr.Kept; i++) {
+        k = stor_port_of_key(storQ.Arr.Key[i]);
+        if (k < 0 || up[k].Dn < 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int stor_due(void)
+{
+    TR_STOR_GATE g;
+
+    memset(&g, 0, sizeof(g));
+    g.Now = GetTickCount();
+    g.Ready = iconAdded && hTray != NULL && stor_setting();
+    g.Quiet = storSuspended ||
+              (storResumeQuiet && g.Now - storResumeTick < TR_STOR_RESUME_MS);
+    g.HaveOther = storHaveOther;
+    g.OtherAt = storOtherAt;
+    g.FastOwed = fastPending || fastHold;
+    g.FastWatch = fastSend.State != TR_BS_IDLE;
+    g.FastAt = fastSentAt;
+    g.ArrNamed = stor_named();
+    return tr_stor_due(&storQ, &g);
+}
+
+/* A queued group sent when it is due (item 8): the removals first; the
+ * arrivals after the model is read again, their names the set's. */
+static void stor_try_send(void)
+{
+    static TR_STOR_GRP arr;
+    TR_STOR_GRP *grp;
+    int due = stor_due();
+    int i;
+    int j;
+
+    if (due == TR_SQ_NONE) {
+        return;
+    }
+    if (due == TR_SQ_ARR) {
+        if (setOpen) {
+            return;             /* sent after the Settings window closes */
+        }
+        if (GetTickCount() - storScanAt > 500UL) {
+            refresh_window();
+            due = stor_due();
+            if (due != TR_SQ_ARR) {
+                return;
+            }
+        }
+        /* Only the arrivals counted in the model now go, named as the
+         * set has them; one whose controller stopped answering stays
+         * queued, unknown, and is dropped silently if it answers again
+         * (item 6). */
+        grp = &arr;
+        memset(grp, 0, sizeof(*grp));
+        for (i = storQ.Arr.Kept - 1; i >= 0; i--) {
+            if (stor_port_of_key(storQ.Arr.Key[i]) < 0) {
+                continue;
+            }
+            for (j = 0; j < storSet.N; j++) {
+                if (strcmp(storSet.E[j].Key, storQ.Arr.Key[i]) == 0) {
+                    tr_copy(storQ.Arr.Name[i], storSet.E[j].Name,
+                            TR_STOR_NAME);
+                    break;
+                }
+            }
+            tr_copy(grp->Key[grp->Kept], storQ.Arr.Key[i], TR_FAST_KEY);
+            tr_copy(grp->Ctrl[grp->Kept], storQ.Arr.Ctrl[i], TR_FAST_KEY);
+            tr_copy(grp->Name[grp->Kept], storQ.Arr.Name[i], TR_STOR_NAME);
+            grp->Kept++;
+            grp->N++;
+            tr_stor_grp_del(&storQ.Arr, i);
+        }
+        if (storQ.Arr.Kept == 0) {
+            storQ.Arr.N = 0;    /* those past the kept are not placed */
+        }
+        if (grp->N == 0) {
+            /* every one unknown: asked again after another hold, not at
+             * every tick */
+            storQ.Arr.First = GetTickCount();
+            return;
+        }
+        /* the queue's order, oldest first, for the names shown */
+        for (i = 0, j = grp->Kept - 1; i < j; i++, j--) {
+            char t[TR_STOR_NAME];
+            tr_copy(t, grp->Name[i], TR_STOR_NAME);
+            tr_copy(grp->Name[i], grp->Name[j], TR_STOR_NAME);
+            tr_copy(grp->Name[j], t, TR_STOR_NAME);
+        }
+    } else {
+        grp = &storQ.Rm;
+    }
+    tr_stor_text(storTitle, sizeof(storTitle), storText, sizeof(storText),
+                 grp, due == TR_SQ_RM);
+    storSent = *grp;
+    storSentArr = due == TR_SQ_ARR;
+    grp->N = 0;
+    grp->Kept = 0;
+    tray_balloon_as(storTitle, storText, 0, TRAY_BK_DRIVE);
+}
+
+/* The drive balloon's re-send (item 10), by section 7.7 item 9's rule. */
+/* An arrival balloon is sent again only while each of its drives is
+ * counted in the model: one gone or unknown is not announced again. */
+static int stor_sent_present(void)
+{
+    int i;
+
+    for (i = 0; storSentArr && i < storSent.Kept; i++) {
+        if (stor_port_of_key(storSent.Key[i]) < 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int stor_answers(void)
+{
+    return tr_stor_answers(balloonAnswers, envNt, envMajor, envMinor);
+}
+
+/* While the Settings window holds the model a tick waits (item 10): an
+ * arrival's drives are counted again in the model its close reads. */
+static void stor_balloon_event(int ev)
+{
+    if (tr_stor_resend_due(&storSend, ev, GetTickCount(), stor_answers(),
+                           setOpen)) {
+        if (iconAdded && stor_setting() && !storSuspended &&
+            storText[0] != '\0' && stor_sent_present()) {
+            tray_balloon_clear();
+            (void)tray_balloon_send(storTitle, storText, 0, TRAY_BK_DRIVE);
+        } else {
+            (void)tr_bsend_step(&storSend, TR_BE_DROP, GetTickCount(),
+                                stor_answers());
+        }
+    }
 }
 
 /* The list of section 7.7 item 6 into t, an entry whole or not at all,
@@ -10378,6 +11065,8 @@ static void set_tool_fill(HWND dlg)
     CheckDlgButton(dlg, IDC_S_FASTWIN, fast_win_setting() ? BST_CHECKED
                                                           : BST_UNCHECKED);
     EnableWindow(GetDlgItem(dlg, IDC_S_FASTWIN), fast_setting());
+    CheckDlgButton(dlg, IDC_S_STOR, stor_setting() ? BST_CHECKED
+                                                   : BST_UNCHECKED);
 }
 
 static void set_tool_option(HWND dlg, int id)
@@ -10399,6 +11088,12 @@ static void set_tool_option(HWND dlg, int id)
         }
     } else if (id == IDC_S_FASTWIN && on != fast_win_setting()) {
         fast_win_set(on);
+        setToolRefresh = 1;
+    } else if (id == IDC_S_STOR && on != stor_setting()) {
+        /* On: the next scan only records the drives there (record 25
+         * section 7.8 item 6); off: nothing kept or owed. */
+        stor_set(on);
+        stor_clear();
         setToolRefresh = 1;
     }
     set_tool_fill(dlg);
@@ -11336,16 +12031,26 @@ static void tray_remove(void)
  * 98 SE's pop-up queues its notices, so there the notice carries its own
  * id (TRAY_POP_FAST), which its click reports. */
 #define TRAY_POP_FAST   2
+#define TRAY_POP_DRIVE  3       /* the USB drive notice's (section 7.8)     */
 #define TRAY_POP_QS     16      /* 16 and on: the quick saves', by folder slot */
 /* The balloon itself; 1 when the shell's was asked for. */
 static int tray_balloon_send(const char *title, const char *text, int warn,
-                             int fast)
+                             int kind)
 {
     TR_NID n;
+    int fast = kind == TRAY_BK_FAST;
 
     tr_copy(lastEvent, text, sizeof(lastEvent));
     if (!iconAdded) {
         return 0;
+    }
+    /* A queued drive notice waits the gap after any balloon, a drive
+     * balloon and its re-send included (section 7.8 item 8); another
+     * kind ends the drive balloon's re-send watch. */
+    storHaveOther = 1;
+    storOtherAt = GetTickCount();
+    if (kind != TRAY_BK_DRIVE) {
+        (void)tr_bsend_step(&storSend, TR_BE_OTHER, storOtherAt, 0);
     }
     if (!shellV5) {
         tray_update();
@@ -11353,6 +12058,7 @@ static int tray_balloon_send(const char *title, const char *text, int warn,
          * section 16). */
         tr_pop_show(hTray, WM_TRAYICON,
                     fast ? TRAY_POP_FAST
+                         : kind == TRAY_BK_DRIVE ? TRAY_POP_DRIVE
                          : qsSending && !warn
                                ? TRAY_POP_QS + (qsDirN - 1) % QS_DIRS
                                      : 1,
@@ -11374,7 +12080,9 @@ static int tray_balloon_send(const char *title, const char *text, int warn,
     }
     Shell_NotifyIconA(NIM_MODIFY, (PNOTIFYICONDATAA)&n);
     tr_bkind_step(&fastKind, fast ? TR_BE_SENT : TR_BE_OTHER);
-    tr_bkind_step(&qsKind, qsSending ? TR_BE_SENT : TR_BE_OTHER);
+    tr_bkind_step(&qsKind, qsSending && kind != TRAY_BK_DRIVE ? TR_BE_SENT
+                                                             : TR_BE_OTHER);
+    tr_bkind_step(&storKind, kind == TRAY_BK_DRIVE ? TR_BE_SENT : TR_BE_OTHER);
     return 1;
 }
 
@@ -11395,22 +12103,29 @@ static void tray_balloon_clear(void)
     Shell_NotifyIconA(NIM_MODIFY, (PNOTIFYICONDATAA)&n);
     tr_bkind_step(&fastKind, TR_BE_DROP);
     tr_bkind_step(&qsKind, TR_BE_DROP);
+    tr_bkind_step(&storKind, TR_BE_DROP);
 }
 
 /* A balloon with new text: the notice's is watched until the shell shows
  * it (item 9); any other replaces it, and the notice's is then not owed. */
 static void tray_balloon_as(const char *title, const char *text, int warn,
-                            int fast)
+                            int kind)
 {
-    if (tray_balloon_send(title, text, warn, fast)) {
-        (void)tr_bsend_step(&fastSend, fast ? TR_BE_SENT : TR_BE_OTHER,
+    if (tray_balloon_send(title, text, warn, kind)) {
+        (void)tr_bsend_step(&fastSend,
+                            kind == TRAY_BK_FAST ? TR_BE_SENT : TR_BE_OTHER,
                             GetTickCount(), 0);
+        if (kind == TRAY_BK_FAST) {
+            fastSentAt = GetTickCount();
+        } else if (kind == TRAY_BK_DRIVE) {
+            (void)tr_bsend_step(&storSend, TR_BE_SENT, GetTickCount(), 0);
+        }
     }
 }
 
 static void tray_balloon(const char *title, const char *text, int warn)
 {
-    tray_balloon_as(title, text, warn, 0);
+    tray_balloon_as(title, text, warn, TRAY_BK_OTHER);
 }
 
 /* ---- the red icon (record 25 section 7.2.1, task 43.57) ------------------ */
@@ -12404,6 +13119,9 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
                 tr_bkind_step(&qsKind, TR_BE_SHOW);
                 fast_balloon_event(tr_bkind_fast(&fastKind, 1) ? TR_BE_SHOW
                                                                : TR_BE_OTHER);
+                tr_bkind_step(&storKind, TR_BE_SHOW);
+                stor_balloon_event(tr_bkind_fast(&storKind, 1) ? TR_BE_SHOW
+                                                               : TR_BE_OTHER);
             }
             break;
         case WM_USER + 3:       /* NIN_BALLOONHIDE */
@@ -12412,6 +13130,8 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
                 tr_bkind_step(&fastKind, TR_BE_HIDE);
                 tr_bkind_step(&qsKind, TR_BE_HIDE);
                 fast_balloon_event(TR_BE_HIDE);
+                tr_bkind_step(&storKind, TR_BE_HIDE);
+                stor_balloon_event(TR_BE_HIDE);
             }
             break;
         case WM_USER + 4:       /* NIN_BALLOONTIMEOUT */
@@ -12420,6 +13140,8 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
                 tr_bkind_step(&fastKind, TR_BE_TIMEOUT);
                 tr_bkind_step(&qsKind, TR_BE_TIMEOUT);
                 fast_balloon_event(TR_BE_TIMEOUT);
+                tr_bkind_step(&storKind, TR_BE_TIMEOUT);
+                stor_balloon_event(TR_BE_TIMEOUT);
             }
             break;
         case WM_USER + 5: {     /* NIN_BALLOONUSERCLICK */
@@ -12439,6 +13161,8 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
                 tr_bkind_step(&fastKind, TR_BE_CLICK);
                 tr_bkind_step(&qsKind, TR_BE_CLICK);
                 fast_balloon_event(TR_BE_CLICK);
+                tr_bkind_step(&storKind, TR_BE_CLICK);
+                stor_balloon_event(TR_BE_CLICK);
             }
             if (onFast) {
                 fast_box(NULL);
@@ -12470,6 +13194,9 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
             poll();
             fast_hold_tick();
             fast_balloon_event(TR_BE_TICK);
+            stor_balloon_event(TR_BE_TICK);
+            stor_poll();
+            stor_try_send();
             tray_hover_poll();
         } else if (wp == TIMER_CHANGE) {
             KillTimer(w, TIMER_CHANGE);
@@ -12480,6 +13207,19 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
     case WM_DEVICECHANGE:
         if (wp == DBT_DEVNODES_CHANGED) {
             SetTimer(w, TIMER_CHANGE, 500, NULL);
+        }
+        return TRUE;
+    case WM_POWERBROADCAST:
+        /* The USB drive notice is quiet across a sleep (record 25 section
+         * 7.8 item 6): a resume may enumerate every drive again. */
+        if (wp == PBT_APMSUSPEND) {
+            storSuspended = 1;
+            stor_drop_all();
+        } else if (wp == PBT_APMRESUMECRITICAL || wp == PBT_APMRESUMESUSPEND ||
+                   wp == 0x12) {    /* PBT_APMRESUMEAUTOMATIC */
+            storSuspended = 0;
+            storResumeQuiet = 1;
+            storResumeTick = GetTickCount();
         }
         return TRUE;
     case WM_CLOSE:
@@ -13767,6 +14507,12 @@ static int run_eject(void)
     if (u >= 0 && gw.N[u].UPort >= 0) {
         free(q);
         return usb_run_eject(u);
+    }
+    if (u >= 0 && gw.N[u].UnitOf >= 0) {
+        /* A device inside a unit (the drive in an enclosure, behind its
+         * switch ports) stops with that unit, as the window's Eject takes
+         * it (unit_of_node); the confirmation lists the whole unit. */
+        u = gw.N[u].UnitOf;
     }
     if (u < 0 || gw.N[u].UnitOf != u) {
         tr_sprintf(msg, sizeof(msg), "No USB device, and no device behind a "

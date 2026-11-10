@@ -151,6 +151,7 @@
 #include "tbt_icm.h"
 #include "tbt_topo.h"
 #include "cm_marks.h"
+#include "tbt_chain.h"
 #include "cm_breq.h"
 #include "cm_dsd.h"
 
@@ -317,6 +318,40 @@ ULONG CmCfgmgAddRemovable(PCM_CFGMG cfg, ULONG devnode);
 /* Task 45.13: owed chain actions kept per domain (record 34 section 3.9). */
 #define CM_CHAIN_OWED_MAX   4UL
 
+/* Task 48.30 (record 34 section 3.12): one binding as the registration
+ * side reads it, and one posted kid eject. */
+#define CM_CHAIN_LANDS      XHCI_CHAIN_BINDS
+#define CM_CHAIN_KIDS       XHCI_CHAIN_KIDS
+
+typedef struct _CM_CHAIN_LAND {
+    ULONG Used;
+    ULONG MemberBdf;
+    ULONG Landing;          /* the chain port's location | CM_MK_LANDING_VALID */
+    ULONG Sec;              /* its secondary bus                           */
+    ULONG PdoSeq;           /* its PDO's identity, 0 until fixed           */
+    ULONG Tok[CM_MK_TOK_WORDS];
+    ULONG Wrong;            /* another identity, or one not before the arm */
+} CM_CHAIN_LAND, *PCM_CHAIN_LAND;
+
+#define CM_KID_SIBS         4UL     /* filters on one chain port's PDO kept */
+
+typedef struct _CM_KID_EJECT {
+    ULONG Posted;
+    ULONG Tok[CM_MK_TOK_WORDS];
+    ULONG MemberBdf;
+    ULONG Landing;
+    ULONG PdoSeq;
+    ULONG Sibs;             /* every listed filter on that PDO at posting:
+                               each one's AttSeq and RelGen              */
+    ULONG SibSeq[CM_KID_SIBS];
+    ULONG SibGen[CM_KID_SIBS];
+} CM_KID_EJECT, *PCM_KID_EJECT;
+
+/* The kid eject's hook (cm_nhi.c): items 4 to 8 of the checklist and the
+ * teardown; TRUE when the kid's tunnel was torn down. */
+typedef BOOLEAN (*CM_REENUM_KIDEJECT)(struct _CM_NHI *nhi,
+                                      const CM_KID_EJECT *post);
+
 typedef struct _CM_REENUM {
     /* The registration list's link (cm_reenum.c), and whether this domain
      * is on it. Under the list's lock. */
@@ -437,6 +472,22 @@ typedef struct _CM_REENUM {
     ULONG ChainUnpowered;   /* candidates read with slot power off        */
     ULONG ChainOver;        /* candidates past XHCI_TBT_CHAIN_MAX         */
     ULONG ChainCancelled;   /* owed actions no longer live, lost or stopped */
+
+    /* Design record 34 section 3.12 (task 48.30). The bindings as the
+     * registration side reads them, one per XHCI_CHAIN binding, written by
+     * the thread (CmReenumChainSet) and read by the PnP dispatch, all under
+     * cmRegLock: the chain port (MemberBdf, Landing as CM_MARK.Landing),
+     * the chain port's identity (0 until a classified filter fixes it) and
+     * the token (CM_MK_TOK_WORDS; word 0 0 while no occupancy stands).
+     * Wrong is set when a classification at the port shows another
+     * identity, or one not older than the arm: the thread withdraws it. */
+    CM_CHAIN_LAND ChainLand[CM_CHAIN_LANDS];
+    /* The posted kid ejects (item 6), one per kid slot, under cmRegLock,
+     * and the hook the hand-off calls (cm_nhi.c). */
+    CM_KID_EJECT KidEject[CM_CHAIN_KIDS];
+    CM_REENUM_KIDEJECT KidEjectHook;
+    ULONG KidEjects;        /* kid ejects handed to the hook              */
+    ULONG KidEjectsStale;   /* ... dropped by the checklist               */
 } CM_REENUM, *PCM_REENUM;
 
 VOID CmReenumStart(struct _CM_NHI *nhi);
@@ -563,7 +614,8 @@ typedef struct _CM_CFGWK_COUNTERS {
      * candidates, configurations created, started, still unstarted at
      * the deadline, disabled leftovers, left-over refusals, journal
      * entries marked gone, timeouts, late results, pin-0 functions seen
-     * and started, and the refusals by reason (CM_NI_W_* 1 to 15). */
+     * and started, the refusals by reason (CM_NI_W_* 1 to 15), and
+     * windows held and calls credited (section 14.4). */
     ULONG NoIrqCandidates;
     ULONG NoIrqAttempts;
     ULONG NoIrqStarted;
@@ -576,6 +628,8 @@ typedef struct _CM_CFGWK_COUNTERS {
     ULONG NoIrqPin0Seen;
     ULONG NoIrqPin0Started;
     ULONG NoIrqRefused[16];
+    ULONG NoIrqHeld;
+    ULONG NoIrqCredited;
 } CM_CFGWK_COUNTERS, *PCM_CFGWK_COUNTERS;
 
 /* Creates the worker for `members` bridges at bdf[] (members the domain
@@ -599,6 +653,14 @@ ULONG CmCfgwkOpenState(struct _CM_CFGWK *w, PULONG why, PULONG version);
 /* A walk of every member forgetting the known children no longer present
  * (a tunnel down: a child the user removed is gone by then). */
 VOID CmCfgwkPrune(struct _CM_CFGWK *w);
+
+/* Design record 34 section 3.3.7 (task 48.31): a chained tunnel's change
+ * on the members in `members` (bit per index) - its numbering (`up`), its
+ * removal (`down`), or both (a reconciliation) - for the worker to deal
+ * with at each tick for at most 10 s from the post that opened it.
+ * <= DISPATCH_LEVEL. */
+VOID CmCfgwkChain(struct _CM_CFGWK *w, ULONG members, BOOLEAN up,
+                  BOOLEAN down);
 /* The 98 instance path of the function at `bdf` (cm_ports.h CmPortsIdPath:
  * its devfn, each parent bridge's up to the root bus, the root bus), read
  * through HalGetBusData; and whether a 98 device id names location `bdf`
@@ -778,8 +840,12 @@ VOID CmRegRelations(struct _CM_FILTER *filter,
 #define CM_CHAIN_EV_BRIDGE      4UL /* cm.chain.bridge: a link learned    */
 #define CM_CHAIN_EV_START       5UL /* cm.chain.start: its device started */
 #define CM_CHAIN_EV_REMOVE      6UL /* cm.chain.remove: its device removed */
+/* Record 34 section 3.12 item 5: a chain child's BusRelations request's
+ * begin stamp, taken before it is passed down, and its answer's
+ * provenance kept with it. <= DISPATCH_LEVEL. */
+ULONG CmRegChainBegin(struct _CM_FILTER *child);
 VOID CmRegChainRelations(struct _CM_FILTER *child,
-                         const DEVICE_RELATIONS *relations);
+                         const DEVICE_RELATIONS *relations, ULONG beginSeq);
 VOID CmRegChainNote(struct _CM_FILTER *f, ULONG event);
 
 /*
@@ -958,6 +1024,33 @@ VOID CmReenumLossMove(struct _CM_NHI *nhi);
  * and, when it names a pending departure, the eject posted once for its
  * member. PASSIVE_LEVEL, the connection-manager thread. */
 VOID CmReenumConfirm(struct _CM_NHI *nhi, const UCHAR *v, ULONG bytes);
+
+/*
+ * Design record 34 section 3.12 (task 48.30), the thread's side of the
+ * chained units' eject:
+ *   CmReenumChainStamp  the list's next stamp (an arm's, a learning's).
+ *   CmReenumChainSet    binding i as the registration side reads it: the
+ *                       chain port under its member with its secondary
+ *                       bus, and the token (CM_MK_TOK_WORDS, NULL for none
+ *                       while the binding holds no occupancy); a new port
+ *                       starts its identity again. The marks synced.
+ *   CmReenumChainClear  binding i gone; its filters' tokens with it.
+ *   CmReenumChainWrong  whether a classification at binding i's port
+ *                       showed another identity (the thread withdraws it).
+ *   CmReenumChainKick   the chain port's child filter at `bdf` invalidated
+ *                       once (item 5, at a learning).
+ *   CmReenumSetKidEject the hand-off's hook.
+ *   CmReenumKidRecheck  item 7.8: the landing check again, under the lock.
+ * PASSIVE_LEVEL, the connection-manager thread.
+ */
+ULONG CmReenumChainStamp(struct _CM_NHI *nhi);
+VOID CmReenumChainSet(struct _CM_NHI *nhi, ULONG i, ULONG memberBdf,
+                      ULONG bdf, ULONG sec, const ULONG *tok);
+VOID CmReenumChainClear(struct _CM_NHI *nhi, ULONG i);
+BOOLEAN CmReenumChainWrong(struct _CM_NHI *nhi, ULONG i);
+VOID CmReenumChainKick(struct _CM_NHI *nhi, ULONG bdf);
+VOID CmReenumSetKidEject(struct _CM_NHI *nhi, CM_REENUM_KIDEJECT hook);
+BOOLEAN CmReenumKidRecheck(struct _CM_NHI *nhi, const CM_KID_EJECT *post);
 
 /* NT: `width` bytes (1, 2 or 4) of `value` written at `offset` (0x40 or
  * above: a capability, never the header) of the configuration space of

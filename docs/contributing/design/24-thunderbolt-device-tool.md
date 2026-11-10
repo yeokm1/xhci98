@@ -51,6 +51,13 @@ as it is then would not get "You can now unplug the device." after it;
 the started-again text names the tool the user is in (section 5.4). The
 tray and window of the xHCI98 USB Tree (record 25) take the same texts.
 
+Revision 9, 2026-11-09 (roadmap-usb4.md task 48.31's follow-up): on 98 SE
+and ME the unit's line says whether Windows has `DN_REMOVABLE` on it,
+"marked removable" or "not marked removable", and no longer "marked
+removable by the Thunderbolt driver": 98 SE and ME set the bit on nearly
+every devnode of a dynamically loaded driver, the host bridge's and root
+devices' included, so it does not say who set it (section 4.3).
+
 It is not a Thunderbolt control panel: it approves nothing, changes no
 security level, updates no firmware, and publishes or shows no secret or
 authentication material.
@@ -364,10 +371,16 @@ the Thunderbolt controller's own functions" and is not numbered; a unit is
 never a bridge in the record's set itself. The host suite covers an
 override naming the host xHCI's port and a unit with an NHI nested in it.
 
-On 98 and ME every unit is offered, marked or not, with "marked removable
-by the Thunderbolt driver" or "not marked removable" beside it (the mark
-is set by the worker for a new child; a unit tunnelled before the worker's
-baseline is not marked). On NT the viewer shows the unit's `Removable`
+On 98 and ME every unit is offered, marked or not, with "marked removable"
+or "not marked removable" beside it: the devnode's `DN_REMOVABLE` (0x4000)
+as Windows reports it (`CM_Get_DevNode_Status`), never who set it
+(revision 9). The worker sets the bit on a new child that lacks it
+(record 21 section 7.4), but 98 SE and ME set it on nearly every devnode
+of a dynamically loaded driver, the host bridge's and the root devices'
+included (record 34 section 3.3.7, read on 98 SE and ME, 2026-11-09), so
+the bit is usually set before the worker looks and its mark finds nothing
+to add; the line names the state alone (`inst_removable_9x_text`, shared
+by the USB Tree). On NT the viewer shows the unit's `Removable`
 and `SurpriseRemovalOK` capabilities (`CM_DRP_CAPABILITIES`) as they are,
 and says the applet lists a device with `Removable` and without
 `SurpriseRemovalOK`; it does not claim more.
@@ -453,6 +466,75 @@ says the tunnel stays up until the unplug. This tool always runs as an
 administrator and keeps the ten seconds. A unit
 with no child filter reaches nothing in `xhcicm.sys`; its tunnel stays up
 until the unplug.
+
+What the ten seconds cover (Phase 48, `runs/run-48.md` "The
+eject's wait", 2026-11-10, 8.1 x86 under emulation): the thread reads a written
+confirmation with the status ask, at most every 500 ms
+(`CM_ST_ASK_MS`) at its idle poll (`XhciCmPollIdleMs`, 200 ms by
+default); the hand-off follows in the same or the next pass (read:
+`cm.reenum.confirm` then `cm.reenum.eject` 200 to 250 ms apart), and the
+teardown itself is a few router requests (read: the tunnel closed and
+the tool's line "The PCIe tunnel was closed." about 4 s after OK, the
+tool's own walk and its 3 s wait for the departure included). A
+teardown whose request goes unanswered ends in a failure, not a closed
+tunnel, so a longer wait would only delay the same answer. Nothing in
+the connection manager polls more slowly than this or defers the
+teardown behind a timer; the one deferral, a bridge not yet settled
+after a tunnel change, ends at that bridge's next `BusRelations`
+answer.
+
+A port the connection manager cannot close (Phase 48, the same run).
+The teardown names the USB4 port by its correspondence with the tunnel
+port's bridge (record 22 section 7.6: router-named, or learned when a
+tunnel comes up). A tunnel found up at start on a host router that
+does not answer Get PCIe Downstream Entry Mapping (the emulator's
+`asm4242` model) is never learned, so the hand-off logs
+`u4.eject.unmapped` and the tunnel stays up until the unplug, whoever
+confirmed the eject. The record shows it: no router entry names that
+bridge (`CM_ST_E_BRIDGE` stays `CM_ST_UNKNOWN`). The watch reads that
+(`inst_port_pcie` and `inst_pcie_unbound`, shared with XHCITR). The
+record read immediately before the call, with the unit present behind
+its tunnel port, is the one that attributes it: the port an active
+member of the set (so not a chain port), no entry naming it, and a
+router on a host USB4 port (`CM_ST_KIND_USB4_PORT`) with its PCIe
+tunnel up or kept from the start and no tunnel port known - the unit's
+own router, since a router whose port reached that bridge would name
+it. When that record read so, no read of the watch named the port, and
+its last read, made at the step that found the bound passed, still
+reads so and is shown current, the watch ends with "The PCIe tunnel stays up until the
+device is unplugged: the Thunderbolt driver does not know which of its
+ports the device is on. It learns that when a device is plugged in
+while Windows runs." instead of the line above. The line above stays
+for a port that was named and not seen closed, for a watch whose last
+read failed or could not be shown current, and for a record with no
+such router (the deeper routers' entries are not read for it). Current
+(Phase 48, 2026-11-10): the record is a registry value the
+driver rewrites only when something in it changes, and the ask made
+before the call stays echoed in it however long ago it was written, so
+a record that driver stopped publishing would read unmapped through the
+whole watch, the device unplugged meanwhile or not. This tool therefore
+writes a new ask 3 s before the bound (`INST_TB_LATE_ASK_MS`) and takes
+the last read as current only when it echoes that ask, was made no more
+than 6 s after the ask was written (`INST_WATCH_ASK_MAX_MS`: a tool
+descheduled past the bound does not take an echo published then and
+frozen since) and its stage is active (`inst_watch_current`); an ask the key refused or the driver did
+not echo by the bound keeps the plain line. The late ask is kept beside
+the run's own, never in its place: a record echoing either is this
+run's (`tb_mine`), so the walk after the watch (`tb_after`, section 5.4)
+reads the record whether or not the late one was echoed. XHCITR reads the query
+device's cached answer instead and takes it as current only when it is
+eject-ready, younger than `CM_Q_CURRENT_MS` with the time the tool held
+it added (from before the call that read it to the decision, since the
+driver samples the age inside the call), and published at least
+`CM_Q_NEW_PASSES` passes after the answer read immediately before the
+call, in the same start (`tr_query_watch_current`; record 25 section
+6.2 step 7). The closed line needs neither: a record cannot show a
+tunnel closed after an eject that had not happened. The reading that led here took the switch's
+functions leaving the emulator's `info pci` some time after the eject
+as the tunnel closing; it was Windows clearing the removed upstream
+switch port's bus numbers, and the driver's own record still read the
+tunnel up. After an unplug and a re-plug the port was learned and the
+same eject closed the tunnel.
 
 Record 22 section 10.4 says the tunnel is down before the user is told the
 device may be unplugged. For an eject this tool makes, that ordering is
@@ -549,7 +631,7 @@ Thunderbolt 3 controller: xHCI98 Thunderbolt 3 Host Interface
     connections: PCIe up, USB3 not known, DisplayPort not known
     behind Thunderbolt port PCI 02:01.0:
       [1] NVM Express Controller         nvme98     working
-          PCI\VEN_1B36&DEV_0010   marked removable by the Thunderbolt driver
+          PCI\VEN_1B36&DEV_0010   marked removable
           instance PCI\VEN_1B36&DEV_0010&SUBSYS_11001AF4&REV_02\0008083000
 
   Other Thunderbolt ports (not carrying a connection now): 02:00.0, 02:02.0

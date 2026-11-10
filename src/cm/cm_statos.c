@@ -344,6 +344,7 @@ static VOID cmStInput(PCM_NHI nhi, PCM_STATUS_IN in)
 {
     ULONG i;
     ULONG n;
+    const TBT_U4_PORT *p;
 
     CmZero(in, sizeof(*in));
     in->NhiId = (nhi->Vendor & 0xFFFFUL) | ((nhi->Device & 0xFFFFUL) << 16);
@@ -391,6 +392,15 @@ static VOID cmStInput(PCM_NHI nhi, PCM_STATUS_IN in)
         }
         if (!cmStNt()) {
             cmStPath(nhi, i, in);
+        }
+    }
+    if (nhi->U4On && nhi->U4Infer.ClosedPort != 0) {
+        /* Record 22 section 7.6.2: for the connection whose closure it
+         * confirmed, never a later one on the port. */
+        p = TbtU4Port(&nhi->U4, nhi->U4Infer.ClosedPort);
+        if (p != NULL && p->Generation == nhi->U4Infer.ClosedGen) {
+            in->InferPort = nhi->U4Infer.ClosedPort;
+            in->InferBdf = nhi->U4Infer.ClosedBdf;
         }
     }
 }
@@ -705,6 +715,8 @@ VOID CmStatusPass(PCM_NHI nhi)
     CM_STATUS_PUB *s;
     CM_STATUS_IN in;
     ULONG bytes;
+    ULONG i;
+    ULONG k;
 
     s = &nhi->StatusPub;
     if (nhi->Stage == CM_STAGE_STOPPED) {
@@ -721,6 +733,16 @@ VOID CmStatusPass(PCM_NHI nhi)
     /* Built whether or not the key opened: the query device frames it
      * (cm_qryos.c, design record 25 section 4). */
     cmStInput(nhi, &in);
+    if (nhi->U4On) {
+        /* Record 34 section 3.12 item 9: each kid's chain port while its
+         * occupancy stands. */
+        for (i = 0; i < 4 && i < XHCI_CHAIN_KIDS; i++) {
+            k = XhciChainOfKid(&nhi->Chain, i + 1UL, 0);
+            if (k < XHCI_CHAIN_BINDS) {
+                in.KidBridge[i] = 0x10000UL | (nhi->Chain.Bind[k].Bdf & 0xFFFFUL);
+            }
+        }
+    }
     bytes = CmStatusBuild(s->Built, &in, &nhi->Icm, &nhi->U4, &nhi->Binds);
     s->BuiltBytes = bytes;
     if (s->DevKey == NULL) {

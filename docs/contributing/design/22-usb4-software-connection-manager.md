@@ -118,6 +118,20 @@ Revised 2026-11-08 (Thunderbolt networking on the ASM4242, reviewed and
 revised): section 18.9 - on the ASM4242's host router, Pending Packets
 on the Host Interface adapter's path entries are read as 0.
 
+Revised 2026-11-09 (task 48.35, a design, reviewed and revised, no code):
+section 11.1, new - standby and hibernation with a device attached: the
+Guide's sleep entry (chapter 8.2) on this profile and the resume after
+it, the firmware connection manager's and the integrated hosts' sleep,
+what this driver cannot order on a native PCIe hot-plug tunnel port, the
+XP x64 and 7 x64 shutdown stall read as another driver's, and the owner's
+questions; decisions U34 to U36 proposed (section 15). Sections 7.6, 11
+and 16 point to it; until it is coded they describe what ships.
+
+Revised 2026-11-09 again (task 48.35, the owner's answers and the code,
+reviewed and revised): section 11.1.11 records the answers, decisions U34
+to U36 are decided, and section 11.1.13 names the code; `XhciCmSleepEntry`
+is 1 since the emulator legs passed (section 11.1.12).
+
 The sources, and the tag each fact carries below:
 
 - **[spec]** the USB4 Specification 2.0 ("Spec") and the USB4 Connection
@@ -200,7 +214,8 @@ In:
 - Polling by default, as record 21 section 4.3 decided for the ICM client
   (decision D3); the ring interrupt beside the idle poll of section 5.4
   and record 21 section 4.5 (task 45.22) is coded behind
-  `XhciCmRingInterrupt`, 0 by default, the line on NT only.
+  `XhciCmRingInterrupt`, 0 by default, the line on NT only (on every
+  system since task 48.26).
 - The Intel integrated hosts' platform preparation through PCI
   configuration space (section 4), shared with record 21's ICM rows.
 - The host router, its adapters discovered from their capability chains,
@@ -240,9 +255,9 @@ Out, each with where it goes:
   asymmetric used as found (section 6.2); since task 45.56 a depth-1
   Gen 4 link between two version 2 routers also recovers from an
   uncorrectable error (section 6.2.3 item 4).
-- MSI and MSI-X, and any interrupt on 98 SE and ME: polling (the line
-  interrupt of section 5.4 runs on NT behind `XhciCmRingInterrupt`, task
-  45.22).
+- MSI and MSI-X: polling (the line interrupt of section 5.4 runs behind
+  `XhciCmRingInterrupt`, task 45.22, on NT and since task 48.26 on 98 SE
+  and ME too).
 - Firmware upgrade (NVM operations), retimers, and the firmware start or
   CIO reset of a stopped Intel firmware: never touched.
 - ACPI: no `_OSC`, no WMI force power of an absent discrete controller, no
@@ -2314,10 +2329,13 @@ learning calls), with the choices marked as the orchestrator's of
   the set is emptied and found again, never left without a named port.
 - Learning is a new device (a function 0 newly answering) on one member's
   secondary bus while that port is the only PCIe tunnel up and not yet
-  attributed. A port stays pending until it is learned or proven down - a
-  teardown whose read-back proved the path closed, or the router's removal
+  attributed, and what answers is a tunnel's far end or comes with the
+  link's evidence (section 7.6.4). A port stays pending until it is
+  learned or proven down - a teardown whose read-back proved the path
+  closed, or the router's removal
   evidence of section 7.1 items 1 to 3; a tunnel-down action alone is not
-  proof - and while another port is pending no gain is attributed. A
+  proof - and while another port is pending no gain is attributed
+  (narrowed for ports found up at start by section 7.6.3). A
   member with no secondary bus blocks learning for the domain, and a
   conflicted port's live tunnel blocks it until that tunnel is proven down
   (orchestrator).
@@ -2335,7 +2353,7 @@ learning calls), with the choices marked as the orchestrator's of
     set cannot be read now), from an idle pass or from the delivery of
     its `TUNNEL_UP`; every attempt that leaves the port pending -
     whatever its outcome (`NOT_GAINED`, `UNREAD`, `NOT_ARMED`,
-    `SEVERAL`, `INACTIVE`, `CONFLICT`) - counts as a miss.
+    `SEVERAL`, `SHAPE`, `INACTIVE`, `CONFLICT`) - counts as a miss.
   - **The schedule.** While less than 1000 ms have passed since the
     window opened, the next attempt is at the next idle pass (never a
     second one in the same pass, a delivery's included). From the
@@ -2398,8 +2416,11 @@ learning calls), with the choices marked as the orchestrator's of
   44.57, on the `asm4242` model with the ASM2464 enclosure attached at
   power-on, where the host router answers Get PCIe Downstream Entry
   Mapping Not Supported, so no router-named correspondence takes the
-  port out of learning). Such a port still blocks the learning of
-  another port's tunnel while it is pending (the rule above, unchanged).
+  port out of learning). Such a port blocked the learning of every
+  other port's tunnel while it was pending; since task 48.43 it does not
+  where its function showed at the start reading (section 7.6.3), and
+  its eject may close its tunnel by an inference (section 7.6.2, off by
+  default).
   Only a router-named or a learned correspondence binds a port;
   `XhciCmTunnelBridge` selects the domain's tunnel-port set and does not
   itself resolve a pending port.
@@ -2482,7 +2503,10 @@ resume does not close the window,
 so **system suspend with a tunnelled device attached is unsupported in this
 release on every target**, and the release notes say so. On Windows 98 no
 filter sits on a bridge (record 21 section 6.1) and there is no hold at
-all.
+all. Task 48.35 designs the sleep with a device attached in section 11.1
+(the Guide's sleep entry, the resume after it, and the native hot-plug
+port this driver cannot order); until it is coded, this paragraph is what
+ships.
 
 #### 7.6.1 AMD's integrated hosts: the ACPI-named source (task 46.23; design, reviewed and revised)
 
@@ -2723,6 +2747,589 @@ absent.
 [ms-usb4acpi]: Microsoft, "USB4 ACPI requirements" (learn.microsoft.com,
 windows-hardware/design/component-guidelines), its `_DSD` properties for a
 USB4 host's PCIe root ports (`usb4-host-interface`, `usb4-port-number`).
+
+#### 7.6.2 A tunnel found up at start: inferring its port (task 48.43; owner, 2026-11-10: option 3, off by default)
+
+Proposed on 2026-11-10 (Phase 48, the eject sections of `runs/run-48.md`)
+and decided by the owner the same day: option 3 below is built, eject
+only, behind `XhciCmInferAtStart` with default 0, and the learning rule
+is narrowed as section 7.6.3 says. The options are kept as they were
+weighed.
+
+**The gap.** A PCIe tunnel the pre-OS connection manager left up, on a
+host router that answers Get PCIe Downstream Entry Mapping Not
+Supported (the emulator's `asm4242` model), is never router-named and
+never shows a gain, so its port stays pending for the instance's life
+(the learning's window above only stops the reading). Read on 8.1 x86
+under emulation (`runs/run-48.md`, the eject sections of 2026-11-10):
+
+- Its eject reaches the hand-off and stops there (`u4.eject.unmapped`):
+  the tunnel stays up until the unplug. Windows holds the unit for the
+  eject (problem 47) through a re-enumeration of every member, so
+  nothing restarts it; the tools say the tunnel stays up (record 24
+  section 5.2). A unit started again after such an eject was the pinned
+  emulator build's power controller on the tunnel port (the board's
+  ports have none), not this rule.
+- While it is pending no other port's gain is attributed (the rule
+  above, until section 7.6.3): a second enclosure plugged into USB4
+  port 2 while Windows ran was refused as `SEVERAL`
+  (`u4.learn=0000020A`), so its eject could not close its tunnel either.
+  Only an unplug of the first device (its port proven down) lifted that.
+
+**What is known at start.** The router's own reads: which host USB4
+ports have a PCIe path up (the tunnel found up, `TBT_U4_PORT.Pcie.Up`,
+from the adapters' path configuration), the routers behind them, their
+PCIe Upstream and Down adapters. The PCI side: the set's members (here
+the switch's own tunnel ports by id), each one's secondary bus range and
+the functions answering below it at the baseline, and its Link Status.
+What is not known is which member a given host PCIe Down adapter reaches:
+that is exactly the correspondence the router would have named.
+
+**Options, as weighed.**
+
+1. **No inference (as before).** No risk of a wrong teardown. Cost: the
+   two readings above, for as long as the device stays connected. This
+   is what `XhciCmInferAtStart` 0, the default, keeps.
+2. **One tunnel, one occupied member.** Exactly one host USB4 port with a
+   PCIe tunnel up, exactly one active member with a function behind it,
+   that port bound to that member. The PCI reading is its only witness;
+   not built.
+3. **Option 2 cross-checked by the links (built).** The same, and in the
+   same pass both link readings agree: the PCI side's Data Link Layer
+   Link Active, on members that report it, and the router's PCIe Down
+   adapter link states. The rules are below.
+4. **By position** (tunnel port device 0 for USB4 port 1, device 1 for
+   port 2). Rejected, as section 7.6.1 rejects position: the second
+   port's place is inferred, not published, for the ASM4242, and no
+   specification ties a switch's device numbers to adapter numbers.
+5. **By the ACPI `usb4-port-number`** of the tunnel port's `_DSD`, where
+   the firmware gives one. Kept rejected as a binding, as section 7.6.1
+   keeps it: the number is the platform's port numbering, which no
+   specification ties to the router's adapters.
+6. **By a probe**: pause the tunnel's path, read which member's link
+   drops, restore it. Rejected: it interrupts a working drive, possibly
+   the system's own, to learn something only an eject needs.
+
+**The argument.** A function behind a tunnel port of a discrete USB4
+controller (a member by the switch's own port ids, record 21 section
+6.3 source 2) can only be carried by a PCIe tunnel of that domain; with
+exactly one tunnel up, the one occupied member is its. The PCI reading
+alone could be wrong in four narrow ways: a member whose function is not
+carried by a tunnel (an override's or a listed root port's set, where
+another device can sit; or a downstream port of the controller's own
+switch with one of the controller's own functions behind it, which the
+switch's port ids alone do not tell from a tunnel port where it is hot-plug
+capable, as the emulator's model makes its xHCI's port); a reading taken while a second tunnel's
+function had not yet answered (a port the router reads down whose path
+was in fact up); a function that answers without its tunnel (a stale or
+shadowed configuration read); or a second tunnel brought up between the
+router's reading and the PCI reading. The rules below exclude the first
+by source and by the shape of what answers behind the member, the second and third by requiring both link readings to agree
+with the occupancy, and the fourth by the thread: tunnels are built and
+torn down on the connection-manager thread alone, which is the thread
+that reads, so none changes between the reads of one pass; the bus
+numbers read before and after the pass catch a re-enumeration by
+Windows in between.
+
+**The inference.** `XhciTbtInfer` (`tbt_topo.c`, pure) over what the
+driver half (`cm_nhi.c`) reads; every condition is required, and the
+first one that fails is the refusal's reason:
+
+- I1. `XhciCmInferAtStart` is 1 (REG_DWORD, 0 or 1, any other value the
+  default 0; the NHI INFs write 0 with NOCLOBBER).
+- I2. The host router is a USB4 router, not a Thunderbolt 3 host: the
+  LTSSM field is read in the USB4 encoding alone (section 19.4).
+- I3. The set as discovered: outcome `SET` from the discovery itself
+  (`FindOutcome` `SET`), one to `XHCI_TBT_MAX_TUNNELS` members, every
+  member of source 2 (`XHCI_TBT_SRC_SWITCH`, the controller's own
+  tunnel ports by id) and active (no other domain claims it). Never
+  under the override, never for listed root ports, router-named,
+  ACPI-named or SHPC members.
+- I4. The shared binding table is empty: no named, learned or
+  conflicted entry and no overflow - so never beside a router-named or
+  learned binding in the domain - and the port is not marked conflicted
+  for the inference (the read-back below).
+- I5. Exactly one host USB4 port has its PCIe tunnel up, that port is an
+  at-start port (section 7.6.3: its tunnel found up at start and no
+  `TUNNEL_UP` taken for it since; a recovery's rebuild queues one and
+  ends the mark), and the learning marks agree: that port is pending and
+  no other port is (`Binds.Pending` is that port's bit alone - so no
+  other port has a path written, incomplete, residual, quarantined or
+  held, section 7.6's reconciliation). The seam record (`U4SeamValid`,
+  `U4SeamGen`) is no evidence either way: the start sets it for every
+  tunnel it finds up, so that the eject's stale check accepts them.
+- I6. The router reading, one read of `ADP_PCIE_CS_0` per host PCIe Down
+  adapter (`TbtU4PcieLinkClass`): the port's reads Path Enable set and
+  its LTSSM in L0, L1, Recovery or Recovery.Idle; every other host USB4
+  port's reads Path Enable clear or its LTSSM in Detect. A failed read,
+  a port with no PCIe Down adapter, or any other LTSSM value (a
+  transitional state included; there is no re-read) refuses.
+- I7. The PCI reading, one pass over every member in set order: the bus
+  number register; the PCI Express capability, a downstream port, Link
+  Capabilities with Data Link Layer Link Active Reporting Capable (bit
+  20) and a Link Status read (`XhciTbtDecodeLink`'s valid answer); the
+  function-0 probe of every device number on the secondary bus (the
+  learning's occupancy) and, where a function answers, device 0's
+  Header Type and PCI Express Capabilities register; then every member's
+  bus number register again. Every register readable and not all-ones;
+  every member's bus numbers the same both times and its secondary bus
+  the learning baseline's; exactly one member with any function behind
+  it, what answers there **a tunnel's far end** - device 0 alone, a
+  PCI-to-PCI bridge whose PCI Express capability says Upstream Switch
+  Port - and that member's Link Active set; every other member with
+  nothing behind it and its Link Active clear. A member that does not
+  report Link Active refuses (a 0 there proves nothing).
+  The far end's shape (task 48.43, revised 2026-11-10; reason 17,
+  `XHCI_TBT_INFER_SHAPE`): a device's own PCIe switch presents its
+  upstream port there, as the emulator's enclosures do, while a host
+  controller's own integrated functions behind its switch's ports - its
+  xHCI, its NHI - are endpoints. Without it, on a set that counts the
+  controller's xHCI's port as a member (a port that reports Link Active,
+  its xHCI always answering), a tunnel found up at start whose function
+  had not yet answered, its member's link still down, left the xHCI's
+  member the one occupied member with both links agreeing, and the
+  inference named it as the port's: an eject would then have torn down
+  a tunnel the user did not eject. Any other shape refuses, an endpoint
+  directly behind a tunnel port included; that costs only the inference.
+  A shape that cannot be read (a failed access, or all-ones) is reason
+  12, unread, never taken for a shape.
+
+When it is tried: at each learning attempt of that port (section 7.6's
+window), after `XhciTbtLearn` left the port pending, so at most once a
+pass and never once the window has closed (60 s after it opened at the
+start, or at the recovery that marked it again). A port whose tunnel
+this driver built never satisfies I5. Its log: `u4.infer` (port 15:8,
+member index 7:0) and `u4.infer.bdf` when made; `u4.infer.refused`
+(port 15:8, reason 7:0) when the reason differs from the last one
+logged, so a refusal repeated at every attempt is logged once.
+
+**The binding kept apart.** An inference is a record of its own,
+`XHCI_TBT_INFER` beside the NHI's `XHCI_TBT_BINDS`, never an entry of
+that table: `XhciTbtPortMember`, the learning, the tunnel changes'
+choice of member, `CmNhiMemberPort` and `CmNhiMemberGen`, the stor98
+statements of a closed path (section 10.2) and the isolation statement
+to xHCI98 (section 10.5) never read it, and treat the port as unbound,
+as before. The port stays pending: the learning goes on as section 7.6
+and 7.6.3 say, and an inference never ends the mark (were it cleared, a
+function of the inferred member that stopped answering and came back
+while another port was pending would be learned as that port's, and a
+learned binding reaches every consumer above). The record is dropped,
+at the next idle pass that sees it, when a binding of any kind enters
+the shared table, when the port is no longer pending, its PCIe tunnel
+no longer up or its connection generation another, or its member no
+longer in the set; and at every rediscovery that changes the set
+(`CmNhiSetChanged`).
+
+**At the eject.** In the hand-off (`cmU4EjectBridge`, every target:
+the NT eject hook and the 98 SE and ME eject transaction alike), only
+where no shared binding names the bridge and the inference names it:
+I1 to I7 are read again, in full, now, and must give the same port, the
+same member, the same secondary bus and the same connection generation
+as when the inference was made (at the eject Windows has removed the
+unit's stacks, but its functions still answer configuration reads while
+the tunnel is up, so the occupancy reads as before). Then the stale
+check of the shared path: the port's router present, its PCIe tunnel
+up, its seam record absent or of the same generation. Any difference
+drops the record (`u4.infer.recheck`, the reason) and the hand-off logs
+`u4.eject.unmapped` as before; the tunnel stays up until the unplug.
+When all agree, `TbtU4EjectPcie` tears the port's PCIe tunnel down as
+for a bound port (`u4.eject`, `u4.eject.inferred`).
+
+**The read-back.** After a teardown the router read back closed
+(`TbtU4EjectPcie` `TBT_OK`), the member is read at that moment and at
+each idle pass after it for 2 s (record 21 section 6.5's poll bound):
+Link Status readable with Link Active clear, the bus numbers unchanged
+and no function answering on its secondary bus. Seen once, the closure
+is confirmed (`u4.infer.closed`): the status record's entry for that
+port names the member as its tunnel port for the ejected tunnel (so the
+tools' watch reads "closed after an eject", record 24 section 5.2), and
+the record is spent. Not seen within the bound - a function still
+answering, Link Active set, an unreadable member, or the instance
+contained or stopping meanwhile - the port is marked conflicted for the
+inference for the instance (`u4.infer.conflict`; no further inference
+on it) and no closure is claimed: the status record names no tunnel
+port, so the tools give their plain "has not confirmed that the PCIe
+tunnel was closed" line. A teardown that did not read back closed is a
+failed eject as for a bound port, and the record is dropped. The
+read-back detects; it does not undo. A path torn down cannot be put
+back as it was: a rebuild goes through the adapters' Detect (sections
+6.8 and 10.1, a reset boundary), the teardown has already removed
+chained routers and queued its own `TUNNEL_DOWN`, and Windows has
+surprise-removed the functions behind it, writes in flight lost. So no
+rebuild is made, and the safeguards that count are the ones before the
+teardown.
+
+**The tools.** No change. With `XhciCmInferAtStart` 0, or the inference
+refused or dropped, the status record names no tunnel port for that
+router and the tools' "The PCIe tunnel stays up until the device is
+unplugged ..." line stands (record 24 section 5.2). With the closure
+confirmed they say "The PCIe tunnel was closed."
+
+**The risk that stays.** A change between the reads of one pass that
+the bus numbers do not show, by something other than this driver's
+thread, on a set of the controller's own tunnel ports; the re-check at
+the eject reads it all again, so it would have to hold at both. The
+cost of a wrong inference is a surprise removal of a drive the user did
+not eject, which nothing after the teardown repairs; hence the default
+0 until the emulator's legs and the owner's board have read it.
+
+**Tests.** Host vectors (`test/test_tbt_topo.c`): the inference made
+(one tunnel, one occupied member, both links agreeing) and each guard
+refusing in turn (I2 to I7: a Thunderbolt 3 host; the override, a
+listed root port, a router-named member and an inactive member; a
+binding in the table and a conflicted port; no tunnel, two tunnels, a
+tunnel not found at start, another port pending; the router's port not
+linked, another port linked, an unknown or transitional LTSSM; an
+unreadable member, a member without Link Active Reporting, two occupied
+members, none occupied, Link Active set on an empty member or clear on
+the occupied one, bus numbers moved, the controller's own xHCI as the
+one occupied member with port 1's function not yet answering, an
+endpoint or a second device behind the occupied member), a wrong inference refused (the
+links disagreeing with the occupancy), the re-check, the read-back's
+three outcomes, and the binding kept apart (`XhciTbtPortMember` and
+`XhciTbtLearn` unchanged by it). Legs on the emulator's `asm4242` model
+with the enclosure at power-on, 8.1 x86: `XhciCmInferAtStart` 0 (the
+tunnel stays up, as before) and 1 (the tunnel closed at the eject, or
+the refusal logged where a reading does not agree). Then the owner's
+board.
+
+**As read** (task 48.43, 2026-11-10, 8.1 x86 on the emulator's
+`asm4242` model with the enclosure at power-on; `runs/run-48.md`):
+with `XhciCmInferAtStart` 0 nothing is inferred and the eject gives the
+tools' "stays up" line, as before. With 1 on the launcher's model the
+inference refuses (`u4.infer.refused`, port 1, reason 13): the model
+makes the downstream port of the ASM4242's own xHCI hot-plug capable,
+so it is a third member of the set, and it does not report Link
+Active; the two tunnel ports do (Link Capabilities bit 20), the
+occupied one reading Link Active set and the empty one clear. With
+that port made not hot-plug capable (`usb4-asm-dsp.hotplug=off`, the
+board's two tunnel ports alone as members) the inference is made at
+start (`u4.infer=00000100`) and the eject closes the tunnel:
+`u4.eject.inferred`, the read-back confirmed at once
+(`u4.infer.closed`), and the tool's "The PCIe tunnel was closed." The
+owner's board's Link Capabilities are not read.
+
+#### 7.6.3 The learning rule narrowed (task 48.43; owner, 2026-11-10)
+
+The rule of section 7.6 attributes a gain only while one port is
+pending, so a port found up at start that stays pending for the
+instance's life blocks the learning of every other port for as long as
+its device stays (ejr's `u4.learn=0000020A`). Narrowed: another pending
+port does not block the attribution when every other pending port is an
+**at-start port** whose function already showed at the start reading,
+and the gain is on a member that was empty then.
+
+- **At-start ports** (`XHCI_TBT_BINDS.AtStart`, `XhciTbtLearnAtStart`):
+  marked by the driver half where the start marks the ports found with
+  a live path pending (`cmU4BindRest`, which a recovery also runs after
+  its commit), for an unbound port whose PCIe tunnel is up and was found
+  up, not built (`Pcie.Preserved`). The mark ends with the pending mark
+  (learned, bound, released or proven down), and at every `TUNNEL_UP`
+  of the port the batch takes (`XhciTbtLearnNotAtStart`, called beside
+  `XhciTbtLearnUp` in `CmNhiU4Take`): a tunnel brought up again may
+  bring a function anew. No later pass marks a port again.
+- **The start reading.** The first full reading of the set (an arm, or
+  a learning attempt's reading) taken after the at-start marks gained a
+  port, kept by bridge location: the members as they were
+  (`StartBdf`), which had a function behind them (`StartOcc`), and
+  whether it can be trusted (`StartOk`): every member then of source 2
+  (the switch's own tunnel ports by id) or router-named - the sources
+  behind which only a tunnel of this domain can put a function, so
+  never under the override and never for listed root ports, ACPI-named
+  or SHPC members; every pending port then an at-start port; every
+  member occupied and not explained by a binding (named or learned:
+  that member's function is its bound port's) holding a tunnel's far
+  end (section 7.6.2 I7's shape: device 0 alone, an Upstream Switch
+  Port); and exactly as many of those members as there were at-start
+  ports. Each tunnel lands on one member, and a far end behind a member
+  of those sources is a tunnel's of this domain, so then every at-start
+  tunnel's function is on a distinct one of those occupied members.
+  The shape is needed (task 48.43, revised 2026-11-10): source 2 does
+  not prove that what sits behind a member is a tunnel's. The emulator's
+  model makes its xHCI's downstream port hot-plug capable, a member by
+  the switch's port ids with the xHCI always behind it; counted, that
+  member made up the count while port 1's at-start function had not yet
+  answered, and port 1's function answering during port 2's learning
+  attempt, on a member empty at the start reading, would have been
+  learned as port 2's - a wrong binding in the shared table, which
+  every consumer reads (an eject of port 1's device acting on port 2's
+  tunnel, the stor98 and isolation statements naming the wrong member).
+  A member holding anything but a far end makes the reading untrusted,
+  and the old rule stands. A shape that cannot be read (a failed access,
+  or all-ones) leaves the reading not taken: the next full reading is
+  the start reading. Until it is taken the narrowed attribution holds
+  its gain (below); the rule for a port pending alone reads no shape and
+  goes on as before. A port joining
+  the at-start marks later takes the reading again (more conservative:
+  more members count as occupied). When no at-start mark is left the
+  reading is forgotten.
+- **The narrowed attribution.** In `XhciTbtLearn`, after the reading
+  and exactly one gain on a member not bound to another port: where
+  another port is pending (formerly `SEVERAL` at once), the gain is
+  still attributed to the port tried when all of these hold: the start
+  reading is taken and trusted; every other pending port is an at-start
+  port; the port tried is not one; every member is active (a member
+  another domain claims could hold that domain's tunnel's function); the
+  member that gained was a member at the start reading and empty then
+  (explained or not); and what it gained is a tunnel's far end (the
+  same shape: a function of the controller's own that answers late, on
+  a member empty at the start reading, is never taken for a tunnel's),
+  or, since section 7.6.4, another shape with the link's evidence.
+  Where that shape, the port reading section 7.6.4 needs, or the start
+  reading's shape cannot be read the attempt
+  is `UNREAD` and the baseline is not moved, so the gain is seen again
+  at the next attempt rather than consumed by a refusal. Nor does an
+  at-start port's own attempt consume a gain while a port not at start
+  is pending (it answers `SEVERAL` and leaves the baseline): it is
+  never given the gain while another port is pending, so the gain is
+  left for that port's attempt, whichever order the pending ports are
+  tried in.
+  Otherwise `SEVERAL`, as before. The other outcomes (`INACTIVE`,
+  `CONFLICT`, `LEARNED`) follow as before.
+- **The risk it keeps out.** A function of an at-start port's member
+  that stopped answering and came back reads as a gain; it is on a
+  member occupied at the start reading, which never qualifies. A tunnel
+  found up at start whose function had not answered by the start
+  reading leaves fewer unexplained occupied members than at-start
+  ports, even where a bound member or a device that is no tunnel's
+  could have made up the count (a bound member's occupancy does not
+  count; sources where a device can sit without a tunnel are not
+  trusted; and a member of a trusted source holding anything but a far
+  end - the controller's own xHCI behind a hot-plug capable port of its
+  switch - makes the reading untrusted rather than counting): the
+  reading is not trusted and the rule is the old one. A function of the
+  controller's own that answers only later, on a member empty at the
+  start reading, is no far end and is never attributed under this rule.
+  The rule of section 7.6 for a port pending alone was not changed by
+  this section; section 7.6.4 narrows it, and this rule, the same way.
+- **On the inference.** Independent of it: a port learned under the
+  narrowed rule is a binding in the shared table, after which I4
+  refuses (and drops) any inference in the domain. With both on, a
+  second enclosure learned on port 2 means port 1's tunnel is no longer
+  the only one up, so its eject is unmapped again, as before.
+
+**Tests.** Host vectors: an at-start port pending with its member
+occupied and a gain on an empty member learned for another port; a gain
+on the occupied member refused (`SEVERAL`); the start reading not
+trusted (fewer occupied members than at-start ports; a bound member's
+occupancy making up the count while the at-start function is late, then
+another port's hot plug; a non-at-start port pending at the reading;
+the controller's own xHCI's port a member, its xHCI occupying it, port
+1 preserved with its function not yet answering, then answering during
+port 2's attempt: `SEVERAL` and no binding in the shared table)
+refused; with the xHCI silent at a trusted start reading, its function
+answering during port 2's attempt refused and port 2's own far end then
+learned; an endpoint gained refused; a shape unreadable once, at the
+gain (`UNREAD`, then `LEARNED` at the next attempt) and at the start
+reading (not taken, then taken and trusted); the xHCI's shape
+unreadable at every reading, port 1 pending alone still learned and
+port 2's gain beside it held (`UNREAD`); port 1's attempt between
+port 2's unreadable attempt and its retry, and port 1 tried first,
+leaving port 2's gain to be learned; an inactive member
+refused; the
+override and listed root ports refused; a member not in
+the start reading refused; the at-start mark ended by a `TUNNEL_UP` and
+by `XhciTbtLearnDown`; the start's own sequence (`cmU4BindRest` sets
+the seam record and the at-start mark both). Leg: a second enclosure on port 2
+learned while port 1's at-start tunnel is pending (`u4.learn`
+`LEARNED` for port 2), and its eject closing its tunnel.
+
+**As read** (the same leg setting, two tunnel ports as members): a
+second enclosure plugged into port 2 while port 1's at-start tunnel
+stayed pending was learned (`u4.learn=00000203`; before, `0000020A`).
+With the launcher's model as it was the start reading counted the
+xHCI's occupied downstream port too and was not trusted, so the old
+rule stood there (`SEVERAL`); since the far-end shape that member makes
+the reading untrusted whatever the count. Read again with the far-end
+rule (2026-11-10, the launcher's xHCI port made not hot-plug capable):
+port 2 learned while port 1's at-start tunnel stayed pending
+(`u4.learn=00000203`), and with `XhciCmInferAtStart` 1 the inference
+made at start and the eject closing port 1's tunnel
+(`u4.eject.inferred`, `u4.infer.closed`, "The PCIe tunnel was
+closed."). Its eject was not read: the
+second enclosure's upstream port sat at problem 31, learned or not. The
+cause is the emulator's, not this rule's nor record 31's kept child:
+the launcher's build gives each tunnel port one bus, so a switch
+plugged after the start gets no bus numbers (record 31 section 4.10,
+read 2026-11-10; `runs/run-48.md`).
+
+#### 7.6.4 What one gain may be: a tunnel's far end, or the link's evidence (task 48.43; 2026-11-10)
+
+Sections 7.6.2 and 7.6.3 require a tunnel's far end of the start
+reading, of the narrowed attribution and of the inference. The rule of
+section 7.6 for a port pending alone did not: it attributed one gain of
+any shape. So a function of the controller's own (its xHCI behind a
+hot-plug capable port of its switch, as the emulator's model has it),
+or a device that is no tunnel's, answering late while one port was
+pending alone - a port found up at start whose function had not yet
+answered, or a hot plug - was learned as that port's: a wrong learned
+binding in the shared table, read by every consumer (an eject of that
+port's device acting on another tunnel, the stor98 and isolation
+statements naming the wrong member). Record 34 section 3.12's chained
+transaction had the same hole: a function of the parent's own answering
+late on an empty chain-port candidate was taken for the kid's.
+
+**The rule.** One gain is attributed - under section 7.6's rule for a
+port pending alone, under section 7.6.3's narrowed rule, and in record
+34 section 3.12 item 4's transaction - only when what answers behind the
+bridge (`XhciTbtGainAdmits`) is:
+
+1. **a tunnel's far end**: device 0 alone, a PCI-to-PCI bridge whose PCI
+   Express capability says Upstream Switch Port (section 7.6.3's shape).
+   A device router with PCIe Down adapters of its own (a hub, a dock)
+   and the ASM2464 (as the emulator models it) put a switch behind their
+   PCIe Up adapter, and its upstream port is what a tunnel brings; or
+2. **any other shape with the link's evidence**: an endpoint directly
+   behind the tunnel port (the emulator's plain enclosure puts its NVMe
+   there, with no switch), or more than one device, only when the
+   bridge's port reading (record 21 section 6.5, `XhciTbtPortRead`) was
+   DOWN - it reports at least one of Link Active, Presence Detect State
+   and the SHPC slots, and each one it reports says absent - at a
+   reading where nothing answered behind it, nothing has been read
+   answering there since, and it reads UP at the gain. That is positive
+   evidence that a link came up behind that bridge, which is what a
+   tunnel does: the PCIe link over a USB4 path trains once the path is
+   enabled. A function of the controller's own is wired behind its port,
+   which reports it present (Presence Detect State, or Link Active)
+   whenever it is there, so no DOWN reading is taken of its port and it
+   is never admitted, however late it answers.
+
+The router naming a port (section 7.6's router-named source) binds with
+none of this: that is positive evidence of its own, and unchanged.
+
+**Where the evidence is read.** At depth 1, per member
+(`XHCI_TBT_BINDS.BaseDown`): at each arm, each member empty in the new
+baseline has its port read, and keeps the bit an earlier baseline gave
+its location; at each attempt that moves the baseline, each empty
+member without the bit is read again and each occupied member's bit is
+cleared. An arm that cannot read every member keeps no new baseline (the
+old one and its bits stay, not armed), so a transient failure never
+loses evidence the next arm would find by location; but a member it read
+occupied before failing loses its bit all the same, since a function was
+seen answering there. An attempt that ends before the baseline moves
+(a member unread, a shape or port not read, an at-start port's attempt
+leaving the gain) holds the bit of each member it read occupied
+(`BaseHeld`): the bit then stands only while that member stays occupied,
+and a reading of that member that finds it empty again spends it at
+once, even when another member then fails. A device seen answering in a
+member's scan that then fails counts as an occupancy all the same.
+In the chained transaction a candidate read gaining at a try that waited
+spoils the transaction if it reads empty again before it is decided.
+No reading that fails part-way is more lenient than a whole one. In the
+chained transaction such a read decides nothing, so anything it did see
+differ from the baseline - another candidate set (count or place), a
+candidate's buses (as the walk read them), a device gained or lost where it was read - spoils
+the transaction at once; so does a failure of the walk itself (which
+never descends below a candidate, so a kid answering Retry Status does
+not fail it), and reaching a candidate already
+waiting on its port reading, whose gain only a whole reading decides. At
+depth 1 an
+attempt that ends before the baseline moves holds the evidence of what
+it saw occupied, spends what it saw empty and held evidence behind a
+member scan that failed (what the failure hid may be that loss), sets no
+new evidence, and
+spends the evidence of a gain it saw that `XhciTbtGainAdmits` rejects
+outright (or any gain on a member whose scan failed), so a link coming
+up later never admits a function already seen answering without it. The
+cost: a kid whose gain is first seen by a read that fails elsewhere is
+unattributed, and a direct endpoint first seen on a member whose scan
+failed is not learned. At depth 2, at the
+arm, once, after the two equal readings:
+each empty candidate's port (`XHCI_CHAIN_BASE.Down`). The arm is
+immediately before the kid's Path Enable, so no link of the kid's can be
+up then.
+
+**Outcomes.** A shape or a port reading that cannot be read (a failed
+access, all-ones, the port `ERROR` or `GONE`) is a reading not made: at
+depth 1 `UNREAD` with the baseline kept, so the gain is seen again; at
+depth 2 `WAIT`, the transaction open. A port reading that fails after
+reading whole a signal that says absent (Link Active clear where it is
+reported, Presence Detect State clear where the slot is implemented, the
+SHPC slots all empty, every slot read even when only the DWORD Select's
+restoring write then failed) is not such a reading: the whole reading would
+have been `DOWN` or `MIXED`, never `UP`, so the gain is not admitted, as
+the whole reading would decide (merge review, 2026-11-10). A gain not admitted: with the
+port pending alone, the new outcome `SHAPE` (`u4.learn` low byte `0F`),
+the baseline moved - the gain consumed, so that the port's own far end
+answering later on another member is one gain, not two - and the port
+pending as before, until it is learned or proven down; under the
+narrowed rule `SEVERAL`, as before; in the chained transaction
+`SPOILED` with the outcome `SHAPE` (`cm.chain.txn` low byte `09`), the
+kid unattributed.
+
+**What is no longer learned** (chosen: no binding without evidence):
+
+- A tunnel found up at start whose endpoint answers only after the
+  baseline, with no switch: its port was up at every reading, so no
+  evidence; it stays pending (its eject unmapped, section 7.6.2 off by
+  default; the whole set acts for it), as every port found up at start
+  did before section 7.6.3. A far end there is still learned.
+- An endpoint behind a member whose port reports none of the three
+  signals to the learning's reader. The learning reads through the
+  thread's read-only accessor (`cmCfgRead`, `HalGetBusData`), and an
+  SHPC slot is read through DWORD Select, a write: so on the emulator's
+  i440FX SHPC tunnel bridge a plain enclosure (its NVMe in the slot) is
+  no longer learned. Its eject keeps the tunnel up until the unplug, as
+  for any port whose member is not known, and no stor98 statement names
+  its member (section 10.2); a dock there (the emulator's switch, a far
+  end) still is learned, and so is a plain enclosure on a q35 tunnel
+  port, which reports Link Active and Presence Detect State.
+- The inference (section 7.6.2 I7) and the start reading keep the far
+  end alone: no transition can be read of a tunnel already up.
+
+**The residual.** A function wired behind a port whose every reported
+signal read absent while it did not answer, and present once it did (no
+Presence Detect State reported, its link down and trained again), would
+carry the evidence. No member read so far has one: the emulator's model
+reports its xHCI's port present (Link Active), and section 7.6.3's leg
+setting makes that port no member at all.
+
+**Every other place a binding is made**, checked for the same hole: the
+router-named source binds by the router's naming, never by a gain; a
+`KNOWN` outcome and `XhciTbtLearnBound` consume a pending mark for a
+binding already made; a recovery's rebuild and a resume's
+reconciliation learn through `XhciTbtLearn` (this rule); the inference
+and the start reading already required a far end (section 7.6.3); the
+chained transaction now applies this rule. Nothing else writes a
+learned binding.
+
+**Tests.** Host vectors: a port pending alone with the controller's own
+xHCI's port a member, the xHCI answering late during its attempt:
+`SHAPE`, nothing bound, the gain consumed, the port's own far end then
+learned; the same with port 1 found up at start, its function late (the
+case reported): `SHAPE` for the xHCI, port 1's far end then learned on
+its own member; a far end learned with no link change; a far end's shape
+unreadable (`UNREAD`, the baseline kept, then `LEARNED`); a direct
+endpoint learned on the evidence (down at the arm, up with the
+endpoint), its port unreadable at the gain (`UNREAD`, the baseline and
+the evidence kept), with no link change (`SHAPE`, consumed), with its
+port up at the arm (no evidence, `SHAPE`), the evidence read at an
+attempt and kept by location across a second arm; the emulator's i440FX
+SHPC bridge with an NVMe at 01:01.0, refused through a read-only accessor
+and learned through one that writes DWORD Select; under the narrowed
+rule an endpoint with no link evidence refused and one with it learned;
+in the chained transaction an endpoint with its chain port still down
+and one whose port read present at the arm refused (`SHAPE`), a far end
+with no presence change learned, a shape unreadable waiting then
+learned. A mutation that admits every shape without evidence fails the
+new vectors and binds the reported case's port 1 to the xHCI's member.
+
+**As read** (2026-11-10, the `release` `xhcicm.sys` of `2023c3ce`
+copied into each guest; 8.1 x86 on the `asm4242` model with the
+launcher's switch ports padded, `asm4242-20261027-fwpad`; XP on the
+`intel-adl` model): a second enclosure (the ASM2464 model, a far end)
+plugged into port 2 while port 1's at-start tunnel stayed pending was
+learned (`u4.learn=00000203`), came up at problem 0, and its eject closed
+its tunnel (`u4.eject.bridge=00000208`, `u4.eject=00000200`, "The PCIe
+tunnel was closed."); with `XhciCmInferAtStart` 1 the inference and the
+inferred eject read as before (`u4.infer=00000100`,
+`u4.eject.inferred=00010200`, `u4.infer.closed=00010200`); on the
+`intel-adl` model, whose third member is the platform's own xHCI root
+port, a plain enclosure (its NVMe directly behind tunnel port 00:05.0)
+plugged after the desktop was learned on the link's evidence
+(`u4.learn=00000103`, the tunnel port 00:05.0), Stor98 bound by the
+wizard, and its eject closed the tunnel (`u4.eject.bridge=00000028`,
+`u4.eject=00000100`, "The PCIe tunnel was closed.").
 
 ### 7.7 The host interface lost: containment
 
@@ -3936,7 +4543,13 @@ Taken: option (a) (owner, 2026-11-06). Coded in `tbt_u4cm.c`
 `TbtU4GetCarry`), logged as `u4.preos.once` (1 left whole, else the
 first test that failed in bits 15:8 and its port in 7:4), with no
 counter of its own (the counter block and its names are XHCITR's too);
-host vectors `test_u4cm` `test_preos_once`. A port
+host vectors `test_u4cm` `test_preos_once`, and since task 48.8
+`test_preos_once_more`, each reading the `u4.preos.once` line: a port
+whose USB3 tunnel's record does not match (test 2), port 1 its own and
+a firmware's tunnel on port 2 (test 2 at port 2, both cleaned), a path
+entry the inventory cannot read and a Path Enable on the device's PCIe
+Down adapter (test 3), and a version 2 host interface, left whole with
+no Host Router Reset and, with that enable, cleaned through one. A port
 with `HostResidual` fails test 2 whatever its tunnel state.
 
 Cleaning one port, the Linux and Windows 11 sequence restricted to it:
@@ -4450,7 +5063,8 @@ yes. Its controller keeps record 17's limitation.
   qualifies (section 6.2.3 item 4 parts 2 and 6). The
   Guide's sleep entry (chapter 8.2: Enter Sleep, Sleep Ready, the wake configuration) is
   not in the first cut; a domain that loses power across the sleep comes
-  back with its device routers uninitialised.
+  back with its device routers uninitialised. Section 11.1 (task 48.35)
+  designs that entry and the resume after it; not coded yet.
 - **Resume to D0**: section 4.2's force power and LTR where they apply, the
   host interface and rings, then section 7.6's restoration of every
   resume obligation (each tunnel up at suspend, whatever its port's state)
@@ -4476,6 +5090,693 @@ yes. Its controller keeps record 17's limitation.
   legs read it.
 - **Runtime power management**: none; the host interface is never put into
   D3 while the system runs.
+
+### 11.1 Sleep with a device attached (task 48.35; a design, reviewed and revised; the owner's answers of 2026-11-09; coded)
+
+Every release so far leaves standby and hibernation with a Thunderbolt or
+USB4 device attached unsupported (the release notes, "Thunderbolt and
+USB4: known limitations"; the README's "stop and unplug" line). Task 48.35
+(owner, 2026-11-09) asks for the Connection Manager Guide's sleep entry on
+this profile, the firmware connection manager's own sleep and resume, the
+integrated hosts through a standby, the tunnels back before Windows looks
+again at a native PCIe hot-plug port, and the first shutdown that stalls on
+XP x64 and 7 x64 after a hibernation with a tunnelled drive. This section
+is the design for all five, for both profiles (record 21's ICM client
+shares the power path, `cm_power.c`, and the tunnel-port filter), what it
+cannot do, and the questions it left to the owner (section 11.1.11, answered
+2026-11-09). It is coded (section 11.1.13); `XhciCmSleepEntry` is 1 since the
+emulator legs passed (section 11.1.12), 0 the behaviour of sections 7.6 and 11
+above.
+
+#### 11.1.1 What ships, and where the limitation is written [code]
+
+- **Nothing refuses a sleep.** `cm_power.c` passes every power IRP but
+  `IRP_MN_SET_POWER` down untouched, `IRP_MN_QUERY_POWER` included; no
+  installer or tool text asks the user to do anything at a sleep.
+- **At a system sleep** (the NHI's D3 for S1 to S4, `CmNhiQuiesce`): the
+  tunnel-port set's held marks (`CmReenumSuspend`), then under this
+  profile `TbtU4Suspend` - every peer logged out (record 35 section 3.8),
+  every tunnel up recorded as a resume obligation, Enable Gen 4 Link
+  Recovery cleared (section 6.2.3 item 4 part 6), the rings stopped;
+  nothing else is written to the fabric. Under record 21's ICM rows:
+  mailbox `0x05` then `0x07` (Falcon Ridge, Alpine Ridge), `0x07` alone
+  (Titan Ridge, Maple Ridge), nothing on the ICL row (Ice Lake to Meteor
+  Lake under their firmware). The link-controller mailbox Linux sends
+  there is coded (`TbtHwPlatformSuspend`, `tbt_hw.c`) and called by
+  nothing.
+- **At the resume**: section 7.6 - each obligation verified, rebuilt where
+  the domain lost its configuration and the tunnel is this driver's own
+  (or section 9.4's match), torn down on removal evidence, else HELD; the
+  marks released and the bridges invalidated whatever the outcome
+  (decision U15).
+- **Where it is written**: the README ("Things to know", first bullet;
+  "Known limitations", Thunderbolt and USB4, first bullet); the release
+  notes' "Thunderbolt and USB4: known limitations" (the standby paragraph
+  with its native hot-plug and XP x64 / 7 x64 shutdown sentences) and the
+  `3.3.0.0` entry for task 44.26; record 21 sections 1.4.3 (the integrated
+  row), 1.4.4 (the ICL row's system suspend), 5.6, 6.3 and 12; this
+  record's sections 7.6, 11, 15 (U7, U15), 16 and 17; record 34 section
+  6.9; record 33 section 7.6 (its leg R11).
+
+#### 11.1.2 What is read already [run]
+
+- **No D0 is held** (task 43.24h, record 21 section 6.3): a retained bridge
+  D0 deadlocked the NT resume; every resume now releases the held marks
+  and invalidates the bridges after the NHI's own resume.
+- **Hibernation on a tunnel bridge Windows does not drive natively**
+  (the i440FX emulator's SHPC bridge): 2000, Vista x86, 7 x86 and x64, 8
+  x86, 8.1 x86 and 10 x86 resumed with the drive and its files and shut down in
+  under a minute, the tunnel rebuilt by this profile (`runs/run-44.md`,
+  "44.27", first and second parts); on q35, with a tunnel the emulated
+  firmware built again at the boot (the Titan Ridge profile's
+  `preboot=on`, the ASM4242 model's pre-OS tunnel), Vista x64, XP x64 and
+  7 x64 the same ("44.27 (continued)").
+- **A native PCIe hot-plug tunnel port** (task 43.71, `runs/run-43.md`,
+  "43.71"; the q35 `usb4-tunnel-port`, 7 x86): at the resume Windows' PCI
+  driver read the slot empty and turned it off (Slot Control `0x17FB`,
+  Slot Status `0x0010`) before the tunnel was back; the drive was reported
+  missing although this profile's resume succeeded, and a file whose
+  directory entry was still in the file system's cache at the hibernation
+  was lost. On q35 under the ICM profile without a pre-boot tunnel the
+  same loss followed on 7 x64 ("44.27 (continued)", "Two readings on the
+  way").
+- **The XP x64 and 7 x64 shutdown stall** ("44.27 (continued)"): it
+  follows `nvme98`, Stor98's older and unreleased version, on the drive,
+  with or without this package installed; with this package's Stor98 on
+  the drive no shutdown after a resume stalled, on seven readings.
+- **Every reading above is a hibernation.** No standby (S3) leg has run
+  under this package: the q35 bases' display adapter vetoes standby
+  (43.71's `powercfg /a`). `usb4-emu` records Windows 11 reaching S3 on q35
+  with `-vga none -device virtio-gpu-pci` and `ICH9-LPC.disable_s3=0`
+  ([model] `usb4-emu` `docs/ROADMAP.md`, the Windows 11 suspend and resume
+  item of 2026-10-23); task 48.35's legs take that route where the base
+  allows it.
+
+#### 11.1.3 What the specifications ask [spec]
+
+- **Entry** (Guide 8.2.1, page 89): the connection manager sets the wake
+  events, disables CLx, clears Enable Gen 4 Link Recovery, verifies that
+  each Target Asymmetric Link matches the actual link, then runs the
+  sequence of 8.2.1.2.
+- **The wake configuration** (Guide 8.2.1.1, Table 8-1, pages 89 and 90):
+  Enable Wake on Connect and on Disconnect only on a downstream port
+  (DFP), each by its USB4 Port is Configured bit; Enable Wake on USB4 Wake
+  "must be set to 1b in all UFP", optional on a configured DFP; Enable
+  Wake on Inter-Domain only on a DFP of an inter-domain link; Enable Wake
+  on PCIe, USB3 and DP in device routers. A router with any wake event
+  enabled needs Enable Wake on USB4 Wake on every port up to the host
+  router and USB4 Port is Configured on both ends of its link.
+- **The sequence** (Guide 8.2.1.2, pages 90 and 91): (1) wait for the
+  connection manager's own sideband transactions; (2) Enter Sleep
+  (`ROUTER_CS_5` bit 0) in every router of the domain, in any order; (3)
+  a version 1.0 router's Sleep Ready (`ROUTER_CS_6` bit 0) polled, a
+  version 2.0 router's taken from its notification (`ROP_CMPLT`, Event
+  Info `03h`) and read, or polled; "within 50 milliseconds", a 500 ms
+  timeout recommended; (4) and (5) inform the host system, or have the
+  host router send `LT_LRoff`, "implementation specific". After Enter
+  Sleep the connection manager finishes the sequence, initiates no
+  sideband transaction and writes neither USB4 Port is Configured nor USB4
+  Port is Inter-Domain. A note asks that a router's internal USB and PCIe
+  functions be in U3 and D3 before Enter Sleep.
+- **The router's side** (Spec 4.5.1, pages 243 and 244): a host router
+  sleeps on an implementation-specific signal; a device router on a PERST
+  Active tunnelled packet or an `LT_LRoff` on its upstream port, and never
+  unless Enter Sleep was set before it. Sleep Ready within tSetSR (Table
+  4-73, page 250: 50 ms; 80 ms with a Thunderbolt 3 compatible sideband
+  channel), unless the router waits for a Notification Acknowledgment.
+  At the sleep event a port with USB4 Port is Configured clear (and not
+  inter-domain) disconnects; an inter-domain port without wake on
+  inter-domain disconnects; any other sends PERST Active on its enabled
+  PCIe paths and `LT_LRoff`, and goes to CLd.
+- **What survives** (Spec 4.5.2, Table 4-71, pages 244 and 245): "On entry
+  to sleep state, a Router shall restore all Configuration Spaces to their
+  default values"; it keeps, apart from them, the Upstream Adapter, the
+  Configured and Inter-Domain bits, the wake enables, the target link
+  speed and asymmetry, and a few link indicators.
+- **Exit** (Spec 4.5.4, page 246; Guide 8.2.2, pages 91 and 92): on an
+  upstream disconnect or a Wake on USB4; every adapter that reaches CL0
+  sends a hot plug packet with UPG 0. The connection manager then
+  reconfigures each router (Guide chapter 3) and sets up again every path
+  that was there before (chapter 5); a USB3 path is disabled or set up as
+  a new path.
+- **A neighbour asleep** (Guide 8.2.3, Figure 8-1 and Table 8-3, pages 92
+  to 94): the sleeping domain's `LT_LRoff` reaches this domain's port as a
+  hot plug packet with UPG 1 while Router Detected stays 1; a disconnect
+  reads Router Detected 0; the neighbour's wake starts link initialisation
+  again with UPG 0.
+- **The registers** (Spec 8.2.1.1, pages 359 to 361; 8.2.2.4, pages 395
+  to 397): `ROUTER_CS_5` bit 0 Enter Sleep, bits 1 to 3 Enable Wake on
+  PCIe, USB3 and DP (hardwired 0 in a host router); `ROUTER_CS_6` bit 0
+  Sleep Ready, bits 2 to 4 the wake status; `PORT_CS_19` bit 16 Enable
+  Wake on Connect, 17 on Disconnect, 18 on USB4 Wake (default 1), 19 on
+  Inter-Domain; `PORT_CS_18` the four port wake status bits.
+
+#### 11.1.4 What Linux and the emulator do [linux] [model]
+
+- **Suspend** ([linux] `switch.c` `tb_switch_suspend`, `usb4.c`
+  `usb4_switch_set_wake`, `usb4_switch_set_sleep`): CLx disabled, plug
+  events off, the children first, wake enables only where the device may
+  wake the system (none otherwise), then Enter Sleep and Sleep Ready
+  waited 500 ms, on every router, the host router last. A Thunderbolt 3
+  router gets `lc.c` `tb_lc_set_sleep`: bit 31 (`TB_LC_SX_CTRL_SLP`) of
+  each link controller's `SX_CTRL` (generation 2 and later), no Sleep
+  Ready, and `tb_lc_set_wake`'s six wake bits.
+- **Resume** ([linux] `tb.c` `tb_resume_noirq`): every router read again
+  and kept only with the same UID, the children configured again, the
+  tunnels a firmware or a restore kernel built across a hibernation torn
+  down, then Linux's own tunnels built again and 100 ms waited.
+- **The integrated hosts** ([linux] `pci.c` `icl_nhi_suspend_noirq`,
+  `icl_nhi_resume`): at a sleep through the firmware, under the ICM, the
+  link-controller mailbox `GO2SX` (wake armed) or `GO2SX_NO_WAKE`, 500 ms;
+  under a software connection manager nothing; at the resume force power,
+  firmware ready and LTR again.
+- **The ICM** ([linux] `icm.c` `icm_suspend`, `icm_probe`): `0x05` (save
+  devices) on Falcon Ridge and Alpine Ridge only, then `0x07`.
+- **The order** ([linux] `tb.c` `tb_apple_add_links`, `acpi.c`
+  `tb_acpi_add_link`): device links make the tunnelled PCIe ports resume
+  after the NHI, so the tunnel is back first; the platform names the pair
+  through the ports' `usb4-host-interface` property ([ms-usb4acpi],
+  section 7.6.1). No such order exists on 2000 to 10 for this driver
+  (record 21 section 6.3).
+- **The emulator** ([model] `usb4-emu` at `a0dcdd5`, read only): a router
+  sets Sleep Ready at once when Enter Sleep is written
+  (`hw/usb4/usb4-router.c`); the machine's S3 wakeup reset returns every
+  router's configuration to its defaults but keeps a router that stayed
+  attached as the same router, so a tunnel the connection manager
+  restores to it is a link retrain, with Data Link Layer Link Active
+  cleared and Presence Detect kept (`hw/usb4/usb4-fabric.c`
+  `usb4_fabric_wakeup_reset`; `docs/ARCHITECTURE.md` section 4.4); the
+  emulated firmware CM (`preos-cm`) runs again after a power-on; and its
+  ICM tunnels again, within that wakeup reset, every device saved by
+  mailbox `0x05` ([model] `docs/ICM-PROTOCOL.md` R34, from the P14s
+  capture: the NVMe answered 0.6 s before the driver ready, so the
+  firmware had rebuilt the tunnel itself [obs]).
+
+#### 11.1.5 The sleep entry under this profile (Guide 8.2.1)
+
+At the NHI's D3 for a system sleep (S1 to S4; never at a shutdown, never on
+a contained instance, and only with `XhciCmSleepEntry` 1, section 11.1.10),
+on the thread, after the peers' logouts and the obligations are recorded
+and before the rings stop. **Each router's register is its type's**, as
+Linux chooses per router, the host router included ([linux] `switch.c`
+`tb_switch_suspend`, `tb_switch_set_wake`): a USB4 router's
+`ROUTER_CS_5` and `ROUTER_CS_6` and its USB4 ports' `PORT_CS_19`; a
+Thunderbolt router, host or device (section 19.4 item 1: no USB4 router
+registers), its link controllers' `SX_CTRL` from generation 2 ([linux]
+`lc.c` `tb_lc_set_wake`, `tb_lc_set_sleep`), and nothing at all on
+generation 1 (Light Ridge, Cactus Ridge: every `tb_lc_*` returns early
+there, section 19.4 item 3). "Enter Sleep" below means `ROUTER_CS_5` bit
+0 on a USB4 router and `SX_CTRL` bit 31 in each link controller of a
+Thunderbolt router of generation 2 or later.
+
+1. **Sideband.** This driver issues no sideband transaction (no port
+   operation is coded), and its router requests are synchronous on the
+   thread, so step 1 of Guide 8.2.1.2 has nothing to wait for.
+2. **The preflight, per port, before any Enter Sleep is written.** CLx:
+   never enabled by this driver (decision U16); on a preserved link a
+   predecessor's CL0s, CL1 or CL2 enable (`LANE_ADP_CS_1` bits 10 to 12)
+   read set at either end is cleared at both ends, the device end first,
+   and read back. The Target Asymmetric Link of each Gen 4 link is read
+   and compared with the link's actual state; nothing is written to it
+   (decision U31: an asymmetric link is used as found and never
+   transitioned, and the target survives the sleep, Table 4-71, so a
+   correction now would be a transition at the wake). Enable Gen 4 Link
+   Recovery is cleared as today. **A preflight that fails anywhere** (a
+   CLx bit that will not clear, a target that does not match, an
+   unreadable register, on any router) leaves the whole domain out of the
+   entry: no router gets items 4 and 5, since the host router and a
+   chain's parent are shared by every branch below them and a per-port
+   fallback would still put a router with a failed prerequisite to sleep.
+   The fact is logged (`u4.sleep.preflight`, the router, the port and the
+   step), every obligation is judged at the resume by section 7.6's rule,
+   not by item 1 of section 11.1.6, and the platform's sleep takes the
+   links down as it did before this section.
+3. **What the entry cannot cover.** A path this driver does not restore
+   at the resume - a preserved DisplayPort path, a router watched rather
+   than run (section 9.2's links at depth 2 that did not verify, every
+   router at depth 3 and deeper), a USB3 path on a link this driver does
+   not run - is lost across any sleep that takes the domain's power, as
+   in every release so far (Spec 4.5.2: every configuration space returns
+   to its defaults); leaving such a router out of the entry does not
+   protect it from its parent's sleep. It is not supported, logged at the
+   suspend (`u4.sleep.unrestorable`, the port and what is on it) and, at
+   the resume, a watched link is read again as section 9.2 reads it at a
+   start (its devices reported missing where it does not come back).
+   Whether a domain carrying such a path should sleep at all is the
+   owner's (question Q7).
+4. **The wake configuration: none** (decision U35). On each router this
+   instance runs, every downstream USB4 port's Enable Wake on Connect, on
+   Disconnect, on USB4 Wake and on Inter-Domain are cleared; each device
+   router's upstream port keeps (or is given) Enable Wake on USB4 Wake,
+   as Table 8-1 requires of every upstream port; each USB4 device router's
+   Enable Wake on PCIe, USB3 and DP are cleared; a Thunderbolt 3 device
+   router's six `SX_CTRL` wake bits are cleared ([linux] `tb_lc_set_wake`
+   with no flags). The values read before the writes are kept per port for
+   item 2 of section 11.1.6. A USB4 host router's downstream ports are
+   given the same; a Thunderbolt host router's `SX_CTRL` wake bits are not
+   written, as Linux writes none at route 0 ([linux] `lc.c`
+   `tb_lc_set_wake` returns before any access there). USB4 Port is
+   Configured is not written here:
+   section 6.4 set it on both ends of every link this driver configured,
+   and a preserved link keeps its predecessor's. An inter-domain port's
+   wake on inter-domain is clear, so at the sleep event it disconnects and
+   the peer sees the link go (Guide 8.2.3, Table 8-3 row 2), its USB4NET
+   service already ended (record 35 section 7.7).
+5. **Enter Sleep** in every router this instance runs on a port that
+   passed item 2, read-modify-write and read back: the routers at depth 2
+   (record 34's kids), then each device router at depth 1, then the host
+   router (through its own register type; nothing on a generation 1
+   Thunderbolt host). The order does not matter to the Guide; this is
+   Linux's. Item 3's routers are left as they are.
+6. **Sleep Ready**, `ROUTER_CS_6` bit 0 of each USB4 router given Enter
+   Sleep, all polled in one pass per poll, for up to 500 ms on the
+   instance's clock from the last Enter Sleep write (the Guide's
+   recommendation; a deadline on the elapsed clock with section 5.3's
+   tick allowance, not a count of sleeps), each wait a safe point of
+   section 5.3, so the transport keeps being served: a notification that
+   Guide 7.7.2 lists for acknowledgement (`ERR_PLUG`, for instance) is
+   acknowledged there as section 5.1 does, which Spec 4.5.1 needs, since a
+   router may hold Sleep Ready back until such an acknowledgement arrives;
+   a hot plug event is answered with its own acknowledgement (Guide 4.3,
+   section 5.1's hot plug paragraph) and queues its port check for after
+   the resume; a version 2.0 router's own `ROP_CMPLT` notification (Event
+   Info `03h`) is consumed silently, as section 5.1 and `TbtCtlClassify`
+   consume every `ROP_CMPLT` (the Guide lists none for acknowledgement),
+   and Sleep Ready is still read. A Thunderbolt router has no Sleep Ready
+   (Linux polls none).
+7. **Then the rings stop**, as today. A router that does not answer, or
+   whose Sleep Ready is not read set in time, is logged
+   (`u4.sleep.not-ready`, its route and the value read) and counted; the
+   sequence is finished anyway, since the Guide forbids stopping it once
+   Enter Sleep is written and this driver cannot stop a system sleep from
+   its D3.
+
+**Steps 4 and 5 of Guide 8.2.1.2** (telling the host system, or having
+the host router send `LT_LRoff`) are left to the platform: its own entry to
+S3 or S4 is taken as the host router's sleep event [inf]. On an Intel
+integrated host under this profile Linux sends no link-controller mailbox
+(`pci.c` returns before it for a software connection manager), and this
+driver sends none either; no host router this driver runs documents a way
+to request `LT_LRoff`, so none is requested [inf].
+
+**The order against the tunnelled devices.** The NHI's device object is
+`DO_POWER_PAGABLE` and the bridges' are not (record 21 section 6.3), so on
+NT the NHI reaches D3 before the tunnel ports, and before the tunnelled
+endpoint whenever that endpoint's stack is not pageable [inf: which
+storage stacks are]. Enter Sleep is therefore written while the endpoint
+may still be in D0. Spec 4.5.1 makes the router sleep only at the sleep
+event, so the tunnels keep carrying traffic until the platform sleeps; the
+Guide's note on internal functions in D3 concerns a router's own built-in
+functions and is a "should". That nothing is lost between Enter Sleep and
+the platform's sleep is [inf], read by the legs (section 11.1.12).
+
+**The cost** at the D3, which the system's sleep waits for: per router a
+few requests (four attempts of 100 ms at worst, section 5.2) for the reads
+and writes of items 2 to 5, then one 500 ms Sleep Ready bound for all of
+them; for the largest domain this driver runs, a few seconds at worst,
+logged at the entry as `u4.sleep.bound-ms`.
+
+**Off** (`XhciCmSleepEntry` 0): items 2 and 4 to 6 are not run (Enable
+Gen 4 Link Recovery is still cleared, as today), which is
+the behaviour of every release up to `3.4.x`.
+
+#### 11.1.6 The resume after it (Guide 8.2.2)
+
+Section 7.6's obligations and budget stand; after an entry that completed,
+each router is expected to read its configuration lost (Spec 4.5.2) and
+section 7.6's rebuild (sections 6.4 to 6.9 and the Detect gate) is Guide
+8.2.2's reconfiguration and path setup. Four changes:
+
+1. **A preserved tunnel is rebuilt too** (decision U34, question Q3). An
+   obligation recorded at a suspend whose entry prepared every router of
+   that port is rebuilt, where its router reads lost, whether this driver built the tunnel or preserved it (a
+   pre-OS connection manager's, or a predecessor's that section 9.4 did
+   not match): the configuration the domain lost is the one this driver
+   put to sleep, and Guide 8.2.2 asks the connection manager to restore
+   every path that was present before the sleep. Without the
+   entry on that port (`XhciCmSleepEntry` 0, a failed preflight, or a
+   router not prepared) section 7.6's rule stands: only this driver's own
+   tunnel, or section 9.4's match, is rebuilt. **Prepared** means, by
+   type: a USB4 router's Enter Sleep written and read back (Sleep Ready
+   late or missing does not undo it, item 7 of section 11.1.5); a
+   Thunderbolt router of generation 2 or later, `SX_CTRL` bit 31 written
+   and read back in each link controller; a generation 1 Thunderbolt
+   router is never prepared (it has no sleep register), so a port through
+   one keeps section 7.6's rule.
+2. **A sleep that did not happen.** Where the system's transition failed
+   after the NHI's D3, or a sleep state kept the domain powered, the
+   routers come back configured (section 7.6's "same router, still
+   enumerated") with Enter Sleep, and perhaps Sleep Ready, still set. Each
+   such router has Enter Sleep cleared in its own register type
+   (`ROUTER_CS_5` bit 0, or each link controller's `SX_CTRL` bit 31) and
+   its wake enables written back to the values item 4 of section 11.1.5
+   kept, host router first, each
+   read back, before its verification; a router where that fails leaves
+   its port's obligation unmet (HELD), since what a router left with Enter
+   Sleep set does at its next `LT_LRoff` or PERST is unknown [inf].
+3. **Wake status**, `ROUTER_CS_6` bits 2 to 4 and `PORT_CS_18`'s four bits,
+   read once per USB4 router after the resume and logged
+   (`u4.wake.status`), a diagnostic: the device-originated sources (PCIe,
+   USB3, DP, connect, disconnect, inter-domain) are expected clear, their
+   enables having been cleared; an upstream port's Wake on USB4 Wake
+   Status may be set, since that port keeps its enable and the host
+   router's wake propagates through it (Spec 4.5.4.2).
+4. **A tunnel the firmware rebuilt at the boot** (a hibernation on a
+   platform whose pre-OS connection manager tunnels at power-on, and the
+   emulator's `preos-cm` and `preboot=on`) reads as the same router with
+   its tunnel up, verified and kept as preserved (section 9.2), as today.
+   Linux tears such a tunnel down and builds its own (`tb_resume_noirq`);
+   this driver keeps it, because the device is then already present when
+   Windows looks at the port, which is what a native hot-plug port needs
+   (section 11.1.8).
+
+**Daisy chains** (record 34 section 6.9): a kid's routers get the entry
+(item 5 of section 11.1.5) and its obligation is judged after its parent's,
+item 1 applying to it as to a port. **Networking** (record 35): this
+domain's peers end before the entry (as today) and its inter-domain port
+disconnects at the sleep event; after the resume the link is a new plug
+and the discovery runs again (record 35 section 3.8). A neighbour that
+sleeps (Guide 8.2.3, Table 8-3 row 1) leaves lane 0 in CLd with Router
+Detected still set, which section 7.1 reads as the peer's unplug, ending
+it as record 35 section 3.8 ends any peer; its wake (row 3) is a new
+plug. That reading is kept as it is; telling the two apart by Router
+Detected (`PORT_CS_18` bit 13) in the log is left to a later item, record
+35's code not being this task's. This domain never enables wake on
+inter-domain, so a neighbour cannot
+wake it; the reverse is the neighbour's choice: a neighbour asleep with
+its own wake on inter-domain enabled wakes when this domain's port
+disconnects the link (Guide 8.2.3), which this domain's own sleep entry
+does (item 4 of section 11.1.5). That is accepted as the Guide's intended
+behaviour (question Q4). Neither record's code changes; the legs read both
+where the emulator offers them.
+
+#### 11.1.7 The firmware connection manager, and the integrated hosts
+
+- **Falcon Ridge and Alpine Ridge**: unchanged, `0x05` then `0x07`. At a
+  standby the firmware tunnels each saved device again within the
+  platform's resume, before the driver ready ([obs] through `usb4-emu`
+  R34; the P14s capture), so the device is present when Windows looks at
+  the port. At a hibernation (a power-on) the save is forgotten [model]; a
+  device is announced again at the driver ready, approved by
+  `XhciCmApprove`'s rule, and its tunnel comes after the NHI's resume:
+  section 11.1.8's case where the port is native.
+- **Titan Ridge and Maple Ridge (ICM)**: unchanged, `0x07` alone, as Linux
+  sends (no `save_devices` for them in `icm_probe`). Whether this
+  firmware keeps a device across a standby without `0x05` is unread; the
+  emulator restores only after a save, so its Titan Ridge leg is expected
+  to show the device back after the driver ready. Sending `0x05` there
+  too is not proposed: no source says the firmware accepts it.
+- **The ICL row** (Ice Lake to Meteor Lake under their firmware): at a
+  system sleep (S1 to S4, never a shutdown), after the rings stop, the
+  link-controller mailbox `GO2SX_NO_WAKE` (`TbtHwPlatformSuspend` with no
+  wake; `VS_CAP_19` command with Valid, `VS_CAP_18` Done polled up to
+  500 ms; [linux] `icl_nhi_suspend_noirq`), its timeout logged
+  (`tbt.hw.lc-timeout`, already there) and the sleep going on. The helper
+  as coded counts 500 one-millisecond sleeps (`TbtHwLcMailbox`), which a
+  coarse tick stretches well past 500 ms (section 5.3); before it is
+  called it is changed to a deadline on the elapsed clock (`TBT_WAIT`,
+  section 5.3's rule: the bound plus one tick), with a host vector of a
+  55 ms tick and Done never set. Force power
+  left set, as Linux leaves it at a sleep through the firmware. The resume
+  is unchanged (force power, firmware ready, LTR, the bind from step 8).
+  This takes away the reason record 21 sections 1.4.3 and 1.4.4 give for
+  "suspend with an integrated controller is unsupported" (the handshake
+  not sent); it rests on Linux alone, no integrated host having been
+  captured.
+- **Integrated hosts under this profile** (Lunar Lake and later, and an
+  earlier one found running a software connection manager): section
+  11.1.5 alone, with no link-controller mailbox ([linux] `pci.c`), force
+  power as section 4.2 says.
+
+#### 11.1.8 The native PCIe hot-plug port: what this driver cannot order
+
+**The mechanism** (task 43.71). Where Windows drives a tunnel port's
+hot-plug itself - a PCI Express slot that is hot-plug capable, on Vista to
+10, where the platform leaves native hot-plug to the operating system
+[inf: 2000, XP, 98 SE and ME have no native PCI Express hot-plug in their
+PCI drivers, so this case is NT 6.x's] - its PCI driver reads the slot's
+presence at the port's own resume and may turn the slot off, before the NHI
+has resumed. The tunnelled device is then reported missing, and a file
+whose directory entry was still cached at the sleep is lost; the device
+comes back only through a new plug, which on q35's slot (with a power
+controller and an attention button) means a replug, and on a real
+integrated root port is unread.
+
+**Rejected**, each for a recorded reason: holding the bridge's D0 (task
+43.24h: it deadlocks the resume); making the NHI non-pageable (the NHI and
+its tunnel ports are siblings or cousins, which the power manager does not
+order [inf]); pending the bridge's bus-relations query in the filter until
+the NHI's resume (in 43.71 the slot was turned off at the port's resume,
+not at a query, so it would change nothing there and only make PnP wait);
+keeping the domain powered across the sleep (the platform removes its power
+in S3 and S4, record 21 section 4.5.6).
+
+**What brings the tunnel back first** is firmware that tunnels before the
+operating system resumes: Falcon Ridge and Alpine Ridge's saved devices at
+a standby (section 11.1.7) [obs]; a pre-OS connection manager at the boot
+of a hibernation resume (platform pre-boot support) [model, task 44.27]; a
+pre-OS connection manager in a firmware's standby resume path is unread on
+any machine. Elsewhere this case stays, and what the user sees is the
+owner's (question Q1).
+
+**Recognising the case**, for the policy and the log: a member of the
+tunnel-port set whose PCI Express capability has Slot Implemented set and
+Hot-Plug Capable (Slot Capabilities bit 6) set, under Vista or later, with
+Hot-Plug Interrupt Enable (Slot Control bit 5) read set at the suspend as
+the sign that Windows took the slot [inf: the platform's grant itself is
+not readable here]; the registers are record 21 section 6.5's capability,
+read through `HalGetBusData` at the suspend while the bridge is in D0.
+Not built: the owner chose Q1's (a), which needs no recognition, and a log
+line alone was not worth a configuration read at every suspend.
+
+#### 11.1.9 The XP x64 and 7 x64 shutdown stall
+
+Task 44.27's reading puts it on `nvme98`, never released, and not on this
+package (section 11.1.2); with Stor98 on the drive it did not recur.
+Nothing changes in the code. The release notes' sentence, which ties the
+stall to this package, goes when the owner agrees (question Q6), after one
+re-read on the reviewed build: 7 x64 and XP x64, i440FX with task 43.24's
+Titan Ridge topology, Stor98 on the drive, a hibernation, the resume, then
+`shutdown /s`.
+
+#### 11.1.10 Values, counters and the log
+
+- **`XhciCmSleepEntry`**, `REG_DWORD`, written by every install path at its
+  default under the don't-overwrite flag with an INF-gate row and a
+  `tuning.md` row (the owner's rule of 2026-10-30), a bench switch not
+  asked by the installer: 1 runs section 11.1.5 and items 1 and 2 of
+  section 11.1.6; 0 the `3.4.x` behaviour; any other value refused, the
+  default standing. Read once at start (record 21 section 8's rule). **Its
+  default is 1**, set in a commit of its own after the emulator legs passed
+  (owner, 2026-11-09, decision U36; section 11.1.12); 0 stays the way back, and a value already on a machine is kept at an update (the
+  don't-overwrite flag).
+- **No policy value for question Q1**: the owner chose (a).
+- **Counters** `u4.sleep.entries`, `.routers` (Enter Sleep read back),
+  `.ready`, `.late`, `.refused`, `.clx`, `.preflight`, `.unrestorable`,
+  `.cancelled` (item 2 of section 11.1.6) and `u4.resume.preserved-rebuilt`,
+  and on the ICM side `cm.lc.go2sx`; the log lines `u4.sleep.entered`,
+  `u4.sleep.not-ready`, `u4.sleep.refused`, `u4.sleep.wake.refused`,
+  `u4.sleep.asym`, `u4.sleep.cancel`, `u4.sleep.cancel.failed`,
+  `u4.wake.status` and `cm.usb4.sleep` (the value as run with); each
+  counter emitted at the stop with the others (section 12).
+
+#### 11.1.11 The owner's questions, and the answers
+
+Answered by the owner on 2026-11-09: **Q1 (a)** - sleep as asked; on a
+native hot-plug port with no firmware that tunnels first a drive may need
+plugging in again after the resume, and the README keeps "Safely Remove
+first" for that case; no automatic safe removal. **Q2 yes** - the
+best-effort flush in `xhcimark`, NT only, never on 98 SE and ME, told to
+the user as reducing the risk, not removing it. **Q3 yes** (decision U34),
+keeping the identity and lost-configuration checks and the exclusions
+(an unprepared route, a generation 1 router, a path not restorable); a
+tunnel the firmware already restored is kept. **Q4 yes** (decision U35):
+wake from a Thunderbolt or USB4 device is unsupported, which is not a
+guarantee that none happens; the upstream ports' Enable Wake on USB4 Wake
+stays as Table 8-1 requires. **Q5 yes** (decision U36), with the default
+held at 0 until the emulator legs pass (section 11.1.10). **Q6** is left
+to the end of the task: the README and release-notes text is drafted
+after the legs, by the owner. **Q7 (b)**: sleep, the path lost and logged,
+and the release notes name the case. The questions as they were put:
+
+- **Q1. A native hot-plug tunnel port without a firmware that tunnels
+  first** (Vista to 10, section 11.1.8). What this driver can guarantee is
+  narrow: it cannot order the resume, and it cannot refuse the sleep there,
+  since from Vista on a failed `IRP_MN_QUERY_POWER` for a system sleep does
+  not stop the sleep [inf: Windows' behaviour as its documentation states
+  it, not read here]. The choices: (a) sleep as asked; the device may be
+  reported missing at the resume and come back through a new plug; (c)
+  ask Windows to safely remove the tunnelled devices at the suspend notice
+  and bring them back after the resume, best effort: refused where a file
+  is open, and bounded by the time the notice allows. Recommended: (a),
+  with Q2's flush, because (c) makes every drive leave and return and is
+  no more certain.
+- **Q2. Flush the tunnelled volumes at the suspend notice**, best effort:
+  the mark service (`xhcimark`, 2000 to 10) takes the system's suspend
+  notice (a service control handler that accepts power events, which it
+  does not register today), opens each volume whose disk is behind a
+  member of a tunnel-port set and asks the file system to flush it, all
+  volumes in parallel within a fixed bound (1.5 s, a design value), and
+  writes each outcome (done, failed, out of time) to its log. Windows does
+  not wait for the service beyond the notice's own allowance, so a flush
+  that has not finished, a service that is not running, or a write made
+  after the flush is not protected; nothing else changes when it fails.
+  Recommended: yes on NT, where the loss is read, described to the user as
+  reducing the risk, not removing it; not on 98 SE and ME, which have no
+  native hot-plug and no service.
+- **Q3. Rebuild a preserved tunnel after a sleep this driver entered**
+  (decision U34, section 11.1.6 item 1), departing from section 7.6's
+  "its configuration being someone else's". Recommended: yes.
+- **Q4. Wake from a Thunderbolt or USB4 device** (decision U35): none, the
+  NHI never arming a wake; and a neighbour asleep over a networking link
+  that has its own wake on inter-domain enabled is woken when this domain
+  sleeps and its port disconnects (Guide 8.2.3), which is accepted.
+  Recommended: none in `3.4.3.0`, the neighbour's wake accepted.
+- **Q5. The Guide's sleep entry on by default** (`XhciCmSleepEntry` 1,
+  decision U36). Recommended: on, with the value to switch it off.
+- **Q6. What is promised.** The README's "stop and unplug" line and the
+  release notes' standby paragraph are rewritten after the legs, from what
+  they read. Recommended: standby and hibernation stated as working with a
+  device attached; the native-port case (Q1) kept as a known limitation
+  with "Safely Remove before standby or hibernation" for it; the integrated
+  controllers' standby limitation and the XP x64 / 7 x64 shutdown sentence
+  removed. Whether that waits for the owner's bench is the owner's.
+- **Q7. A domain carrying a path this driver cannot restore** (item 3 of
+  section 11.1.5: a preserved DisplayPort path, a watched router at depth
+  2, anything at depth 3 and deeper): (a) sleep, the path lost as in every
+  release so far, logged; (b) the same, and the release notes name it; (c)
+  on 2000 and XP, where a queried sleep can still be refused [inf], fail
+  `IRP_MN_QUERY_POWER` while such a path is up (a critical sleep is not
+  queried and still happens), and (b) on Vista and later, where a refusal
+  does not stop the sleep (Q1). Recommended: (b), one behaviour on every
+  system.
+
+#### 11.1.12 Verification
+
+**Host vectors** (the fake fabric of `test_u4cm` gains `ROUTER_CS_5` and
+`ROUTER_CS_6`'s sleep bits, `PORT_CS_19`'s wake bits, `SX_CTRL` and a
+Sleep Ready delay): the entry's order and every bit written; CLx cleared
+on a preserved link; a router late or silent at Sleep Ready; a router
+holding Sleep Ready until an earlier `ERR_PLUG` notification is
+acknowledged; a preflight failing on the host router of a two-port domain
+with the other port passing, which leaves the whole domain out; the
+resume of a domain that lost its configuration with a preserved tunnel
+rebuilt after the entry and held without it; a sleep that did not happen
+(Enter Sleep cleared, the wake enables restored, a refusal leaving the port
+HELD); `XhciCmSleepEntry` 0 writing nothing; a port whose preflight fails
+left out of the entry and judged by section 7.6's rule; a Thunderbolt host
+router (section 19) entered through `SX_CTRL` with no wake bit written,
+a generation 1 host given nothing, and a preserved tunnel through it held
+at the resume by section 7.6's rule; a `ROP_CMPLT` during the Sleep Ready wait consumed without
+an acknowledgement while a hot plug event in the same wait is
+acknowledged; and in `test_cm_pwrr` and the ICM suite, `GO2SX_NO_WAKE`
+once at an ICL row's sleep, never at its shutdown, a timeout going on
+within its elapsed bound at a 55 ms tick. With Q2: the service's pure half
+(which volumes are behind a tunnel port, the bound, the outcomes logged
+for a flush done, failed and out of time).
+
+**Legs** (the emulator; S3 where the base can stand by with the
+`virtio-gpu-pci` route of section 11.1.2, S4 wherever hibernation is
+offered; each reading the drive and its files after the resume, the log's
+`u4.sleep.*` and resume lines, and the first shutdown after it):
+
+| Leg | Profile and machine | Targets | Expected |
+|---|---|---|---|
+| S.1 | `usb4-generic`, SHPC tunnel bridge (i440FX) | 2000, Vista x86, 7 x86 and x64, 8.1 x86, 10 x86 and x64; XP x86 S3 only | Enter Sleep and Sleep Ready on both routers; the tunnel rebuilt; the drive and files kept |
+| S.2 | `usb4-generic`, q35 native port, no pre-boot CM | 7 x64, 10 x64 | S3: the link retrain (Presence kept), what Windows does read; S4: the device missing (Q1's case); with Q2, the service's log reading each flush done |
+| S.3 | the same with `preos-cm=on` | 7 x64, 10 x64 | S4: the firmware's tunnel kept, the device present |
+| S.4 | `tb3-alpine-ridge` | 7 x64, 10 x64 | S3: the saved device back before the driver ready, the device present |
+| S.5 | `tb3-titan-ridge` | 7 x64 | S3: the device back after the driver ready |
+| S.6 | `intel-adl` | 10 x64 | force power and LTR again; the entry and the rebuild |
+| S.7 | `asm4242`, its enclosure | 8.1 x64, 10 x64 | as S.1 on that host |
+| S.8 | depth 2 (`CHAIN=1`) | 10 x64 | the kid's entry and rebuild after its parent's |
+| S.9 | `usb4-generic`, 98 SE and ME on q35 with ACPI | 98 SE, ME | S3 where reached: the entry, the 9x re-enumeration after the resume (record 21 section 6.1) |
+| S.10 | the stall (section 11.1.9) | XP x64, 7 x64 | no stall with Stor98 |
+
+Not readable in the emulator, owed to a bench: the ICL row's mailbox (no
+integrated ICM is modelled), a sleep that did not happen (no route known
+to make one), a real native hot-plug root port's behaviour at the resume,
+and a neighbour domain's sleep over a networking link, then this domain's
+own sleep (two domains).
+
+**Read so far** (task 48.35, 2026-11-09, `da0573e7`; `runs/run-48.md`,
+"48.35"): on 7 x86, q35, the `asm4242` model with its pre-OS CM and the
+ORICO enclosure at power-on, `XhciCmSleepEntry` 1, a hibernation and its
+resume passed: the entry set Enter Sleep on the host router and the
+ASM2464 and read both Sleep Ready, the pre-OS CM's tunnel came back at the
+boot and was verified, every obligation was met, and the drive kept its
+files and took a new one. S3 did not resume on q35 then: the emulator's
+SeaBIOS lost the q35 MMCONFIG window and the ICH9 power-management block
+at the wake (with Windows' own drivers too); the `usb4-emu` fork's SeaBIOS
+image restores them (`usb4-emu` `docs/Q35-S3-RESUME.md`).
+
+**Read with that image** (task 48.35, 2026-11-09 and 10, the gated build of
+`a2d7fc7d`; `runs/run-48.md`, "48.35 (the stand-by legs)"): S.7's host on 7
+x86, 8.1 x86 and 10 x86 (q35, the `asm4242` model with its pre-OS CM, the
+ORICO enclosure at power-on), each a standby and a hibernation with
+`XhciCmSleepEntry` 1 and again with 0, twelve legs: every one resumed with
+the drive and its files, took a new file, kept its device count, and shut
+down in under a minute after it; at 1 the entry set Enter Sleep on both
+routers and read both Sleep Ready (`u4.sleep.entered=00000002`), at 0 no
+entry was made, and both met every resume obligation
+(`cm.reenum.resumed=00000001`). The `tb3-alpine-ridge` profile (S.4's
+case, the firmware connection manager) on 10 x86 with the TB3 enclosure,
+behind its native hot-plug tunnel port: the standby the same; after the
+hibernation the drive was missing, twice (section 11.1.8's case, the
+firmware connection manager's own path; `XhciCmSleepEntry` does not reach
+it). Not read: S.1 to S.3, S.5, S.6 and S.8 to S.10, the x64 half, `xhcimark`'s flush (its log held no flush line
+on these legs), and the bench. `XhciCmSleepEntry` is 1 from these
+readings (decision U36).
+
+**The bench** (the owner's): a machine whose firmware offers S3 to the
+operating system (Modern Standby alone does not reach this path), with a
+Thunderbolt 3 or USB4 host and the ORICO enclosure; the P14s Gen 1 (Alpine
+Ridge, firmware CM) for S.4's case, and a USB4 host under 10 x64 for the
+native-port case of Q1.
+
+#### 11.1.13 As coded (task 48.35, 2026-11-09)
+
+- `src/cm/tbt_u4cm.c`: `tbtU4SleepEnter` (section 11.1.5, called from
+  `TbtU4Suspend` with `TBT_U4_CONFIG.SleepEntry`), with `tbtU4SleepLink`
+  (the preflight), `tbtU4SleepWake` and `tbtU4SleepWakeBack` (item 4 and
+  its undoing), `tbtU4SleepBit` (Enter Sleep by router type) and
+  `tbtU4SleepLc` (a Thunderbolt router's link controllers);
+  `tbtU4SleepCancel`, `tbtU4SleepUndo` and `tbtU4SleepState` (section
+  11.1.6 item 2: the host router read first; each device router's lane
+  above it read for Lock, set again after a sleep or a new connection, so
+  that router is left to the classification; a router read configured is
+  undone; a state that cannot be read keeps its record and holds the port,
+  never taken as a sleep) and `tbtU4WakeStatus` (item 3), called from
+  `TbtU4Resume` once the host router is read again (a host router whose
+  Enter Sleep or wake enables cannot be put back leaves every port's
+  obligations unmet); the lost-configuration
+  rebuild takes `TBT_U4_OBLIGATION.Prepared` beside `BuiltHere`
+  (decision U34), for a port and for a kid. `tbt_u4cm.h` carries the
+  value, the per-router sleep record, the obligation's flag, the counters
+  and `TBT_U4CM.SleepEntered`; `tbt_regs.h` the bits of section 11.1.3.
+- `src/cm/cm_power.c`: the ICL row's `GO2SX_NO_WAKE` after the ICM
+  client's suspend (section 11.1.7); `src/cm/tbt_hw.c`: `TbtHwLcMailbox`
+  bounded on the elapsed clock.
+- The value: `cm_vals.c`, `cm_vals.h`, `cm_reg.c`, `cm_nhi.c` (taken and
+  logged as `cm.usb4.sleep`), both `xhcicm` INFs at 0,
+  `scripts\inf-gate\check-cm-inf.ps1`'s table and mutations,
+  `docs/using/tuning.md`.
+- `xhcimark/xhcimark.c`: the extended control handler, taken where
+  `RegisterServiceCtrlHandlerExA` exists, accepting power events; at
+  `PBT_APMQUERYSUSPEND` and `PBT_APMSUSPEND` each fixed or removable volume
+  whose disk (by its storage device number, matched to a disk interface's
+  devnode) has a member of a tunnel-port set among its ancestors is
+  flushed on a thread of its own, each outcome logged; the whole of a
+  notice's work (the search for the volumes included) runs on a worker of
+  its own, which the control handler waits for at most 1.5 s from the
+  notice, and which owns its record until every flush thread has ended; a
+  notice that finds the last one's worker still running starts nothing and
+  logs it. The members are the poll thread's last reading. `mark_core.c` holds the
+  choice (`mk_flush_wants`, `mk_flush_behind`) and its self-test cases.
+- Host vectors: `test_u4cm` (`test_sleep_entry`, over the fake fabric's new
+  Enter Sleep and Sleep Ready model, its `NoSleepReady`, `SlpStuck` and
+  `ClxStuck`), `test_tbt_hw` (the mailbox at a 55 ms tick), `test_cm` (the
+  value) and `test_mark` (the flush's choice).
 
 ## 12. Registry values, counters, the log
 
@@ -4796,6 +6097,9 @@ from their first form, as each row says.
 | U31 | Asymmetric Gen 4 links (task 45.20) | never initiated (no DisplayPort tunnel needs one) and, found, used as found, never transitioned back to symmetric; confirmed by the owner, 2026-10-29, over a transition to symmetric before the first path, which would touch a link that may carry a preserved tunnel | 6.2.3 |
 | U32 | A new PCIe tunnel beside a preserved DisplayPort tunnel (task 45.20) | built as before, its 1.5 Gb/s floor (Spec 5.3.3.1, Guide 6.2.4) not verified, logged; the owner chose (a), 2026-10-29: (a) build it, as now, since a dock a predecessor left with DP alone would otherwise lose its PCIe devices, and a single-lane 10 Gb/s link with a DP stream large enough to starve PCIe is the rare case; (b) build none until the DP tunnel goes, which meets the floor and costs those devices; (c) read the DP adapters' allocated bandwidth (DP bandwidth allocation mode, out of scope here, section 1.3) | 6.2.2, 9.2 |
 | U33 | Gen 4 Link Recovery (task 45.56) | enabled by default (`XhciCmGen4LinkRecovery` 1, the owner's task of 2026-10-31, with a value to switch it off) on a depth-1 Gen 4 link between two version 2 routers, set at an idle tick once both lane 0 adapters read CL0, cleared at the host's end at a teardown and on both ends before a stop or a suspend; each LINK_RECOVERY a port check and then a read-only recovery check, whose failing PCIe tunnel goes as section 7.1 item 4 takes a lost one and whose failing USB3 tunnel is torn down alone; never below depth 1, never initiated | 6.2.3, 11, 12 |
+| U34 | A tunnel preserved at start, after a sleep this driver entered (task 48.35) | decided (owner, 2026-11-09; question Q3): rebuilt where its router reads lost, as this driver's own tunnels are, when the entry prepared every router of that port (by type, section 11.1.6 item 1; a generation 1 Thunderbolt router never is) (Guide 8.2.2); otherwise section 7.6's rule | 7.6, 11.1.6 |
+| U35 | Wake from the fabric (task 48.35) | decided (owner, 2026-11-09; question Q4): unsupported, not a guarantee that none happens; the wake enables the entry programs cleared (USB4 ports and routers, and a Thunderbolt device router's SX_CTRL bits), Enable Wake on USB4 Wake kept on the upstream ports, which Table 8-1 requires; a Thunderbolt host router's wake bits and a generation 1 router left as they are, not programmed; the NHI never arms a wake; a neighbour that enabled its own wake on inter-domain is woken by this domain's disconnect at its sleep, accepted | 11.1.5, 11.1.6 |
+| U36 | The Guide's sleep entry (task 48.35) | decided (owner, 2026-11-09; question Q5): on by default, `XhciCmSleepEntry` 1, once the emulator legs pass, in a commit of its own; 0 in the tree until then; 0 the `3.4.x` behaviour and the way back; a value on a machine kept at an update | 11.1.5, 11.1.10 |
 
 ## 16. What is open, and what is a risk
 
@@ -4881,7 +6185,10 @@ from their first form, as each row says.
   first action has opened that route requests none, and the operating
   system then learns of the devices only from their own drivers.
 - **Daisy chains, DisplayPort, CLx, sleep per Guide chapter 8**: out of
-  this cut.
+  this cut. Sleep per Guide chapter 8 is designed in section 11.1 (task
+  48.35), not coded; its native hot-plug case (section 11.1.8) stays a
+  risk this driver cannot remove, and its open questions are the owner's
+  (section 11.1.11).
 - **The ASM2464 (section 6.11) on hardware**: the capture is Linux's, on a
   UEFI host. Whether the real router's PCIe Up adapter needs credits
   written in its HopID 8 entry (it resets to none; this driver keeps them

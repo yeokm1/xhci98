@@ -10,17 +10,148 @@
  *
  * The common buffer is design record 04's block, unchanged: one
  * AllocateCommonBuffer of XHCI_HC_RESOURCES_SIZE bytes, cache-enabled,
- * carved by xhci_mem.c (section 11.2). It is freed at stop and remove before
- * the adapter is put back - unless the controller could not be proven to have
- * stopped mastering (HcdSvcDmaNotStopped), in which case the block is kept
- * for the life of the system and counted, the HCD's replacement for the
- * miniport's UsbPortBugCheck.
+ * carved by xhci_mem.c (section 11.2). Since task 48.33 (section 11.11) it
+ * and every other allocation the controller can name - the event ring's
+ * block, the enumeration scratch, stream blocks and isochronous rings, and
+ * all of the staging (hcd_stage.c) - is common buffer from this file, and
+ * no map register is asked for a transfer: the map pump is gone. Each
+ * allocation is charged to the driver's boot ledger before it is made and
+ * refused past its cap (Q-STG.3, the owner's answer (a): 64 MiB). Each is
+ * freed at stop and remove before the adapter is put back - unless the
+ * controller could not be proven to have stopped mastering
+ * (HcdSvcDmaNotStopped), in which case it is kept for the rest of the boot
+ * with the adapter, its charge turned kept, and the driver image kept
+ * loaded so the ledger lasts the boot.
  *
  * IRQL: PASSIVE_LEVEL (AllocateCommonBuffer and IoGetDmaAdapter require it).
  */
 
 #include "hcd.h"
 #include "xhci_hw.h"
+#include "xhci_stage.h"
+
+/* ----------------------------------------------------------------------- */
+/* The boot ledger (task 48.33; design record 13 section 11.11.6)           */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * One for the driver image, not per controller, since a controller removed
+ * and found again is a new FDO: the bytes of every allocation a controller
+ * could name, at its allocation size in whole pages, charged before it is
+ * made. A charge is live while the allocation is, kept once an unproven
+ * stop keeps it, and returned only when the allocation is freed. At the
+ * first kept allocation the driver's DriverUnload is cleared, under the
+ * ledger's lock, so the image and the ledger in it stay for the boot.
+ */
+static KSPIN_LOCK HcdLedgerLock;
+static ULONG HcdLedgerLive;
+static ULONG HcdLedgerKept;
+static PDRIVER_OBJECT HcdLedgerDriver;
+
+/* DriverEntry. IRQL: PASSIVE_LEVEL. */
+VOID HcdDmaLedgerInit(PDRIVER_OBJECT driver)
+{
+    KeInitializeSpinLock(&HcdLedgerLock);
+    HcdLedgerLive = 0;
+    HcdLedgerKept = 0;
+    HcdLedgerDriver = driver;
+}
+
+/* Returns 0, nothing charged, past the cap. */
+static ULONG hcdLedgerCharge(PHCD_CONTROLLER hc, ULONG bytes)
+{
+    KIRQL oldIrql;
+    ULONG fits;
+    ULONG total;
+
+    bytes = XhciStagePages(bytes);
+    KeAcquireSpinLock(&HcdLedgerLock, &oldIrql);
+    fits = (bytes != 0 &&
+            XhciStageLedgerFits(HcdLedgerLive, HcdLedgerKept, bytes,
+                                XHCI_STAGE_LEDGER_CAP))
+               ? 1UL
+               : 0UL;
+    if (fits) {
+        HcdLedgerLive += bytes;
+    }
+    total = HcdLedgerLive + HcdLedgerKept;
+    KeReleaseSpinLock(&HcdLedgerLock, oldIrql);
+    if (!fits) {
+        XhciLogNote(&hc->Hc, "dma.quarantine.cap", total);
+    }
+    return fits;
+}
+
+static VOID hcdLedgerReturn(ULONG bytes)
+{
+    KIRQL oldIrql;
+
+    bytes = XhciStagePages(bytes);
+    KeAcquireSpinLock(&HcdLedgerLock, &oldIrql);
+    HcdLedgerLive = (HcdLedgerLive >= bytes) ? HcdLedgerLive - bytes : 0UL;
+    KeReleaseSpinLock(&HcdLedgerLock, oldIrql);
+}
+
+static VOID hcdLedgerKeep(PHCD_CONTROLLER hc, ULONG bytes)
+{
+    KIRQL oldIrql;
+    ULONG first;
+
+    bytes = XhciStagePages(bytes);
+    KeAcquireSpinLock(&HcdLedgerLock, &oldIrql);
+    HcdLedgerLive = (HcdLedgerLive >= bytes) ? HcdLedgerLive - bytes : 0UL;
+    first = (HcdLedgerKept == 0) ? 1UL : 0UL;
+    HcdLedgerKept += bytes;
+    if (HcdLedgerDriver != NULL) {
+        HcdLedgerDriver->DriverUnload = NULL;
+    }
+    KeReleaseSpinLock(&HcdLedgerLock, oldIrql);
+    hc->CommonBuffersKept++;
+    if (first) {
+        XhciLogNote(&hc->Hc, "dma.quarantine.first", bytes);
+    }
+}
+
+/* A common buffer of `bytes`, charged first and checked whole below 4 GB
+ * (its high part 0 and its last byte below 4 GB); NULL otherwise, nothing
+ * left charged. IRQL: PASSIVE_LEVEL. */
+static PVOID hcdDmaAlloc(PHCD_CONTROLLER hc, ULONG bytes,
+                         PPHYSICAL_ADDRESS pa)
+{
+    PVOID va;
+
+    if (hc->Dma == NULL || bytes == 0 || !hcdLedgerCharge(hc, bytes)) {
+        return NULL;
+    }
+    va = hc->Dma->DmaOperations->AllocateCommonBuffer(hc->Dma, bytes, pa,
+                                                      TRUE);
+    if (va != NULL &&
+        (pa->HighPart != 0 || bytes - 1UL > 0xFFFFFFFFUL - pa->LowPart)) {
+        hc->Dma->DmaOperations->FreeCommonBuffer(hc->Dma, bytes, *pa, va,
+                                                 TRUE);
+        va = NULL;
+    }
+    if (va == NULL) {
+        hcdLedgerReturn(bytes);
+    }
+    return va;
+}
+
+/* Its release, or - a bus master that may still run holding it - kept
+ * for the boot, its charge turned kept. IRQL: PASSIVE_LEVEL. */
+static VOID hcdDmaFree(PHCD_CONTROLLER hc, ULONG bytes, PHYSICAL_ADDRESS pa,
+                       PVOID va)
+{
+    if (va == NULL) {
+        return;
+    }
+    if (hc->Dma == NULL || hc->CommonBufferPinned) {
+        hcdLedgerKeep(hc, bytes);
+        return;
+    }
+    hc->Dma->DmaOperations->FreeCommonBuffer(hc->Dma, bytes, pa, va, TRUE);
+    hcdLedgerReturn(bytes);
+}
 
 /*
  * Task 47.30 (design record 13 section 11.10, point 2): the larger event
@@ -64,12 +195,11 @@ static VOID hcdDmaEventRingOpen(PHCD_CONTROLLER hc)
     for (pass = first; pass < 2; pass++) {
         bytes = (pass == 0) ? XHCI_EVENT_RING_BIG_BLOCK
                             : XHCI_EVENT_RING_BIG_WIDE;
-        va = hc->Dma->DmaOperations->AllocateCommonBuffer(hc->Dma, bytes,
-                                                          &pa, TRUE);
+        va = hcdDmaAlloc(hc, bytes, &pa);
         if (va == NULL) {
             return;
         }
-        if (pa.HighPart == 0 && !refuse &&
+        if (!refuse &&
             XhciEventRingWindow(pa.LowPart, bytes, XHCI_EVENT_RING_BIG_BYTES,
                                 &offset)) {
             hc->EvtBlockVa = va;
@@ -81,11 +211,7 @@ static VOID hcdDmaEventRingOpen(PHCD_CONTROLLER hc)
                                        : HCD_EVT_ROUTE_WIDE;
             return;
         }
-        hc->Dma->DmaOperations->FreeCommonBuffer(hc->Dma, bytes, pa, va,
-                                                 TRUE);
-        if (pa.HighPart != 0) {
-            return;
-        }
+        hcdDmaFree(hc, bytes, pa, va);
     }
 }
 
@@ -94,13 +220,7 @@ static VOID hcdDmaEventRingOpen(PHCD_CONTROLLER hc)
 static VOID hcdDmaEventRingClose(PHCD_CONTROLLER hc)
 {
     if (hc->EvtBlockVa != NULL) {
-        if (hc->CommonBufferPinned) {
-            hc->CommonBuffersKept++;
-        } else {
-            hc->Dma->DmaOperations->FreeCommonBuffer(
-                hc->Dma, hc->EvtBlockBytes, hc->EvtBlockPa, hc->EvtBlockVa,
-                TRUE);
-        }
+        hcdDmaFree(hc, hc->EvtBlockBytes, hc->EvtBlockPa, hc->EvtBlockVa);
     }
     hc->EvtBlockVa = NULL;
     hc->EvtBlockPa.LowPart = 0;
@@ -138,17 +258,11 @@ NTSTATUS HcdDmaOpen(PHCD_CONTROLLER hc)
     hc->MapRegisters = mapRegisters;
     hc->MapGrantRaw = mapRegisters;
 
-    va = hc->Dma->DmaOperations->AllocateCommonBuffer(
-        hc->Dma, XHCI_HC_RESOURCES_SIZE, &pa, TRUE);
-    /* The controller is programmed with the low dword alone (StartPA). The
-     * 32-bit adapter keeps the block below 4 GB, which only an amd64 or PAE
-     * machine could put to the test; checked rather than assumed (task
-     * 28-A.2). */
-    if (va != NULL && pa.HighPart != 0) {
-        hc->Dma->DmaOperations->FreeCommonBuffer(
-            hc->Dma, XHCI_HC_RESOURCES_SIZE, pa, va, TRUE);
-        va = NULL;
-    }
+    /* The controller is programmed with the low dword alone (StartPA):
+     * checked whole below 4 GB rather than assumed (task 28-A.2, and the
+     * whole range since task 48.33). A start past the boot ledger's cap
+     * fails here (Code 10). */
+    va = hcdDmaAlloc(hc, XHCI_HC_RESOURCES_SIZE, &pa);
     if (va == NULL) {
         hc->Dma->DmaOperations->PutDmaAdapter(hc->Dma);
         hc->Dma = NULL;
@@ -165,13 +279,7 @@ NTSTATUS HcdDmaOpen(PHCD_CONTROLLER hc)
     /* The enumeration's scratch, where descriptors land (hcd_enum.c). Its
      * absence leaves the controller started with nothing enumerated, which
      * HcdEnumService checks for. */
-    hc->ScratchVa = hc->Dma->DmaOperations->AllocateCommonBuffer(
-        hc->Dma, HCD_SCRATCH_BYTES, &hc->ScratchPa, TRUE);
-    if (hc->ScratchVa != NULL && hc->ScratchPa.HighPart != 0) {
-        hc->Dma->DmaOperations->FreeCommonBuffer(
-            hc->Dma, HCD_SCRATCH_BYTES, hc->ScratchPa, hc->ScratchVa, TRUE);
-        hc->ScratchVa = NULL;
-    }
+    hc->ScratchVa = hcdDmaAlloc(hc, HCD_SCRATCH_BYTES, &hc->ScratchPa);
     hcdDmaEventRingOpen(hc);
     return STATUS_SUCCESS;
 }
@@ -182,26 +290,16 @@ VOID HcdDmaClose(PHCD_CONTROLLER hc)
         return;
     }
     hcdDmaEventRingClose(hc);
-    if (hc->CommonVa != NULL) {
-        if (hc->CommonBufferPinned) {
-            /* A bus master that may still be running holds this block's
-             * addresses; giving it back would let the next owner's data be
-             * overwritten. It stays allocated, and so does the adapter. */
-            hc->CommonBuffersKept++;
-            hc->CommonVa = NULL;
-            hc->ScratchVa = NULL;
-            hc->Dma = NULL;
-            return;
-        }
-        if (hc->ScratchVa != NULL) {
-            hc->Dma->DmaOperations->FreeCommonBuffer(
-                hc->Dma, HCD_SCRATCH_BYTES, hc->ScratchPa, hc->ScratchVa,
-                TRUE);
-            hc->ScratchVa = NULL;
-        }
-        hc->Dma->DmaOperations->FreeCommonBuffer(
-            hc->Dma, hc->CommonBytes, hc->CommonPa, hc->CommonVa, TRUE);
-        hc->CommonVa = NULL;
+    hcdDmaFree(hc, HCD_SCRATCH_BYTES, hc->ScratchPa, hc->ScratchVa);
+    hc->ScratchVa = NULL;
+    hcdDmaFree(hc, hc->CommonBytes, hc->CommonPa, hc->CommonVa);
+    hc->CommonVa = NULL;
+    if (hc->CommonBufferPinned) {
+        /* A bus master that may still be running holds these blocks'
+         * addresses; giving them back would let the next owner's data be
+         * overwritten. They stay allocated, and so does the adapter. */
+        hc->Dma = NULL;
+        return;
     }
     hc->Dma->DmaOperations->PutDmaAdapter(hc->Dma);
     hc->Dma = NULL;
@@ -219,19 +317,7 @@ VOID HcdDmaClose(PHCD_CONTROLLER hc)
  */
 PVOID HcdDmaStreamAlloc(PHCD_CONTROLLER hc, ULONG bytes, PPHYSICAL_ADDRESS pa)
 {
-    PVOID va;
-
-    if (hc->Dma == NULL || bytes == 0) {
-        return NULL;
-    }
-    va = hc->Dma->DmaOperations->AllocateCommonBuffer(hc->Dma, bytes, pa,
-                                                      TRUE);
-    if (va != NULL && pa->HighPart != 0) {
-        hc->Dma->DmaOperations->FreeCommonBuffer(hc->Dma, bytes, *pa, va,
-                                                 TRUE);
-        va = NULL;
-    }
-    return va;
+    return hcdDmaAlloc(hc, bytes, pa);
 }
 
 /* Its release, once the controller holds no pointer into it - or, while a
@@ -240,14 +326,14 @@ PVOID HcdDmaStreamAlloc(PHCD_CONTROLLER hc, ULONG bytes, PPHYSICAL_ADDRESS pa)
 VOID HcdDmaStreamFree(PHCD_CONTROLLER hc, ULONG bytes, PHYSICAL_ADDRESS pa,
                       PVOID va)
 {
-    if (va == NULL) {
-        return;
-    }
-    if (hc->Dma == NULL || hc->CommonBufferPinned) {
-        hc->CommonBuffersKept++;
-        return;
-    }
-    hc->Dma->DmaOperations->FreeCommonBuffer(hc->Dma, bytes, pa, va, TRUE);
+    hcdDmaFree(hc, bytes, pa, va);
+}
+
+/* One its caller cannot give back (hcd_cfg.c, a ring page it could not
+ * retire): kept, its charge turned kept. IRQL: PASSIVE_LEVEL. */
+VOID HcdDmaStreamKeep(PHCD_CONTROLLER hc, ULONG bytes)
+{
+    hcdLedgerKeep(hc, bytes);
 }
 
 /* ----------------------------------------------------------------------- */
@@ -255,8 +341,9 @@ VOID HcdDmaStreamFree(PHCD_CONTROLLER hc, ULONG bytes, PHYSICAL_ADDRESS pa,
 /* ----------------------------------------------------------------------- */
 
 /*
- * Every URB buffer reaches the controller through the adapter's map
- * registers: AllocateAdapterChannel for the pages a chunk spans, MapTransfer
+ * With XhciDmaStaging 0 alone (owner, 2026-11-09; staging, task 48.33,
+ * is the default and never queues here), every URB buffer reaches the
+ * controller through the adapter's map registers, as in 3.4.2.0: AllocateAdapterChannel for the pages a chunk spans, MapTransfer
  * per physically contiguous run in the execution routine, and at completion
  * FlushAdapterBuffers then FreeMapRegisters (HcdDmaUnmap). The pump runs one
  * channel request at a time - the request borrows the controller FDO's own
@@ -647,8 +734,10 @@ VOID HcdDmaUnmap(PHCD_CONTROLLER hc, PHCD_XFER x)
     x->MapBase = NULL;
 }
 
-/* The pump's objects, once, beside the controller's others. IRQL:
- * PASSIVE_LEVEL. */
+
+/* The pump's objects, the completion list and the slow requests, once,
+ * beside the controller's other objects, and staging's (hcd_stage.c).
+ * IRQL: PASSIVE_LEVEL. */
 VOID HcdDmaInitObjects(PHCD_CONTROLLER hc)
 {
     KeInitializeSpinLock(&hc->MapLock);
@@ -661,6 +750,7 @@ VOID HcdDmaInitObjects(PHCD_CONTROLLER hc)
     hc->MapPhase = HCD_MAP_PHASE_IDLE;
     hc->MapQuarantined = 0;
     hc->MapDpcsInFlight = 0;
+    HcdStageInitObjects(hc);
 }
 
 /* How many 1 ms waits - each a clock tick at most, so at least 0.1 s and
@@ -725,8 +815,9 @@ VOID HcdDmaMapDrain(PHCD_CONTROLLER hc)
     }
 }
 
+
 /* ----------------------------------------------------------------------- */
-/* Stage 2's wide mappings (36.24; design record 13 section 11.6)          */
+/* Stage 2's wide pool (36.24; design record 13 section 11.6)              */
 /* ----------------------------------------------------------------------- */
 
 #define HCD_PROBE_PAGES     16UL
@@ -831,15 +922,20 @@ static ULONG hcdWideCheck(PHCD_CONTROLLER hc)
 }
 
 /*
- * At a start, after the grant is known (hcd_ctl.c): promotion is enabled
- * only with XhciWideMap on, on Windows 2000 or later (98 and ME never send
- * a URB that would be promoted, 36.21), with the adapter's register-free
- * grant of 0x80001 (and, under the qemu flavour's constraint, at least the
- * check's 16 pages), the check passed and the pool allocated. Anything else
- * leaves every URB sequential - stage 1 - counted and noted
- * (xfer.wide.*). IRQL: PASSIVE_LEVEL.
+ * At a start, after the grant is known (hcd_ctl.c). With staging (task
+ * 48.33, design record 13 section 11.11.2, as built) promotion is
+ * withdrawn: a sequential chunk is up to 1 MiB, XhciWideMap is still read
+ * and noted (hcd_ctl.c), no pool is made and no record is promoted, so
+ * hcd_io.c's pipelined machine is never entered. With XhciDmaStaging 0, as
+ * in 3.4.2.0: promotion is enabled only with XhciWideMap on, on Windows
+ * 2000 or later (98 and ME never send a URB that would be promoted,
+ * 36.21), with the adapter's register-free grant of 0x80001 (and, under
+ * the qemu flavour's constraint, at least the check's 16 pages), the check
+ * passed and the pool allocated. Anything else leaves every URB
+ * sequential - stage 1 - counted and noted (xfer.wide.*). IRQL:
+ * PASSIVE_LEVEL.
  */
-VOID HcdDmaWideOpen(PHCD_CONTROLLER hc)
+static VOID hcdDmaWideOpenDirect(PHCD_CONTROLLER hc)
 {
     PHCD_WIDE_ENTRY pool;
     KIRQL oldIrql;
@@ -896,14 +992,35 @@ VOID HcdDmaWideOpen(PHCD_CONTROLLER hc)
     XhciLogNote(&hc->Hc, "xfer.wide.enabled", hc->WideEnabled);
 }
 
+VOID HcdDmaWideOpen(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+
+    if (!hc->Staging) {
+        hcdDmaWideOpenDirect(hc);
+        return;
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hc->WideEnabled = 0;
+    hc->WidePool = NULL;
+    hc->WideScratch = NULL;
+    hc->RefillHead = NULL;
+    hc->Xpipe.Check = XHCI_XPIPE_CHECK_NOT_RUN;
+    hc->Xpipe.Enabled = 0;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    XhciLogNote(&hc->Hc, "xfer.wide.check", XHCI_XPIPE_CHECK_NOT_RUN);
+    XhciLogNote(&hc->Hc, "xfer.wide.enabled", 0);
+}
+
 /*
- * At a stop, after HcdDmaMapDrain. Every record has normally completed and
- * no entry is owned. A stop that could not prove the controller stopped
- * mastering (CommonBufferPinned) keeps its devices' records instead
- * (HcdIoDeviceDrain), and one of them may still own an entry and be
- * finalized by a late cancel: then the pool is detached from admission and
- * kept for the life of the system, as the records it serves are, and counted
- * as a kept buffer is. IRQL: PASSIVE_LEVEL.
+ * At a stop, after HcdDmaMapDrain. With staging no pool was made and this
+ * clears the fields. With XhciDmaStaging 0 every record has normally
+ * completed and no entry is owned; a stop that could not prove the
+ * controller stopped mastering (CommonBufferPinned) keeps its devices'
+ * records instead (HcdIoDeviceDrain), and one of them may still own an
+ * entry and be finalized by a late cancel: then the pool is detached from
+ * admission and kept for the life of the system, as the records it serves
+ * are, and counted as a kept buffer is. IRQL: PASSIVE_LEVEL.
  */
 VOID HcdDmaWideClose(PHCD_CONTROLLER hc)
 {

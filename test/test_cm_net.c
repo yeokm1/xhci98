@@ -6,7 +6,10 @@
  * does; CRC Error and Buffer Overflow as flags), the transmit ring's
  * posting, reaping and wrap, the one-empty-slot rule, and the reservation's
  * tokens (all or nothing, one at a time, a stale generation released
- * without a post).
+ * without a post); and the network PDO's gate to its NHI under the
+ * removals' interleavings (record 35 section 6.6): an interface call that
+ * entered before a removal closed the gate keeps the NHI held until it
+ * leaves, whichever removal unlinked the PDO.
  */
 
 #include <stdio.h>
@@ -180,12 +183,131 @@ static void test_reserve(void)
     CHECK_EQ(CmNetrReserve(&r, &res, 9, 1, &first), 1, "the next reserves");
 }
 
+/*
+ * The removals as cm_net.c orders them, over the gate and the NHI's hold
+ * (CM_NET.PdoCalls, `calls` here). nhiFindsPdo: the PDO still linked, so
+ * the NHI's removal finds it and waits its gate out itself.
+ */
+static CM_NETR_GATE gate;
+static LONG calls;
+static int nhiFindsPdo;
+static int nhiObj;
+
+/* The NHI's removal may free the extension: nothing holds it, and a PDO it
+ * found is closed and idle. Whenever this is true no call may be inside. */
+static int nhiMayFree(void)
+{
+    if (calls != 0) {
+        return 0;
+    }
+    if (nhiFindsPdo && (gate.Nhi != NULL || !CmNetrGateIdle(&gate))) {
+        return 0;
+    }
+    return 1;
+}
+
+static void gateSetup(void)
+{
+    gate.Nhi = &nhiObj;
+    gate.Users = 0;
+    calls = 0;
+    nhiFindsPdo = 1;
+}
+
+static void test_gate(void)
+{
+    PVOID x;
+    PVOID y;
+    PVOID self;
+
+    /* Enter and leave; a closed gate lets nothing in. */
+    gateSetup();
+    CHECK(CmNetrGateEnter(&gate) == &nhiObj, "open: the NHI");
+    CHECK(!CmNetrGateIdle(&gate), "one inside");
+    CmNetrGateLeave(&gate);
+    CHECK(CmNetrGateIdle(&gate), "idle");
+    CmNetrGateClose(&gate, FALSE);
+    CHECK(CmNetrGateEnter(&gate) == NULL, "closed: nothing");
+    CHECK(CmNetrGateIdle(&gate), "nothing raised");
+    CmNetrGateLeave(&gate);
+    CHECK_EQ(gate.Users, 0, "a stray leave does not go below 0");
+
+    /* The interleaving the merge review found: an interface call paused
+     * after its enter while the PDO's removal, then the NHI's, proceed. */
+    gateSetup();
+    x = CmNetrGateEnter(&gate);                 /* TxReserve, paused     */
+    CHECK(x == &nhiObj, "the call holds the NHI");
+    self = CmNetrGateEnter(&gate);              /* the PDO's REMOVE      */
+    CHECK(self == &nhiObj, "the removal enters");
+    calls++;                                    /* the hold, first       */
+    nhiFindsPdo = 0;                            /* unlinked (PdoLock)    */
+    y = CmNetrGateEnter(&gate);                 /* another call, in the  */
+    CHECK(y == &nhiObj, "a call in the window before the close enters");
+    CmNetrGateClose(&gate, TRUE);               /* closed, its own out   */
+    CHECK(CmNetrGateEnter(&gate) == NULL, "after the close: nothing");
+    CHECK(!CmNetrGateIdle(&gate), "two calls still inside");
+    CHECK(!nhiMayFree(), "the NHI's removal finds no PDO and still waits");
+    CmNetrGateLeave(&gate);                     /* the window's call     */
+    CHECK(!nhiMayFree(), "one call still inside: the NHI held");
+    CmNetrGateLeave(&gate);                     /* the paused call       */
+    CHECK(CmNetrGateIdle(&gate), "the gate idle");
+    CHECK(!nhiMayFree(), "held until the removal drops it");
+    calls--;                                    /* after the wait        */
+    CHECK(nhiMayFree(), "then the NHI may go");
+
+    /* The order before the fix, for contrast: unlinked and left with no
+     * hold, the NHI's removal would see nothing to wait for while the
+     * paused call is inside. */
+    gateSetup();
+    x = CmNetrGateEnter(&gate);
+    nhiFindsPdo = 0;
+    CHECK(nhiMayFree() && !CmNetrGateIdle(&gate),
+          "without the hold the NHI looks free under a call (the defect)");
+    CmNetrGateLeave(&gate);
+
+    /* The NHI's removal first: it closes the gate it found and waits; the
+     * PDO's removal then enters nothing and takes no hold. */
+    gateSetup();
+    x = CmNetrGateEnter(&gate);
+    CmNetrGateClose(&gate, FALSE);              /* cmNetOrphan           */
+    CHECK(!nhiMayFree(), "a call inside the found PDO: waited");
+    CHECK(CmNetrGateEnter(&gate) == NULL, "the PDO's REMOVE finds no NHI");
+    CmNetrGateLeave(&gate);
+    CHECK(nhiMayFree(), "out: the NHI may go");
+
+    /* The PDO's REMOVE inside the gate when the NHI's removal closes it:
+     * the hold is already taken, so the NHI waits for the hold too. */
+    gateSetup();
+    self = CmNetrGateEnter(&gate);
+    calls++;
+    CmNetrGateClose(&gate, FALSE);              /* cmNetOrphan           */
+    nhiFindsPdo = 1;
+    CHECK(!nhiMayFree(), "the removal inside: waited");
+    CmNetrGateClose(&gate, TRUE);               /* the REMOVE's close    */
+    CHECK(CmNetrGateIdle(&gate), "idle");
+    CHECK(!nhiMayFree(), "the hold still taken");
+    calls--;
+    CHECK(nhiMayFree(), "dropped: the NHI may go");
+
+    /* Kept across a disable: the hold dropped, the gate left open. */
+    gateSetup();
+    self = CmNetrGateEnter(&gate);
+    calls++;
+    CmNetrGateLeave(&gate);
+    calls--;
+    CHECK(gate.Nhi == &nhiObj, "kept: still open");
+    CHECK(CmNetrGateIdle(&gate) && calls == 0, "nothing held");
+    (void)self;
+    (void)y;
+}
+
 int main(void)
 {
     test_init();
     test_rx();
     test_tx();
     test_reserve();
+    test_gate();
     printf("test_cm_net: %d checks, %d failures\n", checks, failures);
     return failures != 0;
 }

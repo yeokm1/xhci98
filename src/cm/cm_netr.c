@@ -151,3 +151,31 @@ ULONG CmNetrRelease(CM_NETR_RES *res, ULONG gen, ULONG tokGen, ULONG tokFirst,
     res->Held = FALSE;
     return res->Generation == gen ? CM_NETR_REL_POST : CM_NETR_REL_STALE;
 }
+
+PVOID CmNetrGateEnter(CM_NETR_GATE *g)
+{
+    if (g->Nhi != NULL) {
+        g->Users++;
+    }
+    return g->Nhi;
+}
+
+VOID CmNetrGateLeave(CM_NETR_GATE *g)
+{
+    if (g->Users > 0) {
+        g->Users--;
+    }
+}
+
+VOID CmNetrGateClose(CM_NETR_GATE *g, BOOLEAN own)
+{
+    g->Nhi = NULL;
+    if (own) {
+        CmNetrGateLeave(g);
+    }
+}
+
+BOOLEAN CmNetrGateIdle(const CM_NETR_GATE *g)
+{
+    return (BOOLEAN)(g->Users == 0);
+}

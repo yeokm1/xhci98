@@ -356,8 +356,8 @@ makes and signs one catalog per INF (since 3.2.0.0, design record 19 section
 3a) and stages xhci98-test.cer, the certificate's public half, beside them. This script then holds each published x64 binary to
 that signature by this key's thumbprint and to the build's bytes, and the
 published certificate to this key's. The password is read from
-XHCI98_TESTSIGN_PW or, where that is unset, a prompt that does not echo, once,
-before anything is built. Refused with -UploadSetOnly, which stages nothing,
+XHCI98_TESTSIGN_PW or, where that is unset or empty, a prompt that does not
+echo, once, before anything is built. Refused with -UploadSetOnly, which stages nothing,
 and with an -Arch that has no x64. The x86 binaries are never signed. Where
 the key is held and how it was made: design record 19.
 
@@ -2575,7 +2575,9 @@ function New-UploadSet {
     # its flavour directories, read as before (section 7.2).
     $checkRoot = $uploadRoot
     $mediaRootDirs = @($Flavors)
-    if ((Get-FamilyLayoutKind -Root $uploadRoot -What "'$PublishedRoot'") -eq "family") {
+    $setLayout = Get-FamilyLayoutKind -Root $uploadRoot -What "'$PublishedRoot'"
+    Assert-FamilyLayoutVersion -Kind $setLayout -Version $Version -What "the assembled upload set of '$PublishedRoot'"
+    if ($setLayout -eq "family") {
         $mediaRootDirs = @($script:FamilyNames)
         $famWhy = Test-FamilyLayout -Root $uploadRoot
         if ($famWhy -ne "") {
@@ -3253,11 +3255,16 @@ under the git-ignored out\, holding a history.md that carries the build's entry.
             throw "no test-signing key at '$TestSignPfx' (-TestSignPfx). Design record 19 says how the project's is made and where it is held."
         }
         $TestSignPfx = (Resolve-Path -LiteralPath $TestSignPfx).ProviderPath
+        $pfxWhy = Get-TestSignPfxFault -PfxPath $TestSignPfx -Repo $repo -Outputs @($ReleasesDir, $UploadDir, $PackageRoot)
+        if ($pfxWhy -ne "") { throw "-TestSignPfx: $pfxWhy." }
         # Asked once here and held in this script's memory; each x64
         # make-package.ps1 child gets it through XHCI98_TESTSIGN_PW, set in
         # this process's environment only around that one call and restored
         # after it (a script run from an open session must
-        # not leave the password in it). Never printed, never written.
+        # not leave the password in it). Never printed, never written. An
+        # unset or empty XHCI98_TESTSIGN_PW means the prompt, and an empty
+        # answer is refused there (task 48.12), so the child is never handed
+        # an empty value, which it would take as "ask" again.
         $testSignPassword = Get-TestSignPassword
         $testSignCert = Get-TestSignCertificate -PfxPath $TestSignPfx -Password $testSignPassword
         Write-Ok ("x64 binaries will be signed by the project test certificate {0}" -f $testSignCert.Thumbprint)
@@ -3610,6 +3617,7 @@ To cut one, run this script without it.
         # section 7.2): its architectures are its family folders', and
         # New-UploadSet reads its legs through the flat view it rebuilds.
         $pubLayout = Get-FamilyLayoutKind -Root $finalRoot -What "'$finalRoot'"
+        Assert-FamilyLayoutVersion -Kind $pubLayout -Version $Version -What "'$finalRoot'"
         if ($pubLayout -eq "family") {
             $present = @()
             if ((Test-Path -LiteralPath (Join-Path $finalRoot "98-me")) -or (Test-Path -LiteralPath (Join-Path $finalRoot "nt-x86"))) { $present += "x86" }
@@ -4201,6 +4209,9 @@ the result in place of the marker, then cut again. The first:
             $savedPw = [Environment]::GetEnvironmentVariable($script:TestSignPasswordVariable, "Process")
             try {
                 if ($legSigned) {
+                    if ([string]::IsNullOrEmpty($testSignPassword)) {
+                        throw "the $($leg.Id) leg would be handed an empty test-signing password; Get-TestSignPassword never returns one (task 48.12)."
+                    }
                     [Environment]::SetEnvironmentVariable($script:TestSignPasswordVariable, $testSignPassword, "Process")
                 }
                 & powershell.exe @pkgArgs

@@ -45,6 +45,7 @@
 #define IDC_S_WARN              1119
 #define IDC_S_FAST              1120
 #define IDC_S_FASTWIN           1121
+#define IDC_S_STOR              1122    /* the USB drive notice (48.17) */
 
 #define IDM_REFRESH             40001
 #define IDM_SAVE                40002

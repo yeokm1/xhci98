@@ -116,7 +116,7 @@ HAL.dll!KeStallExecutionProcessor            all  required  w2k-export; win98-pr
 ntoskrnl.exe!PsCreateSystemThread            all  required  w2k-export; win98-precedent bt829.sys 4.10.2222 (NTOSKRNL.EXE!PsCreateSystemThread, hint BA); NUSB USBPORT.SYS 5.00.2195.5652 (hint C1) (design record 13 Appendix A row 112). The controller thread (section 5.4)
 ntoskrnl.exe!PsTerminateSystemThread         all  required  w2k-export; win98-precedent bt829.sys 4.10.2222 (NTOSKRNL.EXE!PsTerminateSystemThread, hint BB); NUSB USBPORT.SYS 5.00.2195.5652 (hint C2) (Appendix A row 113)
 ntoskrnl.exe!ObReferenceObjectByHandle      all  required  w2k-export; win98-precedent ks.sys 4.10.2222 (NTOSKRNL.EXE!ObReferenceObjectByHandle, hint AA) (+11 other 98 SE) (Appendix A row 116). Called on NT only (IoIsWdmVersionAvailable(1, 0x10): Windows 2000 is WDM 1.10, Windows 98 1.00, ME 1.05): the stop waits on the thread object there and on an event on Windows 98, where that wait faulted (runs/run-26.md). A NULL object type: PsThreadType is a data import
-ntoskrnl.exe!ObfDereferenceObject           all  required  w2k-export; win98-precedent hidclass.sys 4.10.2222 (NTOSKRNL.EXE!ObfDereferenceObject, hint AC) (+16 other 98 SE) (Appendix A row 34). The ObDereferenceObject macro; NT only, as above: the thread object the stop joins (cm_thr.c) and the link-state callback object (cm_nvlinkos.c)
+ntoskrnl.exe!ObfDereferenceObject           all  required  w2k-export; win98-precedent hidclass.sys 4.10.2222 (NTOSKRNL.EXE!ObfDereferenceObject, hint AC) (+16 other 98 SE) (Appendix A row 34). The ObDereferenceObject macro; NT only, as above: the thread object the stop joins (cm_thr.c) and the link-state callback object (cm_nvlinkos.c); on every system, the network PDO's own reference across its removal and the NHI's, and a relations list given back (cm_net.c, design record 35 section 6.6)
 # The stor98 link-state channel (cm_nvlinkos.c; tasks 39-A.7 and 40-A.7;
 # stor98's stor98cm.h, its decision MD-6): the callback object
 # \Callback\Stor98LinkState and its one callback, created at DriverEntry
@@ -173,6 +173,7 @@ ntoskrnl.exe!KeInitializeTimer               all  required  w2k-export; win98-pr
 ntoskrnl.exe!KeSetTimer                      all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeSetTimer, hint 90) (+18 other 98 SE)
 ntoskrnl.exe!KeCancelTimer                   all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeCancelTimer, hint 6D) (+20 other 98 SE)
 ntoskrnl.exe!ObfReferenceObject              all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!ObfReferenceObject, hint AD) (+14 other 98 SE) (design record 13 Appendix A row 35). The ObReferenceObject macro: every PDO a relations list returns is referenced
+ntoskrnl.exe!ExQueueWorkItem                 all  required  SITES=cm_filt.obj w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!ExQueueWorkItem, hint 17) (+23 other 98 SE); ntkern-name. xhci98.sys's row; here the kept child's destruction handed over from a release above PASSIVE_LEVEL, on 8.1 alone (design record 31 section 4.10)
 
 [deny]
 

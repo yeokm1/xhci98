@@ -2028,7 +2028,35 @@ static void tbtHostRun(const TBT_HOST_CASE *tc)
         CHECK(p->Pcie.Up && fabPcieUp(&g_fab, tc->Port), "rebuilt");
         CHECK_EQ(fabRtr(&g_fab, d2, FAB_RCAP_PLUG + 4) & 0x12UL, 0x02UL,
                  "the EEPROM deselected and bit-banging off");
+        /* The sleep entry on (task 48.35): a generation 1 router has no
+         * sleep register; nothing tried, nothing held, the tunnel kept. */
+        g_cm.Config.SleepEntry = TRUE;
+        TbtU4Suspend(&g_cm);
+        CHECK(!p->Dev.SleepTried && !p->Dev.SleepSet, "generation 1 sleep: nothing tried");
+        CHECK_EQ(TbtU4Resume(&g_cm), TBT_OK, "generation 1 sleep, kept: done");
+        CHECK_EQ(state(&g_cm, tc->Port), TBT_U4_UP, "generation 1 sleep, kept: UP");
+        g_cm.Config.SleepEntry = FALSE;
     }
+
+    /* The sleep entry on, a sleep that did not happen (task 48.35): a
+     * device router with a link controller gets SX_CTRL bit 31 and has it
+     * cleared at the resume, whatever its host's generation. */
+    g_cm.Config.SleepEntry = TRUE;
+    TbtU4Suspend(&g_cm);
+    if (tc->DevKind != FAB_DEV_TBT1_PR) {
+        CHECK(fabRtr(&g_fab, fabDevAt(&g_fab, tc->Port),
+                     FAB_RCAP_LC + FAB_LC_START + 0x96) & 0x80000000UL,
+              "TB host sleep: the device's SX_CTRL bit 31 set");
+    }
+    CHECK_EQ(TbtU4Resume(&g_cm), TBT_OK, "TB host sleep, no sleep: verified");
+    CHECK_EQ(state(&g_cm, tc->Port), TBT_U4_UP, "TB host sleep, no sleep: UP");
+    CHECK_EQ(fabRtr(&g_fab, fabDevAt(&g_fab, tc->Port), FAB_RCAP_LC + FAB_LC_START + 0x96) &
+                 0x80000000UL, 0, "TB host sleep, no sleep: the device's bit cleared");
+    if (tc->Gen >= 2) {
+        CHECK_EQ(fabRtr(&g_fab, 0, FAB_RCAP_LC + FAB_LC_START + 0x96) & 0x80000000UL, 0,
+                 "TB host sleep, no sleep: the host's bit cleared");
+    }
+    g_cm.Config.SleepEntry = FALSE;
 }
 
 /* The cleaning's LC port reset with its answers lost: the reset is owned
@@ -2378,6 +2406,387 @@ static void test_loss_and_eject(void)
     poll(&g_cm, &g_fab, 2);
     CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "re-plugged: UP");
     CHECK_EQ(TbtU4Eject(&g_cm, 2), TBT_E_PARAM, "nothing on port 2 to eject");
+}
+
+/* Record 22 section 11.1 (task 48.35): the Guide's sleep entry
+ * (XhciCmSleepEntry, decision U36), the cancellation of a sleep that did
+ * not happen, the rebuild of a preserved tunnel on a prepared port
+ * (decision U34), the preflight that leaves the whole domain out, and a
+ * Thunderbolt 3 router entered through its link controller. Expected
+ * values from record 22 section 11.1, Guide 8.2.1 and Spec 4.5. */
+/* Drops the next g_sdLeft reads of router g_sdRouter's ROUTER_CS_3
+ * (the cancellation's state read), then answers again. */
+static int g_sdRouter;
+static int g_sdLeft;
+
+static int sleepDropHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                    unsigned long adp, unsigned long addr, unsigned long n,
+                    const unsigned long *data)
+{
+    (void)f;
+    (void)adp;
+    (void)data;
+    if (g_sdLeft > 0 && router == g_sdRouter && cs == TBT_CS_ROUTER &&
+        pdf == TBT_PDF_READ && addr == 3 && n == 3) {
+        g_sdLeft--;
+        return 1;
+    }
+    return 0;
+}
+
+/* After the host router's Enter Sleep write, drops the next g_hsLeft
+ * reads of its ROUTER_CS_5 (the entry's read-back). */
+static int g_hsArmed;
+static int g_hsLeft;
+
+static int hostSlpDropHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                           unsigned long adp, unsigned long addr, unsigned long n,
+                           const unsigned long *data)
+{
+    (void)f;
+    (void)adp;
+    if (router != 0 || cs != TBT_CS_ROUTER || addr != 5 || n != 1) {
+        return 0;
+    }
+    if (pdf == TBT_PDF_WRITE && data != NULL && (data[0] & 1UL) != 0) {
+        g_hsArmed = 1;
+        return 0;
+    }
+    if (pdf == TBT_PDF_READ && g_hsArmed && g_hsLeft > 0) {
+        g_hsLeft--;
+        return 1;
+    }
+    return 0;
+}
+
+/* Drops every write to router 0's adapter g_wdAdp at dword g_wdAddr. */
+static unsigned long g_wdAdp;
+static unsigned long g_wdAddr;
+
+static int wakeDropHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                        unsigned long adp, unsigned long addr, unsigned long n,
+                        const unsigned long *data)
+{
+    (void)f;
+    (void)n;
+    (void)data;
+    return (int)(router == 0 && cs == TBT_CS_ADAPTER && pdf == TBT_PDF_WRITE &&
+                 adp == g_wdAdp && addr == g_wdAddr);
+}
+
+/* Drops the next g_lcLeft reads of router g_lcRouter's dword g_lcAddr. */
+static int g_lcRouter;
+static int g_lcLeft;
+static unsigned long g_lcAddr;
+
+static int lcDropHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                      unsigned long adp, unsigned long addr, unsigned long n,
+                      const unsigned long *data)
+{
+    (void)f;
+    (void)adp;
+    (void)n;
+    (void)data;
+    if (g_lcLeft > 0 && router == g_lcRouter && cs == TBT_CS_ROUTER &&
+        pdf == TBT_PDF_READ && addr == g_lcAddr) {
+        g_lcLeft--;
+        return 1;
+    }
+    return 0;
+}
+
+static void sleepCfg(TBT_U4_CONFIG *c, BOOLEAN on)
+{
+    cfgDefault(c);
+    c->SleepEntry = on;
+}
+
+static int sleepPreos(BOOLEAN on)
+{
+    int dev;
+    TBT_U4_CONFIG c;
+
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 1);
+    g_fab.RxQCount = 0;
+    g_fab.R[0].Adp[fabPortLane0(&g_fab, 1)].Cs[5] |= 0x80000000UL;
+    sleepCfg(&c, on);
+    g_ldCalls = 0;
+    g_ldAnswer = TBT_U4_STMT_WITHHELD;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    return dev;
+}
+
+static void test_sleep_entry(void)
+{
+    TBT_U4_CONFIG c;
+    const TBT_U4_PORT *p;
+    int dev;
+    unsigned up;
+    unsigned dl;
+    LONG rc;
+
+    /* Off (the default until the legs pass): nothing more is written. */
+    sleepCfg(&c, FALSE);
+    CHECK(!c.SleepEntry, "sleep: off by default");
+    dev = setupMinimal(1, &c);
+    TbtU4Suspend(&g_cm);
+    CHECK_EQ(fabRtr(&g_fab, 0, 5) & 1UL, 0, "sleep off: no Enter Sleep on the host");
+    CHECK_EQ(fabRtr(&g_fab, dev, 5) & 1UL, 0, "sleep off: none on the device router");
+    CHECK_EQ(g_cm.Counters.SleepEntries, 0, "sleep off: no entry counted");
+    CHECK_EQ(TbtU4Resume(&g_cm), TBT_OK, "sleep off: the resume as before");
+
+    /* On: the wake enables cleared (the device router's ROUTER_CS_5 3:1,
+     * the host's downstream ports), the device's upstream port keeping
+     * Enable Wake on USB4 Wake, Enter Sleep and Sleep Ready on both. */
+    sleepCfg(&c, TRUE);
+    dev = setupMinimal(1, &c);
+    up = g_fab.R[dev].UpAdp;
+    dl = (unsigned)fabPortLane0(&g_fab, 1);
+    g_fab.R[dev].Rcs[5] |= 0x0000000EUL;
+    g_fab.R[0].Adp[dl].Cs[FAB_CAP_PORT + 19] |= 0x00030000UL;
+    g_fab.R[dev].Adp[up].Cs[FAB_CAP_PORT + 19] &= ~0x00040000UL;
+    TbtU4Suspend(&g_cm);
+    CHECK_EQ(g_cm.Counters.SleepEntries, 1, "sleep: one entry");
+    CHECK(fabRtr(&g_fab, 0, 5) & 1UL, "sleep: Enter Sleep on the host router");
+    CHECK(fabRtr(&g_fab, dev, 5) & 1UL, "sleep: Enter Sleep on the device router");
+    CHECK_EQ(g_cm.Counters.SleepRouters, 2, "sleep: two routers set");
+    CHECK_EQ(g_cm.Counters.SleepReady, 2, "sleep: both read Sleep Ready");
+    CHECK_EQ(g_cm.Counters.SleepLate, 0, "sleep: none late");
+    CHECK_EQ(fabRtr(&g_fab, dev, 5) & 0x0000000EUL, 0, "sleep: the device's wake enables cleared");
+    CHECK_EQ(g_fab.R[0].Adp[dl].Cs[FAB_CAP_PORT + 19] & 0x000F0000UL, 0,
+             "sleep: the host port's wake enables cleared");
+    CHECK(g_fab.R[dev].Adp[up].Cs[FAB_CAP_PORT + 19] & 0x00040000UL,
+          "sleep: the upstream port's Enable Wake on USB4 Wake set (Table 8-1)");
+    CHECK(g_cm.Obligations[0].Used && g_cm.Obligations[0].Prepared,
+          "sleep: the PCIe obligation prepared");
+
+    /* A sleep that did not happen: the routers still configured with
+     * Enter Sleep set; cleared, the wake enables put back, verified. */
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_OK, "no sleep: every obligation verified");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "no sleep: still UP");
+    CHECK_EQ(fabRtr(&g_fab, 0, 5) & 1UL, 0, "no sleep: the host's Enter Sleep cleared");
+    CHECK_EQ(fabRtr(&g_fab, dev, 5) & 1UL, 0, "no sleep: the device's Enter Sleep cleared");
+    CHECK_EQ(g_cm.Counters.SleepCancelled, 2, "no sleep: two routers cancelled");
+    CHECK_EQ(fabRtr(&g_fab, dev, 5) & 0x0000000EUL, 0x0000000EUL,
+             "no sleep: the device's wake enables put back");
+    CHECK_EQ(g_fab.R[0].Adp[dl].Cs[FAB_CAP_PORT + 19] & 0x000F0000UL, 0x00030000UL,
+             "no sleep: the host port's wake enables put back");
+
+    /* The host router's Enter Sleep will not clear: no obligation met,
+     * the failure path. */
+    dev = setupMinimal(1, &c);
+    TbtU4Suspend(&g_cm);
+    g_fab.R[0].SlpNoClear = 1;
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_E_STATE, "host stuck: an obligation unmet");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "host stuck: HELD, untouched");
+    CHECK(fabRtr(&g_fab, 0, 5) & 1UL, "host stuck: still set");
+    g_fab.R[0].SlpNoClear = 0;
+
+    /* The host's Enter Sleep not taken, the device's taken, and no sleep:
+     * the device's bit cleared and its wake enables put back anyway. */
+    dev = setupMinimal(1, &c);
+    dl = (unsigned)fabPortLane0(&g_fab, 1);
+    g_fab.R[dev].Rcs[5] |= 0x0000000EUL;
+    g_fab.R[0].Adp[dl].Cs[FAB_CAP_PORT + 19] |= 0x00030000UL;
+    g_fab.R[0].SlpStuck = 1;
+    TbtU4Suspend(&g_cm);
+    CHECK_EQ(fabRtr(&g_fab, 0, 5) & 1UL, 0, "host refused: no Enter Sleep on the host");
+    CHECK(fabRtr(&g_fab, dev, 5) & 1UL, "host refused: the device's taken");
+    g_fab.R[0].SlpStuck = 0;
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_OK, "host refused, no sleep: verified");
+    CHECK_EQ(fabRtr(&g_fab, dev, 5) & 1UL, 0, "host refused, no sleep: the device's cleared");
+    CHECK_EQ(fabRtr(&g_fab, dev, 5) & 0x0000000EUL, 0x0000000EUL,
+             "host refused, no sleep: the device's wake enables back");
+    CHECK_EQ(g_fab.R[0].Adp[dl].Cs[FAB_CAP_PORT + 19] & 0x000F0000UL, 0x00030000UL,
+             "host refused, no sleep: the host port's wake enables back");
+
+    /* No sleep, but the device router left meanwhile: its lane's Lock
+     * set again, nothing to undo, the removal discharges the obligation. */
+    dev = setupMinimal(1, &c);
+    TbtU4Suspend(&g_cm);
+    fabUnplug(&g_fab, 1);
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_OK, "device left: discharged by its removal");
+    CHECK(!g_cm.Ports[0].SleepCancelFailed, "device left: nothing held");
+
+    /* No sleep, the device router's state unreadable at the cancellation
+     * though readable afterwards: the record kept, the port held. */
+    dev = setupMinimal(1, &c);
+    TbtU4Suspend(&g_cm);
+    g_sdRouter = dev;
+    g_sdLeft = 8;
+    g_fab.Hook = sleepDropHook;
+    rc = TbtU4Resume(&g_cm);
+    g_fab.Hook = NULL;
+    CHECK_EQ(rc, TBT_E_STATE, "device unread: an obligation unmet");
+    CHECK(g_cm.Ports[0].SleepCancelFailed, "device unread: the port marked");
+    CHECK(fabRtr(&g_fab, dev, 5) & 1UL, "device unread: its Enter Sleep not touched");
+
+    /* The host's Enter Sleep not taken and the domain slept (every router
+     * reset): the lane's Lock tells, nothing held, the tunnel rebuilt. */
+    dev = setupMinimal(1, &c);
+    g_fab.R[0].SlpStuck = 1;
+    TbtU4Suspend(&g_cm);
+    g_fab.R[0].SlpStuck = 0;
+    fabPowerCycle(&g_fab);
+    rc = TbtU4Resume(&g_cm);
+    poll(&g_cm, &g_fab, 2);
+    CHECK(!g_cm.Ports[0].SleepCancelFailed, "host refused, slept: nothing held");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "host refused, slept: UP again");
+
+    /* The host's Enter Sleep applied but its read-back lost, and no sleep:
+     * the host is read at the resume anyway and its bit cleared. */
+    dev = setupMinimal(1, &c);
+    g_hsArmed = 0;
+    g_hsLeft = 8;
+    g_fab.Hook = hostSlpDropHook;
+    TbtU4Suspend(&g_cm);
+    g_fab.Hook = NULL;
+    CHECK(fabRtr(&g_fab, 0, 5) & 1UL, "host read-back lost: the bit applied");
+    CHECK(!g_cm.HostRouter.SleepSet, "host read-back lost: not recorded as set");
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(fabRtr(&g_fab, 0, 5) & 1UL, 0, "host read-back lost: cleared at the resume");
+    CHECK_EQ(rc, TBT_OK, "host read-back lost: verified");
+
+    /* A partial wake clear: port 1's taken, port 2's write lost; no sleep:
+     * port 1's enables still put back. */
+    dev = setupMinimal(1, &c);
+    dl = (unsigned)fabPortLane0(&g_fab, 1);
+    g_wdAdp = (unsigned long)fabPortLane0(&g_fab, 2);
+    g_wdAddr = FAB_CAP_PORT + 19;
+    g_fab.R[0].Adp[dl].Cs[FAB_CAP_PORT + 19] |= 0x00030000UL;
+    g_fab.R[0].Adp[g_wdAdp].Cs[FAB_CAP_PORT + 19] |= 0x00010000UL;
+    g_fab.Hook = wakeDropHook;
+    TbtU4Suspend(&g_cm);
+    g_fab.Hook = NULL;
+    CHECK_EQ(g_fab.R[0].Adp[dl].Cs[FAB_CAP_PORT + 19] & 0x000F0000UL, 0,
+             "partial wake: port 1's cleared");
+    CHECK(g_cm.Counters.SleepRefused >= 1, "partial wake: the refusal counted");
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(g_fab.R[0].Adp[dl].Cs[FAB_CAP_PORT + 19] & 0x000F0000UL, 0x00030000UL,
+             "partial wake: port 1's put back");
+    CHECK_EQ(rc, TBT_OK, "partial wake: verified");
+
+    /* The domain slept (every router reset): nothing to cancel, the
+     * tunnel this driver built rebuilt as before. */
+    dev = setupMinimal(1, &c);
+    TbtU4Suspend(&g_cm);
+    fabPowerCycle(&g_fab);
+    rc = TbtU4Resume(&g_cm);
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(g_cm.Counters.SleepCancelled, 0, "slept: nothing cancelled");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "slept: UP again");
+    (void)rc;
+
+    /* Only the device router lost its configuration (it was replugged
+     * across a sleep the host did not take): the host's bit cleared, the
+     * device left to the classification and rebuilt. */
+    dev = setupMinimal(1, &c);
+    TbtU4Suspend(&g_cm);
+    fabUnplug(&g_fab, 1);
+    fabPlug(&g_fab, 1, dev);
+    g_fab.RxQCount = 0;
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_OK, "device lost: rebuilt");
+    CHECK_EQ(g_cm.Counters.SleepCancelled, 1, "device lost: the host cancelled alone");
+    CHECK_EQ(fabRtr(&g_fab, 0, 5) & 1UL, 0, "device lost: the host's Enter Sleep cleared");
+
+    /* Sleep Ready never comes: 500 ms, logged, the entry finished. */
+    dev = setupMinimal(1, &c);
+    g_fab.R[dev].NoSleepReady = 1;
+    TbtU4Suspend(&g_cm);
+    CHECK_EQ(g_cm.Counters.SleepLate, 1, "late: the device router not ready");
+    CHECK(fabRtr(&g_fab, dev, 5) & 1UL, "late: its Enter Sleep still written");
+    CHECK(g_cm.Obligations[0].Prepared, "late: the port still prepared");
+    g_fab.R[dev].NoSleepReady = 0;
+
+    /* Enter Sleep that will not read back on the device: not prepared. */
+    dev = setupMinimal(1, &c);
+    g_fab.R[dev].SlpStuck = 1;
+    TbtU4Suspend(&g_cm);
+    CHECK_EQ(g_cm.Counters.SleepRefused, 1, "stuck: refused, counted");
+    CHECK(!g_cm.Obligations[0].Prepared, "stuck: the obligation not prepared");
+    g_fab.R[dev].SlpStuck = 0;
+
+    /* The preflight: a predecessor's CLx enable cleared at both ends. */
+    dev = setupMinimal(1, &c);
+    up = g_fab.R[dev].UpAdp;
+    g_fab.R[dev].Adp[up].Cs[FAB_CAP_LANE + 1] |= 0x00000C00UL;
+    TbtU4Suspend(&g_cm);
+    CHECK_EQ(g_cm.Counters.SleepClx, 1, "clx: cleared once");
+    CHECK_EQ(g_fab.R[dev].Adp[up].Cs[FAB_CAP_LANE + 1] & 0x00001C00UL, 0, "clx: read back clear");
+    CHECK(fabRtr(&g_fab, 0, 5) & 1UL, "clx: the entry went on");
+
+    /* A CLx bit that will not clear: the whole domain left out. */
+    dev = setupMinimal(1, &c);
+    up = g_fab.R[dev].UpAdp;
+    g_fab.R[dev].Adp[up].Cs[FAB_CAP_LANE + 1] |= 0x00000400UL;
+    g_fab.R[dev].ClxStuck = 1;
+    TbtU4Suspend(&g_cm);
+    CHECK_EQ(g_cm.Counters.SleepPreflight, 1, "preflight: failed, counted");
+    CHECK_EQ(fabRtr(&g_fab, 0, 5) & 1UL, 0, "preflight: no Enter Sleep on the host");
+    CHECK_EQ(fabRtr(&g_fab, dev, 5) & 1UL, 0, "preflight: none on the device");
+    CHECK(!g_cm.Obligations[0].Prepared, "preflight: nothing prepared");
+    g_fab.R[dev].ClxStuck = 0;
+
+    /* Decision U34: a preserved tunnel, its port prepared, rebuilt after
+     * the domain slept; without the entry, held as before (section 7.6). */
+    dev = sleepPreos(TRUE);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK(p->Pcie.Preserved && state(&g_cm, 1) == TBT_U4_UP, "U34: the tunnel preserved");
+    TbtU4Suspend(&g_cm);
+    CHECK(g_cm.Obligations[0].Prepared && !g_cm.Obligations[0].BuiltHere,
+          "U34: preserved and prepared");
+    fabPowerCycle(&g_fab);
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_OK, "U34: rebuilt, every obligation met");
+    CHECK(g_cm.Counters.ResumePreservedRebuilt >= 1, "U34: counted");
+    CHECK(p->Pcie.Up && !p->Pcie.Preserved, "U34: now this driver's own tunnel");
+    dev = sleepPreos(FALSE);
+    TbtU4Suspend(&g_cm);
+    fabPowerCycle(&g_fab);
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_E_STATE, "no entry: the preserved tunnel not rebuilt");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "no entry: HELD");
+    (void)dev;
+
+    /* A Thunderbolt 3 device router: its link controllers' SX_CTRL bit
+     * 31, no Sleep Ready polled. */
+    sleepCfg(&c, TRUE);
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_TBT3_TR);
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "TB3 sleep: UP");
+    TbtU4Suspend(&g_cm);
+    CHECK(fabRtr(&g_fab, dev, FAB_RCAP_LC + FAB_LC_START + 0x96) & 0x80000000UL,
+          "TB3 sleep: SX_CTRL bit 31 set in link controller 0");
+    CHECK_EQ(g_cm.Counters.SleepRouters, 2, "TB3 sleep: both routers prepared");
+    CHECK_EQ(g_cm.Counters.SleepReady, 1, "TB3 sleep: Sleep Ready read on the host alone");
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_OK, "TB3 no sleep: verified");
+    CHECK_EQ(fabRtr(&g_fab, dev, FAB_RCAP_LC + FAB_LC_START + 0x96) & 0x80000000UL, 0,
+             "TB3 no sleep: SX_CTRL bit 31 cleared");
+
+    /* Its link controller's descriptor unreadable at the cancellation: the
+     * record kept, the port held. */
+    TbtU4Suspend(&g_cm);
+    g_lcRouter = dev;
+    g_lcAddr = FAB_RCAP_LC + 2;
+    g_lcLeft = 8;
+    g_fab.Hook = lcDropHook;
+    rc = TbtU4Resume(&g_cm);
+    g_fab.Hook = NULL;
+    CHECK_EQ(rc, TBT_E_STATE, "TB3 descriptor unread: an obligation unmet");
+    CHECK(g_cm.Ports[0].SleepCancelFailed, "TB3 descriptor unread: the port marked");
 }
 
 static void test_suspend_resume(void)
@@ -5479,6 +5888,210 @@ static void test_preos_once(void)
     (void)dev;
 }
 
+/* Section 9.3.1 on a version 2 host interface: A at `a` on a version 2
+ * host and device router, its record. */
+static int carryAV2At(TBT_U4_CARRY *out, ULONG a)
+{
+    TBT_U4_CONFIG c;
+    int dev;
+
+    fabInit(&g_fab);
+    fabHostV2(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4V2);
+    fabPlug(&g_fab, 1, dev);
+    cfgDefault(&c);
+    c.PreOsCleanup = a;
+    c.HostInterfaceCaps = g_fab.Caps;
+    g_ldCalls = 0;
+    g_ldAnswer = TBT_U4_STMT_WITHHELD;
+    memset(&g_ld, 0, sizeof(g_ld));
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    TbtU4Stop(&g_cm);
+    TbtU4GetCarry(&g_cm, out);
+    return dev;
+}
+
+static LONG carryStartBV2At(const TBT_U4_CARRY *carry, ULONG b)
+{
+    TBT_U4_CONFIG c;
+
+    cfgDefault(&c);
+    c.PreOsCleanup = b;
+    c.HostInterfaceCaps = g_fab.Caps;
+    memset(&g_ring2, 0, sizeof(g_ring2));
+    TbtU4Init(&g_cm2, &g_ring2, &g_fab.Host, &c);
+    TbtU4SetLinkDown(&g_cm2, linkDown, NULL);
+    TbtU4SetCarry(&g_cm2, carry);
+    return TbtU4Start(&g_cm2, fabMem(&g_fab), FAB_PHYS, FAB_MEM_BYTES);
+}
+
+/* The u4.preos.once lines of the next start kept. */
+static void onceWatch(void)
+{
+    g_fab.Watch = "u4.preos.once";
+    g_fab.WatchCount = 0;
+}
+
+static ULONG onceValue(void)
+{
+    return g_fab.WatchCount == 1 ? g_fab.WatchValue[0] : 0xFFFFFFFFUL;
+}
+
+/* Reads of one path entry counted; from the g_irFailAt-th on (1-based,
+ * 0: never) each is swallowed, so the read fails. */
+static int g_irRouter;
+static unsigned long g_irAdp;
+static unsigned long g_irAddr;
+static unsigned long g_irReads;
+static unsigned long g_irFailAt;
+
+static int entryReadHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                         unsigned long adp, unsigned long addr, unsigned long n,
+                         const unsigned long *data)
+{
+    (void)f;
+    (void)data;
+    if (pdf != TBT_PDF_READ || router != g_irRouter || cs != TBT_CS_PATH ||
+        adp != g_irAdp || g_irAddr < addr || g_irAddr >= addr + n) {
+        return FAB_HOOK_GO;
+    }
+    g_irReads++;
+    if (g_irFailAt != 0 && g_irReads >= g_irFailAt) {
+        return FAB_HOOK_SWALLOW;
+    }
+    return FAB_HOOK_GO;
+}
+
+/*
+ * Record 22 section 9.3.1 (task 48.8): the cases test_preos_once left -
+ * a mixed port (its PCIe tunnel this driver's own, its USB3 tunnel not),
+ * a domain mixed the same way (port 1 its own, a firmware's tunnel on
+ * port 2), an inventory read that fails, a stray enable, and the cleaned
+ * record on a version 2 host (left whole with no Host Router Reset; a
+ * failing test cleans it with one). Each start's u4.preos.once line is
+ * read: 1 left whole, else the failing test in bits 15:8 and its port in
+ * bits 7:4.
+ */
+static void test_preos_once_more(void)
+{
+    TBT_U4_CARRY k;
+    TBT_U4_CARRY k2;
+    const TBT_U4_PORT *p;
+    unsigned long reads;
+    int dev;
+    int dev2;
+    LONG rc;
+
+    /* A mixed port: the record's USB3 HopIDs not the fabric's, so the
+     * USB3 tunnel verifies but is not this driver's own: test 2. */
+    dev = carryAAt(&k, 2);
+    CHECK(k.Port[0].Pcie.Up && k.Port[0].Usb3.Up, "mixed port: A built both");
+    k.Port[0].Usb3.Hd = 12;
+    onceWatch();
+    rc = carryStartBAt(&k, 2);
+    CHECK_EQ(rc, TBT_OK, "mixed port: B started");
+    CHECK_EQ(onceValue(), (2UL << 8) | (1UL << 4), "mixed port: test 2 on port 1");
+    CHECK_EQ(g_cm2.Counters.PortsCleaned, 1, "mixed port: cleaned");
+    TbtU4Stop(&g_cm2);
+    TbtU4GetCarry(&g_cm2, &k2);
+    CHECK(k2.Valid && k2.Cleaned, "mixed port: the cleaning hands Cleaned");
+
+    /* A mixed domain: port 1 this driver's own, a firmware's tunnel on
+     * port 2: the start cleaned whole, both ports. */
+    dev = carryAAt(&k, 2);
+    dev2 = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 2, dev2);
+    fabPreos(&g_fab, 2, 0);
+    g_fab.RxQCount = 0;
+    onceWatch();
+    rc = carryStartBAt(&k, 2);
+    CHECK_EQ(rc, TBT_OK, "mixed domain: B started");
+    CHECK_EQ(onceValue(), (2UL << 8) | (2UL << 4), "mixed domain: test 2 on port 2");
+    CHECK_EQ(g_cm2.Counters.PortsCleaned, 2, "mixed domain: both ports cleaned");
+    TbtU4Stop(&g_cm2);
+
+    /* An inventory read that fails: the device's downstream lane's HopID
+     * 8 entry, its read swallowed only where the inventory makes it (the
+     * last of a start left whole, counted in a control start): test 3,
+     * cleaned. */
+    dev = carryAAt(&k, 2);
+    g_irRouter = dev;
+    g_irAdp = 3;
+    g_irAddr = 2 * 8;
+    g_irReads = 0;
+    g_irFailAt = 0;
+    g_fab.Hook = entryReadHook;
+    onceWatch();
+    rc = carryStartBAt(&k, 2);
+    g_fab.Hook = NULL;
+    reads = g_irReads;
+    CHECK_EQ(rc, TBT_OK, "read failure, the control: B started");
+    CHECK_EQ(onceValue(), 1, "read failure, the control: left whole");
+    CHECK(reads >= 1, "read failure, the control: the entry read");
+    TbtU4Stop(&g_cm2);
+    dev = carryAAt(&k, 2);
+    g_irRouter = dev;
+    g_irReads = 0;
+    g_irFailAt = reads;
+    g_fab.Hook = entryReadHook;
+    onceWatch();
+    rc = carryStartBAt(&k, 2);
+    g_fab.Hook = NULL;
+    CHECK_EQ(rc, TBT_OK, "read failure: B started");
+    CHECK_EQ(onceValue(), (3UL << 8) | (1UL << 4), "read failure: test 3 on port 1");
+    CHECK_EQ(g_cm2.Counters.PortsCleaned, 1, "read failure: cleaned");
+    TbtU4Stop(&g_cm2);
+
+    /* A stray enable: Path Enable on the device's PCIe Down adapter, which
+     * no owned tunnel explains: test 3, cleaned. */
+    dev = carryAAt(&k, 2);
+    g_fab.R[dev].Adp[7].Cs[FAB_CAP_ADP] |= 0x80000000UL;
+    onceWatch();
+    rc = carryStartBAt(&k, 2);
+    CHECK_EQ(rc, TBT_OK, "stray enable: B started");
+    CHECK_EQ(onceValue(), (3UL << 8) | (1UL << 4), "stray enable: test 3 on port 1");
+    CHECK_EQ(g_cm2.Counters.PortsCleaned, 1, "stray enable: cleaned");
+    TbtU4Stop(&g_cm2);
+
+    /* The cleaned record on a version 2 host: A at 2 hands Cleaned; B at 2
+     * with it is left whole, no Host Router Reset. */
+    dev = carryAV2At(&k, 2);
+    CHECK(k.Valid && k.Cleaned, "version 2: A at 2 hands Cleaned");
+    CHECK_EQ(g_fab.HrResets, 0, "version 2: A had nothing to clean, no reset");
+    onceWatch();
+    rc = carryStartBV2At(&k, 2);
+    p = TbtU4Port(&g_cm2, 1);
+    CHECK_EQ(rc, TBT_OK, "version 2: B started");
+    CHECK_EQ(onceValue(), 1, "version 2: left whole");
+    CHECK(g_cm2.PreOsCleaned, "version 2: PreOsCleaned");
+    CHECK_EQ(g_fab.HrResets, 0, "version 2: no Host Router Reset");
+    CHECK_EQ(g_cm2.Counters.HostRouterResets, 0, "version 2: none counted");
+    CHECK_EQ(g_cm2.Counters.PortsCleaned, 0, "version 2: nothing cleaned");
+    CHECK(p->State == TBT_U4_UP && p->Pcie.Own, "version 2: its own, UP");
+    CHECK(fabPcieUp(&g_fab, 1), "version 2: the fabric's PCIe tunnel kept");
+    TbtU4Stop(&g_cm2);
+    TbtU4GetCarry(&g_cm2, &k2);
+    CHECK(k2.Valid && k2.Cleaned, "version 2: B hands Cleaned on");
+
+    /* The same record with a stray enable: cleaned whole, through one
+     * Host Router Reset in place of the port's reset. */
+    dev = carryAV2At(&k, 2);
+    g_fab.R[dev].Adp[7].Cs[FAB_CAP_ADP] |= 0x80000000UL;
+    onceWatch();
+    rc = carryStartBV2At(&k, 2);
+    CHECK_EQ(rc, TBT_OK, "version 2, stray enable: B started");
+    CHECK_EQ(onceValue(), (3UL << 8) | (1UL << 4), "version 2, stray enable: test 3");
+    CHECK_EQ(g_fab.HrResets, 1, "version 2, stray enable: one Host Router Reset");
+    CHECK_EQ(g_cm2.Counters.HostRouterResets, 1, "version 2, stray enable: counted");
+    CHECK_EQ(g_cm2.Counters.DownstreamPortResets, 0,
+             "version 2, stray enable: no Downstream Port Reset");
+    TbtU4Stop(&g_cm2);
+    TbtU4GetCarry(&g_cm2, &k2);
+    CHECK(k2.Valid && k2.Cleaned, "version 2, stray enable: the cleaning hands Cleaned");
+    (void)dev;
+    (void)dev2;
+}
+
 static LONG carryStartB(const TBT_U4_CARRY *carry)
 {
     TBT_U4_CONFIG c;
@@ -7467,6 +8080,104 @@ static int lcFailHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
  * owed when its descriptor cannot be read at the teardown, the slot
  * TEARDOWN until it is proven undone.
  */
+/* Design record 34 section 3.12 items 2 and 3 (task 48.30): the kid gate,
+ * asked before a fresh kid's connect claims a slot and armed before the
+ * kid's first Path Enable; never for an adoption. */
+static ULONG g_gateArm;
+static ULONG g_gateMay;
+static BOOLEAN g_gateAllow;
+static unsigned long g_gateArmAt;
+static ULONG g_gateKid;
+static ULONG g_gateGen;
+static ULONG g_gatePort;
+
+static BOOLEAN gateFn(PVOID context, ULONG op, ULONG port, ULONG kid, ULONG gen)
+{
+    (void)context;
+    if (op == TBT_U4_KIDGATE_MAY_CONNECT) {
+        g_gateMay++;
+        return g_gateAllow;
+    }
+    if (op == TBT_U4_KIDGATE_ARM) {
+        g_gateArm++;
+        g_gateArmAt = g_fab.WrCount;
+        g_gateKid = kid;
+        g_gateGen = gen;
+        g_gatePort = port;
+    }
+    return TRUE;
+}
+
+static void test_kid_gate(void)
+{
+    TBT_U4_CONFIG c;
+    int dev;
+    int child;
+    long pe;
+    const TBT_U4_KID *k;
+
+    dev = setupParent(FAB_DEV_USB4, NULL);
+    TbtU4SetKidGate(&g_cm, gateFn, NULL);
+    g_gateArm = 0;
+    g_gateMay = 0;
+    g_gateAllow = FALSE;
+    child = fabChild(&g_fab, dev);
+    fabHotPlugChild(&g_fab, dev, child);
+    poll(&g_cm, &g_fab, 3);
+    CHECK(g_gateMay != 0 && g_gateArm == 0, "the gate refusing: asked, nothing armed");
+    CHECK(kidOf(&g_cm, 1) == NULL, "the gate refusing: no slot taken, the connect deferred");
+    CHECK(!fabChainPcieUp(&g_fab, dev), "the gate refusing: no chained tunnel");
+    g_gateAllow = TRUE;
+    poll(&g_cm, &g_fab, 3);
+    k = kidOf(&g_cm, 1);
+    CHECK(k != NULL && k->State == TBT_U4_UP, "the gate allowing: the kid UP");
+    CHECK_EQ(g_gateArm, 1, "armed once");
+    pe = findPe(&g_fab, 0, child, 5, 1);
+    CHECK(pe >= 0 && (unsigned long)pe >= g_gateArmAt,
+          "armed before the first Path Enable");
+    CHECK(k != NULL && g_gateKid == k->Index && g_gateGen == k->Generation &&
+          g_gatePort == 1, "armed with the kid and its generation");
+
+    /* A preserved chain adopted: nothing enabled, nothing armed. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    child = fabChild(&g_fab, dev);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    fabPreosChild(&g_fab, dev, child, 0);
+    g_fab.RxQCount = 0;
+    cfgDefault(&c);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    TbtU4SetKidGate(&g_cm, gateFn, NULL);
+    g_gateArm = 0;
+    g_gateMay = 0;
+    g_gateAllow = FALSE;
+    poll(&g_cm, &g_fab, 2);
+    k = kidOf(&g_cm, 1);
+    CHECK(k != NULL && k->State == TBT_U4_UP && k->Pcie.Preserved,
+          "adopted though the gate refuses connects");
+    CHECK_EQ(g_gateArm, 0, "an adoption is never armed");
+
+    /* A resume that rebuilds the kid arms it before its Path Enable, and
+     * never asks MAY_CONNECT (a rebuild must not wait). */
+    dev = setupKid(FAB_DEV_USB4, &child);
+    TbtU4SetKidGate(&g_cm, gateFn, NULL);
+    TbtU4Suspend(&g_cm);
+    fabPowerCycle(&g_fab);
+    g_fab.RxQCount = 0;
+    g_gateArm = 0;
+    g_gateMay = 0;
+    g_gateAllow = FALSE;
+    CHECK_EQ(TbtU4Resume(&g_cm), TBT_OK, "resume: rebuilt");
+    k = kidOf(&g_cm, 1);
+    CHECK(k != NULL && k->State == TBT_U4_UP, "the kid rebuilt");
+    CHECK_EQ(g_gateArm, 1, "the rebuild armed");
+    CHECK_EQ(g_gateMay, 0, "the rebuild never asked to connect");
+    pe = findPe(&g_fab, g_gateArmAt, child, 5, 1);
+    CHECK(pe >= 0, "armed before the rebuild's Path Enable");
+}
+
 static void test_kid_tbt3_single(void)
 {
     const TBT_U4_KID *k;
@@ -7574,9 +8285,11 @@ int main(void)
     RUN_VEC(test_tbt3_hop_width);
     RUN_VEC(test_tbt_host);
     RUN_VEC(test_preos_once);
+    RUN_VEC(test_preos_once_more);
     RUN_VEC(test_links);
     RUN_VEC(test_loss_and_eject);
     RUN_VEC(test_suspend_resume);
+    RUN_VEC(test_sleep_entry);
     RUN_VEC(test_carry);
     RUN_VEC(test_coarse_clock);
     RUN_VEC(test_edge_enumeration);
@@ -7620,6 +8333,7 @@ int main(void)
     RUN_VEC(test_kid_foreign_and_held);
     RUN_VEC(test_kid_cleanup_gates);
     RUN_VEC(test_kid_tbt3_single);
+    RUN_VEC(test_kid_gate);
 #endif
     fabTraceMark("end");
     printf("test_u4cm: %d checks, %d failures\n", checks, failures);

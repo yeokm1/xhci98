@@ -1,6 +1,15 @@
 # Design Record 34 - Daisy Chains: a Device Behind a Device
 
-Status: revision 12, 2026-10-30, task 45.15: section 3.10's
+Status: revision 14, 2026-11-09, task 48.31's follow-up: section
+3.3.7 item 1's admission (the chain operation's generation taken before
+its gates, every step held to one predicate); item 4's interrupt route
+as read (the chained functions on another pin, started polling); item
+10, the first plug (record 28 section 14's held window). Revision 13, 2026-11-09,
+tasks 48.30 and 48.31, before code:
+section 3.12, the chained unit's correspondence, ownership and eject
+(it replaces section 3.1's "Correspondence"), and section 3.3.7, the
+chain port's own numbering, devnode, removal and `DN_REMOVABLE` on 98 SE
+and ME. Revision 12, 2026-10-30, task 45.15: section 3.10's
 "Deferred" (the chained unit's eject teardown, the correspondence and
 the per-tunnel keying to the next release, owner). Revision 11,
 2026-10-30, task 45.15: section 6.11, Part 3 as coded. Revision 10, 2026-10-29 (task 45.15), before code, reviewed and revised:
@@ -351,7 +360,7 @@ ports of the switch source are (record 21 section 6.3 item 2):
   (`CmRegChainRelations`). A change of the parent's or the child's
   generation, or the member's tunnel going down, cancels it. Host vectors
   cover the delayed enumeration (section 9.1).
-- **Correspondence**: which chain port a given chained tunnel lands on is
+- **Correspondence** (replaced by section 3.12, task 48.30): which chain port a given chained tunnel lands on is
   learned as record 22 section 7.6 learns a host port's member: a new
   function 0 answering on one candidate's secondary bus while that
   chained tunnel is the only one pending under that member. Kept by
@@ -637,6 +646,251 @@ reading. Where this section and section 3.3.2's first two bullets differ
   the re-enumeration, the dock's first driver installs and in a later
   session (run-45, "45.14"): the first premise holds; that the allocation
   holds them waits for the chain port's own numbering.
+
+#### 3.3.7 The chain port's own numbering, its devnode, the removal and `DN_REMOVABLE` (task 48.31)
+
+The rest of section 3.3 made exact for its code, on section 3.3.6's
+reading (a padded empty chain port's range and window kept by PCI.VXD).
+It is the CONFIGMG worker's (`cm_cfgwk.c`), which alone calls CONFIGMG
+and reads below a member through PCI.VXD; the thread only posts. Where
+this section and sections 3.3.2 to 3.3.5 differ, this one governs.
+
+1. **The requests.** On the CONFIGMG route the seam's handling of a
+   depth-2 action (`CmReenumAction`, after the members' own, as section
+   3.9's action follows them on NT) posts a **chain request** to the
+   worker for the members it concerns: the kid's port's member when it
+   is known by correspondence (`XhciTbtPortMember` for the action's
+   port, Slot bits 7:0), else every active member. `TUNNEL_UP` posts
+   `ChainUp` in place of the members' own re-enumeration, which would
+   let PCI.VXD take a chained switch's bridges in reset state as found
+   and give the chain port a child before the worker could number it
+   (read on 98 SE, 2026-11-09); a `ChainUp` that runs out (item 2)
+   falls back to the members' re-enumeration. `TUNNEL_DOWN` posts
+   `ChainDown` beside the members' own, a reconciliation (`RESYNC`,
+   not a loss's or a recovery's) both, each a bit per member beside
+   `ReqReenum` (`CmCfgwkChain`), collapsed as the others are; a newer
+   member request does not cancel them. Under the firmware connection
+   manager the ICM client's depth-2 actions post them the same way
+   (every member, none being named). Taken by the worker after the
+   members' own requests of the same wake, under the same gates (the
+   operation's generation, the claim, `cmWkNoCfg`, the retirement
+   barrier, the prune owed and the vanished children's holds of task
+   43.47, a member's no-IRQ transaction): a gated member's request stays
+   posted. The stor98 gate is not among them: no chained function has an
+   entry (section 3.12 item 10), so a chain request removes nothing a
+   statement waits for.
+
+   **The admission** (task 48.31's follow-up, 2026-11-09). The chain
+   operation's generation is taken **before** those gates are read, not
+   after: every post that owes a loss's removal or its no-scan
+   re-enumeration (`CmCfgwkUnavailable`, `CmCfgwkGone`) also advances the
+   member's generation, so a loss posted between the gates' read and the
+   operation's start makes the operation stale instead of lending it the
+   loss's own generation (taken after the gates, as first coded, the
+   operation was current though `ReqGone` and `NoScan` stood, and its
+   down path could reach `Reenumerate_DevNode` of the chain port before
+   the owed removal, letting PCI.VXD meet bridges in reset state ahead of
+   the removal and the numbering). Inside the operation one predicate
+   (`cmWkChainCurrent`, its pure half `CmPortsChainCurrent`) holds every
+   step: the worker not leaving, the member owned, the generation the one
+   taken, and neither `ReqGone`, `NoScan` nor a retirement barrier
+   (`Hold`, which takes no generation step) on the member, read under the
+   worker's lock. It is checked once more after the gates and before the
+   first step; before each configuration read of the walk, the port
+   reading and the path scans of item 3 (the chain port's and, inside the
+   operation, the member's), each read through an accessor of the chain
+   operation's own over PCI.VXD's reader or the HAL's; before each
+   numbering attempt and at each of its forward steps (its go callback,
+   `cmWkNumberGo`), its reads refused while the attempt has written
+   nothing and never once it has, so its restoration of what it wrote -
+   bus numbers, windows, a BAR sized, lines - still reaches the bridges
+   once it stops; before each read of the vanished-child scan of item 5;
+   after the walk (a walk gone stale is not trusted);
+   before each CONFIGMG call (`cmWkGo`), and in the admission of the chain
+   port's `Reenumerate_DevNode` (`cmWkEnumAdmitEx`), under the same lock
+   that marks the call in flight, so a loss posted after that admission
+   finds the call in `EnumBusy`. A removal of item 5 whose query was
+   accepted before the operation went stale still completes (Windows 98
+   cannot cancel an accepted query), but the chain port's rescan it then
+   owes passes the same words (any generation, no `ReqGone`, `NoScan` or
+   barrier) or is left to the member's re-enumeration, posted, which runs
+   after the loss's own. A member's own re-enumeration keeps its
+   admission as it was: after a loss it is the no-scan re-enumeration
+   itself.
+
+2. **The walk.** For each member with a chain request, the worker walks
+   its chain ports with section 3.9's pure walk (`XhciTbtChainPorts`)
+   over the worker's own PCI.VXD reader (the numbering's, through its
+   guard, `cmWkPciRoute`), so a chain port PCI.VXD found after the
+   dock's numbering is read. A walk that is incomplete, or complete
+   with no candidate (the dock's switch not yet numbered or enumerated:
+   the walk skips an unnumbered bridge, section 3.9), or with a
+   candidate whose devnode is not found yet (item 3), keeps the request
+   posted, retried at the worker's tick (`CM_WK_TICK_MS`) for at most
+   `CM_WK_CHAIN_MS` (10 s, section 3.1's span) from the post that
+   opened it, each kind (`ChainUp`, `ChainDown`) timed on its own - a
+   later post of the same kind keeps that start - then
+   dropped (`cm.chain.9x.owed-expired`). A request whose every
+   candidate was dealt with (numbered, held, or removed from) is done. The walk now records, for
+   each candidate, its rotation (`Rot`: the device numbers of the
+   bridges from the member's secondary bus down to and including the
+   candidate, summed mod 4), for item 4.
+
+3. **The devnode locate** (section 3.3.4). As a member's
+   (`cmWkFindDevnode`): the candidate's PCI path read (`cmWkPciPath`)
+   and its devnode found by `cmWkIdNames` - an instance id of the
+   `BUS_&DEV_&FUNC_` form naming its location, or, for a hot-added
+   function, the path form (`082800`, record 21 section 6.1) naming its
+   path - but walked from the member's devnode down, six levels and
+   `CM_WK_WALK_NODES` nodes at most, never from the root. Section
+   3.3.4's second key (a bus-number resource) is not needed: the path
+   form is the one a hot-added bridge carries, and `CmPortsIdPath`
+   reads it already. A devnode matches only when its id names the
+   candidate's location or path **and** its `VEN_` and `DEV_` fields
+   name the identity dword the walk read from the candidate now; no
+   devnode handle is kept: every use walks again from the member's
+   devnode as found now (`cmWkFindDevnode`), so a devnode left from a
+   replaced dock or an earlier numbering, whose id may still name the
+   location, is never taken for the bridge there now. The marking window
+   (item 6) keeps the chain port's location, path and identity as the
+   operation read them and matches against those, reading no
+   configuration space outside the operation's gates. Not found: that candidate is skipped
+   this time (`cm.chain.9x.no-devnode`), the request kept within its
+   10 s.
+
+4. **The numbering (`ChainUp`).** For each candidate whose devnode has
+   no child (a complete child list, `cmWkChildren`): a candidate with a
+   child is populated already (`cm.chain.9x.held`) and is left alone,
+   as a member with a child is. Otherwise `XhciTbtNumberBridgesAt`, the
+   numbering split as section 3.3.2 asks: the candidate as the range and
+   window bridge (its padded secondary to subordinate, its window), the
+   member as the interrupt anchor (its own Interrupt Pin and Line, the
+   function's pin rotated by the candidate's `Rot` before the
+   comparison and handed down as today), with `F_WINDOWS`, `F_IRQ` and
+   `F_WAIT_EMPTY` but on the last try (the member's 20 tries, 100 ms
+   apart), never `F_PAD` (one level, section 3.9). `XhciTbtNumberBridges`
+   is `XhciTbtNumberBridgesAt(io, port, port, 0, ...)`, its vectors
+   unchanged. The outcome:
+   - NONE with no function behind the candidate: nothing chained there
+     yet; kept for the next post or the request's 10 s;
+   - NONE with a function directly on the candidate's secondary bus (a
+     chained endpoint with no switch of its own, the emulator's plain
+     `usb4-device`): its line given as a function on a member's own bus
+     is (record 28 section 13), then as below;
+   - DONE or REOPENED (windows open), or NUMBERED: `Reenumerate_DevNode`
+     of the candidate's devnode, then its marking window (item 6) and
+     the member's tunnel id window (record 31 section 5, `cmWkTag`,
+     which already walks the member's descendants six levels down);
+   - any refusal (`NO_ROOM`, `ACCESS`, `STALE`, a window refused): undone
+     as today, logged (`cm.chain.9x.number` with the outcome, and
+     `cm.chain.9x.no-room` for `NO_ROOM`), not re-enumerated.
+   The interrupt route of a chained function that the line rule cannot
+   reach (another pin of the member's: the emulated dock's chain port is
+   device 1 of its internal bus) keeps design record 28's routes, as at
+   depth 1; on the emulator's `usb4-generic` member with its Interrupt
+   Pin that function's pin lands on the member's own after the rotation
+   only when the path's devices sum to 0 mod 4 [inf: the leg reads it].
+   The diagnostic block (`XhciCmBridgeDiag`, cm_statb.h) describes the
+   latest attempt, member or chain port, its flag word's bit 8 set for a
+   chain port (section 8).
+
+   **As read** (98 SE and ME, 2026-11-09; `runs/run-48.md`, "48.31
+   follow-up"). `cm.chain.9x.irq=01030001` is outcome DONE (1), no line
+   set (0), three functions on another pin (3), rotation 1: the emulator's
+   chain port is device 1 of the dock's internal bus, so the ASM2464's
+   two bridges and its NVMe, each pin A at device 0 below it, arrive at
+   the member as pin B, a pin whose route this driver does not know (the
+   member's own line is pin A's), and the line rule writes nothing. (Task
+   48.31's run read the word as three lines set; it is not.) The NVMe's
+   Interrupt Line stays 0, the value `info pci` shows: the emulator's
+   configuration-write trace (`-d trace:pci_cfg_write`) has no write to
+   its offset 3Ch from this driver or `PCI.VXD` at either plug, and the
+   only line writes below the chain port are `PCI.VXD`'s FFh then 0 to
+   the ASM2464's downstream bridge. So `PCI.VXD` gives the NVMe no IRQ
+   and problem 29, and record
+   28's memory-only form starts it with Stor98 polling: "StorInterrupt
+   6.0.0 = pin 1 line 0 msi no msix yes port 0/0 polling (interrupt line
+   not set)", against the dock's own NVMe, "pin 1 line 10 ... interrupt".
+   That is the design working: a function whose interrupt this driver
+   cannot route runs polled on 98 SE and ME. Whether a real dock's chain
+   port lands its chained functions on the member's pin depends on its
+   device number (the rotation), as at depth 1.
+
+5. **The removal (`ChainDown`, section 3.3.5).** For each candidate's
+   devnode found: its children whose function no longer answers on the
+   candidate's secondary bus (the member's vanished-child rule,
+   `cmWkBusIds` on the candidate, a bus that cannot be read taking
+   nothing for vanished) go through the worker's removal step
+   (`cmWkRemoveChild`: `Query_Remove_SubTree`, a refusal respected and
+   never forced, then `Remove_SubTree`; no `REMOVE_PENDING` handshake,
+   since no chained function has a stor98 entry, section 3.12 item 10),
+   then `Reenumerate_DevNode` of the candidate. The member's own
+   request at the same down leaves the dock's devnode alone (its
+   function still answers), so nothing else is removed. The middle
+   unplug is the member's, as today: its removal walk takes the whole
+   subtree (record 22 section 7.1).
+
+6. **`DN_REMOVABLE`** (section 3.7). After a candidate's
+   `Reenumerate_DevNode`, a marking window of `CM_WK_MARK_MS` opens for
+   it: each child of the candidate's devnode not yet seen gets
+   `DN_REMOVABLE` (`Change_DevNode_Status`, `CmCfgmgAddRemovable`), as
+   `cmWkMark` gives a member's children, while `XhciCmSafeEject` is on
+   and the member active. The chained unit is then offered for removal
+   on its own (Windows ME's Unplug or Eject Hardware; a tool's removal),
+   nested under the first device's; its removal is Windows' and the
+   tunnel stays up until the unplug (section 3.12 item 11).
+
+7. **What it rests on** [inf]: that PCI.VXD places a device numbered
+   inside a padded chain port's range and window (section 3.3.6's second
+   premise, the allocation), and enumerates it at the chain port's
+   `Reenumerate_DevNode`. The legs read it; if not, section 3.3 is
+   revisited with the owner (Option B, or no 9x chain).
+
+8. **Vectors.** `test\test_tbt_brnum.c`: `XhciTbtNumberBridgesAt` with
+   the range at the emulator's chain port and the anchor at its member
+   (the windows inside the padded window; the line rule through a
+   rotation of 1, 2 and 3; a function on another pin kept), and every
+   existing vector through the unchanged entry. `test\test_tbt_topo.c`:
+   the walk's `Rot` for the emulator's dock and a deeper candidate.
+   `test\test_cm_ports.c`: the path form naming a chain port; the
+   admission of item 1 (`CmPortsChainCurrent` over the worker's request
+   words): a loss posted between the gates' read and the admission
+   refused, the loss's own generation refused while it is owed, an
+   operation taken before a loss stale after it whatever follows (a
+   healthy post that clears `NoScan` included), another member's loss
+   leaving it admitted, a barrier, a lost claim and the worker's exit
+   refusing it.
+
+9. **Legs** (98 SE and ME, q35, `intel-adl`, the dock with
+   `downstream-ports=1` and `chain-power-controller=off` at power-on or
+   plugged at the desktop, a plain NVMe router hot-plugged behind it):
+   the log's `cm.chain.9x.*`; `info pci` after the chain port's
+   numbering (the device inside 07h to 0Fh and the padded window); the
+   chained drive at Code 0 on Stor98 with a drive letter, a file written
+   and read; its devnode `DN_REMOVABLE` (Device Manager, or ME's
+   applet listing it); the child unplugged (the drive gone, the dock's
+   drive untouched, no hang) and plugged again (the drive back); the
+   dock unplugged with the child attached.
+
+10. **The first plug** (task 48.31's follow-up). The first chained unit
+   whose bridges Windows has not installed before gets its function's
+   devnode only after the Add New Hardware wizard has installed the
+   bridges' driver (on 98 SE that wizard asks for a restart; answered
+   No, the bridges' children are enumerated at once), minutes after the
+   chain port's re-enumeration and so after the member's no-IRQ window
+   (record 28, 10 s) had closed: the NVMe sat at problem 29 with no BAR
+   until the next plug or a restart, as task 48.31's legs read on both
+   systems. The chain operation is not changed for it: record 28
+   section 14.3 holds the member's window while a bridge below it is
+   being installed (problems 1, 8, 18 and 28, or no `Driver` value yet)
+   or a function waits for its own driver, bounded at 30 minutes from
+   the window's opening, so the function is admitted and started when
+   its devnode appears. Re-enumerating the chain port again after the
+   wizard was the alternative (a re-enumeration alone, not item 4's
+   numbering, which a populated port skips); it needs a trigger for
+   "the wizard is done", which the held window has by construction
+   (the walk sees the bridges' installation end), and the function's
+   start would still be the window's to make.
 
 ### 3.4 Boot, and chains present at the start
 
@@ -1483,6 +1737,360 @@ there, at both depths, as today.
     manager on q35; a drive behind an enclosure's or a dock's own switch;
     a both-ends failure and an eject on q35; a system, kind or case with
     no passed reading.
+
+### 3.12 The chained unit's correspondence, ownership and eject (task 48.30)
+
+Section 3.10's "Deferred" and section 6.11's "Not in this cut" made exact
+under the USB4 software connection manager: which chain port a kid's
+tunnel lands on, which kid owns what is behind it, and the chained
+unit's eject reaching `TbtU4EjectKid`. The firmware connection manager
+has no kid and no per-device teardown (record 21 section 7.4), so
+nothing here changes it: its chained unit's eject stays Windows' own,
+its tunnel up until the unplug. This section replaces section 3.1's
+"Correspondence" bullet, whose learning after the fact (a function
+found on a candidate's bus while the chained tunnel is the only one
+pending) is the departure census that four design rounds of 45.15
+found tearing down a wrong live tunnel: here the evidence is taken
+around the kid's own Path Enable, and nothing is learnt from a
+reading made after it alone.
+
+1. **The two bindings.**
+   - **Structural** (S): a parent's link, (the host port, the port's
+     connection `Generation`, the parent router's UUID, the parent's
+     PCIe Down adapter of that link `ParentPcieDown`), bound to one
+     chain port: its location, its secondary and subordinate buses, the
+     member it sits under (index and location) and, on NT, the
+     incarnation of the child filter classified on it (item 5), plus an
+     epoch drawn from a counter per domain (never 0, never reused in the
+     domain's life). At most `TBT_U4_MAX_KIDS` (4) per domain, one per
+     parent link.
+   - **Occupancy** (O): the kid on S's link, (its slot `Index`, its
+     `Generation`, its route, its UUID), bound to S. At most one per S.
+     O names the tunnel that owns what lies behind S's chain port: the
+     kid's tunnel, named `CM_NVLINK_TUNNEL(0x40 | kid, generation)` as
+     section 3.5 names it, its generation the kid's (drawn from
+     `TBT_U4CM.KidGeneration`, so never reused).
+   Both are the thread's, kept in the domain (`CM_NHI`), written under
+   the registration list's lock where item 5's readers need them. A
+   kid without O has no chain port as far as this driver knows: it is
+   served as today (section 3.9's action on every candidate), its
+   chained unit ejected by Windows alone, its tunnel up until the
+   unplug.
+
+2. **The transaction.** O, and S when it is not yet known, is learnt
+   only in a transaction opened by the connection manager core
+   immediately before the kid's first Path Enable write
+   (`tbtU4KidPcieTunnel`, before `TBT_U4_E_DEV_ENABLE`), so no
+   function of that kid can answer before the baseline is read. The
+   core calls the driver's kid gate (`TBT_U4_KIDGATE_FN`, set like the
+   link-down upcall) with `ARM`, the port, the kid and its generation;
+   the driver reads, synchronously, through the thread's configuration
+   reader (`HalGetBusData`; NT filter route only, item 11 for 98 SE and
+   ME):
+   - the port's member by correspondence (record 22 section 7.6,
+     `XhciTbtPortMember`); none known: no transaction;
+   - the chain-port walk of section 3.9 under that member, COMPLETE,
+     no overflow, every candidate numbered (its secondary above its own
+     bus, its subordinate at or above it, both inside the member's
+     range);
+   - each candidate's secondary bus: which devices' function 0 answer
+     (a bit per device, as `XHCI_TBT_BINDS.BaseSeen`), a failed read or
+     Retry Status making it unread;
+   - all of it twice, back to back, the two readings equal (the
+     baseline is stable: no enumeration under way below the member).
+   Anything short of that: no transaction, and the kid is
+   **unattributed** (item 3). Otherwise the transaction opens: the
+   port, the kid, its generation, the parent's generation and UUID,
+   `ParentPcieDown`, the member, the baseline (each candidate's
+   location, buses and devices answering), the time, and the arm's
+   stamp (`ArmSeq`, item 5). At most one transaction is open in a
+   domain.
+
+3. **Serialised enables, and the unattributed kids.** A kid whose PCIe
+   tunnel came up is **unsettled** from its Path Enable until it is
+   attributed (O learnt) or resolved: its slot no longer holds that
+   generation (dropped, freed, or connected again), or its path was
+   proven closed for that generation (the link-down upcall with the kid
+   and `PathClosed`, as `XhciTbtLearnDown` takes it at depth 1). No gain
+   is attributed (item 4: SEVERAL), and no transaction opens (item 2),
+   while anything else in the domain may carry a live path to a chain
+   port that no binding owns: another kid unsettled, or any other kid
+   slot in use without O (an adopted kid, whose tunnel is up with no
+   PCI-side evidence; a kid whose activation failed, kept until its
+   unplug, its rollback not proven; one held by a resume or a
+   recovery; one in teardown), or any watched link (`TBT_U4_LINK`, a
+   preserved path this driver does not own), read from the core's
+   tables at each arm and each try, as depth 1 reconciles every port
+   that may carry a live unattributed path before it learns
+   (`cmU4Reconcile`). So that two kids are not unsettled at once, the
+   core asks the gate `MAY_CONNECT` before a fresh kid's connect starts
+   (section 6.4 step 1; not for an adoption, which enables nothing, nor
+   for a resume's rebuild, which must not wait): refused while a
+   transaction is open or any kid is unsettled, for at most
+   `CM_CHAIN_TXN_MS` (10 s, section 3.1's span) from that kid's Path
+   Enable; the connect is then deferred to a later tick
+   (`u4.kid.connect.held`, counted), as a connect waiting for idle lanes
+   is. Past 10 s the connect goes on and both kids stay unattributable
+   until one is resolved - no authority, never a guess. A resume
+   rebuilding several kids arms each in turn; a second one finding the
+   first unsettled is unattributed.
+
+4. **The attribution.** Tried at the kid's `TUNNEL_UP` in the seam,
+   before section 3.9's chain action (whose invalidations may make
+   Windows enumerate), and again at each pass of the thread while the
+   transaction is open: the same reads as the baseline, once. The
+   outcome, in this order:
+   - the kid's generation or the parent's changed, the kid's tunnel not
+     up, or the domain stopped, lost or contained: CANCELLED;
+   - a read failed or answered Retry Status: WAIT;
+   - the candidate set changed (a candidate gone or new, its buses
+     moved, the walk incomplete or over): SPOILED;
+   - any candidate lost a device, or more than one candidate gained:
+     SPOILED;
+   - no candidate gained: WAIT;
+   - one candidate B gained, but B answered any device at the baseline,
+     or item 3's blockers stand (another kid unsettled or in use without
+     O, a watched link): SPOILED (SEVERAL);
+   - what B gained is no tunnel's far end (device 0 alone, an
+     Upstream Switch Port) and B's port was not read DOWN at the arm
+     (every presence signal it reports absent, read once after the two
+     equal readings) and UP now: SHAPE, SPOILED (record 22 section
+     7.6.4: a function of the parent's own that answers late, behind a
+     hot-plug capable port of its switch, is never the kid's); a shape
+     or a port reading that cannot be read: WAIT, and B read empty at
+     a later try before it is decided: SPOILED;
+   - S known for this parent link and naming another chain port than
+     B: CONFLICT, S withdrawn, SPOILED;
+   - otherwise LEARNED: S made (or kept, when it names B) and O made for
+     the kid.
+   WAIT keeps the transaction open; at `CM_CHAIN_TXN_MS` from its
+   opening it closes EXPIRED. CANCELLED, SPOILED, SHAPE, CONFLICT and
+   EXPIRED close it with the kid unattributed. Logged `cm.chain.txn` with the
+   outcome; counters `cm.chain.learned`, `cm.chain.spoiled`,
+   `cm.chain.txn-expired`, `cm.chain.conflict`.
+
+5. **Provenance, and the token (NT).** O reaches the chained unit
+   only through what the registration list records of where each PDO
+   came from, under its lock:
+   - **The chain port's identity.** Every child filter, when it is
+     linked (`CmRegAttLink`), takes its PDO's identity (`PdoSeq`):
+     that of another listed filter on the same PDO when there is one,
+     else a new value of one sequence counter for the whole list
+     (`cmRegSeq`, never reused in the driver's life, compared wrap-safe
+     as elapsed counts). So the two filters a chain port may carry
+     (section 3.10) share one identity, and a PDO made again, even at
+     the same address, gets another. S's incarnation is its chain
+     port's identity, taken at LEARNED from a filter classified at B
+     (or, with none classified then, from the first one classified
+     after); it must be older than the transaction (`PdoSeq` before its
+     arm, `ArmSeq`, the counter read under the lock at `ARM`), else S
+     carries no token at all; a classification at B with another
+     identity withdraws S.
+   - **Publication provenance.** A chain child's `BusRelations`
+     request takes a begin stamp (`cmRegSeq`, `CmRegChainBegin`) before
+     it is passed down (`cmChainRelations`, `cm_filt.c`); at its answer
+     each PDO new to that filter's snapshot is stamped with it
+     (`SnapSeq`), a PDO already there keeps its stamp, every PDO of a
+     filter's first answer is stamped 0 (no provenance), and the filter
+     keeps the stamp of its last answer (`ChainAnsSeq`). A stamp later
+     than `ArmSeq` proves that the query which first reported the PDO
+     began after the baseline read B empty, so its function appeared
+     during the transaction, when only the kid could put one there. A
+     query that began before the arm and finished after it (a scan of
+     an earlier occupant's function, say) stamps its PDOs before the
+     arm, and they are never granted.
+   - **The token.** While O stands, every filter classified at B with
+     S's identity carries the token (`ChainTok`: the port, the kid, its
+     generation, S's epoch, `ArmSeq`, and `LearnSeq`, the counter at
+     LEARNED). A chained entry under landing B with no token takes it
+     when, and only when, its PDO is in the snapshot of a filter
+     carrying the token with a stamp later than `ArmSeq`, the entry has
+     no departure recorded, and no older entry of the landing, current
+     or tombstone, carries the same PDO. That one rule (`CmMarksGrant`,
+     pure, given the snapshot and its stamps) runs at every marks sync
+     and at LEARNED, at an entry's birth and later alike; nothing else
+     sets a token. A token, once set, is never changed or cleared, and
+     is kept through burial.
+   - **The departure.** `CmRegAttRemoved`'s departure of an entry with
+     a token is recorded with the token's generation in `PendingGen` (a
+     member's own entry keeps the port's `ConnGen`); a departure of an
+     entry with none is recorded as today and can never be confirmed.
+   - **At LEARNED** the filter classified at B (if any) is invalidated
+     once more (section 3.9's call, `cmChainTake`), so that an answer
+     begun after the learning follows (item 7's settling).
+
+6. **The confirmation.** `CmMarksConfirm` keeps every check it makes
+   (the epoch, the serial, one departure, the member, bus and address,
+   the location known) and, for an entry with a landing:
+   - no token: `CM_MK_CONF_CHAINED` as today;
+   - with one, under the USB4 profile: the generation compared is the
+     token's kid generation, the confirmation's and the kid's now
+     (passed in, as the ports' are), not the port's; under any other
+     profile `CM_MK_CONF_CHAINED`;
+   - accepted: `CM_MK_CONF_OK`, the departure consumed once, as a
+     member's.
+   `CmReenumConfirm` then, under the lock, finds the filters classified
+   at the entry's landing under its member carrying the same token, and
+   posts a **kid eject** (`CM_REENUM.KidEject`, one per kid slot) with
+   the token, the landing's location, member and identity, and **every**
+   listed filter on that PDO as it stands: each one's own identity
+   (`AttSeq`, a stamp taken when it is linked, never shared) and its
+   population generation (`RelGen`, which a chain child's answer bumps
+   when it reports a new PDO). None carrying the token: refused
+   (`CM_MK_CONF_IDENTITY`), logged. Nothing is posted for the member: a
+   chained unit's confirmation never reaches `TbtU4EjectPcie`.
+
+7. **The checklist and the commit.** `CmReenumService` takes one posted
+   kid eject a pass, after the members' own (one eject a pass under the
+   USB4 profile, as today), and drops it (`cm.chain.eject.stale`, with
+   which item) unless every item holds:
+   1. the confirmation named the entry's serial, epoch, member, bus,
+      address and departure, consumed once (item 6);
+   2. the token was on the entry before its departure (item 5's rule
+      refuses an entry with a departure);
+   3. under the lock, the **landing check**: the listed filters on the
+      landing's PDO (its identity) exactly the posted set, each by its
+      own `AttSeq` - none gone, none new - and each listed, located, not
+      surprise-removed, classified at B under the member, carrying the
+      same token, settled (its last answer's begin stamp later than the
+      token's `LearnSeq`), of its own posted population generation, its
+      snapshot complete and stackless (`cmLandingReady`: the loop of
+      `cmEjectReady` without its member publication test, which a child
+      filter never passes); so no filter's newer observation is hidden
+      by another's; then `EjectHold` set on each of them
+      (`CmRegStartAllowed` now reads chain children's snapshots too, so
+      no function behind B starts meanwhile) and their removal
+      references taken (`CmFilterTryHold`);
+   4. on the thread, the lock released: the domain running and admitted
+      (the USB4 profile on, not failed, not contained, the host
+      interface present, `XhciCmSafeEject` on);
+   5. S and O standing and the token live (`XhciChainTokenLive`: the
+      epoch, the kid and its generation), the parent's generation and
+      UUID S's;
+   6. a fresh reading of B: `XhciTbtChainPortTest` YES at B under S's
+      member, its secondary bus S's;
+   7. the kid in `TbtU4Kid` still `Used`, of the token's port and
+      generation, its PCIe tunnel up, not ejected, not in teardown;
+   8. under the lock again, immediately before the call: item 3's
+      landing check repeated (the hold its own).
+   Then `TbtU4EjectKid(port, kid)` (section 6.11: the orderly teardown
+   with both ends, the kid FAILED `Ejected` until its unplug), logged
+   `u4.eject.kid`, and the holds released. **The commit.** Which tunnel
+   is torn down is O's, thread state that only this thread changes:
+   items 5 and 7 are read with no core work between them and the call,
+   so no PnP event can redirect the teardown to another tunnel. The
+   landing's state is the start gate: items 3 and 8 under the lock and
+   `EjectHold` keep any function behind B from starting before the
+   teardown returns; a surprise removal or a classification change
+   after item 8 can only follow the chain port's own removal, whose
+   tunnel is the one being torn down. A teardown that fails is counted
+   and logged, and nothing else is torn down: there is no fallback to
+   the member, the parent or another kid.
+
+8. **Withdrawal.** S is withdrawn when its port's generation changes or
+   the port leaves UP, at a conflict (item 4), at a classification at
+   B with another identity (item 5), when a classification at B reads
+   anything but YES or other buses, and at the domain's stop, a host
+   interface loss or a recovery. O is withdrawn with S, and when its
+   kid's generation changes (an unplug, a drop, an eject, a failure, a
+   new connect). Each withdrawal clears the filters' `ChainTok` under
+   the lock, so no later entry takes a stale token; the entries keep
+   theirs, which item 7 then refuses. Adopted kids (section 6.9) enable
+   nothing and so have no O: their units are Windows' to eject, their
+   tunnels up until the unplug, until a later connection of that kid
+   is learnt.
+
+9. **Status and log.** XHCITR's kind 3 entry of a kid with O names its
+   chain port as the tunnel port its tunnel reaches (`CM_ST_E_BRIDGE`,
+   section 6.11's `CM_ST_UNKNOWN` otherwise). The log gains
+   `cm.chain.txn`, `cm.chain.bind` (S and O made, with B),
+   `cm.chain.unbind` (with why), `cm.chain.tok` (a grant),
+   `cm.chain.eject`, `cm.chain.eject.stale`, `u4.eject.kid` and
+   `u4.kid.connect.held`.
+
+10. **Stor98, names and ownership.** The kid's tunnel name and
+    generation are O's (item 1), so the statements of section 3.11's
+    D2 can key a kid's entries without anything new. Publishing chained
+    entries (scanning B's secondary bus with the kid's name) is not part
+    of this task: obligation 1 asks UP before Windows can enumerate,
+    which at depth 2 races 7's native hot plug and XP's member
+    invalidation and needs a reading of its own, and without D2's
+    admission (whose bits stay 0) an UP gives Stor98 nothing but a later
+    `IN_USE`. A chained drive stays on Stor98's gone deadline (MD-1),
+    as today.
+
+11. **Windows 98 SE and ME.** The thread's reader does not see a
+    function PCI.VXD does not know yet (record 21 section 6.1.1, "The
+    accessors"), so no baseline or attribution is read there: no
+    transaction opens (the gate's `ARM` reads nothing on the CONFIGMG
+    route), every kid is unattributed, and no kid eject is posted. A
+    chained unit there is the worker's (section 3.3.7): numbered,
+    marked `DN_REMOVABLE`, removed at its tunnel's down; ejected by
+    Windows or a tool as a unit, its tunnel up until the unplug.
+    `MAY_CONNECT` is not refused on that route (no transaction can be
+    open).
+
+12. **The user's stop of a chained router by name** (as Linux's
+    de-authorisation tears down that router's PCIe tunnel) is not
+    taken: XHCITR does not yet show the chained unit on its own
+    (section 3.10, "Not in this cut"), and Windows' own eject, confirmed
+    by the mark service (item 13), is the route.
+
+13. **The mark service.** `xhcimark` confirms a unit Windows holds for
+    eject (problem 47, XP and later; 2000 gives no such problem). It
+    takes as units only direct children of the member's devnode
+    (`mk_check_entry`), so a chained entry is never confirmed today.
+    It now also takes an entry with `CM_QM_EF_CHAINED` for the
+    confirmation alone - never for the `LowerFilters` write, which
+    stays out (section 3.10) - its unit the child of the chain port's
+    devnode (the member's descendant at the landing's bus, device and
+    function) at the entry's bus and address; the same checks
+    otherwise.
+
+14. **Files.** `src/cm/tbt_chain.c`, `tbt_chain.h` (new, pure: the
+    baseline and its reading, the two bindings, the transaction and its
+    outcomes, the token); the kid gate (`tbt_u4cm.c`, `tbt_u4cm.h`);
+    `cm_nhi.c` (the gate, the attribution at `TUNNEL_UP` and each pass,
+    the withdrawals, the kid eject's items 4 to 7 and `TbtU4EjectKid`);
+    `cm_reenum.c`, `cm_reenum.h` (the identities and stamps, the token on
+    the filters, the grant at each sync, the confirmation's posting, the
+    hand-off's items 1 to 3 and 8, `cmLandingReady`,
+    `CmRegStartAllowed`); `cm_filt.c` (the begin stamp); `cm_marks.c`,
+    `cm_marks.h` (`Tok`, `CmMarksGrant`, the confirmation by the kid's
+    generation); `cm.h` (the filter and domain fields); `cm_status.c`
+    (kind 3's bridge); `xhcimark\xhcimark.c` (item 13).
+
+15. **Vectors.** `test\test_tbt_topo.c` (linking `tbt_chain.c`, over
+    its modelled machine): the baseline (complete, a
+    failed read, Retry Status, an unnumbered candidate, two readings
+    that differ); the attribution's every outcome in its order (a gain
+    on one candidate learnt; none waits; two gains, a loss, a moved bus,
+    a new candidate spoiled; a gain on a candidate busy at the baseline
+    spoiled; another kid unsettled spoiled; S naming another port a
+    conflict withdrawing S; the kid's or the parent's generation moved
+    cancelled; expiry at 10 s); `MAY_CONNECT` refused and released at
+    10 s; a second kid on a learnt S (a re-plug) learnt only on S's
+    port; the withdrawals. `test\test_cm_marks.c`: `CmMarksGrant` (a stamp
+    after the arm granted; one at the arm, before it or 0 not;
+    never to a PDO an older entry of the landing carried, never
+    after a departure, never changed), the token kept through
+    burial; the confirmation by the kid's
+    generation, refused without a token, with a stale generation, for
+    a tombstone confirmed once. `test\test_u4cm.c`: the gate called
+    before the first Path Enable of a connect and of a rebuild, never
+    for an adoption; a connect deferred while refused; `TbtU4EjectKid`
+    refusing a stale kid. `xhcimark`'s self-test: a chained entry found
+    under its chain port for the confirmation and never written.
+
+16. **Legs** (section 9.3 clause 5, q35, `intel-adl` with the dock at
+    power-on and a plain NVMe router hot-plugged behind it): XP and 7
+    x86 - the log's `cm.chain.txn` LEARNED and `cm.chain.bind`; the
+    chained unit stopped from Windows' applet; `xhcimark` confirming
+    it; `u4.eject.kid` and the kid FAILED `Ejected` in the status
+    record; the dock's drive untouched; the child unplugged and plugged
+    again, and its new tunnel learnt again. 10 x64 where time allows.
+    A chain present at power-on (adoption): no O, the applet's stop
+    leaves the tunnel up (as today).
 
 ## 4. Part 2: the Thunderbolt 3 firmware connection manager's chain
 

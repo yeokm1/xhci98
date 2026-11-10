@@ -157,6 +157,7 @@ void __cpuid(int info[4], int leaf);
  */
 #include "../src/xhci_version.h"
 #include "tr_log.h"
+#include "tr_net.h"
 
 #define XHCISNAP_VERSION XHCI_VER_STR
 #define XHCISNAP_BUILT   __DATE__ " " __TIME__
@@ -10325,6 +10326,21 @@ static void write_dev_files(void)
 }
 #pragma auto_inline(on)
 
+/* Thunderbolt networking (design record 35 section 17.5, task 48.18):
+ * each xhcicm.sys query device's networking answer, in the form that
+ * withholds the MACs, UUIDs, IP address and the other computer's texts,
+ * since this report is pasted publicly. */
+static void write_dev_net(void)
+{
+    static char text[16384];
+    TR_TEXT t;
+
+    tr_text_init(&t, text, sizeof(text));
+    tr_net_dev_text(&t, on_nt());
+    tr_text_mark_cut(&t);
+    comp("%s", text);
+}
+
 static void write_dev_time(void)
 {
     if (runTimeSet) {
@@ -10547,6 +10563,8 @@ named:
     write_dev_devices();
     printf("\ninstalled files:\n");
     write_dev_files();
+    comp("\n  Thunderbolt networking (xhcicm.sys):\n");
+    write_dev_net();
     comp("\n  dump: taken after this file was written; its result is "
          "appended below. If\n  nothing follows, the dump did not "
          "finish.\n");

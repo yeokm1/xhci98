@@ -280,6 +280,22 @@ function Get-FamilyLayoutKind {
     throw "$What holds neither family folders ($($script:FamilyNames -join ', ')) nor flavour directories."
 }
 
+function Assert-FamilyLayoutVersion {
+    # The family rule of the upload set (roadmap-usb4 task 48.12): a tree
+    # laid out by Windows family ($Kind, Get-FamilyLayoutKind's answer) is a
+    # version published from 3.4.0.0, the first cut that wrote one (task
+    # 45.44, design record 36 section 7.2); a family tree of an earlier
+    # version is a tree no cut wrote, refused before anything is assembled
+    # from it. The other way is not held here: the stand-in trees of the
+    # packager's self-tests are flavour trees at this tree's version.
+    param([string]$Kind, [string]$Version, [string]$What)
+    $v = $null
+    if (-not [version]::TryParse($Version, [ref]$v)) { throw "'$Version' is not a version." }
+    if ($Kind -eq "family" -and $v -lt [version]"3.4.0.0") {
+        throw "$What is laid out by Windows family (98-me\, nt-x86\, nt-x64\), and $Version was published before 3.4.0.0, the first version cut that way (design record 36 section 7.2): no cut wrote this tree. Do not upload it."
+    }
+}
+
 function ConvertTo-FamilyLayout {
     # Writes one flat package's files into their family folders under $Dest
     # (record 36 section 5.1). Every flat file is placed or is the one with
@@ -517,6 +533,15 @@ Point the tool at nt-x86\ or nt-x64\ and let it search the subfolders:
   DISM           Dism /Image:<mounted image> /Add-Driver /Driver:<folder>
                  /Recurse, and for nt-x64\ also /ForceUnsigned.
 
+For Windows 2000 and XP with nLite, Textmode for nt-x86\ lists the
+entries of its txtsetup.oem. Choose "xHCI98 USB 3 Controller (2000/XP, USB
+keyboard/mouse, files from CD)", after copying USBD.SY_, HIDCLASS.SY_ and
+HIDPARSE.SY_ from the I386 folder of the Windows source into nt-x86\,
+unchanged: do not expand or rename them. The other entry, "xHCI98 USB 3
+Controller (32-bit Windows 2000/XP)", is for an XP floppy install without
+the CD's files and with no USB keyboard or mouse; Windows 2000 always
+takes the "files from CD" entry.
+
 For Windows Vista to 10, add the folder to install.wim and to both images
 of boot.wim (Windows PE and Setup). The drivers in boot.wim let Setup use
 a USB keyboard, mouse and install stick on a computer whose only USB ports
@@ -548,9 +573,10 @@ TEXT-MODE SETUP (F6): WINDOWS 2000, XP AND XP X64
 Copy the files at the root of nt-x86\ (nt-x64\ for XP x64 and Server 2003
 x64), without its subfolders, to a floppy disk, and press F6 when Setup
 asks for additional drivers. txtsetup.oem on it lists the options. For
-the Windows 2000 option "files from CD", also copy USBD.SY_, HIDCLASS.SY_
-and HIDPARSE.SY_ from the I386 folder of your Windows 2000 CD to the
-floppy's root, unchanged: do not expand or rename them.
+the option "files from CD" (Windows 2000, always; XP, with a USB keyboard
+or mouse), also copy USBD.SY_, HIDCLASS.SY_ and HIDPARSE.SY_ from the I386
+folder of the Windows 2000 or XP CD you install from to the floppy's root,
+unchanged: do not expand or rename them.
 
 AFTER AN INTEGRATED INSTALL, RUN SETUP.EXE
 
@@ -1426,16 +1452,71 @@ function Test-CatalogOfPackage {
 }
 
 function Get-TestSignPassword {
-    # The .pfx password, from XHCI98_TESTSIGN_PW or, where that is unset, a
-    # prompt that does not echo. Never printed and never written anywhere;
-    # make-release.ps1 hands it to its make-package.ps1 children through the
-    # same variable, in its own process environment only.
-    $pw = [Environment]::GetEnvironmentVariable($script:TestSignPasswordVariable, "Process")
-    if ($null -ne $pw) { return $pw }
+    # The .pfx password, from XHCI98_TESTSIGN_PW or, where that is unset or
+    # set but empty, a prompt that does not echo (task 48.12: the maintainer
+    # types it by hand, so an empty variable means "ask", never an empty
+    # password). An empty answer is refused, so no caller ever holds an
+    # empty password to sign with or hand on. Never printed and never
+    # written anywhere; make-release.ps1 hands it to its make-package.ps1
+    # children through the same variable, in its own process environment
+    # only. -FromEnvironment is the variable's value as read (untyped, so
+    # that $null and "" stay apart for the self-tests: .NET Framework reads a
+    # variable set but empty as either, by the thread's last error).
+    param($FromEnvironment = [Environment]::GetEnvironmentVariable($script:TestSignPasswordVariable, "Process"))
+    $pw = $FromEnvironment
+    if (-not [string]::IsNullOrEmpty($pw)) { return $pw }
     $secure = Read-Host -AsSecureString "Password of the test-signing .pfx (input hidden)"
+    if ($null -eq $secure -or $secure.Length -eq 0) {
+        throw "no password was typed for the test-signing .pfx; nothing is signed with an empty password ($($script:TestSignPasswordVariable) unset or empty means the prompt, design record 19)."
+    }
     $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
     try { return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
     finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+}
+
+function Get-TestSignPfxFault {
+    # The key's path (roadmap-usb4 task 48.12; design record 19, AGENTS.md:
+    # the .pfx is held only in the git-ignored scripts\local\testsign\ or a
+    # folder outside the tree, and never packaged): "" when the .pfx at
+    # $PfxPath may be read, else why not. Inside $Repo only under its
+    # scripts\local\, where git ignores it and tracks nothing at that path;
+    # never inside a folder this run fills for publication ($Outputs).
+    # Checked before the key is opened or its password asked.
+    #
+    # The paths are compared as written (GetFullPath), as make-release.ps1's
+    # Resolve-DirectoryArgument compares its own: a junction, a symbolic
+    # link or a subst drive that aliases one folder into another is not seen
+    # through. This is a net for a key named at the wrong path, not a
+    # boundary against an alias made to defeat it; a key in OneDrive or
+    # behind the scripts\local\ junctions of a clone is read as it is.
+    param([string]$PfxPath, [string]$Repo, [string[]]$Outputs = @())
+    $ps = $ExecutionContext.SessionState.Path
+    $full = [System.IO.Path]::GetFullPath($ps.GetUnresolvedProviderPathFromPSPath($PfxPath)).TrimEnd('\')
+    foreach ($o in @($Outputs | Where-Object { "$_" -ne "" })) {
+        if (Test-PathUnderRoot -Path $full -Root $o) {
+            return "'$full' is inside '$o', which this run fills for publication: keep the key outside it (design record 19)"
+        }
+    }
+    if (-not (Test-PathUnderRoot -Path $full -Root $Repo)) { return "" }
+    $local = Join-Path $Repo "scripts\local"
+    if (-not (Test-PathUnderRoot -Path $full -Root $local)) {
+        return "'$full' is inside the repository but not in its git-ignored scripts\local\ (design record 19 keeps the key in scripts\local\testsign\ or outside the tree): elsewhere in the tree it can reach a commit or a package"
+    }
+    $rel = $full.Substring(([System.IO.Path]::GetFullPath($Repo).TrimEnd('\')).Length + 1).Replace('\', '/')
+    $savedEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $tracked = (& git -C $Repo ls-files -- $rel 2>$null | Out-String).Trim()
+        $lsRc = $LASTEXITCODE
+        & git -C $Repo check-ignore -q --no-index -- $rel 2>$null | Out-Null
+        $ignRc = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $savedEap
+    }
+    if ($lsRc -ne 0 -or ($ignRc -ne 0 -and $ignRc -ne 1)) { return "git could not say whether '$full' is tracked or ignored in '$Repo'" }
+    if ($tracked -ne "") { return "'$full' is a file git tracks: the key is never committed (design record 19); remove it from the index and the history" }
+    if ($ignRc -ne 0) { return "'$full' is not ignored by git, so a commit could take it: scripts\local\ is git-ignored, and nothing there may be un-ignored" }
+    return ""
 }
 
 function Get-TestSignCertificate {

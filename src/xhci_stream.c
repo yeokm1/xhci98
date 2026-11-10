@@ -115,8 +115,8 @@ ULONG XhciStreamPlan(ULONG requested, ULONG exponent, ULONG hcEntries,
     if (want > limit - 1UL) {
         want = limit - 1UL;
     }
-    /* Stream ID 0 is reserved (4.12.2, "to verify" in the transcription):
-     * one entry more than the streams served. */
+    /* Stream ID 0 is reserved (4.12, p.219; 6.2.4, p.421): one entry more
+     * than the streams served. */
     entries = XHCI_STREAM_MIN_ENTRIES;
     while (entries < want + 1UL) {
         entries <<= 1;
@@ -253,7 +253,7 @@ ULONG XhciStreamEndpointContext(volatile ULONG *context, ULONG maxPStreams,
     dw0 &= ~(XHCI_STREAM_EP_MAXPSTREAMS_MASK | XHCI_STREAM_EP_LSA);
     dw0 |= (maxPStreams << 10) | XHCI_STREAM_EP_LSA;
     context[0] = dw0;
-    /* DCS is the array's, not a ring's: 0 (Table 6-10, "to verify"). */
+    /* DCS "shall be '0' if MaxPStreams > '0'" (Table 6-10, p.416). */
     context[2] = arrayPA;
     context[3] = 0;
     return XHCI_STREAM_OK;

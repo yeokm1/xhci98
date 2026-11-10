@@ -51,6 +51,12 @@ SOURCES=..\net_frame.c \
         n5_main.c      \
         xhcinet.rc
 
+# The deferred upcalls' queues of 98 SE and ME (record 35 section 7.8):
+# the x86 image alone, so the x64 one is unchanged by them.
+!IF "$(_BUILDARCH)" != "AMD64"
+SOURCES=$(SOURCES) ..\net_upq.c
+!ENDIF
+
 !IF "$(XHCI_EXTRA_DEFINES)" != ""
 !ERROR XHCI_EXTRA_DEFINES is set, and xhcinet.sys has no diagnostic builds. Clear it before building.
 !ENDIF

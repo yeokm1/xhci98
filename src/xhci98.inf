@@ -49,7 +49,7 @@ ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
 Provider=%Provider%
 LayoutFile=layout.inf
 ; Must equal src\xhci_version.h.
-DriverVer=11/08/2026,3.4.2.0
+DriverVer=11/10/2026,3.4.3.0
 
 [Manufacturer]
 %Mfg%=XhciModels,NTx86.6.0
@@ -286,6 +286,10 @@ HKR,,XhciAcpiTables,0x00010003,1
 HKR,,XhciUsb2Bos,0x00010003,1
 HKR,,XhciResumeKeep,0x00010003,1
 HKR,,XhciLinkKeep,0x00010003,1
+; A SuperSpeed link that keeps failing sent to USB 2.0 (issue 29, design
+; record 13 section 21): 1, the default, sends it; 0 gives it up after the
+; same count. Absent, or anything but a DWORD 0, is 1 (src\hcd_ctl.c).
+HKR,,XhciSsFlapFallback,0x00010003,1
 ; The event ring's size (task 47.30; design record 13 section 11.10): 1024
 ; the larger ring, 256 the one-page ring of the releases before it.
 ; Absent, or any other value, is 1024 (src\hcd_ctl.c).
@@ -295,6 +299,15 @@ HKR,,XhciEventRingTrbs,0x00010003,1024
 ; where the bus offers it as Bulk-Only; 0 the one devnode of the releases
 ; before. Absent, or anything but a DWORD 0, is 1 (src\hcd_ctl.c).
 HKR,,XhciBulkOnlyOwnId,0x00010003,1
+; The staging pool's budget in KiB (task 48.33; design record 13 section
+; 11.11.1), from 256 to 16384: every transfer's data passes through
+; buffers of the driver's own. Absent reads as 2048 (src\hcd_ctl.c).
+HKR,,XhciStagePoolKiB,0x00010003,2048
+; Every transfer's data staged through buffers of the driver's own (task
+; 48.33; design record 13 section 11.11): 1; 0, the default, maps the
+; programs' own buffers for the controller, as 3.4.2.0 did. Absent reads
+; as 0, any other DWORD as 1 (src\hcd_ctl.c).
+HKR,,XhciDmaStaging,0x00010003,0
 ; Linux's xHCI controller quirks (roadmap-hcd task 38.10; design record 20
 ; section 6.1): 0 off, 1 Linux's listed controllers, 2 every controller
 ; where the record offers it. Absent reads as the default written here.
@@ -415,6 +428,10 @@ HKR,,XhciAcpiTables,0x00010003,1
 HKR,,XhciUsb2Bos,0x00010003,1
 HKR,,XhciResumeKeep,0x00010003,1
 HKR,,XhciLinkKeep,0x00010003,1
+; A SuperSpeed link that keeps failing sent to USB 2.0 (issue 29, design
+; record 13 section 21): 1, the default, sends it; 0 gives it up after the
+; same count. Absent, or anything but a DWORD 0, is 1 (src\hcd_ctl.c).
+HKR,,XhciSsFlapFallback,0x00010003,1
 ; The event ring's size (task 47.30; design record 13 section 11.10): 1024
 ; the larger ring, 256 the one-page ring of the releases before it.
 ; Absent, or any other value, is 1024 (src\hcd_ctl.c).
@@ -424,6 +441,15 @@ HKR,,XhciEventRingTrbs,0x00010003,1024
 ; where the bus offers it as Bulk-Only; 0 the one devnode of the releases
 ; before. Absent, or anything but a DWORD 0, is 1 (src\hcd_ctl.c).
 HKR,,XhciBulkOnlyOwnId,0x00010003,1
+; The staging pool's budget in KiB (task 48.33; design record 13 section
+; 11.11.1), from 256 to 16384: every transfer's data passes through
+; buffers of the driver's own. Absent reads as 2048 (src\hcd_ctl.c).
+HKR,,XhciStagePoolKiB,0x00010003,2048
+; Every transfer's data staged through buffers of the driver's own (task
+; 48.33; design record 13 section 11.11): 1; 0, the default, maps the
+; programs' own buffers for the controller, as 3.4.2.0 did. Absent reads
+; as 0, any other DWORD as 1 (src\hcd_ctl.c).
+HKR,,XhciDmaStaging,0x00010003,0
 ; Linux's xHCI controller quirks (roadmap-hcd task 38.10; design record 20
 ; section 6.1): 0 off, 1 Linux's listed controllers, 2 every controller
 ; where the record offers it. Absent reads as the default written here.

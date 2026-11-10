@@ -202,26 +202,41 @@ typedef struct _XHCI_PIPE_EP {
     /* The interval cap (35-T.7, hcd_cfg.c hcdCfgTolerance) lowered
      * Interval. */
     ULONG Capped;
+    /* Task 48.21: wMaxPacketSize 10:0 as the device declared it, and
+     * whether MaxPacketSize is a size the speed's table lists
+     * (XHCI_PIPE_MPS_*; XhciPipeEndpointParams). */
+    ULONG MpsDeclared;
+    ULONG MpsOutside;
 } XHCI_PIPE_EP, *PXHCI_PIPE_EP;
+
+/* XHCI_PIPE_EP.MpsOutside. */
+#define XHCI_PIPE_MPS_LISTED    0UL /* a size the speed's table lists      */
+#define XHCI_PIPE_MPS_UNLISTED  1UL /* under the maximum, not listed: as
+                                     * declared                            */
+#define XHCI_PIPE_MPS_CLAMPED   2UL /* above the maximum: the maximum      */
 
 /*
  * The Endpoint Context fields for one endpoint descriptor of a device at
  * `speed` (XHCI_PIPE_SPEED_*). XHCI_PIPE_MALFORMED for a descriptor that is
  * not an endpoint descriptor of at least 7 bytes, an endpoint number of 0, a
- * Max Packet Size above 1024, or of 0 on anything but an isochronous
- * endpoint (a zero-size isochronous one is a zero-bandwidth endpoint and is
- * accepted, Max ESIT Payload 0: XhciPipeZeroBandwidth), a high-bandwidth
- * count of 3 (bits
- * 12:11 = 11b, reserved), or a Max Packet Size its speed and type do not
- * allow (USB 2.0 5.6.3, 5.7.3, 5.8.3, Table 9-14: LS interrupt <= 8; FS
- * interrupt <= 64; FS bulk 8, 16, 32 or 64; FS isochronous <= 1023; HS bulk
- * 512; HS interrupt and isochronous 1-1024, 513-1024 with one additional
- * transaction and 683-1024 with two); XHCI_PIPE_UNSUPPORTED for a
- * non-default control endpoint, any speed but Full, Low and High, and a
- * Low-Speed bulk or isochronous endpoint (the speed and type refusals come
- * first, so an LS bulk endpoint is UNSUPPORTED whatever its size). Clamps an
- * out-of-range bInterval to Table 6-12's range and says so in
- * IntervalClamped.
+ * Max Packet Size of 0 on anything but an isochronous endpoint (a zero-size
+ * isochronous one is a zero-bandwidth endpoint and is accepted, Max ESIT
+ * Payload 0: XhciPipeZeroBandwidth) or on one with additional transactions,
+ * or a high-bandwidth count of 3 (bits 12:11 = 11b, reserved);
+ * XHCI_PIPE_UNSUPPORTED for a non-default control endpoint, any speed but
+ * Full, Low and High, and a Low-Speed bulk or isochronous endpoint (the speed
+ * and type refusals come first, so an LS bulk endpoint is UNSUPPORTED
+ * whatever its size). Clamps an out-of-range bInterval to Table 6-12's range
+ * and says so in IntervalClamped.
+ *
+ * A Max Packet Size outside the speed's table (USB 2.0 5.6.3, 5.7.3, 5.8.3,
+ * Table 9-14: LS interrupt <= 8; FS interrupt <= 64; FS bulk 8, 16, 32 or
+ * 64; FS isochronous <= 1023; HS bulk 512; HS interrupt and isochronous
+ * 1-1024, 513-1024 with one additional transaction and 683-1024 with two) is
+ * accepted since task 48.21: above the speed and type's maximum (8, 64,
+ * 1023, 512 or 1024 as listed) it is programmed as that maximum
+ * (XHCI_PIPE_MPS_CLAMPED), under it as declared (XHCI_PIPE_MPS_UNLISTED);
+ * MpsDeclared keeps the descriptor's value.
  */
 ULONG XhciPipeEndpointParams(const UCHAR *endpoint, ULONG speed,
                              PXHCI_PIPE_EP ep);
@@ -928,6 +943,56 @@ ULONG XhciPipeBusInformation(ULONG level, ULONG totalBandwidth,
  */
 ULONG XhciPipeTopologyAddress(ULONG pciBus, ULONG pciAddress, ULONG rootPort,
                               ULONG route, UCHAR *out);
+
+/* URB_FUNCTION_SELECT_INTERFACE (Windows 2000 DDK inc\usbdi.h). */
+#define XHCI_PIPE_URB_SELECT_INTERFACE          0x0001UL
+
+/*
+ * What the dispatch does with a URB whose UrbHeader.Length is
+ * `headerLength`, `least` being the end of the last field the bus reads
+ * for its function (hcd_urb.c, hcdUrbMinLength): XHCI_PIPE_URB_SERVE when
+ * headerLength is at least `least`, XHCI_PIPE_URB_SERVE_SHORT below it -
+ * counted and served all the same, for every function (owner,
+ * 2026-11-10). usbport does not hold a URB to its header's Length, and
+ * 3.4.1.0 did not either; 3.4.2.0 refused a short one, and Windows 2000's
+ * usbaudio.sys, whose streaming select states 0 there, played nothing
+ * (GitHub issue 32). No answer is a refusal: a part whose only bound the
+ * header was is bounded by its own lengths where it is read (a select's
+ * interface information, XhciPipeSelectListBytes; the isochronous packet
+ * table, hcd_urb.c hcdIsochRequest).
+ */
+#define XHCI_PIPE_URB_SERVE                     0UL
+#define XHCI_PIPE_URB_SERVE_SHORT               1UL
+ULONG XhciPipeUrbHeaderCheck(ULONG headerLength, ULONG least);
+
+/*
+ * The bytes of a SELECT_CONFIGURATION's interface information list, from
+ * its first entry at `listOffset` in the URB, that a configuration's walk
+ * may read: the URB's Length past that offset (`headerLength`), or the
+ * first entry's own Length (`firstLength`) when that is the larger and
+ * covers the `fixed` bytes before the pipes. So the first entry is always
+ * bounded by its own Length, as usbport reads it, and a header too short
+ * for it - even 0 - still names it; later entries end at the header. A
+ * first Length below `fixed` with a header short of it gives the header's
+ * bytes (possibly 0), which the walk refuses.
+ */
+ULONG XhciPipeSelectListBytes(ULONG headerLength, ULONG listOffset,
+                              ULONG firstLength, ULONG fixed);
+
+/*
+ * A SELECT_INTERFACE's interface named from its USBD_INTERFACE_INFORMATION
+ * at `info`: its Length, the first two bytes (a little-endian USHORT), into
+ * *length, and only when that Length covers the `fixed` bytes before the
+ * pipes (the caller's FIELD_OFFSET) the InterfaceNumber and
+ * AlternateSetting, bytes 2 and 3, into *number and *alternate;
+ * XHCI_PIPE_OK. A Length below `fixed` is XHCI_PIPE_REFUSED with nothing
+ * past the first two bytes read and *number and *alternate untouched: with
+ * the header's Length not a bound (XhciPipeUrbHeaderCheck), the interface
+ * Length is all that says how far the caller's buffer reaches. NULL
+ * pointers or `fixed` below 4: XHCI_PIPE_BAD_PARAM.
+ */
+ULONG XhciPipeSelectIfaceName(const UCHAR *info, ULONG fixed, PULONG length,
+                              PULONG number, PULONG alternate);
 /* The endpoint policy's speed (XHCI_PIPE_SPEED_*) for a device's own speed
  * class (xhci.h XHCI_SPEED_*), as decoded from its Slot Context's Protocol
  * Speed ID - on a root port and behind hubs alike, the device's speed and

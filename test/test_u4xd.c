@@ -331,6 +331,10 @@ static void lpStart(LP *lp, int port, unsigned long uuid0, int live)
  * fabric's own (test_asm_no_e2e). */
 static ULONG g_hostCs0;
 
+/* The host router's baMaxHI (Buffer Allocation index 5) for the next
+ * setup(), 0 for none (test_credit_clamp). */
+static ULONG g_hostBaHi;
+
 static void setup(int net, int bonding)
 {
     TBT_U4_CONFIG c;
@@ -341,6 +345,9 @@ static void setup(int net, int bonding)
     fabHostMinimal(&g_fab);
     if (g_hostCs0 != 0) {
         g_fab.R[0].Rcs[0] = g_hostCs0;
+    }
+    if (g_hostBaHi != 0) {
+        g_fab.R[0].BaData[g_fab.R[0].BaLen++] = TBT_BA_MAX_HI | (g_hostBaHi << 16);
     }
     g_fab.R[0].Rcs[7] = OUR_UUID0;
     g_fab.R[0].Rcs[8] = 0x55667788UL;
@@ -588,6 +595,7 @@ static void test_low_bonded_service(void)
     CHECK_EQ(portState(1), TBT_U4_XDOMAIN, "ERR_ENUM with XhciCmNet 1: XDOMAIN");
     CHECK_EQ(portWhy(1), TBT_U4_WHY_XDOMAIN, "its reason");
     CHECK(pumpUntilUp(lp, 300), "the service came up");
+    pump(50);                   /* each end's re-read, record 35 section 3.18 */
     ours = TbtU4Peer(&g_cm, 1);
     CHECK(ours != NULL, "the peer record");
     if (ours == NULL) {
@@ -656,6 +664,61 @@ static void test_low_bonded_service(void)
     CHECK_EQ(pid(1), 0, "the Inter-Domain bit cleared");
     CHECK_EQ(hostLane(1, 0) & 0x30UL, 0x10UL, "Target Link Width back to single");
     CHECK_EQ(hostLane(1, 0) & 0x8000UL, 0, "no Lane Bonding left");
+}
+
+/* Record 35 section 5.1: the receive entry's Initial Credits is 7 bits
+ * (Spec Table 8-23), so a host router whose baMaxHI and lane exceed it gets
+ * 127, never the figure truncated into the field (128 would write 0, 600
+ * would write 88); the clamp is logged once, with the figure clamped. The
+ * host lane 0 is given 1000 Total Buffers, so the lesser is baMaxHI up to
+ * there; at 0xFFFF the lesser is the lane's spare, between 128 and 1000. */
+static void creditClamp(unsigned long baHi, unsigned long want, int clamped)
+{
+    LP *lp = &g_lp[0];
+    const TBT_XDP_PEER *ours;
+    FAB_ADP *ad;
+    int lane;
+
+    g_hostBaHi = baHi;
+    setup(1, 0);
+    g_hostBaHi = 0;
+    lane = fabPortLane0(&g_fab, 1);
+    ad = &g_fab.R[0].Adp[lane];
+    ad->Cs[4] = (ad->Cs[4] & ~(0x3FFUL << 20)) | (1000UL << 20);
+    g_fab.Watch = "cm.net.credits.clamp";
+    g_fab.WatchCount = 0;
+    TbtU4NetWanted(&g_cm, TRUE, 7);
+    plug(lp, 0x00002222UL, 1);
+    CHECK(pumpUntilUp(lp, 300), "credits: the service came up");
+    CHECK_EQ(g_cm.Ports[0].HostBaHi, baHi, "credits: baMaxHI read");
+    ours = TbtU4Peer(&g_cm, 1);
+    CHECK(ours != NULL, "credits: the peer record");
+    if (ours == NULL) {
+        return;
+    }
+    CHECK_EQ((entry(lane, (int)ours->RxHop, 0) >> 17) & 0x7FUL, want,
+             "credits: the receive entry's Initial Credits");
+    CHECK_EQ(g_fab.WatchCount, clamped ? 1UL : 0UL, "credits: the clamp logged once or not");
+    if (clamped && g_fab.WatchCount != 0) {
+        CHECK_EQ(g_fab.WatchValue[0] >> 16, 1, "credits: the clamp's port");
+        if (baHi < 1000) {
+            CHECK_EQ(g_fab.WatchValue[0] & 0xFFFFUL, baHi, "credits: baMaxHI the figure");
+        } else {
+            CHECK((g_fab.WatchValue[0] & 0xFFFFUL) > 127 &&
+                  (g_fab.WatchValue[0] & 0xFFFFUL) < 1000, "credits: the lane's spare the figure");
+        }
+    }
+    unplug(lp);
+    pump(2);
+    CHECK_EQ(portState(1), TBT_U4_EMPTY, "credits: EMPTY");
+}
+
+static void test_credit_clamp(void)
+{
+    creditClamp(127, 127, 0);
+    creditClamp(128, 127, 1);
+    creditClamp(600, 127, 1);
+    creditClamp(0xFFFFUL, 127, 1);
 }
 
 /* The higher UUID (BOND_HIGH): the peer asks, this side sets its Target
@@ -1207,6 +1270,7 @@ int main(void)
 {
     RUN_VEC(test_off);
     RUN_VEC(test_low_bonded_service);
+    RUN_VEC(test_credit_clamp);
     RUN_VEC(test_asm_no_e2e);
     RUN_VEC(test_asm_replug_pp);
     RUN_VEC(test_pp_stuck_other);

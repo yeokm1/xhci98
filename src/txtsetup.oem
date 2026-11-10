@@ -20,17 +20,22 @@
 # txtsetup.sif's own hardware-id table, with usbd.sys, hidclass.sys and
 # hidparse.sys loaded from Setup's own source; none of them is on this disk.
 #
-# Windows 2000 has a second option, XHCI98W2K (design record 13 section
-# 5.6, limit 7). Its text mode lays down hidusb.sys and usbstor.sys for a
-# USB keyboard, mouse or stick but not usbd.sys, hidclass.sys or
-# hidparse.sys, which they import, and the first GUI-mode boot stops with
-# STOP c000026c. The option is XHCI98's lines and ids plus those three
-# files, which the package never carries: the user copies USBD.SY_,
-# HIDCLASS.SY_ and HIDPARSE.SY_ from the Windows 2000 CD's I386 folder to
-# this disk's root (disk d2, tagged by usbd.sy_; Setup expands them).
-# Text mode reads every disk of an option from drive A: and asks for a
-# missing one there with no way past it but F3, so the files cannot come
-# from the CD drive, and XP keeps the XHCI98 option, which never asks.
+# A second option, XHCI98W2K, takes three files from the CD (design record
+# 13 section 5.6, limit 7). Windows 2000's text mode lays down hidusb.sys
+# and usbstor.sys for a USB keyboard, mouse or stick but not usbd.sys,
+# hidclass.sys or hidparse.sys, which they import, and the first GUI-mode
+# boot stops with STOP c000026c. XP's lays down hidusb.sys and kbdhid.sys
+# without them too; its first GUI-mode boot does not stop, but a USB
+# keyboard has no driver until Installing Devices ends, and that waits at
+# the unsigned-driver question for a key (task 48.25). The option is
+# XHCI98's lines and ids plus those three files, which the package never
+# carries: the user copies USBD.SY_, HIDCLASS.SY_ and HIDPARSE.SY_ from the
+# I386 folder of the Windows 2000 or XP CD being installed to this disk's
+# root (disk d2, tagged by usbd.sy_; Setup expands them). Its id is from
+# when it was Windows 2000's alone. Text mode reads every disk of an option
+# from drive A: and asks for a missing one there with no way past it but
+# F3, so the files cannot come from the CD drive; XHCI98, which never asks,
+# stays the default.
 # setupldr refuses a driver line without a service key, and setupdd makes
 # a service for each (group SCSI miniport, Start 0); the [Config.*]
 # sections set those three to Start 3, so nothing loads them as services -
@@ -61,14 +66,14 @@
 
 [Disks]
 d1 = "xHCI98 USB 3 Driver Disk (32-bit)", \xhci98.sys, \
-d2 = "USBD.SY_ HIDCLASS.SY_ HIDPARSE.SY_ from the 32-bit Windows 2000 CD", \usbd.sy_, \
+d2 = "USBD.SY_ HIDCLASS.SY_ HIDPARSE.SY_ from the 32-bit Windows 2000/XP CD", \usbd.sy_, \
 
 [Defaults]
 scsi = XHCI98
 
 [scsi]
 XHCI98 = "xHCI98 USB 3 Controller (32-bit Windows 2000/XP)"
-XHCI98W2K = "xHCI98 USB 3 Controller (32-bit Windows 2000, files from CD)"
+XHCI98W2K = "xHCI98 USB 3 Controller (2000/XP, USB keyboard/mouse, files from CD)"
 
 [Files.scsi.XHCI98]
 driver = d1, xhci98.sys, xhci98

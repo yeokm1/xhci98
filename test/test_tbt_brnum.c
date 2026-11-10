@@ -2103,6 +2103,93 @@ static VOID test_pad_nested(VOID)
     CHECK_EQ(r.Padded, 2, "nested: two padded, the nested one not");
 }
 
+/*
+ * Design record 34 section 3.3.7 item 4 (task 48.31): a chain port
+ * numbered as the range and window bridge, its member the interrupt
+ * anchor, a function's pin rotated by the path from the member's secondary
+ * bus to the chain port (here the dock's upstream port, device 0, and the
+ * chain port, device 1: a rotation of 1).
+ */
+#define CHAINP   XHCI_TBT_BDF(0x07, 1, 0)
+
+static VOID mchaindock(PULONG port, PULONG usp, PULONG cp)
+{
+    mreset();
+    ioreset(TRUE);
+    *port = mport(0x06, 0x2A);
+    m.N[*port].Intr = 0x0000010AUL;
+    *usp = madd(*port, 0, 0, ID_ASM, 1, 0);
+    m.N[*usp].Buses = (0x10UL << 16) | (0x07UL << 8) | 0x06UL;
+    *cp = madd(*usp, 1, 0, ID_ASM, 1, 0);
+    m.N[*cp].Buses = (0x10UL << 16) | (0x08UL << 8) | 0x07UL;
+}
+
+static VOID test_chain_at(VOID)
+{
+    XHCI_TBT_BRNUM r;
+    ULONG port, usp, cp, nvme, cusp, cdsp, cnvme;
+
+    /* A chained endpoint with no switch: INTD rotated by 1 reaches the
+     * member as INTA, so it takes the member's line. */
+    mchaindock(&port, &usp, &cp);
+    nvme = madd(cp, 0, 0, ID_EMU, 0, 0);
+    m.N[nvme].Intr = 0x00000400UL;
+    CHECK_EQ(XhciTbtNumberBridgesAt(&io, CHAINP, PORT, 1, XHCI_TBT_BRNUM_F_IRQ,
+                                    NULL, NULL, &r),
+             XHCI_TBT_BRNUM_NONE, "at a chain port: an endpoint alone, NONE");
+    CHECK_EQ(r.IrqLine, 10, "the member's line read");
+    CHECK_EQ(r.IrqPin, 1, "the member's pin read");
+    CHECK_EQ(m.N[nvme].Intr, 0x0000040AUL, "INTD rotated by 1: the member's INTA, line 10");
+    CHECK_EQ(m.N[cp].Buses, (0x10UL << 16) | (0x08UL << 8) | 0x07UL,
+             "the chain port's buses untouched");
+    CHECK_EQ(m.N[usp].Buses, (0x10UL << 16) | (0x07UL << 8) | 0x06UL,
+             "the dock's untouched");
+    /* The same function with no rotation, and INTA with rotation 1: on
+     * another pin of the member's, left alone. */
+    mchaindock(&port, &usp, &cp);
+    nvme = madd(cp, 0, 0, ID_EMU, 0, 0);
+    m.N[nvme].Intr = 0x00000400UL;
+    CHECK_EQ(XhciTbtNumberBridgesAt(&io, CHAINP, PORT, 0, XHCI_TBT_BRNUM_F_IRQ,
+                                    NULL, NULL, &r),
+             XHCI_TBT_BRNUM_NONE, "no rotation");
+    CHECK_EQ(m.N[nvme].Intr, 0x00000400UL, "INTD unrotated: another pin, left alone");
+    CHECK_EQ(r.IrqOther, 1, "counted as another pin");
+    mchaindock(&port, &usp, &cp);
+    nvme = madd(cp, 0, 0, ID_EMU, 0, 0);
+    m.N[nvme].Intr = 0x00000100UL;
+    (VOID)XhciTbtNumberBridgesAt(&io, CHAINP, PORT, 1, XHCI_TBT_BRNUM_F_IRQ, NULL,
+                                 NULL, &r);
+    CHECK_EQ(m.N[nvme].Intr, 0x00000100UL, "INTA rotated by 1: INTB, left alone");
+    /* A chained ASM2464 numbered inside the chain port's range, its lines
+     * by the rotated rule. */
+    mchaindock(&port, &usp, &cp);
+    cusp = madd(cp, 0, 0, ID_ASM, 1, 0);
+    cdsp = madd(cusp, 0, 0, ID_ASM, 1, 0);
+    cnvme = madd(cdsp, 0, 0, ID_NVME, 0, 0);
+    m.N[cusp].Intr = 0x00000400UL;
+    m.N[cdsp].Intr = 0x00000400UL;
+    m.N[cnvme].Intr = 0x00000400UL;
+    CHECK_EQ(XhciTbtNumberBridgesAt(&io, CHAINP, PORT, 1, XHCI_TBT_BRNUM_F_IRQ,
+                                    NULL, NULL, &r),
+             XHCI_TBT_BRNUM_DONE, "a chained switch numbered");
+    CHECK_EQ(m.N[cusp].Buses, 0x000A0908UL, "its upstream port 08/09/0A, inside 08 to 10");
+    CHECK_EQ(m.N[cdsp].Buses, 0x000A0A09UL, "its downstream port 09/0A/0A");
+    CHECK_EQ(mbus(cnvme), 0x0A, "its NVMe reachable: 0A");
+    CHECK_EQ(m.N[cp].Buses, (0x10UL << 16) | (0x08UL << 8) | 0x07UL,
+             "the chain port's own buses untouched");
+    CHECK_EQ(r.IrqOutcome, XHCI_TBT_BRIRQ_DONE, "lines given");
+    CHECK_EQ(m.N[cnvme].Intr, 0x0000040AUL, "the chained NVMe: line 10");
+    CHECK_EQ(m.N[cusp].Intr, 0x0000040AUL, "its upstream port: line 10");
+    /* XhciTbtNumberBridges is the same with the anchor the range and no
+     * rotation: the chain port's own pin then (none here). */
+    mchaindock(&port, &usp, &cp);
+    nvme = madd(cp, 0, 0, ID_EMU, 0, 0);
+    m.N[nvme].Intr = 0x00000100UL;
+    CHECK_EQ(XhciTbtNumberBridges(&io, CHAINP, XHCI_TBT_BRNUM_F_IRQ, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_NONE, "the old entry at a chain port");
+    CHECK_EQ(r.IrqOutcome, XHCI_TBT_BRIRQ_PORT_NONE, "a chain port with no line of its own");
+}
+
 int main(void)
 {
     test_p14s_orico();
@@ -2128,6 +2215,7 @@ int main(void)
     test_pad_buses();
     test_pad_memory();
     test_pad_nested();
+    test_chain_at();
     printf("test_tbt_brnum: %d checks, %d failures\n", checks, failures);
     return failures;
 }

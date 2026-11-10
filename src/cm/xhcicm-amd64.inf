@@ -24,7 +24,7 @@ Class=System
 ClassGUID={4D36E97D-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
 ; Must equal src\xhci_version.h.
-DriverVer=11/08/2026,3.4.2.0
+DriverVer=11/10/2026,3.4.3.0
 ; Made and test-signed by the packager alone (design record 19).
 CatalogFile=xhcicm.cat
 
@@ -214,6 +214,13 @@ HKR,,XhciCmNetPollMs,0x00010003,1
 HKR,,XhciCmNetRxFrames,0x00010003,128
 HKR,,XhciCmNetTxFrames,0x00010003,128
 HKR,,XhciCmNetE2E,0x00010003,1
+; Record 35 section 5.5 (task 48.38): the data ring's interrupt, where
+; XhciCmRingInterrupt's is connected and proven; 0 keeps the poll alone.
+HKR,,XhciCmNetInterrupt,0x00010003,1
+; Record 22 section 7.6.2 (task 48.43): 1 lets an eject close the PCIe
+; tunnel of a device attached at start on a host that does not map its
+; ports, by an inferred port cross-checked twice; 0 never infers.
+HKR,,XhciCmInferAtStart,0x00010003,0
 ; Written since task 45.50 (record 21 section 8.1), each at the driver's
 ; default: the tunnel ports' override, whose "auto" is the driver's own
 ; finding (a REG_SZ; a list of bb:dd.f bridges replaces it), the ASM4242
@@ -224,6 +231,7 @@ HKR,,XhciCmTunnelBridge,0x00000002,"auto"
 HKR,,XhciCmAsmediaPcie7Credits,0x00010003,0
 HKR,,XhciCmUsb4V2,0x00010003,1
 HKR,,XhciCmGen4LinkRecovery,0x00010003,1
+HKR,,XhciCmSleepEntry,0x00010003,1
 ; The platform's USB4 handover on an ASM4242 (design record 32 sections
 ; 12.8.6, 12.8.15.10 and 12.8.15.17, task 46.12): its master switch and
 ; the structural tier (which applies to the read path alone), read on

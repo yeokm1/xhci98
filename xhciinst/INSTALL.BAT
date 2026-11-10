@@ -38,7 +38,10 @@ if "%1"=="/console" goto console98
 if "%1"=="/Console" goto console98
 if "%1"=="/CONSOLE" goto console98
 if not exist TOOLS\XHCIINST\XHCIWIZ.EXE goto nodir
-TOOLS\XHCIINST\XHCIWIZ.EXE %1 %2 %3 %4 %5 %6 %7 %8 %9
+rem COMMAND.COM does not wait for a Windows program: its ERRORLEVEL would
+rem be its own, 0, while the window is still open. START /W waits for the
+rem window and passes its exit code on.
+start /w TOOLS\XHCIINST\XHCIWIZ.EXE %1 %2 %3 %4 %5 %6 %7 %8 %9
 set XDIR=
 goto end
 

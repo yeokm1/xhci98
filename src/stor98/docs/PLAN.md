@@ -748,7 +748,7 @@ the timer and interrupts active throughout.
 
 | # | Item | Source |
 |---|---|---|
-| 3.1 | PnP-constrained discovery (only the supplied function); `ConfigInfo` bus/slot consistent. **9x (xhci98 3.4.1.0, its roadmap 46.1):** `HwFindAdapter` takes only the function whose devnode the port is starting, one adapter per call (`Again` FALSE), and never the NT4-style `HwContext` scan from bus 0, which brought up the first NVMe function it met: on a board whose Windows ran from an internal NVMe drive through the BIOS's INT 13h, a tunnelled drive's load reset that drive and the start stopped at "Initing stor98.mpd". The function is named by the port's first access range, the devnode's memory resource (G9: 98 SE gives `ConfigInfo` the devnode's bus, slot and BAR): it is the NVMe function one of whose memory BARs (both dwords when 64-bit) lies at that range's start - not always BAR0: on the owner's board 98 SE gave an SK hynix drive's second memory BAR, 16 KiB above BAR0, as the first range (the `StorFind` report below), and BARs of different functions never share an address (`PciScanIsPortFunction`, `src/pciscan.h`, host test `pciscan_ut`). `ConfigInfo`'s bus and slot are probed first; when they do not hold it, every bus is walked (3.4) for it, and nothing else is taken. No range from the port (start 0) names no function: `SP_RETURN_NOT_FOUND`, nothing touched. **A controller already set up** (xhci98 3.4.1.0, owner 2026-11-02): before anything else is done to the found function (before `HwLocateRegisters` turns decode off to size BAR0), its command register and CC and CSTS are read through its BAR0; it is taken only with CC.EN 0 and CSTS.RDY 0. Enabled or ready in either combination, all ones, registers not reached, or a command register not put back: `SP_RETURN_NOT_FOUND` (`PciScanFirmwareState`, `src/pciscan.h`). **Memory decode off is no exemption** (xhci98 3.4.2.0, its roadmap 47.9, from the review of the whole 3.4.1.0 code, owner 2026-11-05): 3.4.1.0 took a function with decode off unread, so a controller a firmware left enabled with decode off would have been taken and reset. With decode on nothing is written. With decode off, BAR0 is reached only when it is a memory BAR at a nonzero address below 4 GiB and is the port's access range itself (the devnode's first memory resource, at least a page long; the port gives one range, so when it names another BAR, BAR0's allocation is unproven) (`PciScanFirmwareReach`); its page is mapped; then only the command register is written: decode on with every other bit as found (one 16-bit write at 04h, Status untouched), read back on before CC and CSTS are read, and after every such write, whatever it gave, the word as found written back and read back - not reading back as found is a refusal (`PciScanReadFirmware`, the host test `pciscan_ut` holding the sequence with fake operations). Weighed: a missing, high or I/O BAR0 with decode off is refused (`HwLocateRegisters` fails such a function anyway, after writing it); all ones with decode turned on is refused, as with decode on as found since 3.4.1.0, accepting that a path that began to forward only between the find and `HwInitialize`'s first read would have run before (no such path is known; 9x starts a devnode after its parent bridges, and a later start reads it afresh; no retry); a port range naming another BAR with decode off is refused (residual: such a drive is left at Code 10 where it was taken). Read on 98 SE in the emulator: the tunnelled drive found with decode on at power-on (`cmd 0107`) and after it was unplugged and plugged in again (`cmd 0006`). `StorFind` adds "decode on for the read" or "decode off, not read" when decode was found off, "left: command not restored", and "reach <n>" (`PCISCAN_REACH_*`) when BAR0 was not reached; debug-port stage `0x0A` carries the read, decode turned on, not put back and the reason in bits 24-29. A test image (`STOR98_TEST_FWDECODEOFF`, 9x debug-port builds only) turns decode off before the check and records the command word after it (stage `0x0B`). On the owner's board the BIOS served a tunnelled drive through INT 13h (its boot menu listed it; declined, it kept a drive letter through the real-mode mapper), the port called `HwAdapterState(FALSE)` during start, and the controller this driver had reset could not be given back (`FALSE` restores nothing, it stops): the start hung. This is a refusal of a controller someone else initialised, not proof that the BIOS will use it again, and not a firmware handoff: a real handoff would have to rebuild the BIOS's I/O queues, which no register holds. Such a drive runs through the BIOS (compatibility mode) and Stor98's devnode shows Code 10; a drive plugged in after start is not set up and is taken. Possible false positive: firmware that leaves a controller it never uses again enabled (to be read on the P14s, whose power-on drive ran under Stor98). The boot-time `FALSE` caller is still unidentified (G9: handoff beyond the load's `TRUE` not tested). Every 9x find writes what it saw as the REG_SZ value `StorFind` in `HKLM\System\CurrentControlSet\Services\stor98` (the port's bus, slot and first range, what its slot holds, where the function was found, the return; `PlatFindReport`). `RangeInMemory` is not relied on (an I/O range cannot equal a memory BAR's address). Residual: a devnode bound to Stor98 for the system disk itself (Stor98 on that devnode by the user's choice) is still brought up; the installer and the INF keep Stor98 off internal drives | N4; backport; xhci98 46.1 |
+| 3.1 | PnP-constrained discovery (only the supplied function); `ConfigInfo` bus/slot consistent. **9x (xhci98 3.4.1.0, its roadmap 46.1):** `HwFindAdapter` takes only the function whose devnode the port is starting, one adapter per call (`Again` FALSE), and never the NT4-style `HwContext` scan from bus 0, which brought up the first NVMe function it met: on a board whose Windows ran from an internal NVMe drive through the BIOS's INT 13h, a tunnelled drive's load reset that drive and the start stopped at "Initing stor98.mpd". The function is named by the port's first access range, the devnode's memory resource (G9: 98 SE gives `ConfigInfo` the devnode's bus, slot and BAR): it is the NVMe function one of whose memory BARs (both dwords when 64-bit) lies at that range's start - not always BAR0: on the owner's board 98 SE gave an SK hynix drive's second memory BAR, 16 KiB above BAR0, as the first range (the `StorFind` report below), and BARs of different functions never share an address (`PciScanIsPortFunction`, `src/pciscan.h`, host test `pciscan_ut`). `ConfigInfo`'s bus and slot are probed first; when they do not hold it, every bus is walked (3.4) for it, and nothing else is taken. No range from the port (start 0) names no function: `SP_RETURN_NOT_FOUND`, nothing touched. **A controller already set up** (xhci98 3.4.1.0, owner 2026-11-02): before anything else is done to the found function (before `HwLocateRegisters` turns decode off to size BAR0), its command register and CC and CSTS are read through its BAR0; it is taken only with CC.EN 0 and CSTS.RDY 0. Enabled or ready in either combination, all ones, registers not reached, or a command register not put back: `SP_RETURN_NOT_FOUND` (`PciScanFirmwareState`, `src/pciscan.h`). **Memory decode off is no exemption** (xhci98 3.4.2.0, its roadmap 47.9, from the review of the whole 3.4.1.0 code, owner 2026-11-05): 3.4.1.0 took a function with decode off unread, so a controller a firmware left enabled with decode off would have been taken and reset. With decode on nothing is written. With decode off, BAR0 is reached only when it is a memory BAR at a nonzero address below 4 GiB and is the port's access range itself (the devnode's first memory resource, at least a page long; the port gives one range, so when it names another BAR, BAR0's allocation is unproven) (`PciScanFirmwareReach`); its page is mapped; then only the command register is written: decode on with every other bit as found (one 16-bit write at 04h, Status untouched), read back on before CC and CSTS are read, and after every such write, whatever it gave, the word as found written back and read back - not reading back as found is a refusal (`PciScanReadFirmware`, the host test `pciscan_ut` holding the sequence with fake operations). Weighed: a missing, high or I/O BAR0 with decode off is refused (`HwLocateRegisters` fails such a function anyway, after writing it); all ones with decode turned on is refused, as with decode on as found since 3.4.1.0, accepting that a path that began to forward only between the find and `HwInitialize`'s first read would have run before (no such path is known; 9x starts a devnode after its parent bridges, and a later start reads it afresh; no retry); a port range naming another BAR with decode off is refused (residual: such a drive is left at Code 10 where it was taken). Read on 98 SE in the emulator: the tunnelled drive found with decode on at power-on (`cmd 0107`) and after it was unplugged and plugged in again (`cmd 0006`). `StorFind` adds "decode on for the read" or "decode off, not read" when decode was found off, "left: command not restored", and "reach <n>" (`PCISCAN_REACH_*`) when BAR0 was not reached; debug-port stage `0x0A` carries the read, decode turned on, not put back and the reason in bits 24-29. A test image (`STOR98_TEST_FWDECODEOFF`, 9x debug-port builds only) turns decode off before the check and records the command word after it (stage `0x0B`). On the owner's board the BIOS served a tunnelled drive through INT 13h (its boot menu listed it; declined, it kept a drive letter through the real-mode mapper), the port called `HwAdapterState(FALSE)` during start, and the controller this driver had reset could not be given back (`FALSE` restores nothing, it stops): the start hung. This is a refusal of a controller someone else initialised, not proof that the BIOS will use it again, and not a firmware handoff: a real handoff would have to rebuild the BIOS's I/O queues, which no register holds. Such a drive runs through the BIOS (compatibility mode) and Stor98's devnode shows Code 10, unless the user's option takes it (xhci98 3.4.3.0, "Taking a controller the BIOS set up"); a drive plugged in after start is not set up and is taken. Possible false positive: firmware that leaves a controller it never uses again enabled (to be read on the P14s, whose power-on drive ran under Stor98). The boot-time `FALSE` caller is still unidentified (G9: handoff beyond the load's `TRUE` not tested). Every 9x find writes what it saw as the REG_SZ value `StorFind` in `HKLM\System\CurrentControlSet\Services\stor98` (the port's bus, slot and first range, what its slot holds, where the function was found, the return; `PlatFindReport`). `RangeInMemory` is not relied on (an I/O range cannot equal a memory BAR's address). Residual: a devnode bound to Stor98 for the system disk itself (Stor98 on that devnode by the user's choice) is still brought up; the installer and the INF keep Stor98 off internal drives | N4; backport; xhci98 46.1 |
 | 3.2 | Port/HAL interrupt routing on PnP targets; manual routing only where needed | N6; backport |
 | 3.3 | Full 64-bit BAR decoding, sizing with decode disabled | #13 |
 | 3.4 | **PCI config access only from permitted callbacks**. NT: `ScsiPortGetBusData` only in `HwFindAdapter` and `ScsiSetRunningConfig`, `ScsiPortSetBusDataByOffset` likewise; no raw mechanism #1 (CF8/CFC) access on NT, since it cannot be serialised against the HAL's config cycles on another processor. The base reads and writes the PCI command register from `HwInitialize` (src/nvme2k.c:925); that moves to `HwFindAdapter`. 9x: per G9. Return lengths (the helpers request 256 bytes and ignore the count, src/utils.c:752, 770, 788): request only the bytes needed from offset 0; a return of 0 (no such bus) or 2 (no function; only the invalid Vendor ID is returned) is "not found" and `HwFindAdapter` returns `SP_RETURN_NOT_FOUND`; a Vendor ID of 0xFFFF is the same; on a walk of the buses (9x, looking for the port's function when `ConfigInfo`'s bus and slot do not hold it, 3.1; the NT4-ABI `HwContext` scan before xhci98 3.4.1.0), each slot's Vendor ID is probed with a 4-byte read before the header is read, and the scan walks every bus number, 0 to 255 (`src/pciscan.h`; xhci98 3.3.0.0): the base stopped after bus 15, and a firmware numbers a hot-plug port's bus range far up (the emulator's asm4242 model gives its two USB4 ports buses 19h-48h and 49h-78h), so a drive tunnelled there was never found and its devnode stayed at problem 10 (98 SE in the emulator with the asm4242 model's bus ranges, xhci98's `docs/contributing/runs/run-44.md`, "44.45"); the found path resumes through the same walk, so a find at the last slot of bus 255 ends the scan (`Again` FALSE); read on 98 SE in the emulator, the scan from bus 0 to the drive on bus 35h took about 5 ms (the debug-port stages' TSC), so the whole 0-255 walk is a few tens of milliseconds there; the scan reads other slots, as the base's did, and on 9x such a read can return garbage (G9 recorded a Vendor ID of `003E` for a function that does not exist, in `HwFindAdapter`): a probe that does so leads only to the header read, whose checked length and class check decide as before; a short return makes every field beyond it unavailable, and a needed field that is unavailable fails `HwFindAdapter` with `SP_RETURN_ERROR` before CC.EN is written. `ScsiPortSetBusDataByOffset` must return the requested length, and a Bus Master Enable or Command change is read back. No runtime callback reads config space for presence on NT (presence comes from MMIO; isolation from 0.10) | #10; src/utils.c:752, 770, 788; src/nvme2k.c:925 |
@@ -1243,6 +1243,104 @@ in software and succeeded without a block read.
   06h answer), `0x1A1` (a VERIFY admitted), `0x1A2` (each child: its opcode), `0x1A3` (a
   VERIFY completed: its time, children, mode).
 
+## Taking a controller the BIOS set up (9x, xhci98 3.4.3.0, its roadmap 48.28)
+
+Owner, 2026-11-05 and 2026-11-09: an option, off by default, to take a controller that
+3.1's check leaves because it is already set up. No reading tells a controller the BIOS
+has let go from one it still serves: CC.EN and CSTS.RDY say only that someone set it up;
+an INT 13h hook, `RealModeInitialized` and the real-mode mapper's `DCB_DEV_RMM` can refuse
+or be logged, never permit; and xhci98 46.1's board hung on a drive that was not the
+boot disk. So the choice is the user's, per controller or for every one, and this design
+only carries it out. 2000 to 10 have no such check and no such option.
+
+- **Per controller**: `stortakefirmware=1` in that controller's `AdapterSettings`, a
+  `REG_SZ` in its driver key (`HKLM\System\CurrentControlSet\Services\Class\SCSIAdapter\`
+  and the four digits the devnode's `Driver` value names), which the 9x port hands
+  `HwFindAdapter` as its `ArgumentString` (read 2026-11-09 on 98 SE with a test image
+  that recorded the string: the driver key's `AdapterSettings`, whole; with that value
+  deleted, the hardware key's (`HKLM\Enum\PCI\...`) value of the same name; never a
+  `Settings` or `DriverParameter` value; ME in the legs). The documents name the driver
+  key. All the controller's namespaces go with it (one devnode, one adapter).
+- **The string, parsed strictly** (`PciScanTakeArg`, `src/pciscan.h`): fields separated
+  by `;`; a field is the key only when it starts the string or follows a `;` (no other
+  key that merely ends in these letters), compared case-insensitively, and its value is
+  exactly `0` or `1`, ended by `;` or the string's end (`1x`, `01`, ` 1` and an empty
+  value are no setting). Every field that names the key counts: a `0` in any of them
+  leaves (the safe answer to a contradiction); else a `1` in any takes; else (none, or
+  only malformed values) the controller has no setting of its own. On 9x the string is
+  given to this parser alone: `HwFindAdapter` passes no string on to the tunables, the
+  write-through setting or the CM link, as before, when the port gave none (2000 to 10
+  unchanged), so `AdapterSettings` carries no other key on 9x.
+- **For every controller**: `StorTakeFirmware`, a `REG_DWORD` (or a decimal `REG_SZ`, as
+  the other 9x values) under `HKLM\System\CurrentControlSet\Services\stor98`, beside
+  `StorIntWatchdog`, read at each find that would refuse; it applies to every
+  controller with no `stortakefirmware=` of its own. The INF writes it as 0 where it is
+  missing (no overwrite).
+- **The global value, parsed strictly**: a `REG_DWORD` of exactly 1, or a `REG_SZ` that
+  is exactly `1` (`PciScanTakeGlobal`), takes; anything else (absent, 0, another number,
+  a string with anything around the digit, another type) leaves.
+- **The decision** (`PciScanTakeSetting`, pure, host test `pciscan_ut`): the
+  controller's own setting when it has one (its `0` leaves even against a global 1, its
+  `1` takes even against a global 0 or none; the source is the controller), else the
+  global value (the source is the global value, take on 1, else leave). Only a take
+  decision overrides the refusal.
+- **Never on Windows Me** (xhci98's owner, 2026-11-09, its roadmap 48.28): on Me a
+  controller SeaBIOS set up, taken by its own `stortakefirmware=1`, hung the start once
+  the desktop was drawn, the processor in SeaBIOS's own code for 16 minutes (xhci98's
+  `runs/run-48.md`, "48.28 Taking a controller the BIOS set up: ME"; what of Me's
+  reached the BIOS for the drive whose queues the take reset was not read). So on Me (VMM 4.90 and later, `PlatIsMe`) a take
+  decision from either source is set aside and the controller is left
+  (`PciScanTakeMe`, host test `pciscan_ut`); the report says " left: already set up,
+  StorTakeFirmware ignored on Windows ME" or "... stortakefirmware=1 ignored on Windows
+  ME", and stage `0x0C` sets bit 25. The INF still writes `StorTakeFirmware` 0 on both
+  systems (one section); xhci98's installer and XHCITR show the row greyed on Me with
+  the reason, and write nothing there.
+- **What it overrides**: the "already set up" refusal alone, `PCISCAN_FW_SET_UP`
+  (`PciScanFirmwareTake`). Never the function match (3.1), the reach and the read of the
+  registers with decode put back, all ones in CC or in CSTS (`PCISCAN_FW_NO_ANSWER`:
+  from this change CC's all ones is classed there too, where it fell into "set up"
+  before; both are refusals either way), registers not
+  reached (`PCISCAN_FW_UNREADABLE`), a command word not put back
+  (`PCISCAN_FW_NOT_RESTORED`), or `HwFoundAdapter`'s checks after it. The setting is read
+  only where the refusal would apply, so a controller not set up is taken as before
+  whatever the setting.
+- **What follows a take**: the bring-up of every start: `EngInitialize` finds CC.EN or
+  CSTS.RDY set, writes CC.EN 0 and waits for the acknowledged disable (RDY 0) within
+  CAP.TO before anything is reused (0.10, the reopen invariant); no acknowledgement
+  fails the bring-up as for any controller. From that write the BIOS's queues are gone
+  and the drive answers only through this driver. `HwAdapterState(FALSE)` keeps its
+  contract: it stops; it never gives the controller back. Nothing says or assumes that
+  the BIOS can go on using the drive.
+- **The log**: the find report `StorFind` says " taken: already set up, overridden by
+  StorTakeFirmware" or " taken: already set up, overridden by stortakefirmware=1" where
+  the option took it (the controller, CC, CSTS and the command word are already in it,
+  and "; result" says what the find returned), and " left: already set up" as before
+  where it did not. Each find that named a function also writes its report as
+  `StorFind <bus>.<device>.<function>`, so a later adapter's find no longer hides an
+  earlier one's; `StorFind` itself stays the last find, as before. Debug-port stage
+  `0x0C` (`STG_FIND_TAKEFW`): the firmware state, the decision and its source, written
+  wherever the refusal would apply.
+- **The installer and the documents**: the global value is a Stor98 setting of 98 SE
+  alone, ignored on Me (README "Settings", the package readme's SETTINGS table, xhci98's
+  `tuning.md`), offered by xhci98's installer under Stor98's "Advanced..." with its
+  warning; the per-controller key is set by hand (Regedit or a `.reg` file) and is
+  documented there with the driver key's path.
+- **Risks, accepted by the user's choice**: a BIOS that still serves the drive (INT 13h,
+  the real-mode mapper's compatibility path, an MS-DOS mode disk access) after the take
+  reaches a controller whose queues are gone: its request fails or hangs, and a write
+  in flight across the take may be lost; a drive the BIOS also gave a letter through
+  the real-mode mapper may show twice (the BIOS's letter and this driver's). The
+  installer's text says it can hang Windows' start or corrupt data.
+- **Tests**: host vectors (`pciscan_ut`: every firmware state against every decision and
+  source; CC or CSTS alone all ones; the argument parser's boundaries, cases, malformed
+  values, trailing text, duplicates and contradictions; the global value's types and
+  strings); 98 SE and ME in the emulator with a controller SeaBIOS set up (an internal
+  drive it serves) and one it did not (the tunnelled drive): the default (left), the
+  global value, the per-controller key, an explicit 0 against a global 1, two adapters
+  (each report kept), a cold and a warm start (ME; 98 SE ends QEMU at a restart), a
+  hot-plug after the start, a data compare, shutdown and removal, the DOS box, and the
+  drive letters.
+
 ## Removal acceptance (all OSes)
 
 Scope: a non-critical data disk (not the boot, system, paging or dump disk); surprise
@@ -1456,7 +1554,11 @@ isolation evidence.
   only where xhci98's installer puts it on one drive (`UpdateDriverForPlugAndPlayDevices`
   with this INF) or a user does by hand. Windows 8, which has no `stornvme`, and every
   earlier system keep `PCI\CC_010802` as the hardware id. xhci98's
-  `check-stor98-inf.ps1` and `test_inst` hold it.
+  `check-stor98-inf.ps1` and `test_inst` hold it. Since xhci98's record 31 sections 4.7 and
+  4.10 (`3.3.0.0`, and task 48.29 for 8.1) the INFs match the tunnel id
+  `PCI\XHCI98_TUNNEL&CC_010802` alone on 2000 to 8.1 (8.1 through xhci98's kept child, which
+  keeps the id across a restart of the drive's stack), and the class model above is the
+  `NTx86.10.0` / `NTamd64.10.0` section, Windows 10's alone.
 - **Kernel DMA Protection: withdrawn 2026-10-23, the x64 INF writes no
   `DmaRemappingCompatible`.** Read on Windows 10 x64 22H2 (19045) in QEMU (no IOMMU, no
   Kernel DMA Protection; xhci98's `runs/run-43.md` "43.59s"): with the value 1 Stor98 does not

@@ -186,6 +186,14 @@ typedef struct _TBT_U4_CONFIG {
      * (the task 45.20 run); the recovery check and the adoption's clear
      * hold either way. Usb4V2 FALSE never sets it either. */
     BOOLEAN Gen4LinkRecovery;
+    /* XhciCmSleepEntry (record 22 section 11.1.5, decision U36, task
+     * 48.35): TRUE runs the Guide's sleep entry at TbtU4Suspend - the
+     * preflight, every wake enable cleared, Enter Sleep and Sleep Ready -
+     * and, at the resume, the cancellation of a sleep that did not happen
+     * and the rebuild of a preserved tunnel whose port was prepared
+     * (decision U34). FALSE writes nothing more than the 3.4.x suspend
+     * did. Default FALSE until the emulator legs pass (owner, 2026-11-09). */
+    BOOLEAN SleepEntry;
 } TBT_U4_CONFIG, *PTBT_U4_CONFIG;
 
 VOID TbtU4DefaultConfig(PTBT_U4_CONFIG cfg);
@@ -256,6 +264,21 @@ typedef struct _TBT_U4_ROUTER {
                                failed read-back left recorded */
     BOOLEAN SeqOwed;        /* a recovery found the capability supported and
                                disabled and sent no Set: owed to the next tick */
+    /* Record 22 section 11.1.5: the sleep entry. SleepSet: Enter Sleep
+     * written and read back (a Thunderbolt router: every link
+     * controller's SX_CTRL bit 31); SleepReady: a USB4 router's Sleep
+     * Ready read set. SleepWake: the wake enables read before the entry
+     * cleared them, put back by a sleep that did not happen (section
+     * 11.1.6 item 2) - ROUTER_CS_5 bits 3:1, or a Thunderbolt router's
+     * SX_CTRL bits 6:1 of link controller 0 and 1 at bits 6:1 and 14:9 -
+     * and SleepWakePorts: per USB4 downstream port n (adapter 2n + 1)
+     * PORT_CS_19 bits 19:16 at bits 4n + 3:4n. */
+    BOOLEAN SleepSet;
+    BOOLEAN SleepTried;     /* a wake or Enter Sleep write attempted: reconciled at the resume */
+    BOOLEAN SleepReady;
+    BOOLEAN SleepWakeSaved;
+    ULONG SleepWake;
+    ULONG SleepWakePorts;
     TBT_U4_ADP Adp[TBT_U4_MAX_ADP];
 } TBT_U4_ROUTER, *PTBT_U4_ROUTER;
 
@@ -476,6 +499,10 @@ typedef struct _TBT_U4_PORT {
     ULONG ElrNoteSeq;       /* LINK_RECOVERY (or a lost notification) owing the
                              * check, counted: one drained during a check (at a
                              * safe point) keeps the check owed afresh */
+    /* Record 22 section 11.1.6 item 2: a sleep that did not happen whose
+     * Enter Sleep or wake enables could not be put back on this port's
+     * device router: its obligations are not met (HELD). */
+    BOOLEAN SleepCancelFailed;
 } TBT_U4_PORT, *PTBT_U4_PORT;
 
 /* A router below depth 1 a predecessor configured (section 7.1). */
@@ -632,6 +659,21 @@ typedef struct _TBT_U4_LINKDOWN {
 
 typedef ULONG (*TBT_U4_LINKDOWN_FN)(PVOID context, const TBT_U4_LINKDOWN *info);
 
+/*
+ * Design record 34 section 3.12 (task 48.30): the kid gate, the driver's
+ * half of the chained tunnel's transaction, called on the core's thread.
+ * MAY_CONNECT before a fresh kid's connect claims a slot (`kid` and `gen`
+ * 0): FALSE defers the connect to a later tick, as idle lanes do; never
+ * asked for an adoption or a resume's rebuild. ARM immediately before the
+ * kid's first Path Enable write of a connect or a rebuild, with the kid
+ * and its generation: the driver reads its baseline; the answer is
+ * ignored. May be NULL: no gate.
+ */
+#define TBT_U4_KIDGATE_MAY_CONNECT  1UL
+#define TBT_U4_KIDGATE_ARM          2UL
+typedef BOOLEAN (*TBT_U4_KIDGATE_FN)(PVOID context, ULONG op, ULONG port,
+                                     ULONG kid, ULONG gen);
+
 /* A tunnel up at suspend (section 7.6). */
 typedef struct _TBT_U4_OBLIGATION {
     BOOLEAN Used;
@@ -641,6 +683,9 @@ typedef struct _TBT_U4_OBLIGATION {
     ULONG Generation;
     BOOLEAN Usb3;           /* FALSE: PCIe */
     BOOLEAN BuiltHere;
+    BOOLEAN Prepared;       /* section 11.1.6 item 1 (decision U34): every
+                               router on its route prepared by the sleep
+                               entry, so a preserved tunnel is rebuilt too */
     ULONG Hd;
     ULONG Hu;
 } TBT_U4_OBLIGATION, *PTBT_U4_OBLIGATION;
@@ -814,6 +859,17 @@ typedef struct _TBT_U4_COUNTERS {
     ULONG ElrUsb3Lost;      /* a USB3 tunnel torn down by one */
     ULONG ElrUsb3Down;      /* a USB3 link not operational 2 s on, kept */
     ULONG ElrUnread;        /* a check given up, its registers unread for 2 s */
+    /* Record 22 section 11.1 (task 48.35). */
+    ULONG SleepEntries;     /* sleep entries run (XhciCmSleepEntry 1) */
+    ULONG SleepRouters;     /* routers given Enter Sleep, read back */
+    ULONG SleepReady;       /* USB4 routers whose Sleep Ready was read set */
+    ULONG SleepLate;        /* USB4 routers not ready within 500 ms */
+    ULONG SleepRefused;     /* an Enter Sleep or wake write not taken */
+    ULONG SleepClx;         /* CLx enables cleared by the preflight */
+    ULONG SleepPreflight;   /* entries the preflight left out whole */
+    ULONG SleepUnrestorable;/* ports carrying a path not restored at resume */
+    ULONG SleepCancelled;   /* routers whose Enter Sleep a resume cleared */
+    ULONG ResumePreservedRebuilt;   /* preserved tunnels rebuilt (U34) */
 } TBT_U4_COUNTERS;
 
 /*
@@ -912,6 +968,8 @@ typedef struct _TBT_U4CM {
 
     TBT_U4_LINKDOWN_FN LinkDown;
     PVOID LinkDownContext;
+    TBT_U4_KIDGATE_FN KidGate;      /* record 34 section 3.12 */
+    PVOID KidGateContext;
 
     TBT_U4_ROUTER HostRouter;
     ULONG PortCount;
@@ -953,6 +1011,10 @@ typedef struct _TBT_U4CM {
     ULONG DeferredTail[TBT_U4_MAX_PORTS];   /* steps 4 to 6 owed, by port */
 
     TBT_U4_OBLIGATION Obligations[TBT_U4_OBLIGATIONS];
+    /* Record 22 section 11.1: the suspend ran the sleep entry past its
+     * preflight (Enter Sleep written somewhere): the resume then looks for
+     * a sleep that did not happen (section 11.1.6 item 2). */
+    BOOLEAN SleepEntered;
     BOOLEAN ResumeHeld;     /* the last resume left an obligation unmet */
     BOOLEAN Budgeted;       /* a resume budget is running */
     BOOLEAN BudgetSpent;    /* and ran out: requests refused, ports HELD */
@@ -1048,6 +1110,7 @@ typedef struct _TBT_U4CM {
 VOID TbtU4Init(PTBT_U4CM cm, PTBT_RING ring, const TBT_HOST *host,
                const TBT_U4_CONFIG *config);
 VOID TbtU4SetLinkDown(PTBT_U4CM cm, TBT_U4_LINKDOWN_FN fn, PVOID context);
+VOID TbtU4SetKidGate(PTBT_U4CM cm, TBT_U4_KIDGATE_FN fn, PVOID context);
 
 /*
  * Record 22 section 4.4 steps 1 to 6 over the common buffer the driver
@@ -1126,6 +1189,19 @@ BOOLEAN TbtU4PortIsolated(const TBT_U4CM *cm, ULONG port, ULONG gen);
  * *gen: TRUE when it is. Read from another thread at a controller's start
  * (the binding of record 22 section 10.5). */
 BOOLEAN TbtU4PortPcieGen(const TBT_U4CM *cm, ULONG port, PULONG gen);
+/* Record 22 section 7.6.2, I6: host port `port`'s PCIe Down adapter as
+ * read once now (ADP_PCIE_CS_0, no re-read, no wait): UP with Path Enable
+ * set and the LTSSM in L0, L1, Recovery or Recovery.Idle; DOWN with Path
+ * Enable clear or the LTSSM in Detect; NONE for a port with no PCIe Down
+ * adapter; UNKNOWN for anything else - a failed read, another LTSSM value,
+ * a Thunderbolt 3 host router (whose field is not the USB4 encoding,
+ * section 19.4), a failed or contained domain. The values are tbt_topo.h's
+ * XHCI_TBT_RLINK_*. The connection-manager thread, as TbtU4EjectPcie. */
+#define TBT_U4_PLINK_NONE       0UL
+#define TBT_U4_PLINK_UP         1UL
+#define TBT_U4_PLINK_DOWN       2UL
+#define TBT_U4_PLINK_UNKNOWN    3UL
+ULONG TbtU4PcieLinkClass(PTBT_U4CM cm, ULONG port);
 
 /*
  * Section 9.4. TbtU4SetCarry, after TbtU4Init and before TbtU4Start: the

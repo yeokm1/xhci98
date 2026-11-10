@@ -125,6 +125,7 @@ NTHALAPI ULONG HalGetBusData(BUS_DATA_TYPE BusDataType, ULONG BusNumber,
 #define CM_WK_RETRY_MS      5000UL  /* a failed member call tried again   */
 #define CM_WK_MARK_MS       10000UL /* a tunnel up's marking window       */
 #define CM_WK_TICK_MS       200UL   /* the wait while a window or retry runs */
+#define CM_WK_NI_LOGN       32UL    /* a walk's nodes kept for its log     */
 #define CM_WK_WALK_STACK    64UL
 #define CM_WK_WALK_NODES    2048UL
 #define CM_WK_BUS_FUNCTIONS 64UL
@@ -132,6 +133,9 @@ NTHALAPI ULONG HalGetBusData(BUS_DATA_TYPE BusDataType, ULONG BusNumber,
 #define CM_WK_NO_OP         0xFFFFFFFFUL
 #define CM_WK_GONE_TRIES    6UL     /* unresolved CONTROLLER_UNAVAILABLE
                                        attempts, CM_WK_RETRY_MS apart     */
+#define CM_WK_CHAIN_MS      10000UL /* a chain request kept (record 34
+                                       section 3.3.7 item 2)             */
+#define CM_WK_CHAIN_MARKS   8UL     /* chain ports with a marking window  */
 
 /* Children of a member by devnode handle, instance id (cmWkIdHash) and the
  * member's publication generation when they were recorded (PubGen). */
@@ -174,9 +178,15 @@ typedef struct _CM_WK_PORT {
      * record the numbering just made, kept for the generation its
      * re-enumeration opens (NiIrqHave). */
     CM_NI_MEMBER Ni;
+    ULONG NiEnd;            /* the clock at its last no-IRQ tick's end ...  */
+    ULONG NiTicking;        /* ... kept while it is busy (record 28 14.6)   */
     CM_NI_IRQ NiIrqNext;
     ULONG NiIrqHave;
     ULONG NiDiagSeen;
+    ULONG NiWalkV;          /* the last walk logged: its line ...         */
+    ULONG NiWalkSig;        /* ... and its nodes' sum (cmWkNiWalkLog)     */
+    ULONG NiNodes;          /* this walk's nodes kept for the log ...     */
+    ULONG NiNode[CM_WK_NI_LOGN]; /* ... as cmWkNiWalkLog logs them      */
     /* Task 46.13 (record 21 section 8.3): the member's re-enumeration
      * calls in the worker's event order, under the worker's Lock - the
      * call in flight's admission event, the last call's end, and the
@@ -196,6 +206,7 @@ typedef struct _CM_WK_PORT {
 #define CM_WK_NI_DEPTH      6UL
 #define CM_WK_NI_STACK      32UL
 #define CM_WK_NI_OPS        512UL   /* operations a member, a tick         */
+#define CM_WK_NI_MET        64UL    /* locations a walk keeps (14.3 item 1) */
 
 typedef struct _CM_WK_NI_NODE {
     ULONG Node;
@@ -248,6 +259,9 @@ typedef struct _CM_CFGWK {
     ULONG OpMember;         /* the worker's operation in progress: its
                                member (CM_WK_NO_OP: none, the baseline)  */
     ULONG OpGen;            /* ... and the generation it was taken at     */
+    ULONG OpChain;          /* ... a chain operation (cmWkChainCurrent)   */
+    ULONG ChainWrote;       /* a chain port's numbering attempt has written
+                               (its reads then never refused: rollback) */
     ULONG ReqReenum;        /* members to re-enumerate                    */
     ULONG ReqVanish;        /* ... removing vanished children first       */
     ULONG ReqMark;          /* a marking window to open                   */
@@ -318,6 +332,15 @@ typedef struct _CM_CFGWK {
     ULONG NiMs;             /* ... its milliseconds ...                  */
     ULONG NiRest;           /* ... and the microseconds not yet one      */
     CM_WK_NI_NODE NiStack[CM_WK_NI_STACK];
+    /* The walk's placed devnodes' locations, and the bridges whose
+     * children it read (and their depths), for record 28 section 14.3
+     * item 1's unenumerated function; NiMetN past CM_WK_NI_MET: not
+     * kept whole. */
+    ULONG NiMet[CM_WK_NI_MET];
+    ULONG NiMetN;
+    ULONG NiBr[CM_WK_NI_STACK];
+    ULONG NiBrDepth[CM_WK_NI_STACK];
+    ULONG NiBrN;
     /* Design record 31 section 5: the tunnel id. TagReq under Lock (the
      * members newly active, posted); the rest the worker thread's own. */
     ULONG TagReq;
@@ -332,6 +355,23 @@ typedef struct _CM_CFGWK {
     CM_CFGMG Cfgmg;
     CM_CFGWK_COUNTERS C;
     ULONG Evt;              /* task 46.13: the event number, under Lock    */
+    /* Design record 34 section 3.3.7 (task 48.31): the chain requests, a
+     * bit per member, each with its sequence (bumped by every post) and the
+     * tick count of the post that opened it, per kind, under Lock; and the
+     * chain ports whose marking window is open (each found again at every
+     * use), the worker thread's own. */
+    ULONG ChainUp;
+    ULONG ChainDown;
+    ULONG ChainUpSeq[XHCI_TBT_MAX_TUNNELS];
+    ULONG ChainDownSeq[XHCI_TBT_MAX_TUNNELS];
+    ULONG ChainUpAt[XHCI_TBT_MAX_TUNNELS];
+    ULONG ChainDownAt[XHCI_TBT_MAX_TUNNELS];
+    ULONG ChainMarkCount;
+    XHCI_TBT_CHAIN_PORT ChainMarkPort[CM_WK_CHAIN_MARKS];
+    ULONG ChainMarkPath[CM_WK_CHAIN_MARKS][CM_PORTS_PATH_MAX];
+    ULONG ChainMarkPathN[CM_WK_CHAIN_MARKS];
+    ULONG ChainMarkMember[CM_WK_CHAIN_MARKS];
+    ULONG ChainMarkFrom[CM_WK_CHAIN_MARKS];
 #if defined(XHCI_FLAVOUR_QEMU)
     /* XhciCmQemuFailReenum (task 45.27): member calls still to be taken as
      * failed before they are made. The worker thread's own. */
@@ -495,6 +535,18 @@ static VOID cmWkOp(PCM_CFGWK w, ULONG i, ULONG gen)
 {
     w->OpMember = i;
     w->OpGen = gen;
+    w->OpChain = 0;
+}
+
+static BOOLEAN cmWkChainCurrent(PCM_CFGWK w, ULONG i, ULONG gen);
+static VOID cmWkNiOpen(PCM_CFGWK w, ULONG i);
+
+/* A chain operation's (record 34 section 3.3.7 item 1): cmWkGo then holds
+ * it to cmWkChainCurrent. */
+static VOID cmWkChainOpSet(PCM_CFGWK w, ULONG i, ULONG gen)
+{
+    cmWkOp(w, i, gen);
+    w->OpChain = 1;
 }
 
 /*
@@ -511,7 +563,8 @@ static BOOLEAN cmWkGo(PCM_CFGWK w)
     BOOLEAN go;
 
     if (w->OpMember != CM_WK_NO_OP) {
-        return cmWkCurrent(w, w->OpMember, w->OpGen);
+        return w->OpChain ? cmWkChainCurrent(w, w->OpMember, w->OpGen)
+                          : cmWkCurrent(w, w->OpMember, w->OpGen);
     }
     KeAcquireSpinLock(&w->Lock, &irql);
     go = (BOOLEAN)!w->Exit;
@@ -531,6 +584,30 @@ static BOOLEAN cmWkCurrent(PCM_CFGWK w, ULONG i, ULONG gen)
     return ok;
 }
 
+/*
+ * Record 34 section 3.3.7 item 1: a chain operation on member i, taken at
+ * `gen` before its gates were read, still current - and neither
+ * CONTROLLER_UNAVAILABLE's removal nor its no-scan re-enumeration owed,
+ * and no retirement barrier standing - read under one lock
+ * (CmPortsChainCurrent). Checked before each of the operation's
+ * configuration reads and CONFIGMG calls.
+ */
+static BOOLEAN cmWkChainCurrent(PCM_CFGWK w, ULONG i, ULONG gen)
+{
+    KIRQL irql;
+    BOOLEAN ok;
+
+    if (i >= XHCI_TBT_MAX_TUNNELS) {
+        return FALSE;
+    }
+    KeAcquireSpinLock(&w->Lock, &irql);
+    ok = CmPortsChainCurrent((BOOLEAN)(w->Exit != 0), w->Active,
+                             w->ReqGone | w->NoScan | w->Hold, w->Gen[i],
+                             gen, i);
+    KeReleaseSpinLock(&w->Lock, irql);
+    return ok;
+}
+
 /* ---- the 98 devnode tree ---------------------------------------------- */
 
 /*
@@ -541,7 +618,19 @@ static BOOLEAN cmWkCurrent(PCM_CFGWK w, ULONG i, ULONG gen)
  * such parent is a root bus, but only after a scan that read every
  * function it met. FALSE where the path is not known.
  */
-static BOOLEAN cmWkPciPath(ULONG bdf, PULONG path, PULONG count)
+/* One read of the path scan: with `w` (a chain operation's), only while
+ * the operation is current (record 34 section 3.3.7 item 1). */
+static ULONG cmWkPathRead(PCM_CFGWK w, ULONG bdf, ULONG offset,
+                          PULONG value)
+{
+    if (w != NULL && !cmWkGo(w)) {
+        return 0;
+    }
+    return cmWkCfgRead(bdf, offset, value);
+}
+
+static BOOLEAN cmWkPciPathEx(PCM_CFGWK w, ULONG bdf, PULONG path,
+                             PULONG count)
 {
     ULONG n;
     ULONG cur;
@@ -570,7 +659,7 @@ static BOOLEAN cmWkPciPath(ULONG bdf, PULONG path, PULONG count)
         for (b = 0; b < bus && parent == XHCI_TBT_NO_BDF; b++) {
             for (d = 0; d < 32UL && parent == XHCI_TBT_NO_BDF; d++) {
                 for (f = 0; f < 8UL; f++) {
-                    if (!cmWkCfgRead(XHCI_TBT_BDF(b, d, f), 0, &id)) {
+                    if (!cmWkPathRead(w, XHCI_TBT_BDF(b, d, f), 0, &id)) {
                         if (b == 0) {
                             incomplete = 1;
                         }
@@ -583,14 +672,14 @@ static BOOLEAN cmWkPciPath(ULONG bdf, PULONG path, PULONG count)
                         }
                         continue;
                     }
-                    if (!cmWkCfgRead(XHCI_TBT_BDF(b, d, f),
+                    if (!cmWkPathRead(w, XHCI_TBT_BDF(b, d, f),
                                      XHCI_TBT_CFG_HEADER, &hdr)) {
                         incomplete = 1;
                         break;
                     }
                     if (XHCI_TBT_HDR_LAYOUT(hdr >> 16) ==
                             XHCI_TBT_HDR_BRIDGE &&
-                        cmWkCfgRead(XHCI_TBT_BDF(b, d, f),
+                        cmWkPathRead(w, XHCI_TBT_BDF(b, d, f),
                                     XHCI_TBT_CFG_BUSES, &buses) &&
                         ((buses >> 8) & 0xFFUL) == bus) {
                         parent = XHCI_TBT_BDF(b, d, f);
@@ -601,6 +690,10 @@ static BOOLEAN cmWkPciPath(ULONG bdf, PULONG path, PULONG count)
                     }
                 }
             }
+        }
+        if (w != NULL && !cmWkGo(w)) {
+            /* Stopped inside the scan: what it read is not a path. */
+            return FALSE;
         }
         if (parent == XHCI_TBT_NO_BDF) {
             if (incomplete) {
@@ -613,6 +706,11 @@ static BOOLEAN cmWkPciPath(ULONG bdf, PULONG path, PULONG count)
         cur = parent;
     }
     return FALSE;
+}
+
+static BOOLEAN cmWkPciPath(ULONG bdf, PULONG path, PULONG count)
+{
+    return cmWkPciPathEx(NULL, bdf, path, count);
 }
 
 /* Whether a 98 device id names the bridge at `bdf`, in either instance
@@ -694,7 +792,8 @@ static ULONG cmWkFindDevnode(PCM_CFGWK w, ULONG i)
             }
             p->PathCount = p->SavedCount;
             p->PathRead = 1;
-        } else if (cmWkPciPath(p->Bdf, p->Path, &p->PathCount)) {
+        } else if (cmWkPciPathEx(w->OpChain ? w : NULL, p->Bdf, p->Path,
+                                 &p->PathCount)) {
             p->PathRead = 1;
             for (depth = 0; depth < p->PathCount; depth++) {
                 p->Saved[depth] = p->Path[depth];
@@ -812,8 +911,10 @@ static ULONG cmWkChildren(PCM_CFGWK w, ULONG devnode, PULONG out, ULONG room,
 }
 
 /* The ids answering on the bridge's secondary bus; room + 1 when the bus
- * could not be read completely (nothing is then taken for vanished). */
-static ULONG cmWkBusIds(ULONG bridge, PULONG ids, ULONG room)
+ * could not be read completely (nothing is then taken for vanished). With
+ * `w`, each read only while the worker's operation is still current
+ * (cmWkGo; a chain operation's). */
+static ULONG cmWkBusIds(PCM_CFGWK w, ULONG bridge, PULONG ids, ULONG room)
 {
     ULONG buses;
     ULONG bus;
@@ -823,7 +924,8 @@ static ULONG cmWkBusIds(ULONG bridge, PULONG ids, ULONG room)
     ULONG hdr;
     ULONG n;
 
-    if (!cmWkCfgRead(bridge, XHCI_TBT_CFG_BUSES, &buses) ||
+    if ((w != NULL && !cmWkGo(w)) ||
+        !cmWkCfgRead(bridge, XHCI_TBT_CFG_BUSES, &buses) ||
         buses == 0xFFFFFFFFUL) {
         return room + 1;
     }
@@ -834,7 +936,8 @@ static ULONG cmWkBusIds(ULONG bridge, PULONG ids, ULONG room)
     n = 0;
     for (dev = 0; dev < 32UL; dev++) {
         for (fn = 0; fn < 8UL; fn++) {
-            if (!cmWkCfgRead(XHCI_TBT_BDF(bus, dev, fn), 0, &id)) {
+            if ((w != NULL && !cmWkGo(w)) ||
+                !cmWkCfgRead(XHCI_TBT_BDF(bus, dev, fn), 0, &id)) {
                 return room + 1;
             }
             /* Vendor 0001h is Configuration Request Retry Status: the
@@ -854,7 +957,8 @@ static ULONG cmWkBusIds(ULONG bridge, PULONG ids, ULONG room)
             }
             ids[n++] = id;
             if (fn == 0) {
-                if (!cmWkCfgRead(XHCI_TBT_BDF(bus, dev, 0),
+                if ((w != NULL && !cmWkGo(w)) ||
+                    !cmWkCfgRead(XHCI_TBT_BDF(bus, dev, 0),
                                  XHCI_TBT_CFG_HEADER, &hdr) ||
                     hdr == 0xFFFFFFFFUL) {
                     return room + 1;
@@ -870,7 +974,7 @@ static ULONG cmWkBusIds(ULONG bridge, PULONG ids, ULONG room)
 
 ULONG CmCfgwkBusIds(ULONG bridge, PULONG ids, ULONG room)
 {
-    return cmWkBusIds(bridge, ids, room);
+    return cmWkBusIds(NULL, bridge, ids, room);
 }
 
 static VOID cmWkForget(CM_WK_PORT *p, ULONG devnode)
@@ -1138,7 +1242,8 @@ static BOOLEAN cmWkHeld(PCM_CFGWK w, ULONG i)
  * barrier's removal-only request is not made until it has returned
  * (CmCfgwkEnumBusy). The CONFIGMG call itself is made outside the lock;
  * cmWkEnumDone ends it. */
-static BOOLEAN cmWkEnumAdmit(PCM_CFGWK w, ULONG i)
+static BOOLEAN cmWkEnumAdmitEx(PCM_CFGWK w, ULONG i, BOOLEAN chain,
+                               const ULONG *gen)
 {
     KIRQL irql;
     BOOLEAN ok;
@@ -1151,6 +1256,19 @@ static BOOLEAN cmWkEnumAdmit(PCM_CFGWK w, ULONG i)
     ok = (BOOLEAN)((w->Hold & (1UL << i)) == 0 &&
                    (w->PruneOwed & (1UL << i)) == 0 &&
                    !CmEjectVanishHeld(w->Port[i].Bdf));
+    if (ok && chain) {
+        /* Record 34 section 3.3.7 item 1: a chain port's re-enumeration
+         * never while a loss's removal or no-scan re-enumeration is owed
+         * or after its operation went stale, read under the lock that
+         * marks the call in flight. A member's own re-enumeration is the
+         * no-scan one, so this is the chain operation's alone. Without
+         * `gen` (the rescan a removal accepted before its operation went
+         * stale owes), any generation, the loss's words still read. */
+        ok = CmPortsChainCurrent((BOOLEAN)(w->Exit != 0), w->Active,
+                                 w->ReqGone | w->NoScan | w->Hold,
+                                 w->Gen[i], gen != NULL ? *gen : w->Gen[i],
+                                 i);
+    }
     if (ok) {
         w->EnumBusy |= 1UL << i;
         /* Task 46.13: the call's place in the worker's event order,
@@ -1160,6 +1278,11 @@ static BOOLEAN cmWkEnumAdmit(PCM_CFGWK w, ULONG i)
     }
     KeReleaseSpinLock(&w->Lock, irql);
     return ok;
+}
+
+static BOOLEAN cmWkEnumAdmit(PCM_CFGWK w, ULONG i)
+{
+    return cmWkEnumAdmitEx(w, i, FALSE, NULL);
 }
 
 static VOID cmWkEnumDone(PCM_CFGWK w, ULONG i)
@@ -1654,8 +1777,11 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
             }
         }
     }
-    /* Stopped or superseded during the selection: no query begun. */
-    if (!cmWkCurrent(w, i, gen)) {
+    /* Stopped or superseded during the selection: no query begun. A
+     * chain operation's (record 34 section 3.3.7 item 1) also stops for a
+     * loss owed or a barrier raised, which take no generation step. */
+    if (!cmWkCurrent(w, i, gen) ||
+        (w->OpChain && !cmWkChainCurrent(w, i, gen))) {
         return FALSE;
     }
     /* The claim before anything irreversible (task 43.47). */
@@ -1701,6 +1827,16 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
     /* Its identity read back right before the query (task 43.47): gone,
      * nothing owed; not read, no query made. */
     cr = cmWkStill(w, devnode, text);
+    if (cr == CMG_CR_SUCCESS && w->OpChain &&
+        !cmWkChainCurrent(w, i, gen)) {
+        /* A chain operation gone stale during the read back (item 1): no
+         * query begun, the claim ended as for an id not read. */
+        if (CmEjectClaimEnd(claim, CM_EJ_NO_CR, CM_EJ_NO_CR, 0, 0, 0,
+                            CM_EJ_NONE, 0, 0, vanished, takeover)) {
+            cmWkLog(w, "cm.vanish.takeover", (w->Port[i].Bdf << 8) | 4UL);
+        }
+        return FALSE;
+    }
     if (cr == CMG_CR_SUCCESS) {
         cr = CmCfgmgQueryRemove(&w->Cfgmg, devnode);
     } else if (cr != CMG_CR_NO_SUCH_DEVNODE) {
@@ -1821,11 +1957,15 @@ removal:
     if (cmWkCurrent(w, i, gen)) {
         return TRUE;
     }
-    if (!cmWkEnumAdmit(w, i)) {
+    if (w->OpChain ? !cmWkEnumAdmitEx(w, i, TRUE, NULL)
+                   : !cmWkEnumAdmit(w, i)) {
         /* Record 22 section 7.7's retirement barrier stands (the request
          * that made this stale is its removal-only one): the rescan owed
          * is posted, and the enumeration pass holds it until the barrier
-         * is lifted. */
+         * is lifted. Inside a chain operation (record 34 section 3.3.7
+         * item 1) a loss's removal or no-scan re-enumeration owed refuses
+         * the chain port's rescan as well: the member's, owed here, comes
+         * after the loss's own. */
         KeAcquireSpinLock(&w->Lock, &irql);
         w->ReqReenum |= 1UL << i;
         KeReleaseSpinLock(&w->Lock, irql);
@@ -1977,6 +2117,47 @@ static ULONG cmWkIoWrite(PVOID context, ULONG bdf, ULONG offset,
                ? 1UL : 0UL;
 }
 
+/* Record 34 section 3.3.7 item 1: the chain operation's read-only
+ * accessors (the walk, the port reading), each read only while the
+ * operation is current (cmWkGo, held to cmWkChainCurrent inside it). */
+static ULONG cmWkChainIoRead(PVOID context, ULONG bdf, ULONG offset,
+                             PULONG value)
+{
+    return cmWkGo((PCM_CFGWK)context) ? cmWkIoRead(context, bdf, offset,
+                                                   value)
+                                      : 0UL;
+}
+
+/* The chain port numbering's accessors: a read refused once the operation
+ * is stale while the attempt has written nothing (its survey and forward
+ * reads), never once it has (its restoration reads back what it puts);
+ * writes never refused (cmWkNumberGo stops its forward steps). */
+static ULONG cmWkChainNumRead(PVOID context, ULONG bdf, ULONG offset,
+                              PULONG value)
+{
+    PCM_CFGWK w;
+
+    w = (PCM_CFGWK)context;
+    if (!w->ChainWrote && !cmWkGo(w)) {
+        return 0;
+    }
+    return cmWkIoRead(context, bdf, offset, value);
+}
+
+static ULONG cmWkChainNumWrite(PVOID context, ULONG bdf, ULONG offset,
+                               ULONG width, ULONG value)
+{
+    ((PCM_CFGWK)context)->ChainWrote = 1;
+    return cmWkIoWrite(context, bdf, offset, width, value);
+}
+
+static ULONG cmWkChainHalRead(PVOID context, ULONG bdf, ULONG offset,
+                              PULONG value)
+{
+    return cmWkGo((PCM_CFGWK)context) ? cmWkCfgRead(bdf, offset, value)
+                                      : 0UL;
+}
+
 /* The numbering's go callback: member NumberMember's request still the one
  * taken (NumberGen) and its configuration space still to be read (no
  * CONTROLLER_UNAVAILABLE since). */
@@ -1985,6 +2166,11 @@ static ULONG cmWkNumberGo(PVOID context)
     PCM_CFGWK w;
 
     w = (PCM_CFGWK)context;
+    if (w->OpChain) {
+        /* A chain port's numbering (record 34 section 3.3.7 item 1). */
+        return cmWkChainCurrent(w, w->NumberMember, w->NumberGen) ? 1UL
+                                                                  : 0UL;
+    }
     return (cmWkCurrent(w, w->NumberMember, w->NumberGen) &&
             !cmWkNoCfg(w, w->NumberMember))
                ? 1UL : 0UL;
@@ -2359,7 +2545,7 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
     }
     w->ClaimFull = 0;
     if (removeVanished) {
-        idCount = cmWkBusIds(p->Bdf, ids, CM_WK_BUS_FUNCTIONS);
+        idCount = cmWkBusIds(NULL, p->Bdf, ids, CM_WK_BUS_FUNCTIONS);
         complete = FALSE;
         count = idCount <= CM_WK_BUS_FUNCTIONS
                     ? cmWkChildren(w, bridge, children, CM_WK_KNOWN,
@@ -2451,7 +2637,7 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
         if (p->NiIrqHave) {
             CmNiSetIrq(&p->Ni, p->PubGen, &p->NiIrqNext);
         }
-        CmNiOpenWindow(&p->Ni, p->PubGen, cmWkNiNow(w));
+        cmWkNiOpen(w, i);
     }
     p->NiIrqHave = 0;
     if (cr == CMG_CR_SUCCESS && cmWkCurrent(w, i, gen)) {
@@ -2540,6 +2726,473 @@ static VOID cmWkMark(PCM_CFGWK w, ULONG i, BOOLEAN mark)
         p->Known[c] = children[c];
     }
     p->KnownCount = count;
+}
+
+/* ---- the chain ports (design record 34 section 3.3.7, task 48.31) ------ */
+
+/*
+ * Item 3: the devnode of chain port `port` below member i's devnode
+ * `memberDn` (six levels, CM_WK_WALK_NODES nodes at most): one whose id
+ * names the port's location or path and whose VEN_ and DEV_ fields name the
+ * identity read from the port now. Nothing cached. 0 for none.
+ */
+static ULONG cmWkChainDevnode(PCM_CFGWK w, ULONG memberDn,
+                              const XHCI_TBT_CHAIN_PORT *port, PULONG path,
+                              PULONG pathCount, BOOLEAN readNow)
+{
+    ULONG stack[CM_WK_WALK_STACK];
+    ULONG depth[CM_WK_WALK_STACK];
+    ULONG top;
+    ULONG nodes;
+    ULONG node;
+    ULONG level;
+    ULONG next;
+    ULONG vd;
+    ULONG id;
+    char text[CMG_MAX_DEVICE_ID_LEN + 1];
+
+    if (readNow) {
+        /* Inside the chain operation, which passed the member's gates:
+         * the path and the identity read now and handed back for the
+         * marking window, which reads no configuration space. */
+        *pathCount = 0;
+        if (!cmWkGo(w) || !cmWkPciPathEx(w, port->Bdf, path, pathCount)) {
+            *pathCount = 0;
+        }
+        if (!cmWkGo(w) || !cmWkCfgRead(port->Bdf, XHCI_TBT_CFG_ID, &id) ||
+            !cmWkIdAnswers(id) || id != port->Id) {
+            return 0;
+        }
+    } else {
+        id = port->Id;
+    }
+    top = 0;
+    nodes = 0;
+    if (!cmWkGo(w) ||
+        CmCfgmgChild(&w->Cfgmg, memberDn, &next) != CMG_CR_SUCCESS) {
+        return 0;
+    }
+    while (next != 0 && top < CM_WK_WALK_STACK) {
+        stack[top] = next;
+        depth[top] = 1;
+        top++;
+        if (!cmWkGo(w) ||
+            CmCfgmgSibling(&w->Cfgmg, next, &next) != CMG_CR_SUCCESS) {
+            break;
+        }
+    }
+    while (top > 0 && nodes < CM_WK_WALK_NODES) {
+        if (!cmWkGo(w)) {
+            return 0;
+        }
+        top--;
+        node = stack[top];
+        level = depth[top];
+        nodes++;
+        if (CmCfgmgDeviceId(&w->Cfgmg, node, text, sizeof(text)) ==
+            CMG_CR_SUCCESS) {
+            text[CMG_MAX_DEVICE_ID_LEN] = '\0';
+            if (cmWkIdNames(text, port->Bdf, path, *pathCount) &&
+                CmPortsIdVenDev(text, sizeof(text), &vd) && vd == id) {
+                return node;
+            }
+        }
+        if (level >= CM_WK_NI_DEPTH || !cmWkGo(w) ||
+            CmCfgmgChild(&w->Cfgmg, node, &next) != CMG_CR_SUCCESS) {
+            continue;
+        }
+        while (next != 0 && top < CM_WK_WALK_STACK) {
+            stack[top] = next;
+            depth[top] = level + 1;
+            top++;
+            if (!cmWkGo(w) ||
+                CmCfgmgSibling(&w->Cfgmg, next, &next) != CMG_CR_SUCCESS) {
+                break;
+            }
+        }
+    }
+    return 0;
+}
+
+/* Item 6: a chain port's marking window opened (or opened again), kept by
+ * its member, location and identity, never by its devnode handle. */
+static VOID cmWkChainMarkOpen(PCM_CFGWK w, ULONG i,
+                              const XHCI_TBT_CHAIN_PORT *port,
+                              const ULONG *path, ULONG pathCount)
+{
+    ULONG k;
+    ULONG slot;
+
+    slot = CM_WK_CHAIN_MARKS;
+    for (k = 0; k < w->ChainMarkCount; k++) {
+        if (w->ChainMarkMember[k] == i &&
+            w->ChainMarkPort[k].Bdf == port->Bdf) {
+            slot = k;
+        }
+    }
+    if (slot == CM_WK_CHAIN_MARKS) {
+        if (w->ChainMarkCount >= CM_WK_CHAIN_MARKS) {
+            return;
+        }
+        slot = w->ChainMarkCount++;
+    }
+    w->ChainMarkPort[slot] = *port;
+    for (k = 0; k < pathCount && k < CM_PORTS_PATH_MAX; k++) {
+        w->ChainMarkPath[slot][k] = path[k];
+    }
+    w->ChainMarkPathN[slot] = k;
+    w->ChainMarkMember[slot] = i;
+    w->ChainMarkFrom[slot] = cmWkNowTicks();
+}
+
+/* Item 6: each child of chain port devnode `dn` not removable yet gets
+ * DN_REMOVABLE. Inside member i's operation (cmWkOp). */
+static VOID cmWkChainMark(PCM_CFGWK w, ULONG dn)
+{
+    ULONG children[CM_WK_KNOWN];
+    ULONG count;
+    ULONG c;
+    ULONG status;
+    ULONG problem;
+    ULONG cr;
+    BOOLEAN complete;
+
+    count = cmWkChildren(w, dn, children, CM_WK_KNOWN, &complete);
+    for (c = 0; c < count; c++) {
+        if (!cmWkGo(w)) {
+            return;
+        }
+        cr = CmCfgmgStatus(&w->Cfgmg, children[c], &status, &problem);
+        if (cr == CMG_CR_SUCCESS && (status & CMG_DN_REMOVABLE) != 0) {
+            continue;
+        }
+        if (!cmWkGo(w)) {
+            return;
+        }
+        cr = CmCfgmgAddRemovable(&w->Cfgmg, children[c]);
+        cmWkLog(w, "cm.chain.9x.removable", cr);
+        if (cr == CMG_CR_SUCCESS) {
+            w->C.Marked++;
+        } else {
+            w->C.MarkFailures++;
+        }
+    }
+}
+
+/*
+ * Item 5: the chained device's tunnel down - the children of chain port
+ * devnode `dn` whose function no longer answers on the port's secondary
+ * bus removed by the worker's removal step, then the port re-enumerated.
+ * TRUE when done (or nothing to do), FALSE to keep the request.
+ */
+static BOOLEAN cmWkChainDown(PCM_CFGWK w, ULONG i, ULONG gen, ULONG dn,
+                             ULONG portBdf)
+{
+    ULONG children[CM_WK_KNOWN];
+    ULONG ids[CM_WK_BUS_FUNCTIONS];
+    ULONG idCount;
+    ULONG count;
+    ULONG c;
+    ULONG k;
+    ULONG id;
+    ULONG answers;
+    ULONG cr;
+    BOOLEAN complete;
+    char text[CMG_MAX_DEVICE_ID_LEN + 1];
+
+    idCount = cmWkBusIds(w, portBdf, ids, CM_WK_BUS_FUNCTIONS);
+    if (idCount > CM_WK_BUS_FUNCTIONS) {
+        return FALSE;
+    }
+    complete = FALSE;
+    count = cmWkChildren(w, dn, children, CM_WK_KNOWN, &complete);
+    if (!complete) {
+        return FALSE;
+    }
+    for (c = 0; c < count; c++) {
+        if (!cmWkChainCurrent(w, i, gen)) {
+            return FALSE;
+        }
+        if (CmCfgmgDeviceId(&w->Cfgmg, children[c], text, sizeof(text)) !=
+                CMG_CR_SUCCESS ||
+            !CmPortsIdVenDev(text, sizeof(text), &id)) {
+            continue;
+        }
+        answers = 0;
+        for (k = 0; k < idCount; k++) {
+            if (ids[k] == id) {
+                answers = 1;
+            }
+        }
+        if (answers) {
+            continue;
+        }
+        cmWkLog(w, "cm.chain.9x.remove", portBdf);
+        if (!cmWkRemoveChild(w, i, gen, dn, children[c], TRUE)) {
+            return FALSE;
+        }
+    }
+    if (!cmWkChainCurrent(w, i, gen) || w->ClaimFull) {
+        return FALSE;
+    }
+    if (!cmWkEnumAdmitEx(w, i, TRUE, &gen)) {
+        return FALSE;
+    }
+    cr = CmCfgmgReenumerate(&w->Cfgmg, dn);
+    cmWkEnumDone(w, i);
+    w->C.Calls++;
+    if (cr != CMG_CR_SUCCESS) {
+        w->C.CallFailures++;
+    }
+    cmWkLog(w, "cm.chain.9x.reenumerate", (portBdf << 8) | cr);
+    return TRUE;
+}
+
+/*
+ * Item 4: a chained device's tunnel up - the chain port at devnode `dn`
+ * numbered as the range and window bridge with member i as the interrupt
+ * anchor, then re-enumerated and its marking window opened. TRUE when the
+ * port is dealt with (numbered and re-enumerated, populated already, or
+ * refused), FALSE to keep the request (nothing behind it yet, a call that
+ * failed).
+ */
+static BOOLEAN cmWkChainUp(PCM_CFGWK w, ULONG i, ULONG gen, ULONG dn,
+                           const XHCI_TBT_CHAIN_PORT *port,
+                           const ULONG *path, ULONG pathCount)
+{
+    XHCI_TBT_CFG io;
+    XHCI_TBT_CFG hal;
+    XHCI_TBT_BRNUM r;
+    XHCI_TBT_PORT reading;
+    LARGE_INTEGER pause;
+    ULONG children[1];
+    ULONG count;
+    ULONG tries;
+    ULONG cr;
+    BOOLEAN complete;
+    BOOLEAN up;
+
+    complete = FALSE;
+    count = cmWkChildren(w, dn, children, 1, &complete);
+    if (!complete) {
+        return FALSE;
+    }
+    if (count != 0) {
+        /* Populated already, as a member with a child is: left alone. */
+        cmWkLog(w, "cm.chain.9x.held", port->Bdf);
+        return TRUE;
+    }
+    CmZero(&r, sizeof(r));
+    r.Outcome = XHCI_TBT_BRNUM_NONE;
+    r.Functions = 1;
+    if (w->Numbering) {
+        hal.Read = cmWkChainHalRead;
+        hal.Write = NULL;
+        hal.Context = w;
+        hal.Reads = 0;
+        hal.Writes = 0;
+        up = (BOOLEAN)(XhciTbtPortRead(&hal, port->Bdf, &reading) ==
+                       XHCI_TBT_PORT_UP);
+        /* Its forward steps stop at its go callback (cmWkNumberGo, held
+         * to cmWkChainCurrent here) and its reads before its first
+         * write at the accessor; its restoration of what it wrote still
+         * reaches the bridges. */
+        io.Read = cmWkChainNumRead;
+        io.Write = cmWkChainNumWrite;
+        io.Context = w;
+        w->NumberMember = i;
+        w->NumberGen = gen;
+        for (tries = 1;; tries++) {
+            if (!cmWkNumberGo(w)) {
+                /* Stale before this attempt (the port reading's too):
+                 * nothing read through the numbering. Before the first,
+                 * nothing to report either. */
+                if (tries == 1) {
+                    return FALSE;
+                }
+                break;
+            }
+            io.Reads = 0;
+            io.Writes = 0;
+            w->ChainWrote = 0;
+            (VOID)XhciTbtNumberBridgesAt(
+                &io, port->Bdf, w->Port[i].Bdf, port->Rot,
+                XHCI_TBT_BRNUM_F_WINDOWS | XHCI_TBT_BRNUM_F_IRQ |
+                    (tries < CM_WK_NUMBER_TRIES ? XHCI_TBT_BRNUM_F_WAIT_EMPTY
+                                                : 0UL),
+                cmWkNumberGo, w, &r);
+            if (tries >= CM_WK_NUMBER_TRIES || !cmWkNumberGo(w)) {
+                break;
+            }
+            if (r.Outcome != XHCI_TBT_BRNUM_NOT_READY &&
+                !(r.Outcome == XHCI_TBT_BRNUM_NONE && r.Functions == 0 && up)) {
+                break;
+            }
+            CmRelativeMs(&pause, CM_WK_NUMBER_WAIT_MS);
+            (VOID)KeDelayExecutionThread(KernelMode, FALSE, &pause);
+        }
+        cmWkDiag(w, port->Bdf, &r, tries, 0x100UL);
+        cmWkLog(w, "cm.chain.9x.number", (port->Bdf << 8) | r.Outcome);
+        cmWkLog(w, "cm.chain.9x.irq",
+                (r.IrqOutcome & 0xFFUL) | ((r.IrqSet & 0xFFUL) << 8) |
+                    ((r.IrqOther & 0xFFUL) << 16) |
+                    ((port->Rot & 0xFFUL) << 24));
+        if (r.Outcome == XHCI_TBT_BRNUM_NO_ROOM) {
+            cmWkLog(w, "cm.chain.9x.no-room", port->Bdf);
+        }
+    }
+    if (!cmWkChainCurrent(w, i, gen)) {
+        return FALSE;
+    }
+    if (r.Outcome == XHCI_TBT_BRNUM_NONE && r.Functions == 0) {
+        /* Nothing chained behind it yet. */
+        return FALSE;
+    }
+    if ((r.Outcome != XHCI_TBT_BRNUM_DONE &&
+         r.Outcome != XHCI_TBT_BRNUM_REOPENED &&
+         r.Outcome != XHCI_TBT_BRNUM_NUMBERED &&
+         r.Outcome != XHCI_TBT_BRNUM_NONE) ||
+        ((r.Outcome == XHCI_TBT_BRNUM_DONE ||
+          r.Outcome == XHCI_TBT_BRNUM_REOPENED) &&
+         r.Numbered != 0 && r.WinOutcome != XHCI_TBT_BRWIN_DONE)) {
+        /* Refused (its window stage too), undone: dealt with, not
+         * re-enumerated. */
+        /* Refused, undone: dealt with, not re-enumerated. */
+        w->C.NumberRefused++;
+        return TRUE;
+    }
+    if (!cmWkEnumAdmitEx(w, i, TRUE, &gen)) {
+        return FALSE;
+    }
+    cr = CmCfgmgReenumerate(&w->Cfgmg, dn);
+    cmWkEnumDone(w, i);
+    w->C.Calls++;
+    if (cr != CMG_CR_SUCCESS) {
+        w->C.CallFailures++;
+    }
+    cmWkLog(w, "cm.chain.9x.reenumerate", (port->Bdf << 8) | cr);
+    if (cr != CMG_CR_SUCCESS) {
+        return FALSE;
+    }
+    /* The subtree below the member re-enumerated: its devnodes read again
+     * (PubGen), and record 28's no-IRQ window opened for the generation,
+     * with this numbering's interrupt record, as the member's own
+     * re-enumeration opens it (cmWkMember). */
+    w->Port[i].PubGen++;
+    if (w->NoIrq) {
+        if (w->Numbering) {
+            CmNiIrqFromBrnum(&r, &w->Port[i].NiIrqNext);
+            CmNiSetIrq(&w->Port[i].Ni, w->Port[i].PubGen,
+                       &w->Port[i].NiIrqNext);
+        }
+        cmWkNiOpen(w, i);
+    }
+    cmWkChainMarkOpen(w, i, port, path, pathCount);
+    /* Record 31 section 5.1: the tunnel id below the member again, the
+     * chained drive among its descendants. */
+    CmTagSeenInit(&w->TagSeen);
+    cmWkTagWindow(w, 1UL << i);
+    return TRUE;
+}
+
+/*
+ * Items 1 to 5 on member i inside its operation (cmWkOp): the walk through
+ * PCI.VXD's reader, then each chain port's devnode, the removal first
+ * (`down`), then the numbering (`up`). TRUE when every chain port found was
+ * dealt with; FALSE to keep the request for a later tick.
+ */
+static BOOLEAN cmWkChainOp(PCM_CFGWK w, ULONG i, ULONG gen, BOOLEAN up,
+                           BOOLEAN down)
+{
+    XHCI_TBT_CFG io;
+    XHCI_TBT_CHAIN_SET set;
+    ULONG member;
+    ULONG memberDn;
+    ULONG dn;
+    ULONG k;
+    ULONG rc;
+    ULONG path[CM_PORTS_PATH_MAX];
+    ULONG pathCount;
+    BOOLEAN all;
+
+    member = w->Port[i].Bdf;
+    if (!cmWkChainCurrent(w, i, gen) || !cmWkPciRoute(w, member)) {
+        return FALSE;
+    }
+    io.Read = cmWkChainIoRead;
+    io.Write = NULL;
+    io.Context = w;
+    io.Reads = 0;
+    io.Writes = 0;
+    rc = XhciTbtChainPorts(&io, member, i, &set);
+    if (!cmWkChainCurrent(w, i, gen)) {
+        /* Gone stale during the walk: nothing it read is trusted. */
+        return FALSE;
+    }
+    if (rc != XHCI_TBT_CHAIN_COMPLETE || set.Count == 0) {
+        cmWkLog(w, "cm.chain.9x.walk",
+                (member << 16) | ((rc & 0xFFUL) << 8) | (set.Count & 0xFFUL));
+        return FALSE;
+    }
+    memberDn = cmWkFindDevnode(w, i);
+    if (memberDn == 0 || !cmWkChainCurrent(w, i, gen)) {
+        return FALSE;
+    }
+    all = TRUE;
+    for (k = 0; k < set.Count && k < XHCI_TBT_CHAIN_MAX; k++) {
+        if (!cmWkChainCurrent(w, i, gen)) {
+            return FALSE;
+        }
+        dn = cmWkChainDevnode(w, memberDn, &set.Port[k], path, &pathCount,
+                              TRUE);
+        if (dn == 0) {
+            cmWkLog(w, "cm.chain.9x.no-devnode", set.Port[k].Bdf);
+            all = FALSE;
+            continue;
+        }
+        if (down && !cmWkChainDown(w, i, gen, dn, set.Port[k].Bdf)) {
+            all = FALSE;
+            continue;
+        }
+        if (up && !cmWkChainUp(w, i, gen, dn, &set.Port[k], path,
+                               pathCount)) {
+            all = FALSE;
+        }
+    }
+    return all;
+}
+
+VOID CmCfgwkChain(PCM_CFGWK w, ULONG members, BOOLEAN up, BOOLEAN down)
+{
+    KIRQL irql;
+    ULONG i;
+
+    if (w == NULL || (!up && !down)) {
+        return;
+    }
+    KeAcquireSpinLock(&w->Lock, &irql);
+    for (i = 0; i < w->Members; i++) {
+        if ((members & (1UL << i)) == 0) {
+            continue;
+        }
+        /* The 10 s count from the post that opened each kind. */
+        if (up) {
+            if ((w->ChainUp & (1UL << i)) == 0) {
+                w->ChainUpAt[i] = cmWkNowTicks();
+            }
+            w->ChainUp |= 1UL << i;
+            w->ChainUpSeq[i]++;
+        }
+        if (down) {
+            if ((w->ChainDown & (1UL << i)) == 0) {
+                w->ChainDownAt[i] = cmWkNowTicks();
+            }
+            w->ChainDown |= 1UL << i;
+            w->ChainDownSeq[i]++;
+        }
+    }
+    KeSetEvent(&w->Wake, IO_NO_INCREMENT, FALSE);
+    KeReleaseSpinLock(&w->Lock, irql);
 }
 
 /* ---- a function with no interrupt (design record 28, task 42-A.15) ----- */
@@ -2830,6 +3483,114 @@ static ULONG cmWkNiSecondary(PCM_CFGWK w, ULONG member, ULONG bdf)
     return (v >> 8) & 0xFFUL;
 }
 
+/* The hardware key value an installed devnode carries (record 28 section
+ * 14.3). */
+static char cmWkNiDriver[] = "Driver";
+
+/* Record 28 section 14.3 item 1: the devices answering on secondary bus
+ * `bus` (device 0 to 31, function 0, through PCI.VXD) whose devnode the
+ * window waits for - a bridge, or a class this record starts
+ * (CmNiAwaited); one whose class is not read counts. A bit each; a read
+ * of the id that fails, or bus 0, none. */
+static ULONG cmWkNiPresent(PCM_CFGWK w, ULONG bus)
+{
+    ULONG v;
+    ULONG cls;
+    ULONG dev;
+    ULONG mask;
+
+    mask = 0;
+    if (bus == 0) {
+        return 0;
+    }
+    for (dev = 0; dev < 32; dev++) {
+        if (CmCfgmgPciRead(&w->Cfgmg, XHCI_TBT_BDF(bus, dev, 0), 0, &v) &&
+            (v & 0xFFFFUL) != 0xFFFFUL && (v & 0xFFFFUL) != 0 &&
+            (!CmCfgmgPciRead(&w->Cfgmg, XHCI_TBT_BDF(bus, dev, 0), 0x08UL,
+                             &cls) ||
+             cls == 0xFFFFFFFFUL || CmNiAwaited(cls))) {
+            mask |= 1UL << dev;
+        }
+    }
+    return mask;
+}
+
+/* Bridge `bdf`'s secondary bus through PCI.VXD, 0 when not read or not
+ * numbered below it. */
+static ULONG cmWkNiBridgeBus(PCM_CFGWK w, ULONG bdf)
+{
+    ULONG v;
+    ULONG bus;
+
+    if (!CmCfgmgPciRead(&w->Cfgmg, bdf, XHCI_TBT_CFG_BUSES, &v) ||
+        v == 0xFFFFFFFFUL) {
+        return 0;
+    }
+    bus = (v >> 8) & 0xFFUL;
+    return bus <= (v & 0xFFUL) ? 0 : bus;
+}
+
+/* A walk's end (cm.reenum.9x.noirq.walk, 31:24): complete, or the first
+ * thing that cut it short or left a devnode unread. */
+#define CM_WK_NIW_COMPLETE  0UL
+#define CM_WK_NIW_NO_MEMBER 1UL     /* the member's devnode not found      */
+#define CM_WK_NIW_NO_PATH   2UL     /* the member's path not read          */
+#define CM_WK_NIW_GATE      3UL     /* the gate closed before the walk     */
+#define CM_WK_NIW_ROUTE     4UL     /* the member's route not read         */
+#define CM_WK_NIW_TOP_CHILD 5UL     /* the member's Get_Child failed       */
+#define CM_WK_NIW_STACK     6UL     /* the stack full                      */
+#define CM_WK_NIW_SIBLING   7UL     /* a Get_Sibling failed                */
+#define CM_WK_NIW_CUT       8UL     /* the node bound, the worker or the
+                                       gate in the walk                    */
+#define CM_WK_NIW_ID        9UL     /* a Get_Device_ID failed              */
+#define CM_WK_NIW_PLACE     10UL    /* a devnode not placed                */
+#define CM_WK_NIW_CHILD     11UL    /* a Get_Child failed                  */
+#define CM_WK_NIW_TICK_GATE 12UL    /* the gate closed at the tick: no walk */
+
+/* The walk's line, and each node it met, when they differ from the last
+ * walk logged for the member's window (record 28 section 14.4): its end
+ * (CM_WK_NIW_*) 31:24, the devnodes it met 23:16 (held at FFh) and its
+ * hold's 15:0; a node's location 31:16 (FFFFh not placed), a bridge 15,
+ * its Get_Child's CONFIGRET 14:8 and its problem 7:0 (FFh no Driver
+ * value). */
+static VOID cmWkNiWalkLog(PCM_CFGWK w, ULONG i, ULONG why, ULONG nodes,
+                          ULONG hold)
+{
+    CM_WK_PORT *p;
+    ULONG v;
+    ULONG sig;
+    ULONG k;
+
+    p = &w->Port[i];
+    v = (why << 24) | ((nodes > 0xFFUL ? 0xFFUL : nodes) << 16) |
+        (hold & 0xFFFFUL);
+    sig = p->NiNodes;
+    for (k = 0; k < p->NiNodes && k < CM_WK_NI_LOGN; k++) {
+        sig = (sig << 5) + (sig >> 27) + p->NiNode[k];
+    }
+    if (v == p->NiWalkV && sig == p->NiWalkSig) {
+        return;
+    }
+    p->NiWalkV = v;
+    p->NiWalkSig = sig;
+    cmWkLog(w, "cm.reenum.9x.noirq.walk", v);
+    for (k = 0; k < p->NiNodes && k < CM_WK_NI_LOGN; k++) {
+        cmWkLog(w, "cm.reenum.9x.noirq.walk.node", p->NiNode[k]);
+    }
+}
+
+/* One node the walk met, kept for its line. */
+static VOID cmWkNiWalkNode(PCM_CFGWK w, ULONG i, ULONG v)
+{
+    CM_WK_PORT *p;
+
+    p = &w->Port[i];
+    if (p->NiNodes < CM_WK_NI_LOGN) {
+        p->NiNode[p->NiNodes] = v;
+    }
+    p->NiNodes++;
+}
+
 /*
  * The walk (record 28, "The walk"): the member's descendants, one
  * Get_Child or Get_Sibling at a time, six levels and CM_WK_WALK_NODES
@@ -2837,9 +3598,11 @@ static ULONG cmWkNiSecondary(PCM_CFGWK w, ULONG member, ULONG bdf)
  * form - BUS_&DEV_&FUNC_ by itself, the path form by the ancestry in hand
  * (its devfn on its parent's secondary bus, its path's tail the parent's)
  * - and the swizzle of the bridges between the member and it. One whose
- * id resolves to no location is skipped and counted.
+ * id resolves to no location is skipped and counted. Its result: the hold
+ * of record 28 section 14.3 item 1 (CM_NI_HOLD_BRIDGE's log value), 0 for
+ * none.
  */
-static VOID cmWkNiWalk(PCM_CFGWK w, ULONG i)
+static ULONG cmWkNiWalk(PCM_CFGWK w, ULONG i)
 {
     CM_WK_PORT *p;
     CM_WK_NI_NODE *e;
@@ -2858,27 +3621,49 @@ static VOID cmWkNiWalk(PCM_CFGWK w, ULONG i)
     ULONG hash;
     ULONG cr;
     ULONG complete;
+    ULONG status;
+    ULONG problem;
+    ULONG hold;
+    ULONG isBridge;
+    ULONG classOk;
+    ULONG classRev;
+    ULONG drvCr;
+    ULONG drvBytes;
+    ULONG why;
+    ULONG nodeV;
+    char drv[64];
     char text[CMG_MAX_DEVICE_ID_LEN + 1];
 
     p = &w->Port[i];
     cmWkOp(w, CM_WK_NO_OP, 0);
     bridge = cmWkFindDevnode(w, i);
-    if (bridge == 0 || !p->PathRead || !cmWkNiGate(w, i) ||
-        !cmWkPciRoute(w, p->Bdf)) {
-        return;
+    hold = 0;
+    p->NiNodes = 0;
+    why = bridge == 0 ? CM_WK_NIW_NO_MEMBER
+          : !p->PathRead ? CM_WK_NIW_NO_PATH
+          : !cmWkNiGate(w, i) ? CM_WK_NIW_GATE
+          : !cmWkPciRoute(w, p->Bdf) ? CM_WK_NIW_ROUTE
+          : CM_WK_NIW_COMPLETE;
+    if (why != CM_WK_NIW_COMPLETE) {
+        cmWkNiWalkLog(w, i, why, 0, 0);
+        return 0;
     }
     depth = 0;
     nodes = 0;
     complete = 1;
+    w->NiMetN = 0;
+    w->NiBrN = 0;
     CmNiWalkBegin(&p->Ni);
     cr = CmCfgmgChild(&w->Cfgmg, bridge, &child);
     if (cr == CMG_CR_NO_SUCH_DEVNODE) {
         child = 0;
     } else if (cr != CMG_CR_SUCCESS) {
-        return;
+        cmWkNiWalkLog(w, i, CM_WK_NIW_TOP_CHILD, 0, 0);
+        return 0;
     }
     while (child != 0) {
         if (depth >= CM_WK_NI_STACK) {
+            why = CM_WK_NIW_STACK;
             complete = 0;
             break;
         }
@@ -2896,6 +3681,7 @@ static VOID cmWkNiWalk(PCM_CFGWK w, ULONG i)
             break;
         }
         if (cr != CMG_CR_SUCCESS) {
+            why = CM_WK_NIW_SIBLING;
             complete = 0;
             break;
         }
@@ -2904,6 +3690,7 @@ static VOID cmWkNiWalk(PCM_CFGWK w, ULONG i)
         /* The member's gate after every call that may have blocked: a
          * loss ends the walk before any bridge below is read. */
         if (nodes >= CM_WK_WALK_NODES || !cmWkGo(w) || !cmWkNiGate(w, i)) {
+            why = why != CM_WK_NIW_COMPLETE ? why : CM_WK_NIW_CUT;
             complete = 0;
             break;
         }
@@ -2912,6 +3699,7 @@ static VOID cmWkNiWalk(PCM_CFGWK w, ULONG i)
         nodes++;
         if (CmCfgmgDeviceId(&w->Cfgmg, node, text, sizeof(text)) !=
             CMG_CR_SUCCESS) {
+            why = why != CM_WK_NIW_COMPLETE ? why : CM_WK_NIW_ID;
             complete = 0;
             continue;
         }
@@ -2932,6 +3720,7 @@ static VOID cmWkNiWalk(PCM_CFGWK w, ULONG i)
             }
             /* The gate again: Get_Device_ID may have blocked. */
             if (ok && !cmWkNiGate(w, i)) {
+                why = why != CM_WK_NIW_COMPLETE ? why : CM_WK_NIW_CUT;
                 complete = 0;
                 break;
             }
@@ -2945,24 +3734,85 @@ static VOID cmWkNiWalk(PCM_CFGWK w, ULONG i)
         if (!ok) {
             /* Present but not placed: the walk cannot prove the others
              * gone, so nothing is forgotten by it. */
+            why = why != CM_WK_NIW_COMPLETE ? why : CM_WK_NIW_PLACE;
             complete = 0;
             CmNiUnresolved(&p->Ni);
+            cmWkNiWalkNode(w, i, 0xFFFF0000UL | (cur.Depth & 0xFFUL));
             continue;
         }
+        /* Record 28 section 14.3 item 1: a bridge whose driver is still
+         * being installed holds the member's window, whatever its entry
+         * (refused by its header, on the refused list): an installation
+         * problem, or no Driver value in its hardware key yet. Another
+         * class, or a read that fails, holds nothing. One walk's first
+         * such bridge is enough. */
+        classOk = (ULONG)(CmCfgmgPciRead(&w->Cfgmg, bdf, 0x08UL,
+                                         &classRev) &&
+                          classRev != 0xFFFFFFFFUL);
+        isBridge = (ULONG)(classOk && CmNiIsBridge(classRev));
+        nodeV = ((bdf & 0xFFFFUL) << 16) | (isBridge << 15);
+        if (isBridge && hold == 0) {
+            problem = 0;
+            status = 0;
+            cr = CmCfgmgStatus(&w->Cfgmg, node, &status, &problem);
+            drvCr = CMG_CR_SUCCESS;
+            if (cr != CMG_CR_SUCCESS || !CmNiInstalling(status, problem)) {
+                drvBytes = sizeof(drv) - 1;
+                drvCr = CmCfgmgReadHardwareValue(&w->Cfgmg, node,
+                                                 cmWkNiDriver, CMG_REG_SZ,
+                                                 drv, &drvBytes);
+            }
+            nodeV |= drvCr == CMG_CR_NO_SUCH_VALUE ? 0xFFUL
+                                                   : (problem & 0xFFUL);
+            if (hold == 0 && CmNiWalkInstalling(cr, status, problem, drvCr)) {
+                hold = CM_NI_HOLD_BRIDGE | ((cur.Depth & 0xFFUL) << 8) |
+                       (drvCr == CMG_CR_NO_SUCH_VALUE
+                            ? CM_NI_HOLD_NO_DRIVER
+                            : (problem & 0xFFUL));
+            }
+        }
         CmNiSeen(&p->Ni, node, hash, bdf, cur.Rot & 3UL);
-        if (cur.Depth >= CM_WK_NI_DEPTH) {
+        if (w->NiMetN < CM_WK_NI_MET) {
+            w->NiMet[w->NiMetN] = bdf;
+        }
+        w->NiMetN++;
+        /* Only a bridge has PCI devnodes below it: a function's children
+         * (a started USB controller's root hub) are not walked, nor read
+         * as unplaced. One whose class is not read is walked. */
+        if (cur.Depth >= CM_WK_NI_DEPTH || (classOk && !isBridge)) {
+            cmWkNiWalkNode(w, i, nodeV | 0x7F00UL);
             continue;
         }
         cr = CmCfgmgChild(&w->Cfgmg, node, &child);
+        cmWkNiWalkNode(w, i, nodeV | ((cr & 0x7FUL) << 8));
         if (cr == CMG_CR_NO_SUCH_DEVNODE) {
+            /* Record 28 section 14.3 item 1: a bridge with a function
+             * behind it and no child devnode yet - Windows has not
+             * enumerated what its installation brought (98 SE does so
+             * once its restart question is answered) - holds too. */
+            if (hold == 0 && isBridge &&
+                cmWkNiPresent(w, cmWkNiBridgeBus(w, bdf)) != 0) {
+                hold = CM_NI_HOLD_BRIDGE | ((cur.Depth & 0xFFUL) << 8) |
+                       CM_NI_HOLD_NO_CHILD;
+            }
+            if (isBridge && w->NiBrN < CM_WK_NI_STACK) {
+                w->NiBr[w->NiBrN] = bdf;
+                w->NiBrDepth[w->NiBrN++] = cur.Depth;
+            }
             continue;
         }
         if (cr != CMG_CR_SUCCESS) {
+            why = why != CM_WK_NIW_COMPLETE ? why : CM_WK_NIW_CHILD;
             complete = 0;
             continue;
         }
+        if (isBridge && w->NiBrN < CM_WK_NI_STACK) {
+            w->NiBr[w->NiBrN] = bdf;
+            w->NiBrDepth[w->NiBrN++] = cur.Depth;
+        }
         while (child != 0) {
             if (depth >= CM_WK_NI_STACK) {
+                why = why != CM_WK_NIW_COMPLETE ? why : CM_WK_NIW_STACK;
                 complete = 0;
                 break;
             }
@@ -2981,12 +3831,36 @@ static VOID cmWkNiWalk(PCM_CFGWK w, ULONG i)
                 break;
             }
             if (cr != CMG_CR_SUCCESS) {
+                why = why != CM_WK_NIW_COMPLETE ? why : CM_WK_NIW_SIBLING;
                 complete = 0;
                 break;
             }
         }
     }
+    /* Record 28 section 14.3 item 1: 98 SE enumerates a new bridge's
+     * children one at a time, each once the one before has had its
+     * wizard; so a function on the member's or a walked bridge's
+     * secondary bus with no devnode yet holds, read by a complete walk
+     * whose locations were all kept. */
+    if (hold == 0 && complete) {
+        bus = cmWkNiSecondary(w, p->Bdf, p->Bdf);
+        if (CmNiUnenumerated(bus, cmWkNiPresent(w, bus), w->NiMet,
+                             w->NiMetN, CM_WK_NI_MET)) {
+            hold = CM_NI_HOLD_BRIDGE | CM_NI_HOLD_NO_CHILD;
+        }
+        for (k = 0; hold == 0 && k < w->NiBrN && k < CM_WK_NI_STACK; k++) {
+            bus = cmWkNiBridgeBus(w, w->NiBr[k]);
+            if (CmNiUnenumerated(bus, cmWkNiPresent(w, bus), w->NiMet,
+                                 w->NiMetN, CM_WK_NI_MET)) {
+                hold = CM_NI_HOLD_BRIDGE |
+                       ((w->NiBrDepth[k] & 0xFFUL) << 8) |
+                       CM_NI_HOLD_NO_CHILD;
+            }
+        }
+    }
     CmNiWalkDone(&p->Ni, complete);
+    cmWkNiWalkLog(w, i, why, nodes, hold);
+    return hold;
 }
 
 /* One operation of cm_noirq.h, made here at once (the interim). */
@@ -3048,8 +3922,12 @@ static VOID cmWkNiExec(PCM_CFGWK w, ULONG i, const CM_NI_OP *op,
         pd[0] = 0;
         dlCr = CmCfgmgReadSoftwareValue(&w->Cfgmg, op->Dn, "DevLoader", dl,
                                         &dlBytes);
-        pdCr = CmCfgmgReadSoftwareValue(&w->Cfgmg, op->Dn, "PortDriver", pd,
-                                        &pdBytes);
+        /* The second value of the kind's pair (record 28 section 14.2):
+         * Stor98's PortDriver, xhci98.inf's NTMPDriver. */
+        pdCr = CmCfgmgReadSoftwareValue(&w->Cfgmg, op->Dn,
+                                        op->FnKind == CM_NI_KIND_XHCI
+                                            ? "NTMPDriver" : "PortDriver",
+                                        pd, &pdBytes);
         if (dlBytes > sizeof(dl) - 1) {
             dlBytes = sizeof(dl) - 1;
         }
@@ -3059,7 +3937,8 @@ static VOID cmWkNiExec(PCM_CFGWK w, ULONG i, const CM_NI_OP *op,
         dl[dlBytes] = 0;
         pd[pdBytes] = 0;
         /* A name longer than the room reads as another driver. */
-        res->Bind = CmNiBindFlags(dlCr == CMG_CR_SUCCESS || dlCr ==
+        res->Bind = CmNiBindFlagsKind(op->FnKind,
+                                  dlCr == CMG_CR_SUCCESS || dlCr ==
                                       CMG_CR_BUFFER_SMALL,
                                   dlCr == CMG_CR_SUCCESS ? dl : "", dlBytes,
                                   pdCr == CMG_CR_SUCCESS || pdCr ==
@@ -3209,6 +4088,38 @@ static VOID cmWkNiDiagCopy(PCM_CFGWK w, ULONG i)
     KeReleaseSpinLock(&w->Lock, irql);
 }
 
+/* Member i's no-IRQ window opens for its generation now (record 28
+ * section 4). Where its ticks were not running, the worker's time from
+ * here to its first tick is measured from the opening (section 14.6). */
+static VOID cmWkNiOpen(PCM_CFGWK w, ULONG i)
+{
+    CM_WK_PORT *p;
+
+    p = &w->Port[i];
+    CmNiOpenWindow(&p->Ni, p->PubGen, cmWkNiNow(w));
+    p->NiWalkV = 0xFFFFFFFFUL;
+    p->NiWalkSig = 0;
+    if (!p->NiTicking) {
+        p->NiEnd = cmWkNiNow(w);
+        p->NiTicking = 1;
+    }
+}
+
+/* The lines member m's state owes the log (record 28 section 14.4). */
+static VOID cmWkNiLogs(PCM_CFGWK w, PCM_NI_MEMBER m)
+{
+    ULONG what;
+    ULONG value;
+
+    while (CmNiLogNext(m, &what, &value)) {
+        cmWkLog(w, what == CM_NI_LOG_HOLD ? "cm.reenum.9x.noirq.hold"
+                   : what == CM_NI_LOG_CREDIT ? "cm.reenum.9x.noirq.credit"
+                   : what == CM_NI_LOG_CLOSE ? "cm.reenum.9x.noirq.close"
+                                             : "cm.reenum.9x.noirq.close.hold",
+                value);
+    }
+}
+
 /* One tick of member i's no-IRQ work: the walk while its window is open,
  * then every operation the pass hands out. */
 static VOID cmWkNoIrq(PCM_CFGWK w, ULONG i)
@@ -3219,20 +4130,38 @@ static VOID cmWkNoIrq(PCM_CFGWK w, ULONG i)
     CM_NI_RES res;
     ULONG ops;
     ULONG state;
+    ULONG walkFrom;
 
     m = &w->Port[i].Ni;
     ctx.Now = cmWkNiNow(w);
+    /* Record 28 section 14.6: the worker's time since this member's last
+     * tick, beyond the tick's own wait, went to its other work (marking,
+     * tagging, a chain operation, another member's calls) - a call there
+     * that blocked is credited as one of this member's would be. */
+    if (w->Port[i].NiTicking &&
+        ctx.Now - w->Port[i].NiEnd > CM_WK_TICK_MS) {
+        CmNiCredit(m, ctx.Now - w->Port[i].NiEnd - CM_WK_TICK_MS, ctx.Now);
+        cmWkNiLogs(w, m);
+    }
     ctx.Switch = w->NoIrq;
     ctx.Gate = cmWkNiGate(w, i);
     ctx.Stor98 = CM_NI_STOR98_FAILED;
+    ctx.WalkHold = 0;
     if (ctx.Gate && CmNiWindow(m)) {
-        cmWkNiWalk(w, i);
+        walkFrom = ctx.Now;
+        ctx.WalkHold = cmWkNiWalk(w, i);
         /* The walk's calls may have blocked: the clock and the gate as
-         * they are now. */
+         * they are now, and a walk held by a wizard credited (record 28
+         * section 14.6). */
         ctx.Now = cmWkNiNow(w);
         ctx.Gate = cmWkNiGate(w, i);
+        CmNiCredit(m, ctx.Now - walkFrom, ctx.Now);
+    } else if (CmNiWindow(m)) {
+        w->Port[i].NiNodes = 0;
+        cmWkNiWalkLog(w, i, CM_WK_NIW_TICK_GATE, 0, 0);
     }
     CmNiPass(m, &ctx);
+    cmWkNiLogs(w, m);
     if (ctx.Gate) {
         ctx.Stor98 = cmWkNiStor98(w);
     }
@@ -3251,6 +4180,7 @@ static VOID cmWkNoIrq(PCM_CFGWK w, ULONG i)
         ctx.Now = cmWkNiNow(w);
         ctx.Gate = cmWkNiGate(w, i);
         CmNiTake(m, &ctx, &res);
+        cmWkNiLogs(w, m);
         if (op.Dev < CM_NOIRQ_DEVICES && m->Dev[op.Dev].Used &&
             m->Dev[op.Dev].State != state &&
             (m->Dev[op.Dev].State == CM_NI_S_EXCLUDED ||
@@ -3266,6 +4196,8 @@ static VOID cmWkNoIrq(PCM_CFGWK w, ULONG i)
         }
     }
     cmWkNiDiagCopy(w, i);
+    w->Port[i].NiEnd = cmWkNiNow(w);
+    w->Port[i].NiTicking = CmNiBusy(m) ? 1UL : 0UL;
 }
 
 /* The members' no-IRQ counts into `c` (record 28 section 7). */
@@ -3288,6 +4220,8 @@ static VOID cmWkNiCounters(PCM_CFGWK w, PCM_CFGWK_COUNTERS c)
         c->NoIrqLate += n->Late;
         c->NoIrqPin0Seen += n->Pin0Seen;
         c->NoIrqPin0Started += n->Pin0Started;
+        c->NoIrqHeld += n->Held;
+        c->NoIrqCredited += n->Credited;
         for (k = 0; k < 16 && k < CM_NI_W_COUNT; k++) {
             c->NoIrqRefused[k] += n->Refused[k];
         }
@@ -3628,6 +4562,21 @@ static VOID NTAPI cmWkThread(PVOID context)
     ULONG i;
     ULONG lostClaim;
     ULONG tagNew;
+    ULONG chainUp;
+    ULONG chainDown;
+    ULONG chainActive;
+    ULONG chainGen;
+    ULONG upSeq[XHCI_TBT_MAX_TUNNELS];
+    ULONG downSeq[XHCI_TBT_MAX_TUNNELS];
+    ULONG upAt[XHCI_TBT_MAX_TUNNELS];
+    ULONG downAt[XHCI_TBT_MAX_TUNNELS];
+    ULONG chainDn;
+    BOOLEAN upOn;
+    BOOLEAN downOn;
+    BOOLEAN upGone;
+    BOOLEAN downGone;
+    ULONG bit;
+    BOOLEAN chainDone;
     PCM_CFGWK_PCI pci;
     BOOLEAN clean;
     BOOLEAN only;
@@ -3719,6 +4668,16 @@ static VOID NTAPI cmWkThread(PVOID context)
         }
         pci = w->PciReq;
         w->PciReq = NULL;
+        /* Record 34 section 3.3.7: the chain requests as they stand. */
+        chainUp = w->ChainUp;
+        chainDown = w->ChainDown;
+        for (i = 0; i < XHCI_TBT_MAX_TUNNELS; i++) {
+            upSeq[i] = w->ChainUpSeq[i];
+            downSeq[i] = w->ChainDownSeq[i];
+            upAt[i] = w->ChainUpAt[i];
+            downAt[i] = w->ChainDownAt[i];
+        }
+        chainActive = w->Active;
         /* Record 31 section 5.1: members newly active, still active. */
         tagNew = w->TagReq & w->Active;
         w->TagReq = 0;
@@ -3942,6 +4901,134 @@ static VOID NTAPI cmWkThread(PVOID context)
                     done |= 1UL << i;
                 }
             }
+            /* Record 34 section 3.3.7: the chain requests, after the
+             * members' own and under their gates; one not dealt with is
+             * kept for the next tick, for 10 s from its first post. */
+            for (i = 0; i < w->Members && go; i++) {
+                bit = 1UL << i;
+                upOn = (BOOLEAN)((chainUp & bit) != 0);
+                downOn = (BOOLEAN)((chainDown & bit) != 0);
+                if (!upOn && !downOn) {
+                    continue;
+                }
+                /* Each kind expires 10 s after the post that opened it
+                 * (at once on a member no longer owned). */
+                upGone = (BOOLEAN)(upOn &&
+                                   ((chainActive & bit) == 0 ||
+                                    cmWkSince(upAt[i]) >= CM_WK_CHAIN_MS));
+                downGone = (BOOLEAN)(downOn &&
+                                     ((chainActive & bit) == 0 ||
+                                      cmWkSince(downAt[i]) >= CM_WK_CHAIN_MS));
+                if (upGone || downGone) {
+                    cmWkLog(w, "cm.chain.9x.owed-expired",
+                            (w->Port[i].Bdf << 8) | (upGone ? 1UL : 0UL) |
+                                (downGone ? 2UL : 0UL));
+                }
+                if (upGone && (chainActive & bit) != 0) {
+                    /* Item 1: a chained tunnel's numbering not dealt with
+                     * in its 10 s falls back to the member's
+                     * re-enumeration, which the seam left to it. */
+                    KeAcquireSpinLock(&w->Lock, &irql);
+                    if (((w->ReqGone | w->NoScan | w->Defer | w->Hold) &
+                         bit) == 0) {
+                        /* Never over a loss's own requests: their removal
+                         * and no-scan re-enumeration stand as they are. */
+                        w->ReqReenum |= bit;
+                        w->Retry &= ~bit;
+                        w->RetryVanish &= ~bit;
+                        w->Gen[i]++;
+                        KeSetEvent(&w->Wake, IO_NO_INCREMENT, FALSE);
+                    }
+                    KeReleaseSpinLock(&w->Lock, irql);
+                    cmWkLog(w, "cm.chain.9x.fallback", w->Port[i].Bdf);
+                }
+                upOn = (BOOLEAN)(upOn && !upGone);
+                downOn = (BOOLEAN)(downOn && !downGone);
+                chainDone = FALSE;
+                /* The generation before the gates are read: a loss posted
+                 * after their read (CmCfgwkUnavailable, CmCfgwkGone)
+                 * advances it, so the operation is refused or goes stale
+                 * instead of taking the newer generation as its own
+                 * (item 1). */
+                chainGen = cmWkGenOf(w, i);
+                if ((upOn || downOn) &&
+                    !CmNiInTransaction(&w->Port[i].Ni) &&
+                    !cmWkDeferOwed(w, i) && !cmWkGoneOwed(w, i) &&
+                    !cmWkHeld(w, i) && !CmEjectVanishHeld(w->Port[i].Bdf) &&
+                    cmWkPruneClear(w, i) && !cmWkNoCfg(w, i)) {
+                    cmWkLeave(w);
+                    if (!cmWkEnter(w)) {
+                        go = FALSE;
+                        break;
+                    }
+                    cmWkChainOpSet(w, i, chainGen);
+                    w->ClaimFull = 0;
+                    if (cmWkChainCurrent(w, i, chainGen)) {
+                        chainDone = cmWkChainOp(w, i, chainGen, upOn,
+                                                downOn);
+                    }
+                    cmWkOp(w, CM_WK_NO_OP, 0);
+                }
+                KeAcquireSpinLock(&w->Lock, &irql);
+                if ((upGone || (chainDone && upOn)) &&
+                    w->ChainUpSeq[i] == upSeq[i]) {
+                    w->ChainUp &= ~bit;
+                }
+                if ((downGone || (chainDone && downOn)) &&
+                    w->ChainDownSeq[i] == downSeq[i]) {
+                    w->ChainDown &= ~bit;
+                }
+                KeReleaseSpinLock(&w->Lock, irql);
+            }
+            /* Record 34 section 3.3.7 item 6: each chain port's marking
+             * window, while safe eject is on. */
+            for (i = 0; i < w->ChainMarkCount && go;) {
+                if (cmWkSince(w->ChainMarkFrom[i]) >= CM_WK_MARK_MS) {
+                    w->ChainMarkCount--;
+                    w->ChainMarkPort[i] = w->ChainMarkPort[w->ChainMarkCount];
+                    for (chainGen = 0; chainGen < CM_PORTS_PATH_MAX;
+                         chainGen++) {
+                        w->ChainMarkPath[i][chainGen] =
+                            w->ChainMarkPath[w->ChainMarkCount][chainGen];
+                    }
+                    w->ChainMarkPathN[i] = w->ChainMarkPathN[w->ChainMarkCount];
+                    w->ChainMarkMember[i] =
+                        w->ChainMarkMember[w->ChainMarkCount];
+                    w->ChainMarkFrom[i] = w->ChainMarkFrom[w->ChainMarkCount];
+                    continue;
+                }
+                if (w->MarkWanted &&
+                    w->ChainMarkMember[i] < w->Members &&
+                    (w->Active & (1UL << w->ChainMarkMember[i])) != 0) {
+                    cmWkLeave(w);
+                    go = cmWkEnter(w);
+                    if (!go) {
+                        break;
+                    }
+                    /* The generation before the no-configuration gate: a
+                     * loss posted after the gate's read makes the
+                     * operation stale, so nothing is read through it. */
+                    chainGen = cmWkGenOf(w, w->ChainMarkMember[i]);
+                    cmWkOp(w, w->ChainMarkMember[i], chainGen);
+                    if (!cmWkNoCfg(w, w->ChainMarkMember[i]) && cmWkGo(w)) {
+                        /* Found again from the member's devnode by
+                         * location and identity, never by a kept handle
+                         * (item 3). */
+                        chainDn = cmWkFindDevnode(w, w->ChainMarkMember[i]);
+                        if (chainDn != 0) {
+                            chainDn = cmWkChainDevnode(
+                                w, chainDn, &w->ChainMarkPort[i],
+                                w->ChainMarkPath[i], &w->ChainMarkPathN[i],
+                                FALSE);
+                        }
+                        if (chainDn != 0) {
+                            cmWkChainMark(w, chainDn);
+                        }
+                    }
+                    cmWkOp(w, CM_WK_NO_OP, 0);
+                }
+                i++;
+            }
             if (go && w->MarkOpen) {
                 cmWkLeave(w);
                 go = cmWkEnter(w);
@@ -4018,7 +5105,9 @@ static VOID NTAPI cmWkThread(PVOID context)
             w->MarkFrom = cmWkNowTicks();
         }
         timed = (BOOLEAN)(w->MarkOpen || w->PruneOwed != 0 ||
-                          (w->ReqGone & ~w->Defer) != 0 || w->TagOpen != 0);
+                          (w->ReqGone & ~w->Defer) != 0 || w->TagOpen != 0 ||
+                          (w->ChainUp | w->ChainDown) != 0 ||
+                          w->ChainMarkCount != 0);
         for (i = 0; i < w->Members && !timed; i++) {
             if (CmNiBusy(&w->Port[i].Ni) ||
                 CmEjectParkedAny(w->Port[i].Bdf)) {

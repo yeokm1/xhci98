@@ -21,13 +21,19 @@ families.
   OEM-QUOTE  A quote anywhere is balanced and wraps its whole field, with no
            space just inside it (Setup keeps that space; this parser trims it).
   OEM-DEFAULT  [Defaults] is "scsi = XHCI98" alone, and [scsi] names XHCI98
-           alone (x86: XHCI98 and then XHCI98W2K, whose description names
-           Windows 2000 and not XP), each with a quoted description.
+           alone (x86: XHCI98 and then XHCI98W2K, the "files from CD"
+           option, whose description names 2000/XP and says "files from
+           CD"; task 48.25), each with a quoted description.
   OEM-DISK [Disks] is one disk, d1, whose tag file is \xhci98.sys and whose
            directory is the disk root - where the package stages the driver.
            The x86 file adds d2, tagged \usbd.sy_ at the root: the same
-           floppy once the user has copied the Windows 2000 CD's files to it.
-  OEM-W2K  (x86) The Windows 2000 option: [Files.scsi.XHCI98W2K] is
+           floppy once the user has copied the Windows 2000 or XP CD's files
+           to it, its description naming the Windows 2000/XP CD.
+  OEM-W2K  (x86) The "files from CD" option (its id XHCI98W2K from when it
+           was Windows 2000's alone; XP takes it too since task 48.25, its
+           text mode laying down the same hidusb.sys and kbdhid.sys without
+           their imports, so a USB keyboard is dead at GUI-mode Setup's
+           first question): [Files.scsi.XHCI98W2K] is
            [Files.scsi.XHCI98]'s lines in order, then exactly
            "driver = d2, usbd.sys, usbd", "driver = d2, hidclass.sys,
            hidclass" and "driver = d2, hidparse.sys, hidparse"; its ids are
@@ -87,7 +93,11 @@ families.
            tag, which name the user's copy from the CD.
   OEM-83   Every file name is 8.3.
   OEM-ARCH The x86 file's descriptions say "32-bit" and the amd64 file's say
-           "x64", so a user offered both at the F6 list can tell them apart.
+           "x64", so a user offered both at the F6 list can tell them apart;
+           the x86 file's "files from CD" option, which names 2000/XP (no
+           2000 is x64, and the amd64 file has no such option), need not
+           say "32-bit" and must not say "x64" (owner's wording,
+           2026-11-09).
   OEM-PAIR The two committed files carry the same entries everywhere except
            the [Disks] and [scsi] descriptions and the dll lines, since the
            accepted cost of two files is that they can drift; the dll lines
@@ -496,6 +506,7 @@ function Test-OemText {
     }
 
     $descs = @()
+    $w2kDesc = $null
     $named = @()
 
     $def = & $get "Defaults"
@@ -520,10 +531,13 @@ function Test-OemText {
                     & $add "OEM-DEFAULT" "[scsi] $($options[$k]) needs one quoted, non-empty description."
                 } else {
                     $descs += $f[0].Text
-                    # The user picks by this text: the Windows 2000 option
-                    # must say so and must not offer itself to XP.
-                    if ($options[$k] -eq $w2kOption -and ($f[0].Text -notmatch 'Windows 2000' -or $f[0].Text -match 'XP')) {
-                        & $add "OEM-DEFAULT" "[scsi] $w2kOption's description must name Windows 2000 and not XP."
+                    if ($options[$k] -eq $w2kOption) { $w2kDesc = $f[0].Text }
+                    # The user picks by this text: the "files from CD"
+                    # option serves 2000 and XP (task 48.25) and must say
+                    # both, and that it takes files from the CD, so it reads
+                    # apart from XHCI98's.
+                    if ($options[$k] -eq $w2kOption -and ($f[0].Text -notmatch '2000/XP' -or $f[0].Text -notmatch 'files from CD')) {
+                        & $add "OEM-DEFAULT" "[scsi] $w2kOption's description must name 2000/XP and say 'files from CD'."
                     }
                 }
             }
@@ -549,7 +563,14 @@ function Test-OemText {
                 if ($f.Count -ne 3 -or -not $f[0].Quoted -or $f[0].Text -eq "" -or
                     $f[1].Text -ne $w2kTag -or $f[2].Text -ne "\") {
                     & $add "OEM-DISK" "[Disks] d2 must be `"<description>`", $w2kTag, \ - the user's copy of the CD's files at the floppy root."
-                } else { $descs += $f[0].Text }
+                } else {
+                    # Setup shows it as "Insert the disk labeled: ...": the
+                    # files come from the 2000 or the XP CD (task 48.25).
+                    if ($f[0].Text -notmatch 'Windows 2000/XP CD') {
+                        & $add "OEM-DISK" "[Disks] d2's description must name the Windows 2000/XP CD the files come from."
+                    }
+                    $descs += $f[0].Text
+                }
             }
         }
     }
@@ -728,7 +749,8 @@ function Test-OemText {
     $word = if ($Profile -eq "amd64") { "x64" } else { "32-bit" }
     $other = if ($Profile -eq "amd64") { "32-bit" } else { "x64" }
     foreach ($d in $descs) {
-        if ($d -notmatch [regex]::Escape($word) -or $d -match [regex]::Escape($other)) {
+        $needWord = -not ($null -ne $w2kDesc -and $d -ceq $w2kDesc)
+        if (($needWord -and $d -notmatch [regex]::Escape($word)) -or $d -match [regex]::Escape($other)) {
             & $add "OEM-ARCH" "the $Profile description '$d' must say '$word' and not '$other'."
         }
     }
@@ -879,7 +901,10 @@ if ($SelfTest) {
             $cases += @{ Rule = "OEM-SECTION"; Text = (& $inSec "Config.hidparse" "[Config.hidparse]`r`nvalue = `"`", Start, REG_DWORD, 3`r`n" "") }
             $cases += @{ Rule = "OEM-DISK"; Text = $text.Replace(", \usbd.sy_, \", ", \usbd.sys, \") }
             $cases += @{ Rule = "OEM-DISK"; Text = $text.Replace(", \usbd.sy_, \", ", \usbd.sy_, \i386") }
-            $cases += @{ Rule = "OEM-DEFAULT"; Text = $text.Replace("(32-bit Windows 2000, files from CD)", "(32-bit Windows 2000/XP, files from CD)") }
+            $cases += @{ Rule = "OEM-DEFAULT"; Text = $text.Replace("(2000/XP, USB keyboard/mouse, files from CD)", "(2000, USB keyboard/mouse, files from CD)") }
+            $cases += @{ Rule = "OEM-DEFAULT"; Text = $text.Replace("(2000/XP, USB keyboard/mouse, files from CD)", "(2000/XP, USB keyboard/mouse, CD)") }
+            $cases += @{ Rule = "OEM-ARCH"; Text = $text.Replace("(2000/XP, USB keyboard/mouse, files from CD)", "(2000/XP x64, USB keyboard/mouse, files from CD)") }
+            $cases += @{ Rule = "OEM-DISK"; Text = $text.Replace("from the 32-bit Windows 2000/XP CD", "from the 32-bit Windows 2000 CD") }
             $cases += @{ Rule = "OEM-DEFAULT"; Text = (& $inSec "scsi" "XHCI98W2K = " "XHCI98W2K_ = ") }
             # A d2 line on the XP option: XP would ask for the disk with no
             # way past it, and the file is Microsoft's.

@@ -217,7 +217,7 @@ same key, SHA-1, no timestamp, last of the staging: Windows 8, 8.1 and 10 x64
 refuse a package with no catalog in test-signing mode. Each catalog is held to
 Test-PackageCatalog (package-common.ps1) before it is staged. The password
 comes from the XHCI98_TESTSIGN_PW environment variable or, where that is
-unset, a prompt; it is never printed.
+unset or empty, a prompt (an empty answer is refused); it is never printed.
 
 The binaries are signed in temporary copies after the import gates have read
 the build (their SITES rule needs the objects beside the image) and before
@@ -1067,6 +1067,10 @@ kernel-mode code signing, and the published x86 bytes stay those of the build.
     }
     if ($TestSignPfx -ne "" -and -not (Test-Path -LiteralPath $TestSignPfx -PathType Leaf)) {
         throw "no test-signing key at '$TestSignPfx' (-TestSignPfx). Design record 19 says how the project's is made and where it is held."
+    }
+    if ($TestSignPfx -ne "") {
+        $pfxWhy = Get-TestSignPfxFault -PfxPath $TestSignPfx -Repo $repo -Outputs @($OutDir)
+        if ($pfxWhy -ne "") { throw "-TestSignPfx: $pfxWhy." }
     }
 
 

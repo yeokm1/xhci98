@@ -55,8 +55,8 @@ const NDIS_OID Net6Oids[] = {
 
 const ULONG Net6OidsSize = sizeof(Net6Oids);
 
-/* The receive errors: the core's drops and the split's. */
-static ULONG net6RxErrors(PNET6_ADAPTER a)
+/* The receive errors: the core's drops and the split's. IRQL: any. */
+ULONG Net6RxErrorTotal(PNET6_ADAPTER a)
 {
     ULONG v = 0;
     ULONG i;
@@ -70,7 +70,8 @@ static ULONG net6RxErrors(PNET6_ADAPTER a)
     return v;
 }
 
-static ULONG net6TxErrors(PNET6_ADAPTER a)
+/* IRQL: any. */
+ULONG Net6TxErrorTotal(PNET6_ADAPTER a)
 {
     return a->TxErrors + a->TxDrops[NET_TXDROP_SHORT] +
            a->TxDrops[NET_TXDROP_LONG] + a->TxDrops[NET_TXDROP_PEER];
@@ -177,10 +178,10 @@ static NDIS_STATUS net6Query(PNET6_ADAPTER a, PNDIS_OID_REQUEST r)
         v = a->RxOk;
         break;
     case OID_GEN_XMIT_ERROR:
-        v = net6TxErrors(a);
+        v = Net6TxErrorTotal(a);
         break;
     case OID_GEN_RCV_ERROR:
-        v = net6RxErrors(a);
+        v = Net6RxErrorTotal(a);
         break;
     case OID_GEN_RCV_NO_BUFFER:
         v = a->RxNoBuffer;
@@ -201,14 +202,14 @@ static NDIS_STATUS net6Query(PNET6_ADAPTER a, PNDIS_OID_REQUEST r)
             NDIS_STATISTICS_FLAGS_VALID_XMIT_DISCARDS;
         /* ULONG counters widened, not summed in 64 bits. */
         st.ifInDiscards = a->RxNoBuffer + a->RxNotUp;
-        st.ifInErrors = net6RxErrors(a);
+        st.ifInErrors = Net6RxErrorTotal(a);
         NdisAcquireSpinLock(&a->Lock);
         Net6Read64(&a->RxBytes, &a->RxBytesHi, &st.ifHCInOctets);
         st.ifHCInUcastPkts = a->RxOk;
         Net6Read64(&a->TxBytes, &a->TxBytesHi, &st.ifHCOutOctets);
         NdisReleaseSpinLock(&a->Lock);
         st.ifHCOutUcastPkts = a->TxOk;
-        st.ifOutErrors = net6TxErrors(a);
+        st.ifOutErrors = Net6TxErrorTotal(a);
         st.ifOutDiscards = a->TxDown;
         src = &st;
         size = sizeof(st);

@@ -103,6 +103,14 @@ fourth tag, **[linux]**: read in this project from the Linux Thunderbolt
 driver's structures, constants and per-id choices (section 9), not seen in
 any capture, and held to the same tolerance (section 1.4.6).
 
+Revised 2026-11-09 (task 48.35, a design, reviewed and revised, no code):
+standby and hibernation with a device attached are designed in design
+record 22 section 11.1 for both profiles - for this client the ICL row's
+link-controller mailbox `GO2SX_NO_WAKE` at a system sleep (section 11.1.7
+there) and the native PCIe hot-plug tunnel port that no resume of this
+driver can order (section 11.1.8 there); sections 1.4.3, 1.4.4, 5.6 and
+6.3 here describe what ships until it is coded.
+
 ## 1. Purpose, scope and what it is not
 
 ### 1.1 What this is for
@@ -1746,7 +1754,16 @@ never take or clear work bits, which stay for the loop.
   raises (on i440FX and q35 alike, only the self-test of section 4.5.5 can
   say, so this reading is taken again by the code's first 98 leg). A 98 SE
   or ME devnode with no IRQ polls; one with an IRQ is connected only
-  after an INTx leg on that OS passes.
+  after an INTx leg on that OS passes. The reading was taken in task 45.22
+  (`runs/run-45.md`, "45.22 ... the code", "98 SE and ME: the NHI's
+  route": an IRQ, shared and level, on both systems and both profiles),
+  and since task 48.26 the code connects the line on 98 SE and ME as on
+  NT, the self-test of section 4.5.5 deciding on each start as it does
+  there; the legs are `runs/run-48.md`, "48.26". `XHCIPFW.VXD` frees the
+  NHI's IRQ at every start by default (`XhciPfwNhiLine` 1, design record
+  32), so on a 98 SE or ME install with it the start has no interrupt
+  resource and polls (`cm.irq.none`); with `XhciPfwNhiLine` 0 the line is
+  the BIOS's and is connected.
 - **Every system**: no interrupt resource, a failed connection, a failed
   arm or a failed self-test leaves the activation polling as today, with
   a log line (`cm.irq.none`, `cm.irq.connect.fail`, `cm.irq.arm.fail`,
@@ -2117,11 +2134,14 @@ open, reviewed and revised with it:
   and queueing - a line that died - which the watchdog's suspicion, the
   self-test and the fall back read as on hardware. The `usb4-emu` addition
   of section 4.5.9 stays the faithful form.
-- **98 SE and ME** connect nothing whatever the value says
-  (`cm.irq.9x`); their route reading of section 4.5.4 stays owed.
+- **98 SE and ME** connected nothing whatever the value said
+  (`cm.irq.9x`) until task 48.26, which removed that gate: every system
+  now connects the line its start was given, through the same calls
+  (`CmRirqWanted` no longer takes the system).
 - **Log and counters.** `cm.irq.value` and `cm.irq.resource` at each start;
   `cm.irq.connected`, `.armed`, `.selftest`, `.selftest.fail`, `.suspect`,
-  `.lost`, `.storm`, `.down`, `.unretired`, `.intx.*`, `.none`, `.9x`; and
+  `.lost`, `.storm`, `.down`, `.unretired`, `.intx.*`, `.none` (`.9x`
+  until task 48.26); and
   the `cm.irq.*` counters at the stop (claims, DPCs, wakes, connections,
   self-tests and their failures, suspicions, losses, storms, downs,
   unretired and disconnections), written only where the value is 1 or an
@@ -2974,7 +2994,11 @@ is never renumbered under it.
    0 or `FFh`, gets the port's line; its pin, and a bridge's Bridge
    Control, are written back as read. Any other function gets nothing,
    and keeps whatever PCI.VXD makes of it (Code 29 for want of an IRQ on
-   the P14s). A function this stage cannot read (a failed read, or one
+   the P14s), unless design record 28 starts it with no interrupt: an
+   NVMe drive on Stor98 (its section 12) or, since task 48.36, an xHCI
+   controller on `xhci98.sys` (its section 14; a dock's controllers on
+   its switch's ports 1 to 3, whose pins arrive on the port's pins B to
+   D). A function this stage cannot read (a failed read, or one
    answering Retry Status) is counted as not set up, so the stage does
    not report every line written. Considered and not used: the IRQ Windows recorded at boot
    for the same position (`HKLM\Enum`'s LogConfig is rewritten at every
@@ -3991,7 +4015,8 @@ or is reported missing and removed. This is section 6.3's old failure
 path, now taken at every resume and without the five-minute stall.
 
 **System suspend with a tunnelled device attached stays unsupported in
-this release on every target**, and the release notes say so. What task
+this release on every target**, and the release notes say so (task 48.35
+designs it in design record 22 section 11.1, not coded yet). What task
 43.24h changes is that it no longer stops Windows 8 to 10 and no longer
 stalls 2000 to 7 for five minutes. Leg `39-V.2` reads, where the guest
 offers S3, a resume that succeeds, one that fails (the firmware not
@@ -7432,7 +7457,7 @@ record 13 section 5.5). The INFs still write only the driver key:
 | `XhciCmApproveTimeoutMs` | 10000 | the `approve` timeout, the same bounds |
 | `XhciCmLogVerbosity` | 2 | the shared log rule (the `0`-`4` ladder of `xhci_log.h`); its own name, as every value of this driver, and the only one read: `xhcicm.sys` was never released under another (owner, 2026-10-16) |
 | `XhciCmLogDebugView` | 0 | 1 hands the log to `DbgPrint` in every flavour, as `xhci98.sys`'s `XhciLogDebugView` does; 0 to 1, refused otherwise (owner, 2026-10-16: the reversal of decision D12 below) |
-| `XhciCmRingInterrupt` | 0 (written by the NT install paths since task 45.50, section 8.1) | section 4.5 (task 45.22, owner 2026-10-29): 1 lets the NHI's line interrupt end the thread's idle wait where the start grants one and the self-test proves it, on 2000 to 10; 0 polls as before. 98 SE and ME poll whatever it says until their route is read. Absent reads as 0; 2 and above (reserved for the message step) are refused and 0 stands |
+| `XhciCmRingInterrupt` | 0 (written by the NT install paths since task 45.50, section 8.1, and by every path since task 48.26) | section 4.5 (task 45.22, owner 2026-10-29): 1 lets the NHI's line interrupt end the thread's idle wait where the start grants one and the self-test proves it, on every system since task 48.26 (on 2000 to 10 alone before: 98 SE and ME polled whatever it said until their route was read); 0 polls as before. Absent reads as 0; 2 and above (reserved for the message step) are refused and 0 stands |
 
 Installing the package is already the user's choice of this driver, so the
 master switch defaults to on: a driver that installs and does nothing until
@@ -7559,7 +7584,7 @@ no INF before this task:
 | `xhcicm.sys` | `XhciCmAsmediaPcie7Credits` | every system | 0 | 0, every path of both NHI INFs |
 | `xhcicm.sys` | `XhciCmUsb4V2` | every system | 1 | 1, every path of both NHI INFs |
 | `xhcicm.sys` | `XhciCmGen4LinkRecovery` | every system | 1 | 1, every path of both NHI INFs (task 45.56) |
-| `xhcicm.sys` | `XhciCmRingInterrupt` | 2000 to 10 (98 SE and ME read it and poll whatever it says) | 0 | 0, the NT paths (`.NTx86`, `.NTx86.6.0`, `.NTamd64`, `.NTamd64.6.0`) |
+| `xhcicm.sys` | `XhciCmRingInterrupt` | every system since task 48.26 (2000 to 10 before; 98 SE and ME read it and polled whatever it said) | 0 | 0, every path since task 48.26 (the NT paths, `.NTx86`, `.NTx86.6.0`, `.NTamd64`, `.NTamd64.6.0`, before) |
 | `xhcicm.sys` | `XhciCmBridgeReq` | NT 5.x alone (2000, XP, XP x64; `CmBreqGate`) | 1 | 1, the NT 5.x paths (`.NTx86`, `.NTamd64`) |
 
 Exempt, as the owner's rule says: the `qemu` flavour's test-only values
@@ -7620,8 +7645,9 @@ number, with `0x00010003`), its footprints follow, and its self-tests and
 rule table and the 98 SE and ME one: the values every path writes
 (`XhciCmAsmediaPcie7Credits`, `XhciCmUsb4V2`, from `cm_vals.h`'s
 `CM_ASM_PCIE7_DEFAULT` and `CM_USB4_V2_DEFAULT`, and `XhciCmTunnelBridge`
-at `auto` with flag `0x00000002`), the NT paths' (`XhciCmRingInterrupt`,
-`CM_RING_IRQ_DEFAULT`) and the NT 5.x paths' (`XhciCmBridgeReq`,
+at `auto` with flag `0x00000002`, and since task 48.26
+`XhciCmRingInterrupt`, `CM_RING_IRQ_DEFAULT`, the NT paths' alone before)
+and the NT 5.x paths' (`XhciCmBridgeReq`,
 `CM_BRIDGE_REQ_DEFAULT`); its rule refusing `XhciCmTunnelBridge` (VAL-EXTRA)
 becomes the requirement, and a value on a path that does not read it stays
 VAL-EXTRA. Each gains self-test mutations (missing, wrong default, wrong

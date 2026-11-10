@@ -21,6 +21,15 @@ make-package.ps1 -SignOnly reads.
             tree read again; the record is written from the CAPTURED hashes
             and the pending file deleted
 
+With -Amend (build-driver.cmd's Stor98-only run, roadmap-usb4 task 48.9),
+-Begin keeps the last record, -Hash and -Capture take Stor98's images
+alone, and -Finish replaces their hashes in that record - only when it was
+written at the commit the run started at, from a clean tree, and the tree
+is still clean at that commit; any other record is deleted, since it names
+Stor98 images the tree no longer holds and its other binaries were gated
+at another commit or from another tree. With no record, nothing is
+written.
+
 build-driver.cmd holds out\gated-<arch>.lock for its whole run, with the
 run's token in run.txt and in XHCI98_GATED_RUN; each mode refuses unless the
 two agree with each other and with the pending file. build-driver.cmd
@@ -49,6 +58,9 @@ xhcicm.sys, xhcihlpr.sys, stor98.sys, stor98.mpd, xhcinet.sys, xhcinet6.sys).
 
 .PARAMETER NoTargetEvidence
 -Finish: the build's import gates ran with -NoTargetEvidence.
+
+.PARAMETER Amend
+-Begin and -Finish: the Stor98-only run's record (above).
 #>
 
 [CmdletBinding()]
@@ -65,7 +77,8 @@ param(
     [switch]$Finish,
     [string]$Name = "",
     [string]$Image = "",
-    [switch]$NoTargetEvidence
+    [switch]$NoTargetEvidence,
+    [switch]$Amend
 )
 
 $ErrorActionPreference = "Stop"
@@ -95,6 +108,9 @@ try {
     if (($Flavor -eq "") -ne [bool]$RunStart) {
         throw "-Flavor goes with every mode but -RunStart."
     }
+    if ($Amend -and -not ($Begin -or $Finish)) {
+        throw "-Amend goes with -Begin and -Finish."
+    }
     $repo = Get-RepoRoot
     $lockRun = Join-Path $repo ("out\gated-{0}.lock\run.txt" -f $Arch)
     $lockStart = Join-Path $repo ("out\gated-{0}.lock\start.txt" -f $Arch)
@@ -119,10 +135,11 @@ try {
     $record = Get-GatedManifestPath -Repo $repo -Arch $Arch -Flavor $Flavor
     $pending = [System.IO.Path]::ChangeExtension($record, ".pending")
     if ($Begin) {
-        if (Test-Path -LiteralPath $record) { Remove-Item -LiteralPath $record -Force }
+        if (-not $Amend -and (Test-Path -LiteralPath $record)) { Remove-Item -LiteralPath $record -Force }
         if (Test-Path -LiteralPath $pending) { Remove-Item -LiteralPath $pending -Force }
         [System.IO.File]::WriteAllText($pending, "", [System.Text.Encoding]::ASCII)
         Add-PendingLines -Path $pending -Lines @("run=$token")
+        if ($Amend) { Add-PendingLines -Path $pending -Lines @("amend=1") }
         exit 0
     }
 
@@ -133,10 +150,15 @@ try {
     if ($p["run"] -ne $token) {
         throw "'$pending' belongs to another build-driver.cmd run."
     }
+    $amending = $p["amend"] -eq "1"
+    if ($Finish -and ([bool]$Amend -ne $amending)) {
+        throw $(if ($amending) { "this flavour's record was begun with -Amend; finish it with -Amend." } else { "-Finish -Amend needs a record begun with -Amend." })
+    }
 
     if ($Hash -or $Capture) {
         $key = $Name.ToLowerInvariant()
         if ($key -notmatch '^((xhci98|xhciuas|xhcicm|xhcihlpr|stor98|xhcinet|xhcinet6)\.sys|stor98\.mpd)$') { throw "-Name '$Name' is not a binary this build gates." }
+        if ($amending -and $key -notmatch '^stor98\.(sys|mpd)$') { throw "-Name '$Name': the Stor98-only run gates Stor98's images alone." }
         if (-not (Test-Path -LiteralPath $Image -PathType Leaf)) { throw "no $key at '$Image'." }
         $full = (Resolve-Path -LiteralPath $Image).ProviderPath
         $now = Get-FileSha256 -Path $full
@@ -162,6 +184,10 @@ try {
     # on both architectures (task 45.59, record 35 section 9.5).
     $expected = @("xhci98.sys", "xhciuas.sys", "xhcicm.sys", "stor98.sys", "xhcinet.sys", "xhcinet6.sys")
     if ($Arch -eq "x86") { $expected += @("xhcihlpr.sys", "stor98.mpd") }
+    if ($amending) {
+        $expected = @("stor98.sys")
+        if ($Arch -eq "x86") { $expected += "stor98.mpd" }
+    }
     $sha = @{}
     foreach ($n in $expected) {
         if (-not $p.ContainsKey("sha256.$n")) {
@@ -179,6 +205,48 @@ try {
     $s = Read-Pending -Path $lockStart
     $end = Get-GitTreeState -Repo $repo
     $dirty = ($s["dirty_start"] -ne "0") -or $end.Dirty -or ($s["head_start"] -ne $end.Head)
+    if ($amending) {
+        Remove-Item -LiteralPath $pending -Force
+        if (-not (Test-Path -LiteralPath $record -PathType Leaf)) {
+            Write-Host ("  no {0} {1} record to amend: Stor98's images are gated and stamped, and no record names them" -f $Flavor, $Arch)
+            exit 0
+        }
+        $why = ""
+        try {
+            $old = ConvertFrom-GatedManifest -Text ([System.IO.File]::ReadAllText($record))
+        } catch {
+            $old = $null
+            $why = "it cannot be read ($($_.Exception.Message))"
+        }
+        if ($null -ne $old) {
+            if ($old.Arch -ne $Arch -or $old.Flavor -ne $Flavor) { $why = "it records the $($old.Flavor) $($old.Arch) build" }
+            elseif ($old.Dirty -ne "0") { $why = "its build ran in a tree with uncommitted changes" }
+            elseif ($dirty -or $end.Head -eq "none") { $why = "this run's tree had uncommitted changes, or its commit moved or could not be read" }
+            elseif ($old.Commit -ne $end.Head.ToLowerInvariant()) { $why = "it was written at commit $($old.Commit), and this run is at $($end.Head)" }
+            else {
+                foreach ($n in $expected) {
+                    if (-not $old.Sha256.ContainsKey($n)) { $why = "it names no $n" }
+                }
+            }
+        }
+        if ($why -ne "") {
+            Remove-Item -LiteralPath $record -Force
+            Write-Warn ("{0} deleted: {1}. It named Stor98 images the tree no longer holds; a full build-driver.cmd run writes a new one." -f $record, $why)
+            exit 0
+        }
+        $shaNew = @{}
+        foreach ($k in $old.Sha256.Keys) { $shaNew[$k] = $old.Sha256[$k] }
+        foreach ($n in $expected) { $shaNew[$n] = $sha[$n] }
+        $text = ConvertTo-GatedManifest -Arch $Arch -Flavor $Flavor -Commit $old.Commit -Dirty $false `
+            -TargetEvidence ($old.TargetEvidence -eq "1") `
+            -Time ([DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")) -Sha256 $shaNew
+        $tmp = $record + ".tmp"
+        [System.IO.File]::WriteAllBytes($tmp, [System.Text.Encoding]::ASCII.GetBytes($text))
+        Move-Item -LiteralPath $tmp -Destination $record -Force
+        Write-Ok ("gated build record amended (Stor98 alone): {0}" -f $record)
+        foreach ($n in $expected) { Write-Host ("  {0,-13} {1}" -f $n, $sha[$n]) }
+        exit 0
+    }
     $text = ConvertTo-GatedManifest -Arch $Arch -Flavor $Flavor -Commit $end.Head -Dirty $dirty `
         -TargetEvidence (-not $NoTargetEvidence) `
         -Time ([DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")) -Sha256 $sha

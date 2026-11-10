@@ -478,6 +478,13 @@ static PHCD_USB_DEVICE hcdDeviceNew(PHCD_CONTROLLER hc, PHCD_PORT port,
     HcdSuspDeviceInit(dev, port);
     XhciXferQueueInit(&dev->Ep0Queue);
     HcdIoPipeInitEp0(dev);
+    /* Task 48.33 (design record 13 section 11.11.1): the default pipe's
+     * staging, before the record is published; a device that cannot have
+     * it is not enumerated. */
+    if (HcdStagePipeOpen(hc, &dev->Ep0Pipe) != XHCI_USBD_STATUS_SUCCESS) {
+        HcdPoolFree(dev);
+        return NULL;
+    }
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     hc->SlotDevice[slotId] = dev;
     XhciControllerLockRelease(&hc->Hc, oldIrql);
@@ -519,6 +526,10 @@ static VOID hcdDeviceFree(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         hc->DevicesKept++;
         return;
     }
+    /* Task 48.33: its URBs are complete, so no TD names the default
+     * pipe's staging; freed, or kept with the rest while the controller
+     * may still be mastering (HcdDmaStreamFree). */
+    HcdStagePipeClose(hc, &dev->Ep0Pipe);
     HcdPoolFree(dev->Config);
     HcdPoolFree(dev->Bos);
     HcdPoolFree(dev->Selected);
@@ -3371,7 +3382,7 @@ static ULONG hcdRun(PHCD_CONTROLLER hc, PHCD_PORT p, XHCI_ENUM_EVENT event)
                 }
                 if (p->Hub != NULL && !p->Hub->Draining &&
                     p->Hub->Device != NULL) {
-                    HcdHubPortDisable(hc, p->Hub, p->Number);
+                    (VOID)HcdHubPortDisable(hc, p->Hub, p->Number);
                 }
                 break;
             }
@@ -3553,7 +3564,13 @@ static VOID hcdPortUnreadable(PHCD_CONTROLLER hc, PHCD_PORT p)
  * RxDetect and LWS - the Disabled state's exit to Disconnected - and never
  * a warm reset, which does not act on a Disabled port, nor a power cycle.
  * Its link trains again if the device comes back to it, and that arrives as
- * an ordinary change. Thread only, powered.
+ * an ordinary change. An unreadable PORTSC re-arms nothing and ends nothing:
+ * the entry stays, its pure hold already ended, so the port stays held and
+ * unserved, and the read counts as the port's unreadable one
+ * (hcdPortUnreadable), which owes its inspection again; that inspection
+ * tries the release once more (hcdPortChanged), and reads that stay
+ * unreadable hand the controller to recovery, whose reset forgets the hold
+ * (issue 29). Thread only, powered.
  */
 static VOID hcdHoldRelease(PHCD_CONTROLLER hc, PHCD_HOLD h)
 {
@@ -3563,14 +3580,25 @@ static VOID hcdHoldRelease(PHCD_CONTROLLER hc, PHCD_HOLD h)
 
     q = &hc->Ports[h->Port - 1];
     portsc = XhciReadPortsc(&hc->Hc, h->Port);
-    if (portsc != 0xFFFFFFFFUL &&
-        XhciLinkDecide(&q->Link, portsc, XHCI_LINK_WANT_RELEASE, &act) ==
+    if (portsc == 0xFFFFFFFFUL) {
+        h->Hold.Kind = XHCI_HOLD_NONE;
+        hcdPortUnreadable(hc, q);
+        return;
+    }
+    q->Unreadable = 0;
+    if (XhciLinkDecide(&q->Link, portsc, XHCI_LINK_WANT_RELEASE, &act) ==
             XHCI_LINK_ACT_RX_DETECT) {
         XhciWritePortsc(&hc->Hc, h->Port, XhciPortscRxDetect(portsc));
     }
     hc->Counters.HoldsReleased++;
     XHCI_DBG_VALUE("hcd: hold released, port/PLS",
                    (h->Port << 8) | XHCI_PORTSC_GET_PLS(portsc));
+    if (h->Reason == HCD_HOLD_REASON_LINK_FLAP) {
+        /* Issue 29, F5: the connector's next device starts afresh. */
+        XhciLogNote(&hc->Hc, "link.flap",
+                    (h->Port << 24) | (4UL << 16) | q->Flap.Count);
+        XhciLinkFlapInit(&q->Flap);
+    }
     h->Hold.Kind = XHCI_HOLD_NONE;
     h->Used = 0;
 }
@@ -3915,6 +3943,86 @@ static ULONG hcdTolPortFeed(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG portsc,
 }
 
 /*
+ * Issue 29 (design record 13 section 21, F1, F3, F4, F6): root port p's
+ * inspection is about to write the ordinary warm reset for its link, read
+ * in SS.Inactive or Compliance Mode. The failure is counted; the first
+ * XHCI_LINK_FLAP_LIMIT of a window keep the warm reset (*act unchanged).
+ * Past them the link is sent to USB 2.0: a hold entry is claimed for the
+ * port in one controller-lock section - none owning the port already, a
+ * free entry, a companion - and *act becomes XHCI_LINK_ACT_DISABLE, which
+ * the caller writes as PED once the disconnect it owed is fed. The entry
+ * owns the port from here, so a disable that lands late lands on a held
+ * port. With no hold to be had, or XhciSsFlapFallback 0, the record
+ * stops and *act becomes the
+ * give-up, as every later failure's does until a fresh attach. Either way
+ * the warm reset's charge to 29-A.2's budget is taken back. Thread only,
+ * powered.
+ */
+static VOID hcdLinkFlap(PHCD_CONTROLLER hc, PHCD_PORT p,
+                        PXHCI_LINK_ACTION act)
+{
+    PXHCI_PORT_MAP map;
+    PHCD_HOLD slot;
+    KIRQL oldIrql;
+    ULONG companion;
+    ULONG verdict;
+    ULONG taken;
+    ULONG i;
+
+    map = &hc->Hc.PortMap;
+    verdict = XhciLinkFlapFailure(&p->Flap, HcdTolNow(hc));
+    if (verdict == XHCI_FLAP_WARM) {
+        XhciLogNote(&hc->Hc, "link.flap",
+                    (p->PortId << 24) | (1UL << 16) | p->Flap.Count);
+        return;
+    }
+    XhciLinkRefund(&p->Link);
+    /* F8: XhciSsFlapFallback 0 keeps the warm resets 3.4.x made, bounded:
+     * the failure past the limit is given up instead of sent. */
+    companion = (ULONG)map->Companion[p->PortId - 1];
+    verdict = XhciLinkFlapDecide(verdict, hc->SsFlapFallback,
+                                 companion != XHCI_PORT_NO_COMPANION);
+    if (verdict == XHCI_FLAP_SEND && !hcdHalted(hc)) {
+        slot = NULL;
+        taken = 0;
+        if (companion != XHCI_PORT_NO_COMPANION) {
+            XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+            for (i = 0; i < HCD_MAX_HOLDS; i++) {
+                if (hc->Holds[i].Used && hc->Holds[i].Port == p->PortId) {
+                    taken = 1;
+                } else if (!hc->Holds[i].Used && slot == NULL) {
+                    slot = &hc->Holds[i];
+                }
+            }
+            if (!taken && slot != NULL) {
+                slot->Used = 1;
+                slot->Pending = 0;
+                slot->Reason = HCD_HOLD_REASON_LINK_FLAP;
+                slot->Port = p->PortId;
+                slot->Unreadable = 0;
+                slot->SettleGen = hc->SettleAsked;
+                (VOID)XhciHoldBeginFlap(&slot->Hold, p->PortId, companion);
+            }
+            XhciControllerLockRelease(&hc->Hc, oldIrql);
+        }
+        if (!taken && slot != NULL) {
+            hc->Counters.HoldsUnidentified++;
+            act->Kind = XHCI_LINK_ACT_DISABLE;
+            act->Converted = 0;
+            XhciLogNote(&hc->Hc, "link.flap",
+                        (p->PortId << 24) | (2UL << 16) | p->Flap.Count);
+            return;
+        }
+    }
+    if (XhciLinkFlapStop(&p->Flap)) {
+        XhciLogNote(&hc->Hc, "link.flap",
+                    (p->PortId << 24) | (3UL << 16) | p->Flap.Count);
+    }
+    act->Kind = XHCI_LINK_ACT_GIVE_UP;
+    act->Converted = 0;
+}
+
+/*
  * One root port marked changed: read it, acknowledge the change bits this
  * read saw - only those, so a change arriving after the read stays for the
  * next pass (batch (b)) - and feed its machine what XhciLinkPortFeed
@@ -3997,11 +4105,19 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
     }
     /* A held SuperSpeed port is not served: its link is Disabled and stays
      * so until the hold is released (29-A.5). */
-    if (hcdHoldOf(hc, p->PortId) != NULL) {
-        p->Unreadable = 0;
+    h = hcdHoldOf(hc, p->PortId);
+    if (h != NULL) {
         /* 38.10: a held port is never touched by XhciStuckLinkReset; its
          * post-resume reading is this one. */
         p->Link.StuckCheck = 0;
+        /* A release an unreadable PORTSC left owed (hcdHoldRelease), whose
+         * unreadable reads count on toward the recovery until one
+         * succeeds. */
+        if (h->Hold.Kind == XHCI_HOLD_NONE) {
+            hcdHoldRelease(hc, h);
+        } else {
+            p->Unreadable = 0;
+        }
         return;
     }
     /* The companion of a held port: its departures and arrivals are the
@@ -4028,6 +4144,7 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
      * SS.Inactive or Compliance Mode under a device - nothing else in the
      * sample, 35-T.5 leaving the disconnect as it was - may be restored in
      * place instead of the disconnect and warm reset below. */
+    XhciLinkFlapSample(&p->Flap, portsc);
     lk = HCD_LKEEP_NONE;
     if (act.Kind == XHCI_LINK_ACT_WARM_RESET && !stuck &&
         (feed & XHCI_LINK_FEED_DISCONNECT) != 0 && p->Device != NULL &&
@@ -4051,9 +4168,20 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
             return;
         }
     }
+    /* Issue 29 (design record 13 section 21, F1, F3, F4): the warm reset
+     * about to be written for a failed link is counted; past the limit the
+     * link is sent to USB 2.0 (a hold claimed now, PED written below) or,
+     * with no hold to be had, given up. */
+    if (act.Kind == XHCI_LINK_ACT_WARM_RESET && !stuck &&
+        XhciPortIsUsb3(&ext->PortMap, p->PortId) &&
+        (XhciLinkClassify(portsc) == XHCI_LINK_ERROR ||
+         XhciLinkClassify(portsc) == XHCI_LINK_COMPLIANCE)) {
+        hcdLinkFlap(hc, p, &act);
+    }
     if (XhciEnumNoteWantLook(&p->Notes, p->Enum.State, feed,
                              act.Kind == XHCI_LINK_ACT_WARM_RESET ||
-                                 act.Kind == XHCI_LINK_ACT_GIVE_UP)) {
+                                 act.Kind == XHCI_LINK_ACT_GIVE_UP ||
+                                 act.Kind == XHCI_LINK_ACT_DISABLE)) {
         hcdNoteLook(hc, p,
                     XhciEnumNoteLook(p->PortId, p->Enum.State, act.Kind,
                                      feed, portsc));
@@ -4093,6 +4221,14 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
     case XHCI_LINK_ACT_GIVE_UP:
         hc->Counters.SsLinksGivenUp++;
         XHCI_DBG_VALUE("hcd: SuperSpeed link given up, port", p->PortId);
+        break;
+    case XHCI_LINK_ACT_DISABLE:
+        /* Issue 29, F3: the hold claimed in hcdLinkFlap owns the port; PED
+         * takes it from SS.Inactive or Compliance Mode to Disabled (xHCI
+         * 1.2c 4.19.1.2.1, p.279), which withdraws its terminations. */
+        XHCI_DBG_VALUE("hcd: failing link sent to USB 2.0, port/PLS",
+                       (p->PortId << 8) | XHCI_PORTSC_GET_PLS(portsc));
+        XhciWritePortsc(ext, p->PortId, XhciPortscDisable(portsc));
         break;
     default:
         break;
@@ -5547,18 +5683,22 @@ static VOID hcdInvalidate(PHCD_CONTROLLER hc)
 /*
  * 35-T.6's third step (design record 17 section 4.6), once the controller is
  * latched failed and Unreadable and the thread has read Bus Master Enable
- * back clear or failed to: with that proof, every device's transfers are
- * drained before any device is waited out and every device then leaves
- * through the existing departure (hcdDropAll, as an invalidation drops
- * them); without it the caller has pinned the common buffer, and the drain
- * marks each device Gone and keeps every transfer under the pinned-buffer
- * rule. The slot is not given back either way: no command reaches a failed
- * controller. Only the controller thread calls it, the power gate held.
- * IRQL: PASSIVE_LEVEL.
+ * back clear or failed to: every device's transfers are drained before any
+ * device is waited out and every device then leaves through the existing
+ * departure (hcdDropAll, as an invalidation drops them). Without the proof
+ * the caller has pinned the common buffer first, and since task 48.33
+ * (record 17 section 4.13.8) that changes only what is kept: the
+ * controller names nothing but this driver's memory, which the pin keeps
+ * for the boot, so the clients' requests complete and the PDOs are removed
+ * as with the proof. The slot is not given back either way: no command
+ * reaches a failed controller. With XhciDmaStaging 0, as in 3.4.2.0, a
+ * containment without the proof drains instead: each device is marked
+ * Gone and every transfer kept under the pinned-buffer rule. Only the
+ * controller thread calls it, the power gate held. IRQL: PASSIVE_LEVEL.
  */
 VOID HcdEnumContain(PHCD_CONTROLLER hc, ULONG proof)
 {
-    if (proof) {
+    if (proof || hc->Staging) {
         hcdDropAll(hc);
         return;
     }
@@ -6622,6 +6762,7 @@ VOID HcdEnumInit(PHCD_CONTROLLER hc)
         p->Unreadable = 0;
         p->LinkRecovering = 0;
         XhciLinkInit(&p->Link);
+        XhciLinkFlapInit(&p->Flap);
         XhciEnumNotesInit(&p->Notes);
         if (p->Enum.State == XHCI_ENUM_GONE && !hcdPortQuiet(hc, p)) {
             continue;

@@ -97,6 +97,12 @@ ntoskrnl.exe!ExFreePool                    all  required  SITES=hcd_pool.obj nt5
 ntoskrnl.exe!IoAllocateMdl                 all  required  SITES=hcd_pool.obj nt52-amd64-export; twin of the x86 row (task 26-A.5)
 ntoskrnl.exe!IoFreeMdl                     all  required  SITES=hcd_pool.obj nt52-amd64-export; twin of the x86 row (task 26-A.5)
 ntoskrnl.exe!MmBuildMdlForNonPagedPool     all  required  SITES=hcd_pool.obj nt52-amd64-export; twin of the x86 row (task 26-A.5)
+# Task 48.33 (design record 13 section 11.11.4): the staging window; on
+# amd64 its mapping is MmMapLockedPagesSpecifyCache, which returns NULL
+# rather than stopping the system (no Windows 98 image is built for amd64).
+ntoskrnl.exe!IoBuildPartialMdl             all  required  SITES=hcd_stage.obj nt52-amd64-export; twin of the x86 row (task 48.33)
+ntoskrnl.exe!MmMapLockedPagesSpecifyCache  all  required  SITES=hcd_stage.obj nt52-amd64-export; the window's mapping, NULL on failure (task 48.33)
+ntoskrnl.exe!MmUnmapLockedPages            all  required  SITES=hcd_stage.obj nt52-amd64-export; twin of the x86 row (task 48.33)
 ntoskrnl.exe!IoAcquireCancelSpinLock       all  required  nt52-amd64-export; twin of the x86 row (task 26-A.5)
 ntoskrnl.exe!IoReleaseCancelSpinLock       all  required  nt52-amd64-export; twin of the x86 row (task 26-A.5)
 

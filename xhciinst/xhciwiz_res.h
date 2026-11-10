@@ -115,8 +115,4 @@
 #define IDC_ROW_BASE            1200
 #define IDC_ROW_STRIDE          4
 
-/* The Summary page's boxes for the Stor98 drives an update touches on
- * 98 SE and ME, made at run time. */
-#define IDC_SUM_S98             1300
-
 #endif /* XHCIWIZ_RES_H */

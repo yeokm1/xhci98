@@ -78,6 +78,7 @@ foreach ($l in $legSet.Legs) {
     if (Test-LegManual $l) { $manual += $l; continue }
     $g = Get-LegGuest $cfg $l.Guest
     $null = Get-LegStartPoint $cfg $g $qver
+    if ($l.ContainsKey('Audio') -and $l.Audio) { $null = Get-LegWavChk }
     if ($MaxVcpu -gt 0 -and [int]$g.Smp -gt $MaxVcpu) { throw "leg $($l.Id) needs $($g.Smp) vCPUs, over MaxVcpu $MaxVcpu" }
     if ([int]$g.Smp -gt $logical) { throw "leg $($l.Id) needs $($g.Smp) vCPUs, over the host's $logical" }
     [void]$todo.Add(@{ Def = $l; Smp = [int]$g.Smp })

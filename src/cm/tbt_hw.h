@@ -192,9 +192,8 @@ LONG TbtHwPlatformInit(const TBT_HW_PROFILE *hw,
                        PTBT_HW_POWER power);
 
 /*
- * NOT CALLED IN THE FIRST CUT: record 21 section 1.4.3 leaves system
- * suspend with an integrated controller unsupported and sends no LC
- * mailbox handshake. Kept for Phase 40.
+ * Called since task 48.35 (record 22 section 11.1.7) at a system sleep of
+ * the ICL row, with no wake (decision U35), never at a shutdown.
  *
  * System sleep on a profile with TBT_HW_ICL_POWER while its ICM owns it
  * (Linux pci.c icl_nhi_suspend_noirq, the firmware-suspend branch): the LC
@@ -239,8 +238,9 @@ ULONG TbtHwTbtGeneration(ULONG vendor, ULONG device);
 BOOLEAN TbtHwIsApple(ULONG subsystemVendorId);
 
 /* The LC mailbox (Linux pci.c icl_nhi_lc_mailbox_cmd and _complete):
- * command and VALID into VS_CAP_19, VS_CAP_18 DONE polled 1 ms apart up to
- * `timeoutMs`, then VS_CAP_19 cleared. TBT_OK or TBT_E_TIMEOUT. */
+ * command and VALID into VS_CAP_19, VS_CAP_18 DONE polled 1 ms apart until
+ * `timeoutMs` have passed on the elapsed clock (TBT_WAIT), then VS_CAP_19
+ * cleared. TBT_OK or TBT_E_TIMEOUT. */
 LONG TbtHwLcMailbox(const TBT_CFG *cfg, const TBT_HOST *host, ULONG cmd,
                     ULONG timeoutMs);
 

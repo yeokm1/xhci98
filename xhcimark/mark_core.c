@@ -182,9 +182,33 @@ int mk_marks_parse(const unsigned char *b, size_t n, MK_MARKS *m,
         m->E[i].Flags = mk_get32(e, CM_QM_E_FLAGS);
         m->E[i].Pending = mk_get32(e, CM_QM_E_PENDING);
         m->E[i].PendingGen = mk_get32(e, CM_QM_E_PENDING_GEN);
+        m->E[i].Landing = 0;
+        if (entBytes >= CM_QM_E_LANDING + 4 &&
+            (m->E[i].Flags & MK_EF_CHAINED) != 0) {
+            m->E[i].Landing = mk_get32(e, CM_QM_E_LANDING) & 0xFFFFUL;
+        }
     }
     mk_marks_bridges(b, bytes, off + count * entBytes, m);
     return 1;
+}
+
+int mk_descends(const int *parent, int count, int node, int ancestor,
+                int hops)
+{
+    int up;
+    int k;
+
+    if (parent == NULL || node < 0 || node >= count || ancestor < 0) {
+        return 0;
+    }
+    up = parent[node];
+    for (k = 0; k < hops && up >= 0 && up < count; k++) {
+        if (up == ancestor) {
+            return 1;
+        }
+        up = parent[up];
+    }
+    return 0;
 }
 
 int mk_verifiable(int devOk, const MK_QUERY *q, const MK_MARKS *m)
@@ -658,7 +682,7 @@ const char *mk_s98_noid_text(int why)
     case MK_S98_ID_UNKNOWN:
         return "no id: its tunnel port's filters could not be read";
     case MK_S98_ID_OS:
-        return "no id on Windows 8.1 and later, by design";
+        return "no id on Windows 10, by design";
     }
     return "?";
 }
@@ -693,6 +717,9 @@ int mk_s98_wanted(const MK_S98_IN *in)
     }
     if (!in->Below) {
         return MK_S98_W_TUNNEL;
+    }
+    if (in->Os == MK_S98_OS_81 && !in->TunnelId) {
+        return MK_S98_W_NOID;
     }
     if (in->Protected) {
         return MK_S98_W_PROTECTED;
@@ -740,6 +767,8 @@ const char *mk_s98_why_text(int why)
         return "its record allows no attempt now";
     case MK_S98_W_PENDING:
         return "a Windows installation is pending";
+    case MK_S98_W_NOID:
+        return "no tunnel id (Windows 8.1 matches Stor98 by it)";
     }
     return "?";
 }
@@ -919,6 +948,26 @@ const char *mk_ctl_why_text(int why)
     }
 }
 
+int mk_flush_wants(INST_U32 event)
+{
+    return event == MK_PBT_APMQUERYSUSPEND || event == MK_PBT_APMSUSPEND;
+}
+
+int mk_flush_behind(const INST_U32 *chain, int n, const INST_U32 *members, int m)
+{
+    int i;
+    int j;
+
+    for (i = 0; i < n; i++) {
+        for (j = 0; j < m; j++) {
+            if (chain[i] == members[j]) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 int mk_selftest(void (*report)(int ok, const char *what))
 {
     unsigned char b[1024];
@@ -969,6 +1018,28 @@ int mk_selftest(void (*report)(int ok, const char *what))
              "a marks answer parses");
     mk_check(m.Count == 1 && m.E[0].Bus == 6 && m.E[0].Serial == 3 && m.Gen == 7,
              "its entry");
+    mk_check(m.E[0].Landing == 0, "a member's own entry: no landing");
+    /* Design record 34 section 3.12 item 13: a chained entry's landing. */
+    mk_put32(b, CM_QM_HDR_BYTES + CM_QM_E_FLAGS,
+             MK_EF_LOCATED | MK_EF_REPORTED | MK_EF_CHAINED);
+    mk_put32(b, CM_QM_HDR_BYTES + CM_QM_E_LANDING, 0x10529UL);
+    mk_check(mk_marks_parse(b, CM_QM_HDR_BYTES + CM_QM_ENT_BYTES, &m, &need) == 1 &&
+                 m.E[0].Landing == 0x0529UL, "a chained entry's landing");
+    mk_put32(b, CM_QM_HDR_BYTES + CM_QM_E_FLAGS, MK_EF_LOCATED | MK_EF_REPORTED);
+    mk_check(mk_marks_parse(b, CM_QM_HDR_BYTES + CM_QM_ENT_BYTES, &m, &need) == 1 &&
+                 m.E[0].Landing == 0, "the landing read only with the flag");
+    mk_put32(b, CM_QM_HDR_BYTES + CM_QM_E_LANDING, 0);
+    {
+        /* 0 the member's port, 1 the dock's upstream port, 2 its chain
+         * port, 3 the chained unit; 4 another port's child. */
+        static const int par[5] = { -1, 0, 1, 2, -1 };
+
+        mk_check(mk_descends(par, 5, 2, 0, 8), "the chain port below its member");
+        mk_check(mk_descends(par, 5, 3, 2, 8), "the unit below the chain port");
+        mk_check(!mk_descends(par, 5, 4, 0, 8), "another root's node: not below");
+        mk_check(!mk_descends(par, 5, 2, 0, 1), "past the hops allowed: not");
+        mk_check(!mk_descends(par, 5, 0, 0, 8), "a node is not below itself");
+    }
     mk_put32(b, CM_QM_O_COUNT, 2);
     mk_check(mk_marks_parse(b, CM_QM_HDR_BYTES + CM_QM_ENT_BYTES, &m, &need) == 0,
              "a count past the size is refused");
@@ -1317,9 +1388,22 @@ int mk_selftest(void (*report)(int ok, const char *what))
         s.StatusOk = 1;
         s.Started = 1;
         s.Below = 1;
+        s.TunnelId = 1;
         s.Os = MK_S98_OS_81;
         mk_check(mk_s98_wanted(&s) == MK_S98_GO && mk_s98_displaces(&s),
                  "8.1: a tunnelled stornvme drive: the 8.1 arm");
+        s.TunnelId = 0;
+        mk_check(mk_s98_wanted(&s) == MK_S98_W_NOID,
+                 "8.1: without the tunnel id: not taken (record 31 section 4.10)");
+        s.Os = MK_S98_OS_LOW;
+        s.Service = "";
+        s.Started = 0;
+        mk_check(mk_s98_wanted(&s) == MK_S98_GO,
+                 "2000 to 8: a driverless drive without the id: taken (by model)");
+        s.Service = "stornvme";
+        s.Started = 1;
+        s.Os = MK_S98_OS_81;
+        s.TunnelId = 1;
         s.Service = "StorNVMe";
         mk_check(mk_s98_wanted(&s) == MK_S98_GO, "the service in any case");
         s.Below = 0;
@@ -1351,6 +1435,10 @@ int mk_selftest(void (*report)(int ok, const char *what))
         s.Os = MK_S98_OS_81;
         mk_check(mk_s98_wanted(&s) == MK_S98_GO && !mk_s98_displaces(&s),
                  "8.1: no driver: installed over nothing");
+        s.TunnelId = 0;
+        mk_check(mk_s98_wanted(&s) == MK_S98_W_NOID,
+                 "8.1: no driver and no id: not taken");
+        s.TunnelId = 1;
         s.Os = MK_S98_OS_10;
         mk_check(mk_s98_wanted(&s) == MK_S98_W_OS, "10: no driver: nothing");
         s.Os = MK_S98_OS_LOW;
@@ -1651,6 +1739,26 @@ int mk_selftest(void (*report)(int ok, const char *what))
         mk_check(strcmp(mk_ctl_why_text(MK_CTL_HELPER),
                         "the helper xhcihlpr is not running") == 0,
                  "a reason's text");
+    }
+    {
+        /* Record 22 section 11.1.11 Q2 (task 48.35): the flush's events
+         * and its choice of volume. */
+        INST_U32 chain[3];
+        INST_U32 mem[2];
+
+        mk_check(mk_flush_wants(MK_PBT_APMSUSPEND) && mk_flush_wants(MK_PBT_APMQUERYSUSPEND),
+                 "flush: at the suspend and its query");
+        mk_check(!mk_flush_wants(7UL) && !mk_flush_wants(0x12UL),
+                 "flush: never at a resume");
+        chain[0] = 0x0600;
+        chain[1] = 0x0518;
+        chain[2] = 0x0008;
+        mem[0] = 0x0510;
+        mem[1] = 0x0518;
+        mk_check(mk_flush_behind(chain, 3, mem, 2), "flush: a disk behind a member");
+        mem[1] = 0x0519;
+        mk_check(!mk_flush_behind(chain, 3, mem, 2), "flush: no member above it");
+        mk_check(!mk_flush_behind(chain, 3, mem, 0), "flush: no member at all");
     }
     return mkFails;
 }

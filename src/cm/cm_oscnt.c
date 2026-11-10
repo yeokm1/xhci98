@@ -970,6 +970,7 @@ NTSTATUS CmOscmAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo,
     }
     mb->Common.Kind = CM_KIND_MEMBER;
     mb->Common.Self = self;
+    CmCommonInit(&mb->Common);
     mb->Common.Pdo = pdo;
     mb->Common.Lower = lower;
     CmOscmInit(&mb->Osc, role, pdo, lower);
@@ -1057,7 +1058,8 @@ NTSTATUS CmOscmPnp(PCM_MEMBER mb, PIRP irp)
         CmOscmLeave(&mb->Osc);
         IoSkipCurrentIrpStackLocation(irp);
         status = IoCallDriver(mb->Common.Lower, irp);
-        IoDetachDevice(mb->Common.Lower);
+        /* The one detach owner (design record 31 section 4.10, K6). */
+        (VOID)CmDetachOnce(&mb->Common, TRUE);
         IoDeleteDevice(mb->Common.Self);
         return status;
 

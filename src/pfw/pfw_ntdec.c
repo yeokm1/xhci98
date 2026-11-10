@@ -50,6 +50,11 @@ int PfwNtRole(PFW_U32 major, PFW_U32 minor)
             return PFW_ROLE_FILTER;
         }
     }
+    /* 10 (record 32 section 11.5.6, task 48.27): a root bus filter acts in
+     * time there too (section 11.5.5). */
+    if (major == 10 && minor == 0) {
+        return PFW_ROLE_FILTER;
+    }
     return PFW_ROLE_NONE;
 }
 

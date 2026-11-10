@@ -706,6 +706,12 @@ static int is_9x(void)
     return (GetVersion() & 0x80000000UL) != 0;
 }
 
+/* Windows ME: 9x, version 4.90. */
+static int is_me(void)
+{
+    return is_9x() && ((GetVersion() >> 8) & 0xFFUL) == 90UL;
+}
+
 /* The readme beside this program: tools\xhciinst\readme.txt in the
  * package (record 26 section 5's Help). */
 static void open_help(HWND owner)
@@ -764,16 +770,13 @@ static int adv_help_kind(int page)
 /* The Finish page's variant, from its two buttons as they are shown. */
 static int finish_variant(HWND dlg)
 {
-    char t[128];
     HWND now = GetDlgItem(dlg, IDC_F_NOW);
 
     if (now == NULL ||
         (GetWindowLongA(now, GWL_STYLE) & WS_VISIBLE) == 0) {
         return INST_FV_NONE;
     }
-    GetWindowTextA(now, t, sizeof(t));
-    return strcmp(t, inst_page_text(INST_PT_SHUT_NOW)) == 0 ? INST_FV_SHUT
-                                                            : INST_FV_RESTART;
+    return INST_FV_RESTART;
 }
 
 static HWND helpWnd;            /* the help window, while it is open    */
@@ -2561,7 +2564,7 @@ static void oth_sync(HWND dlg, int set)
     int sys9x;
 
     inst_eng_other_choose(set, IsDlgButtonChecked(dlg, oth_id(set,
-                          IDC_O_BOX)) == BST_CHECKED, 0);
+                          IDC_O_BOX)) == BST_CHECKED);
     /* 98 SE and ME: the sentence for the rest follows the copy box
      * (record 26 section 6.7.13). */
     (void)inst_eng_vsd_state(&vsdShown, &sys9x);
@@ -4101,7 +4104,7 @@ static int s98AdvCount;
 static int s98AdvCur = -1;
 static int s98AdvSet[INST_S98_COUNT];
 static char s98AdvVal[INST_S98_COUNT][32];
-static int s98AdvGrey[INST_S98_COUNT];   /* inst_s98_greyed: never written */
+static int s98AdvGrey[INST_S98_COUNT];   /* inst_s98_greyed_os: never written */
 
 static void s98_adv_cell(HWND lv, int n)
 {
@@ -4111,7 +4114,7 @@ static void s98_adv_cell(HWND lv, int n)
     inst_eng_s98_row(s98AdvRow[n], &r);
     if (s98AdvGrey[n]) {
         _snprintf(text, sizeof(text) - 1, "(%s)",
-                  inst_s98_only(s98AdvRow[n]));
+                  inst_s98_only_os(s98AdvRow[n], is_me()));
         text[sizeof(text) - 1] = '\0';
     } else if (s98AdvSet[n]) {
         _snprintf(text, sizeof(text) - 1, "%s (will be saved)",
@@ -4179,6 +4182,7 @@ static void s98_adv_show(HWND dlg, int n)
     INST_S98ROW r;
     char note[1024];
     char range[160];
+    char means[320];
     INST_U32 hi;
 
     s98AdvCur = n;
@@ -4190,8 +4194,9 @@ static void s98_adv_show(HWND dlg, int n)
     if (s98AdvGrey[n]) {
         _snprintf(note, sizeof(note) - 1, "%s: %s.\r\nUsed on %s; nothing "
                   "is saved here.",
-                  v->KeyNt != NULL ? v->KeyNt : v->Name9x, v->What,
-                  inst_s98_only(s98AdvRow[n]));
+                  (is_9x() && v->Name9x != NULL) || v->KeyNt == NULL ?
+                  v->Name9x : v->KeyNt,
+                  v->What, inst_s98_only_os(s98AdvRow[n], is_me()));
         note[sizeof(note) - 1] = '\0';
         SetDlgItemTextA(dlg, IDC_A_TEXT, note);
         SetDlgItemTextA(dlg, IDC_A_EDIT, "");
@@ -4202,9 +4207,13 @@ static void s98_adv_show(HWND dlg, int n)
      * default on this system), never a second copy. */
     hi = inst_s98_hi(s98AdvRow[n], !is_9x());
     inst_s98_range(s98AdvRow[n], hi, range, sizeof(range));
+    /* A 0-or-1 row's meanings (StorTakeFirmware's warning among them)
+     * shown before anything is saved. */
+    inst_s98_meanings(s98AdvRow[n], means, sizeof(means));
     _snprintf(note, sizeof(note) - 1,
-              "%s: %s.\r\nCurrent: %s.\r\nDefault: %s. Allowed: %s. "
+              "%s: %s.\r\n%s%sCurrent: %s.\r\nDefault: %s. Allowed: %s. "
               "Leave empty to keep it unchanged.\r\n%s", r.Name, v->What,
+              means, means[0] != '\0' ? "\r\n" : "",
               r.NowText, r.Default, range, s98_where());
     note[sizeof(note) - 1] = '\0';
     SetDlgItemTextA(dlg, IDC_A_TEXT, note);
@@ -4245,13 +4254,16 @@ static WIZ_DLGRET CALLBACK s98_adv_proc(HWND dlg, UINT msg, WPARAM wp,
             int grey = 0;
             if (!inst_eng_s98_row(i, &r)) {
                 /* Another system's row: shown greyed (owner,
-                 * 2026-10-19), named as that system names it. */
-                if (!inst_s98_greyed(i, !is_9x()) || instS98Values[i].Asked) {
+                 * 2026-10-19), named as that system names it; and
+                 * StorTakeFirmware on ME (task 48.28). */
+                if (!inst_s98_greyed_os(i, !is_9x(), is_me()) ||
+                    instS98Values[i].Asked) {
                     continue;
                 }
                 grey = 1;
-                r.Name = instS98Values[i].KeyNt != NULL ?
-                         instS98Values[i].KeyNt : instS98Values[i].Name9x;
+                r.Name = (is_9x() && instS98Values[i].Name9x != NULL) ||
+                         instS98Values[i].KeyNt == NULL ?
+                         instS98Values[i].Name9x : instS98Values[i].KeyNt;
             } else if (r.Asked) {
                 continue;
             }
@@ -4956,9 +4968,9 @@ static void summary_fill(HWND dlg)
                 _snprintf(line, sizeof(line) - 1, "\nIf the box below is "
                           "ticked, Stor98's driver file (stor98.mpd) is\n"
                           "replaced with %s at the next start; no drive is "
-                          "reinstalled.\nWindows is then shut down and "
-                          "started again, not restarted. If\nunticked, "
-                          "Stor98 is updated in a later run.\n", s98Ver);
+                          "reinstalled.\nWindows is then restarted. If "
+                          "unticked, Stor98 is updated in a\nlater run.\n",
+                          s98Ver);
                 line[sizeof(line) - 1] = '\0';
                 tb_add(&t, line);
             }
@@ -5232,13 +5244,12 @@ static void restart_now(HWND owner)
             CloseHandle(tok);
         }
     }
-    /* 98 SE and ME after a Stor98 update: a shutdown and a fresh start,
-     * not a warm restart (record 26 section 5.9). */
-    if (!ExitWindowsEx(inst_eng_shutdown() ? EWX_SHUTDOWN : EWX_REBOOT, 0)) {
-        _snprintf(text, sizeof(text) - 1, "Windows could not %s (error "
-                  "%lu). %s from the Start menu.", inst_eng_shutdown() ?
-                  "shut down" : "restart", (unsigned long)GetLastError(),
-                  inst_eng_shutdown() ? "Shut down" : "Restart");
+    /* 98 SE and ME restart too, a Stor98 update included (owner,
+     * 2026-11-10; record 26 section 5.9). */
+    if (!ExitWindowsEx(EWX_REBOOT, 0)) {
+        _snprintf(text, sizeof(text) - 1, "Windows could not restart (error "
+                  "%lu). Restart from the Start menu.",
+                  (unsigned long)GetLastError());
         text[sizeof(text) - 1] = '\0';
         MessageBoxA(owner, text, "xHCI98 Setup", MB_OK | MB_ICONWARNING);
     }
@@ -5252,9 +5263,8 @@ static void finish_fill(HWND dlg)
     int failed;
     int restart;
     int steps;
-    const char *last = inst_final_text_shown(finalLine, inst_eng_shutdown(),
+    const char *last = inst_final_text_shown(finalLine,
                                              !page_skipped(P_STEPS));
-    int cold = inst_eng_shutdown();
 
     inst_eng_flags(&changed, &failed, &restart, &steps);
     SetDlgItemTextA(dlg, IDC_F_LAST, ran ? last :
@@ -5284,10 +5294,8 @@ static void finish_fill(HWND dlg)
         }
     }
     LeaveCriticalSection(&textLock);
-    SetDlgItemTextA(dlg, IDC_F_NOW, inst_page_text(cold ? INST_PT_SHUT_NOW
-                                                        : INST_PT_NOW));
-    SetDlgItemTextA(dlg, IDC_F_LATER, inst_page_text(cold ? INST_PT_SHUT_LATER
-                                                          : INST_PT_LATER));
+    SetDlgItemTextA(dlg, IDC_F_NOW, inst_page_text(INST_PT_NOW));
+    SetDlgItemTextA(dlg, IDC_F_LATER, inst_page_text(INST_PT_LATER));
     if (ran && changed && finalLine != INST_FINAL_DONE) {
         ShowWindow(GetDlgItem(dlg, IDC_F_NOW), SW_SHOW);
         ShowWindow(GetDlgItem(dlg, IDC_F_LATER), SW_SHOW);
@@ -7374,8 +7382,6 @@ static void st_help(HWND parent)
         SetDlgItemTextA(d, IDC_F_NOW, inst_page_text(INST_PT_NOW));
         ShowWindow(GetDlgItem(d, IDC_F_NOW), SW_SHOW);
         st(finish_variant(d) == INST_FV_RESTART, "help: finish, restart");
-        SetDlgItemTextA(d, IDC_F_NOW, inst_page_text(INST_PT_SHUT_NOW));
-        st(finish_variant(d) == INST_FV_SHUT, "help: finish, shut down");
         ShowWindow(GetDlgItem(d, IDC_F_NOW), SW_HIDE);
         st(finish_variant(d) == INST_FV_NONE, "help: finish, none shown");
         DestroyWindow(d);
@@ -7668,8 +7674,6 @@ static int selftest(void)
     static const int b2Texts[] = { INST_PT_VSD };
     static const int s3Ids[] = { IDC_S_HEAD };
     static const int s3Texts[] = { INST_PT_S98SET };
-    static const int n2Ids[] = { IDC_F_NOW, IDC_F_LATER };
-    static const int n2Texts[] = { INST_PT_SHUT_NOW, INST_PT_SHUT_LATER };
     static const int c2Ids[] = { IDC_C_TB_T };
     static const int c2Texts[] = { INST_PT_TB_ABSENT };
     /* Record 26 section 5.3.6 (task 46.5): the router not listed. */
@@ -7757,8 +7761,6 @@ static int selftest(void)
         st_comp_layout_nt(parent);
         st_other_layout(parent);
         st_page(parent, IDD_SETTINGS, s3Ids, s3Texts, 1, "Stor98's settings");
-        st_page(parent, IDD_FINISH, n2Ids, n2Texts, 2, "the finish, a "
-                "shutdown");
         st_page(parent, IDD_COMPONENTS, c2Ids, c2Texts, 1, "the components, "
                 "no controller");
         st_page(parent, IDD_COMPONENTS, c5Ids, c5Texts, 1, "the components, "

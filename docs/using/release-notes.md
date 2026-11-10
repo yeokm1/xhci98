@@ -1,11 +1,14 @@
 # xhci98 - Release Notes
 
-This file describes package version `3.4.2.0`, the twenty-first release and
-the fourteenth of the host controller driver, dated 2026-11-08 (`DriverVer`
-`11/08/2026,3.4.2.0` in every INF of the package: those of `xhci98.sys`,
-the UAS driver and the connection manager, and Stor98's). What it changes from `3.4.1.0` is "What `3.4.2.0`
-changes", below, and is marked "new in `3.4.2.0`" or "from `3.4.2.0`" where
-it applies below. What `3.4.1.0` changed from `3.4.0.0` is "What `3.4.1.0`
+This file describes package version `3.4.3.0`, the twenty-second release and
+the fifteenth of the host controller driver, dated 2026-11-10 (`DriverVer`
+`11/10/2026,3.4.3.0` in every INF of the package: those of `xhci98.sys`,
+the UAS driver and the connection manager, and Stor98's). What it changes
+from `3.4.2.0` is "What `3.4.3.0` changes", below, and is marked "new in
+`3.4.3.0`" or "from `3.4.3.0`" where it applies below. What `3.4.2.0`
+changed from `3.4.1.0` is "What `3.4.2.0` changes", below, and is marked
+"new in `3.4.2.0`" or "from `3.4.2.0`" where it applies. What `3.4.1.0`
+changed from `3.4.0.0` is "What `3.4.1.0`
 changes", below, and is marked "new in `3.4.1.0`" or "from `3.4.1.0`" where
 it applies. What `3.4.0.0`
 changed from `3.3.0.0` is "What `3.4.0.0` changes", below, and is marked
@@ -336,6 +339,143 @@ downstream ports `xHCI98 USB4 PCI Bridge
 | Intel 200 Series | `8086:A2AF` | xHCI98 USB 3 Controller (Intel 200 Series) |
 | Intel 300 Series | `8086:A36D` | xHCI98 USB 3 Controller (Intel 300 Series) |
 | Intel Raptor Lake | `8086:A71E` | xHCI98 USB 3 Controller (Intel Raptor Lake) |
+
+## What `3.4.3.0` changes
+
+The full list: the `3.4.3.0` entry of `releases/history.md`.
+
+### USB
+- Windows 2000: USB audio plays again. `3.4.2.0` refused the request
+  with which Windows 2000's own USB audio driver chooses its stream,
+  because the request's header gave a length of 0, so no sound played
+  ("Your audio hardware cannot play files like the current file";
+  GitHub issue 32, `docs/issues/30-w2k-usbaudio-select-interface-header.md`).
+  A request whose header states a length too short for it is now served
+  and counted, as Windows' own USB stack serves it.
+- A USB 3 device whose SuperSpeed link keeps failing (three resets
+  within a minute, then a fourth failure), at a root port or behind a
+  USB 3 hub, is moved to the USB 2.0 side of the same connector or hub,
+  where it runs at High Speed; it was reset again and again
+  (`XhciSsFlapFallback`, on by default; `0` leaves the device off until
+  it is plugged in again).
+- `XhciDmaStaging`, `0` by default: `1` passes every transfer's data
+  through memory of the driver's own, so that a disable, update or
+  removal of a controller that has stopped answering completes instead
+  of waiting, at the cost of one more copy of the data.
+  `XhciStagePoolKiB` sets the size of that memory
+  (`docs/using/tuning.md`).
+- An audio or video request whose last packet failed part-way ends at
+  once, where it could wait for its cancellation; a USB 2.0 endpoint
+  whose maximum packet size its speed does not list is opened, where it
+  was refused.
+- The USB devices answer Windows' bus information request as Windows'
+  own USB stack does.
+
+### Thunderbolt and USB4
+- Standby and hibernation with a Thunderbolt or USB4 drive attached are
+  supported on Windows 2000 and later: the USB4 connection manager puts
+  the devices to sleep in order and builds their connections again at
+  resume (`XhciCmSleepEntry`, on by default). On 98 SE and ME, stop and
+  unplug the drive first ("Thunderbolt and USB4: known limitations").
+- 98 SE and ME: a Thunderbolt dock's second and further USB controllers,
+  which Windows leaves at Code 29 for want of an interrupt, now start
+  without one, `xhci98.sys` polling them (`XhciCmNoIrqStart`), from the
+  dock's first plug.
+- 98 SE and ME: `XhciCmRingInterrupt` `1` works on these systems too,
+  with `XhciPfwNhiLine` `0`: the controller's interrupt reports a plug,
+  an unplug and network traffic at once (off by default; "Thunderbolt
+  networking speed on 98 SE and ME: the controller's interrupt",
+  `docs/using/tuning.md`).
+- USB4 hosts whose tunnels xHCI98 builds: on 98 SE and ME a device in a
+  daisy chain (behind another device) is set up when it is plugged in,
+  removed when it is unplugged, and marked removable; on 2000 to 10
+  stopping it closes its own connection.
+- USB4 hosts whose tunnels xHCI98 builds, where the host does not tell
+  the driver which of its ports leads where (the ASMedia ASM4242): for a
+  device already attached when Windows starts, `XhciCmInferAtStart` `1`
+  lets the driver work out its port when only one such device is
+  attached and two separate readings agree, so that safely removing it
+  closes its connection; `0`, the default, leaves that connection up
+  until the device is unplugged. The port of a tunnel found up at start
+  is learned only from the tunnel's own far end, so a function that
+  answers late is never taken for the device.
+- When a tunnel stays up after an eject because the driver does not know
+  the device's port, the eject says so: "The PCIe tunnel stays up until
+  the device is unplugged: the Thunderbolt driver does not know which of
+  its ports the device is on. It learns that when a device is plugged in
+  while Windows runs."
+- Windows 8.1: a tunnelled NVMe drive keeps its Thunderbolt id, and so
+  Stor98, across a disable, a driver update or another restart of its
+  own devices; on 8.1 Stor98 matches a drive by that id alone.
+
+### Networking
+- 98 SE and ME with the controller's interrupt on: Thunderbolt
+  networking no longer stops Windows with a fatal exception 0E inside
+  its TCP/IP (MSTCP) while sending, and data coming in no longer stalls.
+  The network driver now hands Windows what it receives and the sends
+  it completes from an NDIS timer, as these systems expect.
+- With the controller's interrupt on, network traffic is reported at
+  once (`XhciCmNetInterrupt`, on by default); the driver still looks at
+  every clock tick, and only that if the interrupt fails.
+- Thunderbolt networking with a Windows 11 computer: traffic passes
+  where the link came up and carried nothing, and the link comes back
+  after the cable is plugged in again at the Windows end. Each new peer
+  is told to read this computer's properties again, as Linux does.
+- Thunderbolt networking on 98 SE and ME: two tips in
+  `docs/using/tuning.md`. "Thunderbolt networking speed on 98 SE and
+  ME: the TCP receive window" sets the systems' own TCP receive window
+  (`DefaultRcvWindow` `64240`), which can take data coming in from about
+  10 to about 100 Mbit/s; it is 98 SE and ME's own setting and applies
+  to all their networking, and the tip says how to undo it. "Thunderbolt
+  networking speed on 98 SE and ME: the controller's interrupt"
+  (`XhciCmRingInterrupt` `1` with `XhciPfwNhiLine` `0`) makes it about
+  three times faster in both directions, where the BIOS gives the
+  controller an interrupt no other device holds.
+
+### Storage
+- Stor98 on 98 SE: `StorTakeFirmware` `1`, off by default, takes an NVMe
+  controller the BIOS has set up, which Stor98 otherwise leaves to the
+  BIOS (its drive then runs in MS-DOS compatibility mode and Stor98's
+  entry shows Code 10); `stortakefirmware=1` in one controller's
+  `AdapterSettings` takes that one alone. Taking it can hang Windows'
+  start or corrupt data if the BIOS still uses the drive. Ignored on ME
+  (`docs/using/tuning.md`; Stor98's README, "Take a controller the BIOS
+  set up").
+
+### Installer and package
+- A reinstall or update at the same version replaces every installed
+  file of this package whose bytes differ from the package's, on every
+  system, as it replaces an older file; a newer version is still kept
+  unless `/force` is given. `/list` says "Keep (same version)" or
+  "Replace files (same version)".
+- 98 SE and ME: after a Stor98 update, and on 98 SE after the storage
+  drivers' copy with a UAS disk at Code 2, Setup offers "Restart Windows
+  now" and ends with "Done. Please restart Windows now.", as on every
+  other system, where it asked you to shut down and start Windows again.
+  Disconnect your external NVMe drives before a Stor98 update, as before.
+- 32-bit Windows 10, version 2004 or later: Setup offers `XHCIPFW.SYS`,
+  which closes PCI bridges' windows above 4 GB, as on 8 and 8.1. On 8,
+  8.1 and 10 it acts only at a full start: restart Windows after
+  installing or updating it (with fast startup on, Shut down and power
+  on is not a full start).
+- Setup's Advanced lists and the USB Tree's Settings window show
+  `XhciSsFlapFallback` and Stor98's `StorTakeFirmware` (98 SE; greyed on
+  ME), and `XhciCmRingInterrupt` on every system.
+- Setup's refusal while Windows is installing something names the
+  program to run again, `SETUP.EXE` or `INSTALL.BAT`; on 98 SE and ME
+  `INSTALL.BAT` waits for Setup's window and returns its exit code.
+- The text-mode Setup (F6) entry for Windows 2000 also serves 32-bit XP:
+  "xHCI98 USB 3 Controller (2000/XP, USB keyboard/mouse, files from CD)".
+- The USB Tree: USB drive notices, off unless you tick "USB drive
+  notices" on the Settings window's xHCI98 USB Tree tab, say when a USB
+  drive is connected or removed. A Thunderbolt networking node under the
+  Thunderbolt or USB4 controller shows each link's state, the other computer, the speed, the
+  addresses and the counters, also in the saved report and the
+  snapshot. `/eject` with the ID of a device inside a Thunderbolt or
+  USB4 device (its drive, say) stops that whole device.
+- XHCIPERF, the developer diagnostic in the source tree: on 98 SE and ME,
+  which cannot cancel a request sent, Stop and closing the window wait
+  for the disk to answer it.
 
 ## What `3.4.2.0` changes
 
@@ -1498,7 +1638,7 @@ Manager name ("Which controllers"). The install writes each value below
 at its default, only where it is missing, so a value you set survives an
 update: from `3.4.0.0` every one, `XhciCmTunnelBridge` as `auto`, on the
 systems that read it (`XhciCmNoIrqStart`, `XhciCmBridgeNumbering` and,
-from `3.4.1.0`, `XhciCmAsm4242Handover` on 98 SE and ME alone, `XhciCmRingInterrupt` on 2000 to 10, `XhciCmBridgeReq`
+from `3.4.1.0`, `XhciCmAsm4242Handover` on 98 SE and ME alone, `XhciCmRingInterrupt` on 2000 to 10 (from `3.4.3.0` on every system), `XhciCmBridgeReq`
 on 2000, XP and XP x64). `docs/using/tuning.md` has every value. From `3.1.0.0` each is also read from
 `HKLM\System\CurrentControlSet\Services\USB` first, where it wins when it
 is there ("Registry settings", "One value for every controller").
@@ -1513,13 +1653,13 @@ Restart Windows, or disable and enable the controller, after a change.
 | `XhciCmUsb3Tunnel` | `1` | USB4 connection manager: `1` builds a USB3 tunnel beside the PCI Express one where the device has one; `0` builds none |
 | `XhciCmLaneBonding` | `1` | USB4 connection manager: `1` bonds the link's two lanes; `0` runs on one |
 | `XhciCmPreOsCleanup` | `0` | USB4 connection manager, tunnels found at its start: `0` keeps every tunnel it can verify and holds a port it cannot; `1` cleans what it cannot verify; `2` cleans everything |
-| `XhciCmNoIrqStart` | `1` | Windows 98 SE and ME: `1` starts an NVMe drive behind a tunnel whose interrupt cannot be routed with no interrupt, for the bundled Stor98 (0.4.0.0 or later; this package's is 3.1.0.0, installed by its installer) to poll; `0` leaves it at its problem code. `0` to `1`. Ignored on 2000 to 7. Written by the install on 98 SE and ME from `3.3.0.0` |
+| `XhciCmNoIrqStart` | `1` | Windows 98 SE and ME: `1` starts an NVMe drive behind a tunnel whose interrupt cannot be routed with no interrupt, for the bundled Stor98 (0.4.0.0 or later; this package's is 3.1.0.0, installed by its installer) to poll, and from `3.4.3.0` a USB controller there (such as a dock's second USB controller, Code 29) bound to `xhci98.sys`, which then polls; `0` leaves it at its problem code. `0` to `1`. Ignored on 2000 to 7. Written by the install on 98 SE and ME from `3.3.0.0` |
 | `XhciCmBridgeNumbering` | `1` | Windows 98 SE and ME: `1` sets up the PCI bridges a device brings up behind a tunnel after Windows has started (bus numbers, memory windows, interrupt lines, as the BIOS would) (a USB4 NVMe enclosure's switch, which otherwise shows Code 29 until a restart); `0` leaves them as they come up. `0` to `1`. Ignored on 2000 to 7. Written by the install on 98 SE and ME from `3.3.0.0` |
 | `XhciCmAsm4242Handover` | `1` | From `3.4.1.0`: Windows 98 SE and ME only. On an ASMedia ASM4242 USB4 host whose firmware hands USB4 over only through ACPI `_OSC`, which these systems never run, `1` sends that handover when the driver starts, once a boot, if the driver knows the firmware. Without it such a host never answers and nothing behind it works. `0` never sends it. `0` to `1`. Written by the install on 98 SE and ME |
 | `XhciCmBridgeReq` | `1` | From `3.4.0.0`: Windows 2000, XP and XP x64 only. `1` rewrites the resource lists of the PCI bridges a dock or an enclosure with a switch brings, below an active tunnel port, so every port behind it is placed, and has the safe-removal mark service keep the filter on those bridges; `0` neither; `2` computes and records each list without changing it. Any other value is refused and `1` stands. The installer offers it under the Thunderbolt page's "Advanced..." on those systems, and `INSTALL /set XhciCmBridgeReq=0..2` sets it there. What it did is recorded in `XhciCmBridgeReqDiag`, a binary value in the controller's hardware key |
 | `XhciCmUsb4V2` | `1` | From `3.4.0.0`, USB4 connection manager: leave it at `1`. `1` runs a USB4 version 2 router (Barlow Ridge, say) as version 2, Gen 4 links included; `0` runs every router as version 1, as `3.3.0.0` did |
 | `XhciCmGen4LinkRecovery` | `1` | From `3.4.0.0`, USB4 connection manager: leave it at `1`. `1` lets the Gen 4 link between the controller and the device plugged into it recover from a link error in place, the devices behind it kept; `0` takes such an error as an unplug and a fresh plug, as before |
-| `XhciCmRingInterrupt` | `0` | From `3.4.0.0`, Windows 2000 to 10: `1` lets the controller's interrupt tell the driver at once that a device was plugged in or removed, the driver still looking every `XhciCmPollIdleMs` and going back to that alone if the interrupt fails; `0` looks every `XhciCmPollIdleMs` alone. 98 SE and ME look as with `0` |
+| `XhciCmRingInterrupt` | `0` | From `3.4.0.0` (98 SE and ME from `3.4.3.0`): `1` lets the controller's interrupt tell the driver at once that a device was plugged in or removed, the driver still looking every `XhciCmPollIdleMs` and going back to that alone if the interrupt fails; `0` looks every `XhciCmPollIdleMs` alone. On 98 SE and ME the controller has an interrupt only with `XhciPfwNhiLine` `0` |
 | `XhciCmNet` | `0` | From `3.4.0.0`, Thunderbolt networking: `1` lets the controller answer another computer joined by a Thunderbolt or USB4 cable and carry the network adapter's traffic; `0` answers no other computer. The installer's "Thunderbolt networking" box sets it. Its buffer and polling values are in `docs/using/tuning.md` |
 | `XhciCmTunnelBridge` | `auto` (`REG_SZ`) | `auto`, written by the install (or empty): the driver finds the tunnel ports itself. A comma-separated list of `bb:dd.f` PCI bridges replaces that finding, for a machine whose ports it does not find (its log says so) |
 | `XhciCmAsmediaPcie7Credits` | `0` | From `3.3.0.0` (roadmap-usb4 task 44.41): a bench experiment for the ASMedia ASM4242, leave it at `0`. `1` writes 7 credits, IFC 1 and ISE 0 into the two protocol-adapter entries of a PCI Express tunnel the USB4 connection manager builds between an ASM4242 host router and an ASM2464 device router; `0` keeps them as read; any other value is refused and `0` stands. Written as `0` by the install from `3.4.0.0`; the installer does not ask for it |
@@ -1697,6 +1837,10 @@ have every leg.
 - **Windows 2000: an unplug without a stop shows "Unsafe Removal of
   Device"**, and the device is removed. Stop it in "Unplug or Eject
   Hardware" first.
+- **Windows 2000: the first time a Thunderbolt dock is plugged in,
+  Windows asks to restart for each of its PCI bridges** (from
+  `3.4.3.0`); until the restart some of the dock's devices do not
+  start.
 - **Windows 2000, XP and XP x64: the first plug of a dock or an enclosure
   with a switch** (from `3.4.0.0`, tasks 45.12 and 45.55). The first time such a device is
   plugged in, its devices may stop and start again once, a few seconds
@@ -1804,34 +1948,17 @@ have every leg.
 - **Approval is automatic by default, and a tunnelled device can reach all
   of memory**; set `XhciCmApprove` to `0` where the port is within reach
   of people you do not trust (same section).
-- **Standby and hibernation with a tunnelled device attached are
-  unsupported** on every system, and so is standby with an integrated
-  controller (Ice Lake and later). Stop and unplug the device first.
-  From `3.3.0.0`, on a USB4 host whose tunnels the connection manager
-  builds, a tunnel it built is built again after a hibernation also when
-  Windows had restarted the controller's driver since (the new instance
-  took the tunnel as one it found up and did not build it again, and the
-  drive was missing after the resume; roadmap-usb4 task 44.26, design record 22 section 9.4). Read on
-  the emulator's tunnel bridge with a standard hot-plug controller, on 7
-  x86 and 10 x86; with that change, 2000, 7 x86, 8.1 x86 and 10 x86
-  resumed from a hibernation with the drive attached and its files, and
-  shut down in under a minute after it (task 44.27).
-  Where the tunnel port is a native PCIe hot-plug port (the integrated
-  USB4 root ports, and the emulator's q35 port), Windows finds the port
-  empty at the resume, before the tunnel is back, and reports the drive
-  missing: files written shortly before the hibernation can be lost
-  (those whose directory entries were still in Windows' cache), and the
-  drive comes back only when it is plugged in again (read on the
-  emulator; on the integrated root ports it is expected from the same
-  mechanism, not yet read). On Windows XP x64 and 7 x64, read on the
-  emulator, the first shutdown after resuming from a hibernation with a
-  tunnelled NVMe drive still attached can stall at "Shutting down" for
-  over ten minutes (XP x64 finished after twelve; 7 x64 was stopped after
-  fifteen); 8 x64 and 10 x64 do not stall. On 7 x64, without the drive,
-  or without this package, it completes, and it also completes when the
-  drive was stopped with Safely Remove before the hibernation (read on 7
-  only). Always use
-  Safely Remove before standby or hibernation.
+- **Standby and hibernation with a Thunderbolt or USB4 drive attached
+  are supported on Windows 2000 and later.** On Windows 98 SE and ME,
+  stop and unplug the drive first. On a computer whose firmware does
+  not restore the Thunderbolt or USB4 connection at resume, stop the
+  drive before standby or hibernation.
+- **Windows ME (and rarely 98 SE): with a Thunderbolt dock or chain
+  attached at power-on, the first start after the install can stop
+  with a fatal exception 0E.** Setting `XhciCmReenum` to `0` avoids
+  it, at the cost of no automatic re-enumeration on 9x: Windows then
+  finds devices plugged in behind the Thunderbolt port only at Device
+  Manager's Refresh.
 - **Windows 98 SE and ME: a device plugged in after the start needs an
   interrupt line from the BIOS.** On the ThinkPad P14s Gen 1 the BIOS's
   routing table covers the Thunderbolt port (read from a capture); on
@@ -3015,7 +3142,7 @@ Disk, and point it at the package directory.
 
 ### NVMe drives behind Thunderbolt or USB4 (new in `3.0.0.0`)
 
-This download bundles Stor98 `3.4.2.0`.
+This download bundles Stor98 `3.4.3.0`.
 
 <!-- The cut replaces the line above with "This download bundles Stor98
 `<version>`." or "This download bundles no Stor98."

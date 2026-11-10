@@ -108,6 +108,7 @@ const char *tr_brdiag_irq(TR_U32 outcome);
 const char *tr_ni_irq(TR_U32 v);
 const char *tr_ni_state(TR_U32 v);
 const char *tr_ni_why(TR_U32 v);
+const char *tr_ni_kind(TR_U32 v);
 const char *tr_ni_op(TR_U32 v);
 /* "PCI 05:01.0" for a location in bus 15:8, device 7:3, function 2:0;
  * "none" for FFFFFFFFh. */

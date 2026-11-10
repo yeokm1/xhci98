@@ -73,8 +73,12 @@ call %XC%:\XHEXIT.BAT list
 C:
 cd \
 call %XC%:\XHSEND.BAT list C:\XHLEG\LIST2.TXT
+rem "Keep (same version)" from 3.4.3.0 on, "Reinstall (same version)" before.
+find "Keep (same version)" C:\XHLEG\LIST2.TXT>NUL
+if not errorlevel 1 goto l2pass
 find "Reinstall (same version)" C:\XHLEG\LIST2.TXT>NUL
 if errorlevel 1 goto l2fail
+:l2pass
 echo XHLEG CHECK list-current PASS>COM1
 goto stick
 :l2fail
@@ -135,9 +139,13 @@ call %XC%:\XHEXIT.BAT list-final
 C:
 cd \
 call %XC%:\XHSEND.BAT list C:\XHLEG\LIST3.TXT
+find "Keep (same version)" C:\XHLEG\LIST3.TXT>NUL
+if errorlevel 2 goto l3err
+if not errorlevel 1 goto l3cur
 find "Reinstall (same version)" C:\XHLEG\LIST3.TXT>NUL
 if errorlevel 2 goto l3err
 if errorlevel 1 goto l3ok
+:l3cur
 echo XHLEG CHECK list-removed FAIL a device still current>COM1
 goto done
 :l3err

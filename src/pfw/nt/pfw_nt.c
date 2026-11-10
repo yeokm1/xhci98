@@ -1,19 +1,20 @@
 /*
  * pfw_nt.c - XHCIPFW.SYS, which closes every PCI-to-PCI bridge's
  * prefetchable window lying wholly above 4 GB before the PCI driver of
- * Windows 2000, XP or the 32-bit Vista, 7, 8 and 8.1 reads the bridges
- * (roadmap-usb4.md tasks 44.49 and 45.9, design record 32 section 11),
+ * Windows 2000, XP or the 32-bit Vista, 7, 8, 8.1 and 10 reads the
+ * bridges (roadmap-usb4.md tasks 44.49, 45.9 and 48.27, design record 32
+ * section 11),
  * with the step of the 98 SE and ME VxD (..\pfw_scan.c) and its log.
  *
  * Two roles, by the system's version (PfwNtRole): on 2000 to 7 a
  * boot-start driver of the group System Reserved whose DriverEntry runs
  * the step once, with no device, no dispatch routine and no unload
- * routine (record 32 section 11.2); on 8 and 8.1 an upper filter of every
- * PCI root bus that runs the step at the first IRP_MN_START_DEVICE of the
- * boot before passing it down, and passes everything else down (section
- * 11.5.2). Neither elsewhere: on any other version (the 32-bit Windows 10
- * among them) DriverEntry records Skipped = PFW_SKIP_SYSTEM and returns,
- * having touched nothing. It decides (..\pfw_ntdec.c) from the system's
+ * routine (record 32 section 11.2); on 8, 8.1 and 10 an upper filter of
+ * every PCI root bus that runs the step at the first IRP_MN_START_DEVICE
+ * of the boot before passing it down, and passes everything else down
+ * (sections 11.5.2 and 11.5.6). Neither elsewhere: on any other version
+ * DriverEntry records Skipped = PFW_SKIP_SYSTEM and returns, having
+ * touched nothing. It decides (..\pfw_ntdec.c) from the system's
  * version, Safe Mode, whether it runs at the boot drivers' time, and the
  * processors (on 2000 and XP one processor only); runs the step with every other processor held inside
  * KeIpiGenericCall (resolved at run time: a static import would keep the
@@ -305,7 +306,7 @@ static void PfwStep(PUNICODE_STRING RegistryPath, ULONG role, ULONG extra)
     PfwLog(RegistryPath, skip, (ULONG)mode, holdTicks, role);
 }
 
-/* ---- The filter role on 8 and 8.1 (record 32 section 11.5.2) ----------- */
+/* ---- The filter role on 8, 8.1 and 10 (record 32 section 11.5.2) ------- */
 
 #define PFW_LOCK_TAG 'fPhX'
 

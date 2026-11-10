@@ -45,8 +45,8 @@
  * joining them is the network driver's.
  *
  * IRQL. Open and Close at PASSIVE_LEVEL; QueryInfo, TxReserve, TxCommit,
- * TxAbort and Log at IRQL <= DISPATCH_LEVEL. Callbacks: LinkChange at
- * PASSIVE_LEVEL on xhcicm.sys's thread; Receive and TxDone at
+ * TxAbort and Log at IRQL <= DISPATCH_LEVEL. Callbacks: LinkChange and
+ * Stats at PASSIVE_LEVEL on xhcicm.sys's thread; Receive and TxDone at
  * DISPATCH_LEVEL in xhcicm.sys's service DPC. No lock of xhcicm.sys is held
  * across a callback, and a callback must not call Open or Close.
  *
@@ -115,11 +115,60 @@ typedef VOID (NTAPI *XHCI_CM_NET_RECEIVE)(PVOID ClientContext, const VOID *Frame
  * try again. */
 typedef VOID (NTAPI *XHCI_CM_NET_TX_DONE)(PVOID ClientContext, ULONG Count);
 
+/* The network driver's counters, for the status query the xHCI98 USB Tree
+ * reads (design record 35 section 17, task 48.18): the caller sets Size;
+ * the callback fills the fields Size covers, as its general statistics
+ * OIDs would answer them. Every field a ULONG, so the query's client
+ * block is these words in this order (cm_qnet.h CM_QN_C_*). */
+#define XHCI_CM_NET_STATS_NDIS5         1UL     /* xhcinet.sys  */
+#define XHCI_CM_NET_STATS_NDIS6         2UL     /* xhcinet6.sys */
+#define XHCI_CM_NET_STATS_F_BYTES32     0x00000001UL    /* bytes wrap at 2^32 */
+#define XHCI_CM_NET_STATS_F_ASLEEP      0x00000002UL    /* D3, or paused */
+
+typedef struct _XHCI_CM_NET_STATS {
+    ULONG Size;                         /* in: sizeof(XHCI_CM_NET_STATS) */
+    ULONG Driver;                       /* XHCI_CM_NET_STATS_NDIS* */
+    ULONG Mtu;
+    ULONG Flags;                        /* XHCI_CM_NET_STATS_F_* */
+    ULONG TxPackets;                    /* OID_GEN_XMIT_OK */
+    ULONG TxBytesLo;
+    ULONG TxBytesHi;
+    ULONG RxPackets;                    /* OID_GEN_RCV_OK */
+    ULONG RxBytesLo;
+    ULONG RxBytesHi;
+    ULONG TxErrors;                     /* OID_GEN_XMIT_ERROR */
+    ULONG RxErrors;                     /* OID_GEN_RCV_ERROR */
+    ULONG RxNoBuffer;                   /* OID_GEN_RCV_NO_BUFFER */
+    ULONG TxDown;                       /* sends completed: link down */
+    ULONG RxNotUp;                      /* frames while the link was down */
+    ULONG RxSplit;                      /* large segments split */
+    ULONG TxFullWaits;                  /* sends that waited for a descriptor */
+} XHCI_CM_NET_STATS, *PXHCI_CM_NET_STATS;
+
+/* On xhcicm.sys's thread at PASSIVE_LEVEL, no lock of xhcicm.sys held,
+ * between Open and Close: copy the counters and return. It must not wait,
+ * and must not call the interface. */
+typedef VOID (NTAPI *XHCI_CM_NET_STATS_FN)(PVOID ClientContext,
+                                           PXHCI_CM_NET_STATS Stats);
+
+/* The first three callbacks alone: what Open accepts at the least. A
+ * driver from before task 48.18 passes this Size and is never asked for
+ * Stats; Stats is taken only from a Size that covers it. */
+typedef struct _XHCI_CM_NET_CALLBACKS_V1 {
+    ULONG Size;
+    XHCI_CM_NET_LINK_CHANGE LinkChange;
+    XHCI_CM_NET_RECEIVE Receive;
+    XHCI_CM_NET_TX_DONE TxDone;
+} XHCI_CM_NET_CALLBACKS_V1;
+
+#define XHCI_CM_NET_CALLBACKS_V1_BYTES  sizeof(XHCI_CM_NET_CALLBACKS_V1)
+
 typedef struct _XHCI_CM_NET_CALLBACKS {
     ULONG Size;                         /* sizeof(XHCI_CM_NET_CALLBACKS) */
     XHCI_CM_NET_LINK_CHANGE LinkChange;
     XHCI_CM_NET_RECEIVE Receive;
     XHCI_CM_NET_TX_DONE TxDone;
+    XHCI_CM_NET_STATS_FN Stats;         /* may be NULL */
 } XHCI_CM_NET_CALLBACKS, *PXHCI_CM_NET_CALLBACKS;
 
 typedef struct _XHCI_CM_NET_CONFIG {

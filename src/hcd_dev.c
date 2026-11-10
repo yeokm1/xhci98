@@ -257,6 +257,9 @@ static ULONG hcdPipeResult(PHCD_CONTROLLER hc, PHCD_PIPE pipe,
     return 0;
 }
 
+static ULONG hcdSettlePipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG dci,
+                           ULONG passed);
+
 /*
  * A Transfer Event on an isochronous pipe. Ring Underrun and Overrun name
  * no TD (4.10.3.1 p.185) and never reach the engine: the endpoint left the
@@ -279,6 +282,7 @@ static ULONG hcdIsoEvent(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG slotId,
     ULONG missed;
     ULONG dropped;
     ULONG answer;
+    ULONG settled;
 
     if (cc == XHCI_CC_RING_UNDERRUN || cc == XHCI_CC_RING_OVERRUN) {
         if (cc == XHCI_CC_RING_UNDERRUN) {
@@ -286,12 +290,22 @@ static ULONG hcdIsoEvent(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG slotId,
         } else {
             hc->Hc.IsoRingOverruns++;
         }
+        /* Task 48.21: the controller found the ring empty, so it has
+         * passed every TD queued before this event, and a held request's
+         * tail, written before it, would have been consumed: what is
+         * still held settles now, before the flow's reading and the
+         * doorbell below, which a queue holding only that request would
+         * otherwise ring for an empty ring at every interval. */
+        settled = hcdSettlePipe(hc, pipe, dci, 1);
         /* 36.57: nothing queued, the ring ran dry at a service interval
          * and the data flow has ended (xHCI 4.11.2.5 p.200). */
         pipe->IsoFlowFresh = XhciXferIsoFlowNext(pipe->IsoFlowFresh,
                                                  XHCI_ISO_FLOW_DRY,
                                                  pipe->Queue->Count);
         if (pipe->Queue->Count == 0) {
+            if (settled != 0) {
+                return 0;
+            }
             hc->Hc.IsoEventsUnattributed++;
         } else if (pipe->Paused || pipe->Closed || pipe->DrainPending ||
                    pipe->CancelPending || pipe->Device->Gone) {
@@ -717,18 +731,29 @@ ULONG HcdDevRetryReplay(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG token)
 /* One pipe's settle: a short packet's promised tail that never came. The
  * ring refusing the settle's retire leaves the transfer queued on a Running
  * endpoint, which owes Stop plus a drain (xhci_xfer.h, XhciXferDrainSettled;
- * batch (c)). Controller lock held. */
-static VOID hcdSettlePipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG dci)
+ * batch (c)). `passed`: the caller has proof the controller passed every
+ * held TD, which settles an isochronous error's hold too (task 48.21,
+ * XhciXferDrainSettledPassed). Returns how many were settled. Controller
+ * lock held. */
+static ULONG hcdSettlePipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG dci,
+                           ULONG passed)
 {
     XHCI_XFER_EVENT_RESULT result;
     ULONG guard;
+    ULONG answer;
+    ULONG settled;
 
+    settled = 0;
     if (pipe == NULL || !XhciXferDeferralsArmed(pipe->Queue)) {
-        return;
+        return 0;
     }
     for (guard = 0; guard < 8; guard++) {
-        if (XhciXferDrainSettled(pipe->Queue, pipe->Ring, &result) !=
-            XHCI_XFER_OK) {
+        answer = passed
+                     ? XhciXferDrainSettledPassed(pipe->Queue, pipe->Ring,
+                                                  &result)
+                     : XhciXferDrainSettled(pipe->Queue, pipe->Ring,
+                                            &result);
+        if (answer != XHCI_XFER_OK) {
             break;
         }
         if (result.Action != XHCI_XFER_ACTION_COMPLETE) {
@@ -740,12 +765,14 @@ static VOID hcdSettlePipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG dci)
             }
             break;
         }
+        settled++;
         if (dci == 1) {
             (VOID)hcdEp0Result(hc, pipe->Device, &result);
         } else {
             (VOID)hcdPipeResult(hc, pipe, &result);
         }
     }
+    return settled;
 }
 
 /*
@@ -773,7 +800,7 @@ ULONG HcdDevStopSettle(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG deqLow,
         return place.Verdict;
     }
     for (settled = 0; settled < place.Passed; settled++) {
-        if (XhciXferDrainSettled(pipe->Queue, pipe->Ring, &result) !=
+        if (XhciXferDrainSettledPassed(pipe->Queue, pipe->Ring, &result) !=
             XHCI_XFER_OK) {
             break;
         }
@@ -816,11 +843,11 @@ VOID XhciSlotDrainSettled(PXHCI_EXTENSION ext)
             pipe = hcdEventPipe(hc, slot, dci);
             if (pipe != NULL && pipe->Streams != NULL) {
                 for (id = 1; id <= pipe->Streams->Count; id++) {
-                    hcdSettlePipe(hc, pipe->Streams->Pipe[id], dci);
+                    (VOID)hcdSettlePipe(hc, pipe->Streams->Pipe[id], dci, 0);
                 }
                 continue;
             }
-            hcdSettlePipe(hc, pipe, dci);
+            (VOID)hcdSettlePipe(hc, pipe, dci, 0);
         }
     }
 }

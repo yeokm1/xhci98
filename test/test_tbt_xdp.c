@@ -278,12 +278,23 @@ static void test_packets(void)
           "fields");
     n = TbtNetBuildLoginResponse(b, &rt, &a, &c, 7, 0, mac);
     CHECK_EQ(n, 25UL, "Login Response: DW 1 to 25");
-    CHECK_EQ(b[18], 0x02112233UL, "MAC Hi: the most significant 4 bytes");
-    CHECK_EQ(b[19], 0x4455UL, "MAC Lo");
+    CHECK_EQ(b[18], 0x33221102UL, "MAC Hi: bytes 0 to 3, byte 0 in 7:0");
+    CHECK_EQ(b[19], 0x5544UL, "MAC Lo: bytes 4 and 5, byte 4 in 7:0");
     CHECK_EQ(TbtXdpDecode(7, b, n, &k), TBT_XDP_K_NET, "decodes");
     for (i = 0; i < 6; i++) {
         CHECK_EQ(k.Mac[i], mac[i], "MAC byte");
     }
+    /* Windows 11's Login Response on the owner's bench (2026-11-10): its
+     * adapter is B0-59-89-DC-A6-40, which the frames it sent carry; DW 19
+     * and 20 read 0xDC8959B0 and 0x40A6, which the parse before this one
+     * showed as DC-89-59-B0-40-A6. */
+    b[18] = 0xDC8959B0UL;
+    b[19] = 0x000040A6UL;
+    CHECK_EQ(TbtXdpDecode(7, b, n, &k), TBT_XDP_K_NET, "Windows' decodes");
+    CHECK(k.Mac[0] == 0xB0 && k.Mac[1] == 0x59 && k.Mac[2] == 0x89 &&
+              k.Mac[3] == 0xDC && k.Mac[4] == 0xA6 && k.Mac[5] == 0x40,
+          "Windows' MAC: B0-59-89-DC-A6-40");
+    CHECK_EQ(k.MacLength, 6UL, "length 6");
     CHECK_EQ(TbtNetBuildLogout(b, &rt, &a, &c, 9), 17UL, "Logout");
     CHECK_EQ(TbtNetBuildLogoutResponse(b, &rt, &a, &c, 9, 0), 18UL,
              "Logout Response");
@@ -350,9 +361,19 @@ typedef struct SIDE {
     ULONG UpRx;
     BOOLEAN Drop;       /* lose what this side sends */
     ULONG DropOnce;     /* lose the first discovery packet of this type */
+    ULONG DropType;     /* lose every discovery packet of this type */
+    ULONG RespIdBias;   /* its Login Responses carry the Login's Request ID
+                           plus this (Windows 11's own counter, the
+                           owner's bench of 2026-11-09)                 */
     BOOLEAN DropNet;    /* lose its USB4NET packets: an interface down */
     BOOLEAN SendFail;   /* the ring refuses every send */
     BOOLEAN Dual;       /* report a dual Supported Link Width */
+    int Drops;          /* "cm.xdp.drop" lines (record 35 section 3.12) */
+    int UuidWords;      /* "cm.xdp.uuidw" lines */
+    int CounterLines;   /* "cm.xdp.n.*" and "cm.net.n.*" lines */
+    int ErrLines;       /* "cm.xdp.err.rx" lines */
+    int Spins;          /* "cm.xdp.props.spin" lines */
+    ULONG LastDrop;
 } SIDE;
 
 static ULONG gNow;
@@ -373,11 +394,30 @@ static LONG fSend(PVOID c, ULONG pdf, const ULONG *dw, ULONG words)
         s->DropOnce = 0;
         return TBT_OK;
     }
+    if (s->DropType != 0 && words > TBT_XDP_W_TYPE &&
+        dw[TBT_XDP_W_PROTO] == TbtXdpProtocolUuid.Dw[0] &&
+        dw[TBT_XDP_W_TYPE] == s->DropType) {
+        return TBT_OK;
+    }
     if (s->DropNet && words > TBT_XDP_W_PROTO &&
         dw[TBT_XDP_W_PROTO] != TbtXdpProtocolUuid.Dw[0]) {
         return TBT_OK;
     }
     if (s->Drop || s->Out.Count >= QMAX) {
+        return TBT_OK;
+    }
+    if (s->RespIdBias != 0 && words > TBT_NET_W_REQID &&
+        dw[TBT_XDP_W_PROTO] == TbtNetProtocolUuid.Dw[0] &&
+        dw[TBT_NET_W_TYPE] == TBT_NET_LOGIN_RESP) {
+        ULONG i2;
+
+        for (i2 = 0; i2 < words; i2++) {
+            s->Out.Dw[s->Out.Count][i2] = dw[i2];
+        }
+        s->Out.Dw[s->Out.Count][TBT_NET_W_REQID] += s->RespIdBias;
+        s->Out.Pdf[s->Out.Count] = pdf;
+        s->Out.Words[s->Out.Count] = words;
+        s->Out.Count++;
         return TBT_OK;
     }
     s->Out.Pdf[s->Out.Count] = pdf;
@@ -434,6 +474,34 @@ static VOID fDown(PVOID c, BOOLEAN gone)
     s->DownGone = gone;
 }
 
+static int startsWith(const char *s, const char *p)
+{
+    while (*p != '\0') {
+        if (*s++ != *p++) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static VOID fLog(PVOID c, const char *label, ULONG value)
+{
+    SIDE *s = (SIDE *)c;
+
+    if (strcmp(label, "cm.xdp.drop") == 0) {
+        s->Drops++;
+        s->LastDrop = value;
+    } else if (strcmp(label, "cm.xdp.uuidw") == 0) {
+        s->UuidWords++;
+    } else if (strcmp(label, "cm.xdp.err.rx") == 0) {
+        s->ErrLines++;
+    } else if (strcmp(label, "cm.xdp.props.spin") == 0) {
+        s->Spins++;
+    } else if (startsWith(label, "cm.xdp.n.") || startsWith(label, "cm.net.n.")) {
+        s->CounterLines++;
+    }
+}
+
 static void sideInit(SIDE *s, int idx, BOOLEAN firmware, BOOLEAN bond,
                      const TBT_UUID *self, const TBT_UUID *remote)
 {
@@ -448,6 +516,7 @@ static void sideInit(SIDE *s, int idx, BOOLEAN firmware, BOOLEAN bond,
     ops.Context = s;
     ops.Send = fSend;
     ops.NowMs = fNow;
+    ops.Log = fLog;
     if (!firmware) {
         ops.LinkRead = fLinkRead;
         ops.LinkSetTarget = fSetTarget;
@@ -543,6 +612,9 @@ static void test_software_pair(void)
     CHECK(gB.UpTx == 8 && gA.UpRx == 8, "and the other way");
     CHECK(gA.Peer.PeerMac[5] == 2 && gB.Peer.PeerMac[5] == 1,
           "each learnt the other's MAC");
+    CHECK(memcmp(gA.Peer.PeerMac, gB.Peer.Mac, 6) == 0 &&
+              memcmp(gB.Peer.PeerMac, gA.Peer.Mac, 6) == 0,
+          "byte for byte, in order");
 
     /* A closes its service: Logout, B tears down and logs out in turn. */
     TbtXdpPeerSetNetWanted(&gA.Peer, FALSE, 0);
@@ -604,7 +676,7 @@ static void test_firmware_nudge(void)
     gA.Drop = FALSE;
     gA.DropOnce = TBT_XDP_UUID_REQ;     /* the first nudge lost */
     TbtXdpPeerStart(&gA.Peer);  /* the connected event's record */
-    run(&gA, &gB, 200, 50);
+    run(&gA, &gB, 400, 50);     /* and each end's re-read, section 3.18 */
     CHECK(gA.Peer.NudgeTries >= 2 && gA.Peer.NudgeDone, "resent and answered");
     CHECK_EQ(gB.Peer.State, TBT_XDP_S_READY, "B restarted by A's UUID Request");
     CHECK_EQ(gA.Peer.State, TBT_XDP_S_READY, "A READY");
@@ -638,6 +710,454 @@ static void test_login_idle(void)
     gB.DropNet = FALSE;
     run(&gA, &gB, 200, 100);
     CHECK_EQ(gA.Peer.NetState, TBT_NET_S_UP, "up once the peer answers");
+}
+
+/* Record 35 section 3.12 (the owner's bench of 2026-11-09): a peer that
+ * knows this host by another UUID has its Logins dropped; the first
+ * TBT_XDP_DROPS_LOGGED drops are logged with their reason, the four UUIDs
+ * once, and the counters at the Login's minute unanswered and at
+ * TbtXdpPeerLogCounters. */
+static void test_drop_log(void)
+{
+    TBT_UUID lo;
+    TBT_UUID hi;
+    TBT_UUID other;
+
+    uuids(&lo, &hi);
+    other = lo;
+    other.Dw[3] = 0x12345678UL;
+    gNow = 700000;
+    sideInit(&gA, 1, TRUE, FALSE, &lo, &hi);
+    sideInit(&gB, 2, TRUE, FALSE, &hi, &other);
+    gA.DropType = TBT_XDP_CHANGED;  /* B keeps the other UUID (section 3.18) */
+    TbtXdpPeerStart(&gA.Peer);
+    TbtXdpPeerStart(&gB.Peer);
+    run(&gA, &gB, 800, 100);    /* 80 s */
+    CHECK_EQ(gA.Peer.NetState, TBT_NET_S_LOGIN, "A never logged in");
+    CHECK(gB.Peer.Counters.Strays >= 20, "A's Logins dropped by B");
+    CHECK_EQ(gB.Drops, (int)TBT_XDP_DROPS_LOGGED, "the first 16 drops logged");
+    CHECK_EQ((gB.LastDrop >> 16) & 0xFFUL, TBT_XDP_DROP_PAIR, "as a UUID pair mismatch");
+    CHECK_EQ((gB.LastDrop >> 8) & 0xFUL, TBT_XDP_K_NET, "a USB4NET packet");
+    CHECK_EQ(gB.UuidWords, 32, "four UUIDs once");
+    CHECK(gA.Peer.LoginIdle && gA.CounterLines == 7, "the counters at login.none");
+    TbtXdpPeerLogCounters(&gA.Peer);
+    CHECK_EQ(gA.CounterLines, 14, "and on demand");
+    /* Error Responses: each counted, the first 16 written. */
+    {
+        ULONG e[TBT_XDP_MAX_WORDS];
+        ULONG n;
+        ULONG i;
+        ULONG before = gA.Peer.Counters.ErrorsReceived;
+
+        for (i = 0; i < 20; i++) {
+            n = TbtXdpBuildError(e, &gA.Peer.Route, i & 3UL, TBT_XDP_ERR_NOT_SUPPORTED);
+            TbtXdpPeerOnPacket(&gA.Peer, TBT_PDF_XDOMAIN_RESP, e, n);
+        }
+        CHECK_EQ(gA.Peer.Counters.ErrorsReceived - before, 20UL, "every Error Response counted");
+        CHECK_EQ(gA.ErrLines, 16, "the first 16 written");
+    }
+}
+
+/* Record 35 section 3.18: every start owes one Properties Changed
+ * Notification, sent once ready; the far end, ready, reads the block
+ * again; a read again owes nothing, so the two never trade them. */
+static void test_changed_at_start(void)
+{
+    TBT_UUID lo;
+    TBT_UUID hi;
+    ULONG ra;
+    ULONG rb;
+
+    uuids(&lo, &hi);
+    gNow = 900000;
+    sideInit(&gA, 1, TRUE, FALSE, &lo, &hi);
+    sideInit(&gB, 2, TRUE, FALSE, &hi, &lo);
+    TbtXdpPeerStart(&gA.Peer);
+    CHECK(gA.Peer.ChangedOwed, "a start owes the notification");
+    TbtXdpPeerStart(&gB.Peer);
+    run(&gA, &gB, 400, 50);
+    CHECK(!gA.Peer.ChangedOwed && !gB.Peer.ChangedOwed, "both sent");
+    CHECK(gA.Peer.ChangedSends == 1 && gB.Peer.ChangedSends == 1,
+          "once each: the crossing notifications abort neither");
+    CHECK_EQ(gA.Peer.State, TBT_XDP_S_READY, "A READY");
+    CHECK_EQ(gB.Peer.State, TBT_XDP_S_READY, "B READY");
+    CHECK_EQ(gA.Peer.NetState, TBT_NET_S_UP, "A up");
+    CHECK_EQ(gB.Peer.NetState, TBT_NET_S_UP, "B up");
+    CHECK(gA.Peer.Counters.PropsReads >= 2 && gB.Peer.Counters.PropsReads >= 2,
+          "each end read again at the other's notification");
+    ra = gA.Peer.Counters.PropsReads;
+    rb = gB.Peer.Counters.PropsReads;
+    run(&gA, &gB, 600, 100);    /* 60 s more */
+    CHECK(gA.Peer.Counters.PropsReads == ra && gB.Peer.Counters.PropsReads == rb,
+          "no notification traded back");
+    CHECK(!gA.Peer.ChangedOwed && !gB.Peer.ChangedOwed, "nothing owed");
+    CHECK_EQ(gA.Peer.NetState, TBT_NET_S_UP, "A still up");
+}
+
+/* Record 35 section 3.18: A's notification lost, B's reaching A before
+ * A resends; A's read again takes the slot, and A's notification is owed
+ * again and sent, so B reads A's block again too. */
+static void test_changed_lost(void)
+{
+    TBT_UUID lo;
+    TBT_UUID hi;
+
+    uuids(&lo, &hi);
+    gNow = 950000;
+    sideInit(&gA, 1, TRUE, FALSE, &lo, &hi);
+    sideInit(&gB, 2, TRUE, FALSE, &hi, &lo);
+    gA.DropOnce = TBT_XDP_CHANGED;
+    TbtXdpPeerStart(&gA.Peer);
+    TbtXdpPeerStart(&gB.Peer);
+    run(&gA, &gB, 400, 50);
+    CHECK(gB.Peer.Counters.PropsReads >= 2, "B read A's block again");
+    CHECK(gA.Peer.Counters.PropsReads >= 2, "A read B's block again");
+    CHECK(!gA.Peer.ChangedOwed && !gB.Peer.ChangedOwed, "nothing owed");
+    CHECK(gA.Peer.ChangedSends >= 2 && gA.Peer.ChangedSends <= TBT_XDP_RESENDS + 1,
+          "A's sends counted across the read");
+    CHECK_EQ(gA.Peer.NetState, TBT_NET_S_UP, "A up");
+    CHECK_EQ(gB.Peer.NetState, TBT_NET_S_UP, "B up");
+}
+
+/* Record 35 section 3.18: this end's block changes after its startup
+ * notification's last unanswered send; the new one gets a fresh budget
+ * and still reaches the peer, which reads the new block. */
+static void test_changed_after_budget(void)
+{
+    TBT_UUID lo;
+    TBT_UUID hi;
+    ULONG before;
+    int i;
+
+    uuids(&lo, &hi);
+    gNow = 980000;
+    sideInit(&gA, 1, TRUE, FALSE, &lo, &hi);
+    sideInit(&gB, 2, TRUE, FALSE, &hi, &lo);
+    gB.DropType = TBT_XDP_CHANGED_RESP;     /* A's notifications unanswered */
+    TbtXdpPeerStart(&gA.Peer);
+    TbtXdpPeerStart(&gB.Peer);
+    for (i = 0; i < 2000 && gA.Peer.ChangedSends <= TBT_XDP_RESENDS; i++) {
+        run(&gA, &gB, 1, 10);
+    }
+    CHECK_EQ(gA.Peer.ChangedSends, TBT_XDP_RESENDS + 1, "the last send out");
+    CHECK(gA.Peer.Disc.Active, "and unanswered");
+    run(&gA, &gB, 5, 10);       /* that send delivered and read, the deadline not reached */
+    CHECK(gA.Peer.Disc.Active, "still unanswered");
+    before = gB.Peer.Counters.PropsReads;
+    gB.DropType = 0;
+    TbtXdpPeerSetNetWanted(&gA.Peer, (BOOLEAN)!gA.Peer.NetWanted, 7);
+    CHECK(gA.Peer.ChangedOwed, "a new notification owed");
+    run(&gA, &gB, 400, 50);
+    CHECK(gB.Peer.Counters.PropsReads > before, "B read the new block");
+    CHECK(!gA.Peer.ChangedOwed, "nothing owed");
+}
+
+/* Record 35 section 3.18: the peer's notification arrives while this
+ * end's Properties Read is out, before the read's last response, which
+ * still carries the block as it was (a delayed answer); the read is made
+ * again once that one completes, and the network directory is found. */
+static void test_changed_during_read(void)
+{
+    TBT_UUID lo;
+    TBT_UUID hi;
+    TBT_XDP_PKT k;
+    PKTQ q;
+    ULONG held[TBT_XDP_MAX_WORDS];
+    ULONG heldPdf = 0;
+    ULONG heldWords = 0;
+    ULONG i;
+    int r;
+
+    uuids(&lo, &hi);
+    gNow = 990000;
+    sideInit(&gA, 1, TRUE, FALSE, &lo, &hi);
+    sideInit(&gB, 2, TRUE, FALSE, &hi, &lo);
+    TbtXdpPeerSetNetWanted(&gB.Peer, FALSE, 0);
+    TbtXdpPeerStart(&gA.Peer);
+    TbtXdpPeerStart(&gB.Peer);
+    run(&gA, &gB, 400, 50);
+    CHECK(gA.Peer.State == TBT_XDP_S_READY && gB.Peer.State == TBT_XDP_S_READY,
+          "both READY");
+    CHECK(!gA.Peer.RemoteInfo.Network, "A holds B's block without the directory");
+
+    /* A reads B's block again; B's last response is held back. */
+    TbtXdpPeerStart(&gA.Peer);
+    for (r = 0; r < 200 && heldWords == 0; r++) {
+        TbtXdpPeerTick(&gA.Peer);
+        TbtXdpPeerTick(&gB.Peer);
+        q = gA.Out;
+        gA.Out.Count = 0;
+        for (i = 0; i < q.Count; i++) {
+            TbtXdpPeerOnPacket(&gB.Peer, q.Pdf[i], q.Dw[i], q.Words[i]);
+        }
+        q = gB.Out;
+        gB.Out.Count = 0;
+        for (i = 0; i < q.Count; i++) {
+            if (heldWords == 0 && gA.Peer.State == TBT_XDP_S_PROPS &&
+                TbtXdpDecode(q.Pdf[i], q.Dw[i], q.Words[i], &k) == TBT_XDP_K_DISCOVERY &&
+                k.Type == TBT_XDP_PROPS_RESP &&
+                k.Offset + k.DataWords >= k.BlockSize) {
+                memcpy(held, q.Dw[i], q.Words[i] * sizeof(ULONG));
+                heldPdf = q.Pdf[i];
+                heldWords = q.Words[i];
+                continue;
+            }
+            TbtXdpPeerOnPacket(&gA.Peer, q.Pdf[i], q.Dw[i], q.Words[i]);
+        }
+        gNow += 50;
+    }
+    CHECK(heldWords != 0, "the read's last response held");
+
+    /* B offers the network: its notification reaches A, A's answer B. */
+    TbtXdpPeerSetNetWanted(&gB.Peer, TRUE, TBT_NET_STNS_E2E | TBT_NET_STNS_FRAME_ID);
+    TbtXdpPeerTick(&gB.Peer);
+    q = gB.Out;
+    gB.Out.Count = 0;
+    for (i = 0; i < q.Count; i++) {
+        TbtXdpPeerOnPacket(&gA.Peer, q.Pdf[i], q.Dw[i], q.Words[i]);
+    }
+    q = gA.Out;
+    gA.Out.Count = 0;
+    for (i = 0; i < q.Count; i++) {
+        TbtXdpPeerOnPacket(&gB.Peer, q.Pdf[i], q.Dw[i], q.Words[i]);
+    }
+    CHECK(!gB.Peer.ChangedOwed && !gB.Peer.Disc.Active, "B's notification answered");
+
+    /* Then the old block's last words reach A. */
+    TbtXdpPeerOnPacket(&gA.Peer, heldPdf, held, heldWords);
+    run(&gA, &gB, 400, 50);
+    CHECK(gA.Peer.RemoteInfo.Network, "A read again and found the directory");
+    CHECK_EQ(gA.Peer.State, TBT_XDP_S_READY, "A READY");
+    CHECK_EQ(gA.Peer.NetState, TBT_NET_S_UP, "A up");
+    CHECK_EQ(gB.Peer.NetState, TBT_NET_S_UP, "B up");
+}
+
+/* Deliver what one side sent to the other, once, and empty its queue. */
+static void hand(SIDE *from, SIDE *to)
+{
+    PKTQ q = from->Out;
+    ULONG i;
+
+    from->Out.Count = 0;
+    for (i = 0; i < q.Count; i++) {
+        TbtXdpPeerOnPacket(&to->Peer, q.Pdf[i], q.Dw[i], q.Words[i]);
+    }
+}
+
+/* Tick both until A's Properties Read Request at an offset of at least
+ * `minOffset` is in A's queue, undelivered; what came before is delivered. */
+static int untilPropsReq(SIDE *a, SIDE *b, ULONG minOffset)
+{
+    TBT_XDP_PKT k;
+    ULONG i;
+    int r;
+
+    for (r = 0; r < 400; r++) {
+        TbtXdpPeerTick(&a->Peer);
+        TbtXdpPeerTick(&b->Peer);
+        for (i = 0; i < a->Out.Count; i++) {
+            if (TbtXdpDecode(a->Out.Pdf[i], a->Out.Dw[i], a->Out.Words[i], &k) ==
+                    TBT_XDP_K_DISCOVERY &&
+                k.Type == TBT_XDP_PROPS_REQ && k.Offset >= minOffset) {
+                return 1;
+            }
+        }
+        hand(a, b);
+        hand(b, a);
+        gNow += 50;
+    }
+    return 0;
+}
+
+/* Record 35 section 3.18: the peer's block shrinks (its directory gone)
+ * while this end's request for its later words is out; the peer drops
+ * that request, and its notification is answered. The read fails, and
+ * one read afresh finds the block as it now is. */
+static void test_changed_read_fails(void)
+{
+    TBT_UUID lo;
+    TBT_UUID hi;
+
+    uuids(&lo, &hi);
+    gNow = 1000000;
+    sideInit(&gA, 1, TRUE, FALSE, &lo, &hi);
+    sideInit(&gB, 2, TRUE, FALSE, &hi, &lo);
+    TbtXdpPeerStart(&gA.Peer);
+    TbtXdpPeerStart(&gB.Peer);
+    run(&gA, &gB, 400, 50);
+    CHECK(gA.Peer.RemoteInfo.Network, "A holds B's block with the directory");
+    TbtXdpPeerStart(&gA.Peer);
+    CHECK(untilPropsReq(&gA, &gB, 1), "A's request for B's later words out");
+    TbtXdpPeerSetNetWanted(&gB.Peer, FALSE, 0);
+    CHECK(gA.Peer.RemoteWords > gB.Peer.LocalWords, "B's block now shorter than the read");
+    run(&gA, &gB, 600, 50);
+    CHECK_EQ(gA.Peer.State, TBT_XDP_S_READY, "A READY, not ERROR");
+    CHECK(!gA.Peer.RemoteInfo.Network, "A read the block as it now is");
+    CHECK(!gA.Peer.ReadOwed, "nothing latched");
+}
+
+/* Record 35 section 3.18: the peer's notification answered, then the read
+ * out refused with an Error Response; one read afresh finds the directory. */
+static void test_changed_read_refused(void)
+{
+    TBT_UUID lo;
+    TBT_UUID hi;
+    ULONG buf[TBT_XDP_MAX_WORDS];
+    ULONG words;
+
+    uuids(&lo, &hi);
+    gNow = 1100000;
+    sideInit(&gA, 1, TRUE, FALSE, &lo, &hi);
+    sideInit(&gB, 2, TRUE, FALSE, &hi, &lo);
+    TbtXdpPeerSetNetWanted(&gB.Peer, FALSE, 0);
+    TbtXdpPeerStart(&gA.Peer);
+    TbtXdpPeerStart(&gB.Peer);
+    run(&gA, &gB, 400, 50);
+    CHECK(!gA.Peer.RemoteInfo.Network, "A holds B's block without the directory");
+    TbtXdpPeerStart(&gA.Peer);
+    CHECK(untilPropsReq(&gA, &gB, 0), "A's read out");
+    gA.Out.Count = 0;           /* that request lost */
+    TbtXdpPeerSetNetWanted(&gB.Peer, TRUE, TBT_NET_STNS_E2E | TBT_NET_STNS_FRAME_ID);
+    TbtXdpPeerTick(&gB.Peer);
+    hand(&gB, &gA);
+    hand(&gA, &gB);
+    CHECK(!gB.Peer.ChangedOwed && !gB.Peer.Disc.Active, "B's notification answered");
+    words = TbtXdpBuildError(buf, &gA.Peer.Route, gA.Peer.Disc.Sn,
+                             TBT_XDP_ERR_NOT_SUPPORTED);
+    TbtXdpPeerOnPacket(&gA.Peer, TBT_PDF_XDOMAIN_RESP, buf, words);
+    run(&gA, &gB, 400, 50);
+    CHECK(gA.Peer.RemoteInfo.Network, "A read again and found the directory");
+    CHECK_EQ(gA.Peer.NetState, TBT_NET_S_UP, "A up");
+    CHECK_EQ(gB.Peer.NetState, TBT_NET_S_UP, "B up");
+}
+
+/* B's Properties Changed Notification, forged, to A. */
+static void changedTo(SIDE *a, const TBT_UUID *from)
+{
+    ULONG buf[TBT_XDP_MAX_WORDS];
+    ULONG words;
+
+    words = TbtXdpBuildChanged(buf, &a->Peer.Route, 0, from);
+    TbtXdpPeerOnPacket(&a->Peer, TBT_PDF_XDOMAIN_REQ, buf, words);
+}
+
+/* Both ends ticked and their packets delivered, B's notification sent
+ * into every read of A's, until A leaves PROPS or `rounds` pass. */
+static int spinReads(SIDE *a, SIDE *b, const TBT_UUID *from, int rounds)
+{
+    int r;
+
+    for (r = 0; r < rounds && a->Peer.State == TBT_XDP_S_PROPS; r++) {
+        TbtXdpPeerTick(&a->Peer);
+        TbtXdpPeerTick(&b->Peer);
+        hand(a, b);
+        hand(b, a);
+        if (a->Peer.State == TBT_XDP_S_PROPS) {
+            changedTo(a, from);
+        }
+        gNow += 50;
+    }
+    return r;
+}
+
+/* Record 35 section 3.18: a peer that notifies during every read, each
+ * read completing. The reads made afresh are bounded: the read fails, the
+ * block it gave is not taken, and the service up from the block adopted
+ * before ends with a Logout. A notification after that is read, and the
+ * service comes back. */
+static void test_changed_every_read(void)
+{
+    TBT_UUID lo;
+    TBT_UUID hi;
+    ULONG reads;
+    int downs;
+
+    uuids(&lo, &hi);
+    gNow = 1200000;
+    sideInit(&gA, 1, TRUE, FALSE, &lo, &hi);
+    sideInit(&gB, 2, TRUE, FALSE, &hi, &lo);
+    TbtXdpPeerStart(&gA.Peer);
+    TbtXdpPeerStart(&gB.Peer);
+    run(&gA, &gB, 400, 50);
+    CHECK(gA.Peer.NetState == TBT_NET_S_UP && gB.Peer.NetState == TBT_NET_S_UP,
+          "both up");
+    downs = gA.Downs;
+    changedTo(&gA, &hi);
+    CHECK_EQ(gA.Peer.State, TBT_XDP_S_PROPS, "A reads B's block again");
+    reads = gA.Peer.Counters.PropsReads;
+    spinReads(&gA, &gB, &hi, 4000);
+    CHECK_EQ(gA.Peer.State, TBT_XDP_S_ERROR, "the read failed, not held in PROPS");
+    CHECK_EQ(gA.Peer.PropsRestarts, TBT_XDP_RESENDS, "after the budget of reads afresh");
+    CHECK_EQ(gA.Peer.Counters.PropsReads - reads, TBT_XDP_RESENDS + 1UL,
+             "each read completed");
+    CHECK(gA.Spins == 1 && !gA.Peer.ReadOwed, "logged once, nothing latched");
+    CHECK_EQ(gA.Peer.NetState, TBT_NET_S_LOGOUT, "the stale service logging out");
+    run(&gA, &gB, 200, 50);
+    CHECK(gA.Downs == downs + 1 && gA.Peer.NetState == TBT_NET_S_OFF, "A down");
+    CHECK_EQ(gA.Peer.State, TBT_XDP_S_ERROR, "and stays failed");
+    CHECK(gB.Peer.NetState != TBT_NET_S_UP, "B logged out too");
+    changedTo(&gA, &hi);
+    run(&gA, &gB, 400, 50);
+    CHECK_EQ(gA.Peer.State, TBT_XDP_S_READY, "the next notification read");
+    CHECK(gA.Peer.RemoteInfo.Network && gA.Peer.PropsRestarts == 0, "adopted, budget renewed");
+    CHECK(gA.Peer.NetState == TBT_NET_S_UP && gB.Peer.NetState == TBT_NET_S_UP,
+          "up again");
+}
+
+/* Record 35 section 3.18: a peer that notifies during every read and
+ * answers none, from the first: each read gives up, is made afresh, and
+ * after the budget the engine is at ERROR, where a failed record's
+ * cleanup finds it. */
+static void test_changed_every_failed_read(void)
+{
+    TBT_UUID lo;
+    TBT_UUID hi;
+
+    uuids(&lo, &hi);
+    gNow = 1300000;
+    sideInit(&gA, 1, TRUE, FALSE, &lo, &hi);
+    sideInit(&gB, 2, TRUE, FALSE, &hi, &lo);
+    gB.DropType = TBT_XDP_PROPS_RESP;
+    TbtXdpPeerStart(&gA.Peer);
+    TbtXdpPeerStart(&gB.Peer);
+    CHECK_EQ(gA.Peer.State, TBT_XDP_S_PROPS, "A reads B's block");
+    spinReads(&gA, &gB, &hi, 40000);
+    CHECK_EQ(gA.Peer.State, TBT_XDP_S_ERROR, "failed, not held in PROPS");
+    CHECK_EQ(gA.Peer.PropsRestarts, TBT_XDP_RESENDS, "after the budget of reads afresh");
+    CHECK(gA.Spins == 1 && !gA.Peer.RemoteValid, "logged once, no block taken");
+    CHECK(gA.Ups == 0 && gA.Peer.NetState == TBT_NET_S_OFF, "no service");
+    gB.DropType = 0;
+    changedTo(&gA, &hi);
+    run(&gA, &gB, 400, 50);
+    CHECK_EQ(gA.Peer.State, TBT_XDP_S_READY, "answered at last: read");
+    CHECK_EQ(gA.Peer.NetState, TBT_NET_S_UP, "A up");
+}
+
+/* Record 35 section 4.5 (the owner's bench of 2026-11-09, plug order
+ * 1): Windows 11 answers each Login with a Login Response whose Request ID
+ * is its own counter, ahead of the Login's; matched by type, route,
+ * protocol UUID and UUID pair, the service comes up, the first such id
+ * logged once a login. */
+static void test_login_resp_other_id(void)
+{
+    TBT_UUID lo;
+    TBT_UUID hi;
+
+    uuids(&lo, &hi);
+    gNow = 800000;
+    sideInit(&gA, 1, TRUE, FALSE, &lo, &hi);
+    sideInit(&gB, 2, TRUE, FALSE, &hi, &lo);
+    gB.RespIdBias = 7;
+    TbtXdpPeerStart(&gA.Peer);
+    TbtXdpPeerStart(&gB.Peer);
+    run(&gA, &gB, 200, 50);
+    CHECK_EQ(gA.Peer.NetState, TBT_NET_S_UP, "up with another Request ID");
+    CHECK(gA.Peer.Counters.LoginIdOther >= 1, "counted");
+    /* A discovery response may be dropped: a Changed Response arriving
+     * after the re-read that B's notification began (section 3.18). */
+    CHECK(gA.Drops == 0 || ((gA.LastDrop >> 8) & 0xFUL) == TBT_XDP_K_DISCOVERY,
+          "no USB4NET packet dropped");
+    CHECK_EQ(gB.Peer.NetState, TBT_NET_S_UP, "the peer up too");
 }
 
 static void test_single_lane(void)
@@ -700,6 +1220,8 @@ static void test_linux_shapes(void)
     gNow = 30000;
     sideInit(&gA, 1, TRUE, FALSE, &lo, &hi);
     sideInit(&gB, 2, TRUE, FALSE, &hi, &lo);
+    gA.DropType = TBT_XDP_CHANGED;  /* the shapes alone, no re-read (3.18) */
+    gB.DropType = TBT_XDP_CHANGED;
     TbtXdpPeerStart(&gA.Peer);
     TbtXdpPeerStart(&gB.Peer);
     gA.Peer.NetWanted = TRUE;
@@ -883,7 +1405,7 @@ static void test_pending_login(void)
     TbtXdpPeerOnPacket(&gA.Peer, TBT_PDF_XDOMAIN_RESP, b, n);
     CHECK(gA.Peer.LoginReceived && gA.Peer.RxHop == 10, "that half stands");
     gB.Drop = FALSE;
-    run(&gA, &gB, 60, 50);
+    run(&gA, &gB, 200, 50);     /* A's notification owed again too (3.18) */
     CHECK_EQ(gA.Peer.State, TBT_XDP_S_READY, "read again");
     CHECK_EQ(gA.Peer.NetState, TBT_NET_S_UP, "up again");
     CHECK(gA.Ups >= 2, "built again");
@@ -928,6 +1450,16 @@ int main(void)
     test_firmware_pair();
     test_firmware_nudge();
     test_login_idle();
+    test_drop_log();
+    test_login_resp_other_id();
+    test_changed_at_start();
+    test_changed_lost();
+    test_changed_after_budget();
+    test_changed_during_read();
+    test_changed_read_fails();
+    test_changed_read_refused();
+    test_changed_every_read();
+    test_changed_every_failed_read();
     test_single_lane();
     test_no_answer();
     test_linux_shapes();

@@ -175,6 +175,9 @@ rem                  43.50, design record 29 section 9): presets and the plan,
 rem                  the pattern and its map, the generation limit, statistics,
 rem                  the header, paths, the key, saved results, the command line
 rem   test_pfs98   - its reader of Stor98's counter answer (xhciperf\pf_s98.c)
+rem   test_tbs     - TBSPEED's pure half (tbspeed\tbs_core.c, the TCP
+rem                  throughput diagnostic): the command line, the request
+rem                  and result blocks, the figures
 rem   test_wizlay  - the installer window's settings-page layout arithmetic
 rem                  (xhciinst\wiz_lay.c, task 43.10, design record 26
 rem                  section 5.4): the "now" column, the split into parts of
@@ -249,6 +252,10 @@ rem                  and the helper's result files by the installer's
 rem   test_xpipe   - stage 2's TD planner (src\xhci_xpipe.c, task 36.24):
 rem                  TDs of at most 31 elements cut from one wide
 rem                  mapping of a URB, packet-aligned but the last
+rem   test_stage   - staging's pure half (src\xhci_stage.c, task 48.33):
+rem                  the shared pool from XhciStagePoolKiB, a run of
+rem                  staging cut at 64 KB lines, a chunk from its room,
+rem                  an isochronous share and the boot ledger's cap
 rem   test_uas     - the pure core of xhciuas.sys, the UAS class driver
 rem                  (src\uas\uas_iu.c, task 31-A.2): the COMMAND and TASK
 rem                  MANAGEMENT IU encoders and the SENSE, RESPONSE and READY
@@ -332,6 +339,13 @@ rem   test_cm_query - the answer of xhcicm.sys's query device
 rem                  (src\cm\cm_query.c, design record 25 section 4): the
 rem                  header, the router extensions, the instance id, the
 rem                  sizing answers and the router-count edge
+rem   test_cm_qnet - the query device's Thunderbolt networking answer
+rem                  (src\cm\cm_qnet.c, design record 35 section 17): each
+rem                  state, the links and their cut, the peer's texts made
+rem                  printable, the client block, the sizing answers
+rem   test_trnet   - XHCITR's networking nodes (xhcitr\tr_net.c): the
+rem                  reader's bounds, the far side's kind, the labels, the
+rem                  text in 79 columns and the snapshot's withheld fields
 rem   test_cm      - the pure half of xhcicm.sys, the Thunderbolt 3
 rem                  connection manager (src\cm\cm_vals.c, task 39-A.1): the
 rem                  role a PDO's hardware ids name (NHI or tunnel-bridge
@@ -429,12 +443,18 @@ rem                  yes and every condition's refusal in order
 rem   test_cm_net  - the Thunderbolt networking data rings' pure half
 rem                  (src\cm\cm_netr.c, task 45.59, design record 35
 rem                  sections 5.3 and 6.3): descriptors, completion, reaping,
-rem                  the wrap and the reservation's tokens
+rem                  the wrap, the reservation's tokens and the network
+rem                  PDO's gate under the removals' interleavings (6.6)
 rem   test_net_frame - Thunderbolt networking's USB4NET framing core
 rem                  (src\net\net_frame.c, task 45.59 step S6, design record
 rem                  35 sections 7.2 to 7.4): the transmit split, the Frame
 rem                  ID rule, every receive drop and the reassembly, and the
 rem                  receive segmentation over IPv4 and IPv6
+rem   test_net_upq - xhcinet.sys's deferred upcalls' queues on 98 SE and ME
+rem                  (src\net\net_upq.c, task 48.38, design record 35
+rem                  section 7.8): one timer until the routine empties every
+rem                  queue, the completions in order with the reset's after
+rem                  them, the frame ring, the halt's stop and cancel
 rem   test_ej9x    - the tools' half of the 9x eject asked of xhcicm.sys
 rem                  (xhciinst\inst_ej9x.c, task 43.18) over the install
 rem                  tool's pure half
@@ -659,6 +679,9 @@ call :run test_uas "test_uas.c ..\src\uas\uas_iu.c"
 rem test_xpipe links nothing else: stage 2's TD planner over a URB's wide
 rem mapping (task 36.24, design record 13 section 11.6) is pure.
 call :run test_xpipe "test_xpipe.c ..\src\xhci_xpipe.c"
+rem test_stage links nothing else: staging's arithmetic (task 48.33,
+rem design record 13 section 11.11) is pure.
+call :run test_stage "test_stage.c ..\src\xhci_stage.c"
 call :run test_poll "test_poll.c ..\src\xhci_poll.c"
 rem test_quirk links nothing else: Linux's xHCI controller quirks' values,
 rem lists, match and packed word are pure (task 38.10, design record 20),
@@ -686,10 +709,12 @@ call :run test_tbt_ring "test_tbt_ring.c ..\src\cm\tbt_ring.c"
 call :run test_tbt_icm "test_tbt_icm.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_xdp.c ..\src\cm\tbt_ring.c"
 call :run test_tbt_xdp "test_tbt_xdp.c ..\src\cm\tbt_xdp.c ..\src\cm\tbt_ring.c"
 call :run test_tbt_hw "test_tbt_hw.c ..\src\cm\cm_vals.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_xdp.c ..\src\cm\tbt_ring.c"
-rem test_tbt_topo links nothing else: the tunnel ports' discovery, the
+rem test_tbt_topo links only tbt_chain.c beside it: the tunnel ports'
+rem discovery, the
 rem port readings and the poll are pure, driven over a modelled machine
-rem whose P14s half is the captured configuration space (39-A.5).
-call :run test_tbt_topo "test_tbt_topo.c ..\src\cm\tbt_topo.c"
+rem whose P14s half is the captured configuration space (39-A.5); so
+rem are the chained tunnels' bindings, tbt_chain.c (48.30).
+call :run test_tbt_topo "test_tbt_topo.c ..\src\cm\tbt_topo.c ..\src\cm\tbt_chain.c"
 rem test_tbt_brnum links nothing else: the Windows 98 SE and ME bus
 rem numbering of the bridges below a tunnel port is pure (record 21
 rem section 6.1.1).
@@ -818,6 +843,9 @@ rem 35 sections 7.2 to 7.4): the transmit split, the Frame ID rule, every
 rem receive drop and the reassembly, a short frame whose SOF PDF reads 0,
 rem and the receive segmentation over IPv4 and IPv6 with its refusals.
 call :run test_net_frame "test_net_frame.c ..\src\net\net_frame.c"
+rem test_net_upq links the deferred upcalls' queues of xhcinet.sys on 98 SE
+rem and ME (src\net\net_upq.c, task 48.38, design record 35 section 7.8).
+call :run test_net_upq "test_net_upq.c ..\src\net\net_upq.c"
 rem test_cm_marks links the marks answer's table (task 42-A.5, design
 rem record 21 section 7.4 revision 3) and the re-enumeration's pure half
 rem for the Removable answer's gate (design record 31 section 4.1).
@@ -831,6 +859,13 @@ call :run test_cm_status "test_cm_status.c ..\src\cm\cm_status.c"
 rem test_cm_query links the query device's answer builder and the status
 rem record's, whose records it frames (design record 25 section 4).
 call :run test_cm_query "test_cm_query.c ..\src\cm\cm_query.c ..\src\cm\cm_status.c"
+rem test_cm_qnet links the query device's networking answer builder
+rem (src\cm\cm_qnet.c, design record 35 section 17, task 48.18).
+call :run test_cm_qnet "test_cm_qnet.c ..\src\cm\cm_qnet.c"
+rem test_trnet links XHCITR's reader of that answer and its text
+rem (xhcitr\tr_net.c) over answers the builder made: the bounds, the
+rem kinds, the labels, 79 columns, the snapshot's withheld fields.
+call :run test_trnet "test_trnet.c ..\xhcitr\tr_net.c ..\xhcitr\tr_core.c ..\src\cm\cm_qnet.c ..\xhciinst\inst_core.c ..\xhcimark\mark_core.c"
 rem test_trpci links xhcicm.sys's PCI answer builder (src\cm\cm_qpci.c) over
 rem modelled buses and XHCITR's reader and decoders of it (xhcitr\tr_pci.c):
 rem the bounds, the capability walk with bad lists, the decoders, 79 columns
@@ -861,6 +896,9 @@ rem test_pf and test_pfs98 link the disk benchmark's two pure halves
 rem (xhciperf\pf_core.c and pf_s98.c, task 43.50, design record 29 section 9).
 call :run test_pf "test_pf.c ..\xhciperf\pf_core.c"
 call :run test_pfs98 "test_pfs98.c ..\xhciperf\pf_s98.c ..\xhciperf\pf_core.c"
+rem test_tbs links TBSPEED's pure half (tbspeed\tbs_core.c), a developer
+rem diagnostic no package carries.
+call :run test_tbs "test_tbs.c ..\tbspeed\tbs_core.c"
 rem test_dijob links both pure halves, the installer's and the helper's:
 rem each reads what the other writes (record 27 sections 4.1 and 4.2).
 call :run test_dijob "test_dijob.c ..\xhciinst\inst_core.c ..\xhciinst\di\di_core.c"
@@ -997,6 +1035,19 @@ rem discriminator is the reputation block's own message, which the redirection
 rem above captures: only that is "run this again". Anything else that ran and
 rem produced no verdict is a FAILURE, because a suite that cannot finish is not
 rem a suite that passed.
+rem
+rem An antivirus product that takes the freshly linked exe for malware is the
+rem other launch that never ran (2026-11-09: Microsoft Defender called one
+rem test_xhq.exe build "Trojan:Win32/Killav!pz", a heuristic false positive).
+rem It blocks the file as soon as the link closes it, so the exe can no longer
+rem even be read, and its launch prints "The system cannot execute the
+rem specified program." with exit 9020. Neither is a crash: the suite never
+rem started. A read of the exe before the launch, that exit, that message, and
+rem a second read after a launch that left nothing else (below) are what tell
+rem it apart, and unlike Smart App Control it does not go away on a re-run.
+set "RC=none: the read before the launch failed"
+copy /b "%EXE%" nul >nul 2>&1
+if errorlevel 1 goto suiteavblocked
 "%~dp0%EXE%" > "%OUT%" 2>&1
 set RC=%ERRORLEVEL%
 type "%OUT%"
@@ -1004,6 +1055,18 @@ findstr /c:"checks, " "%OUT%" >nul 2>&1
 if not errorlevel 1 goto suiteresult
 findstr /i /c:"Device Guard" /c:"blocked by" "%OUT%" >nul 2>&1
 if not errorlevel 1 goto suiteblocked
+if "%RC%"=="9020" goto suiteavblocked
+findstr /i /c:"cannot execute the specified program" "%OUT%" >nul 2>&1
+if not errorlevel 1 goto suiteavblocked
+rem An exe that cannot be read after the launch is a blocked launch only with
+rem nothing else said: the suite printed nothing, and the exit is one a launch
+rem refused for the file's sake gives (5, access denied; 225, a virus found),
+rem never a crash status or any other exit. A suite that started and died,
+rem then had its exe taken away, is still a crash.
+if not "%RC%"=="5" if not "%RC%"=="225" goto suitecrashed
+for %%F in ("%OUT%") do if not "%%~zF"=="0" goto suitecrashed
+copy /b "%EXE%" nul >nul 2>&1
+if errorlevel 1 goto suiteavblocked
 goto suitecrashed
 
 :suiteresult
@@ -1070,13 +1133,28 @@ call :cleanup %NAME%
 endlocal
 exit /b 2
 
+:suiteavblocked
+echo %NAME% never started - the freshly linked exe could not be read or run.
+echo Exit code: %RC%.
+echo An antivirus product most likely took it for malware and blocked it.
+echo That is not a crash and not a test failure, and re-running will not help
+echo while the detection stands. Read-only check, in PowerShell:
+echo   Get-MpThreatDetection ^| Sort-Object InitialDetectionTime -Descending
+echo (a Resources entry naming %NAME%.exe confirms it). Clearing a false
+echo positive is the host owner's decision; this runner changes no host setting.
+call :cleanup %NAME%
+endlocal
+exit /b 2
+
 :blocked
 echo.
-echo INCONCLUSIVE: a test binary never started. The output above names "Device
-echo Guard policy", which is Smart App Control's reputation check on a freshly
-echo linked unsigned exe - not a test failure and not a policy rule. Just run
-echo this again. (A binary that started and then died is reported as FAILED
-echo instead, and re-running that one changes nothing.)
+echo INCONCLUSIVE: a test binary never started. Where the output above names
+echo "Device Guard policy", that is Smart App Control's reputation check on a
+echo freshly linked unsigned exe - not a test failure and not a policy rule:
+echo just run this again. Where it says the exe could not be read or run, an
+echo antivirus product blocked it; see that suite's note (Get-MpThreatDetection),
+echo since a re-run meets the same detection. (A binary that started and then
+echo died is reported as FAILED instead, and re-running that one changes nothing.)
 endlocal
 exit /b 2
 

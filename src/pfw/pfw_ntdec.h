@@ -31,9 +31,10 @@
                                        its range is not known; nothing
                                        scanned                          */
 
-/* The role DriverEntry takes (record 32 section 11.5.2): the step at
- * DriverEntry on 2000, XP, Vista and 7; an upper filter of the PCI root
- * bus, the step at its first start, on 8 and 8.1; neither elsewhere. */
+/* The role DriverEntry takes (record 32 sections 11.5.2 and 11.5.6): the
+ * step at DriverEntry on 2000, XP, Vista and 7; an upper filter of the PCI
+ * root bus, the step at its first start, on 8, 8.1 and 10; neither
+ * elsewhere. */
 #define PFW_ROLE_NONE       0
 #define PFW_ROLE_ENTRY      1
 #define PFW_ROLE_FILTER     2

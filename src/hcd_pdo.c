@@ -2846,8 +2846,12 @@ static VOID hcdPdoQuiesce(PHCD_DEVICE_PDO pdo, ULONG removing)
             (VOID)InterlockedDecrement(&dev->Refs);
         }
     }
+    /* Task 48.33 (record 17 section 4.13.8): waited for even when the
+     * controller may still be mastering - its requests complete then too,
+     * the controller naming only this driver's memory. With XhciDmaStaging
+     * 0 they stay pending then, as in 3.4.2.0, and are not waited for. */
     while (pdo->UrbsPending != 0 &&
-           !(hc != NULL && hc->CommonBufferPinned)) {
+           !(hc != NULL && hc->CommonBufferPinned && !hc->Staging)) {
         HcdRelativeMs(&due, 1);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
     }
@@ -3224,6 +3228,41 @@ static VOID hcdPdoPnpNote(PHCD_DEVICE_PDO pdo, UCHAR minor)
                     (pdo->Function ? 1UL : 0UL));
 }
 
+/*
+ * Task 48.13 (design record 13 section 20): IRP_MN_QUERY_BUS_INFORMATION,
+ * whose answer the PnP manager keeps as the devnode's BusTypeGuid,
+ * LegacyBusType and BusNumber. Windows' own stacks were read at run time on
+ * 2000, XP, 7 and 10: every root hub, hub and device PDO, a composite
+ * device's included, answers GUID_BUS_TYPE_USB, PNPBus and bus number 0,
+ * and so does a composite device's function PDO from XP on; on 2000 that
+ * function PDO answers nothing. `function` asks for that one difference:
+ * a function PDO answers only where WDM 1.20 (XP) is available, so on 98,
+ * ME and 2000 the IRP keeps its status. IRQL: PASSIVE_LEVEL.
+ */
+static const GUID hcdGuidBusTypeUsb = {
+    0x9D7DEBBCL, 0xC85D, 0x11D1,
+    { 0x9E, 0xB4, 0x00, 0x60, 0x08, 0xC3, 0xA1, 0x9A }
+};
+
+NTSTATUS HcdPdoBusInformation(PIRP irp, ULONG function)
+{
+    PPNP_BUS_INFORMATION info;
+
+    if (function && !IoIsWdmVersionAvailable(1, 0x20)) {
+        return HcdCompleteIrp(irp, irp->IoStatus.Status,
+                              irp->IoStatus.Information);
+    }
+    info = (PPNP_BUS_INFORMATION)HcdPoolAllocHandedOff(
+        sizeof(PNP_BUS_INFORMATION));
+    if (info == NULL) {
+        return HcdCompleteIrp(irp, STATUS_INSUFFICIENT_RESOURCES, 0);
+    }
+    info->BusTypeGuid = hcdGuidBusTypeUsb;
+    info->LegacyBusType = PNPBus;
+    info->BusNumber = 0;
+    return HcdCompleteIrp(irp, STATUS_SUCCESS, (ULONG_PTR)info);
+}
+
 NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
 {
     PIO_STACK_LOCATION stack;
@@ -3348,6 +3387,9 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
 
     case IRP_MN_QUERY_CAPABILITIES:
         return hcdDeviceCapabilities(pdo, irp);
+
+    case IRP_MN_QUERY_BUS_INFORMATION:
+        return HcdPdoBusInformation(irp, pdo->Function ? 1UL : 0UL);
 
     case IRP_MN_QUERY_PNP_DEVICE_STATE:
         return HcdCompleteIrp(irp, STATUS_SUCCESS,

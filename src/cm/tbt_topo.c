@@ -1127,12 +1127,25 @@ static ULONG xhciTbtBaseFits(const XHCI_TBT_TOPO *topo,
     return 1;
 }
 
+static ULONG xhciTbtStartTake(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
+                              PXHCI_TBT_BINDS binds, const ULONG *bus,
+                              const ULONG *seen);
+
 ULONG XhciTbtLearnArm(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
                       PXHCI_TBT_BINDS binds)
 {
     ULONG i;
+    ULONG k;
     ULONG bus;
     ULONG seen;
+    ULONG down;
+    ULONG oldCount;
+    ULONG oldDown;
+    ULONG oldHeld;
+    ULONG ok;
+    ULONG oldBdf[XHCI_TBT_MAX_TUNNELS];
+    ULONG newBus[XHCI_TBT_MAX_TUNNELS];
+    ULONG newSeen[XHCI_TBT_MAX_TUNNELS];
 
     if (binds == NULL) {
         return XHCI_TBT_MAP_BAD_PARAM;
@@ -1142,16 +1155,68 @@ ULONG XhciTbtLearnArm(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
         topo->Tunnels == 0 || topo->Tunnels > XHCI_TBT_MAX_TUNNELS) {
         return XHCI_TBT_MAP_BAD_PARAM;
     }
+    oldCount = binds->BaseCount;
+    oldDown = binds->BaseDown;
+    oldHeld = binds->BaseHeld;
+    for (i = 0; i < oldCount && i < XHCI_TBT_MAX_TUNNELS; i++) {
+        oldBdf[i] = binds->BaseBdf[i];
+    }
+    /* Read whole before the baseline is kept: an arm that fails leaves
+     * the old baseline and its link evidence as they were (not armed), so
+     * the next arm still finds that evidence by location - but what it
+     * did read of a member counts at once, whatever happens after: a
+     * device seen answering there (even in a scan that then failed)
+     * spends the member's evidence, and so does reading empty a member
+     * whose evidence an incomplete attempt held. */
     for (i = 0; i < topo->Tunnels; i++) {
-        if (!xhciTbtOccupancy(io, topo->Set[i], &bus, &seen)) {
+        ok = xhciTbtOccupancy(io, topo->Set[i], &bus, &seen);
+        for (k = 0; k < oldCount && k < XHCI_TBT_MAX_TUNNELS; k++) {
+            /* Held evidence is spent by a scan that failed too: what the
+             * failure hid may be the loss of the occupancy it holds. */
+            if (oldBdf[k] == topo->Set[i] &&
+                (seen != 0 || (oldHeld & (1UL << k)) != 0)) {
+                oldDown &= ~(1UL << k);
+                oldHeld &= ~(1UL << k);
+            }
+        }
+        if (!ok) {
+            binds->BaseDown = oldDown;
+            binds->BaseHeld = oldHeld;
             return XHCI_TBT_MAP_UNREAD;
         }
+        newBus[i] = bus;
+        newSeen[i] = seen;
+    }
+    for (i = 0; i < topo->Tunnels; i++) {
         binds->BaseBdf[i] = topo->Set[i];
-        binds->BaseBus[i] = bus;
-        binds->BaseSeen[i] = seen;
+        binds->BaseBus[i] = newBus[i];
+        binds->BaseSeen[i] = newSeen[i];
     }
     binds->BaseCount = topo->Tunnels;
+    /* The link evidence: a member empty now keeps what an earlier baseline
+     * read of it, or reads its port now. */
+    down = 0;
+    for (i = 0; i < topo->Tunnels; i++) {
+        if (binds->BaseSeen[i] != 0) {
+            continue;
+        }
+        /* A bit held by an occupancy no complete reading followed is
+         * spent here: the member is empty again with no DOWN read since. */
+        for (k = 0; k < oldCount && k < XHCI_TBT_MAX_TUNNELS; k++) {
+            if (oldBdf[k] == topo->Set[i] && (oldDown & (1UL << k)) != 0 &&
+                (oldHeld & (1UL << k)) == 0) {
+                down |= 1UL << i;
+            }
+        }
+        if ((down & (1UL << i)) == 0 && XhciTbtPortDown(io, topo->Set[i])) {
+            down |= 1UL << i;
+        }
+    }
+    binds->BaseDown = down;
+    binds->BaseHeld = 0;
     binds->Armed = 1;
+    /* A shape not read leaves the start reading to the next reading. */
+    (VOID)xhciTbtStartTake(io, topo, binds, binds->BaseBus, binds->BaseSeen);
     return 0;
 }
 
@@ -1166,14 +1231,6 @@ VOID XhciTbtLearnUp(PXHCI_TBT_BINDS binds, ULONG port)
     binds->Pending |= xhciTbtPortBit(port);
 }
 
-VOID XhciTbtLearnDown(PXHCI_TBT_BINDS binds, ULONG port)
-{
-    if (binds == NULL || port == 0 || port > XHCI_TBT_MAX_PORTS) {
-        return;
-    }
-    binds->Pending &= ~xhciTbtPortBit(port);
-}
-
 /* 1 when a gain on the bridge at `bdf` is its own bound port's. */
 static ULONG xhciTbtExplained(const XHCI_TBT_BINDS *binds, ULONG bdf)
 {
@@ -1184,6 +1241,299 @@ static ULONG xhciTbtExplained(const XHCI_TBT_BINDS *binds, ULONG bdf)
              binds->How[e] == XHCI_TBT_CORR_LEARNED)) ? 1UL : 0UL;
 }
 
+/* The at-start mark of `port` ended (record 22 section 7.6.3); with none
+ * left the start reading is forgotten. */
+static VOID xhciTbtAtStartEnd(PXHCI_TBT_BINDS binds, ULONG port)
+{
+    binds->AtStart &= ~xhciTbtPortBit(port);
+    if (binds->AtStart == 0) {
+        binds->StartTaken = 0;
+        binds->StartOk = 0;
+    }
+}
+
+VOID XhciTbtLearnDown(PXHCI_TBT_BINDS binds, ULONG port)
+{
+    if (binds == NULL || port == 0 || port > XHCI_TBT_MAX_PORTS) {
+        return;
+    }
+    binds->Pending &= ~xhciTbtPortBit(port);
+    xhciTbtAtStartEnd(binds, port);
+}
+
+VOID XhciTbtLearnAtStart(PXHCI_TBT_BINDS binds, ULONG port)
+{
+    ULONG bit;
+
+    if (binds == NULL || port == 0 || port > XHCI_TBT_MAX_PORTS ||
+        xhciTbtBindOfPort(binds, port) != XHCI_TBT_NO_MEMBER) {
+        return;
+    }
+    bit = xhciTbtPortBit(port);
+    if (!(binds->Pending & bit) || (binds->AtStart & bit)) {
+        return;
+    }
+    binds->AtStart |= bit;
+    /* A port newly marked: the next full reading is the start reading. */
+    binds->StartTaken = 0;
+    binds->StartOk = 0;
+}
+
+VOID XhciTbtLearnNotAtStart(PXHCI_TBT_BINDS binds, ULONG port)
+{
+    if (binds == NULL || port == 0 || port > XHCI_TBT_MAX_PORTS) {
+        return;
+    }
+    xhciTbtAtStartEnd(binds, port);
+}
+
+static ULONG xhciTbtBits(ULONG v)
+{
+    ULONG n = 0;
+
+    while (v != 0) {
+        v &= v - 1;
+        n++;
+    }
+    return n;
+}
+
+/* xhciTbtFarEnd's answers, XhciTbtGainAdmits' own. */
+#define XHCI_TBT_FAR_NO         XHCI_TBT_GAIN_NO
+#define XHCI_TBT_FAR_YES        XHCI_TBT_GAIN_YES
+#define XHCI_TBT_FAR_UNREAD     XHCI_TBT_GAIN_UNREAD
+
+/*
+ * Whether what answers behind a member (its secondary bus `bus` and the
+ * devices `seen` there, as xhciTbtOccupancy gives them) has the shape of
+ * a tunnel's far end as record 22 section 7.6.3 admits it: device 0
+ * alone, a PCI-to-PCI bridge whose PCI Express capability says Upstream
+ * Switch Port (YES). A host controller's own integrated functions behind
+ * its switch's downstream ports (its xHCI, its NHI) are endpoints, so
+ * they never have it. NO for any other shape; UNREAD when a read failed
+ * or came back all-ones, which proves no shape either way.
+ */
+static ULONG xhciTbtFarEnd(PXHCI_TBT_CFG io, ULONG bus, ULONG seen)
+{
+    ULONG bdf;
+    ULONG v;
+    ULONG off;
+    ULONG st;
+
+    if (seen != 1UL) {
+        return XHCI_TBT_FAR_NO;
+    }
+    bdf = XHCI_TBT_BDF(bus, 0, 0);
+    if (!xhciTbtRead(io, bdf, XHCI_TBT_CFG_HEADER, &v) ||
+        v == XHCI_TBT_ALL_ONES) {
+        return XHCI_TBT_FAR_UNREAD;
+    }
+    if (XHCI_TBT_HDR_LAYOUT((v >> 16) & 0xFFUL) != XHCI_TBT_HDR_BRIDGE) {
+        return XHCI_TBT_FAR_NO;
+    }
+    st = XhciTbtFindCapStatus(io, bdf, XHCI_TBT_CAP_PCIE, &off);
+    if (st == XHCI_TBT_CAP_ABSENT) {
+        return XHCI_TBT_FAR_NO;
+    }
+    if (st != XHCI_TBT_CAP_FOUND ||
+        !xhciTbtRead(io, bdf, off + XHCI_TBT_PCIE_CAPS, &v) ||
+        v == XHCI_TBT_ALL_ONES) {
+        return XHCI_TBT_FAR_UNREAD;
+    }
+    return XHCI_TBT_PCIE_TYPE(v >> 16) == XHCI_TBT_PCIE_TYPE_UP
+               ? XHCI_TBT_FAR_YES
+               : XHCI_TBT_FAR_NO;
+}
+
+/*
+ * Whether a port reading that ended ERROR or GONE had already read, whole,
+ * a signal that says absent (Link Active where reported, Presence Detect
+ * State where the slot is implemented, SHPC slots all empty): a complete
+ * reading would then be DOWN or MIXED, never UP, so the failure hides no
+ * UP (record 22 section 7.6.4). Every SHPC slot read empty counts even
+ * when only the DWORD Select's restoring write then failed.
+ */
+static ULONG xhciTbtPortRulesOutUp(const XHCI_TBT_PORT *p)
+{
+    return (p->LinkValid && !p->LinkActive) ||
+           (p->SlotValid && !p->Presence) ||
+           (p->ShpcSeen && p->ShpcPresent == 0);
+}
+
+ULONG XhciTbtPortDown(PXHCI_TBT_CFG io, ULONG bdf)
+{
+    XHCI_TBT_PORT p;
+
+    return XhciTbtPortRead(io, bdf, &p) == XHCI_TBT_PORT_DOWN ? 1UL : 0UL;
+}
+
+ULONG XhciTbtGainAdmits(PXHCI_TBT_CFG io, ULONG bdf, ULONG bus, ULONG seen,
+                        ULONG wasDown)
+{
+    XHCI_TBT_PORT p;
+    ULONG shape;
+
+    if (io == NULL || io->Read == NULL || seen == 0) {
+        return XHCI_TBT_GAIN_NO;
+    }
+    shape = xhciTbtFarEnd(io, bus, seen);
+    if (shape != XHCI_TBT_FAR_NO) {
+        return shape;
+    }
+    /* Any other shape (an endpoint directly behind the port, several
+     * devices) only on the link's evidence: the port seen down with
+     * nothing behind it, up now. */
+    if (!wasDown) {
+        return XHCI_TBT_GAIN_NO;
+    }
+    switch (XhciTbtPortRead(io, bdf, &p)) {
+    case XHCI_TBT_PORT_UP:
+        return XHCI_TBT_GAIN_YES;
+    case XHCI_TBT_PORT_ERROR:
+    case XHCI_TBT_PORT_GONE:
+        /* A reading that fails part-way is never more lenient than a
+         * whole one: a signal it read absent before failing rejects. */
+        return xhciTbtPortRulesOutUp(&p) ? XHCI_TBT_GAIN_NO
+                                         : XHCI_TBT_GAIN_UNREAD;
+    default:
+        return XHCI_TBT_GAIN_NO;
+    }
+}
+
+/*
+ * The start reading (record 22 section 7.6.3), from a full reading of the
+ * set (`bus` and `seen`, per member), when at-start marks exist and none
+ * was taken since the last one was added. Trusted only where a function
+ * behind any member can be a tunnel's of this domain alone (source SWITCH
+ * or ROUTER), every pending port is an at-start port, every occupied
+ * member no binding explains holds a tunnel's far end (xhciTbtFarEnd: a
+ * member holding anything else, such as the controller's own xHCI behind
+ * a hot-plug capable port, is not a tunnel's), and those members are
+ * exactly as many as the at-start ports: then each at-start tunnel's
+ * function is on a distinct one of them. Returns 0, the reading not
+ * taken, when a shape could not be read; else 1 (taken now or before).
+ */
+static ULONG xhciTbtStartTake(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
+                              PXHCI_TBT_BINDS binds, const ULONG *bus,
+                              const ULONG *seen)
+{
+    ULONG i;
+    ULONG shape;
+    ULONG occ = 0;
+    ULONG occupied = 0;
+    ULONG trusted = 1;
+
+    if (binds->AtStart == 0 || binds->StartTaken) {
+        return 1;
+    }
+    for (i = 0; i < topo->Tunnels && i < XHCI_TBT_MAX_TUNNELS; i++) {
+        if (topo->Source[i] != XHCI_TBT_SRC_SWITCH &&
+            topo->Source[i] != XHCI_TBT_SRC_ROUTER) {
+            trusted = 0;
+        }
+        if (seen[i] != 0) {
+            occ |= 1UL << i;
+            if (!xhciTbtExplained(binds, topo->Set[i])) {
+                occupied++;
+                shape = xhciTbtFarEnd(io, bus[i], seen[i]);
+                if (shape == XHCI_TBT_FAR_UNREAD) {
+                    return 0;
+                }
+                if (shape != XHCI_TBT_FAR_YES) {
+                    trusted = 0;
+                }
+            }
+        }
+    }
+    for (i = 0; i < topo->Tunnels && i < XHCI_TBT_MAX_TUNNELS; i++) {
+        binds->StartBdf[i] = topo->Set[i];
+    }
+    binds->StartCount = i;
+    binds->StartOcc = occ;
+    if (topo->Outcome != XHCI_TBT_TOPO_SET ||
+        binds->Pending != binds->AtStart ||
+        occupied != xhciTbtBits(binds->AtStart)) {
+        trusted = 0;
+    }
+    binds->StartOk = trusted;
+    binds->StartTaken = 1;
+    return 1;
+}
+
+/*
+ * The narrowed attribution (record 22 section 7.6.3): FAR_YES when the
+ * gain on member `member`, the one gain of the reading (`bus` and `seen`
+ * as read now), may be port `bit`'s although other ports are pending: the
+ * start reading trusted, every other pending port an at-start port and
+ * this one not, every member active (a member another domain claims
+ * could hold that domain's tunnel's function), the member one of the
+ * start reading's and empty then, and what it gained admitted by
+ * XhciTbtGainAdmits (a tunnel's far end, or the link's evidence). FAR_UNREAD
+ * when only that shape or port reading could not be read; else FAR_NO.
+ */
+static ULONG xhciTbtStartAdmits(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
+                                const XHCI_TBT_BINDS *binds, ULONG bit,
+                                ULONG member, const ULONG *bus,
+                                const ULONG *seen, const ULONG *active)
+{
+    ULONG i;
+
+    if (!binds->StartTaken || !binds->StartOk ||
+        (binds->AtStart & bit) != 0 ||
+        ((binds->Pending & ~bit) & ~binds->AtStart) != 0) {
+        return XHCI_TBT_FAR_NO;
+    }
+    for (i = 0; active != NULL && i < topo->Tunnels; i++) {
+        if (!active[i]) {
+            return XHCI_TBT_FAR_NO;
+        }
+    }
+    for (i = 0; i < binds->StartCount && i < XHCI_TBT_MAX_TUNNELS; i++) {
+        if (binds->StartBdf[i] == topo->Set[member]) {
+            if ((binds->StartOcc & (1UL << i)) != 0) {
+                return XHCI_TBT_FAR_NO;
+            }
+            return XhciTbtGainAdmits(io, topo->Set[member], bus[member],
+                                     seen[member],
+                                     (binds->BaseDown >> member) & 1UL);
+        }
+    }
+    return XHCI_TBT_FAR_NO;
+}
+
+/*
+ * An attempt that ends before the baseline moves decides no gain, but a
+ * gain it saw that XhciTbtGainAdmits rejects outright (no far end, no
+ * link evidence: its port not UP now) is rejected as a whole reading
+ * would reject it: the member's evidence is spent, so a link coming up
+ * later never admits a function already seen answering without it. The
+ * members read are 0 to `upto` - 1, and `partial` the one whose scan
+ * failed (its devices partly read: any gain there spends its evidence),
+ * or XHCI_TBT_NO_MEMBER.
+ */
+static VOID xhciTbtGainReject(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
+                              PXHCI_TBT_BINDS binds, const ULONG *bus,
+                              const ULONG *seen, ULONG upto, ULONG partial)
+{
+    ULONG i;
+    ULONG bit;
+
+    for (i = 0; i < upto && i < XHCI_TBT_MAX_TUNNELS; i++) {
+        bit = 1UL << i;
+        if ((seen[i] & ~binds->BaseSeen[i]) == 0 ||
+            xhciTbtExplained(binds, topo->Set[i])) {
+            continue;
+        }
+        if (i == partial ||
+            XhciTbtGainAdmits(io, topo->Set[i], bus[i], seen[i],
+                              (binds->BaseDown & bit) != 0 ? 1UL : 0UL) ==
+                XHCI_TBT_GAIN_NO) {
+            binds->BaseDown &= ~bit;
+            binds->BaseHeld &= ~bit;
+        }
+    }
+}
+
 ULONG XhciTbtLearn(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
                    PXHCI_TBT_BINDS binds, ULONG port, const ULONG *active)
 {
@@ -1192,7 +1542,11 @@ ULONG XhciTbtLearn(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
     ULONG bus[XHCI_TBT_MAX_TUNNELS];
     ULONG seen[XHCI_TBT_MAX_TUNNELS];
     ULONG gained = 0;
+    ULONG ok;
+    ULONG occ = 0;
     ULONG member = XHCI_TBT_NO_MEMBER;
+    ULONG admit;
+    ULONG taken;
     ULONG result;
 
     if (io == NULL || io->Read == NULL || topo == NULL || binds == NULL ||
@@ -1203,6 +1557,7 @@ ULONG XhciTbtLearn(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
     bit = xhciTbtPortBit(port);
     if (xhciTbtBindOfPort(binds, port) != XHCI_TBT_NO_MEMBER) {
         binds->Pending &= ~bit;
+        xhciTbtAtStartEnd(binds, port);
         return XHCI_TBT_MAP_KNOWN;
     }
     if (binds->Overflow || (binds->PortConflict & bit)) {
@@ -1221,26 +1576,98 @@ ULONG XhciTbtLearn(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
         XhciTbtLearnArm(io, topo, binds);
         return XHCI_TBT_MAP_NOT_ARMED;
     }
+    /* Every attempt that ends before the baseline moves holds the evidence
+     * of each member it read occupied (BaseHeld), a device seen in a scan
+     * that then failed included: the bit then stands only while that
+     * member stays occupied, and a member read empty while its bit is
+     * held spends it at once, whatever happens after. */
     for (i = 0; i < topo->Tunnels; i++) {
-        if (!xhciTbtOccupancy(io, topo->Set[i], &bus[i], &seen[i]) ||
-            bus[i] != binds->BaseBus[i]) {
+        ok = xhciTbtOccupancy(io, topo->Set[i], &bus[i], &seen[i]);
+        if (seen[i] != 0) {
+            occ |= 1UL << i;
+        }
+        if ((binds->BaseHeld & (1UL << i)) != 0 &&
+            (seen[i] == 0 || !ok || bus[i] != binds->BaseBus[i])) {
+            /* Held evidence read empty, or behind a scan that failed (what
+             * it hid may be that loss), or a member moved: spent. */
+            binds->BaseDown &= ~(1UL << i);
+            binds->BaseHeld &= ~(1UL << i);
+        }
+        if (!ok || bus[i] != binds->BaseBus[i]) {
+            binds->BaseHeld |= occ;
+            xhciTbtGainReject(io, topo, binds, bus, seen, i + 1, i);
             return XHCI_TBT_MAP_UNREAD;
         }
     }
+    taken = xhciTbtStartTake(io, topo, binds, bus, seen);
     for (i = 0; i < topo->Tunnels; i++) {
         if ((seen[i] & ~binds->BaseSeen[i]) &&
             !xhciTbtExplained(binds, topo->Set[i])) {
             gained++;
             member = i;
         }
-        binds->BaseSeen[i] = seen[i];
     }
+    /* An at-start port is never given a gain while another port is
+     * pending (the narrowed rule admits only a port not at start), so its
+     * attempt leaves a gain unconsumed while a port not at start is
+     * pending: that port's own attempt decides it. */
+    if (gained != 0 && (binds->AtStart & bit) != 0 &&
+        (binds->Pending & ~binds->AtStart) != 0) {
+        binds->BaseHeld |= occ;
+        xhciTbtGainReject(io, topo, binds, bus, seen, topo->Tunnels,
+                          XHCI_TBT_NO_MEMBER);
+        return XHCI_TBT_MAP_SEVERAL;
+    }
+    /* What one gain is (record 22 section 7.6.4), under either rule: a
+     * tunnel's far end, or another shape with the link's evidence. A shape
+     * or a port that could not be read is a reading not made: the baseline
+     * stays, so the gain is seen again at the next attempt. */
+    admit = XHCI_TBT_GAIN_YES;
+    if (gained == 1 && binds->Pending != bit) {
+        if (!taken) {
+            binds->BaseHeld |= occ;
+            xhciTbtGainReject(io, topo, binds, bus, seen, topo->Tunnels,
+                              XHCI_TBT_NO_MEMBER);
+            return XHCI_TBT_MAP_UNREAD;
+        }
+        admit = xhciTbtStartAdmits(io, topo, binds, bit, member, bus, seen,
+                                   active);
+    } else if (gained == 1) {
+        admit = XhciTbtGainAdmits(io, topo->Set[member], bus[member],
+                                  seen[member],
+                                  (binds->BaseDown >> member) & 1UL);
+    }
+    if (admit == XHCI_TBT_GAIN_UNREAD) {
+        binds->BaseHeld |= occ;
+        xhciTbtGainReject(io, topo, binds, bus, seen, topo->Tunnels,
+                          XHCI_TBT_NO_MEMBER);
+        return XHCI_TBT_MAP_UNREAD;
+    }
+    for (i = 0; i < topo->Tunnels; i++) {
+        binds->BaseSeen[i] = seen[i];
+        if (seen[i] != 0 || (binds->BaseHeld & (1UL << i)) != 0) {
+            /* Answering now, or answered at an attempt not completed and
+             * empty again: spent either way. */
+            binds->BaseDown &= ~(1UL << i);
+        }
+        if (seen[i] == 0 && (binds->BaseDown & (1UL << i)) == 0 &&
+            XhciTbtPortDown(io, topo->Set[i])) {
+            binds->BaseDown |= 1UL << i;
+        }
+    }
+    binds->BaseHeld = 0;
     if (gained == 0) {
         return XHCI_TBT_MAP_NOT_GAINED;
     }
-    if (gained > 1 || binds->Pending != bit) {
+    if (gained > 1 || (admit != XHCI_TBT_GAIN_YES && binds->Pending != bit)) {
         /* Another tunnel not yet attributed could explain the gain. */
         return XHCI_TBT_MAP_SEVERAL;
+    }
+    if (admit != XHCI_TBT_GAIN_YES) {
+        /* Pending alone, but what answers is no tunnel's far end and no
+         * link came up for it: a function of the controller's own, or of
+         * a device that is no tunnel's, answering late is never bound. */
+        return XHCI_TBT_MAP_SHAPE;
     }
     /* Only a binding resolves the tunnel: an inactive or conflicting
      * attribution leaves it pending until it is proven down. */
@@ -1251,6 +1678,7 @@ ULONG XhciTbtLearn(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
                           XHCI_TBT_CORR_LEARNED, XHCI_TBT_MAP_LEARNED);
     if (result == XHCI_TBT_MAP_LEARNED) {
         binds->Pending &= ~bit;
+        xhciTbtAtStartEnd(binds, port);
     }
     return result;
 }
@@ -1397,7 +1825,209 @@ ULONG XhciTbtLearnBound(PXHCI_TBT_BINDS binds, ULONG port)
         return 0;
     }
     binds->Pending &= ~xhciTbtPortBit(port);
+    xhciTbtAtStartEnd(binds, port);
     return 1;
+}
+
+/* ---- a tunnel found up at start: its port inferred --------------------- */
+
+/*
+ * One member's link as I7 reads it: 1 with *active, 0 with *why (UNREAD
+ * or NO_REPORT).
+ */
+static ULONG xhciTbtInferLink(PXHCI_TBT_CFG io, ULONG bdf, PULONG active,
+                              PULONG why)
+{
+    ULONG cap;
+    ULONG st;
+    ULONG caps;
+    ULONG linkCap;
+    ULONG linkSta;
+    ULONG valid;
+
+    *active = 0;
+    st = XhciTbtFindCapStatus(io, bdf, XHCI_TBT_CAP_PCIE, &cap);
+    if (st != XHCI_TBT_CAP_FOUND) {
+        *why = st == XHCI_TBT_CAP_ABSENT ? XHCI_TBT_INFER_NO_REPORT
+                                         : XHCI_TBT_INFER_UNREAD;
+        return 0;
+    }
+    if (!xhciTbtRead(io, bdf, cap + XHCI_TBT_PCIE_CAPS, &caps) ||
+        caps == XHCI_TBT_ALL_ONES ||
+        !xhciTbtRead(io, bdf, cap + XHCI_TBT_PCIE_LINKCAP, &linkCap) ||
+        linkCap == XHCI_TBT_ALL_ONES ||
+        !xhciTbtRead(io, bdf, cap + XHCI_TBT_PCIE_LINKSTA, &linkSta) ||
+        linkSta == XHCI_TBT_ALL_ONES) {
+        *why = XHCI_TBT_INFER_UNREAD;
+        return 0;
+    }
+    XhciTbtDecodeLink(caps >> 16, linkCap, linkSta >> 16, &valid, active);
+    if (!valid) {
+        *why = XHCI_TBT_INFER_NO_REPORT;
+        return 0;
+    }
+    return 1;
+}
+
+ULONG XhciTbtInfer(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
+                   const XHCI_TBT_BINDS *binds, const XHCI_TBT_INFER_IN *in,
+                   PXHCI_TBT_INFER_OUT out)
+{
+    ULONG i;
+    ULONG n;
+    ULONG up;
+    ULONG port;
+    ULONG want;
+    ULONG why;
+    ULONG bus;
+    ULONG member;
+    ULONG occupied;
+    ULONG first[XHCI_TBT_MAX_TUNNELS];
+    ULONG again;
+    ULONG seen[XHCI_TBT_MAX_TUNNELS];
+    ULONG link[XHCI_TBT_MAX_TUNNELS];
+    ULONG farEnd[XHCI_TBT_MAX_TUNNELS];
+
+    if (out != NULL) {
+        xhciTbtZero((PULONG)out, sizeof(*out) / sizeof(ULONG));
+    }
+    if (io == NULL || io->Read == NULL || topo == NULL || binds == NULL ||
+        in == NULL || out == NULL || in->Ports == 0 ||
+        in->Ports > XHCI_TBT_MAX_PORTS) {
+        return XHCI_TBT_INFER_BAD_PARAM;
+    }
+    if (!in->Usb4Host) {
+        return XHCI_TBT_INFER_HOST;
+    }
+    n = topo->Tunnels;
+    if (topo->Outcome != XHCI_TBT_TOPO_SET ||
+        topo->FindOutcome != XHCI_TBT_TOPO_SET || n == 0 ||
+        n > XHCI_TBT_MAX_TUNNELS) {
+        return XHCI_TBT_INFER_SET;
+    }
+    for (i = 0; i < n; i++) {
+        if (topo->Source[i] != XHCI_TBT_SRC_SWITCH) {
+            return XHCI_TBT_INFER_SET;
+        }
+    }
+    for (i = 0; i < n; i++) {
+        if (in->Active != NULL && !in->Active[i]) {
+            return XHCI_TBT_INFER_INACTIVE;
+        }
+    }
+    if (binds->Count != 0 || binds->Overflow || binds->PortConflict) {
+        return XHCI_TBT_INFER_BOUND;
+    }
+    up = in->UpMask;
+    if (in->Ports < 32) {
+        up &= (1UL << in->Ports) - 1;
+    }
+    if (up == 0 || (up & (up - 1)) != 0) {
+        return XHCI_TBT_INFER_NOT_ONE;
+    }
+    if (in->Conflict & up) {
+        return XHCI_TBT_INFER_CONFLICTED;
+    }
+    if (!(binds->AtStart & up)) {
+        return XHCI_TBT_INFER_NOT_AT_START;
+    }
+    if (binds->Pending != up) {
+        return XHCI_TBT_INFER_PENDING;
+    }
+    port = 0;
+    for (i = 1; i <= in->Ports; i++) {
+        if (up == xhciTbtPortBit(i)) {
+            port = i;
+        }
+        want = up == xhciTbtPortBit(i) ? XHCI_TBT_RLINK_UP
+                                       : XHCI_TBT_RLINK_DOWN;
+        if (in->RouterLink[i - 1] != want) {
+            return XHCI_TBT_INFER_ROUTER;
+        }
+    }
+    if (!xhciTbtBaseFits(topo, binds)) {
+        return XHCI_TBT_INFER_NOT_ARMED;
+    }
+    /* One pass: the bus numbers, each member's link, occupancy and the
+     * shape of what answers there, the bus numbers again. */
+    for (i = 0; i < n; i++) {
+        if (!xhciTbtRead(io, topo->Set[i], XHCI_TBT_CFG_BUSES, &first[i]) ||
+            first[i] == XHCI_TBT_ALL_ONES) {
+            return XHCI_TBT_INFER_UNREAD;
+        }
+    }
+    for (i = 0; i < n; i++) {
+        if (!xhciTbtInferLink(io, topo->Set[i], &link[i], &why)) {
+            return why;
+        }
+        if (!xhciTbtOccupancy(io, topo->Set[i], &bus, &seen[i])) {
+            return XHCI_TBT_INFER_UNREAD;
+        }
+        if (bus != ((first[i] >> 8) & 0xFFUL) || bus != binds->BaseBus[i]) {
+            return XHCI_TBT_INFER_MOVED;
+        }
+        farEnd[i] = seen[i] != 0 ? xhciTbtFarEnd(io, bus, seen[i])
+                                 : XHCI_TBT_FAR_NO;
+        if (farEnd[i] == XHCI_TBT_FAR_UNREAD) {
+            return XHCI_TBT_INFER_UNREAD;
+        }
+    }
+    for (i = 0; i < n; i++) {
+        if (!xhciTbtRead(io, topo->Set[i], XHCI_TBT_CFG_BUSES, &again) ||
+            again == XHCI_TBT_ALL_ONES) {
+            return XHCI_TBT_INFER_UNREAD;
+        }
+        if (again != first[i]) {
+            return XHCI_TBT_INFER_MOVED;
+        }
+    }
+    occupied = 0;
+    member = XHCI_TBT_NO_MEMBER;
+    for (i = 0; i < n; i++) {
+        if (seen[i] != 0) {
+            occupied++;
+            member = i;
+        }
+    }
+    if (occupied != 1) {
+        return XHCI_TBT_INFER_OCCUPANCY;
+    }
+    if (farEnd[member] != XHCI_TBT_FAR_YES) {
+        return XHCI_TBT_INFER_SHAPE;
+    }
+    for (i = 0; i < n; i++) {
+        if ((seen[i] != 0) != (link[i] != 0)) {
+            return XHCI_TBT_INFER_LINKS;
+        }
+    }
+    out->Port = port;
+    out->Member = member;
+    out->Bdf = topo->Set[member];
+    out->Buses = first[member];
+    return XHCI_TBT_INFER_MADE;
+}
+
+ULONG XhciTbtInferReadBack(PXHCI_TBT_CFG io, ULONG bdf, ULONG buses)
+{
+    ULONG v;
+    ULONG active;
+    ULONG why;
+    ULONG bus;
+    ULONG seen;
+
+    if (io == NULL || io->Read == NULL) {
+        return XHCI_TBT_RB_UNREAD;
+    }
+    if (!xhciTbtRead(io, bdf, XHCI_TBT_CFG_BUSES, &v) || v != buses ||
+        v == XHCI_TBT_ALL_ONES) {
+        return XHCI_TBT_RB_UNREAD;
+    }
+    if (!xhciTbtInferLink(io, bdf, &active, &why) ||
+        !xhciTbtOccupancy(io, bdf, &bus, &seen) ||
+        bus != ((buses >> 8) & 0xFFUL)) {
+        return XHCI_TBT_RB_UNREAD;
+    }
+    return (active || seen != 0) ? XHCI_TBT_RB_OPEN : XHCI_TBT_RB_CLOSED;
 }
 
 /* ---- the port reading -------------------------------------------------- */
@@ -1465,6 +2095,7 @@ static ULONG xhciTbtShpcRead(PXHCI_TBT_CFG io, ULONG bdf, ULONG cap,
         }
     }
     if (slots != 0) {
+        port->ShpcSeen = 1;
         port->ShpcValid = 1;
         result = port->ShpcPresent != 0 ? XHCI_TBT_PORT_UP
                                         : XHCI_TBT_PORT_DOWN;
@@ -1811,9 +2442,9 @@ static ULONG xhciTbtChainFail(PXHCI_TBT_CHAIN_SET out, ULONG why, ULONG bdf)
  */
 static ULONG xhciTbtChainFn(PXHCI_TBT_CFG io, ULONG bdf, ULONG id,
                             ULONG header, ULONG member, ULONG level,
-                            ULONG lo, ULONG hi, PULONG stack,
-                            PULONG levels, PULONG top, PULONG visited,
-                            PXHCI_TBT_CHAIN_SET out)
+                            ULONG rot, ULONG lo, ULONG hi, PULONG stack,
+                            PULONG levels, PULONG rots, PULONG top,
+                            PULONG visited, PXHCI_TBT_CHAIN_SET out)
 {
     ULONG buses;
     ULONG sec;
@@ -1856,9 +2487,11 @@ static ULONG xhciTbtChainFn(PXHCI_TBT_CFG io, ULONG bdf, ULONG id,
             p->Bdf = bdf;
             p->Id = id;
             p->Secondary = sec;
+            p->Subordinate = sub;
             p->Member = member;
             p->Depth = level + 1;
             p->Unpowered = 0;
+            p->Rot = (rot + XHCI_TBT_BDF_DEV(bdf)) & 3UL;
             if (slotCap & XHCI_TBT_SLOTCAP_PCP) {
                 if (!xhciTbtRead(io, bdf, off + XHCI_TBT_PCIE_SLOTSTA,
                                  &slotCtl)) {
@@ -1886,6 +2519,7 @@ static ULONG xhciTbtChainFn(PXHCI_TBT_CFG io, ULONG bdf, ULONG id,
     visited[sec >> 5] |= 1UL << (sec & 31UL);
     stack[*top] = sec;
     levels[*top] = level + 1;
+    rots[*top] = (rot + XHCI_TBT_BDF_DEV(bdf)) & 3UL;
     (*top)++;
     return 1;
 }
@@ -1895,10 +2529,12 @@ ULONG XhciTbtChainPorts(PXHCI_TBT_CFG io, ULONG memberBdf, ULONG member,
 {
     ULONG stack[XHCI_TBT_CHAIN_STACK];
     ULONG levels[XHCI_TBT_CHAIN_STACK];
+    ULONG rots[XHCI_TBT_CHAIN_STACK];
     ULONG visited[8];
     ULONG top;
     ULONG bus;
     ULONG level;
+    ULONG rot;
     ULONG buses;
     ULONG lo;
     ULONG hi;
@@ -1934,11 +2570,13 @@ ULONG XhciTbtChainPorts(PXHCI_TBT_CFG io, ULONG memberBdf, ULONG member,
     visited[lo >> 5] |= 1UL << (lo & 31UL);
     stack[0] = lo;
     levels[0] = 0;
+    rots[0] = 0;
     top = 1;
     while (top != 0) {
         top--;
         bus = stack[top];
         level = levels[top];
+        rot = rots[top];
         for (dev = 0; dev < 32; dev++) {
             fns = 1;
             for (fn = 0; fn < fns; fn++) {
@@ -1963,8 +2601,9 @@ ULONG XhciTbtChainPorts(PXHCI_TBT_CFG io, ULONG memberBdf, ULONG member,
                 if (fn == 0 && ((header >> 16) & XHCI_TBT_HDR_MF) != 0) {
                     fns = 8;
                 }
-                if (!xhciTbtChainFn(io, bdf, id, header, member, level, lo,
-                                    hi, stack, levels, &top, visited, out)) {
+                if (!xhciTbtChainFn(io, bdf, id, header, member, level, rot,
+                                    lo, hi, stack, levels, rots, &top,
+                                    visited, out)) {
                     return XHCI_TBT_CHAIN_INCOMPLETE;
                 }
             }

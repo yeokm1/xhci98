@@ -1,6 +1,8 @@
 # Design Record 29 - XHCIPERF, the Disk Benchmark
 
-Status: draft 12, 2026-10-27: section 16.9 (task 44.21's third pass).
+Status: draft 13, 2026-11-10: sections 4.4 and 6.2, the close on 98 SE
+and ME while a request is out (roadmap-usb4 task 48.6). Draft 12,
+2026-10-27: section 16.9 (task 44.21's third pass).
 Draft 11, 2026-10-27: section 16.8 (task 44.21's second pass).
 Draft 10, 2026-10-25: section 16 (roadmap-usb4 task 44.21). Draft 9,
 2026-10-22 (roadmap-usb4 task 43.50): the owner's
@@ -676,7 +678,10 @@ never produce any other target.
 - **The window stays responsive**: the window thread never waits on a
   worker or on the counter thread. While a worker still has a request
   outstanding after Stop, the status bar says "Waiting for the disk to
-  finish the last request" and the close button asks again; the tool
+  finish the last request"; on 98 SE and ME a further close, while the
+  close's stop waits, says "Still waiting for the disk; Windows 98/ME
+  cannot cancel it. Ctrl+Alt+Del ends XHCIPERF." (task 48.6; before it a
+  further close only repeated the first line); the tool
   never terminates a thread and never frees memory a request may still
   write. If the disk never answers (a stalled 9x request), the window
   says so and offers only to keep waiting; the user may end the program
@@ -985,7 +990,16 @@ driver, share them).
   and the DLL is never unloaded while the program runs. A read not
   answered in 2 s marks the counters "Stor98 did not answer in time" for
   the rest of the run, and no further read is sent; at exit the tool waits
-  for the outstanding read as section 4.4 waits for a worker.
+  for the outstanding read as section 4.4 waits for a worker: from the
+  close no ASPI request is sent (`g_aspiClosing`), and while one is out or
+  a thread that may send one is alive (`g_aspiOut`, `g_aspiThreads`) the
+  window stays, its controls greyed, its status bar saying "Waiting for
+  Stor98 to answer before closing", and closes at the first 250 ms check
+  after the last is given back (if that check's timer cannot be made the
+  window stays all the same, saying "Waiting for Stor98 to answer; close
+  again later", and each further close tries the timer again and closes
+  once nothing is out; task 48.6; before it the window closed and
+  the process waited with no window, for as long as ASPI held the request).
 - **When it is read**: once before the run; then just before and just
   after each measured interval, with no request of the tool outstanding -
   after the preparation, any warm-up and the pause, and before any

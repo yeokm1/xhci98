@@ -3986,8 +3986,10 @@ typedef struct _XHCI_TRANSFER {
  *
  * An isochronous request carries it for one case: its final packet ended
  * short on an earlier TRB of that packet's TD (`XhciXferIsoEvent`; the audit
- * of 2026-11-06), every packet then being answered and only the tail
- * outstanding. Its settle retires by group (`XhciXferDrainSettled`).
+ * of 2026-11-06), or in an error other than TRB Error there (task 48.21,
+ * with `XHCI_XFER_FLAG_ERROR_HELD`), every packet then being answered and
+ * only the tail outstanding. Its settle retires by group
+ * (`XhciXferDrainSettled`).
  */
 #define XHCI_XFER_FLAG_SHORT_DEFERRED 0x00000004UL
 /*
@@ -4013,6 +4015,13 @@ typedef struct _XHCI_TRANSFER {
  * which then decides it as on any TD, or by the replay that applies it.
  */
 #define XHCI_XFER_FLAG_RETRY_DEFERRED 0x00000020UL
+/*
+ * Task 48.21. Meaningful only under `XHCI_XFER_FLAG_SHORT_DEFERRED`, on an
+ * isochronous request: the hold was armed by an error on an earlier TRB of
+ * the final packet, not a short packet, so a tail of any code answers it
+ * (`XhciXferIsoEvent`). Set or cleared at every arm.
+ */
+#define XHCI_XFER_FLAG_ERROR_HELD   0x00000040UL
 
 /* ------------------------------------------------------------------ */
 /* 9-A.1: the isochronous group's storage                              */
@@ -4198,6 +4207,11 @@ typedef struct _XHCI_TRANSFER_QUEUE {
     ULONG MidTdDeferralsTailed;
     ULONG MidTdDeferralsTailedSpurious;
     ULONG MidTdDeferralsLost;
+    /* Task 48.21: of `MidTdDeferrals`, the isochronous holds an error armed
+     * rather than a short packet (`XHCI_XFER_FLAG_ERROR_HELD`). They end in
+     * the same five ways, so the partition above holds with them in it;
+     * the verdict above is the short packet's alone while this reads 0. */
+    ULONG IsoErrorHolds;
     /*
      * The residual reading, and after task 9-0.2 it measures only the window
      * that fix could not close: a tail written by the xHC *after* a drain pass
@@ -6539,6 +6553,17 @@ typedef struct _XHCI_EXTENSION {
      * re-runs the sequence on hardware that has not been re-enumerated since.
      */
     ULONG InitBelowPassive;
+
+    /*
+     * XhciDmaStaging as the HCD's start read it (task 48.33; owner,
+     * 2026-11-09): non-zero, every transfer is staged through buffers the
+     * HCD owns, and a PCI command word read back as all ones proves
+     * nothing at a quiesce (design record 17 section 4.13.8); zero, the
+     * clients' buffers are mapped as in 3.4.2.0, and all ones reads as a
+     * function off the bus, as it did then (xhci_stage.c,
+     * XhciStageCommandProof).
+     */
+    ULONG DmaStaging;
 
     /* ---------------------------------------------------------------- */
     /* Devices, endpoints and transfers (Phase 6 batch B)                */

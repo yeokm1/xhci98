@@ -233,7 +233,7 @@ static VOID cmStIcm(UCHAR *buf, const CM_STATUS_IN *in, const TBT_ICM *icm,
     }
 }
 
-static VOID cmStU4(UCHAR *buf, const TBT_U4CM *u4,
+static VOID cmStU4(UCHAR *buf, const CM_STATUS_IN *in, const TBT_U4CM *u4,
                    const XHCI_TBT_BINDS *binds, ULONG *count, ULONG *flags)
 {
     ULONG i;
@@ -243,6 +243,7 @@ static VOID cmStU4(UCHAR *buf, const TBT_U4CM *u4,
     const TBT_U4_LINK *l;
     const TBT_U4_KID *k;
     ULONG lanes;
+    ULONG bridge;
 
     for (i = 0; i < u4->PortCount && i < TBT_U4_MAX_PORTS; i++) {
         p = &u4->Ports[i];
@@ -279,9 +280,16 @@ static VOID cmStU4(UCHAR *buf, const TBT_U4CM *u4,
                     (cmStTunnel(&p->Usb3, p->Usb3Failed, FALSE) << 4) |
                     ((p->DpPreserved ? CM_ST_TUN_PRESERVED : CM_ST_TUN_NONE)
                      << 8));
-        cmStPut(e, CM_ST_E_BRIDGE,
-                p->Index >= 1 && p->Index <= 32 ? cmStU4Bridge(binds, p->Index)
-                                                : CM_ST_UNKNOWN);
+        bridge = p->Index >= 1 && p->Index <= 32
+                     ? cmStU4Bridge(binds, p->Index)
+                     : CM_ST_UNKNOWN;
+        if (bridge == CM_ST_UNKNOWN && in->InferPort != 0 &&
+            p->Index == in->InferPort && p->Ejected) {
+            /* Record 22 section 7.6.2: an inferred eject's closure,
+             * confirmed by its read-back, names the member it reached. */
+            bridge = in->InferBdf;
+        }
+        cmStPut(e, CM_ST_E_BRIDGE, bridge);
         cmStPut(e, CM_ST_E_SHORT_ID,
                 cmStShortId((BOOLEAN)(r->Present && r->UuidValid), r->Uuid));
         if (r->Present) {
@@ -292,8 +300,8 @@ static VOID cmStU4(UCHAR *buf, const TBT_U4CM *u4,
     /* Design record 34 section 3.7: a kid (a router chained at depth 2
      * this driver runs) as a kind 3 entry with its fields filled: its
      * state, ids, generation, lanes and PCIe tunnel; the tunnel port its
-     * tunnel reaches (its chain port) is not named until the chain
-     * port's correspondence is known (CM_ST_UNKNOWN). */
+     * tunnel reaches (its chain port) is named while its occupancy
+     * stands (section 3.12 item 9), else CM_ST_UNKNOWN. */
     for (i = 0; i < TBT_U4_MAX_KIDS; i++) {
         k = &u4->Kids[i];
         r = &k->Dev;
@@ -327,7 +335,9 @@ static VOID cmStU4(UCHAR *buf, const TBT_U4CM *u4,
         cmStPut(e, CM_ST_E_TUNNELS,
                 cmStTunnel(&k->Pcie, k->PcieFailed, k->Ejected) |
                     (CM_ST_TUN_NONE << 4) | (CM_ST_TUN_NONE << 8));
-        cmStPut(e, CM_ST_E_BRIDGE, CM_ST_UNKNOWN);
+        cmStPut(e, CM_ST_E_BRIDGE,
+                (i < 4 && in->KidBridge[i] != 0) ? (in->KidBridge[i] & 0xFFFFUL)
+                                                 : CM_ST_UNKNOWN);
         cmStPut(e, CM_ST_E_SHORT_ID,
                 cmStShortId((BOOLEAN)(r->Present && r->UuidValid), r->Uuid));
         if (r->Present) {
@@ -379,7 +389,7 @@ ULONG CmStatusBuild(UCHAR *buf, const CM_STATUS_IN *in, const TBT_ICM *icm,
     if (in->Cm == CM_ST_CM_ICM && icm != NULL) {
         cmStIcm(buf, in, icm, &count, &flags);
     } else if (in->Cm == CM_ST_CM_USB4 && u4 != NULL) {
-        cmStU4(buf, u4, binds, &count, &flags);
+        cmStU4(buf, in, u4, binds, &count, &flags);
     }
     ports = in->PortCount > CM_ST_MAX_PORTS ? CM_ST_MAX_PORTS : in->PortCount;
     cmStPut(buf, CM_ST_O_MAGIC, CM_ST_MAGIC);

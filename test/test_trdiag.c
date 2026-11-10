@@ -430,6 +430,7 @@ static void test_nidiag(void)
     CHECK(has("Its pin INTA, line unset (FFh)"), "nidiag: pin");
     CHECK(has("Interrupt 7: routable"), "nidiag: irq");
     CHECK(has("State 5: done (started); reason 0: none"), "nidiag: state");
+    CHECK(has("Kind 0: an NVMe controller, for Stor98"), "nidiag: kind 0");
     CHECK(has("Problem before: 12"), "nidiag: before");
     CHECK(has("Step reached 12: Setup_DevNode, CONFIGRET 0"), "nidiag: step");
     CHECK(has("status 0000000A (started), problem 0"), "nidiag: after");
@@ -458,6 +459,14 @@ static void test_nidiag(void)
     tr_nidiag_text(&t, &v, 0);
     CHECK(has("State 2: excluded; reason 2: started, or another problem"),
           "nidiag: excluded");
+    put32(b + 16, 0UL | (5UL << 8) | (0UL << 16) | (1UL << 24));
+    dv_bin(&v, b, 48);
+    tr_text_init(&t, text, sizeof(text));
+    tr_nidiag_text(&t, &v, 0);
+    CHECK(has("Kind 1: an xHCI controller, for xhci98.sys"), "nidiag: kind 1");
+    CHECK(!t.Overflow && cols_ok(), "nidiag: kind 1, 79 columns");
+    CHECK_EQ(strcmp(tr_ni_why(4), "not its driver (Stor98 / xhci98.sys)"), 0,
+             "nidiag: reason 4");
     CHECK(has("After: not recorded"), "nidiag: exclusion, no status after");
     CHECK(!has("not started"), "nidiag: exclusion not called not started");
     v.Type = TR_REG_DWORD;

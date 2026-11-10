@@ -57,6 +57,11 @@ What it does
   - On Windows XP and later, when Windows holds a device for removal after
     you stopped it, the service tells the driver, which then tears its
     tunnel down (the USB4 connection manager).
+  - When Windows is about to go to standby or hibernation, it writes out
+    what Windows still holds in memory for each drive behind a
+    Thunderbolt or USB4 port, for at most one and a half seconds. This
+    reduces the risk of losing a file if the drive is missing after the
+    resume; it does not remove it. Each drive's result is in the log.
 
 Stor98 on a drive Windows left without it (Windows 2000 to 8.1)
 ---------------------------------------------------------------

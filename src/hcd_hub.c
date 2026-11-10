@@ -83,6 +83,10 @@
 #define HCD_SSHUB_REARM_FIRST       2UL
 #define HCD_SSHUB_REARM_CAP         64UL
 
+static VOID hcdHubFlapOutcome(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
+                              PHCD_PORT q, ULONG ok);
+static VOID hcdHubPortGone(PHCD_PORT q);
+
 static VOID hcdHubDelay(ULONG milliseconds)
 {
     LARGE_INTEGER due;
@@ -1083,6 +1087,7 @@ static VOID hcdHubRearmStop(PHCD_HUB hub)
         hub->RearmArmed = 0;
     }
     hub->RearmPorts = 0;
+    hub->DisablePorts = 0;
 }
 
 /* A port's next re-arm wait: HCD_SSHUB_REARM_FIRST ticks doubled with each
@@ -1111,6 +1116,16 @@ static VOID hcdHubRearmTick(PHCD_HUB hub)
     hub->RearmArmed = 1;
 }
 
+/* A SuperSpeed hub port in SS.Disabled scheduled for its re-arm to
+ * RxDetect, after its backoff wait (HcdHubPortDisable; issue 29's retry
+ * that finds the port already Disabled). */
+static VOID hcdHubRearmLater(PHCD_HUB hub, PHCD_PORT q, ULONG n)
+{
+    hcdHubRearmBackoff(q);
+    hub->RearmPorts |= 1UL << n;
+    hcdHubRearmTick(hub);
+}
+
 /*
  * The given-up SuperSpeed hub ports whose wait has run out, put back to
  * RxDetect - SET_FEATURE(PORT_LINK_STATE) with RxDetect (5) in wIndex bits
@@ -1133,6 +1148,9 @@ static VOID hcdHubRearmPorts(PHCD_CONTROLLER hc, PHCD_HUB hub)
     PHCD_PORT q;
     ULONG bytes;
     ULONG stalled;
+    ULONG state;
+    ULONG status;
+    ULONG change;
     ULONG n;
 
     if (!hub->RearmArmed || hub->Draining || hub->Device == NULL) {
@@ -1144,6 +1162,42 @@ static VOID hcdHubRearmPorts(PHCD_CONTROLLER hc, PHCD_HUB hub)
         return;
     }
     hub->RearmArmed = 0;
+    /* Issue 29: a pending send to the USB 2.0 half, tried again; a port
+     * that holds a device again (a connection since) is no longer owed
+     * it. */
+    for (n = 1; n <= hub->Ports; n++) {
+        if ((hub->DisablePorts & (1UL << n)) == 0) {
+            continue;
+        }
+        q = HcdHubPort(hc, hub, n);
+        /* The port as it is now: a departure or a new connection the
+         * hub's report has not been processed for yet ends the send, so
+         * the next device never inherits it. An unanswered GET_STATUS
+         * leaves the attempt to be made, and counted, as before. */
+        state = XHCI_SSHUB_SEND_OWED;
+        if (q->Device != NULL) {
+            state = XHCI_SSHUB_SEND_ENDED;
+        } else if (HcdHubPortStatus(hc, hub, n, &status, &change)) {
+            state = XhciSsHubSendState(status);
+        }
+        if (state == XHCI_SSHUB_SEND_DONE) {
+            /* The hub applied an earlier request whose completion failed:
+             * a send, with the re-arm a send schedules. */
+            hcdHubRearmLater(hub, q, n);
+            hcdHubFlapOutcome(hc, hub, n, q, 1);
+            continue;
+        }
+        if (state == XHCI_SSHUB_SEND_ENDED) {
+            /* The device left, or a replacement is there: the departed
+             * device's budgets go with it, as HcdSsHubPortLook's empty
+             * reading clears them, so the next device starts afresh even
+             * when no empty reading came between. */
+            hub->DisablePorts &= ~(1UL << n);
+            hcdHubPortGone(q);
+            continue;
+        }
+        hcdHubFlapOutcome(hc, hub, n, q, HcdHubPortDisable(hc, hub, n));
+    }
     for (n = 1; n <= hub->Ports; n++) {
         if ((hub->RearmPorts & (1UL << n)) == 0) {
             continue;
@@ -1170,7 +1224,7 @@ static VOID hcdHubRearmPorts(PHCD_CONTROLLER hc, PHCD_HUB hub)
         XHCI_DBG_VALUE("hcd: SS hub port re-armed, hub/port",
                        (hub->Index << 8) | n);
     }
-    if (hub->RearmPorts != 0) {
+    if (hub->RearmPorts != 0 || hub->DisablePorts != 0) {
         hcdHubRearmTick(hub);
     }
 }
@@ -1184,7 +1238,7 @@ static VOID hcdHubRearmPorts(PHCD_CONTROLLER hc, PHCD_HUB hub)
  * detects nothing, so no connect change would ever come: the port is
  * scheduled for its re-arm to RxDetect (hcdHubRearmPorts), after a wait
  * that doubles with each give-up in a row. */
-VOID HcdHubPortDisable(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
+ULONG HcdHubPortDisable(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
 {
     PHCD_PORT q;
     ULONG ok;
@@ -1204,16 +1258,105 @@ VOID HcdHubPortDisable(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
     if (!ok) {
         XHCI_DBG_VALUE("hcd: hub port not disabled, hub/port",
                        (hub->Index << 8) | n);
-        return;
+        return 0;
     }
     XHCI_DBG_VALUE("hcd: hub port given up, disabled, hub/port",
                    (hub->Index << 8) | n);
     if (hub->Usb3) {
-        q = HcdHubPort(hc, hub, n);
-        hcdHubRearmBackoff(q);
-        hub->RearmPorts |= 1UL << n;
-        hcdHubRearmTick(hub);
+        hcdHubRearmLater(hub, HcdHubPort(hc, hub, n), n);
     }
+    return 1;
+}
+
+/* Issue 29: a SuperSpeed hub port read empty while its send was pending
+ * or ending: the warm budget, the flap record and the send's attempts
+ * cleared, as HcdSsHubPortLook's empty reading clears them. */
+static VOID hcdHubPortGone(PHCD_PORT q)
+{
+    q->Link.WarmResets = 0;
+    q->Link.GaveUp = 0;
+    XhciLinkFlapInit(&q->Flap);
+    XhciLinkDisableInit(&q->HubSsDisable);
+}
+
+/* Issue 29's note for a hub port: hub, port, event, the window's count. */
+static VOID hcdHubFlapNote(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
+                           ULONG event, PHCD_PORT q)
+{
+    XhciLogNote(&hc->Hc, "link.flap.hub",
+                ((hub->Index & 0xFFUL) << 24) | ((n & 0xFFUL) << 16) |
+                    ((event & 0xFFUL) << 8) | (q->Flap.Count & 0xFFUL));
+}
+
+/* One attempt's outcome (XhciLinkDisableOutcome): sent, pending on the
+ * re-arm tick, or given up as F4 gives a link up. Thread only. */
+static VOID hcdHubFlapOutcome(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
+                              PHCD_PORT q, ULONG ok)
+{
+    ULONG answered;
+    ULONG status;
+    ULONG change;
+
+    status = 0;
+    change = 0;
+    switch (XhciLinkDisableOutcome(&q->HubSsDisable, ok)) {
+    case XHCI_DISABLE_DONE:
+        hub->DisablePorts &= ~(1UL << n);
+        hcdHubFlapNote(hc, hub, n, 2, q);
+        break;
+    case XHCI_DISABLE_RETRY:
+        hub->DisablePorts |= 1UL << n;
+        hcdHubFlapNote(hc, hub, n, 4, q);
+        hcdHubRearmTick(hub);
+        break;
+    default:
+        hub->DisablePorts &= ~(1UL << n);
+        /* The last request may have applied though its completion failed:
+         * a port left in SS.Disabled is re-armed on its schedule. */
+        answered = HcdHubPortStatus(hc, hub, n, &status, &change);
+        if (answered &&
+            XhciSsHubSendState(status) == XHCI_SSHUB_SEND_ENDED) {
+            /* The device left meanwhile, or a replacement connected:
+             * nothing to give up, and the departed device's budgets go
+             * with it, as at the retry's own reading. */
+            hcdHubPortGone(q);
+            break;
+        }
+        if (XhciSsHubGiveUpRearm(answered, status)) {
+            hcdHubRearmLater(hub, q, n);
+        }
+        if (XhciLinkFlapStop(&q->Flap)) {
+            hc->Counters.SsHubLinksGivenUp++;
+            hcdHubFlapNote(hc, hub, n, 3, q);
+        }
+        break;
+    }
+}
+
+/*
+ * Issue 29 (design record 13 section 21.5): SuperSpeed hub port n, whose
+ * link failed past the limit with its device torn down, sent to the hub's
+ * USB 2.0 half - HcdHubPortDisable's SS.Disabled. An attempt that fails on
+ * the wire stays pending in hub->DisablePorts and is tried again on the
+ * hub's re-arm tick (hcdHubRearmPorts), which HcdHubCollect polls at every
+ * pass whatever the hub reports, so an interrupt-driven hub that sends no
+ * further change still gets it; after XHCI_LINK_DISABLE_TRIES failed
+ * attempts in all the link is given up - a recovery that comes here again
+ * while the send is pending (a polled hub's looks) attempts nothing and
+ * restarts no count. Thread only, powered.
+ */
+VOID HcdHubFlapSend(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
+{
+    PHCD_PORT q;
+
+    q = HcdHubPort(hc, hub, n);
+    /* A send already pending keeps its attempts: a polled hub's looks may
+     * bring the recovery here again between ticks. */
+    if (!XhciLinkDisableEnter(&q->HubSsDisable,
+                              (hub->DisablePorts & (1UL << n)) != 0)) {
+        return;
+    }
+    hcdHubFlapOutcome(hc, hub, n, q, HcdHubPortDisable(hc, hub, n));
 }
 
 /*
@@ -1696,6 +1839,8 @@ VOID HcdHubFree(PHCD_CONTROLLER hc, PHCD_HUB hub)
         q->HubSsRearms = 0;
         q->HubSsSeen = 0;
         XhciLinkInit(&q->Link);
+        XhciLinkFlapInit(&q->Flap);
+        XhciLinkDisableInit(&q->HubSsDisable);
         b = (PUCHAR)&q->HubSsLink;
         for (i = 0; i < sizeof(q->HubSsLink); i++) {
             b[i] = 0;

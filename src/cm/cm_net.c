@@ -210,6 +210,7 @@ static VOID cmNetServicePass(PCM_NHI nhi)
            CmNetrRxTake(&net->Rx, head + n, &len, &flags) != CM_NETR_RX_NONE) {
         n++;
     }
+    net->RxTaken += n;
     reaped = CmNetrTxReap(&net->Tx);
     net->Counters.TxReaped += reaped;
     deliver = (BOOLEAN)(net->Up && cmNetCbEnter(net, &cb, &ctx));
@@ -304,6 +305,20 @@ static VOID cmNetKick(PCM_NET net)
         net->Counters.Coalesced++;
         cmNetInFlightDown(net);
     }
+}
+
+VOID CmNetIrqKick(PCM_NHI nhi)
+{
+    PCM_NET net;
+    KIRQL irql;
+
+    net = &nhi->Net;
+    KeAcquireSpinLock(&net->Lock, &irql);
+    if (net->RingsOn && !net->Closing) {
+        net->Counters.IrqKicks++;
+        cmNetKick(net);
+    }
+    KeReleaseSpinLock(&net->Lock, irql);
 }
 
 static VOID cmNetArmLocked(PCM_NET net)
@@ -551,6 +566,17 @@ static LONG cmNetRingsUp(PVOID context, ULONG port, ULONG ring, BOOLEAN e2e)
     net->Counters.Services++;
     CmLogNote(nhi, "cm.net.rings",
               (port << 24) | (ring << 16) | (net->E2E << 15) | (net->Rx.Head & 0x7FFFUL));
+    /* Record 35 section 5.5: the receive ring's cause opened beside ring
+     * 0's where the ring interrupt is armed (else at its next arm), then
+     * one kick for a frame that landed before. */
+    if (nhi->Values.Value[CM_VAL_NET_IRQ] != 0 &&
+        CmRirqDataOpen(nhi, ring, FALSE) == CM_RIRQ_DATA_OPEN) {
+        KeAcquireSpinLock(&net->Lock, &irql);
+        if (net->RingsOn && !net->Closing) {
+            cmNetKick(net);
+        }
+        KeReleaseSpinLock(&net->Lock, irql);
+    }
     return TBT_OK;
 }
 
@@ -752,6 +778,14 @@ static VOID cmNetRundown(PCM_NHI nhi, BOOLEAN lost)
     net->Closing = 1;
     net->Up = 0;
     ring = net->Ring;
+    KeReleaseSpinLock(&net->Lock, irql);
+    /* Record 35 section 5.5: the data cause masked first, proven before
+     * the rings are disabled; not proven, the whole interrupt falls back
+     * (record 21 section 4.5.6 then retires the line). */
+    if (!CmRirqDataClose(nhi, lost)) {
+        CmRirqDown(nhi, CM_RIRQ_DOWN_FALLBACK);
+    }
+    KeAcquireSpinLock(&net->Lock, &irql);
     if (net->TimerOn && KeCancelTimer(&net->Timer)) {
         /* Removed before it fired: its share goes with it. */
         net->TimerOn = 0;
@@ -797,6 +831,7 @@ VOID CmNetInit(PCM_NHI nhi)
     net = &nhi->Net;
     KeInitializeSpinLock(&net->Lock);
     KeInitializeSpinLock(&net->OwnerLock);
+    KeInitializeSpinLock(&net->PdoLock);
     KeInitializeEvent(&net->Ack, NotificationEvent, FALSE);
     KeInitializeEvent(&net->Idle, NotificationEvent, TRUE);
     KeInitializeDpc(&net->ServiceDpc, cmNetServiceDpc, nhi);
@@ -982,7 +1017,8 @@ static const char *const cmNetCounterNames[] = {
     "cm.net.tx.refused",   "cm.net.tx.stale",   "cm.net.tx.drainleft",
     "cm.net.res.slow.n"  ,  "cm.net.passes",     "cm.net.kicks",
     "cm.net.coalesced",    "cm.net.contended",  "cm.net.timers",
-    "cm.net.stop.unverified.n", "cm.net.mem.kept.n", "cm.net.nomem.n"
+    "cm.net.stop.unverified.n", "cm.net.mem.kept.n", "cm.net.nomem.n",
+    "cm.net.irq.kicks"
 };
 
 /* The shared header writes the fallback's code out (its host build has no
@@ -1010,6 +1046,199 @@ VOID CmNetLogCounters(PCM_NHI nhi)
 }
 
 /* ---------------------------------------------------------------------- */
+/* The status query (record 35 section 17, task 48.18)                    */
+/* ---------------------------------------------------------------------- */
+
+/* One peer record as a link entry. The record is the thread's own: read
+ * with no lock. */
+static VOID cmNetQLink(PCM_NHI nhi, const TBT_XDP_PEER *peer, ULONG link,
+                       ULONG serviceKey, ULONG flags, PCM_QN_LINK_IN l)
+{
+    PCM_NET net;
+    ULONG i;
+
+    net = &nhi->Net;
+    CmZero(l, sizeof(*l));
+    l->Link = link;
+    l->Flags = flags;
+    l->DiscState = peer->State;
+    l->NetState = peer->NetState;
+    if (peer->HaveRemote) {
+        l->Flags |= CM_QN_LF_UUID;
+        for (i = 0; i < 4; i++) {
+            l->Uuid[i] = peer->Remote.Dw[i];
+        }
+    }
+    if (peer->RemoteValid) {
+        l->Flags |= CM_QN_LF_BLOCK;
+        l->VendorId = peer->RemoteInfo.VendorId;
+        l->DeviceId = peer->RemoteInfo.DeviceId;
+        l->DeviceRev = peer->RemoteInfo.DeviceRevision;
+        l->VendorText = peer->RemoteInfo.VendorText;
+        l->DeviceText = peer->RemoteInfo.DeviceText;
+        if (peer->RemoteInfo.Network) {
+            l->Flags |= CM_QN_LF_USB4NET;
+            l->Prtcstns = peer->RemoteInfo.Prtcstns;
+        }
+    }
+    if (net->Up && net->Port == serviceKey) {
+        l->Flags |= CM_QN_LF_SERVICE;
+    }
+    if (!net->Fw) {
+        cmNetLinkRate(nhi, link, &l->Mbps, &l->Lanes);
+        if (l->Mbps != 0) {
+            l->Flags |= CM_QN_LF_WIDTH_READ;
+        }
+    }
+    l->Sent = peer->Counters.Sent;
+    l->Received = peer->Counters.Received;
+    l->Resends = peer->Counters.Resends;
+    l->Malformed = peer->Counters.Malformed;
+    l->LoginsSent = peer->Counters.LoginsSent;
+    l->LoginFailures = peer->Counters.LoginFailures;
+    l->LoginsReceived = peer->Counters.LoginsReceived;
+    l->LoginsRefused = peer->Counters.LoginsRefused;
+    l->ServicesUp = peer->Counters.ServicesUp;
+    l->ServiceFailures = peer->Counters.ServiceFailures;
+    l->Restarts = peer->Counters.Restarts;
+}
+
+ULONG CmNetQueryFill(PCM_NHI nhi)
+{
+    PCM_NET net;
+    CM_QN_IN in;
+    CM_QN_LINK_IN links[CM_QN_MAX_LINKS];
+    XHCI_CM_NET_STATS st;
+    XHCI_CM_NET_CALLBACKS cb;
+    PVOID ctx;
+    const TBT_XDP_PEER *peer;
+    KIRQL irql;
+    BOOLEAN call;
+    ULONG pdoReported;
+    ULONG n;
+    ULONG i;
+    ULONG fwLink;
+
+    net = &nhi->Net;
+    CmZero(&in, sizeof(in));
+    in.EpochLo = nhi->QueryEpochLo;
+    in.EpochHi = nhi->QueryEpochHi;
+    in.NetValue = nhi->Values.Value[CM_VAL_NET];
+    in.E2EValue = nhi->Values.Value[CM_VAL_NET_E2E];
+    in.Cm = CM_ST_CM_NONE;
+    if (nhi->Stage == CM_STAGE_ACTIVE || nhi->Stage == CM_STAGE_FAILED) {
+        in.Cm = net->Fw ? CM_ST_CM_ICM : nhi->U4On ? CM_ST_CM_USB4 : CM_ST_CM_NONE;
+    }
+
+    /* The links: the running connection manager's peer records, in their
+     * own order. */
+    n = 0;
+    fwLink = 0;
+    if (in.Cm == CM_ST_CM_ICM) {
+        for (i = 0; i < TBT_ICM_MAX_XD && n < CM_QN_MAX_LINKS; i++) {
+            if (!nhi->Icm.Xd[i].Used) {
+                continue;
+            }
+            if (net->Port == i + 1) {
+                fwLink = nhi->Icm.Xd[i].Addr.Link;
+            }
+            cmNetQLink(nhi, &nhi->Icm.Xd[i].Peer, nhi->Icm.Xd[i].Addr.Link, i + 1,
+                       CM_QN_LF_FIRMWARE |
+                       (nhi->Icm.Xd[i].Adopted ? CM_QN_LF_UNANNOUNCED : 0UL),
+                       &links[n]);
+            n++;
+        }
+    } else if (in.Cm == CM_ST_CM_USB4) {
+        for (i = 1; i <= TBT_U4_MAX_PORTS && n < CM_QN_MAX_LINKS; i++) {
+            peer = TbtU4Peer(&nhi->U4, i);
+            if (peer == NULL) {
+                continue;
+            }
+            cmNetQLink(nhi, peer, i, i, 0, &links[n]);
+            n++;
+        }
+    }
+    in.Links = links;
+    in.LinkCount = n;
+
+    /* The service, under its lock for the copy alone. */
+    KeAcquireSpinLock(&net->PdoLock, &irql);
+    pdoReported = (ULONG)(net->Pdo != NULL &&
+                          ((PCM_NETPDO)net->Pdo->DeviceExtension)->Reported);
+    KeReleaseSpinLock(&net->PdoLock, irql);
+    KeAcquireSpinLock(&net->Lock, &irql);
+    if (pdoReported) {
+        in.Flags |= CM_QN_F_PDO;
+    }
+    if (net->Opened) {
+        in.Flags |= CM_QN_F_OPEN;
+    }
+    if (net->Up) {
+        in.Flags |= CM_QN_F_UP;
+    }
+    if (net->MacValid) {
+        in.Flags |= CM_QN_F_MAC;
+        for (i = 0; i < 6; i++) {
+            in.Mac[i] = net->Mac[i];
+        }
+    }
+    if (in.NetValue == 0 || !pdoReported) {
+        in.State = CM_QN_STATE_OFF;
+    } else if (!net->Opened) {
+        in.State = CM_QN_STATE_NO_DRIVER;
+    } else if (!net->Up) {
+        in.State = CM_QN_STATE_WAITING;
+    } else {
+        in.State = CM_QN_STATE_UP;
+    }
+    if (net->Up) {
+        in.Link = net->Fw ? fwLink : net->Port;
+        for (i = 0; i < 6; i++) {
+            in.PeerMac[i] = net->PeerMac[i];
+        }
+        in.PeerStns = net->PeerStns;
+        in.E2E = net->E2E;
+        in.Mbps = net->LinkMbps;
+        in.Lanes = net->Lanes;
+        in.TxDesc = net->Tx.Size;
+        in.RxDesc = net->Rx.Size;
+    }
+    in.OurStns = net->Opened ? net->WantedStns : 0;
+    in.MaxFrame = net->MaxFrame != 0 ? net->MaxFrame : XHCI_CM_NET_FRAME_STANDARD;
+    if (net->Up && (net->PeerStns & XHCI_CM_NET_STNS_64K) == 0 &&
+        in.MaxFrame > XHCI_CM_NET_FRAME_STANDARD) {
+        in.MaxFrame = XHCI_CM_NET_FRAME_STANDARD;
+    }
+    in.Generation = net->Generation;
+    in.RxFrames = net->Counters.RxFrames;
+    in.RxErrors = net->Counters.RxErrors;
+    in.RxDropped = net->Counters.RxBadPdf + net->Counters.RxUnheld;
+    in.TxFrames = net->Counters.TxFrames;
+    in.TxRefused = net->Counters.TxRefused + net->Counters.TxStale;
+    in.LinkUps = net->Counters.LinkUps;
+    in.LinkDowns = net->Counters.LinkDowns;
+    in.RingsFailed = net->Counters.RingsFailed;
+    in.IrqKicks = net->Counters.IrqKicks;
+    in.IrqState = CmRirqDataState(nhi);
+    call = (BOOLEAN)(net->Cb.Stats != NULL && cmNetCbEnter(net, &cb, &ctx));
+    KeReleaseSpinLock(&net->Lock, irql);
+
+    /* The network driver's counters, no lock held (xhci_cmnet.h). */
+    if (call) {
+        CmZero(&st, sizeof(st));
+        st.Size = sizeof(st);
+        cb.Stats(ctx, &st);
+        cmNetCbLeave(net);
+        if (st.Size > sizeof(st)) {
+            st.Size = sizeof(st);
+        }
+        in.ClientWords = (const ULONG *)&st;
+        in.ClientWordCount = st.Size / sizeof(ULONG);
+    }
+    return CmNetQueryBuild(nhi->NetQBuf, sizeof(nhi->NetQBuf), &in);
+}
+
+/* ---------------------------------------------------------------------- */
 /* The interface (xhci_cmnet.h), Context the PDO's extension              */
 /* ---------------------------------------------------------------------- */
 
@@ -1019,10 +1248,7 @@ static PCM_NHI cmNetEnter(PCM_NETPDO pdo)
     KIRQL irql;
 
     KeAcquireSpinLock(&pdo->Lock, &irql);
-    nhi = pdo->Nhi;
-    if (nhi != NULL) {
-        pdo->Users++;
-    }
+    nhi = (PCM_NHI)CmNetrGateEnter(&pdo->Gate);
     KeReleaseSpinLock(&pdo->Lock, irql);
     return nhi;
 }
@@ -1032,7 +1258,7 @@ static VOID cmNetLeave(PCM_NETPDO pdo)
     KIRQL irql;
 
     KeAcquireSpinLock(&pdo->Lock, &irql);
-    pdo->Users--;
+    CmNetrGateLeave(&pdo->Gate);
     KeReleaseSpinLock(&pdo->Lock, irql);
 }
 
@@ -1068,7 +1294,7 @@ static LONG NTAPI cmNetOpen(PVOID context, const XHCI_CM_NET_CALLBACKS *callback
 
     pdo = (PCM_NETPDO)context;
     if (callbacks == NULL || config == NULL ||
-        callbacks->Size < sizeof(XHCI_CM_NET_CALLBACKS) ||
+        callbacks->Size < XHCI_CM_NET_CALLBACKS_V1_BYTES ||
         config->Size < sizeof(XHCI_CM_NET_CONFIG) || callbacks->LinkChange == NULL ||
         callbacks->Receive == NULL || callbacks->TxDone == NULL ||
         config->MaxFrame < XHCI_CM_NET_FRAME_MIN || config->MaxFrame > XHCI_CM_NET_FRAME_MAX) {
@@ -1086,7 +1312,15 @@ static LONG NTAPI cmNetOpen(PVOID context, const XHCI_CM_NET_CALLBACKS *callback
     } else if (net->Opened || net->CbActive != 0) {
         rc = XHCI_CM_NET_E_BUSY;
     } else {
-        net->Cb = *callbacks;
+        /* Field by field: a driver from before task 48.18 passes the three
+         * callbacks alone, and Stats is taken only where its Size covers
+         * it (xhci_cmnet.h, record 35 section 17.3). */
+        net->Cb.Size = sizeof(net->Cb);
+        net->Cb.LinkChange = callbacks->LinkChange;
+        net->Cb.Receive = callbacks->Receive;
+        net->Cb.TxDone = callbacks->TxDone;
+        net->Cb.Stats = callbacks->Size >= sizeof(XHCI_CM_NET_CALLBACKS)
+                            ? callbacks->Stats : NULL;
         net->ClientContext = clientContext;
         net->MaxFrame = config->MaxFrame;
         net->Opened = 1;
@@ -1377,52 +1611,104 @@ static VOID cmNetName(PWCHAR buffer, ULONG serial)
     buffer[n] = 0;
 }
 
-/* After a start's PnP half returned: the PDO created at the first start
- * that wants it, and reported while XhciCmNet is 1 under either
- * connection manager (record 35 section 6.1); the PnP manager asked again
- * when that changes. PASSIVE_LEVEL. */
-VOID CmNetStarted(PCM_NHI nhi)
+/* A network PDO made, initialised and not yet given to the NHI; NULL where
+ * IoCreateDevice failed. PASSIVE_LEVEL, no lock held. */
+static PDEVICE_OBJECT cmNetPdoCreate(PCM_NHI nhi)
 {
     WCHAR nameBuffer[40];
     UNICODE_STRING name;
     PDEVICE_OBJECT obj;
     PCM_NETPDO pdo;
-    ULONG want;
     ULONG serial;
     ULONG n;
     NTSTATUS status;
 
-    want = (ULONG)(nhi->Values.Value[CM_VAL_NET] != 0 && (nhi->U4On || nhi->Net.Fw) &&
-                   nhi->Stage == CM_STAGE_ACTIVE);
-    if (want && nhi->Net.Pdo == NULL) {
-        serial = (ULONG)InterlockedIncrement(&cmNetSerial);
-        cmNetName(nameBuffer, serial);
-        for (n = 0; nameBuffer[n] != 0; n++) {
-        }
-        name.Buffer = nameBuffer;
-        name.Length = (USHORT)(n * sizeof(WCHAR));
-        name.MaximumLength = (USHORT)((n + 1) * sizeof(WCHAR));
-        status = IoCreateDevice(CmDriverObject, sizeof(CM_NETPDO), &name,
-                                FILE_DEVICE_BUS_EXTENDER, 0, FALSE, &obj);
-        if (!NT_SUCCESS(status)) {
-            CmLogNote(nhi, "cm.net.pdo.fail", (ULONG)status);
-            want = 0;
-        } else {
-            pdo = (PCM_NETPDO)obj->DeviceExtension;
-            CmZero(pdo, sizeof(CM_NETPDO));
-            pdo->Common.Kind = CM_KIND_NETPDO;
-            pdo->Common.Self = obj;
-            KeInitializeSpinLock(&pdo->Lock);
-            pdo->Nhi = nhi;
-            obj->Flags |= DO_POWER_PAGABLE;
-            obj->Flags &= ~DO_DEVICE_INITIALIZING;
-            nhi->Net.Pdo = obj;
-            CmLogNote(nhi, "cm.net.pdo", serial);
-        }
+    serial = (ULONG)InterlockedIncrement(&cmNetSerial);
+    cmNetName(nameBuffer, serial);
+    for (n = 0; nameBuffer[n] != 0; n++) {
     }
-    if (want != nhi->Net.Report || (want && nhi->Net.Pdo != NULL &&
-                                    !((PCM_NETPDO)nhi->Net.Pdo->DeviceExtension)->Reported)) {
-        nhi->Net.Report = want;
+    name.Buffer = nameBuffer;
+    name.Length = (USHORT)(n * sizeof(WCHAR));
+    name.MaximumLength = (USHORT)((n + 1) * sizeof(WCHAR));
+    status = IoCreateDevice(CmDriverObject, sizeof(CM_NETPDO), &name,
+                            FILE_DEVICE_BUS_EXTENDER, 0, FALSE, &obj);
+    if (!NT_SUCCESS(status)) {
+        CmLogNote(nhi, "cm.net.pdo.fail", (ULONG)status);
+        return NULL;
+    }
+    pdo = (PCM_NETPDO)obj->DeviceExtension;
+    CmZero(pdo, sizeof(CM_NETPDO));
+    pdo->Common.Kind = CM_KIND_NETPDO;
+    pdo->Common.Self = obj;
+    KeInitializeSpinLock(&pdo->Lock);
+    pdo->Gate.Nhi = nhi;
+    obj->Flags |= DO_POWER_PAGABLE;
+    obj->Flags &= ~DO_DEVICE_INITIALIZING;
+    CmLogNote(nhi, "cm.net.pdo", serial);
+    return obj;
+}
+
+/* A PDO made where the NHI has none and none is retired (record 35 section
+ * 6.6): one of an instance at a time, so a fresh one never meets an old
+ * one the PnP manager is still removing. FALSE where one was wanted and
+ * could not be made. PASSIVE_LEVEL, PdoLock not held. */
+static BOOLEAN cmNetPdoEnsure(PCM_NHI nhi)
+{
+    PCM_NET net;
+    PDEVICE_OBJECT obj;
+    KIRQL irql;
+    BOOLEAN need;
+
+    net = &nhi->Net;
+    KeAcquireSpinLock(&net->PdoLock, &irql);
+    need = (BOOLEAN)(net->Pdo == NULL && net->Retired == NULL);
+    KeReleaseSpinLock(&net->PdoLock, irql);
+    if (!need) {
+        return TRUE;
+    }
+    obj = cmNetPdoCreate(nhi);
+    if (obj == NULL) {
+        return FALSE;
+    }
+    KeAcquireSpinLock(&net->PdoLock, &irql);
+    if (net->Pdo == NULL && net->Retired == NULL) {
+        net->Pdo = obj;
+        obj = NULL;
+    }
+    KeReleaseSpinLock(&net->PdoLock, irql);
+    if (obj != NULL) {
+        /* Another path installed one meanwhile (not while the NHI's own
+         * IRPs are serial): this one was never reported. */
+        IoDeleteDevice(obj);
+    }
+    return TRUE;
+}
+
+/* After a start's PnP half returned: the PDO created at the first start
+ * that wants it, and reported while XhciCmNet is 1 under either
+ * connection manager (record 35 section 6.1); the PnP manager asked again
+ * when that changes. With a retired PDO not yet removed, none is made
+ * here: that one's removal asks again (section 6.6). PASSIVE_LEVEL. */
+VOID CmNetStarted(PCM_NHI nhi)
+{
+    PCM_NET net;
+    KIRQL irql;
+    ULONG want;
+    BOOLEAN ask;
+
+    net = &nhi->Net;
+    want = (ULONG)(nhi->Values.Value[CM_VAL_NET] != 0 && (nhi->U4On || net->Fw) &&
+                   nhi->Stage == CM_STAGE_ACTIVE);
+    if (want && !cmNetPdoEnsure(nhi)) {
+        want = 0;
+    }
+    KeAcquireSpinLock(&net->PdoLock, &irql);
+    ask = (BOOLEAN)(want != net->Report ||
+                    (want && net->Pdo != NULL &&
+                     !((PCM_NETPDO)net->Pdo->DeviceExtension)->Reported));
+    net->Report = want;
+    KeReleaseSpinLock(&net->PdoLock, irql);
+    if (ask) {
         IoInvalidateDeviceRelations(nhi->Common.Pdo, BusRelations);
     }
 }
@@ -1430,43 +1716,115 @@ VOID CmNetStarted(PCM_NHI nhi)
 /* A surprise removal of the NHI: the PDO is reported no more. */
 VOID CmNetGone(PCM_NHI nhi)
 {
+    KIRQL irql;
+
+    KeAcquireSpinLock(&nhi->Net.PdoLock, &irql);
     nhi->Net.Report = 0;
+    KeReleaseSpinLock(&nhi->Net.PdoLock, irql);
 }
+
+#define CM_NET_REL_NONE     0UL     /* no PDO: the IRP passed on as it is */
+#define CM_NET_REL_ADD      1UL     /* the PDO added, referenced          */
+#define CM_NET_REL_OMIT     2UL     /* reported no more: left out         */
+#define CM_NET_REL_NOMEM    3UL     /* to add, and no list for it         */
 
 /* IRP_MN_QUERY_DEVICE_RELATIONS (BusRelations) at the NHI's FDO: what a
  * filter above may have built, plus the network PDO while reported,
- * referenced as PnP requires; the IRP then goes down. PASSIVE_LEVEL. */
+ * referenced as PnP requires; the IRP then goes down. An answer that
+ * leaves out a PDO an earlier one reported retires it (record 35 section
+ * 6.6): that object is never reported again, and no fresh one is made
+ * until its removal. PASSIVE_LEVEL. */
 NTSTATUS CmNetBusRelations(PCM_NHI nhi, PIRP irp)
 {
+    PCM_NET net;
     PDEVICE_RELATIONS old;
     PDEVICE_RELATIONS rel;
+    PDEVICE_OBJECT obj;
+    KIRQL irql;
     ULONG count;
+    ULONG action;
     ULONG i;
 
-    if (nhi->Net.Pdo == NULL) {
+    net = &nhi->Net;
+    KeAcquireSpinLock(&net->PdoLock, &irql);
+    i = (ULONG)(net->Report && net->Pdo == NULL && net->Retired == NULL);
+    KeReleaseSpinLock(&net->PdoLock, irql);
+    if (i) {
+        /* Wanted again after a retired PDO's removal: a fresh one. */
+        (VOID)cmNetPdoEnsure(nhi);
+    }
+    old = (PDEVICE_RELATIONS)irp->IoStatus.Information;
+    count = old != NULL ? old->Count : 0;
+    /* Room for the incoming list and one more, allocated before the lock;
+     * DEVICE_RELATIONS holds one object of its own. */
+    rel = (PDEVICE_RELATIONS)CmAlloc(sizeof(DEVICE_RELATIONS) + count * sizeof(PDEVICE_OBJECT));
+    obj = NULL;
+    KeAcquireSpinLock(&net->PdoLock, &irql);
+    if (net->Pdo == NULL) {
+        action = CM_NET_REL_NONE;
+    } else if (!net->Report) {
+        action = CM_NET_REL_OMIT;
+        if (((PCM_NETPDO)net->Pdo->DeviceExtension)->Reported) {
+            /* To retire once this answer has succeeded (below). */
+            obj = net->Pdo;
+        }
+    } else if (rel == NULL) {
+        action = CM_NET_REL_NOMEM;
+    } else {
+        action = CM_NET_REL_ADD;
+        obj = net->Pdo;
+        ObReferenceObject(obj);
+    }
+    KeReleaseSpinLock(&net->PdoLock, irql);
+
+    if (action == CM_NET_REL_NONE) {
+        if (rel != NULL) {
+            CmFree(rel);
+        }
         IoSkipCurrentIrpStackLocation(irp);
         return IoCallDriver(nhi->Common.Lower, irp);
     }
-    if (!nhi->Net.Report) {
+    if (action == CM_NET_REL_OMIT) {
+        NTSTATUS status;
+
         /* Withdrawn (a start with XhciCmNet 0, a surprise removal): a
          * successful answer without it, the incoming list kept or an
          * empty one, so the PnP manager removes the child. */
         if (irp->IoStatus.Information == 0) {
-            rel = (PDEVICE_RELATIONS)CmAlloc(sizeof(DEVICE_RELATIONS));
             if (rel == NULL) {
                 return CmCompleteIrp(irp, STATUS_INSUFFICIENT_RESOURCES, 0);
             }
             rel->Count = 0;
             irp->IoStatus.Information = (ULONG_PTR)rel;
+        } else if (rel != NULL) {
+            CmFree(rel);
         }
         irp->IoStatus.Status = STATUS_SUCCESS;
-        IoSkipCurrentIrpStackLocation(irp);
-        return IoCallDriver(nhi->Common.Lower, irp);
+        if (obj == NULL) {
+            IoSkipCurrentIrpStackLocation(irp);
+            return IoCallDriver(nhi->Common.Lower, irp);
+        }
+        /* Record 35 section 6.6: the PnP manager learns it is gone only
+         * from an answer that succeeds, so the PDO is retired once this
+         * one has; one that fails below leaves it for the next answer. */
+        status = CmForwardSync(&nhi->Common, irp);
+        if (NT_SUCCESS(status)) {
+            KeAcquireSpinLock(&net->PdoLock, &irql);
+            if (net->Pdo == obj && !net->Report) {
+                ((PCM_NETPDO)obj->DeviceExtension)->Retired = 1;
+                net->Retired = obj;
+                net->Pdo = NULL;
+            } else {
+                obj = NULL;
+            }
+            KeReleaseSpinLock(&net->PdoLock, irql);
+            if (obj != NULL) {
+                CmLogNote(nhi, "cm.net.pdo.retired", 0);
+            }
+        }
+        return CmCompleteIrp(irp, status, irp->IoStatus.Information);
     }
-    old = (PDEVICE_RELATIONS)irp->IoStatus.Information;
-    count = old != NULL ? old->Count : 0;
-    rel = (PDEVICE_RELATIONS)CmAlloc(sizeof(DEVICE_RELATIONS) + count * sizeof(PDEVICE_OBJECT));
-    if (rel == NULL) {
+    if (action == CM_NET_REL_NOMEM) {
         /* The list a filter above built given back, with its references. */
         for (i = 0; i < count; i++) {
             ObDereferenceObject(old->Objects[i]);
@@ -1479,17 +1837,29 @@ NTSTATUS CmNetBusRelations(PCM_NHI nhi, PIRP irp)
     for (i = 0; i < count; i++) {
         rel->Objects[i] = old->Objects[i];
     }
-    rel->Objects[count] = nhi->Net.Pdo;
+    rel->Objects[count] = obj;
     rel->Count = count + 1;
-    ObReferenceObject(nhi->Net.Pdo);
-    ((PCM_NETPDO)nhi->Net.Pdo->DeviceExtension)->Reported = 1;
     if (old != NULL) {
         CmFree(old);
     }
     irp->IoStatus.Information = (ULONG_PTR)rel;
     irp->IoStatus.Status = STATUS_SUCCESS;
-    IoSkipCurrentIrpStackLocation(irp);
-    return IoCallDriver(nhi->Common.Lower, irp);
+    {
+        NTSTATUS status;
+
+        /* Reported only once the answer has succeeded (record 35 section
+         * 6.6): a PDO the PnP manager never learned of is never retired
+         * to wait for a removal that cannot come. */
+        status = CmForwardSync(&nhi->Common, irp);
+        if (NT_SUCCESS(status)) {
+            KeAcquireSpinLock(&net->PdoLock, &irql);
+            if (net->Pdo == obj) {
+                ((PCM_NETPDO)obj->DeviceExtension)->Reported = 1;
+            }
+            KeReleaseSpinLock(&net->PdoLock, irql);
+        }
+        return CmCompleteIrp(irp, status, irp->IoStatus.Information);
+    }
 }
 
 /* The PDO's holds waited out (at most 2 s): FALSE when one is still held,
@@ -1499,39 +1869,82 @@ static BOOLEAN cmNetRefsGone(PCM_NETPDO pdo)
     ULONG waited;
 
     waited = cmNetTick();
-    while ((pdo->Refs != 0 || pdo->Users != 0) && cmNetSinceMs(waited) < CM_NET_REF_WAIT_MS) {
+    while ((pdo->Refs != 0 || !CmNetrGateIdle(&pdo->Gate)) &&
+           cmNetSinceMs(waited) < CM_NET_REF_WAIT_MS) {
         cmNetSleepMs(1);
     }
-    return (BOOLEAN)(pdo->Refs == 0 && pdo->Users == 0);
+    return (BOOLEAN)(pdo->Refs == 0 && CmNetrGateIdle(&pdo->Gate));
 }
 
-/* The NHI's removal: the PDO orphaned (no way to the NHI from now, every
- * call inside waited out), then deleted when the PnP manager has removed
- * it or never learned of it; otherwise it deletes itself at its own
- * removal. PASSIVE_LEVEL. */
-VOID CmNetRemove(PCM_NHI nhi)
+/* IoDeleteDevice once, by whichever of the PDO's removal and the NHI's
+ * wins the claim (record 35 section 6.6); each holds a reference on the
+ * object while it looks, so the loser never reads a freed extension. */
+static VOID cmNetDelete(PCM_NETPDO pdo)
+{
+    if (InterlockedIncrement(&pdo->DeleteClaim) == 1) {
+        pdo->Deleted = 1;
+        IoDeleteDevice(pdo->Common.Self);
+    }
+}
+
+/* One PDO of the NHI's at its removal: orphaned (no way to the NHI from
+ * now, every call inside waited out), then deleted when the PnP manager
+ * has removed it or never learned of it; otherwise it deletes itself at
+ * its own removal. The caller holds a reference on obj. PASSIVE_LEVEL. */
+static VOID cmNetOrphan(PDEVICE_OBJECT obj)
 {
     PCM_NETPDO pdo;
     KIRQL irql;
-    ULONG waited;
 
-    if (nhi->Net.Pdo == NULL) {
-        return;
-    }
-    pdo = (PCM_NETPDO)nhi->Net.Pdo->DeviceExtension;
-    nhi->Net.Pdo = NULL;
-    nhi->Net.Report = 0;
+    pdo = (PCM_NETPDO)obj->DeviceExtension;
     KeAcquireSpinLock(&pdo->Lock, &irql);
-    pdo->Nhi = NULL;
+    CmNetrGateClose(&pdo->Gate, FALSE);
     KeReleaseSpinLock(&pdo->Lock, irql);
-    for (waited = 0; pdo->Users != 0; waited++) {
+    while (!CmNetrGateIdle(&pdo->Gate)) {
         cmNetSleepMs(1);
     }
     if ((pdo->RemoveReceived || !pdo->Reported) && !pdo->Deleted) {
         if (cmNetRefsGone(pdo)) {
-            pdo->Deleted = 1;
-            IoDeleteDevice(pdo->Common.Self);
+            cmNetDelete(pdo);
         }
+    }
+}
+
+/* The NHI's removal: its PDO, and a retired one whose removal has not
+ * come, orphaned (record 35 sections 6.1 and 6.6). PASSIVE_LEVEL. */
+VOID CmNetRemove(PCM_NHI nhi)
+{
+    PCM_NET net;
+    PDEVICE_OBJECT cur;
+    PDEVICE_OBJECT retired;
+    KIRQL irql;
+
+    net = &nhi->Net;
+    KeAcquireSpinLock(&net->PdoLock, &irql);
+    cur = net->Pdo;
+    retired = net->Retired;
+    net->Pdo = NULL;
+    net->Retired = NULL;
+    net->Report = 0;
+    if (cur != NULL) {
+        ObReferenceObject(cur);
+    }
+    if (retired != NULL) {
+        ObReferenceObject(retired);
+    }
+    KeReleaseSpinLock(&net->PdoLock, irql);
+    if (cur != NULL) {
+        cmNetOrphan(cur);
+        ObDereferenceObject(cur);
+    }
+    if (retired != NULL) {
+        cmNetOrphan(retired);
+        ObDereferenceObject(retired);
+    }
+    /* A PDO's removal that unlinked itself and has not yet seen its calls
+     * out, or still asks the NHI for a new answer (record 35 section 6.6). */
+    while (net->PdoCalls != 0) {
+        cmNetSleepMs(1);
     }
 }
 
@@ -1653,34 +2066,71 @@ NTSTATUS CmNetPdoPnp(PCM_NETPDO pdo, PIRP irp)
             return CmCompleteIrp(irp, STATUS_SUCCESS, 0);
         }
         pdo->RemoveReceived = 1;
+        /* Its own reference while it looks (section 6.6): the NHI's
+         * removal may delete it meanwhile. */
+        ObReferenceObject(pdo->Common.Self);
         nhi = cmNetEnter(pdo);
-        if (nhi != NULL && nhi->Net.Report) {
-            cmNetLeave(pdo);
-            /* Still reported (a disable): kept, the bus-driver rule. */
-            return CmCompleteIrp(irp, STATUS_SUCCESS, 0);
-        }
         if (nhi != NULL) {
-            /* Reported no more: retired from the NHI, which makes a fresh
-             * PDO at a later start that wants one. */
-            if (nhi->Net.Pdo == pdo->Common.Self) {
-                nhi->Net.Pdo = NULL;
-            }
-            cmNetLeave(pdo);
-            {
-                KIRQL irql;
+            KIRQL irql;
+            BOOLEAN keep;
+            BOOLEAN ask;
 
-                KeAcquireSpinLock(&pdo->Lock, &irql);
-                pdo->Nhi = NULL;
-                KeReleaseSpinLock(&pdo->Lock, irql);
+            /* The NHI held before either link is cleared (record 35
+             * section 6.6): once unlinked, this PDO is not one the NHI's
+             * removal finds and waits out, so that removal waits for this
+             * hold instead, until every call that entered the gate before
+             * it closed has left. */
+            (VOID)InterlockedIncrement(&nhi->Net.PdoCalls);
+            /* Decided under PdoLock against the NHI's start and
+             * BusRelations, whatever their order. */
+            keep = FALSE;
+            ask = FALSE;
+            KeAcquireSpinLock(&nhi->Net.PdoLock, &irql);
+            if (nhi->Net.Pdo == pdo->Common.Self) {
+                if (nhi->Net.Report) {
+                    /* Still reported (a disable): kept, the bus-driver
+                     * rule. */
+                    keep = TRUE;
+                } else {
+                    /* Reported no more and never left out of an answer
+                     * (the NHI's surprise removal): retired now. */
+                    nhi->Net.Pdo = NULL;
+                }
+            } else if (nhi->Net.Retired == pdo->Common.Self) {
+                /* Left out of an answer: gone, and a fresh one may be made
+                 * if the NHI wants one again. */
+                nhi->Net.Retired = NULL;
+                ask = (BOOLEAN)(nhi->Net.Report && nhi->Net.Pdo == NULL);
             }
+            KeReleaseSpinLock(&nhi->Net.PdoLock, irql);
+            if (keep) {
+                cmNetLeave(pdo);
+                (VOID)InterlockedDecrement(&nhi->Net.PdoCalls);
+                ObDereferenceObject(pdo->Common.Self);
+                return CmCompleteIrp(irp, STATUS_SUCCESS, 0);
+            }
+            /* No way to the NHI from now, and this call out with the same
+             * step; the calls already inside waited out under the hold. */
+            KeAcquireSpinLock(&pdo->Lock, &irql);
+            CmNetrGateClose(&pdo->Gate, TRUE);
+            KeReleaseSpinLock(&pdo->Lock, irql);
+            while (!CmNetrGateIdle(&pdo->Gate)) {
+                cmNetSleepMs(1);
+            }
+            if (ask) {
+                CmLogNote(nhi, "cm.net.pdo.again", 0);
+                IoInvalidateDeviceRelations(nhi->Common.Pdo, BusRelations);
+            }
+            /* The last use of the NHI here. */
+            (VOID)InterlockedDecrement(&nhi->Net.PdoCalls);
         }
         /* Orphaned by the NHI's removal. On 98 SE and ME more IRPs may
          * follow a REMOVE (hcd_pdo.c), so the object stays allocated. */
         (VOID)CmCompleteIrp(irp, STATUS_SUCCESS, 0);
         if (IoIsWdmVersionAvailable(1, 0x10) && cmNetRefsGone(pdo)) {
-            pdo->Deleted = 1;
-            IoDeleteDevice(pdo->Common.Self);
+            cmNetDelete(pdo);
         }
+        ObDereferenceObject(pdo->Common.Self);
         return STATUS_SUCCESS;
 
     case IRP_MN_QUERY_ID:

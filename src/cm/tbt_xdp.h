@@ -218,7 +218,7 @@ ULONG TbtNetBuildLogoutResponse(PULONG out, const TBT_ROUTE *route,
 #define TBT_XDP_ENTRY_DATA          0x64UL  /* 'd' */
 #define TBT_XDP_ENTRY_TEXT          0x74UL  /* 't' */
 #define TBT_XDP_ENTRY_DIRECTORY     0x44UL  /* 'D' */
-#define TBT_XDP_TEXT_MAX            32UL    /* characters kept of a text */
+#define TBT_XDP_TEXT_MAX            64UL    /* characters kept of a text */
 #define TBT_XDP_MAX_DEPTH           8UL
 /* The largest block this driver builds. */
 #define TBT_XDP_LOCAL_MAX           64UL
@@ -368,7 +368,40 @@ typedef struct _TBT_XDP_COUNTERS {
     ULONG LogoutsReceived;
     ULONG ServicesUp;
     ULONG ServiceFailures;
+    ULONG ErrorsReceived;   /* Error Responses (IDS 2.11) the peer sent */
+    ULONG LoginIdOther;     /* Login Responses with a Request ID not ours,
+                               taken (record 35 section 4.5)             */
 } TBT_XDP_COUNTERS;
+
+/*
+ * Why a packet the engine took was dropped, for the log (record 35
+ * section 3.12, task 48.16; the owner's bench of 2026-11-09): the first
+ * TBT_XDP_DROPS_LOGGED drops of a record each write "cm.xdp.drop" =
+ * reason 23:16, PDF 15:12, TbtXdpDecode's kind 11:8, packet type 7:0;
+ * the first that is a UUID mismatch also writes the four UUIDs as
+ * "cm.xdp.uuidw" lines (TBT_XDP_UUIDW_*). Counted always, as Strays or
+ * Malformed.
+ */
+#define TBT_XDP_DROPS_LOGGED        16UL
+#define TBT_XDP_DROP_MALFORMED      1UL     /* IDS chapter 2's rules       */
+#define TBT_XDP_DROP_ROUTE          2UL     /* not this record's route     */
+#define TBT_XDP_DROP_NOREMOTE       3UL     /* USB4NET before the peer's UUID */
+#define TBT_XDP_DROP_PAIR           4UL     /* USB4NET UUIDs not the pair  */
+#define TBT_XDP_DROP_LOGIN_UUID     5UL     /* a Login not Remote to Local */
+#define TBT_XDP_DROP_LOGOUT_UUID    6UL     /* a Logout, the same          */
+#define TBT_XDP_DROP_LOGIN_RESP     7UL     /* no Login of ours awaits it
+                                               (also "cm.xdp.drop.id")     */
+#define TBT_XDP_DROP_LOGOUT_RESP    8UL     /* no Logout of ours awaits it */
+#define TBT_XDP_DROP_NET_TYPE       9UL     /* another USB4NET type        */
+#define TBT_XDP_DROP_DISC_NONE      10UL    /* a discovery response with no
+                                               request out, or another SN  */
+#define TBT_XDP_DROP_DISC_TYPE      11UL    /* the wrong response type     */
+/* "cm.xdp.uuidw" = index 23:16, a 16-bit half 15:0; index = UUID * 8 +
+ * word * 2 + half (half 0 the low one), word 0 to 3 as TBT_UUID's Dw. */
+#define TBT_XDP_UUIDW_LOCAL         0UL
+#define TBT_XDP_UUIDW_REMOTE        1UL
+#define TBT_XDP_UUIDW_REQUESTER     2UL     /* the dropped packet's        */
+#define TBT_XDP_UUIDW_RESPONDER     3UL
 
 /* One outstanding request and its schedule: a discovery request in
  * Disc, a USB4NET one in Net, each with its own tries and deadline, so a
@@ -409,6 +442,21 @@ typedef struct _TBT_XDP_PEER {
     ULONG LocalWords;
     ULONG LocalGeneration;
     BOOLEAN ChangedOwed;        /* a Properties Changed Notification to send */
+    ULONG ChangedSends;         /* its sends since it was first owed: at
+                                   most TBT_XDP_RESENDS more, whatever
+                                   re-read came between (record 35 3.18) */
+    BOOLEAN ReadOwed;           /* the peer's notification came while ours
+                                   was out: its read waits for our answer
+                                   or give-up, so neither aborts the
+                                   other's; or while a read was out: read
+                                   again once that one completes (record
+                                   35 section 3.18) */
+    ULONG PropsRestarts;        /* reads made afresh (a notification during
+                                   a read, or the block's generation changed
+                                   in it) since the last block adopted or
+                                   the last new peer: at most
+                                   TBT_XDP_RESENDS, then the read fails
+                                   (record 35 section 3.18) */
 
     /* The peer's block. */
     ULONG RemoteBlock[TBT_XDP_PROPS_MAX];
@@ -450,6 +498,10 @@ typedef struct _TBT_XDP_PEER {
     UCHAR PeerMac[6];
 
     TBT_XDP_COUNTERS Counters;
+    ULONG DropsLogged;          /* "cm.xdp.drop" lines written       */
+    ULONG ErrsLogged;           /* "cm.xdp.err.rx" lines written     */
+    BOOLEAN UuidsLogged;        /* the UUIDs written once            */
+    BOOLEAN LoginIdLogged;      /* "cm.net.login.id" written this login */
 } TBT_XDP_PEER, *PTBT_XDP_PEER;
 
 /* Prepare a peer: `local` this domain's UUID; `remote` NULL under the
@@ -492,6 +544,15 @@ VOID TbtXdpPeerSetNetWanted(PTBT_XDP_PEER peer, BOOLEAN wanted,
  * Logout first where the service is up (the engine ends it when the
  * Logout is answered or times out, then goes IDLE). */
 VOID TbtXdpPeerEnd(PTBT_XDP_PEER peer, BOOLEAN gone);
+
+/* The record's counters into the log (record 35 section 3.12): at the
+ * Login's minute unanswered, and at the record's end (an unplug, a stop):
+ * "cm.xdp.n.rx" packets taken, "cm.xdp.n.malformed", "cm.xdp.n.strays",
+ * "cm.xdp.n.errors" Error Responses, "cm.net.n.logins" sent 23:12 and
+ * received 11:0, "cm.net.n.loginfail" failures answered 23:12 and refused
+ * 11:0 (each saturating), "cm.net.n.loginid" Login Responses taken with a
+ * Request ID not this host's. */
+VOID TbtXdpPeerLogCounters(PTBT_XDP_PEER peer);
 
 /* Whether the engine has nothing outstanding and owes nothing (a stop may
  * proceed). */

@@ -109,7 +109,7 @@ static __inline int PciScanIsPortFunction(int IsNvme,
 // (PciScanFirmwareReach), and put back.
 #define PCISCAN_FW_TAKE         0   // not set up: this driver may take it
 #define PCISCAN_FW_SET_UP       1   // CC.EN or CSTS.RDY set
-#define PCISCAN_FW_NO_ANSWER    2   // CSTS all ones
+#define PCISCAN_FW_NO_ANSWER    2   // CC or CSTS all ones
 #define PCISCAN_FW_UNREADABLE   3   // the registers were not reached
 #define PCISCAN_FW_NOT_RESTORED 4   // decode turned on for the read, not put back
 
@@ -253,13 +253,135 @@ static __inline int PciScanFirmwareState(int ReadHow,
     if (ReadHow != PCISCAN_READ_OK) {
         return PCISCAN_FW_UNREADABLE;
     }
-    if (Csts == 0xFFFFFFFFUL) {
+    // All ones in either register is no answer, never "set up": the
+    // user's option (PciScanFirmwareTake) overrides "set up" alone.
+    if (Csts == 0xFFFFFFFFUL || Cc == 0xFFFFFFFFUL) {
         return PCISCAN_FW_NO_ANSWER;
     }
     if ((Cc & 0x1UL) != 0 || (Csts & 0x1UL) != 0) {
         return PCISCAN_FW_SET_UP;
     }
     return PCISCAN_FW_TAKE;
+}
+
+// 9x (PLAN "Taking a controller the BIOS set up", xhci98 3.4.3.0): the
+// user's option to take a controller the check above found set up. Off by
+// default; it overrides PCISCAN_FW_SET_UP alone.
+//
+// PciScanTakeArg: the controller's own setting in the string the 9x port
+// hands HwFindAdapter (the devnode's AdapterSettings). Fields are separated
+// by ';'; a field is the key only at the string's start or after a ';',
+// compared case-insensitively, and its value is exactly '0' or '1' ended by
+// ';' or the string's end. A 0 in any such field leaves (the safe answer to
+// a contradiction); else a 1 in any takes; else none.
+#define PCISCAN_TAKE_NONE       (-1)    // no setting of its own
+#define PCISCAN_TAKE_LEAVE      0
+#define PCISCAN_TAKE_TAKE       1
+
+#define PCISCAN_TAKE_KEY        "stortakefirmware="
+
+static __inline int PciScanTakeArg(const char *s)
+{
+    const char *k;
+    const char *p;
+    int sawTake = 0;
+    int c;
+
+    if (s == 0) {
+        return PCISCAN_TAKE_NONE;
+    }
+    p = s;
+    for (;;) {
+        // p is a field's start.
+        k = PCISCAN_TAKE_KEY;
+        while (*k != 0) {
+            c = (unsigned char)*p;
+            if (c >= 'A' && c <= 'Z') {
+                c += 'a' - 'A';
+            }
+            if (c != (unsigned char)*k) {
+                break;
+            }
+            p++;
+            k++;
+        }
+        if (*k == 0 && (p[0] == '0' || p[0] == '1') && (p[1] == ';' || p[1] == 0)) {
+            if (p[0] == '0') {
+                return PCISCAN_TAKE_LEAVE;
+            }
+            sawTake = 1;
+        }
+        // On to the next field.
+        while (*p != 0 && *p != ';') {
+            p++;
+        }
+        if (*p == 0) {
+            break;
+        }
+        p++;
+    }
+    return sawTake ? PCISCAN_TAKE_TAKE : PCISCAN_TAKE_NONE;
+}
+
+// PciScanTakeGlobal: StorTakeFirmware under Services\stor98 as read
+// (Present FALSE when the value was not read): a REG_DWORD (4) of exactly
+// 1, or a REG_SZ (1) that is exactly "1" (with or without its terminating
+// zero in Size), takes; anything else leaves.
+static __inline int PciScanTakeGlobal(int Present,
+                                      unsigned long Type,
+                                      const unsigned char *Data,
+                                      unsigned long Size)
+{
+    if (!Present || Data == 0) {
+        return PCISCAN_TAKE_LEAVE;
+    }
+    if (Type == 4UL) {
+        return (Size == 4UL && Data[0] == 1 && Data[1] == 0 && Data[2] == 0 && Data[3] == 0)
+               ? PCISCAN_TAKE_TAKE : PCISCAN_TAKE_LEAVE;
+    }
+    if (Type == 1UL) {
+        return (Data[0] == '1' && (Size == 1UL || (Size == 2UL && Data[1] == 0)))
+               ? PCISCAN_TAKE_TAKE : PCISCAN_TAKE_LEAVE;
+    }
+    return PCISCAN_TAKE_LEAVE;
+}
+
+// PciScanTakeSetting: the decision and its source. The controller's own
+// setting when it has one (its 0 leaves against a global 1, its 1 takes
+// against a global 0), else the global value's.
+#define PCISCAN_TAKESRC_ADAPTER 1   // the controller's stortakefirmware=
+#define PCISCAN_TAKESRC_GLOBAL  2   // StorTakeFirmware
+
+static __inline int PciScanTakeSetting(int Arg, int Global, int *Source)
+{
+    if (Arg == PCISCAN_TAKE_LEAVE || Arg == PCISCAN_TAKE_TAKE) {
+        *Source = PCISCAN_TAKESRC_ADAPTER;
+        return Arg;
+    }
+    *Source = PCISCAN_TAKESRC_GLOBAL;
+    return Global == PCISCAN_TAKE_TAKE ? PCISCAN_TAKE_TAKE : PCISCAN_TAKE_LEAVE;
+}
+
+// PciScanTakeMe: the decision on this system. Windows Me never takes a
+// controller someone else set up (xhci98's owner, 2026-11-09, its roadmap
+// 48.28: a take there hung Me's start after the desktop came, in the BIOS's
+// own code), whatever the settings say. Me: 1 on Windows Me. *Refused is 1
+// when a take decision was set aside for that, else 0.
+static __inline int PciScanTakeMe(int Take, int Me, int *Refused)
+{
+    *Refused = (Take == PCISCAN_TAKE_TAKE && Me) ? 1 : 0;
+    return *Refused ? PCISCAN_TAKE_LEAVE : Take;
+}
+
+// PciScanFirmwareTake: whether the find goes on with this function: one not
+// set up, or one set up that the user's decision takes. Never no answer,
+// unreadable or not restored.
+static __inline int PciScanFirmwareTake(int State, int Take)
+{
+    if (State == PCISCAN_FW_TAKE) {
+        return 1;
+    }
+    return State == PCISCAN_FW_SET_UP && Take == PCISCAN_TAKE_TAKE;
 }
 
 #endif // _STOR98_PCISCAN_H_

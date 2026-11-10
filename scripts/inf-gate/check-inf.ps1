@@ -128,6 +128,11 @@ What it checks, grouped by the failure each rule prevents:
            XhciEventRingTrbs joined at 1024 (owner, 2026-11-06).
            Forty-three since UASBOT.1's XhciBulkOnlyOwnId joined at 1
            (owner, 2026-11-08).
+           Forty-four since issue 29's XhciSsFlapFallback joined at 1
+           (owner, 2026-11-09), forty-five since task 48.33's
+           XhciStagePoolKiB joined at 2048 (owner, 2026-11-09), and
+           forty-six since its XhciDmaStaging joined at 1 (owner,
+           2026-11-09), written at 0 since the owner's of 2026-11-10.
            (**VAL-SZ was removed with XhciLogFile.** It was the
            string half - a REG_SZ's data is text two setup engines may quote,
            trim or tokenise differently, which a DWORD's is not - and with no
@@ -1872,6 +1877,13 @@ $requiredValues = @(
         DefaultWhy = "1 is the driver's own default - absent, another number or another type is on; only 0 turns it off"
     },
     @{
+        Name    = "XhciSsFlapFallback"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "issue 29's SuperSpeed root link that keeps failing (design record 13 section 21), read at each start: 1 sends it to the USB 2.0 side of its connector after three warm resets in a minute, 0 gives it up there instead. Written (owner, 2026-11-09) under 34.1's don't-overwrite rule so a user's 0 survives an update"
+        DefaultWhy = "1 is the driver's own default - absent, another number or another type is on; only 0 gives the link up instead (owner, 2026-11-09)"
+    },
+    @{
         Name    = "XhciEventRingTrbs"
         Type    = "0x00010003"
         Default = "1024"
@@ -1884,6 +1896,20 @@ $requiredValues = @(
         Default = "1"
         Why     = "roadmap-usb4 UASBOT.1's own instance id for the Bulk-Only form of a drive that offers UAS too (design record 13 section 10.7), read at each enumeration beside XhciForceBulkOnly. Written (owner, 2026-11-08) under 34.1's don't-overwrite rule so a user's 0 survives an update"
         DefaultWhy = "1 is the driver's own default - absent, another number or another type is on; only 0 keeps the one devnode of the releases before (owner, 2026-11-08: on by default)"
+    },
+    @{
+        Name    = "XhciStagePoolKiB"
+        Type    = "0x00010003"
+        Default = "2048"
+        Why     = "roadmap-usb4 task 48.33's shared staging pool (design record 13 section 11.11.1), read at each start: the KiB of driver-owned buffers every transfer's data passes through, 256 to 16384. Written (owner, 2026-11-09, Q-STG.2 answer (b)) under 34.1's don't-overwrite rule so a user's value survives an update"
+        DefaultWhy = "2048 is the driver's own default - absent or another type is 2048, a value outside 256 to 16384 is held to the nearer end (xhci_stage.c, XhciStagePoolSlabs); the measurement may move it before release (owner, 2026-11-09)"
+    },
+    @{
+        Name    = "XhciDmaStaging"
+        Type    = "0x00010003"
+        Default = "0"
+        Why     = "roadmap-usb4 task 48.33's switch (owner, 2026-11-09), read at each start: 1 stages every transfer's data through driver-owned buffers, 0 maps the clients' buffers through the map pump as 3.4.2.0 did, with 3.4.2.0's wait on an unproven stop. Written under 34.1's don't-overwrite rule so a user's value survives an update"
+        DefaultWhy = "0 is the driver's own default - absent or a DWORD 0 is 0, any other DWORD 1 (xhci_stage.c, XhciStagingOn); off by default, as 3.4.2.0 ran, since the copy's cost on real hardware is not yet measured (owner, 2026-11-10), revisited after the bench speed checks"
     },
     @{
         Name    = "XhciVirtualHSHub"
@@ -2327,7 +2353,7 @@ $osNeverNamedNames = @($osNeverNamed | ForEach-Object { $_.File.ToLowerInvariant
 $pkgRefusedNames = @($osSuppliedNames + $retiredMediaNames + $osNeverNamedNames |
                      Sort-Object -Unique)
 # And the same files under the compressed names the Windows CD carries
-# (USBD.SY_), with the three the Windows 2000 F6 option names
+# (USBD.SY_), with the three the "files from CD" F6 option names
 # (src\txtsetup.oem, XHCI98W2K): the user copies those from the CD to the
 # floppy, and the package never carries them (legal-provenance.md section 5).
 $pkgRefusedNames = @($pkgRefusedNames + @("usbd.sy_", "hidclass.sy_", "hidparse.sy_") +

@@ -67,6 +67,7 @@ Useful narrowings:
 | `release-legs.psd1` | The standard legs, their allowed exit codes and the host's steps (the 98 SE wizards). |
 | `release.config.sample.psd1` | Per-host settings of the three above; copy to `release.config.psd1` (git-ignored). |
 | `leg/` | The guest side of the release legs: the pollers and their setup (`XHPOLL`, `XHSETUP`), the leg scripts (`LEG9X.BAT`, `LEGNT.CMD`) and the 9x helpers. CRLF, ASCII. |
+| `wavchk/` | `WAVCHK.EXE` (`wavchk.c`, built by its `build.cmd` with the in-repo MSVC 6.0; not tracked, in no package): the playback check of a leg with `Audio` (`release-legs.psd1`), which plays a WAV through the waveOut device named USB and reports each `MMSYSERR` result and the time taken. |
 | `lib/legvm.ps1`, `lib/leghost.ps1`, `lib/qmp.ps1`, `lib/iso.ps1` | The release legs' machine, starting points and serial protocol; the host's steps; QMP; the CD image (Windows' IMAPI2, ISO 9660 and Joliet). |
 | `guest/` | The load scripts that run inside the guest for the concurrent-load stage, in two non-interchangeable pairs (Windows 2000 `cmd.exe`, Windows 98 `COMMAND.COM`). `guest/README.md` says which pair is which and why running the wrong one fails silently. |
 

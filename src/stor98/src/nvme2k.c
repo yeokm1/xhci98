@@ -729,6 +729,14 @@ ULONG HwFindAdapter(
     USHORT fwCmd;
     ULONG fwCc, fwCsts, fwReach, fwHow;
     PLAT_FIND_INFO fi;
+    // The string the 9x port hands over is the devnode's AdapterSettings
+    // (PLAN "Taking a controller the BIOS set up"); on 9x it is read for
+    // stortakefirmware= alone and passed on to nothing else, as when the
+    // port gives none.
+    PCHAR fwArg = ArgumentString;
+    int takeArg, takeGlobal, take, takeSrc, takeMe;
+
+    ArgumentString = NULL;
 #endif
 
     UNREFERENCED_PARAMETER(BusInformation);
@@ -935,7 +943,25 @@ ULONG HwFindAdapter(
     DBGSTAGE(STG_FIND_FIRMWARE, fi.FwState | ((fwCc & 0xFF) << 8) | ((fwCsts & 0xFF) << 16) |
              ((ULONG)(fwHow == PCISCAN_READ_OK) << 24) | ((ULONG)fwOn << 25) |
              ((ULONG)(fwHow == PCISCAN_READ_NOT_RESTORED) << 26) | ((fwReach & 0x7) << 27));
-    if (fi.FwState != PCISCAN_FW_TAKE) {
+    take = PCISCAN_TAKE_LEAVE;
+    if (fi.FwState == PCISCAN_FW_SET_UP) {
+        // Set up by someone else: left, unless the user's option takes it
+        // (PLAN "Taking a controller the BIOS set up"). Read only here, so
+        // a controller not set up is taken as before whatever the setting.
+        takeArg = PciScanTakeArg(fwArg);
+        takeGlobal = PlatTakeFirmwareRaw();
+        take = PciScanTakeSetting(takeArg, takeGlobal, &takeSrc);
+        // Never on Windows Me (PciScanTakeMe): the setting is ignored there
+        // and the report says so.
+        take = PciScanTakeMe(take, PlatIsMe(), &takeMe);
+        fi.FwTake = (ULONG)(take == PCISCAN_TAKE_TAKE);
+        fi.FwTakeSrc = (ULONG)takeSrc;
+        fi.FwTakeMe = (ULONG)takeMe;
+        DBGSTAGE(STG_FIND_TAKEFW, fi.FwState | ((ULONG)(takeArg & 0xFF) << 8) |
+                 ((ULONG)takeGlobal << 16) | ((ULONG)takeSrc << 20) | (fi.FwTake << 24) |
+                 (fi.FwTakeMe << 25));
+    }
+    if (!PciScanFirmwareTake((int)fi.FwState, take)) {
         PlatFindReport(&fi);
         DBGSTAGE(STG_FIND_RESULT, SP_RETURN_NOT_FOUND);
         return SP_RETURN_NOT_FOUND;

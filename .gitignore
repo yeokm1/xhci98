@@ -70,6 +70,7 @@ objfre/
 !xhcimark/selftest.cmd
 !xhciperf/build.cmd
 !xhciperf/selftest.cmd
+!tbspeed/build.cmd
 !test/xfertest/build.cmd
 !test/atatest/build.cmd
 !test/pmclient/build.cmd

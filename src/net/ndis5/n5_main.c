@@ -241,9 +241,17 @@ static VOID netWorker(PVOID ctx)
                 NdisMIndicateStatusComplete(a->Handle);
             }
             netSendsQuiet(a, NET_STATUS_DOWN);
+#if NET_DEFER
+            NetUpQuiet(a);
+#endif
             NdisMSetInformationComplete(a->Handle, NDIS_STATUS_SUCCESS);
         } else if (req == NET_WORK_D0) {
-            NDIS_STATUS status = NetCmOpen(a);
+            NDIS_STATUS status;
+
+#if NET_DEFER
+            NetUpWake(a);
+#endif
+            status = NetCmOpen(a);
 
             if (status == NDIS_STATUS_SUCCESS) {
                 a->PowerD3 = 0;
@@ -322,6 +330,10 @@ static VOID netFreeAdapter(PNET_ADAPTER a)
 {
     NetRxFree(a);
     NetCmRelease(a);
+#if NET_DEFER
+    NetUpFree(a);
+    NdisFreeSpinLock(&a->UpLock);
+#endif
     NdisFreeSpinLock(&a->RxLock);
     NdisFreeSpinLock(&a->TxLock);
     NdisFreeMemory(a, sizeof(*a), 0);
@@ -375,6 +387,12 @@ static NDIS_STATUS netInitialize(PNDIS_STATUS openError, PUINT medium,
                          | NDIS_ATTRIBUTE_SURPRISE_REMOVE_OK
 #endif
                          , NdisInterfaceInternal);
+#if NET_DEFER
+    if (NetUpInit(a) != NDIS_STATUS_SUCCESS) {
+        netFreeAdapter(a);
+        return NDIS_STATUS_RESOURCES;
+    }
+#endif
 
     pdo = NULL;
     fdo = NULL;
@@ -440,8 +458,9 @@ static NDIS_STATUS netInitialize(PNDIS_STATUS openError, PUINT medium,
 /*
  * MiniportHalt (section 7.6): Close (a logout, the directory withdrawn,
  * no callback after it), every queued send failed, the sender waited
- * out, every indicated packet back, then everything freed.
- * IRQL: PASSIVE_LEVEL.
+ * out, on 98 SE and ME the deferred upcalls stopped and what they held
+ * completed or given back (section 7.8), every indicated packet back,
+ * then everything freed. IRQL: PASSIVE_LEVEL.
  */
 static VOID netHalt(NDIS_HANDLE ctx)
 {
@@ -457,6 +476,9 @@ static VOID netHalt(NDIS_HANDLE ctx)
     NetCmClose(a);
     a->LinkUp = 0;
     netSendsQuiet(a, NDIS_STATUS_FAILURE);
+#if NET_DEFER
+    NetUpStop(a);
+#endif
 
     /* No receive callback runs after Close, so RxOut only falls from
      * here; but a split indicated after the receive callback read
@@ -610,20 +632,10 @@ static NDIS_STATUS netQuery(NDIS_HANDLE ctx, NDIS_OID oid, PVOID buf,
         v = a->RxOk;
         break;
     case OID_GEN_XMIT_ERROR:
-        v = a->TxErrors + a->TxDrops[NET_TXDROP_SHORT] +
-            a->TxDrops[NET_TXDROP_LONG] + a->TxDrops[NET_TXDROP_PEER];
+        v = NetTxErrorTotal(a);
         break;
     case OID_GEN_RCV_ERROR:
-        {
-            ULONG i;
-
-            for (i = 0; i < NET_RXDROP_REASONS; i++) {
-                v += a->Rx.Drops[i];
-            }
-            for (i = 0; i < NET_SEGDROP_REASONS; i++) {
-                v += a->SegDrops[i];
-            }
-        }
+        v = NetRxErrorTotal(a);
         break;
     case OID_GEN_RCV_NO_BUFFER:
         v = a->RxNoBuffer;
@@ -731,6 +743,9 @@ static NDIS_STATUS netSet(NDIS_HANDLE ctx, NDIS_OID oid, PVOID buf,
         } else {
             a->PowerD3 = 1;
             a->WorkReq = NET_WORK_D3;
+#if NET_DEFER
+            NetUpSleep(a);
+#endif
         }
         NdisReleaseSpinLock(&a->TxLock);
         (VOID)KeSetEvent(&a->WorkEvent, IO_NO_INCREMENT, FALSE);

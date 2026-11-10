@@ -384,7 +384,7 @@ int inst_eng_other_state(int set, int *state, int *forThis, int *include,
                          int *stage);
 void inst_eng_other_texts(int set, const char *dir, char *sentence,
                           size_t sCap, char *line, size_t lCap);
-void inst_eng_other_choose(int set, int include, int stage);
+void inst_eng_other_choose(int set, int include);
 /* Record 26 section 6.7.11: the i-th package of a set (0 past the last),
  * its box ticked (0 when it cannot be: not eligible, barred, or the set
  * not copied), and the set's earlier staging in words ("" for none). */
@@ -463,10 +463,8 @@ const char *inst_eng_s98_choose_value(int i, int set, const char *text);
 int inst_eng_s98_file_update(void);
 void inst_eng_s98_file_ok(int ok);
 
-/* 1 when the finish offers a shutdown rather than a restart (98 SE and ME
- * after a Stor98 update); 1 when the uninstall left a Stor98 it did not
- * install (the finish page says so). */
-int inst_eng_shutdown(void);
+/* 1 when the uninstall left a Stor98 it did not install (the finish page
+ * says so). */
 int inst_eng_s98_left(void);
 
 #endif /* INST_ENG_H */

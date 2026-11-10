@@ -233,7 +233,13 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
 #define CM_VAL_NET_RX_FRAMES     14  /* XhciCmNetRxFrames                   */
 #define CM_VAL_NET_TX_FRAMES     15  /* XhciCmNetTxFrames                   */
 #define CM_VAL_NET_E2E           16  /* XhciCmNetE2E                        */
-#define CM_VAL_COUNT             17
+/* Record 35 section 5.5 (task 48.38): the data ring's cause opened where
+ * the ring interrupt (XhciCmRingInterrupt) is connected and proven. */
+#define CM_VAL_NET_IRQ           17  /* XhciCmNetInterrupt                  */
+/* Record 22 section 7.6.2 (task 48.43): 1 infers the port of a PCIe
+ * tunnel found up at start for its eject alone; 0, the default, never. */
+#define CM_VAL_INFER_AT_START    18  /* XhciCmInferAtStart                  */
+#define CM_VAL_COUNT             19
 
 
 /* XhciCmMode (record 21 section 8, decision D11). */
@@ -367,6 +373,23 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
 #define CM_GEN4_ELR_DEFAULT 1UL
 
 /*
+ * XhciCmSleepEntry, REG_DWORD (design record 22 sections 11.1.5 and
+ * 11.1.10, decision U36, task 48.35): a bench switch. 1 runs the Guide's
+ * sleep entry at a system sleep under the USB4 software connection
+ * manager - the preflight, the wake enables cleared, Enter Sleep and
+ * Sleep Ready - and at the resume the cancellation of a sleep that did
+ * not happen and the rebuild of a preserved tunnel on a prepared port
+ * (decision U34) (tbt_u4cm.h, TBT_U4_CONFIG SleepEntry); 0 writes no
+ * more than the 3.4.x suspend did. The INFs write it at the default
+ * under the don't-overwrite flag and the installer does not ask for it;
+ * absent reads as the default, and any other value is refused and the
+ * default stands. Read once per start, machine-wide key first, as every
+ * value. The default is 1 since the emulator legs passed (owner,
+ * 2026-11-09; 0 is the way back).
+ */
+#define CM_SLEEP_ENTRY_DEFAULT 1UL
+
+/*
  * XhciCmBridgeReq, REG_DWORD, Windows 2000, XP and XP x64 only (design
  * record 33 section 9.1, task 45.12): 1 rewrites the requirement list of
  * a hot-added bridge below an active tunnel port (record 33 section 6)
@@ -439,6 +462,10 @@ typedef struct _CM_VALUES {
     ULONG Gen4ElrFound;
     ULONG Gen4ElrRaw;
     ULONG Gen4ElrRefused;
+    ULONG SleepEntry;           /* XhciCmSleepEntry as run with             */
+    ULONG SleepEntryFound;
+    ULONG SleepEntryRaw;
+    ULONG SleepEntryRefused;
     ULONG BridgeReq;            /* XhciCmBridgeReq as run with              */
     ULONG BridgeReqFound;
     ULONG BridgeReqRaw;
@@ -489,6 +516,9 @@ VOID CmValuesTakeUsb4V2(PCM_VALUES v, ULONG found, ULONG raw);
 
 /* Take XhciCmGen4LinkRecovery: 0 or 1, anything else refused (1 stands). */
 VOID CmValuesTakeGen4Elr(PCM_VALUES v, ULONG found, ULONG raw);
+
+/* Take XhciCmSleepEntry: 0 or 1, anything else refused (the default stands). */
+VOID CmValuesTakeSleepEntry(PCM_VALUES v, ULONG found, ULONG raw);
 
 /* Take XhciCmBridgeReq: 0, 1 or 2, anything else refused (1 stands). */
 VOID CmValuesTakeBridgeReq(PCM_VALUES v, ULONG found, ULONG raw);

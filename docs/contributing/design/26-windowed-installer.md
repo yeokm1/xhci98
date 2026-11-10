@@ -1,6 +1,11 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 77, 2026-11-08 (roadmap-usb4 task 47.42: usb-wdm-free
+Status: draft 78, 2026-11-10 (the owner's decision of that day: 98 SE
+and ME restart at the finish as every other system does, after a Stor98
+update and after the storage drivers' copy with a UAS devnode at Code 2
+too, the shut-down choice and final lines and their Help topic retired,
+sections 5.9, 5.10, 6.3 and 6.5.5, record 23 revision 55);
+draft 77, 2026-11-08 (roadmap-usb4 task 47.42: usb-wdm-free
 `v0.1.9`'s pin and its SHA-1 test certificate, section 6.7.11; an
 `EXCLUDES` of a package no earlier release carried admitted as a
 `COEXISTS` without the proof of section 6.7.14, for `uac1` and
@@ -2769,6 +2774,7 @@ every one), and the choices and ranges are `tuning.md`'s:
 |---|---|---|---|---|
 | `XhciImodInterval250ns` | USB | every | 10 to 4000 | the interrupt moderation interval, in 250 ns units |
 | `XhciLinkKeep` | USB | every | 0, 1 | keep a UAS drive with a serial number as it was when its SuperSpeed link drops and recovers |
+| `XhciSsFlapFallback` | USB | every | 0, 1 | send a USB 3 device whose SuperSpeed link keeps failing to its connector's USB 2.0 side (1), or stop resetting the link (0) (issue 29, owner 2026-11-09) |
 | `XhciResumeKeep` | USB | every | 0, 1 | keep a device on a root port as it was after a standby or hibernation that started the controller afresh |
 | `XhciUsb2Bos` | USB | every | 0, 1 | ask a USB 2.1 device at High or Full Speed whether it can run at SuperSpeed (its BOS descriptor) |
 | `XhciLogVerbosity` | USB | every | 0 to 4 | the driver's log (the 0 to 4 meanings of the connection manager's row, 4 with its caution) |
@@ -2779,7 +2785,7 @@ every one), and the choices and ranges are `tuning.md`'s:
 | `XhciFirstEnumPortMs` | USB | every | 0 to 30000 | the longest one port may hold that wait, in ms; the driver holds it to `XhciFirstEnumWaitMs` |
 | `XhciMaxTransferKB` | USB | every | 64 to 2048, a multiple of 4 | the largest UAS command, in KiB |
 | `XhciWideMap` | USB | 2000 and later (`INST_APPLY_NT_XHCI`; greyed as "Windows 2000 to 7 only", as `XhciPollFineTimer` is) | 0, 1 | two pieces of a large bulk transfer on the controller at once |
-| `XhciCmRingInterrupt` | Thunderbolt | 2000 to 10 (`INST_APPLY_NT_CM`, new) | 0, 1 | let the controller's interrupt tell the driver at once that a device was plugged in or removed |
+| `XhciCmRingInterrupt` | Thunderbolt | 2000 to 10 (`INST_APPLY_NT_CM`, new; every system, `INST_APPLY_CM`, since task 48.26) | 0, 1 | let the controller's interrupt tell the driver at once that a device was plugged in or removed |
 | `XhciCmUsb4V2` | Thunderbolt | every | 0, 1 | USB4: run a version 2 router as a version 2 one, with a caution on 0 (a bench switch: leave it at 1) |
 | `XhciBulkOnlyOwnId` (UASBOT.1, owner 2026-11-08; after `XhciForceBulkOnly`) | USB | every | 0, 1 | give a disk used as Bulk-Only its own Device Manager entry, apart from its UAS entry |
 
@@ -2821,7 +2827,10 @@ the Advanced dialog's box, its message and the row's note all use the
 two.
 
 *A new system rule.* `XhciCmRingInterrupt` is read on 2000 to 10 and
-ignored on 98 SE and ME (`tuning.md`). The x86 NHI INF writes it on its
+ignored on 98 SE and ME (`tuning.md`; since task 48.26 it is read on
+every system, written by every path of the x86 NHI INF, and its rule is
+`INST_APPLY_CM`, so it is greyed nowhere; the rest of this paragraph is
+the rule as it stood). The x86 NHI INF writes it on its
 NT paths alone. Its rule, `INST_APPLY_NT_CM`, makes it a Thunderbolt
 row: it is on `inst_eng_rows`' list of Thunderbolt rules (`cmRow`), so
 it is shown with no NHI present too (the staged-only case of section
@@ -2987,7 +2996,8 @@ another system. `XhciCmTunnelBridge` (a string
 for a machine whose ports the driver does not find) is not offered: it is
 a diagnostic the release notes describe for a hand edit. Since draft 52
 (task 45.54, section 5.4.1) two more rows join Advanced:
-`XhciCmRingInterrupt` (2000 to 10, greyed on 98 SE and ME) and
+`XhciCmRingInterrupt` (2000 to 10, greyed on 98 SE and ME; every
+system since task 48.26) and
 `XhciCmUsb4V2`. `XhciCmAsmediaPcie7Credits`, a bench experiment, is not
 offered.
 
@@ -3064,7 +3074,13 @@ row says. The rows asked: `StorWriteThrough` (`auto`, `off`, `cacheoff`,
 `StorPollMode` (0 or 1). "Advanced...": `StorMaxTransferKB`,
 `StorPollBusyUs`, `StorPollIdleMs`, `StorPollSpinUs`, `StorGoneMs`,
 `StorWriteIdleMs`, from `3.3.0.0` `StorHold9xMs` and, from `3.4.1.0`,
-`StorIntWatchdog` (0 or 1, roadmap-usb4 46.9), each with Stor98's
+`StorIntWatchdog` (0 or 1, roadmap-usb4 46.9) and, from `3.4.3.0`,
+`StorTakeFirmware` (0 or 1, 98 SE and ME only and greyed on 2000 to 10
+as `StorHold9xMs` is, roadmap-usb4 48.28; and greyed on ME too, owner
+2026-11-09, "(Windows 98 SE only: on ME it can hang Windows' start)",
+never written there, because Stor98 ignores it on ME:
+`inst_s98_greyed_os`, `inst_s98_applies_os`, XHCITR's row the same),
+each with Stor98's
 default, unit and range; `StorHold9xMs` is a 98 SE and ME value with no
 `DriverParameter` key, shown greyed on 2000 to 10 ("Windows 98 SE and ME
 only") and never written there. Up to
@@ -3072,7 +3088,9 @@ only") and never written there. Up to
 settable on 98 SE and ME, and there they were shown greyed, "(Windows
 2000 to 7 only)", and never written (`inst_s98_greyed`, owner,
 2026-10-19); from `3.3.0.0` Stor98 reads them on every system and of
-the advanced rows only `StorHold9xMs` is greyed, on 2000 to 10. Where they are
+the advanced rows only `StorHold9xMs` (and from `3.4.3.0`
+`StorTakeFirmware`) is greyed, on 2000 to 10 (and `StorTakeFirmware`
+on ME). Where they are
 written is Stor98's rule, not this package's, and the table carries it
 per value: on 98 SE and ME a value of the row's name under
 `HKLM\System\CurrentControlSet\Services\stor98`, a `REG_SZ` for
@@ -3347,24 +3365,27 @@ each as the console prints it), and the restart:
   after `SE_SHUTDOWN_NAME` is enabled on the process token
   (`OpenProcessToken`, `LookupPrivilegeValueA`, `AdjustTokenPrivileges`,
   looked up at run time, as record 23's security routines are). A refusal
-  of the restart is shown and the window closes. On 98 SE and ME, when a
-  Stor98 device was updated in this run, the choice reads "Shut down
-  now" (`EWX_SHUTDOWN`) and "Shut down later", because Stor98's readme
-  asks for a shutdown and a fresh start rather than a warm restart after
-  its update on those two systems (section 6.3); the final line of
-  record 23 section 7.4 then reads "Changes were made. Please shut down
-  and start Windows again." in both front ends, and its unfinished form
-  "Changes were made, but not everything is done: do what is said above
-  first, then shut down and start Windows again.", the exit codes (3,
-  and 2 or 4 by the failed and steps flags) unchanged: the one amendment
-  of that section, in the pure half's final-line rule (section 12). On
-  2000 to 7 a Stor98 update keeps the ordinary restart. The console tool
-  never restarts or shuts the machine down (record 23 section 5.9): that
-  is the window's one addition to what the engine may do (W5).
+  of the restart is shown and the window closes. This holds on 98 SE
+  and ME after a Stor98 update, and on 98 SE after the storage drivers'
+  copy with a UAS devnode at Code 2 (section 6.5.5), as everywhere else
+  (draft 78, the owner's decision of 2026-11-10). Up to draft 77 the
+  choice there read "Shut down now" (`EWX_SHUTDOWN`) and "Shut down
+  later", with its own Help topic, and the final line of record 23
+  section 7.4 took a shutdown form in both front ends ("Done. Please shut
+  down and start Windows again.", and in the unfinished line "then shut
+  down and start Windows again."), because Stor98's readme asked for a
+  shutdown and a fresh start rather than a warm restart after its update
+  on those two systems (section 6.3). That came from the emulator, whose
+  98 SE and ME guests do not survive a warm restart, not from real
+  hardware, so the owner withdrew it: the choice, the final lines and
+  the exit codes (3, and 2 or 4 by the failed and steps flags) are the
+  ordinary ones on every system. The console tool never restarts the
+  machine (record 23 section 5.9): that is the window's one addition to
+  what the engine may do (W5).
 - Where the run changed nothing, Finish closes.
-- Where steps are left, the second button ("Restart later", or "Shut
-  down later" in the case above) is preselected and the page says to do
-  them first, as the console's unfinished line does.
+- Where steps are left, the second button ("Restart later") is
+  preselected and the page says to do them first, as the console's
+  unfinished line does.
 
 The exit code is record 23's, so `INSTALL.BAT` passes it on unchanged
 whichever front end ran. `SETUP.EXE` does not wait for the window and
@@ -3436,8 +3457,9 @@ Which topic a page opens is decided by one pure function,
 page (`INST_HK_WELCOME`, `_COMP`, `_TBT`, `_FREE`, `_NONFREE`,
 `_SET_USB`, `_SET_TB`, `_SET_S98`, `_ADV`, `_ADV_S98`, `_SUMMARY`,
 `_PROGRESS`, `_STEPS`, `_FINISH`), `uninstall` the run's mode, `variant`
-for the Finish page what its two buttons are (restart, shut down, or
-none shown: the run changed nothing, whatever the reason), and for the
+for the Finish page what its two buttons are (restart, or none shown:
+the run changed nothing, whatever the reason; up to draft 77 also shut
+down), and for the
 Progress page the system (draft 59: `INST_PV_9X` on 98 SE and ME, whose
 hardware wizard is the Add New Hardware Wizard, `INST_PV_NT` on 2000 and
 later, whose is Found New Hardware; `page_help_variant`, from
@@ -3486,7 +3508,6 @@ final words and paragraphs):
 | `INST_HELP_PROGRESS_9X` | Progress, both, 98 SE and ME (draft 59; until then the topic above on every system) | The steps as they run. Windows may open its own windows, such as the Add New Hardware Wizard: answer them (Next, then Finish). Setup waits for them. / Cancel stops at the next step; what was done is kept. While Setup waits for a Thunderbolt drive to reconnect, Cancel skips only that wait and Setup continues. |
 | `INST_HELP_STEPS` | Steps left for you | Devices Setup could not install by itself, each with the steps to follow after the restart. / Save as text file...: saves the steps to read after the restart. / Open Device Manager: where the steps are done. |
 | `INST_HELP_FINISH` | Finish (install), Restart choices | What was done, what is left, and where the log file is. / Restart Windows now: Finish restarts Windows, and what was installed starts. / Restart Windows later: to save your work or follow the steps first. Restart before using the devices. |
-| `INST_HELP_FINISH_SHUT` | Finish (install), Shut down choices | What was done, what is left, and where the log file is. / Shut down now: Finish shuts Windows down; start it again yourself. Stor98's update, or the storage drivers' copy, needs a fresh start rather than a restart. / Shut down later: to save your work first. |
 | `INST_HELP_FINISH_NONE` | Finish, nothing changed (install or uninstall, done, refused or stopped) | No changes were made, so no restart is needed. The last line above says why. Finish closes Setup. |
 | `INST_HELP_UFINISH` | Finish (uninstall), Restart choices | What was removed, what is left, and where the log file is. / Restart Windows now: Finish restarts Windows, and what was removed is gone. / Restart Windows later: to save your work or follow the steps left first. |
 
@@ -3509,9 +3530,10 @@ of (topic, label) pairs holds that each topic's text quotes the page's
 own labels: the Components labels from `INST_PT_DRIVERS`, `INST_PT_UAS`,
 `INST_PT_STOR`, `INST_PT_TB` and `INST_PT_FAST` (their words before the
 first parenthesis), `INST_PT_TRAY` whole, the approval's
-`INST_PT_APPR_1` and `INST_PT_APPR_0` whole, `INST_PT_NOW`,
-`INST_PT_LATER`, `INST_PT_SHUT_NOW` and `INST_PT_SHUT_LATER` whole in
-their Finish topics, the Settings tabs' value names, and so on for each
+`INST_PT_APPR_1` and `INST_PT_APPR_0` whole, `INST_PT_NOW` and
+`INST_PT_LATER` whole in their Finish topics (up to draft 77 also
+`INST_PT_SHUT_NOW` and `INST_PT_SHUT_LATER` in the shut-down topic,
+`INST_HELP_FINISH_SHUT`, retired with them), the Settings tabs' value names, and so on for each
 topic. The window's self-test (record 23 section 10, the window's half)
 checks the window's own routing: for every page number of the install
 and the uninstall sheet and for the Settings sheet's three tabs,
@@ -3794,7 +3816,8 @@ unasked. With the box ticked:
   4.4, revision 23): `STOR98.TMP` beside it and a `WININIT.INI`
   `[rename]` entry, the `INF` or `INF\OTHER` copy each Stor98 driver key
   names made the bundled `stor98.inf`, with or without a drive present,
-  then a shut down and a start; a drive first plugged after it binds to
+  then a restart (a shut down and a start up to draft 77); a drive first
+  plugged after it binds to
   the new file. The printed steps never send the user to Update Driver
   on a drive Stor98 runs, and a Stor98 drive no helper job touches may
   be unplugged between the plan and Install, as the confirmation asks,
@@ -3802,10 +3825,14 @@ unasked. With the box ticked:
   the gate again).
 - **An update of a Stor98 device** follows Stor98's readme ("Updating the
   driver"), whose two precautions are each for its own systems. On 98 SE
-  and ME: nothing may be using the drive's volume, and the machine is
-  shut down and started again afterwards rather than restarted with the
-  drive attached (the readme records a volume coming back "not ready",
-  and ME stopping with a VCACHE error, after a warm restart there). So on
+  and ME: nothing may be using the drive's volume. (Up to draft 77 also a
+  shutdown and a fresh start afterwards rather than a restart with the
+  drive attached, from the readme's record of a volume coming back "not
+  ready", and ME stopping with a VCACHE error, after a warm restart
+  there; that was seen in the emulator only, whose 98 SE and ME guests do
+  not survive a warm restart, and the readme no longer asks for it
+  (owner, 2026-11-10, draft 78). The box below serves the first
+  precaution, not the shutdown, and stays.) So on
   those two systems, when the run replaces Stor98's file, the Summary
   page carries one check box, "Disconnect all external NVMe drives
   before Setup continues." (draft 16, owner 2026-10-19, worded so on
@@ -3816,9 +3843,10 @@ unasked. With the box ticked:
   ticked, the file update goes ahead; unticked, Install still runs and
   Stor98 is left for a later run, out of this run whole (no copy of its
   files, no job, no setting, no record; a step, exit 4). The finish page offers
-  "Shut down now" in place of "Restart now" (section 5.9); the console
-  tool asks the same sentence as one yes/no question (`INST_Q_S98_UNUSED`,
-  Enter and `/yes` give N) and ends with the shutdown line. On 2000 to 7 the
+  the ordinary restart (section 5.9; "Shut down now" up to draft 77); the
+  console tool asks the same sentence as one yes/no question
+  (`INST_Q_S98_UNUSED`, Enter and `/yes` give N) and ends with the
+  ordinary restart line. On 2000 to 7 the
   ordinary restart flow stands, and one thing is added: on a USB4 host
   under this package's own connection manager, a driver change on a
   tunnelled drive stops the device, which the connection manager takes as
@@ -4278,11 +4306,13 @@ in the run it installs the storage devices present, in record 27 section
 - **UAS devices**, by `xhciuas.inf` as before, after the Bulk-Only step:
   the filter is in place when `xhciuas.sys` binds. A UAS devnode already
   at Code 2 before this run's copies (bound while `USBNTMAP.SYS` was
-  missing) is not reinstalled: NTKERN started such a devnode only after a
-  fresh start on 98 SE (`runs/run-28.md`: "after the next cold boot"),
-  so it is listed as starting at the next start, and the run's final
-  line takes section 5.9's shutdown form ("shut down and start Windows
-  again", `inst_eng_shutdown`).
+  missing) is not reinstalled: NTKERN started such a devnode at the next
+  start on 98 SE (`runs/run-28.md`: "after the next cold boot", in the
+  emulator, whose 98 SE guests are never warm-restarted), so it is listed
+  as starting at the next start, "A UAS disk with Code 2 starts after
+  Windows restarts.", and the run ends with the ordinary restart (draft
+  78; up to draft 77 with section 5.9's shutdown form, "shut down and
+  start Windows again", `inst_eng_shutdown`, retired with it).
 - **Units, the settle and the rebind**: after the UAS step a settle
   (record 23 section 5.8's, as each pass has), and then each present
   unit (`USBSTOR\GenDisk`, `USBSTOR\GenCdRom` or `USBSTOR\GenSfloppy`
@@ -6958,7 +6988,8 @@ record 23 section 7.4's precedence: a wizard the user cancelled, a helper
 dialog the user cancelled or a device the helper found no match for sets
 the steps flag (exit 4); so, since draft 16, does a helper that did not
 finish (`inst_di_unfinished`): its install is unfinished, its steps say
-to shut down, start Windows and run the installer again, and never
+to restart Windows and run the installer again (up to draft 77 to shut
+down and start Windows), and never
 "nothing to do" or "this release runs it", whatever the device reads
 afterwards (the 98 SE update of 2026-10-19 reported a helper cut short
 that way, exit 2); a helper that failed, or a
@@ -7349,7 +7380,8 @@ this list is the whole of it:
   a failure by its disappearance (section 6.3).
 - Section 7.1: `/stor98`, `/from`, `/console`; 7.4: the final line's
   shutdown forms, finished and unfinished, on 98 SE and ME after a Stor98
-  update, with the exit codes unchanged.
+  update, with the exit codes unchanged (withdrawn by draft 78, record 23
+  revision 55).
 - Section 8.1: the Stor98 rows and the asked-or-advanced column; 8.3: the
   mixed state of two controllers kept; 8.4: the machine-wide location
   (42-A.17) and Stor98's locations; `/defaults` unchanged.
@@ -7376,7 +7408,8 @@ ticked and the case allows it, read from the download's `NONFREE\`),
 6.2 and 6.4 (the storage copies, the storage devices' jobs and the unit
 rebind; the UAS Code 2 step taken by the copy when the row is ticked,
 and the advice kept where it is not), 7.1 (`/storage`, `/nostorage`),
-7.4 (the shutdown form for a UAS devnode at Code 2 before the copies),
+7.4 (the shutdown form for a UAS devnode at Code 2 before the copies;
+withdrawn by draft 78),
 9 (the storage removal of section 6.5.8) and 13 (D2 gains the row).
 
 Draft 19 (task 43.42) changes record 23 by its revision 25, made with the
@@ -7425,8 +7458,9 @@ Draft 52 (task 45.54) changes record 23 by its revision 51: section
   built on the multithreaded static runtime (sections 3.3 and 4).
 - **W4** Under WOW64 the 32-bit window starts the x64 one and returns its
   exit code; the console tool keeps its refusal (section 4).
-- **W5** The window restarts Windows on "Restart now" and shuts it down
-  on "Shut down now"; the console tool never does either (section 5.9).
+- **W5** The window restarts Windows on "Restart now"; the console tool
+  never does (section 5.9). Up to draft 77 it shut Windows down instead
+  on "Shut down now", offered on 98 SE and ME after a Stor98 update.
 - **W6** The uninstall from the install directory relaunches a temporary
   copy of itself; on 98 SE and ME that copy is left in `TEMP` and said
   (section 9.2). Not taken: `WININIT.INI` (record 23 forbids it), a
@@ -7498,8 +7532,10 @@ Draft 52 (task 45.54) changes record 23 by its revision 51: section
   record and the uninstall's entry point; the uninstall run after the
   restart finishes it. No `WININIT.INI` entry (section 6.5.8).
 - **W22** (draft 17) A UAS devnode at Code 2 before this run's copies is
-  not reinstalled; the run ends with the shutdown form, from run-28's
-  reading that it started after the next cold boot (section 6.5.5).
+  not reinstalled; the run ends with the ordinary restart (draft 78; up
+  to draft 77 with the shutdown form, from run-28's reading that it
+  started after the next cold boot, an emulator reading) (section
+  6.5.5).
 - **W23** (draft 17) `/storage` and `/nostorage`, the first refused off
   98 SE, the second accepted everywhere (section 6.5.9).
 
@@ -7566,7 +7602,7 @@ Draft 52 (task 45.54) changes record 23 by its revision 51: section
   section 6.5.5); whether a first plug after the install lands on "USB
   Disk" or "Disk drive", with and without `XhciSilentInstall`; whether the
   unit rebind starts the unit or needs the replug; that a UAS devnode at
-  Code 2 starts after the shut down; and whether a stock 98 SE needs any
+  Code 2 starts after the restart; and whether a stock 98 SE needs any
   of NUSB's other files. Until each is read the design takes the cautious
   reading named where it is used.
 - (draft 18) The owner's decisions of 2026-10-20 on the questions draft

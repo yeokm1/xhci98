@@ -2510,6 +2510,25 @@ Scope: this is a property of two QEMU device models. Nothing here transfers
 to a physical BOT or UAS enclosure, which remains unmet and belongs to task
 13-E.4.
 
+### The same, again, read as a Full Speed gap (Phase 48, task 48.20)
+
+On a 98 SE q35 guest, a hot-plugged `usb-uas` and a `usb-serial` on
+`-chardev null` read in `info usb` as "Speed 12 Mb/s", `Device 0.0`, and
+were written down as "no Full Speed device is enumerated". Neither was
+ever attached: 12 Mb/s is the speed `usb_desc_init` gives every device
+before any attach, not a speed the port trained at. `usb-serial` attaches
+only when its chardev raises the open event (or with `always-plugged=on`),
+and the `null` backend never raises it, at power-on or hot-plugged. Read
+on a copy of the same overlay (2026-11-09): `qom-get ... attached` false
+for both and the port's trace at `pls 5` throughout; with
+`always-plugged=on` the same `usb-serial` was addressed at Full Speed at
+power-on and hot-plugged (Evaluate Context to its 8-byte `bMaxPacketSize0`,
+then the descriptors, and Windows' wizard for "QEMU USB SERIAL"), and the
+hot-plugged `usb-uas` after `qom-set ... attached true` came up at
+SuperSpeed and reached the wizard as "xHCI98 USB Attached SCSI Storage".
+Read `attached` (and, for `usb-serial`, the chardev) before reading an
+unaddressed device as a driver gap.
+
 ### A second fact from the same boot: a modal dialog blocks the Windows 2000 PnP install queue
 
 A keyboard behind a second-tier hub (port `3.2.1`) sat at `Device 0.0`,
@@ -10173,6 +10192,47 @@ objects path-independent (`omfpub.py` sets `THEADR` to the base name,
 `wcc386 -zld`), and `omfcheck.py` refuses a name of 18n characters (design
 record 30 section 6.1; `runs/run-46.md`, "XHCIPFW.VXD's log strings: a
 path-dependent bad build").
+
+## A failure on one OS with an emulated device is checked against Windows' own driver for another controller before the emulator is blamed
+
+GitHub issue 32, 2026-11-10, development host A, the q35 Windows 2000
+base, QEMU's `qemu-xhci` and `usb-audio`, `-audiodev none`. `3.4.2.0`
+shipped with Windows 2000 USB audio broken: Sound Recorder said "Your
+audio hardware cannot play files like the current file" and DxDiag's
+DirectSound test failed with `0x88780032`, while 98 SE and XP played. The
+project's own 2000 legs had seen the same refusal twice before the cut -
+Phase 47's (`runs/run-47.md`, "The 98 SE usbaudio fault at unplug while
+playing", section 9: "the guest's Sound Recorder could not play the
+device") and 48.33's 2000 leg (`runs/run-48.md`, worker pci4: "Audio
+beside: not achieved") - and each recorded it as the emulated device's
+limit and moved on. What settled it was one control: the same file on the
+same guest through Windows' own UHCI driver (`ich9-usb-uhci1`, no
+`xhci98.sys` loaded) played to the end, and DxDiag's test played its
+first format. `3.4.1.0`'s `xhci98.sys` played too. The cause was this
+driver's: `3.4.2.0`'s URB header-length rule refused `usbaudio.sys`'s
+streaming `SELECT_INTERFACE`, whose `UrbHeader.Length` is 0, a field
+usbport does not read for a select (`docs/issues/30-w2k-usbaudio-select-interface-header.md`).
+
+It was the second time. In October the first HCD bounded the same select
+by the same field, and every 2000 alternate-1 select was refused with the
+same Sound Recorder text (`runs/run-26.md`, c15, a real C-Media device
+passed through; fixed in `3191f72`). The refusal was in the trace both
+times (`URBs refused - malformed`), and in October someone read it.
+
+The emulated device's record made the wrong answer easy: QEMU's
+`usb-audio` does stop 98 SE's own `usbaudio.sys` (Phase 9; lessons.md,
+"Windows 98 SE cannot play USB audio here"), on Windows' UHCI stack as on
+this one. That was shown with exactly this control, and it is not a
+property of the device on another OS.
+
+Rule. **When a leg fails on one OS only, with an emulated device, run the
+same steps on the same guest with Windows' own driver for another
+controller - on 98 SE, 2000 and XP, the in-box UHCI driver on
+`ich9-usb-uhci` - before writing the emulator down as the cause; and read
+the driver's refusal counters (`URBs refused - malformed`, XHCITR's
+`UrbsMalformed`) whenever a class driver says it cannot open a device.**
+The 2000 release leg now plays a WAV through `usb-audio` and fails on a
+refused URB (`build-and-test.md`, "Faster emulator legs").
 
 ## Appendix A. The binary readings behind `legal-provenance.md` section 4
 

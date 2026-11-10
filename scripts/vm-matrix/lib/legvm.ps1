@@ -149,14 +149,16 @@ function Quote-LegArg {
 # Starts QEMU hidden and headless and returns its process. Every reset ends
 # the process (-action reboot=shutdown): Windows 98 SE hangs on a warm restart,
 # and on every guest a restart then becomes a cold start the host makes.
+# Backends: arguments no saved state depends on, so not in the starting
+# point's hash (an audio leg's -audiodev, whose device the host plugs later).
 function Start-LegQemu {
     param(
         $Config, $Guest, [hashtable]$Ports,
         [string]$Disk, [string]$Iso, [string]$RunDir, [string]$Tag,
-        [switch]$Incoming, [string]$Name = 'xhleg'
+        [switch]$Incoming, [string]$Name = 'xhleg', [string[]]$Backends = @()
     )
     $serial = Join-Path $RunDir "serial-$Tag.log"
-    $a = @('-name', $Name) + (Get-LegHardwareArgs $Guest)
+    $a = @('-name', $Name) + (Get-LegHardwareArgs $Guest) + @($Backends)
     $a += @('-display', 'none', '-vnc', "127.0.0.1:$($Ports.Vnc - 5900)",
         '-qmp', "tcp:127.0.0.1:$($Ports.Qmp),server=on,wait=off",
         '-action', 'reboot=shutdown',

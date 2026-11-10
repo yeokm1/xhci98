@@ -227,4 +227,16 @@ ULONG XhciTbtNumberBridges(PXHCI_TBT_CFG io, ULONG port, ULONG flags,
                            XHCI_TBT_BRNUM_GO go, PVOID goContext,
                            PXHCI_TBT_BRNUM r);
 
+/*
+ * Design record 34 section 3.3.7 item 4 (task 48.31): the same numbering
+ * with the range and window bridge (`port`, a chain port) apart from the
+ * interrupt anchor (`anchor`, its member, whose Interrupt Pin and Line the
+ * line stage reads), a function's pin rotated by `rot` (the chain port's
+ * XHCI_TBT_CHAIN_PORT.Rot) before it is compared with the anchor's.
+ * XhciTbtNumberBridges is this with `anchor` = `port` and `rot` 0.
+ */
+ULONG XhciTbtNumberBridgesAt(PXHCI_TBT_CFG io, ULONG port, ULONG anchor,
+                             ULONG rot, ULONG flags, XHCI_TBT_BRNUM_GO go,
+                             PVOID goContext, PXHCI_TBT_BRNUM r);
+
 #endif /* TBT_BRNUM_H */

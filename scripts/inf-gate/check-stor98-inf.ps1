@@ -137,10 +137,11 @@ function Get-InfFault {
     } elseif ($cat.Count -ne 0) {
         return "it names a catalog, and the x86 package carries none (design record 19)"
     }
-    # The models (record 31 sections 4.7 and 4.8): one [Manufacturer] line,
-    # exactly these decorations, and each section exactly one model line -
-    # the tunnel id as the hardware id before NT 6.3, the class as the
-    # compatible id (hardware id empty) from it; no class match elsewhere.
+    # The models (record 31 sections 4.7, 4.8 and 4.10): one [Manufacturer]
+    # line, exactly these decorations, and each section exactly one model
+    # line - the tunnel id as the hardware id up to NT 6.3 (8.1, the kept
+    # child of section 4.10), the class as the compatible id (hardware id
+    # empty) on 10 (NT 10.0); no class match elsewhere.
     # Windows merges sections of one name, so a second one would escape the
     # checks below: no section name may appear twice.
     $seen = @{}
@@ -154,13 +155,13 @@ function Get-InfFault {
     $mlines = @([regex]::Matches($mfgSec.Groups[1].Value, '(?m)^[ \t]*([^;\s\r\n][^\r\n]*?)[ \t]*(;[^\r\n]*)?\r?$') | ForEach-Object { $_.Groups[1].Value })
     if ($mlines.Count -ne 1 -or $mlines[0] -notmatch '^%Mfg%[ \t]*=[ \t]*(.+)$') { return "its [Manufacturer] section does not hold exactly one %Mfg% line" }
     $parts = @($Matches[1].Split(',') | ForEach-Object { $_.Trim() })
-    $want = if ($x64) { 'Stor98_Models,NTamd64,NTamd64.6.3' } else { 'Stor98_Models,NTx86.6.3' }
-    if (($parts -join ',') -cne $want) { return "its [Manufacturer] line is '$($parts -join ',')', not '$want' (record 31 section 4.7)" }
-    $sec63 = if ($x64) { 'Stor98_Models.NTamd64.6.3' } else { 'Stor98_Models.NTx86.6.3' }
+    $want = if ($x64) { 'Stor98_Models,NTamd64,NTamd64.6.3,NTamd64.10.0' } else { 'Stor98_Models,NTx86.6.3,NTx86.10.0' }
+    if (($parts -join ',') -cne $want) { return "its [Manufacturer] line is '$($parts -join ',')', not '$want' (record 31 sections 4.7 and 4.10)" }
+    $sec10 = if ($x64) { 'Stor98_Models.NTamd64.10.0' } else { 'Stor98_Models.NTx86.10.0' }
     foreach ($h in [regex]::Matches($t, '(?ims)^[ \t]*\[([^\]\r\n]+)\][ \t]*\r?$(.*?)(?=^[ \t]*\[|\z)')) {
-        if ($h.Groups[1].Value.Trim() -ne $sec63 -and [regex]::IsMatch($h.Groups[2].Value, '(?im)^[ \t]*%Stor98\.DeviceDesc%[^\r\n;]*PCI\\CC_')) { return "a model line outside [$sec63] matches a PCI class id, which would offer Stor98 for an internal drive" }
+        if ($h.Groups[1].Value.Trim() -ne $sec10 -and [regex]::IsMatch($h.Groups[2].Value, '(?im)^[ \t]*%Stor98\.DeviceDesc%[^\r\n;]*PCI\\CC_')) { return "a model line outside [$sec10] matches a PCI class id, which would offer Stor98 for an internal drive" }
     }
-    $sections = if ($x64) { @(@('Stor98_Models.NTamd64', 0), @('Stor98_Models.NTamd64.6.3', 3)) } else { @(@('Stor98_Models', 0), @('Stor98_Models.NTx86.6.3', 3)) }
+    $sections = if ($x64) { @(@('Stor98_Models.NTamd64', 0), @('Stor98_Models.NTamd64.6.3', 0), @('Stor98_Models.NTamd64.10.0', 3)) } else { @(@('Stor98_Models', 0), @('Stor98_Models.NTx86.6.3', 0), @('Stor98_Models.NTx86.10.0', 3)) }
     foreach ($s in $sections) {
         $sm = [regex]::Match($t, '(?ims)^[ \t]*\[' + [regex]::Escape($s[0]) + '\][ \t]*\r?$(.*?)(?=^[ \t]*\[|\z)')
         if (-not $sm.Success) { return "it has no [$($s[0])] section" }
@@ -215,7 +216,8 @@ $settings9x = @(
     'HKLM,"System\CurrentControlSet\Services\stor98",StorIntWatchdog,0x00010003,1',
     'HKLM,"System\CurrentControlSet\Services\stor98",StorGoneMs,0x00010003,5000',
     'HKLM,"System\CurrentControlSet\Services\stor98",StorWriteIdleMs,0x00010003,1000',
-    'HKLM,"System\CurrentControlSet\Services\stor98",StorHold9xMs,0x00010003,4000'
+    'HKLM,"System\CurrentControlSet\Services\stor98",StorHold9xMs,0x00010003,4000',
+    'HKLM,"System\CurrentControlSet\Services\stor98",StorTakeFirmware,0x00010003,0'
 )
 $settingsNt = 'HKR,"Parameters\Device","DriverParameter",0x00000002,"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storintwatchdog=1;storgonems=5000;storwriteidlems=1000"'
 
@@ -235,7 +237,7 @@ function Get-SettingsFault {
         $add = @($inst | Where-Object { $_ -match '^(?i)AddReg=' })
         if ($null -eq $inst -or $add.Count -ne 1 -or @(($add[0] -replace '^(?i)AddReg=', '').Split(',') | ForEach-Object { $_.Trim() }) -notcontains 'Stor98_Settings_9x') { return "its [Stor98_Inst] does not write [Stor98_Settings_9x] (the 98 SE and ME settings, roadmap-usb4 45.50)" }
         $got = Get-SectionLines $Text 'Stor98_Settings_9x'
-        if ($null -eq $got -or (@($got) -join "`n") -cne ($settings9x -join "`n")) { return "its [Stor98_Settings_9x] is not the nine settings at their 98 SE and ME defaults, each written only where missing (roadmap-usb4 45.50)" }
+        if ($null -eq $got -or (@($got) -join "`n") -cne ($settings9x -join "`n")) { return "its [Stor98_Settings_9x] is not the eleven settings at their 98 SE and ME defaults, each written only where missing (roadmap-usb4 45.50)" }
     }
     $dp = @([regex]::Matches($Text, '(?im)DriverParameter'))
     if ($Nt) {
@@ -317,16 +319,19 @@ try {
                 @{ T = $base.Replace("DriverVer=$want", "DriverVer=$want`r`nDriverVer=$want"); Ok = $false; Why = "two DriverVer lines" },
                 @{ T = $base.Replace('"$Windows NT$"', '"$CHICAGO$"'); Ok = $false; Why = "the 9x Signature in the x86 INF" },
                 @{ T = $base.Replace("DriverVer=$want", "DriverVer=$want`r`nCatalogFile=stor98.cat"); Ok = $false; Why = "a catalog in the x86 INF" },
-                @{ T = $base.Replace("%Mfg%=Stor98_Models,NTx86.6.3", "%Mfg%=Stor98_Models"); Ok = $false; Why = "no NT 6.3 models in the x86 INF" },
-                @{ T = $base.Replace("%Mfg%=Stor98_Models,NTx86.6.3", "%Mfg%=Stor98_Models,NTx86.6.3,NTx86.10.0"); Ok = $false; Why = "a later decoration in the x86 INF" },
-                @{ T = $base.Replace("%Mfg%=Stor98_Models,NTx86.6.3", "%Mfg%=Stor98_Models,NTx86,NTx86.6.3"); Ok = $false; Why = "an NTx86 decoration in the x86 INF" },
-                @{ T = $base.Replace("%Mfg%=Stor98_Models,NTx86.6.3", "%Mfg%=Stor98_Models,NTx86.6.3`r`n%Mfg%=Other_Models"); Ok = $false; Why = "a second manufacturer line in the x86 INF" },
+                @{ T = $base.Replace("%Mfg%=Stor98_Models,NTx86.6.3,NTx86.10.0", "%Mfg%=Stor98_Models"); Ok = $false; Why = "no NT 6.3 and 10.0 models in the x86 INF" },
+                @{ T = $base.Replace("%Mfg%=Stor98_Models,NTx86.6.3,NTx86.10.0", "%Mfg%=Stor98_Models,NTx86.6.3"); Ok = $false; Why = "no 10.0 models in the x86 INF (the class model back on 10 alone, record 31 section 4.10)" },
+                @{ T = $base.Replace("%Mfg%=Stor98_Models,NTx86.6.3,NTx86.10.0", "%Mfg%=Stor98_Models,NTx86.6.3,NTx86.10.0,NTx86.10.0.22000"); Ok = $false; Why = "a later decoration in the x86 INF" },
+                @{ T = $base.Replace("%Mfg%=Stor98_Models,NTx86.6.3,NTx86.10.0", "%Mfg%=Stor98_Models,NTx86,NTx86.6.3,NTx86.10.0"); Ok = $false; Why = "an NTx86 decoration in the x86 INF" },
+                @{ T = $base.Replace("%Mfg%=Stor98_Models,NTx86.6.3,NTx86.10.0", "%Mfg%=Stor98_Models,NTx86.6.3,NTx86.10.0`r`n%Mfg%=Other_Models"); Ok = $false; Why = "a second manufacturer line in the x86 INF" },
+                @{ T = $base.Replace("[Stor98_Models.NTx86.6.3]`r`n%Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL&CC_010802", "[Stor98_Models.NTx86.6.3]`r`n%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_010802"); Ok = $false; Why = "the class model back on 8.1 in the x86 INF" },
+                @{ T = $base.Replace("[Stor98_Models.NTx86.6.3]`r`n%Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL&CC_010802", "[Stor98_Models.NTx86.6.3]`r`n%Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL&CC_010802,PCI\CC_010802"); Ok = $false; Why = "the class as a compatible id on 8.1 in the x86 INF" },
                 @{ T = $base.Replace("[Stor98_Models]`r`n%Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL&CC_010802", "[Stor98_Models]`r`n%Stor98.DeviceDesc%=Stor98_Inst,PCI\CC_010802"); Ok = $false; Why = "the class match back for 2000 to 8 in the x86 INF" },
                 @{ T = $base.Replace("[Stor98_Models]`r`n%Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL&CC_010802", "[Stor98_Models]`r`n%Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL&CC_010802,PCI\CC_010802"); Ok = $false; Why = "the class as a compatible id for 2000 to 8 in the x86 INF" },
                 @{ T = $base.Replace("[Stor98_Models]`r`n%Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL&CC_010802", "[Stor98_Models]`r`n%Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL"); Ok = $false; Why = "another id in the x86 INF" },
-                @{ T = $base.Replace("%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_010802", "%Stor98.DeviceDesc%=Stor98_Inst,PCI\CC_010802"); Ok = $false; Why = "the class as the hardware id on 8.1 and 10 in the x86 INF" },
-                @{ T = $base.Replace("%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_010802", "%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_0108"); Ok = $false; Why = "the whole subclass on 8.1 and 10 in the x86 INF" },
-                @{ T = $base.Replace("%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_010802", "%Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL&CC_010802"); Ok = $false; Why = "the tunnel id on 8.1 and 10 in the x86 INF" },
+                @{ T = $base.Replace("%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_010802", "%Stor98.DeviceDesc%=Stor98_Inst,PCI\CC_010802"); Ok = $false; Why = "the class as the hardware id on 10 in the x86 INF" },
+                @{ T = $base.Replace("%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_010802", "%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_0108"); Ok = $false; Why = "the whole subclass on 10 in the x86 INF" },
+                @{ T = $base.Replace("%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_010802", "%Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL&CC_010802"); Ok = $false; Why = "the tunnel id on 10 in the x86 INF" },
                 @{ T = $base.Replace("[Stor98_Inst.NTx86.HW]", "[Stor98_Inst.NTx86.HWX]"); Ok = $false; Why = "no .HW section in the x86 INF" },
                 @{ T = $base.Replace("MSISupported,%REG_DWORD%,0", "MSISupported,%REG_DWORD%,1"); Ok = $false; Why = "MSISupported 1 in the x86 INF" },
                 @{ T = $base.Replace("Interrupt Management\MessageSignaled", "InterruptManagement\MessageSignaled"); Ok = $false; Why = "the subkey without its space in the x86 INF" },
@@ -357,15 +362,17 @@ try {
             @{ T = $b64.Replace("Interrupt Management\MessageSignaled", "InterruptManagement\MessageSignaled"); Ok = $false; Why = "the subkey without its space in the x64 INF" },
             @{ T = $b64.Replace("[Stor98_Models.NTamd64]", "[Stor98_Models]`r`n`r`n[Stor98_Models.NTamd64]"); Ok = $false; Why = "an empty undecorated models section in the x64 INF" },
             @{ T = $b64.Replace("CatalogFile=stor98.cat`r`n", ""); Ok = $false; Why = "no catalog in the x64 INF" },
-            @{ T = $b64.Replace("%Mfg%=Stor98_Models,NTamd64,NTamd64.6.3", "%Mfg%=Stor98_Models,NTamd64"); Ok = $false; Why = "no NT 6.3 models in the x64 INF" },
-            @{ T = $b64.Replace("%Mfg%=Stor98_Models,NTamd64,NTamd64.6.3", "%Mfg%=Stor98_Models,NTamd64,NTamd64.6.3,NTamd64.10.0"); Ok = $false; Why = "a later decoration in the x64 INF" },
+            @{ T = $b64.Replace("%Mfg%=Stor98_Models,NTamd64,NTamd64.6.3,NTamd64.10.0", "%Mfg%=Stor98_Models,NTamd64"); Ok = $false; Why = "no NT 6.3 and 10.0 models in the x64 INF" },
+            @{ T = $b64.Replace("%Mfg%=Stor98_Models,NTamd64,NTamd64.6.3,NTamd64.10.0", "%Mfg%=Stor98_Models,NTamd64,NTamd64.6.3"); Ok = $false; Why = "no 10.0 models in the x64 INF" },
+            @{ T = $b64.Replace("%Mfg%=Stor98_Models,NTamd64,NTamd64.6.3,NTamd64.10.0", "%Mfg%=Stor98_Models,NTamd64,NTamd64.6.3,NTamd64.10.0,NTamd64.10.0.22000"); Ok = $false; Why = "a later decoration in the x64 INF" },
+            @{ T = $b64.Replace("[Stor98_Models.NTamd64.6.3]`r`n%Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL&CC_010802", "[Stor98_Models.NTamd64.6.3]`r`n%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_010802"); Ok = $false; Why = "the class model back on 8.1 in the x64 INF" },
             @{ T = $b64 + "`r`n[Stor98_Models.NTamd64.6.3]`r`n%Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL&CC_010802`r`n"; Ok = $false; Why = "a second NT 6.3 models section in the x64 INF" },
             @{ T = $b64 + "`r`n[Manufacturer]`r`n%Mfg%=Stor98_Models,NTamd64.10.0`r`n"; Ok = $false; Why = "a second [Manufacturer] section in the x64 INF" },
             @{ T = $b64 + "`r`n[Stor98_Models.NTamd64.6.3] ; more models`r`n%Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL&CC_010802`r`n"; Ok = $false; Why = "a second NT 6.3 models section with a comment on its header" },
             @{ T = $b64 + "`r`n[Manufacturer] ; more`r`n%Mfg%=Stor98_Models,NTamd64.10.0`r`n"; Ok = $false; Why = "a second [Manufacturer] with a comment on its header" },
-            @{ T = $b64.Replace("%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_010802", "%Stor98.DeviceDesc%=Stor98_Inst,PCI\CC_010802"); Ok = $false; Why = "the class as the hardware id on 8.1 and 10 in the x64 INF" },
+            @{ T = $b64.Replace("%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_010802", "%Stor98.DeviceDesc%=Stor98_Inst,PCI\CC_010802"); Ok = $false; Why = "the class as the hardware id on 10 in the x64 INF" },
             @{ T = $b64.Replace("[Stor98_Models.NTamd64]`r`n%Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL&CC_010802", "[Stor98_Models.NTamd64]`r`n%Stor98.DeviceDesc%=Stor98_Inst,PCI\CC_010802"); Ok = $false; Why = "the class match back in the x64 INF" },
-            @{ T = $b64.Replace("%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_010802", "%Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL&CC_010802"); Ok = $false; Why = "the tunnel id on 8.1 and 10 in the x64 INF" },
+            @{ T = $b64.Replace("%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_010802", "%Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL&CC_010802"); Ok = $false; Why = "the tunnel id on 10 in the x64 INF" },
             @{ T = $b64.Replace("CatalogFile=stor98.cat", "CatalogFile=other.cat"); Ok = $false; Why = "another catalog name in the x64 INF" },
             @{ T = $b64.Replace("CatalogFile=stor98.cat", "CatalogFile.NTamd64=stor98.cat"); Ok = $false; Why = "a decorated catalog line in the x64 INF" },
             @{ T = $b64.Replace("CatalogFile=stor98.cat", "CatalogFile=stor98.cat`r`nCatalogFile=stor98.cat"); Ok = $false; Why = "two catalog lines in the x64 INF" },

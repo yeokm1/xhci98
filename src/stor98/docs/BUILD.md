@@ -113,9 +113,9 @@ Three INFs, one per family folder, each shipped as `stor98.inf`:
 
 | Source | Release | Signature | Sections |
 |---|---|---|---|
-| `inf\stor98-x86.inf` | `nt-x86\stor98\stor98.inf`, next to `stor98.sys` | `$Windows NT$` | undecorated models (the tunnel id; Windows 2000 reads no decoration) and `NTx86.6.3`; Windows 2000 to 10: `[Stor98_Inst.NTx86]` copies `stor98.sys` (`[Stor98_Files_NT]`) to DIRID 12 (`system32\drivers`), `[Stor98_Inst.NTx86.Services]` adds the service. NT-only since xhci98 3.4.0.0: up to 3.3.0.0 it also carried a 98 SE / ME install section and `stor98.mpd` |
+| `inf\stor98-x86.inf` | `nt-x86\stor98\stor98.inf`, next to `stor98.sys` | `$Windows NT$` | undecorated models (the tunnel id; Windows 2000 reads no decoration), `NTx86.6.3` (the tunnel id, xhci98 record 31 section 4.10) and `NTx86.10.0` (the class as the compatible id); Windows 2000 to 10: `[Stor98_Inst.NTx86]` copies `stor98.sys` (`[Stor98_Files_NT]`) to DIRID 12 (`system32\drivers`), `[Stor98_Inst.NTx86.Services]` adds the service. NT-only since xhci98 3.4.0.0: up to 3.3.0.0 it also carried a 98 SE / ME install section and `stor98.mpd` |
 | `inf\stor98-9x.inf` | `98-me\stor98\stor98.inf` (`stor98w9.inf` up to xhci98 3.3.0.0), next to `stor98.mpd` | `$CHICAGO$` | Windows 98 SE / ME: `[Stor98_Inst]` copies `stor98.mpd` to DIRID 12 (`SYSTEM\IOSUBSYS`) and sets `DevLoader=*IOS`, `PortDriver=stor98.mpd` |
-| `inf\stor98-x64.inf` | `nt-x64\stor98\stor98.inf`, next to the amd64 `stor98.sys` | `$Windows NT$` | `NTamd64` models only; `[Stor98_Inst.NTamd64]` and `.Services` |
+| `inf\stor98-x64.inf` | `nt-x64\stor98\stor98.inf`, next to the amd64 `stor98.sys` | `$Windows NT$` | `NTamd64` models only (`NTamd64` and `NTamd64.6.3` the tunnel id, `NTamd64.10.0` the class as the compatible id); `[Stor98_Inst.NTamd64]` and `.Services` |
 
 Each INF names only its own image in `[SourceDisksFiles]`. 64-bit Windows
 ignores undecorated models, so it does not offer the x86 INF, and 32-bit Windows finds no

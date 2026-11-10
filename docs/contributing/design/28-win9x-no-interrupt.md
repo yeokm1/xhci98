@@ -1,5 +1,14 @@
 # Design Record 28 - A Windows 98 SE or ME Function With No Interrupt
 
+**Note, 2026-11-09 (tasks 48.31's follow-up and 48.36): section 14,
+functions met while Windows installs, and an xHCI controller on
+`xhci98.sys`: the window held while a bridge below the member, or a
+function's own driver, is being installed (section 14.3); an xHCI
+controller bound to `xhci98.sys` started by the memory-only form (the
+owner's decision of 2026-11-09, section 14.2); a devnode refused by its
+header kept off the entries (section 14.5); the time a blocked call held
+the worker credited to the window and the attempts (section 14.6).**
+
 **Note, 2026-10-30 (task 45.18): section 13, a function directly on the
 tunnel port's bus, which the line stage did not reach.**
 
@@ -30,7 +39,14 @@ So for that case nothing is added: the attempt is the reprocess-only
 one (section 12.2). Sections 3 to 5 stand for a configuration that
 carries an IRQ descriptor, which no reading has met.
 
-Status: draft 12, 2026-10-25 (task 44.30: section 12, the memory-only
+Status: draft 13, 2026-11-09 (tasks 48.31's follow-up and 48.36:
+section 14, functions met while Windows installs - one hold of the
+window for a bridge or a function's driver being installed, bounded at
+30 minutes -, an xHCI controller on `xhci98.sys` admitted to the
+memory-only form, the refused list and the credit of a blocked call;
+section 1.3, section 4's budget paragraph and section 6's last
+paragraph brought in line; section 14.8 has the section's own history);
+draft 12, 2026-10-25 (task 44.30: section 12, the memory-only
 form; the note above, the result table's configuration rows, N11, the
 legs of section 8.2 item 1 and section 10 brought in line); draft 11,
 2026-10-18, reviewed and revised (an unstarted device
@@ -246,7 +262,10 @@ function until section 8.2's legs read them.
 - Any function that is not Stor98's: a driver that does not poll would
   wait for an interrupt that never comes. Section 4's rule limits this to
   a function bound to a Stor98 that polls, established as section 4
-  says, and fails closed where it cannot be established.
+  says, and fails closed where it cannot be established. Since task
+  48.36 (the owner, 2026-11-09) one more class is in scope: an xHCI
+  controller bound to `xhci98.sys`, which polls with no interrupt
+  resource, by the memory-only form alone (section 14).
 - The NT targets: `pci.sys` owns a function's resources there, and a
   function with no routable interrupt is the bus driver's business (the
   installed Stor98 polls where NT hands it no interrupt, its README).
@@ -485,7 +504,10 @@ a priority read each), the writes and the reprocess come to about a
 hundred calls for the largest admitted source, some five seconds at
 the 50 ms cadence, inside the budget; a call that blocks (a wizard
 open) spends the budget as it spends every 9x transaction's, and the
-transaction ends FAILED while its call stays the worker's. Devices of
+transaction ends FAILED while its call stays the worker's (amended by
+section 14.6: the time the worker was held is credited, up to
+`CM_NOIRQ_HOLD_MS`, 30 minutes).
+Devices of
 one member advance one at a time (one worker, one call), those of other
 members in parallel. The window is not conditioned on
 `XhciCmSafeEject`, which governs the removable mark alone, and
@@ -1131,8 +1153,9 @@ enumeration as today, whatever the interrupt outcome. What Stor98's side
 owes is tracked in its own plan (its `docs/PLAN.md`, "Polling mode"); the
 joint reading is 42-V.6's.
 
-A function of another class or driver, which the pass never touches,
-stays as `PCI.VXD` left it, and the viewer (XHCITR, record 25) shows its
+A function of another class or driver, which the pass never touches
+(an xHCI controller on `xhci98.sys` excepted since task 48.36, section
+14), stays as `PCI.VXD` left it, and the viewer (XHCITR, record 25) shows its
 problem code as it shows any other.
 
 ## 7. Registry value, diagnostic, log and counters
@@ -1167,11 +1190,14 @@ problem code as it shows any other.
   `CONFIGRET` in the low word), `cm.reenum.9x.noirq.refused` with the
   rule, `cm.reenum.9x.noirq.after` with the status read at the next
   pass, and the devnode-handle records through `CmLogNoteAddress` as the
-  other handle records of the 9x route go (level 4 alone).
+  other handle records of the 9x route go (level 4 alone);
+  `cm.reenum.9x.noirq.hold` and `cm.reenum.9x.noirq.credit` since task
+  48.36 (section 14.4).
 - **Counters** (record 21 section 8's `cm.*` set, the 9x route's block):
   candidates, attempts, started, still unstarted, refused by each rule of
   section 4, left-over refusals, disabled leftovers, journal entries
-  marked gone, timeouts, late results dropped.
+  marked gone, timeouts, late results dropped; windows held and calls
+  credited since task 48.36 (section 14.4).
 
 ## 8. Verification
 
@@ -1760,6 +1786,561 @@ PORT_NONE handed to rule 5 as a numbered chain's; stale or no stage, no
 record. The legs are task 45.18's
 98 SE and ME runs on q35: the function started on IRQ 10, Stor98
 running, before their gate-G3 readings.
+
+## 14. Functions met while Windows installs, and an xHCI controller on `xhci98.sys` (tasks 48.31's follow-up and 48.36)
+
+Two readings of 2026-11-09 met the same gap from two sides, and this
+section answers both with one design: a function that appears, or is
+bound, only after a New Hardware wizard has run (a chained unit's first
+plug, a dock's first plug), and a dock's second and third USB
+controllers, which no rule of this record admitted. Section 14.8 says
+how the section came to be.
+
+### 14.1 What was read
+
+**A chained unit's first plug** (task 48.31's follow-up, `runs/run-48.md`,
+"48.31 follow-up"). On the q35 98 SE base, a fresh overlay with the
+release package and Stor98 installed and the emulator's dock
+(`usb4-device`, `downstream-ports=1`) at power-on, the first chained
+ASMedia ASM2464 (`device-model=asm2464`) plugged behind the dock's chain
+port 02:01.0:
+
+- the worker numbered the chain port's range (record 34 section 3.3.7
+  item 4, `cm.chain.9x.number=00020801`), re-enumerated it
+  (`cm.chain.9x.reenumerate=00020800`) and opened the member's no-IRQ
+  window;
+- `PCI.VXD` made devnodes for the ASM2464's two bridges (04:00.0, 05:00.0)
+  with no driver (problem 28), and the window's rule 3 excluded both
+  ("class", `cm.reenum.9x.noirq.refused=04000203` and `05000203`); no
+  devnode existed yet for the NVMe at 06:00.0, which a bridge's
+  children get only once the bridge has its driver;
+- Windows' Add New Hardware wizard for "PCI standard PCI-to-PCI bridge"
+  ran (on 98 SE it ended with "To finish setting up your new hardware,
+  you must restart your computer", answered No), then a wizard bound
+  Stor98 to the NVMe's devnode, minutes after the re-enumeration;
+- by then the window (10 s) had closed: the NVMe sat at problem 29, its
+  memory base address register unassigned (`info pci`: no BAR), Stor98
+  bound and not started, with no `cm.reenum.9x.noirq` line for it
+  (a CFGMGR32 walk: `st=08000620 pr=29`);
+- the chained unit unplugged and plugged again (the bridges' driver
+  installed now): the window admitted the NVMe within its 10 s, the
+  memory-only form of section 12 started it (`cm.reenum.9x.noirq.after=
+  06000500`), Stor98 polling ("StorInterrupt 6.0.0 = pin 1 line 0 ...
+  polling (interrupt line not set)").
+
+ME read the same at the first plug (no restart asked there), and one
+more thing: during the window the new bridges read **no** installation
+problem - only once the wizard was up did they read `DN_HAS_PROBLEM`
+with problem 1 (`st=18086ECE pr=1`) - and their hardware keys held
+`HardwareID`, `CompatibleIDs`, `DeviceDesc` and `HWRevision` and no
+`Driver`, against the dock's installed bridge's `"Driver"=
+"System\\0057"`. So section 4's "a devnode whose problem appears only
+after the wizard has bound its driver is therefore still seen" holds
+only for a devnode that exists while the window is open; a function
+below a bridge Windows has not installed yet appears after it.
+
+**A dock's USB controllers** (task 48.36). The owner's capture of
+2026-11-09 (a P14s Gen 1 under 98 SE with `3.4.2.0`, a CalDigit TS3
+Plus on its tunnel port 04:01.0, line 10, pin A): the dock's switch
+(06:00.0 upstream, 07:00.0 to 07:04.0 downstream) carries a Fresco Logic
+FL1100 on port 0 (08:00.0), a second FL1100 on port 1 (09:00.0), an
+ASMedia ASM1142 on port 2 (0A:00.0) and an Intel I210 on port 3
+(0B:00.0), each function on pin A. Seen from the tunnel port, port d's
+pin A arrives as pin (d mod 4) + 1 (the swizzle of record 21 section
+6.1.1 step 5 through 07:0d.0 and 06:00.0): port 0's on the port's own
+pin, ports 1 to 3's on pins B, C and D. Step 5 gave line 10 to 08:00.0
+alone, as its rule says; 09:00.0 kept line `FFh`, 0A:00.0 and 0B:00.0
+line 0, and `PCI.VXD` disabled the three at their first enumeration
+(section 12.1 item 1: problem 29, decode off). This record's pass met
+each and refused it on its class (`cm.reenum.9x.noirq.refused`
+`09000203`, `0A000203`, `0B000203`: EXCLUDED, why 3, "header"). So the
+dock's card reader (on 09:00.0's root hub) and its own USB ports (on
+0A:00.0's) did not work on 98 SE, where on Windows 11 every function
+started. The emulator's model of the dock (`usb4-emu`'s `usb4-device
+dock-model=ts3plus`, `runs/run-48.md`, "48.36") reproduces the same
+pins, lines and problems on 98 SE by construction, and on it two more
+things were read: the member's eight entries ran out in device order
+(section 14.5), and every plug opened the New Hardware wizard for the
+I210, which has no 98 SE driver, during which the configuration
+manager's calls blocked (section 14.6).
+
+### 14.2 An xHCI controller on `xhci98.sys` (the owner's decision of 2026-11-09)
+
+Section 1.3's "any function that is not Stor98's" is narrowed by one
+class: an xHCI controller (class code `0C0330h`) below a tunnel port,
+bound to `xhci98.sys`, is started by section 12's memory-only form as an
+NVMe drive on Stor98 is. `xhci98.sys` polls when it is given no
+interrupt resource (design record 15 section 4: `XhciInterruptMode` 0,
+the default, with no interrupt resource is "poll, automatic: no
+interrupt resource"), so the function needs nothing that was withheld.
+No line is written or invented, so section 1.3's second rule stands; the
+I210, and every other class, stays EXCLUDED "header" at problem 29.
+
+The rules of section 4, with what changes for the new class:
+
+1. Rule 1 (`XhciCmNoIrqStart` 1): unchanged; the switch covers both
+   classes.
+2. Rule 2 (problem 29, 12, 16 or 27, unstarted): unchanged.
+3. Rule 3: the class code `010802h` **or `0C0330h`** (the class
+   `xhci98.inf` binds as `PCI\CC_0C0330`), a type 0 header, a pin other
+   than 0, a line of 0 or `FFh`, no I/O base address register. The entry
+   records which class it read (its **kind**: NVMe or xHCI), and rule 4
+   and the form follow the kind.
+4. Rule 4, for the xHCI kind: two values of the devnode's driver key,
+   read as for Stor98: `DevLoader` reading `*NTKERN` and `NTMPDriver`
+   reading `xhci98.sys`, the pair `xhci98.inf`'s 98 SE and ME sections
+   write (`HKR,,DevLoader,,*NTKERN`, `HKR,,NTMPDriver,,xhci98.sys`).
+   Both absent, or one alone, is PENDING (the driver not installed yet,
+   section 14.3); another pair (a `DevLoader` other than `*NTKERN`, an
+   `NTMPDriver` other than `xhci98.sys`) is EXCLUDED "not its driver"
+   (the reason that read "not Stor98's", the same code). **No version is
+   read** for this kind, and the pair names the driver, not its release:
+   every `xhci98.sys` from `2.3.0.0` polls with no interrupt resource
+   (record 15, roadmap-hcd Phase 36), and `xhcicm.sys` has shipped only
+   from `3.0.0.0`, in the same package as `xhci98.sys`, installed and
+   updated with it by the same run, so the `xhci98.sys` beside this
+   `xhcicm.sys` is expected to poll. That is accepted knowingly as an
+   exception, as N10 accepts Stor98's: an older `xhci98.sys` left by a
+   hand copy or a run that failed between the two files. What such a
+   file does is bounded by record 15 section 4: before Phase 36 an
+   interrupt descriptor was required and its start was refused without
+   one (the refusal mode 1 keeps), so the function then shows that start
+   failure instead of problem 29 - no interrupt is invented and no
+   driver waits for one. The NVMe kind keeps its pair and its installer
+   record unchanged. A Stor98 pair on an xHCI function, or `xhci98.sys`'s
+   on an NVMe one, is "not its driver".
+5. Rule 5: unchanged (UNROUTABLE or PORT_NO_LINE, by the numbering's
+   record or a fresh reading).
+
+**The form.** The xHCI kind is admitted to the memory-only form alone
+(section 12.2): problem 29 as admitted, the source configuration memory
+descriptors only, one reprocess a devnode a generation by the journal's
+reprocess mark, the changeable conditions (rules 2 and 4, with the
+kind's pair) read again before the reprocess and before the `READY`
+fallback. A source configuration with an IRQ descriptor, or a problem
+other than 29, is EXCLUDED "configuration" for this kind: section 4's
+added configuration has been read on no machine for any class, and
+nothing is created for a function of a class this record did not first
+read. So the journal's committed alternative (rule 1 of "Across
+generations and starts") never arises for the kind.
+
+**What `xhci98.sys` then does.** Its start finds a memory window and no
+interrupt resource; under mode 0 it polls (record 15 section 4) and logs
+the reason; record 15 section 4.4's held-line scan finds no line and
+does nothing. The function's Interrupt Line stays as it was ([static]
+`CONFIG_START` writes it only from an allocated IRQ, section 12.1 item
+4). Under `XhciInterruptMode` 1 or 3, which only a user sets,
+`xhci98.sys` refuses the start (record 15's table, "none: the start
+fails"), and the function shows that failure instead of problem 29: the
+user's setting decides, as it does for a controller with an interrupt.
+Mode 2 polls.
+
+**What it overrides, and why that is safe.** As section 12.2 says for
+Stor98: `PCI.VXD`'s disable records that no interrupt was found, and the
+start is made only for a function whose driver polls without one; the
+user's own disable (problem 22) is never undone. An xHCI function on a
+port whose pin arrives on the tunnel port's own keeps the line record 21
+section 6.1.1 step 5 writes and is left untouched: EXCLUDED "header"
+when its line reads set (rule 3), as a routed NVMe function is, or
+EXCLUDED "interrupt" where its line still reads 0 or `FFh` and rule 5
+finds it routable (the stage's business, section 4).
+
+**Pin 0.** An xHCI function with no pin is counted with section 5.4's
+pin-0 functions (seen, and started where it starts by itself), as an
+NVMe one is; nothing is done to it.
+
+### 14.3 The window held while a driver is being installed
+
+The member's window (section 4, `CM_NOIRQ_WINDOW_MS`, 10 s) is **held**
+while a pass finds Windows installing a driver that can still bring a
+function this record would start. Two readings hold it, and only these:
+
+1. **A bridge being installed** (the walk's). Each pass's walk (section
+   4, "The walk"; `cmWkNiWalk`) reads, for each descendant it places
+   (its location resolved), until one holds: its class code (`PCI.VXD`'s
+   configuration read of offset 08h); for a PCI-to-PCI bridge (base
+   class 06h, subclass 04h) alone, its status (`Get_DevNode_Status`)
+   and, where that says no installation, its hardware key's `Driver`
+   value (`Read_Registry_Value`, `CM_REGISTRY_HARDWARE`). A bridge whose
+   status reads `DN_HAS_PROBLEM` with one of the installation problems
+   section 4 already names for PENDING (`CM_PROB_NOT_CONFIGURED` 1,
+   `CM_PROB_DEVLOADER_NOT_FOUND` 8, `CM_PROB_REINSTALL` 18,
+   `CM_PROB_FAILED_INSTALL` 28; `CmNiInstalling`), or whose hardware key
+   has no `Driver` value (`CR_NO_SUCH_VALUE`: Windows has installed no
+   driver for it yet, ME's reading in section 14.1;
+   `CmNiWalkInstalling`), holds, whatever its entry (a bridge is
+   EXCLUDED by its header and on the refused list of section 14.5; the
+   walk reads it all the same). So does a bridge that is installed but
+   has a function behind it and no child devnode yet: its
+   `Get_Child` answers `CR_NO_SUCH_DEVNODE` while a function the window
+   waits for answers on its secondary bus (devices 0 to 31, function 0,
+   read through `PCI.VXD`) - Windows has not yet enumerated what the
+   installation brought. Read on 98 SE (section 14.1, the joined
+   build's first leg): there a bridge's wizard ends with its restart
+   question, and its children are enumerated only once that is
+   answered No; a user who
+   takes longer than 10 s over it left a gap in which no bridge read as
+   being installed, and the window closed before the dock's controllers
+   appeared. And so does a function waited for that answers on the
+   member's or a walked bridge's secondary bus (devices 0 to 31,
+   function 0) at a device where the walk placed no devnode
+   (`CmNiUnenumerated`): read on 98 SE with
+   the dock model (section 14.7, "as read", 2026-11-10), 98 SE creates a
+   new bridge's children one at a time - after the dock's upstream port
+   was installed only its first downstream port appeared, and the second
+   only once the wizard of the first's USB controller had finished - so
+   with that first child in place no bridge read as childless, and the
+   window closed during the controller's wizard.
+   The functions waited for (`CmNiAwaited`) are a bridge, which brings
+   more devnodes, and the two classes this record starts (section
+   14.2), or one whose class is not read; a function of another class
+   is not: read on 98 SE with the dock model, the I210's wizard,
+   cancelled, left no devnode below its port, which would otherwise
+   hold every first plug's window to the bound. That reading is made by
+   a complete walk alone, whose locations were all kept
+   (`CM_WK_NI_MET`, 64): a devnode the walk could not read or place
+   might be the one at that device. So that a started USB controller's
+   root hub (`USB\XHCI98_ROOT_HUB`, no PCI location) does not leave
+   every such walk incomplete, the walk goes below a bridge alone, or a
+   devnode whose class it could not read: only a bridge has PCI
+   devnodes below it. The walk's own bounds are kept (six levels,
+   `CM_WK_WALK_NODES`).
+2. **An entry waiting for its driver** (the entry's own). An entry
+   PENDING whose last reading was rule 2's with an installation problem
+   (the same four), or rule 4's with the kind's pair absent or one value
+   alone (its own wizard still running: section 14.1's NVMe, whose
+   devnode `PCI.VXD` created at problem 29 before Stor98's wizard wrote
+   its binding, or a dock's xHCI controller before `xhci98.inf`'s did).
+   The mark (`CM_NI_DEV.WaitDrv`) clears at the entry's next reading of
+   either rule that says otherwise, and at any state other than
+   PENDING; it is not cleared by a pass that has not yet read the entry
+   again.
+
+Why a bridge, and not any descendant (the first form of this section
+read every descendant): only a bridge's installation makes new devnodes
+appear below the member, and a function this record would start is
+held by its own entry (item 2). A function of another class that never
+gets a driver - the TS3 Plus's I210, whose wizard is cancelled at every
+plug on 98 SE - would otherwise hold every window of that dock to the
+bound. A read that fails (the class, the status, the location) holds
+nothing; a problem 29 alone, with the binding in place or another
+driver's, holds nothing; an entry PENDING for another reading (a read
+that failed, `Stor98`'s installer record not read, a fresh
+classification to repeat) holds nothing.
+
+**The window's clock.** The window has an **opening** (`CmNiOpenWindow`;
+moved forward only by the credit of section 14.6) and, once held, a
+**last hold**: the last pass that found item 1 or item 2. It closes
+`CM_NOIRQ_WINDOW_MS` after the later of the two, and never later than
+`CM_NOIRQ_HOLD_MS` (30 minutes) after its opening: one deadline, used by
+its close and by every admission check that reads the window (the
+gate's and the descriptors' "not in time", the memory-only form's). A
+pass at or past `CM_NOIRQ_HOLD_MS` from the opening holds nothing. So a
+binding that appears at 40 s leaves the entry 10 s, from the last pass
+that still saw it waiting, to pass its remaining rules and its
+descriptors, as at a window's opening; a function whose devnode appears
+once the wizard has bound its parent bridge's driver is walked,
+admitted and started as any other; an entry that never gets a driver,
+or a bridge left at problem 28 for good, holds the window to 30 minutes
+and no longer, and every entry still PENDING then is EXCLUDED "not read
+in time", as at any close. A pass that comes late (a call that blocked)
+holds by the entry's last reading before anything closes on it. The
+deadline is reset with the window: a new generation and a reopening
+within the same generation (a retry of the call) both start it afresh
+from the new opening, with no hold yet; the entries themselves follow
+section 4's generation rules unchanged (an entry ACTIVE or ATTEMPTED
+keeps its attempt and its own deadline). An entry admitted before the
+close keeps its own transaction budget (`CM_NOIRQ_TXN_MS`).
+
+Why 30 minutes (the first form of this section, and the joined build,
+had 10): read on 98 SE in the emulator with the dock model (section
+14.8), a dock's first plug asks about ten wizards in a row - six
+bridges, each with its restart question, three USB controllers and the
+network function - and they took 13 minutes at a deliberate pace; the
+dock's second USB controller, the ninth devnode installed, appeared
+after a 10-minute bound and stayed at problem 29. While held the window
+costs one walk a tick and holds nothing else back, so the bound is set
+for the slowest first plug a user is expected to answer, not for the
+cost.
+
+Nothing else changes: the rules, the result table, the transaction and
+its budget (a transaction already FAILED in the generation is not
+revived), the journal, the switch (`XhciCmNoIrqStart` 0 opens no
+window, so nothing walks and nothing is held) and the NT route. While
+held the worker keeps the cadence it has for a window in progress - the
+interim's `CM_WK_TICK_MS` (200 ms) between passes, not section 4's
+planned 50 ms - so a held window costs one walk a pass, some 9,000 walks
+at most; the walk's added reads are one configuration read a placed
+descendant and two calls a bridge, until one holds. Nothing else waits
+on a held window (this driver's re-enumerations queue only behind an
+entry ACTIVE or ATTEMPTED, section 4). Both kinds are held alike: an
+NVMe drive's first plug meets the same wizards as a dock's controllers.
+
+[inf] What it rests on: that the NVMe's devnode, once it appears, reads
+an installation problem or problem 29 inside the held window, and that
+the memory-only form starts it there as at a later plug (the reading of
+section 14.1's second plug). The legs read it.
+
+### 14.4 The diagnostic, the log and the counters
+
+`XhciCmNoIrqDiag` word 4 gains the kind in bits 31:24 (0 NVMe, 1 xHCI);
+XHCITR prints it. The refusal and attempt records are unchanged (the
+function's location says which device; its class is in the PCI section
+of the same report). Two lines are added, a pair:
+
+- `cm.reenum.9x.noirq.hold`, once a window, at its first hold: bits
+  31:24 say which reading held it - 1 a bridge the walk met, with its
+  depth below the member in 15:8 and its problem in 7:0 (`FFh` for no
+  `Driver` value, `FEh` for a function behind it with no child devnode
+  yet); 2 an entry waiting for its driver, with the
+  function's location (bus 15:8, device and function 7:0).
+- `cm.reenum.9x.noirq.credit`, at each call whose held time is credited
+  (section 14.6): the call's measured duration in milliseconds, held at
+  `FFFFFFFFh`.
+
+Two more pairs say why a window ended (added 2026-11-10, after the 98 SE
+first plug of section 14.7 left neither the close nor the walk's progress
+in the log):
+
+- `cm.reenum.9x.noirq.close`, at the close: why in 31:24 (1 at 10 s from
+  the opening with no hold, 2 at 10 s from the last hold, 3 at
+  `CM_NOIRQ_HOLD_MS`), the seconds from the opening in 23:12 and from the
+  last hold (the opening when none) in 11:0, each held at `FFFh`; then
+  `cm.reenum.9x.noirq.close.hold`, the last hold's source as in the
+  hold's line, 0 for none.
+- `cm.reenum.9x.noirq.walk`, at each walk whose end, count or hold
+  differs from the last logged in the window: its end in 31:24 (0
+  complete; 1 the member's devnode not found, 2 its path not read, 3 the
+  gate closed, 4 its route not read, 5 its `Get_Child` failed, 6 the
+  stack full, 7 a `Get_Sibling` failed, 8 cut short by the node bound,
+  the worker or the gate, 9 a `Get_Device_ID` failed, 10 a devnode not
+  placed, 11 a `Get_Child` failed, 12 the gate closed at the tick so no
+  walk), the devnodes met in 23:16 (held at `FFh`) and the hold's 15:0;
+  then a `cm.reenum.9x.noirq.walk.node` for each devnode met (the first
+  32): its location in 31:16 (`FFFFh` not placed, its depth in 7:0), a
+  bridge in 15, its `Get_Child` answer in 14:8 (`7Fh` not asked: a
+  function, or below the depth bound) and, for a bridge read before the walk's first hold,
+  its problem in 7:0 (`FFh` no `Driver` value).
+
+The counters are shared by the two kinds; two are added: `Held`
+(windows held) and `Credited` (calls credited).
+
+### 14.5 Room for a dock's functions
+
+The walk meets every PCI devnode below the member, bridges included,
+and a member keeps `CM_NOIRQ_DEVICES` (8) entries. The TS3 Plus brings
+ten (its upstream port, five downstream ports and four functions), and
+an entry refused by its header kept its slot for as long as the walk
+met it, so the room ran out in device order: on 98 SE with the dock
+model (`runs/run-48.md`, "48.36"), the second FL1100 was taken and
+started while the ASM1142 and the I210 were never met (`NoRoom`).
+So an entry refused by its header (rule 3: the class, the header type,
+a pin above 4, a line that reads set, an I/O register) and holding no
+journal leaves the entries: its devnode handle and its instance id's
+hash go into the member's **refused list** (`CM_NOIRQ_SKIPS`, 32), and
+a devnode the walk meets on that list (the same handle and hash) is
+passed over with no reading by the entries (the walk's own reading of
+section 14.3 item 1 still reads a bridge on the list). The entry is
+freed not at the refusal but at the next pass, or by the walk when it
+needs the room, so the refusal is logged and counted as before. An
+entry with a journal (a device an attempt was made for, whose line
+reads set since) keeps its entry and its journal; a function with
+Interrupt Pin 0 (section 5.4, "no pin", counted after its status read)
+keeps its entry too. A handle met with another hash is a new device:
+its old line is taken off the list and the device is judged afresh.
+Each line is marked by the walks that meet it, and a walk that ended
+complete (`CmNiWalkDone`) takes off every line it did not meet, as it
+forgets an entry it did not meet, so a devnode that left and came back
+with the same handle is judged afresh; an incomplete walk takes off
+nothing. The list is emptied at a new generation (`CmNiOpenWindow` with
+another generation), so every devnode below the member is judged once
+more after each of this driver's re-enumerations; a reopening within
+the same generation keeps it. A line goes into a free line first; when
+the list is full the lines are overwritten in turn (a cyclic cursor,
+close to the oldest first), so a devnode evicted from a full list is
+read and refused once more: a refusal by its header is counted and
+logged once a generation while its line stays on the list. Nothing is
+written for such a devnode, so nothing is lost with its entry.
+
+### 14.6 A call that blocked
+
+Read on 98 SE with the TS3 Plus model (section 14.1): while the I210's
+wizard is open the configuration manager's calls block. The worker's
+reprocess of the second FL1100 was held about 80 s, until the wizard was
+cancelled: the attempt then ended FAILED "timeout" although the
+controller had started, and the window had closed before the ASM1142
+was met. Section 4's rule ("a call that blocks spends the budget") is
+amended for this: **time the worker spent blocked does not count against
+the window or an attempt.** What is measured is the worker's own time
+away from the member, never the time a pass waits for its tick: an
+operation's, from the pass that handed it out (`CmNiNext`) to its result
+(`CmNiTake`), on the clock the machine is given; the walk's, which the
+worker times and hands over (`CmNiCredit`); and the worker's other work
+between two of the member's ticks (the marking, the tunnel ids, a chain
+operation, another member's calls, all on the same thread and as able
+to block on a wizard): the time from the end of the member's last tick,
+or from its window's opening when its ticks were not running, to the
+start of the next, less the tick's own wait (`CM_WK_TICK_MS`), handed
+over the same way at the start of the tick before anything else. A
+duration above `CM_NI_BLOCK_MS` (2 s; a call that does
+not block returns in milliseconds, a walk in well under a second) is
+**credited**: the window's opening and its last hold (section 14.3) move
+forward by it, never by more than has passed since the opening (a last
+hold made while the call was outstanding stays where it is, and none is
+left before the moved opening), and so do the deadline and the attempted
+time of each entry ACTIVE or ATTEMPTED. The credit is bounded by the
+same `CM_NOIRQ_HOLD_MS` (30 minutes) a window and as much an attempt,
+past which a held call counts as before and the deadlines run out; so a
+window lives at most an hour of the machine's time, 30 minutes of them
+its own. A new window (`CmNiOpenWindow`) starts with no credit, and a new
+attempt with none of its own. An attempt whose devnode started while its
+call was held is then read DONE at its next outcome read, and a function
+whose devnode appeared while the wizard was open is met by the next
+walk, inside the credited window.
+
+**What the credit rests on: no pass while a call is outstanding.** The
+interim ("The code, and its interim" above) makes each operation on the
+worker's own thread, at once, and the walk too: while a call blocks no
+pass runs, so no deadline is judged and the window is not closed on the
+time the call takes. The first thing the machine sees after a held call
+is that call's end, and the credit is applied there before anything is
+judged on time: `CmNiTake` credits before it reads the attempt's
+deadline or the window, and the worker hands the walk's time, and the
+time its other work took since the member's last tick, over
+(`CmNiCredit`) before `CmNiPass`. When task 42-A.12's call workers land
+and the connection-manager thread's passes run while an operation is
+outstanding, that order must be kept: a pass does not end the attempt
+whose operation is outstanding, nor close its member's window, on time
+alone until the result is taken and its time credited (the stop, the
+claim's loss and the gate are judged as before). That is owed with
+42-A.12; the host vectors run the interim's order.
+
+### 14.7 Host vectors and legs
+
+`test\test_cm_noirq.c`, the hold (section 14.3): `CmNiInstalling` for
+problems 1, 8, 18 and 28 with `DN_HAS_PROBLEM`, none for 29, 0 or a
+problem without the flag; `CmNiWalkInstalling` for ME's bridge during
+its wizard, no `Driver` value, a started devnode with one, both reads
+failing, a value too long for the room (present); `CmNiIsBridge` for a
+bridge (`060400h`, `060401h`) and none for another class or a failed
+read; a window held at 9 s stays open past 10 s from its opening and
+closes 10 s after the last hold; a hold at `CM_NOIRQ_HOLD_MS` - 1 does
+not keep it open past `CM_NOIRQ_HOLD_MS` (the exact boundary); a new
+opening restarts the bound; a hold with the window closed does nothing;
+an entry PENDING for its binding holds the window and is admitted once
+bound, the binding appearing after 10 s and the admission spanning
+further passes; an entry that never gets a driver, closed at the bound;
+one at problem 29 with no installation reading, or with its status or
+binding read failing, is EXCLUDED "not read in time" at 10 s; the
+deadline reset by a new generation and by a reopening; the hold's log
+once a window with its source. The refused list (section 14.5): ten
+devnodes below one member, nine of them refused by their headers, the
+function reached; a refused devnode not read again in the generation,
+read again at a new generation, a reused handle judged afresh, a line
+not met by a complete walk taken off and judged afresh when it comes
+back, kept after an incomplete walk, an entry with a journal kept, a
+full list overwritten. The credit (section 14.6): the reprocess held 80
+s, then DONE; the window's deadline moved by the credit; a credit past
+the bound, timeout as before; a call held 2 s not credited; a walk's
+held time handed over and credited; a new window with no credit,
+nothing before its opening credited; the worker's time between two
+ticks credited as a call's (the window opened, the marking blocked 80
+s, two controllers then met and admitted, an attempt surviving); the
+vectors of a result returned
+past its budget now held past the bound; the credit's log. The xHCI
+kind (section 14.2): an xHCI function at problem 29, memory only, bound
+`*NTKERN` and `xhci98.sys`, unroutable: the reprocess-only attempt with
+no installer record present, DONE with the line read and the kind in
+the diagnostic; the same with Stor98's pair, and an NVMe function with
+`xhci98.sys`'s, EXCLUDED "not its driver"; an xHCI function whose
+configuration holds an IRQ descriptor, EXCLUDED "configuration" with
+nothing created; an xHCI function on the port's pin with its line set,
+EXCLUDED "header", and with its line 0, EXCLUDED "interrupt"; class
+`020000h`, EXCLUDED "header"; the binding read again before the
+reprocess, changed to another driver, FAILED "admission". The combined
+cases: a chained NVMe behind two bridges still being installed (the
+walk's hold) whose devnode appears after 10 s and waits for Stor98's
+binding (the entry's hold), started; a second xHCI controller of the
+same member waiting for `xhci98.inf`'s binding while the first is
+attempted, both started; a member whose only unfinished devnode is a
+function of another class with no driver (the I210), closed at 10 s.
+The one-at-a-time enumeration (section 14.3 item 1): a device answering
+on a secondary bus with no devnode placed found, a placed function of
+the device counting for it and the same device on another bus not, a
+bus not read or locations not kept whole saying nothing;
+`CmNiAwaited` for a bridge, an NVMe drive and an xHCI controller and
+none for a network function, an EHCI controller or a failed read; the
+dock's first plug as read, held through 04:00's install and then its
+unenumerated ports and closed 10 s after the last hold; the close's two
+lines unheld, after a hold and at the bound.
+
+Legs, in the emulator: 98 SE and ME with the TS3 Plus model behind the
+P14s's host (`launch-q35.ps1 -Usb4 tb3ar`, the dock hot-plugged): the
+dock's first plug with its wizards answered, and a re-plug; both FL1100s
+and the ASM1142 started (the second FL1100 and the ASM1142 polling, line
+0 or `FFh`), a stick on each controller's ports with a file compared;
+the dock ejected through XHCITR, and removed by surprise;
+`XhciCmNoIrqStart` 0 leaving them at problem 29. 98 SE and ME, fresh
+overlays, the first chained ASM2464 plugged behind the emulator's dock:
+the wizards answered (98 SE's restart answered No), the NVMe started on
+Stor98 with no second plug, polling, a file written and read back.
+
+As read (2026-11-10, `runs/run-48.md`, "48.36, the two joined"): ME,
+the dock's first plug, both polled controllers started with no second
+plug, a stick on each controller compared, the eject, the re-plug and
+the surprise removal pass; 98 SE, the first chained ASM2464 started
+with no second plug (each restart question left 25 s) and a file
+compared; 98 SE, the dock's re-plug starts both polled controllers, and
+the eject and the surprise removal pass. Open: 98 SE, the dock's very
+first plug - after its ten wizards the second FL1100 and the ASM1142
+stay at problem 29 until the next plug; the walk met the dock's first
+three devnodes and none after, though both controllers' devnodes were
+there and bound, and the window's close was not logged (the release
+log has no line for it). Not explained; the user documents say so.
+
+Explained and fixed (2026-11-10, task 48.36 continued, `runs/run-48.md`,
+"48.36 (continued) The dock's first plug on 98 SE"): with the close and
+walk lines of section 14.4, a fresh 98 SE overlay read the walk complete
+each time and the window closing 10 s after the last hold, 258 s from its
+opening (`cm.reenum.9x.noirq.close=0210200A`, last hold `010002FE`),
+during the first FL1100's wizard: below the dock's upstream port 98 SE
+had created only the first downstream port's devnode, and created the
+next only after that wizard (section 14.3 item 1). With a device on a
+walked secondary bus with no devnode yet holding, the dock's first plug
+on a fresh overlay, every wizard answered (each restart question left
+15 to 20 s, the I210's open 50 s and cancelled), started both polled
+controllers (`cm.reenum.9x.noirq.after=07000500`, `08000500`, the
+reprocess held 478 s by the wizards and credited), and the window closed
+10 s after its last hold (`close=021DC00A`, last hold the second FL1100's
+entry); a stick on each of the three controllers enumerated at
+SuperSpeed.
+
+### 14.8 How this section came to be
+
+- 2026-11-09, task 48.31's follow-up (commit 8edfd362): the window held
+  while the walk met any descendant at an installation problem, or an
+  entry was PENDING for one or for its binding; its start moved to the
+  pass, bounded at 10 minutes from its opening; `cm.reenum.9x.noirq.hold`
+  and `Held`.
+- 2026-11-09, the same (59a28f59): the walk also reads a descendant's
+  `Driver` value, after ME's reading (section 14.1).
+- 2026-11-09, task 48.36, on a branch of its own (7621fd7c to 8d7bc126):
+  the xHCI kind; a deadline moved by an entry waiting for its driver,
+  bounded at 300 s; the refused list; the credit of a blocked call,
+  bounded at 300 s.
+- 2026-11-09, the two joined (task 48.36's merge): one hold of two
+  readings (section 14.3), the walk's restricted to bridges so that a
+  function with no driver for this system holds nothing; one bound,
+  `CM_NOIRQ_HOLD_MS` (10 minutes then), for the hold and the credit alike;
+  one clock (the opening and the last hold, the credit moving both); the
+  pair of log lines and the two counters of section 14.4.
+- 2026-11-10, after the joined build's first 98 SE leg: a bridge with a
+  function behind it and no child devnode yet holds too (section 14.3
+  item 1); and `CM_NOIRQ_HOLD_MS` raised to 30 minutes, after a dock's
+  first plug on 98 SE outlasted 10 (section 14.3, "Why 30 minutes").
+- 2026-11-10, task 48.36 continued: the close and walk lines of section
+  14.4 read the dock's first plug on 98 SE, and a device on a walked
+  secondary bus with no devnode yet holds (section 14.3 item 1).
 
 ## Appendix A. The binary readings behind `legal-provenance.md` section 4
 

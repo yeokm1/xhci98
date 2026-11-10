@@ -673,11 +673,26 @@ ULONG XhciXferQueueRestart(PXHCI_TRANSFER_QUEUE queue);
  * on an earlier TRB of its final packet) is settled by the same call and the
  * same answers, retired by group through XhciRingRetireIsoGroup after the
  * hold is checked against the ring, its packets keeping the results their
- * events wrote.
+ * events wrote. One held for an error there (XHCI_XFER_FLAG_ERROR_HELD, task
+ * 48.21) is passed over: an empty ring does not prove its tail is not coming
+ * (4.10.3.2 p.187). A short packet's hold behind it, settled, sweeps it.
  */
 ULONG XhciXferDrainSettled(PXHCI_TRANSFER_QUEUE queue,
                            PXHCI_RING ring,
                            PXHCI_XFER_EVENT_RESULT result);
+
+/*
+ * XhciXferDrainSettled for a caller holding proof that the controller has
+ * passed every held TD it settles, which then takes an isochronous error's
+ * hold as well (task 48.21): a stopped endpoint's TDs XhciXferStopPlace
+ * counts as passed (HcdDevStopSettle), or an isochronous Ring Underrun or
+ * Overrun - the xHC found the ring empty, so it has consumed every TRB
+ * queued before the event, and the tail of any of them, written before it
+ * on the same event ring, has been consumed already. Same answers, same loop.
+ */
+ULONG XhciXferDrainSettledPassed(PXHCI_TRANSFER_QUEUE queue,
+                                 PXHCI_RING ring,
+                                 PXHCI_XFER_EVENT_RESULT result);
 
 /*
  * How many transfers on this queue are holding a deferral right now.
@@ -710,8 +725,8 @@ ULONG XhciXferDeferralsArmed(const XHCI_TRANSFER_QUEUE *queue);
  *
  * `Passed` counts the queued TDs wholly before the position - every one of
  * them carrying XHCI_XFER_FLAG_SHORT_DEFERRED, for any verdict but UNREAD.
- * Those the caller settles with XhciXferDrainSettled, oldest first, on the
- * stopped endpoint; the head is then the stopped TD (IN_TD) or a TD the
+ * Those the caller settles with XhciXferDrainSettledPassed, oldest first, on
+ * the stopped endpoint; the head is then the stopped TD (IN_TD) or a TD the
  * controller has not entered (BETWEEN). Changes nothing. Pure.
  */
 #define XHCI_XFER_STOP_UNREAD   0UL

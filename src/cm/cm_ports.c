@@ -746,3 +746,76 @@ ULONG CmPortsHoldBound(const CM_PORTS_RESUME *resume)
                                          : resume->Devices));
     return cmAddCap(bound, CM_PORTS_HOLD_EXTRA_MS);
 }
+
+BOOLEAN CmPortsChainCurrent(BOOLEAN leaving, ULONG active, ULONG held,
+                            ULONG genNow, ULONG taken, ULONG i)
+{
+    ULONG bit;
+
+    if (i >= 32UL) {
+        return FALSE;
+    }
+    bit = 1UL << i;
+    return (BOOLEAN)(!leaving && genNow == taken && (active & bit) != 0 &&
+                     (held & bit) == 0);
+}
+
+ULONG CmPortsTagOs(ULONG major, ULONG minor)
+{
+    return (ULONG)(major == 5UL || (major == 6UL && minor <= 3UL));
+}
+
+ULONG CmPortsKeptOs(ULONG major, ULONG minor)
+{
+    return (ULONG)(major == 6UL && minor == 3UL);
+}
+
+ULONG CmPortsKeptStep(ULONG state, ULONG event, PULONG action)
+{
+    *action = 0;
+    if (state == CM_KEPT_DETACHED) {
+        /* Detached is final; a removal whose forwarded request deleted the
+         * object below still records its departure. */
+        if (event == CM_KEPT_E_REMOVED) {
+            *action = CM_KEPT_A_DEPART;
+        }
+        return CM_KEPT_DETACHED;
+    }
+    switch (event) {
+    case CM_KEPT_E_CALLBACK:
+        *action = CM_KEPT_A_DETACH | CM_KEPT_A_DROP_ATTACH | CM_KEPT_A_ABSENT;
+        return CM_KEPT_DETACHED;
+    case CM_KEPT_E_REMOVED:
+        if (state != CM_KEPT_LOGICAL) {
+            *action = CM_KEPT_A_DEPART | CM_KEPT_A_ABSENT;
+        }
+        return CM_KEPT_LOGICAL;
+    case CM_KEPT_E_START:
+        return state == CM_KEPT_LOGICAL ? CM_KEPT_STARTING : state;
+    case CM_KEPT_E_START_OK:
+        if (state == CM_KEPT_STARTING) {
+            /* Presence and the departure's end together: the marks clear
+             * a pending departure for any attachment present. */
+            *action = CM_KEPT_A_PRESENT | CM_KEPT_A_END_DEPART;
+            return CM_KEPT_ATTACHED;
+        }
+        return state;
+    case CM_KEPT_E_START_FAIL:
+        return state == CM_KEPT_STARTING ? CM_KEPT_LOGICAL : state;
+    default:
+        return state;
+    }
+}
+
+ULONG CmPortsKeptAdmits(ULONG state)
+{
+    return (ULONG)(state != CM_KEPT_DETACHED);
+}
+
+ULONG CmPortsKeptLast(ULONG count, ULONG state, ULONG aboveP)
+{
+    if (count != 0 || state != CM_KEPT_DETACHED) {
+        return CM_KEPT_L_NONE;
+    }
+    return aboveP ? CM_KEPT_L_QUEUE : CM_KEPT_L_DESTROY;
+}
