@@ -284,21 +284,24 @@ LONG TbtHwLcMailbox(const TBT_CFG *cfg, const TBT_HOST *host, ULONG cmd,
                     ULONG timeoutMs)
 {
     ULONG v;
-    ULONG waited;
+    TBT_WAIT w;
 
     cfg->Write32(cfg->Context, TBT_ICL_VS_CAP_19,
                  ((cmd << TBT_ICL_VS_CAP_19_CMD_SHIFT) & TBT_ICL_VS_CAP_19_CMD_MASK) |
                  TBT_ICL_VS_CAP_19_VALID);
-    for (waited = 0;; waited++) {
+    /* A deadline on the elapsed clock (record 22 sections 5.3 and
+     * 11.1.7): a count of 1 ms sleeps would last a tick each. */
+    TbtWaitStart(&w, host, timeoutMs * 1000UL, FALSE);
+    for (;;) {
         v = cfg->Read32(cfg->Context, TBT_ICL_VS_CAP_18);
         if (v != 0xFFFFFFFFUL && (v & TBT_ICL_VS_CAP_18_DONE) != 0) {
             break;
         }
-        if (waited >= timeoutMs) {
+        if (TbtWaitDone(&w, host)) {
             tbtHwLog(host, "tbt.hw.lc-timeout", cmd);
             return TBT_E_TIMEOUT;
         }
-        host->Sleep(host->Context, 1);
+        TbtWaitStep(&w, host, 1000UL);
     }
     cfg->Write32(cfg->Context, TBT_ICL_VS_CAP_19, 0);
     return TBT_OK;

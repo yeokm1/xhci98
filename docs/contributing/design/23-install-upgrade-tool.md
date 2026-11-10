@@ -1,6 +1,15 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 53, 2026-11-04 (roadmap-usb4 task 46.24, the owner's decisions of that day on
+Status: revision 55, 2026-11-10 (the owner's decision of that day: the
+final line's shutdown form of revision 24 and record 26 section 5.9
+withdrawn, so 98 SE and ME end with the ordinary restart line after a
+Stor98 update and after the storage drivers' copy with a UAS entry at
+Code 2 too, the exit codes unchanged, sections 6.4 and 7.4, record 26
+draft 78);
+revision 54, 2026-11-10 (roadmap-usb4 Phase 48: a file of this
+package at the package's version with other bytes is replaced as an
+older one is, on every system, section 5.4.1);
+revision 53, 2026-11-04 (roadmap-usb4 task 46.24, the owner's decisions of that day on
 the UAS driver: on 2000 to 7 a UAS devnode not plugged in during an
 update is updated too, by model selection from the staged INF, with a
 guarded copy of `xhciuas.sys` behind it, section 5.5.1; on 8, 8.1 and 10
@@ -1237,6 +1246,87 @@ A device is **matched** by an INF when one of its hardware or compatible
 ids equals one of the INF's model ids for the running system, compared
 without case.
 
+### 5.3.1 Values longer than the tool holds (roadmap-usb4 task 48.19)
+
+The device record holds a hardware or compatible id list of 2,048 bytes,
+a `Driver` value of 128 and a `Service` of 64, and until `3.4.2.0` any of
+them longer than that was "unreadable" and refused the run, though such a
+value is nearly always another driver's device. `3.4.2.0` took the
+`Service` and `UpperFilters` values out of that rule (the audit of
+2026-11-06). This section takes `HardwareID`, `CompatibleIDs` and
+`Driver` out of it, by holding the whole value rather than judging a
+part of it: every decision then reads exactly what it reads for a short
+value, and none of them changes (reviewed and revised: a rule that kept
+the entries that fit and judged the dropped ones by their prefixes could
+not see every reader - the storage unit kinds, the Thunderbolt class
+tests, the first hardware id an update call takes - and a `Driver` left
+empty would have read as "no driver" where ownership and INF references
+are decided).
+
+**The id lists.** A list longer than the record's array is read whole
+into an overflow copy the record owns, and the array is left empty: on
+NT the `REG_MULTI_SZ` value read again at its length
+(`enum_value_whole`, at most 1 MB); on 98 SE and ME the comma-separated
+string of the devnode's `HKLM\Enum` key read whole and split once, into
+the copy, with its final byte count. A short 9x string keeps today's one
+split into the array; an overflow copy is never split again (the four
+9x readers today split what they read). Where the configuration manager
+is the authority - the 9x fallback when the registry proves the value
+absent, and the NT Thunderbolt reader's own reads - an answer too big
+for the array is asked again at its size (bounded as above) and held
+whole, every string of it kept (98 SE's and ME's configuration manager
+hands back several, the class-code id not first; its commas become
+separators, its length kept), an absent property stays absent and a
+failed one unreadable (on 98 SE and ME, where the registry proves the
+value absent, an answer too big that cannot be read again; any other
+answer stays as before, read or no list, as the 98 SE root devnode
+`HTREE\ROOT\0` answers, read 2026-11-09); a registry value read after a provisional
+answer replaces it and frees its copy. Every
+reader of a device's lists takes them through one accessor that chooses
+the array or the copy each time it is asked (never a pointer kept into
+the record, which `realloc` moves), with its byte count: the INF
+matching, the class and Thunderbolt tests, the storage kinds, the raw
+compatible-id walk, the log and `first_hw`. The two signatures keep what
+they hash today (`devs_signature` no list, `settle_signature` instance
+ids and states; only their controller test goes through the accessor),
+so nothing changes for a short list.
+
+**Who frees the copies.** Each record owns its overflow copies and
+nothing else. They are freed before a record is overwritten, zeroed or
+discarded: the previous inventory's records, by its previous count,
+before `devCount` or the Thunderbolt inventory's count is reset (also
+when the new reading fails or is shorter); a registry-only candidate
+dropped before it is counted; the temporary record of the 9x Stor98
+baseline on every exit; and the inventories at the run's end.
+
+**`Driver`.** A driver key name is a class key name and an instance key
+name of at most 255 characters each and the separator: at most 511
+characters. The record's `Driver` is 515 bytes: 511 characters, the
+terminator and the readers' spare bytes (`enum_value` and `cm_prop` read
+two bytes less than their buffer, `reg9x_value` three), with a check of
+its own holding the value to 511 characters; and so are the three
+readers outside the record (the tunnel port's check after the filter
+is taken off, the Stor98 Enum comparison and the Stor98 uninstall's
+adoption). Every path built from it - `driver_key_path`, the cached
+Thunderbolt path, and the two direct joins - is sized for the longest
+prefix (`SYSTEM\CurrentControlSet\Control\Class\` on NT,
+`System\CurrentControlSet\Services\Class\` on 98 SE and ME), the 511
+characters and the terminator; a path that cannot be built is a refusal
+before any key is opened (`join` drops a part that does not fit, and the
+result would name the class key itself). A value longer than 511
+characters cannot name a driver key and stays unreadable, as before.
+
+The first hardware id an update call is made with is still copied into
+an instance-id-sized buffer, as today, where a longer one is cut short
+(`inst_copy`): unchanged by this section.
+
+A value that cannot be read whole (the key or the value not opening,
+another type, longer than 1 MB, or no memory for the copy) stays
+unreadable and refuses the run, as section 5.3 says. Host vectors (the
+pure half): the 98 SE comma string split into a list at its final
+length, a list longer than the array, the accessor's answers, and the
+driver-path capacity.
+
 ### 5.4 The action per device, and the verdict per service group
 
 **Ownership first.** A device bound to another vendor's service is foreign
@@ -1247,7 +1337,7 @@ problem code turns it into an install. Then:
 |---|---|
 | No `Service` value at all | install |
 | Bound to this INF's service (`xhci98`, `xhciuas`, `xhcicm`), driver key `DriverVersion` older than the package, or absent | update (a problem code 1, 18 or 28 on it too: it is reinstalled) |
-| The same, equal to the package's | current, nothing done; `/force` reinstalls |
+| The same, equal to the package's | current, nothing done, unless a file of its group differs from the package's (section 5.4.1); `/force` reinstalls |
 | The same, newer than the package | refused (section below); `/force` installs the older release (going back) |
 | The same, `DriverVersion` unreadable | unknown: refused, said, `/force` does not override it |
 | A tunnel port (`xhcicmf.inf`) bound to `pci` without `xhcicm` in `UpperFilters` | install the filter (the INF keeps `pci.sys` through `machine.inf`'s section) |
@@ -1289,6 +1379,215 @@ NHIs and filtered ports):
   reason. `/force` lifts a "newer" refusal for the whole group, after the
   plan names every devnode it reaches; it never lifts an "unknown";
 - otherwise each device's own action stands.
+
+### 5.4.1 The same version with other bytes (roadmap-usb4 Phase 48, 2026-11-10; revision 54)
+
+**What was found.** Until revision 54 every decision about a file of this
+package that the tool did not already compare by its bytes was taken from
+a version alone - the driver key's `DriverVersion`, the file's version
+resource - and a file at the package's version was "current". Three
+readings of 2026-11-09 and 2026-11-10 on development builds that kept the
+version and `DriverVer` (`3.4.2.0`, `11/08/2026`) show what that leaves:
+
+- **XP**: an update printed "xhcicm 3.4.2.0, started", exited 3 and
+  replaced no driver file; the guests kept an older 464,803-byte
+  `xhcicm.sys` through three updates (section 5.4's table: equal is
+  "current, nothing done"; the restart was owed by other changes of the
+  run).
+- **XHCITR**: the copy in the install directory is kept "up to date" by
+  version (section 9.5, `inst_tray_copy_needed`), so a newer build of the
+  same version is not copied.
+- **ME**: `stor98.mpd` was not replaced: record 26 section 6.3's file
+  update runs only for an installed file of an older release
+  (`inst_s98_file_update`), and the device row read "Reinstall (same
+  version)" though nothing was reinstalled.
+
+What Windows does with a forced install of the same version was read
+before this revision, with the `3.4.2.0`-era installer and two development
+packages of that version whose every binary differs (INFs and `DriverVer`
+equal):
+
+- **XP** (an image holding the 464,803-byte `xhcicm.sys` above): without
+  `/force` the run left every file as it was; `INSTALL.BAT /force`
+  (section 5.5: `INSTALLFLAG_FORCE` on every device of the group) and a
+  restart left `xhci98.sys`, `xhcihlpr.sys` (its row's
+  `COPYFLG_NO_VERSION_DIALOG` notwithstanding), `xhcicm.sys` and
+  `xhcinet.sys` byte for byte the package's (`fc /b`), and `XHCITR.EXE`
+  the old one. So Windows' own ranking does not keep an equal driver once
+  the install is forced; the tool simply never forced it.
+- **ME** (a copy of an image with an earlier build): `/force` had the
+  helper reinstall the controllers, and after the restart `xhci98.sys`,
+  `xhciuas.sys`, `xhcicm.sys` and `xhcinet.sys` were the package's;
+  `stor98.mpd` (65,423 bytes against the package's 65,182) and
+  `XHCITR.EXE` (565,248 against 585,728) were not.
+
+98 SE and ME already replace `xhciuas.sys`, `xhcicm.sys` and
+`xhcinet.sys` by their bytes (record 26 section 5.0, draft 69), and
+`S98VSD.VXD`, `XHCIPFW.VXD`, `XHCIPFW.SYS`, `XHCIMARK.EXE` and the local
+copy (section 4.4) are compared by their bytes or a recorded SHA-256
+everywhere; those are unchanged.
+
+**What "Reinstall (same version)" is for.** A user who runs Setup again
+with a package of the version already installed wants what the package
+holds: a repair. A file of this package left in place with other bytes
+under the same version is a defect whether it came from a development
+build, a damaged copy or an earlier install that did not finish. So:
+
+**The rule.** A file of this package installed at the package's own
+version whose bytes differ from the package's file is treated as an
+older file: it is replaced, by the route that replaces an older one on
+that system, and the run says so. Two files are the same when their
+sizes are equal and their bytes compare equal (the files are below 1 MB;
+`same_file3`); the package's file is the one this system installs
+(`pkg_path`, the family folder's). Nothing else changes:
+
+- a **newer** installed version is never replaced without `/force`, and
+  its bytes are never compared (section 5.4's refusal stands);
+- an **unknown** version stays unknown and refuses as before;
+- a file whose bytes **cannot be read** for the comparison (the read fails
+  for any reason but its absence) is taken as the same: logged
+  ("<file>: its bytes could not be compared; left"), never replaced on
+  that ground, so the rule adds no refusal and no failure to a run that
+  had none;
+- `/force` keeps its meaning (every device of the group reinstalled,
+  section 5.4), and a group the plan leaves out (a box unticked, the
+  connection manager alone, Stor98 unticked or its shared file held,
+  section 4.4) is not compared.
+
+**Per file.**
+
+| File | System | Until revision 54 | From revision 54 |
+|---|---|---|---|
+| `xhci98.sys`, `xhciuas.sys`, `xhcicm.sys`, `xhcinet.sys` / `xhcinet6.sys` (the group's binary, section 5.4) | 2000 to 10 | the group's present devices reinstalled when the binary is missing or older | also when it is at the package's version with other bytes: the group's present devices whose driver key says "current" are reinstalled as for a missing or older file (`INSTALLFLAG_FORCE`, section 5.5; for `xhci98` its controllers); then the file check below |
+| `stor98.sys` | 2000 to 10 | as the row above | at the package's version with other bytes: the file check alone, never a drive's reinstall, and only with Stor98 in the run, its shared file free (section 4.4) and no other drive bound to Stor98 |
+| `xhcihlpr.sys` | 32-bit 2000 to 10 | the controllers (or the NHI) reinstalled when it is missing or older | also at the package's version with other bytes |
+| `xhci98.sys` | 98 SE, ME | replaced only by a device install of the helper; at the same version the setup engine copies nothing (section 6.6) | at the package's version with other bytes: placed by the tool as `xhciuas.sys` is (record 26 section 5.0, drafts 68 and 69: staged, queued in `WININIT.INI` while loaded, recorded), before the helper's jobs; see below |
+| `xhciuas.sys`, `xhcicm.sys`, `xhcinet.sys` | 98 SE, ME | by bytes | unchanged |
+| `stor98.mpd` | 98 SE, ME | replaced at the next start when the installed file is older | also at the package's version with other bytes, when no other drive is bound to Stor98 (the same confirmation, the same `WININIT.INI` route; with `/yes`, which cannot confirm the disconnection, it is left for a run that confirms it, as an older file is) |
+| `XHCITR.EXE` / `XHCITR64.EXE` | all | copied when absent, unreadable or older | also at the package's version with other bytes (the copy's own route, section 9.5) |
+| `S98VSD.VXD`, `XHCIPFW.VXD`, `XHCIPFW.SYS`, `XHCIMARK.EXE`, the local copy | as before | by bytes or SHA-256 | unchanged |
+
+**The NT file check.** Windows itself ranks drivers by date and version,
+and with `INSTALLFLAG_FORCE` it installs the package's driver whatever
+the rank (section 5.5); whether its file queue then copies a file of the
+same version over the installed one is not assumed - it is read on the
+XP leg (below) - and the tool does not rest on it. After the per-INF
+passes (section 5.1) and section 5.5.1's absent UAS devnodes, for each
+group in the run whose verdict is not a refusal and whose binary - or, on
+32-bit NT, `xhcihlpr.sys` - was at the package's version with other
+bytes when planned:
+
+A file the plan once read so is owed the check for the whole run, even
+when a later plan (after a barrier's rescan) reads the package's bytes in
+place: an INF pass may have copied them while a queued entry would still
+undo them; but never for a group the run leaves out as the choices stand
+when it runs (a box unticked after the first plan). The session manager's `PendingFileRenameOperations` is read
+first for any entry that touches the file (a rename onto it, a rename
+away from it, its deletion). No such entry is trusted to leave the
+package's bytes there, since an earlier entry may consume or change its
+source; a value that cannot be read (a size that keeps changing
+included) fails the file's check - "<path> could not be replaced:
+Windows' list of files to replace at the next start cannot be read." -
+and is never taken as an empty queue:
+
+1. with no entry touching it, the file already equal to the package's:
+   replaced, nothing more;
+2. else, unless section 5.7's trap is reported for its INF (the
+   `/restage` route owns that INF), the tool replaces it itself: the
+   package's file copied beside it under a staging name no file and no
+   queued entry has (`<name>.X00` to `.X99`; a name an earlier entry
+   still names would let that entry consume the copy) and compared, then -
+   only when no entry touches the file, since a queued one would undo it
+   at the restart - `MoveFileExA(<staging copy>, <file>,
+   MOVEFILE_REPLACE_EXISTING)`; otherwise, or when that is refused (the
+   file in use), `MoveFileExA(..., MOVEFILE_REPLACE_EXISTING |
+   MOVEFILE_DELAY_UNTIL_REBOOT)`, which appends the tool's rename after
+   every entry already queued, so the next start applies it last (an
+   earlier package's queued copy, or a source since gone, is then
+   overridden). The restart flag is set either way, since the running
+   image is the old one. A failure of both leaves the file, deletes
+   the staging copy, and fails the run (exit 2) with "<file> could not be
+   replaced (error <n>)."
+
+The check goes around no refusal: it skips a file when any INF that
+installs it is under section 5.7's trap, or had an install in this run
+that failed, was refused or cancelled (the signature question answered
+No) or was left (an id shared with a skipped device, a device still
+busy), and the UAS driver when any of section 5.5.1's absent-devnode
+installs or their checks failed, with a Win32 error or without one. A file more than one INF installs is held by
+either: `xhcicm.sys` by `xhcicm.inf` and `xhcicmf.inf` (a filter install
+cancelled, or the filter's stored package trapped, with no NHI present,
+still keeps the image the tunnel filters run), and `xhcihlpr.sys` by
+`xhci98.inf` and `xhcicm.inf`, which is also kept while either group is
+refused by section 5.4's verdict (a newer or unreadable version there),
+whichever branch would replace it; every other file has one INF on its
+system (`inst_stale_infs`, `inst_stale_blocked`, `inst_hlpr_stale_ok`,
+host-tested).
+
+The same check covers a group with no present device to reinstall (a UAS
+driver with no disk plugged in, a network driver with no adapter, Stor98
+with no tunnel drive), which a reinstall cannot reach and section 5.5.1's
+fallback (`SP_COPY_NEWER_ONLY`) does not copy at the same version. It
+repairs the file, not a devnode's record: the driver keys already name
+the package's version.
+
+**98 SE and ME: `xhci98.sys`.** The placement of `xhciuas.sys` runs
+before the helper's first job (record 26 draft 75); `xhci98.sys` joins it
+there only when its installed file is at the package's version with other
+bytes and no `xhci98` device is installed or updated by the helper in this
+run (a device its passes take: present, not refused, not an `Enum` entry
+with no devnode such as an old slot's, section 6.3, which would otherwise
+put the placement off at every run). A controller the helper installs in the same run would have the
+setup engine write its own `[rename]` line for `xhci98.sys`
+(`xhci98.sys=xhci98.tmp`, section 6.6) over the tool's, under the same
+key, while copying nothing; so in that case the placement is left for
+the next run and the run says "xhci98.sys: run Setup again after the
+restart to replace it." (the steps flag). A `[rename]` line of another's
+naming the file - the engine's own from an earlier run with no restart
+since - holds it as it holds the other three (draft 69: said, the run
+failed, nothing replaced). The uninstall withdraws a queued replacement
+of `xhci98.sys` as it does the other three (`sys_9x_withdraw`), but only
+when its own `xhci98.IN$` is there: a line of the engine's with no copy of
+the tool's stays section 6.6's pending-rename guard's, as before. The
+placement is recorded (`Placed9x`), and the uninstall removes it as it
+removes the file.
+
+**What the plan and the window say.** The device row's action (section
+5.4's table, the window's device table, record 26) is chosen from what
+the run will do, not from the version alone:
+
+| The device | Row text |
+|---|---|
+| this INF's service, equal, its group's files the package's | "Keep (same version)" |
+| the same, reinstalled by section 5.4's repair (a file missing, older, or at the package's version with other bytes), or on 98 SE and ME a controller whose `xhci98.sys`, or a drive whose `stor98.mpd`, this run replaces | "Replace files (same version)" |
+| the same, with `/force` (a newer one with `/force` too) | "Reinstall (/force)" |
+
+and each file the rule replaces has a plan line of its own before the
+confirmation, in the form of the resident images' lines (record 26 draft
+68): "  <file>: same version, other bytes: replaced, loaded at next
+start." The confirmation counts such a run as one that changes something
+(section 7.4), and the run ends with the restart line and exit 3 when
+nothing else is owed. The NT file check says per file "Replaced <path>
+with this package's file.", "Setup will replace <path> at the next
+start." or "<path> could not be replaced (error <n>).", each with the
+progress steps "Replacing <file>" and "<file>: replaced", "<file>:
+replaced at the next start" or "<file>: not replaced".
+
+**Host vectors** (`test_inst`): the pure decisions take the comparison as
+an input - the group's repair (`inst_same_ver_stale`: version compare 0
+and bytes differ; never for a newer, unknown or unreadable file), the
+tray copy (`inst_tray_copy_needed` with the bytes' answer), Stor98's
+file update (`inst_s98_file_update` with it), the 98 SE / ME placement
+of `xhci98.sys` (`inst_x98_place9x`: stale and no `xhci98` helper job),
+and the row text (`inst_action_row_text`).
+
+**The legs.** XP and ME: a package installed, then a package of the same
+version whose every binary differs (`DriverVer` and INFs equal): the plan
+names each file, the run replaces it (or queues it), and after the
+restart every installed file equals the second package's and the new
+drivers run (`fc /b` of each file against the package; the controller
+and the NHI started). 98 SE: the same update as a no-regression check
+(the three by-bytes files as before, `xhci98.sys` now placed).
 
 ### 5.5 Installing: `UpdateDriverForPlugAndPlayDevices`
 
@@ -2936,9 +3235,9 @@ either being the same driver (both read on the legs).
 (Revision 24) On 98 SE with the USB storage drivers' row ticked, the run
 copies `USBNTMAP.SYS` itself before any device job, so the step below
 is printed only where the row is not ticked or its case copies nothing;
-a UAS entry already at Code 2 then starts once Windows is shut down and
-started again, which the final line says (section 7.4, record 26
-section 6.5.5).
+a UAS entry already at Code 2 then starts once Windows restarts, which
+the run says (section 7.4, record 26 section 6.5.5; up to revision 54
+"shut down and started again", from an emulator reading, revision 55).
 
 (Revision 25, record 26 section 7) The storage prerequisite's sentence
 after the steps ("On Windows 98 SE any disk, UAS included, needs ...")
@@ -3128,12 +3427,16 @@ were made, but not everything is done: do what is said above first, then
 restart Windows.", its code unchanged (a change under a refusal's code is
 reported as 2). The 2000 leg read the restart line on an unchanged rerun
 and beside a stop; the rule lives in the pure half (section 10).
-(Revision 24) On 98 SE the line takes record 26 section 5.9's shutdown
-form ("shut down and start Windows again") also when the run copied the
-USB storage drivers' `USBNTMAP.SYS` with a UAS entry already at Code 2,
-which starts only after a fresh start (record 26 section 6.5.5); the
-codes are unchanged. The USB storage drivers' copies count as a change,
-and as a device change for the confirmation's words.
+(Revision 24) The USB storage drivers' copies count as a change, and as
+a device change for the confirmation's words. Up to revision 54 the
+line on 98 SE also took record 26 section 5.9's shutdown form ("shut
+down and start Windows again") when the run copied the USB storage
+drivers' `USBNTMAP.SYS` with a UAS entry already at Code 2, and on 98 SE
+and ME after a Stor98 update (record 26 sections 6.3 and 6.5.5), the
+codes unchanged. (Revision 55, the owner's decision of 2026-11-10) Both
+are withdrawn: the shutdown came from the emulator, whose 98 SE and ME
+guests do not survive a warm restart, not from real hardware, so every
+system ends with the lines above and the codes are unchanged.
 
 **The device modes are the one exception** (design record 24 section 8):
 `/devices` changes nothing and ends "No changes were made.", exit 0; an
@@ -3217,6 +3520,7 @@ user-visible effect, off or on by default for a reason the user can judge
 | `XhciCmPreOsCleanup` | `xhcicm.inf`, the NHI's | never (owner, 2026-10-15) | - | 0, 1, 2 | USB4: tunnels found at start kept (0), cleaned where they do not verify (1), or all cleaned (2) |
 | `XhciImodInterval250ns` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 10 to 4000 | the interrupt moderation interval, in 250 ns units |
 | `XhciLinkKeep` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0, 1 | keep a UAS drive as it was when its SuperSpeed link drops and recovers |
+| `XhciSsFlapFallback` | `xhci98.inf`, the controller's | never (issue 29, the owner 2026-11-09; the window's Advanced) | - | 0, 1 | send a USB 3 device whose SuperSpeed link keeps failing to USB 2.0, or give the link up |
 | `XhciResumeKeep` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0, 1 | keep a root-port device as it was after a resume that started the controller afresh |
 | `XhciUsb2Bos` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0, 1 | ask a USB 2.1 device at High or Full Speed for its BOS descriptor |
 | `XhciLogVerbosity` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0 to 4 | the driver's log |
@@ -3227,7 +3531,7 @@ user-visible effect, off or on by default for a reason the user can judge
 | `XhciFirstEnumPortMs` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0 to 30000 | the longest one port may hold it, in ms (held to `XhciFirstEnumWaitMs`) |
 | `XhciMaxTransferKB` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 64 to 2048, a multiple of 4 | the largest UAS command, in KiB |
 | `XhciWideMap` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0, 1 (read on 2000 and later; the window shows it greyed on 98 SE and ME, as `XhciPollFineTimer`) | two pieces of a large bulk transfer at once |
-| `XhciCmRingInterrupt` | `xhcicm.inf`, the NHI's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0, 1 on 2000 and later; refused on 98 SE and ME, where the window shows it greyed | the controller's interrupt for a plug or removal |
+| `XhciCmRingInterrupt` | `xhcicm.inf`, the NHI's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0, 1 on every system since task 48.26 (on 2000 and later alone before, refused on 98 SE and ME, where the window showed it greyed) | the controller's interrupt for a plug or removal |
 | `XhciCmUsb4V2` | `xhcicm.inf`, the NHI's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0, 1 | USB4: a version 2 router run as one (a bench switch: leave it at 1) |
 
 Not asked: the log values (`SNAPON.BAT` and `SNAPOFF.BAT` own them, with a

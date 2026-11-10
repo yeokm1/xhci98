@@ -22,6 +22,8 @@ Every registry setting of the xHCI98 controller driver and of the Thunderbolt an
 - [Controller faults (`XhciTolerance`, `XhciIntervalCap`, `XhciAvgTrbEsit`)](#controller-faults-xhcitolerance-xhciintervalcap-xhciavgtrbesit)
 - [Linux's controller quirks (`XhciMsiAvoid` and thirteen more)](#linuxs-controller-quirks-xhcimsiavoid-and-thirteen-more)
 - [The Thunderbolt driver: bridges behind a tunnel on 98 SE and ME (`XhciCmBridgeNumbering`)](#the-thunderbolt-driver-bridges-behind-a-tunnel-on-98-se-and-me-xhcicmbridgenumbering)
+- [Thunderbolt networking speed on 98 SE and ME: the TCP receive window (`DefaultRcvWindow`)](#thunderbolt-networking-speed-on-98-se-and-me-the-tcp-receive-window-defaultrcvwindow)
+- [Thunderbolt networking speed on 98 SE and ME: the controller's interrupt](#thunderbolt-networking-speed-on-98-se-and-me-the-controllers-interrupt)
 
 ## Where the values are, and every value
 
@@ -58,13 +60,16 @@ A value there **wins** over the same value in a controller's own key, for every 
 | `XhciPollIdleMs` | While polling, the period with nothing outstanding, in ms | `1` | `5000` | `50` | `50` |
 | `XhciPollActiveMs` | While polling, the shortest period with transfers outstanding, in ms (with only a mouse's or keyboard's periodic transfers outstanding, the endpoint's interval is used, held between this and the idle period) | `1` | `XhciPollIdleMs` | `1` | `1` |
 | `XhciPollFineTimer` | While polling at `XhciPollActiveMs`, a finer system clock asked of Windows (2000 to 7; Windows 98 SE and ME ignore it); off unless set: any value but `0` turns it on (see "Polling and message-signalled interrupts") | `0` | `1` | `0` | `0` |
-| `XhciWideMap` | Two pieces of a large bulk transfer on the controller at once (2000 to 7) | `0` | `1` | `0` | `0` |
+| `XhciWideMap` | Two pieces of a large bulk transfer on the controller at once (2000 to 7); from `3.4.3.0` only with `XhciDmaStaging` set to `0` (see "UAS command size and two transfer pieces at once") | `0` | `1` | `0` | `0` |
 | `XhciSelectiveSuspend` | Selective suspend of idle devices when Windows asks | `0` | `1` | `0` | `0` |
 | `XhciSilentInstall` | Windows 98 SE and ME: `1` installs a device whose class is in the `SilentClasses` list with no wizard (`silent-on.bat` and `silent-off.bat` in `tools\silent\`; see "The silent install" below) | `0` | `1` | `0` | `0` |
 | `XhciUsb2Bos` | From `3.2.0.0`: a device declaring USB 2.1 or later asked for its BOS descriptor at High or Full Speed, which tells Windows and the xHCI98 USB Tree's "can run faster" notice that it can run at SuperSpeed; `0` stops the request for every device, any other value is on (the release notes, "XhciUsb2Bos") | `0` | `1` | `1` | `1` |
 | `XhciResumeKeep` | From `3.4.0.0`: after standby or hibernation that started the controller afresh (`XhciResumeReinit` below, and every controller that cannot save its state), a device on a root port is kept as it was - its drive letter and the files open on it - instead of being removed and found again; a UAS drive is kept under load too, its requests held from the sleep until the drive is checked after the wake (a drive found changed behind the same USB device, a different disk or medium, is found again as a new one); a hub and what is behind it, a Bulk-Only drive, a drive with no serial number or one that could not finish its requests before the sleep, an isochronous (audio, video) device and a device selective suspend held are still found again; `0` turns it off, any other value is on | `0` | `1` | `1` | `1` |
+| `XhciStagePoolKiB` | From `3.4.3.0`: the memory, in KiB, the driver sets aside at each start for the data of every transfer, which passes through memory of the driver's own rather than straight to the program's; more lets several fast drives move larger pieces at once; a value below `256` is `256`, above `16384` is `16384` | `256` | `16384` | `2048` | `2048` |
+| `XhciDmaStaging` | From `3.4.3.0`: `1` passes the data of every transfer through memory of the driver's own, so that a controller that stops answering while removed or disabled lets every program's request finish; every transfer's data is then copied once more, which takes processor time and can lower the speed. `0`, the default, gives the controller the programs' own memory, as before `3.4.3.0`: no copy, but the programs' requests wait for ever when the controller cannot be shown to have stopped (any value but `0` is `1`) | `0` | `1` | `0` | `0` |
 | `XhciEventRingTrbs` | From `3.4.2.0`: the size of the controller's event ring, the queue every device's completions pass through: `1024` a larger ring, which lets an audio or video stream at High Speed keep more requests queued (if the memory for it is not there, the controller uses the smaller ring); `256` the smaller ring of the releases before; any other value is `1024` | `256` | `1024` | `1024` | `1024` |
 | `XhciLinkKeep` | From `3.4.0.0`: a UAS drive with a serial number kept as it was - its drive letter and the files open on it - when its SuperSpeed link drops and recovers (behind a hub or on a root port), instead of being removed and found again; every other device is found again as before; `0` turns it off, any other value is on | `0` | `1` | `1` | `1` |
+| `XhciSsFlapFallback` | From `3.4.3.0`: a USB 3 device whose SuperSpeed link keeps failing (three resets within a minute, then a fourth failure) is moved to the USB 2.0 side of the same connector, or of its USB 3 hub, where it runs at High Speed; `0` stops resetting the link instead and leaves the device off until it is unplugged and plugged in again; any other value is on | `0` | `1` | `1` | `1` |
 | `XhciCommandCheck` | From `3.4.0.0`: the command-state checker, which reads a device's state before each command the driver gives the controller and counts and logs what a controller that follows the xHCI specification to the letter would refuse; it changes nothing the driver does, and the xHCI98 USB Tree's snapshot shows its counters (`StrictChecked`, `StrictViolations`, `StrictUndefined`, `StrictRefusals`) and log lines (`strict.*`) for a report; `0` turns it off, any other value is on | `0` | `1` | `1` | `1` |
 | `XhciAcpiTables` | From `3.4.1.0`: Windows 98 SE and ME: the computer's firmware (ACPI) tables read when the xHCI98 USB Tree saves them (File > Save Firmware Tables..., `XHCITR /acpi`); `0` refuses it, any other value allows it; 2000 and later ignore it | `0` | `1` | `1` | `1` |
 
@@ -134,8 +139,10 @@ A value there **wins** over the same value in a controller's own key, for every 
 | `XhciCmNetRxFrames` | From `3.4.0.0`, Thunderbolt networking: receive buffers of 4 KB each | `32` | `1024` | `128` | `128` |
 | `XhciCmNetTxFrames` | From `3.4.0.0`, Thunderbolt networking: send buffers of 4 KB each | `32` | `1024` | `128` | `128` |
 | `XhciCmNetE2E` | From `3.4.0.0`, Thunderbolt networking: `1` uses end-to-end flow control where the other computer offers it; `0` for one that mishandles it | `0` | `1` | `1` | `1` |
+| `XhciCmNetInterrupt` | From `3.4.3.0`, Thunderbolt networking: `1` lets the controller's interrupt tell the driver at once that network traffic came in, where `XhciCmRingInterrupt` is `1` and that interrupt works (on 98 SE and ME only with `XhciPfwNhiLine` `0`); the driver still looks every clock tick as well, and goes back to looking alone if the interrupt fails. `0` looks every clock tick alone. Any other value is refused and `1` stands | `0` | `1` | `1` | `1` |
+| `XhciCmInferAtStart` | From `3.4.3.0`, USB4: a device already attached when Windows starts, on a computer whose USB4 controller does not tell the driver which of its ports leads where. `1` lets the driver work out the port when exactly one such device is attached and two separate readings agree, so that safely removing the device closes its connection; `0` leaves that connection open until the device is unplugged. Any other value is refused and `0` stands | `0` | `1` | `0` | `0` |
 | `XhciCmBridgeNumbering` | 98 SE and ME: the set-up of PCI bridges behind a tunnel plugged in after start (see "The Thunderbolt driver: bridges behind a tunnel on 98 SE and ME" below) | `0` | `1` | `1` | `1` (98 SE and ME) |
-| `XhciCmNoIrqStart` | 98 SE and ME: an NVMe drive behind a tunnel whose interrupt cannot be routed started with none, for the bundled Stor98 to poll (see below) | `0` | `1` | `1` | `1` (98 SE and ME) |
+| `XhciCmNoIrqStart` | 98 SE and ME: an NVMe drive or a USB controller behind a tunnel whose interrupt cannot be routed started with none, for the bundled Stor98 or xhci98.sys to poll (see below) | `0` | `1` | `1` | `1` (98 SE and ME) |
 | `XhciCmAsm4242Handover` | From `3.4.1.0`: `1` lets the driver send an ASMedia ASM4242 host the USB4 handover the board's firmware sends only to a system that runs ACPI (98 SE and ME) or only to Windows 11 (2000 to 10), when the firmware (98 SE and ME) or the board (2000 to 10) is one the driver knows; `0` never sends it (see below) | `0` | `1` | `1` | `1` |
 | `XhciCmAsm4242Structural` | From `3.4.1.0`: `1` also sends the ASM4242 handover when the firmware is not a known build but its handover code matches one (on 2000 to 10 only when `XhciCmAsm4242Reads` is `1`); `0` sends it only to a known build (see below) | `0` | `1` | `0` | `0` |
 | `XhciCmAsm4242Reads` | 2000 to 10, from `3.4.1.0`: `1` lets the driver read the firmware's own tables and memory to send the ASM4242 handover to a board it does not know; `0` sends it to a known board only (see below) | `0` | `1` | `0` | `0` (2000 to 10) |
@@ -143,9 +150,10 @@ A value there **wins** over the same value in a controller's own key, for every 
 | `XhciCmTunnelBridge` | A `REG_SZ`, not a `DWORD`: `auto` (written by the install): the driver finds the tunnel ports itself; or a comma-separated `bb:dd.f` list of PCI bridges that replaces its finding. An empty value means `auto` too | - | - | `auto` (the driver's own finding) | `auto` |
 | `XhciCmBridgeReq` | 2000 and XP (XP x64 too), from `3.4.0.0`: the memory windows of the PCI bridges a dock or enclosure brings up while Windows runs, set so that the devices behind every bridge get what they need (without it a dock plugged in while Windows runs may get only one of its ports); `0` leaves Windows' own, `1` on, `2` only records what would be done, for a report; any other value is refused and `1` stands. The installer's Thunderbolt "Advanced..." and `INSTALL /set` set it; ignored on 98 SE, ME and Vista to 10 | `0` | `2` | `1` | `1` (2000, XP and XP x64) |
 | `XhciCmAsmediaPcie7Credits` | USB4 connection manager, from `3.3.0.0`: a bench experiment, leave it at `0`. `1` writes 7 credits, IFC 1 and ISE 0 into the two protocol-adapter entries of a PCI Express tunnel the driver builds between an ASMedia ASM4242 host router and an ASM2464 device router; `0` keeps them as read; any other value is refused and `0` stands | `0` | `1` | `0` | `0` |
-| `XhciCmRingInterrupt` | From `3.4.0.0`, Windows 2000 to 10: `1` lets the Thunderbolt or USB4 controller's interrupt tell the driver at once that a device was plugged in or removed, where Windows gives the controller one and the driver's own test of it passes; `0` looks every `XhciCmPollIdleMs` as before. With `1` the driver still looks at that period, and goes back to looking alone if the interrupt fails or stops coming. 98 SE and ME look as with `0` whatever it says. Any other value is refused and `0` stands | `0` | `1` | `0` | `0` (2000 to 10) |
+| `XhciCmRingInterrupt` | From `3.4.0.0` (98 SE and ME from `3.4.3.0`): `1` lets the Thunderbolt or USB4 controller's interrupt tell the driver at once that a device was plugged in or removed, where Windows gives the controller one and the driver's own test of it passes; `0` looks every `XhciCmPollIdleMs` as before. With `1` the driver still looks at that period, and goes back to looking alone if the interrupt fails or stops coming. On 98 SE and ME the controller has an interrupt only with `XhciPfwNhiLine` `0`. Any other value is refused and `0` stands | `0` | `1` | `0` | `0` |
 | `XhciCmUsb4V2` | USB4 connection manager, from `3.4.0.0`: a bench switch, leave it at `1`. `1` runs a USB4 version 2 router (Barlow Ridge, say) as a version 2 one: Gen 4 links, symmetric or asymmetric, and the version 2 features the USB4 Specification asks for; `0` runs every router as version 1, as `3.3.0.0` did; any other value is refused and `1` stands | `0` | `1` | `1` | `1` |
 | `XhciCmGen4LinkRecovery` | USB4 connection manager, from `3.4.0.0`: a bench switch, leave it at `1`. `1` lets a Gen 4 link between the controller and a USB4 version 2 device recover from a link error in place, the devices behind it kept, and checks the device's connections after each recovery; `0` takes such an error as an unplug followed by a fresh plug, as before; `XhciCmUsb4V2` `0` turns it off too; any other value is refused and `1` stands | `0` | `1` | `1` | `1` |
+| `XhciCmSleepEntry` | USB4 connection manager, from `3.4.3.0`: leave it as installed. `1` (the default) puts the Thunderbolt / USB4 devices to sleep in order at standby and hibernation and builds their connections again afterwards; `0` leaves them as earlier releases did; any other value is refused and `1` stands | `0` | `1` | `1` | `1` |
 
 **Thunderbolt networking (`xhcinet.sys`, and `xhcinet6.sys` on 8, 8.1 and 10)**, from `3.4.0.0`: the value is in the network adapter's own driver key (`HKLM\System\CurrentControlSet\Services\Class\Net\NNNN` on 98 SE and ME, `HKLM\SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}\NNNN` on 2000 to 10, the subkey whose `DriverDesc` is "xHCI98 Thunderbolt Networking"), not in `Services\USB`, and it is a string (`REG_SZ`) holding a number, as Windows' network Advanced page writes it: the adapter's Properties, Advanced, "MTU" sets it. It is read when the adapter starts: disable and enable the adapter, or restart Windows, after a change. A value outside its range is refused and the default stands. Raise it on both computers together; a peer that takes no large frames still gets frames of up to 1514 bytes.
 
@@ -329,7 +337,7 @@ A UAS command moves up to 1 MiB by default. Restart after changing either value 
 On Windows 98 SE and ME the practical maximum is 64 KiB: Windows' storage layer there never sends a request larger than that, so a larger setting makes no difference.
 
 - `XhciMaxTransferKB`: the largest UAS command for every UAS drive on the controller, `64` to `2048` KiB in multiples of `4`. Default `1024`.
-- `XhciWideMap`: `1` keeps two pieces of a large bulk transfer on the controller at once, on Windows 2000 to 7. **Off by default** (`0`), because a regression would show as wrong data rather than an error.
+- `XhciWideMap`: `1` keeps two pieces of a large bulk transfer on the controller at once, on Windows 2000 to 7 (off by default). With `XhciDmaStaging` set to `1` (from `3.4.3.0`) every transfer's data passes through memory of the driver's own, in pieces of up to 1 MiB, and this value then changes nothing.
 
 Microsoft's per-device `MaximumTransferLength` under `HKLM\SYSTEM\CurrentControlSet\Control\usbstor\VVVVPPPP` (`65535` to `2097152` bytes) sets the command size for one drive model instead. The release notes, "XhciMaxTransferKB" and "XhciWideMap", have the details.
 
@@ -460,7 +468,7 @@ on Windows 98 SE and ME only.
 
 | Value | What it sets | Minimum | Maximum | Default when absent | Written by the install |
 |---|---|---|---|---|---|
-| `XhciCmNoIrqStart` | An NVMe drive behind a Thunderbolt or USB4 tunnel whose interrupt cannot be routed (Device Manager: Code 29, 12, 16 or 27) started with no interrupt, when it is bound to the bundled Stor98 0.4.0.0 or later, which then polls (98 SE and ME; ignored on 2000 to 7) | `0` | `1` | `1` | `1` (98 SE and ME) |
+| `XhciCmNoIrqStart` | An NVMe drive behind a Thunderbolt or USB4 tunnel whose interrupt cannot be routed (Device Manager: Code 29, 12, 16 or 27) started with no interrupt, when it is bound to the bundled Stor98 0.4.0.0 or later, which then polls; from `3.4.3.0` also a USB controller there (such as a dock's second USB controller, Code 29), when it is bound to xhci98.sys, which then polls (98 SE and ME; ignored on 2000 to 7) | `0` | `1` | `1` | `1` (98 SE and ME) |
 | `XhciCmAsm4242Handover` | On a board whose USB4 host is an ASMedia ASM4242, the handover the firmware gives a system that runs ACPI (on 2000 to 10: that it gives Windows 11 alone), sent by the driver when it starts, once, if the firmware (on 2000 to 10: the board) is one the driver knows and names the same host; without it such a host never answers and no device behind it works. `0` never sends it | `0` | `1` | `1` | `1` |
 | `XhciCmAsm4242Structural` | On a board whose USB4 host is an ASMedia ASM4242 and whose firmware the driver does not know, the handover sent if the firmware's handover code matches a known build's (on 2000 to 10 only when `XhciCmAsm4242Reads` is `1`, which reads the firmware's tables). Setup asks about it when it finds such a host. `0` sends it only to a known build | `0` | `1` | `0` | `0` |
 | `XhciCmAsm4242Reads` | 2000 to 10: on a board whose USB4 host is an ASMedia ASM4242 and which the driver does not know, `1` lets it read the firmware's own tables and memory to find the handover; this can stop Windows on some machines. `0` sends the handover to a known board only; an unknown board is then reported in the xHCI98 USB Tree's report. Restart Windows after changing it | `0` | `1` | `0` | `0` (2000 to 10) |
@@ -499,3 +507,75 @@ until it next starts (`StorIntWatchdog` on 98 SE and ME,
 Stor98's README, "Settings"). The value above keeps what the start
 found; XHCIPERF's Stor98 page shows the mode in use, `polling after
 missed interrupts` once it has switched.
+
+From `3.4.3.0` the bundled Stor98 on 98 SE can take an NVMe
+controller the BIOS has already set up. On ME it always leaves such a
+controller and ignores both values below, because taking it there can
+hang Windows' start. By default it leaves such a
+controller, because the BIOS may still be serving its drive through INT 13h:
+the drive then runs in MS-DOS compatibility mode and Stor98's controller
+shows Code 10. The value is a `DWORD` in `HKLM\System\CurrentControlSet\Services\stor98`;
+one controller alone is taken with the string value `AdapterSettings` set to
+`stortakefirmware=1` in that controller's key under
+`HKLM\System\CurrentControlSet\Services\Class\SCSIAdapter` (the one whose
+`DriverDesc` is Stor98's), and `stortakefirmware=0` there leaves it whatever
+the machine-wide value says (Stor98's README, "Settings"). Taking it can
+hang Windows' start or corrupt data if the BIOS still uses the drive. Each
+start's finding is recorded as `StorFind <bus>.<device>.<function>` in the
+same key.
+
+| Value | What it sets | Minimum | Maximum | Default when absent | Written by the install |
+|---|---|---|---|---|---|
+| `StorTakeFirmware` | 98 SE: `1` takes every NVMe controller the BIOS set up at its next start, `0` leaves it to the BIOS; only an exact `1` takes (ignored on ME and on 2000 to 10) | `0` | `1` | `0` | `0` (98 SE and ME) |
+
+## Thunderbolt networking speed on 98 SE and ME: the TCP receive window (`DefaultRcvWindow`)
+
+This is a tip, not one of this package's values: `DefaultRcvWindow` is
+Windows 98 SE and ME's own TCP setting, which no xHCI98 install writes or
+changes. It sets how much data the other computer may send before 98 SE or
+ME has to answer, and the systems' own default is small. On a Thunderbolt
+networking link, data coming in to 98 SE from a Windows 11 computer can go
+from about 10 Mbit/s to about 100 Mbit/s when it is set to `64240`; data going out was not changed by it.
+
+It is a string value (`REG_SZ`) named `DefaultRcvWindow` in
+`HKLM\System\CurrentControlSet\Services\VxD\MSTCP`. To set it: Start, Run,
+`regedit`, and open that key. If `DefaultRcvWindow` is already there,
+write down the number it holds before you change it, then double-click it
+and type `64240`; if it is not there, choose Edit, New, String Value,
+name it `DefaultRcvWindow`, double-click it and type `64240`. Then restart
+Windows. It applies to all of the system's TCP networking, not only to
+Thunderbolt networking: every network adapter and every connection uses
+the same window.
+
+To undo it, open the same key: if you created `DefaultRcvWindow`, delete
+it (right-click, Delete); if it was there before, double-click it and type
+the number you wrote down. Then restart Windows.
+
+## Thunderbolt networking speed on 98 SE and ME: the controller's interrupt
+
+By default the Thunderbolt or USB4 controller has no interrupt on 98 SE
+and ME, and the driver looks for network traffic at every clock tick.
+Letting the controller's interrupt report traffic at once makes
+Thunderbolt networking about three times faster in both directions, and
+with it the receive window above makes little difference.
+
+It takes two values, both `REG_DWORD`:
+
+- `XhciCmRingInterrupt` `1` in `HKLM\System\CurrentControlSet\Services\USB`;
+- `XhciPfwNhiLine` `0` in `HKLM\System\CurrentControlSet\Services\VxD\XHCIPFW`,
+  which leaves the controller the interrupt its BIOS gave it.
+
+Set them with Regedit, then shut down and start Windows again. If
+Device Manager then shows the Thunderbolt or USB4 controller with a
+problem ("cannot find any free Interrupt Request (IRQ) resources"), or
+its devices no longer appear, the BIOS gave the controller an interrupt
+that another device holds: put the values back (below). That is why
+`XhciPfwNhiLine` is `1` by default: with `1` the controller starts on
+every board, with no interrupt.
+
+`XhciCmRingInterrupt` also tells the driver at once that a device was
+plugged in or removed, and applies on every system. Where the interrupt
+fails or stops, the driver goes back to looking at every clock tick.
+
+To undo it, set `XhciCmRingInterrupt` to `0` and `XhciPfwNhiLine` to `1`,
+then shut down and start Windows again.

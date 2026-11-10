@@ -48,8 +48,18 @@
                download carries. release-matrix.ps1 lists a leg whose
                package lacks it as not in the package and does not start
                it; run-leg.ps1 refuses it
+    Audio      $true (2000 to 7): after list-current the guest asks for
+               QEMU's usb-audio, which the host plugs into the controller
+               (its output to -audiodev none: nothing plays on the host);
+               WAVCHK.EXE (wavchk\, built by its build.cmd) plays a 2 s WAV
+               through the waveOut device named USB once Windows has
+               installed it and must play it to the end (audio-play), and
+               XHCITR's report must show the counters with no UrbsMalformed
+               (urbs-malformed): Windows 2000's usbaudio.sys selecting its
+               streaming interface, refused by 3.4.2.0 (docs/issues/30)
     Checks     the guest's checks that must each be reported PASS (default:
-               driver-file, list-current, stick-seen, stick-copy, list-removed)
+               driver-file, list-current, stick-seen, stick-copy, list-removed,
+               and with Audio audio-play and urbs-malformed)
     Manual     $true: not started by release-matrix.ps1 (a window leg with
                no WindowKeys is Manual)
     Minutes    the leg's deadline (default 90)
@@ -119,6 +129,7 @@
             Guest      = 'w2k'
             Mode       = 'console'
             PromptStep = 'xp'
+            Audio      = $true
             Exits      = @{ install = @(3); list = @(0); uninstall = @(3); 'list-final' = @(0) }
         }
         @{

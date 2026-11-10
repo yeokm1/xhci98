@@ -45,6 +45,7 @@
 #include "xhci_dbg.h"
 #include "xhci_poll.h"
 #include "hcd_svc.h"
+#include "xhci_stage.h"
 
 /*
  * Bounded waits, all specification-derived.
@@ -2511,8 +2512,21 @@ static ULONG xhciTryClearBusMaster(PXHCI_EXTENSION ext)
         return 0;
     }
     if (command == 0xFFFFU) {
-        XHCI_DBG_TEXT("quiesce: device is off the bus - it masters nothing");
-        return 1;
+        /* Task 48.33 (design record 17 section 4.13.8): with staging, all
+         * ones is not a proof - a function that stops answering
+         * configuration reads has not shown that writes it already
+         * forwarded have drained (section 4.13.7). Not proven; the stop
+         * keeps this driver's memory and completes its clients. With
+         * XhciDmaStaging 0 it reads as 3.4.2.0 read it, a function off the
+         * bus (XhciStageCommandProof). */
+        if (XhciStageCommandProof(command, ext->DmaStaging)) {
+            XHCI_DBG_TEXT("quiesce: device is off the bus - it masters "
+                          "nothing");
+            return 1;
+        }
+        XHCI_DBG_TEXT("quiesce: PCI command reads all ones - DMA not "
+                      "proven stopped");
+        return 0;
     }
     if ((command & XHCI_PCI_COMMAND_BME) == 0) {
         XHCI_DBG_VALUE("quiesce: bus mastering was already off, PCI command",
@@ -2534,7 +2548,9 @@ static ULONG xhciTryClearBusMaster(PXHCI_EXTENSION ext)
         XHCI_DBG_TEXT("quiesce: Bus Master Enable cleared but not confirmed");
         return 0;
     }
-    if (command != 0xFFFFU && (command & XHCI_PCI_COMMAND_BME) != 0) {
+    if (!XhciStageCommandProof(command, ext->DmaStaging)) {
+        /* All ones at the read-back proves nothing either with staging
+         * (task 48.33); with XhciDmaStaging 0 it reads as in 3.4.2.0. */
         XHCI_DBG_VALUE("quiesce: Bus Master Enable would not clear, PCI "
                        "command", command);
         return 0;

@@ -592,6 +592,9 @@ VOID HcdSvcDmaNotStopped(PXHCI_EXTENSION ext)
     }
     hc = HcdControllerFromExt(ext);
     hc->CommonBufferPinned = 1;
+    /* Task 48.33 (design record 13 section 11.11.6, step 1): no TD is
+     * admitted, no staging handed out, from here. */
+    HcdStageCloseAdmission(hc);
 }
 
 /* --------------------------------------------------------------------- */

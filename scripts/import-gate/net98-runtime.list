@@ -47,3 +47,42 @@ NDIS.SYS!NdisReleaseSpinLock
 NDIS.SYS!NdisTerminateWrapper
 NDIS.SYS!NdisUnchainBufferAtFront
 NDIS.SYS!NdisWriteErrorLogEntry
+
+[record cdcnet-tcp98]
+repository usb-wdm-free
+commit 427acad
+observation docs/testing/2026-11-07-98se-tcp.md
+imports src/net/cdcnet/imports-ndis5.txt
+systems 98SE ME
+NDIS.SYS!NDIS_BUFFER_TO_SPAN_PAGES
+NDIS.SYS!NdisAcquireSpinLock
+NDIS.SYS!NdisAdjustBufferLength
+NDIS.SYS!NdisAllocateBuffer
+NDIS.SYS!NdisAllocateBufferPool
+NDIS.SYS!NdisAllocateMemory
+NDIS.SYS!NdisAllocatePacket
+NDIS.SYS!NdisAllocatePacketPool
+NDIS.SYS!NdisAllocateSpinLock
+NDIS.SYS!NdisCloseConfiguration
+NDIS.SYS!NdisFreeBuffer
+NDIS.SYS!NdisFreeBufferPool
+NDIS.SYS!NdisFreeMemory
+NDIS.SYS!NdisFreePacket
+NDIS.SYS!NdisFreePacketPool
+NDIS.SYS!NdisFreeSpinLock
+NDIS.SYS!NdisInitializeWrapper
+NDIS.SYS!NdisMCancelTimer
+NDIS.SYS!NdisMGetDeviceProperty
+NDIS.SYS!NdisMInitializeTimer
+NDIS.SYS!NdisMRegisterMiniport
+NDIS.SYS!NdisMSetAttributesEx
+NDIS.SYS!NdisMSleep
+NDIS.SYS!NdisOpenConfiguration
+NDIS.SYS!NdisQueryBuffer
+NDIS.SYS!NdisQueryBufferOffset
+NDIS.SYS!NdisReadConfiguration
+NDIS.SYS!NdisReleaseSpinLock
+NDIS.SYS!NdisSetTimer
+NDIS.SYS!NdisTerminateWrapper
+NDIS.SYS!NdisUnchainBufferAtFront
+NDIS.SYS!NdisWriteErrorLogEntry

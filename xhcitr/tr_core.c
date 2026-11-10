@@ -1103,6 +1103,24 @@ int tr_query_new_pass(const TR_QUERY *a, const TR_QUERY *b)
     return moved >= CM_Q_NEW_PASSES && moved < 0x80000000UL;
 }
 
+int tr_query_watch_new(const TR_QUERY *pre, const TR_QUERY *now)
+{
+    return tr_query_eject_ready(now, NULL) && tr_query_new_pass(pre, now);
+}
+
+int tr_query_age_within(TR_U32 ageMs, TR_U32 heldMs)
+{
+    return ageMs != CM_Q_UNKNOWN && ageMs < CM_Q_CURRENT_MS &&
+           heldMs < CM_Q_CURRENT_MS - ageMs;
+}
+
+int tr_query_watch_current(const TR_QUERY *pre, const TR_QUERY *now,
+                           TR_U32 heldMs)
+{
+    return tr_query_watch_new(pre, now) &&
+           tr_query_age_within(now->AgeMs, heldMs);
+}
+
 int tr_query_same_content(const TR_QUERY *a, const TR_QUERY *b)
 {
     return a->EpochLo == b->EpochLo && a->EpochHi == b->EpochHi &&
@@ -3868,6 +3886,366 @@ int tr_bkind_fast(const TR_BKIND *b, int reports)
     return (reports ? b->Shown : b->Sent) == TR_BK_FAST;
 }
 
+/* ---- The USB drive notice (record 25 section 7.8, task 48.17) ------------ */
+
+int tr_stor_on(int haveValue, TR_U32 value)
+{
+    return haveValue && value == 1;
+}
+
+void tr_stor_key(char *out, size_t cap, const char *ctrlKey, const char *path,
+                 unsigned int vid, unsigned int pid, TR_U32 slot)
+{
+    char k[TR_FAST_KEY];
+
+    tr_fast_key(k, sizeof(k), ctrlKey, path, vid, pid);
+    tr_sprintf(out, cap, "%s|s%lu", k, (unsigned long)slot);
+}
+
+/* A drive letter in a label: "(F:" or ", F:" as usb_label writes them. */
+static int tr_stor_has_letter(const char *s)
+{
+    for (; s[0] != '\0'; s++) {
+        if ((s[0] == '(' || s[0] == ' ') && s[1] >= 'A' && s[1] <= 'Z' &&
+            s[2] == ':') {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int tr_stor_name(char *out, size_t cap, const char *label,
+                 const char *product, unsigned int vid, unsigned int pid)
+{
+    size_t len;
+
+    if (cap == 0) {
+        return TR_SN_VIDPID;
+    }
+    if (label != NULL && label[0] != '\0' && !tr_name_generic(label)) {
+        tr_copy(out, label, cap);
+        return tr_stor_has_letter(label) ? TR_SN_LETTER : TR_SN_LABEL;
+    }
+    if (product != NULL) {
+        while (*product == ' ') {
+            product++;
+        }
+        len = strlen(product);
+        while (len > 0 && product[len - 1] == ' ') {
+            len--;
+        }
+        if (len > 0) {
+            if (len > cap - 1) {
+                len = cap - 1;
+            }
+            memcpy(out, product, len);
+            out[len] = '\0';
+            return TR_SN_PRODUCT;
+        }
+    }
+    if (label != NULL && label[0] != '\0') {
+        tr_copy(out, label, cap);
+        return TR_SN_CLASS;
+    }
+    tr_sprintf(out, cap, "USB drive %04X:%04X", vid & 0xFFFFU, pid & 0xFFFFU);
+    return TR_SN_VIDPID;
+}
+
+int tr_stor_grp_find(const TR_STOR_GRP *g, const char *key)
+{
+    int i;
+
+    for (i = 0; i < g->Kept; i++) {
+        if (strcmp(g->Key[i], key) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void tr_stor_grp_del(TR_STOR_GRP *g, int i)
+{
+    int n = g->Kept - i - 1;
+
+    if (n > 0) {
+        memmove(g->Key[i], g->Key[i + 1], (size_t)n * sizeof(g->Key[0]));
+        memmove(g->Ctrl[i], g->Ctrl[i + 1], (size_t)n * sizeof(g->Ctrl[0]));
+        memmove(g->Name[i], g->Name[i + 1], (size_t)n * sizeof(g->Name[0]));
+    }
+    g->Kept--;
+    g->N--;
+}
+
+static void tr_stor_grp_add(TR_STOR_GRP *g, const char *key, const char *ctrl,
+                            const char *name, TR_U32 nowMs)
+{
+    if (g->N <= 0) {
+        g->N = 0;
+        g->Kept = 0;
+        g->First = nowMs;
+    }
+    if (g->Kept < TR_STOR_MAX) {
+        tr_copy(g->Key[g->Kept], key, TR_FAST_KEY);
+        tr_copy(g->Ctrl[g->Kept], ctrl, TR_FAST_KEY);
+        tr_copy(g->Name[g->Kept], name, TR_STOR_NAME);
+        g->Kept++;
+    }
+    g->N++;
+}
+
+static int tr_stor_quiet(const char (*quietCtrl)[TR_FAST_KEY], int nq,
+                         const char *ctrl)
+{
+    int i;
+
+    for (i = 0; i < nq; i++) {
+        if (strcmp(quietCtrl[i], ctrl) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int tr_stor_step(TR_STOR_SET *set, const int *gone, const TR_STOR_OBS *obs,
+                 int nobs, const char (*quietCtrl)[TR_FAST_KEY], int nq,
+                 int quietAll, TR_STOR_Q *q, TR_U32 nowMs)
+{
+    static TR_STOR_SET next;
+    static unsigned char used[TR_STOR_MAX * 4];
+    int events = 0;
+    int i;
+    int j;
+
+    if (nobs > (int)sizeof(used)) {
+        nobs = (int)sizeof(used);
+    }
+    memset(used, 0, sizeof(used));
+    next.N = 0;
+    for (i = 0; i < set->N; i++) {
+        const TR_STOR_ENT *e = &set->E[i];
+        int quiet = quietAll || tr_stor_quiet(quietCtrl, nq, e->Ctrl);
+
+        for (j = 0; j < nobs; j++) {
+            if (!used[j] && strcmp(obs[j].Key, e->Key) == 0) {
+                break;
+            }
+        }
+        if (j < nobs) {
+            TR_STOR_ENT *n = &next.E[next.N++];
+
+            used[j] = 1;
+            *n = *e;
+            if (obs[j].Rank >= e->Rank) {
+                tr_copy(n->Name, obs[j].Name, sizeof(n->Name));
+                n->Rank = obs[j].Rank;
+            }
+            if (obs[j].Asked && !n->Asked) {
+                n->Asked = 1;
+                tr_copy(n->Prod, obs[j].Prod, sizeof(n->Prod));
+            }
+            continue;
+        }
+        if (gone == NULL || !gone[i]) {
+            next.E[next.N++] = *e;          /* unknown: kept as it was */
+            continue;
+        }
+        /* gone */
+        j = tr_stor_grp_find(&q->Arr, e->Key);
+        if (j >= 0) {
+            tr_stor_grp_del(&q->Arr, j);    /* never announced: nothing */
+            continue;
+        }
+        if (!quiet) {
+            tr_stor_grp_add(&q->Rm, e->Key, e->Ctrl, e->Name, nowMs);
+            events++;
+        }
+    }
+    for (j = 0; j < nobs; j++) {
+        TR_STOR_ENT *n;
+
+        if (used[j]) {
+            continue;
+        }
+        if (next.N >= TR_STOR_MAX) {
+            break;
+        }
+        n = &next.E[next.N++];
+        memset(n, 0, sizeof(*n));
+        tr_copy(n->Key, obs[j].Key, sizeof(n->Key));
+        tr_copy(n->Ctrl, obs[j].Ctrl, sizeof(n->Ctrl));
+        tr_copy(n->Path, obs[j].Path, sizeof(n->Path));
+        n->Vid = obs[j].Vid;
+        n->Pid = obs[j].Pid;
+        n->Slot = obs[j].Slot;
+        tr_copy(n->Name, obs[j].Name, sizeof(n->Name));
+        n->Rank = obs[j].Rank;
+        n->Asked = obs[j].Asked;
+        tr_copy(n->Prod, obs[j].Prod, sizeof(n->Prod));
+        if (!quietAll && !tr_stor_quiet(quietCtrl, nq, obs[j].Ctrl)) {
+            tr_stor_grp_add(&q->Arr, n->Key, n->Ctrl, n->Name, nowMs);
+            events++;
+        }
+    }
+    memcpy(set, &next, sizeof(*set));
+    return events;
+}
+
+void tr_stor_q_drop_ctrl(TR_STOR_Q *q, const char *ctrl)
+{
+    TR_STOR_GRP *g[2];
+    int k;
+    int i;
+
+    g[0] = &q->Rm;
+    g[1] = &q->Arr;
+    for (k = 0; k < 2; k++) {
+        for (i = g[k]->Kept - 1; i >= 0; i--) {
+            if (strcmp(g[k]->Ctrl[i], ctrl) == 0) {
+                tr_stor_grp_del(g[k], i);
+            }
+        }
+        if (g[k]->Kept == 0) {
+            g[k]->N = 0;        /* those past the kept are not placed */
+        }
+    }
+}
+
+void tr_stor_q_clear(TR_STOR_Q *q)
+{
+    q->Rm.N = q->Rm.Kept = 0;
+    q->Arr.N = q->Arr.Kept = 0;
+}
+
+int tr_stor_due(const TR_STOR_Q *q, const TR_STOR_GATE *g)
+{
+    TR_U32 age;
+
+    if (!g->Ready || g->Quiet || g->FastOwed) {
+        return TR_SQ_NONE;
+    }
+    if (g->FastWatch && g->Now - g->FastAt < TR_STOR_FAST_MS) {
+        return TR_SQ_NONE;
+    }
+    if (g->HaveOther && g->Now - g->OtherAt < TR_STOR_GAP_MS) {
+        return TR_SQ_NONE;
+    }
+    if (q->Rm.N > 0) {
+        return g->Now - q->Rm.First >= TR_STOR_GATHER_MS ? TR_SQ_RM
+                                                          : TR_SQ_NONE;
+    }
+    if (q->Arr.N > 0) {
+        age = g->Now - q->Arr.First;
+        if (age < TR_STOR_GATHER_MS) {
+            return TR_SQ_NONE;
+        }
+        if ((g->ArrNamed && age >= TR_STOR_SETTLE_MS) ||
+            age >= TR_STOR_HOLD_MS) {
+            return TR_SQ_ARR;
+        }
+    }
+    return TR_SQ_NONE;
+}
+
+void tr_stor_text(char *title, size_t tcap, char *text, size_t cap,
+                  const TR_STOR_GRP *g, int removal)
+{
+    char a[TR_STOR_NAME];
+    char b[TR_STOR_NAME];
+    const char *verb1 = removal ? "was removed." : "is connected.";
+    const char *verbN = removal ? "were removed." : "are connected.";
+    int named = g->Kept < 2 ? g->Kept : 2;
+    int more = g->N - named;
+    size_t fixed;
+    size_t room;
+    char tail[64];
+
+    tr_sprintf(title, tcap, "USB drive%s %s", g->N > 1 ? "s" : "",
+               removal ? "removed" : "connected");
+    if (cap == 0) {
+        return;
+    }
+    if (named == 0) {
+        /* none kept: the count alone */
+        tr_sprintf(text, cap, "%d USB drives %s", g->N, verbN);
+        return;
+    }
+    if (more > 0) {
+        tr_sprintf(tail, sizeof(tail), " and %d more %s", more, verbN);
+    } else if (named == 2) {
+        tr_sprintf(tail, sizeof(tail), " %s", verbN);
+    } else {
+        tr_sprintf(tail, sizeof(tail), " %s", verb1);
+    }
+    /* the joints: ", " between two named with more after, " and " between
+     * two named alone */
+    fixed = strlen(tail) + (named == 2 ? (more > 0 ? 2 : 5) : 0);
+    room = cap - 1 > fixed ? cap - 1 - fixed : 0;
+    if (named == 2) {
+        room /= 2;
+    }
+    if (room < 4) {
+        room = 4;
+    }
+    tr_copy(a, g->Name[0], sizeof(a));
+    if (strlen(a) > room) {
+        a[room - 3] = '\0';
+        strcat(a, "...");
+    }
+    if (named == 2) {
+        tr_copy(b, g->Name[1], sizeof(b));
+        if (strlen(b) > room) {
+            b[room - 3] = '\0';
+            strcat(b, "...");
+        }
+        tr_sprintf(text, cap, "%s%s%s%s", a, more > 0 ? ", " : " and ", b,
+                   tail);
+    } else {
+        tr_sprintf(text, cap, "%s%s", a, tail);
+    }
+}
+
+int tr_stor_poll_step(TR_STOR_POLL *base, const TR_STOR_POLL *now)
+{
+    int changed = 0;
+    int i;
+    int j;
+
+    if (base == NULL || now == NULL) {
+        return 0;
+    }
+    for (i = 0; i < now->N; i++) {
+        for (j = 0; j < base->N; j++) {
+            if (strcmp(base->Key[j], now->Key[i]) == 0) {
+                if (base->Bytes[j] != now->Bytes[i]) {
+                    changed = 1;
+                }
+                break;
+            }
+        }
+        if (j == base->N) {
+            changed = 1;
+        }
+    }
+    if (base != now) {
+        *base = *now;
+    }
+    return changed;
+}
+
+int tr_stor_answers(int answered, int nt, TR_U32 major, TR_U32 minor)
+{
+    return answered || (nt && (major > 5UL || (major == 5UL && minor >= 1UL)));
+}
+
+int tr_stor_resend_due(TR_BSEND *s, int ev, TR_U32 nowMs, int answers,
+                       int held)
+{
+    if (held && ev == TR_BE_TICK) {
+        return 0;
+    }
+    return tr_bsend_step(s, ev, nowMs, answers);
+}
+
 void tr_fast_balloon(char *out, size_t cap, const char *name,
                      const TR_FAST *f, int count, int clickBalloon)
 {
@@ -4909,6 +5287,11 @@ int tr_at_line(const char *line, TR_U32 *value)
         *value = v;
     }
     return (v != 0) ? 1 : 2;
+}
+
+const char *tr_eject_end_text(int kind, int unbound)
+{
+    return unbound ? inst_pcie_unbound_text() : tr_eject_open_text(kind);
 }
 
 const char *tr_eject_open_text(int kind)

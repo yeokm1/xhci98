@@ -155,11 +155,12 @@ BEGIN
                     74, 316, 10
     AUTOCHECKBOX    "Watch Windows' own USB &ports too", IDC_S_FASTWIN, 20,
                     88, 304, 10
-    AUTOCHECKBOX    "Quick-save &hotkey:", IDC_S_HK, 8, 108, 80, 10
-    COMBOBOX        IDC_S_HKKEY, 90, 106, 110, 100, CBS_DROPDOWNLIST |
+    AUTOCHECKBOX    "USB &drive notices", IDC_S_STOR, 8, 102, 316, 10
+    AUTOCHECKBOX    "Quick-save &hotkey:", IDC_S_HK, 8, 122, 80, 10
+    COMBOBOX        IDC_S_HKKEY, 90, 120, 110, 100, CBS_DROPDOWNLIST |
                     WS_VSCROLL | WS_TABSTOP
-    LTEXT           "", IDC_S_HKNOTE, 206, 105, 118, 18
-    AUTOCHECKBOX    "&Sound when a quick save ends", IDC_S_SND, 8, 128, 150,
+    LTEXT           "", IDC_S_HKNOTE, 206, 119, 118, 18
+    AUTOCHECKBOX    "&Sound when a quick save ends", IDC_S_SND, 8, 142, 150,
                     10
     DEFPUSHBUTTON   "Apply", IDOK, 152, 242, 114, 14
     PUSHBUTTON      "Close", IDCANCEL, 272, 242, 52, 14

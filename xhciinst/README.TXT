@@ -43,10 +43,11 @@ computer without such windows, and records what it did under
 HKLM\System\CurrentControlSet\Services\VxD\XHCIPFW, in values whose names
 begin with XhciPfw. Untick it, or uninstall, to remove it.
 
-On Windows 2000, XP and the 32-bit Vista, 7, 8 and 8.1 the same box, "Find
-Thunderbolt / USB4 controllers and devices placed above 4 GB", offers
-XHCIPFW.SYS. It is a small driver Windows loads at each start before its
-PCI driver, and it does the same. On 8 and 8.1 it is a filter of each PCI
+On Windows 2000, XP and the 32-bit Vista, 7, 8, 8.1 and 10 (version 2004
+or later) the same box, "Find Thunderbolt / USB4 controllers and devices
+placed above 4 GB", offers XHCIPFW.SYS. It is a small driver Windows loads
+at each start before its PCI driver, and it does the same. On 8, 8.1 and
+10 it is a filter of each PCI
 root bus (the "PCI Express Root Complex" or "PCI bus" in Device Manager),
 named in that device's UpperFilters as the service xhcipff, and it acts as
 that bus starts. As on 98 SE and ME it is ticked whenever the Thunderbolt
@@ -59,42 +60,46 @@ That also ticks this one. The console says so when it sees such a bridge.
 On Windows 2000 and XP it acts only when one processor runs. On a computer
 with several, start them with /NUMPROC=1 in BOOT.INI if they need this. It
 records what it did under
-HKLM\SYSTEM\CurrentControlSet\Services\xhcipfw\Parameters (on 8 and 8.1
-under Services\xhcipff\Parameters). No 64-bit Windows is offered it.
+HKLM\SYSTEM\CurrentControlSet\Services\xhcipfw\Parameters (on 8, 8.1 and
+10 under Services\xhcipff\Parameters). No 64-bit Windows is offered it. On
+8, 8.1 and 10 it acts only at a full start: restart Windows after
+installing or updating (with fast startup on, Shut down and power on is
+not a full start).
 
-If Windows 8 or 8.1 stops at start after XHCIPFW.SYS was installed (its
-file gone or damaged while a PCI root bus still names it), Automatic
-Repair shows "Windows couldn't load correctly" (or the stop reads
-INACCESSIBLE_BOOT_DEVICE). Its Restore (System Restore) may give a working
-start back. Otherwise start the computer from the Windows 8 or 8.1 setup
-DVD or USB stick and choose Next, Repair your computer, Troubleshoot,
-Advanced options, Command Prompt (where Automatic Repair offers Advanced
-options, the same path is there). Type regedit. Select HKEY_LOCAL_MACHINE,
-then File, Load Hive, open the system's Windows\System32\config\SYSTEM and
-give it any name; its drive there need not be C: (dir C:\Windows shows
-whether it is). In that hive read Select\Default for the control set the
-next start uses (ControlSet00n), select that set's Enum key and search
-from it for xhcipff (Edit, Find, Values and Data ticked), and remove the
-line xhcipff from every UpperFilters that has it, keeping any other line
-(an UpperFilters left with no line is fine). Find Next (F3) reaching the
-xhcipff service's own key, outside Enum, means none is left. Then select
-the hive, choose File, Unload Hive, and restart. Do not set the xhcipff
-service to disabled while a root bus names it: that stops the start the
-same way. Without the filter the windows above 4 GB are no longer closed:
-on a board that leaves them there, set "Above 4G Decoding" off in the
-firmware setup for Windows to start, then run Setup again with the box
-ticked.
+If Windows 8, 8.1 or 10 stops at start after XHCIPFW.SYS was installed (its
+file gone or damaged while a PCI root bus still names it, or Secure Boot
+turned on, which keeps it from loading), Automatic Repair shows "Windows
+couldn't load correctly" (or the stop reads INACCESSIBLE_BOOT_DEVICE). Its
+Restore (System Restore) may give a working start back. With Secure Boot
+turned on after the install, turning it off again in the firmware setup is
+enough. Otherwise start the computer from the Windows setup DVD or USB stick
+and choose Next, Repair your computer, Troubleshoot, Advanced options,
+Command Prompt (where Automatic Repair offers Advanced options, the same
+path is there). Type regedit. Select HKEY_LOCAL_MACHINE, then File, Load
+Hive, open the system's Windows\System32\config\SYSTEM and give it any name;
+its drive there need not be C: (dir C:\Windows shows whether it is). In that
+hive read Select\Default for the control set the next start uses
+(ControlSet00n), select that set's Enum key and search from it for xhcipff
+(Edit, Find, Values and Data ticked), and remove the line xhcipff from every
+UpperFilters that has it, keeping any other line (an UpperFilters left with
+no line is fine). Find Next (F3) reaching the xhcipff service's own key,
+outside Enum, means none is left. Then select the hive, choose File, Unload
+Hive, and restart. Do not set the xhcipff service to disabled while a root
+bus names it: that stops the start the same way. Without the filter the
+windows above 4 GB are no longer closed: on a board that leaves them there,
+set "Above 4G Decoding" off in the firmware setup for Windows to start, then
+run Setup again with the box ticked.
 
-The 32-bit Windows 10 is not offered XHCIPFW.SYS: there it cannot start in
-time. On a board that leaves the USB4 ports' windows above 4 GB, 10 cannot
-use the devices behind those ports. An XHCIPFW.SYS that Setup placed there
-before is removed. /xhcipfw and /noxhcipfw are not accepted there.
+The 32-bit Windows 10 before version 2004 is not offered XHCIPFW.SYS. On a
+board that leaves the USB4 ports' windows above 4 GB, it cannot use the
+devices behind those ports. An XHCIPFW.SYS that Setup placed there before
+is removed. /xhcipfw and /noxhcipfw are not accepted there.
 
 On the 32-bit Vista, 7, 8, 8.1 and 10, set "Above 4G Decoding" off in the
 computer's firmware setup where it offers that. With it on, those systems
 can stop at start on a board with a lot of memory space above 4 GB, and
 nothing here can help. With it off, XHCIPFW.SYS closes the windows the
-firmware still leaves above 4 GB on Vista, 7, 8 and 8.1.
+firmware still leaves above 4 GB.
 
 It uses only routines Windows documents for this. It is not devcon, and
 this package's own files include no Microsoft file (the downloads'
@@ -232,8 +237,7 @@ default); only the settings you change are saved. On Windows 98 SE and ME
 an older Stor98 is updated as a file, replaced when Windows next starts
 (no drive is reinstalled), once you answer OK to "Disconnect all external
 NVMe drives before Setup continues." at Install (Cancel stays on the
-Summary page), and the window then offers "Shut down now" rather than a
-restart: Stor98's readme asks for a fresh start after its update there. On
+Summary page), and the window then offers to restart Windows. On
 2000 to 7 a drive behind a Thunderbolt or USB4 port is unplugged and
 plugged in again after its update; Setup asks for that and waits up to two
 minutes. The uninstall removes Stor98 only where Setup installed it: a
@@ -329,7 +333,7 @@ install folder, preselected), /thunderbolt, /stor98 (only with /thunderbolt
 or /cmonly), /nostor98 (Stor98 unticked), /s98vsd and /nos98vsd (98 SE and
 ME: S98VSD.VXD, Stor98 transfer chunks up to 2 MiB, ticked or unticked;
 /s98vsd needs Stor98 in the run), /xhcipfw and /noxhcipfw (98 SE, ME, 2000,
-XP and the 32-bit Vista to 8.1: XHCIPFW.VXD or XHCIPFW.SYS, which finds
+XP and the 32-bit Vista to 10: XHCIPFW.VXD or XHCIPFW.SYS, which finds
 controllers and devices above 4 GB, ticked or unticked; /xhcipfw only with
 /thunderbolt or /cmonly), /tbnet and /notbnet (Thunderbolt networking ticked
 or unticked; /tbnet only with /thunderbolt or /cmonly), /faster and
@@ -588,14 +592,15 @@ firmware Setup does not know as a known build). The release notes,
 "Registry settings", say what each does. A change takes effect at the
 driver's next start. Advanced... on each tab has the settings to change
 only if the release notes advise it. On the USB tab: XhciInterruptMode,
-XhciLinkKeep, XhciResumeKeep, XhciUsb2Bos, XhciImodInterval250ns, the
-driver's log (XhciLogVerbosity, XhciLogDebugView), the polling periods
-(XhciPollIdleMs, XhciPollActiveMs) and XhciPollFineTimer on 2000 to 7,
+XhciLinkKeep, XhciSsFlapFallback, XhciResumeKeep, XhciUsb2Bos,
+XhciImodInterval250ns, the driver's log (XhciLogVerbosity,
+XhciLogDebugView), the polling periods (XhciPollIdleMs, XhciPollActiveMs)
+and XhciPollFineTimer on 2000 to 7,
 XhciSelectiveSuspend, XhciForceBulkOnly, XhciBulkOnlyOwnId,
 XhciFastPollFsLs, XhciMaxTransferKB, XhciWideMap on 2000 to 7, and the
 first report's waits (XhciFirstEnumWaitMs, XhciFirstEnumPortMs). On the
 Thunderbolt tab:
-XhciCmRingInterrupt on 2000 to 10, XhciCmReenum, XhciCmUsb3Tunnel,
+XhciCmRingInterrupt, XhciCmReenum, XhciCmUsb3Tunnel,
 XhciCmLaneBonding, XhciCmPreOsCleanup, XhciCmUsb4V2, the connection
 manager's period, its waits and its log, XhciCmBridgeNumbering,
 XhciCmNoIrqStart and XHCIPFW.VXD's XhciPfwNhiLine on 98 SE and ME,
@@ -606,7 +611,7 @@ install writes each value of the release notes' "Registry settings" and
 "The connection manager's registry values" at its default where it is
 missing, so it is already in the controller's key, every value the drivers
 read (each on the systems that read it: XhciCmBridgeNumbering and
-XhciCmNoIrqStart on 98 SE and ME alone, XhciCmRingInterrupt on 2000 to 10,
+XhciCmNoIrqStart on 98 SE and ME alone,
 XhciCmBridgeReq on 2000 and XP); XhciCmTunnelBridge is written as "auto",
 the driver's own finding of the tunnel ports. Stor98's install does the
 same for its settings (its readme, "Settings"). A value you set is never
@@ -620,9 +625,8 @@ device while Windows' own install of it is under way.
 At the end it says "Done. Please restart Windows now." (exit code 3) when
 it changed anything and finished, "Not everything is done" when it stopped
 with steps left for you (follow those first), and "No changes were made."
-when it changed nothing. After a Stor98 update on 98 SE or ME the first
-two say "shut down and start Windows again" instead. The window then
-offers to restart (or shut down) Windows; the console tool never does.
+when it changed nothing. The window then offers to restart Windows; the
+console tool never does.
 
 The install directory
 ---------------------

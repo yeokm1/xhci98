@@ -10,8 +10,10 @@
  * paths are what they were. CREATE succeeds for the device itself (on NT,
  * an open with a name past the device's is refused), CLOSE and CLEANUP
  * succeed, DEVICE_CONTROL answers CM_Q_IOCTL, CM_QL_IOCTL, CM_QP_IOCTL
- * (the PCI answer below), CM_QM_IOCTL (the marks, below) and CM_QA_IOCTL
- * (the firmware tables, below), everything else is
+ * (the PCI answer below), CM_QM_IOCTL (the marks, below), CM_QA_IOCTL
+ * (the firmware tables, below) and CM_QN_IOCTL (Thunderbolt networking,
+ * cm_qnet.h: built by the thread with the marks, CmNetQueryFill, and
+ * answered as the marks are), everything else is
  * STATUS_INVALID_DEVICE_REQUEST.
  *
  * THE FIRMWARE TABLES (design record 25 section 21, record 32 section
@@ -695,6 +697,7 @@ VOID CmQueryPublish(PCM_NHI nhi, BOOLEAN inert)
     KIRQL irql;
     ULONG bytes;
     ULONG mbytes;
+    ULONG nbytes;
     ULONG readGen;
     BOOLEAN readAny;
     ULONG n;
@@ -773,6 +776,17 @@ VOID CmQueryPublish(PCM_NHI nhi, BOOLEAN inert)
         q->Marks[i] = nhi->MarksBuf[i];
     }
     q->MarksBytes = mbytes;
+    KeReleaseSpinLock(&q->Lock, irql);
+    /* The networking answer (record 35 section 17): built with no lock
+     * held (it calls the network driver's Stats), copied in under it. */
+    nbytes = CmNetQueryFill(nhi);
+    KeAcquireSpinLock(&q->Lock, &irql);
+    for (i = 0; i < nbytes; i++) {
+        q->NetQ[i] = nhi->NetQBuf[i];
+    }
+    q->NetQBytes = nbytes;
+    q->NetQPass = q->Pass;
+    q->NetQTick = q->PassTick;
     KeReleaseSpinLock(&q->Lock, irql);
 }
 
@@ -967,6 +981,62 @@ static NTSTATUS cmQMarks(PCM_QUERY_DEV q, PIRP irp)
         }
     }
     KeReleaseSpinLock(&q->Lock, irql);
+    if (rc == 0xFFFFFFFFUL) {
+        return CmCompleteIrp(irp, cmQNt() ? STATUS_DEVICE_REMOVED
+                                          : STATUS_NO_SUCH_DEVICE, 0);
+    }
+    if (rc == 0xFFFFFFFEUL) {
+        return CmCompleteIrp(irp, STATUS_DEVICE_NOT_READY, 0);
+    }
+    if (rc == CM_Q_ANS_TOO_SMALL) {
+        return CmCompleteIrp(irp, STATUS_BUFFER_TOO_SMALL, 0);
+    }
+    return CmCompleteIrp(irp, STATUS_SUCCESS, info);
+}
+
+/* IRP_MJ_DEVICE_CONTROL's CM_QN_IOCTL (record 35 section 17, task 48.18):
+ * the networking answer as last published, with the pass, its age and the
+ * stopping flag of this request. */
+static NTSTATUS cmQNet(PCM_QUERY_DEV q, PIRP irp)
+{
+    PIO_STACK_LOCATION stack;
+    LARGE_INTEGER ticks;
+    ULONG room;
+    ULONG info;
+    ULONG rc;
+    ULONG pass;
+    ULONG tick;
+    KIRQL irql;
+    PUCHAR out;
+
+    stack = IoGetCurrentIrpStackLocation(irp);
+    room = stack->Parameters.DeviceIoControl.OutputBufferLength;
+    out = (PUCHAR)irp->AssociatedIrp.SystemBuffer;
+    if (out == NULL) {
+        room = 0;
+    }
+    info = 0;
+    pass = 0;
+    tick = 0;
+    KeAcquireSpinLock(&q->Lock, &irql);
+    if (!q->Connected) {
+        rc = 0xFFFFFFFFUL;
+    } else if (q->NetQBytes < CM_QN_HDR_BYTES) {
+        /* No pass has built one yet. */
+        rc = 0xFFFFFFFEUL;
+    } else {
+        /* The pass these bytes were published with, not a later one's. */
+        pass = q->NetQPass;
+        tick = q->NetQTick;
+        rc = CmNetQueryAnswer(out, room, q->NetQ, q->NetQBytes, pass,
+                              (BOOLEAN)(q->Stopping != 0), &info);
+    }
+    KeReleaseSpinLock(&q->Lock, irql);
+    if (rc == CM_Q_ANS_WHOLE || rc == CM_Q_ANS_HEADER) {
+        KeQueryTickCount(&ticks);
+        CmNetQuerySetAge(out, info, pass,
+                         CmQueryAgeMs(ticks.LowPart, tick, KeQueryTimeIncrement()));
+    }
     if (rc == 0xFFFFFFFFUL) {
         return CmCompleteIrp(irp, cmQNt() ? STATUS_DEVICE_REMOVED
                                           : STATUS_NO_SUCH_DEVICE, 0);
@@ -1233,6 +1303,9 @@ NTSTATUS CmQueryDispatch(PDEVICE_OBJECT device, PIRP irp)
         }
         if (stack->Parameters.DeviceIoControl.IoControlCode == CM_QA_IOCTL) {
             return cmQAcpi(q, irp);
+        }
+        if (stack->Parameters.DeviceIoControl.IoControlCode == CM_QN_IOCTL) {
+            return cmQNet(q, irp);
         }
         break;
     case IRP_MJ_POWER:

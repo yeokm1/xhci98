@@ -210,6 +210,10 @@ static volatile LONG g_endVerify;       /* PF_EV_ of the run's whole-file verifi
 static int g_haveResults;
 static int g_npasses;
 static volatile LONG g_running;
+/* Closing: the run asked to stop for it, and the window kept until no
+ * ASPI request of the process is out (record 29 sections 4.4 and 6.2) */
+static int g_closeStop, g_closeWait, g_closeTimer;
+#define PF_TIMER_CLOSE  1
 static HANDLE g_ctrl;
 static HANDLE g_stopEvent;
 static char g_folder[MAX_PATH];
@@ -4166,7 +4170,7 @@ static void start_run(void)
     unsigned id;
     SYSTEMTIME st;
 
-    if (g_running) {
+    if (g_running || g_closeWait) {
         return;
     }
     params_from_ui();
@@ -4842,18 +4846,59 @@ static LRESULT CALLBACK main_proc(HWND w, UINT m, WPARAM wp, LPARAM lp)
         return 0;
     case WM_CLOSE:
         if (g_running) {
-            if (g_cl.exitAtEnd || MessageBoxA(w, "Stop the test and close?", "xHCI98 Disk Benchmark",
-                                              MB_YESNO | MB_ICONQUESTION) == IDYES) {
+            if (g_closeStop && g_os == PF_OS_9X) {
+                /* asked again while 9x's request is still in flight: it
+                 * cannot be cancelled there (record 29 section 4.4) */
+                SetWindowTextA(g_status, "Still waiting for the disk; Windows 98 SE and ME cannot cancel it. "
+                                         "Ctrl+Alt+Del ends XHCIPERF.");
+            } else if (g_cl.exitAtEnd || MessageBoxA(w, "Stop the test and close?", "xHCI98 Disk Benchmark",
+                                                     MB_YESNO | MB_ICONQUESTION) == IDYES) {
                 SetEvent(g_stopEvent);
                 g_cl.exitAtEnd = 1;
+                g_closeStop = 1;
                 SetWindowTextA(g_status, "Waiting for the disk to finish the last request");
             }
             return 0;
+        }
+        /* No ASPI request is sent from here on; one still out owns its SRB
+         * and buffer, so the window stays, says so and closes once it is
+         * given back (record 29 section 6.2), rather than the process
+         * waiting with no window */
+        InterlockedExchange((LONG *)&g_aspiClosing, 1);
+        if (g_aspiOut > 0 || g_aspiThreads > 0) {
+            if (!g_closeWait) {
+                g_closeWait = 1;
+                controls_enable(0);
+                EnableWindow(ctl(IDC_START), FALSE);
+                EnableWindow(ctl(IDC_STOP), FALSE);
+            }
+            /* with no timer the window still stays; a further close tries
+             * the timer again and closes once the counts are 0 */
+            if (!g_closeTimer && SetTimer(w, PF_TIMER_CLOSE, 250, NULL) != 0) {
+                g_closeTimer = 1;
+            }
+            SetWindowTextA(g_status, g_closeTimer ? "Waiting for Stor98 to answer before closing"
+                                                  : "Waiting for Stor98 to answer; close again later");
+            return 0;
+        }
+        if (g_closeTimer) {
+            KillTimer(w, PF_TIMER_CLOSE);
+            g_closeTimer = 0;
         }
         params_from_ui();
         save_settings();
         DestroyWindow(w);
         return 0;
+    case WM_TIMER:
+        if (wp == PF_TIMER_CLOSE) {
+            /* the timer runs until the close itself kills it, so a
+             * request counted again meanwhile is waited for too */
+            if (g_aspiOut <= 0 && g_aspiThreads <= 0) {
+                PostMessageA(w, WM_CLOSE, 0, 0);
+            }
+            return 0;
+        }
+        break;
     case WM_DESTROY:
         PostQuitMessage(0);
         return 0;

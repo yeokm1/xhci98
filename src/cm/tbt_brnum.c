@@ -28,6 +28,8 @@ typedef struct _BRNUM_CTX {
                                candidate's window, 0 for none            */
     ULONG InCand;           /* candidates above the bus being walked: one
                                level, nothing below a candidate padded   */
+    ULONG Rot;              /* the anchor-to-range path's pin rotation
+                               (record 34 section 3.3.7 item 4)          */
 } BRNUM_CTX;
 
 static ULONG brRead(PXHCI_TBT_CFG io, ULONG bdf, ULONG offset, PULONG value)
@@ -1307,8 +1309,9 @@ static VOID brLinesUndo(BRNUM_CTX *c)
     r->IrqFnCount = 0;
 }
 
-/* The interrupt lines of the chain just set up: the port's own Interrupt
- * Line and Pin read, and handed down (brLines). */
+/* The interrupt lines of the chain just set up: the anchor's own Interrupt
+ * Line and Pin read, and handed down (brLines) from the range bridge's
+ * secondary bus, rotated by the anchor-to-range path's `rot`. */
 static VOID brIrq(BRNUM_CTX *c, ULONG port, ULONG secondary)
 {
     PXHCI_TBT_BRNUM r;
@@ -1329,7 +1332,7 @@ static VOID brIrq(BRNUM_CTX *c, ULONG port, ULONG secondary)
         r->IrqOutcome = XHCI_TBT_BRIRQ_PORT_NONE;
         return;
     }
-    if (brLines(c, secondary, 0, 0, pin, line) != 0) {
+    if (brLines(c, secondary, c->Rot & 3UL, 0, pin, line) != 0) {
         brLinesUndo(c);
         r->IrqOutcome = XHCI_TBT_BRIRQ_STALE;
         return;
@@ -1491,6 +1494,13 @@ ULONG XhciTbtNumberBridges(PXHCI_TBT_CFG io, ULONG port, ULONG flags,
                            XHCI_TBT_BRNUM_GO go, PVOID goContext,
                            PXHCI_TBT_BRNUM r)
 {
+    return XhciTbtNumberBridgesAt(io, port, port, 0, flags, go, goContext, r);
+}
+
+ULONG XhciTbtNumberBridgesAt(PXHCI_TBT_CFG io, ULONG port, ULONG anchor,
+                             ULONG rot, ULONG flags, XHCI_TBT_BRNUM_GO go,
+                             PVOID goContext, PXHCI_TBT_BRNUM r)
+{
     BRNUM_CTX c;
     ULONG buses;
     ULONG own;
@@ -1586,6 +1596,7 @@ ULONG XhciTbtNumberBridges(PXHCI_TBT_CFG io, ULONG port, ULONG flags,
         c.PadBus = 0;
         c.PadMem = 0;
         c.InCand = 0;
+        c.Rot = rot;
         k = 0;
         r->Bridges = 0;
         rc = brJournal(&c, secondary, secondary + 1UL, subordinate, 0, &k,
@@ -1651,7 +1662,7 @@ ULONG XhciTbtNumberBridges(PXHCI_TBT_CFG io, ULONG port, ULONG flags,
         }
         if ((flags & XHCI_TBT_BRNUM_F_IRQ) != 0 &&
             r->WinOutcome == XHCI_TBT_BRWIN_DONE) {
-            brIrq(&c, port, secondary);
+            brIrq(&c, anchor, secondary);
             if (r->IrqOutcome == XHCI_TBT_BRIRQ_STALE) {
                 brWinUndo(&c);
                 r->Numbered = 0;
@@ -1677,7 +1688,8 @@ ULONG XhciTbtNumberBridges(PXHCI_TBT_CFG io, ULONG port, ULONG flags,
         c.PadBus = 0;
         c.PadMem = 0;
         c.InCand = 0;
-        brIrq(&c, port, secondary);
+        c.Rot = rot;
+        brIrq(&c, anchor, secondary);
         r->Outcome = XHCI_TBT_BRNUM_NONE;
         return r->Outcome;
     }
@@ -1696,6 +1708,7 @@ ULONG XhciTbtNumberBridges(PXHCI_TBT_CFG io, ULONG port, ULONG flags,
     c.PadBus = (ULONG)((flags & XHCI_TBT_BRNUM_F_PAD) != 0);
     c.PadMem = 0;
     c.InCand = 0;
+    c.Rot = rot;
     rc = brBus(&c, secondary, 0, &k);
     if (rc == XHCI_TBT_BRNUM_NO_ROOM && r->Padded != 0) {
         /* Record 34 section 3.3.6: never at the cost of the dock itself.
@@ -1743,7 +1756,7 @@ ULONG XhciTbtNumberBridges(PXHCI_TBT_CFG io, ULONG port, ULONG flags,
         if ((flags & XHCI_TBT_BRNUM_F_IRQ) != 0 && c.Count != 0 &&
             ((flags & XHCI_TBT_BRNUM_F_WINDOWS) == 0 ||
              r->WinOutcome == XHCI_TBT_BRWIN_DONE)) {
-            brIrq(&c, port, secondary);
+            brIrq(&c, anchor, secondary);
             if (r->IrqOutcome == XHCI_TBT_BRIRQ_STALE) {
                 /* Superseded: windows and bus numbers go too. */
                 brWinUndo(&c);

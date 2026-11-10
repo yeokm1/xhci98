@@ -232,6 +232,7 @@ static char logPath[MAX_PATH];
 static int logConsole;
 static HANDLE stopEvent;
 static SERVICE_STATUS_HANDLE statusHandle;
+static int powerEvents;         /* the extended handler took the power events */
 static SERVICE_STATUS status;
 static DWORD lastInventory;
 static int inventoryDone;
@@ -1099,6 +1100,58 @@ static int mk_check_entry(const MK_NHI *h, const MK_ENTRY *e,
     return has ? MK_W_PRESENT : MK_W_OK;
 }
 
+/* Design record 34 section 3.12 item 13: a chained entry's unit for the
+ * confirmation alone - the child at the entry's bus and address of the
+ * chain port at its landing, that chain port a descendant of the member's
+ * devnode - with the write's other checks; never a LowerFilters write.
+ * The unit's node in *unitOut on MK_W_OK. */
+static int mk_check_chained(const MK_NHI *h, const MK_ENTRY *e,
+                            const int *prot, int *unitOut)
+{
+    static int parents[MK_MAX_NODES];
+    int port;
+    int chain;
+    int unit;
+    int up;
+
+    *unitOut = -1;
+    if ((e->Flags & MK_EF_LOCATED) == 0) {
+        return MK_W_NOT_LOCATED;
+    }
+    if ((e->Flags & MK_EF_REPORTED) == 0) {
+        return MK_W_NOT_REPORTED;
+    }
+    if ((e->Flags & MK_EF_SAFE_OFF) != 0 || (h->M.Flags & MK_F_SAFE_OFF) != 0) {
+        return MK_W_SAFE_OFF;
+    }
+    if (!mk_member_active(&h->Q, e->Member)) {
+        return MK_W_NOT_ACTIVE;
+    }
+    port = mk_find_loc(e->Member);
+    chain = e->Landing != 0 ? mk_find_loc(e->Landing) : -1;
+    if (port < 0 || chain < 0) {
+        return MK_W_NO_PORT;
+    }
+    for (up = 0; up < nodeCount && up < MK_MAX_NODES; up++) {
+        parents[up] = nodes[up].Parent;
+    }
+    if (!mk_descends(parents, up, chain, port, 8)) {
+        return MK_W_NO_PORT;
+    }
+    unit = mk_find_unit(chain, e->Bus, e->Address);
+    if (unit < 0) {
+        return MK_W_NO_UNIT;
+    }
+    if (!nodes[unit].StatusOk) {
+        return MK_W_UNREADABLE;
+    }
+    if (prot[unit] || prot[chain] || prot[port]) {
+        return MK_W_PROTECTED;
+    }
+    *unitOut = unit;
+    return MK_W_OK;
+}
+
 /* A unit's last failed write or replay, so both keep one attempt a
  * minute (section 7.4, "The write"); an entry is kept while its record is
  * outstanding and given back once a write succeeds. */
@@ -1561,6 +1614,15 @@ static void mk_entries(const int *prot)
             MK_ENTRY *e = &h->M.E[j];
             MK_TRIED *t;
             if ((e->Flags & MK_EF_REPORTED) == 0) {
+                continue;
+            }
+            if ((e->Flags & MK_EF_CHAINED) != 0) {
+                /* Record 34 section 3.12 item 13: confirmed when Windows
+                 * holds it for eject, never written. */
+                if (mk_check_chained(h, e, prot, &unit) == MK_W_OK &&
+                    e->Pending != 0) {
+                    mk_confirm(h, e, unit);
+                }
                 continue;
             }
             w = mk_check_entry(h, e, prot, &unit);
@@ -3364,7 +3426,7 @@ static int mk_s98_noid_code(int i, int m)
     for (p = i; p >= 0 && p != m && depth < 64; p = nodes[p].Parent) {
         depth++;
     }
-    if (s98PollSys == MK_S98_OS_81 || s98PollSys == MK_S98_OS_10) {
+    if (s98PollSys == MK_S98_OS_10) {
         return MK_S98_ID_OS;
     }
     return mk_s98_noid_why(
@@ -4084,6 +4146,8 @@ static void mk_s98_poll(const int *prot)
         in.Problem = (nodes[i].Status & MK_DN_HAS_PROBLEM) != 0;
         in.ProblemCode = nodes[i].Problem;
         in.Below = mk_s98_below(parent, nodeCount, i, member);
+        in.TunnelId = inst_msz_has(nodes[i].Compat, nodes[i].CompatBytes,
+                                   MK_S98_TUNNEL_ID);
         in.Protected = prot[i];
         in.Record = mk_s98_rec_get(nodes[i].Id);
         in.Attempts = s98Seen[s].Attempts;
@@ -5275,6 +5339,322 @@ static void mk_cm_start(void)
     }
 }
 
+/* ======================================================================== */
+/* The flush at the suspend notice (record 22 section 11.1.11 Q2)           */
+/* ======================================================================== */
+
+/*
+ * Best effort (owner, 2026-11-09): at the system's suspend notice the
+ * volumes whose disk is behind a member of a tunnel-port set are flushed,
+ * all at once, within MK_FLUSH_BOUND_MS, and each outcome logged. Windows
+ * does not wait for the service beyond the notice's own allowance; a
+ * flush not finished, a service not running or a write after the flush
+ * is not protected. The member list is the poll thread's last reading
+ * (mk_flush_note); the notice runs on the control dispatcher's thread.
+ */
+#define MK_FLUSH_MAX_MEMBERS    (MK_MAX_NHIS * 4)
+#define MK_SERVICE_ACCEPT_POWEREVENT    0x00000040UL
+#define MK_SERVICE_CONTROL_POWEREVENT   0x0000000DUL
+#define MK_IOCTL_STORAGE_GET_DEVICE_NUMBER 0x002D1080UL
+#define MK_DIGCF_PRESENT        0x00000002UL
+#define MK_DIGCF_DEVICEINTERFACE 0x00000010UL
+
+typedef DWORD (WINAPI *PFN_HANDLER_EX)(DWORD, DWORD, LPVOID, LPVOID);
+typedef SERVICE_STATUS_HANDLE (WINAPI *PFN_REGISTER_EX)(LPCSTR, PFN_HANDLER_EX, LPVOID);
+
+typedef struct _MK_SDN {        /* STORAGE_DEVICE_NUMBER */
+    DWORD DeviceType;
+    DWORD DeviceNumber;
+    DWORD PartitionNumber;
+} MK_SDN;
+
+typedef struct _MK_IFD {        /* SP_DEVICE_INTERFACE_DATA */
+    DWORD cbSize;
+    GUID InterfaceClassGuid;
+    DWORD Flags;
+    void *Reserved;
+} MK_IFD;
+
+typedef BOOL (WINAPI *PFN_ENUMIFACE)(HDEVINFO, PSP_DEVINFO_DATA, const GUID *, DWORD,
+                                     MK_IFD *);
+typedef BOOL (WINAPI *PFN_IFACEDETAIL)(HDEVINFO, MK_IFD *, void *, DWORD, PDWORD,
+                                       PSP_DEVINFO_DATA);
+
+/* GUID_DEVINTERFACE_DISK */
+static const GUID mkDiskGuid = {
+    0x53F56307UL, 0xB6BF, 0x11D0, { 0x94, 0xF2, 0x00, 0xA0, 0xC9, 0x1E, 0xFB, 0x8B }
+};
+
+static volatile LONG flushMemberCount;
+static INST_U32 flushMembers[MK_FLUSH_MAX_MEMBERS];
+
+typedef struct _MK_FLUSH_JOB {
+    char Path[8];
+    volatile LONG Done;         /* 0 running, 1 done, 2 failed */
+    DWORD Error;
+} MK_FLUSH_JOB;
+
+/* After each reading of the NHIs: the members of every answered domain. */
+static void mk_flush_note(void)
+{
+    int i;
+    INST_U32 k;
+    LONG n = 0;
+
+    for (i = 0; i < nhiCount; i++) {
+        if (!nhis[i].Answered) {
+            continue;
+        }
+        for (k = 0; k < nhis[i].Q.Ports && k < 4; k++) {
+            if (n < MK_FLUSH_MAX_MEMBERS) {
+                flushMembers[n++] = nhis[i].Q.Port[k];
+            }
+        }
+    }
+    InterlockedExchange((LONG *)&flushMemberCount, n);
+}
+
+/* The disk number of a volume, or -1. */
+static long mk_flush_disk_of(const char *path)
+{
+    HANDLE h;
+    MK_SDN sdn;
+    DWORD got = 0;
+    long disk = -1;
+
+    h = CreateFileA(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        return -1;
+    }
+    if (DeviceIoControl(h, MK_IOCTL_STORAGE_GET_DEVICE_NUMBER, NULL, 0, &sdn, sizeof(sdn),
+                        &got, NULL) && got >= sizeof(sdn)) {
+        disk = (long)sdn.DeviceNumber;
+    }
+    CloseHandle(h);
+    return disk;
+}
+
+/* 1 when disk number `disk` is a devnode behind a member. */
+static int mk_flush_disk_behind(long disk, const INST_U32 *members, int m)
+{
+    HMODULE sa = api.SetupApi;
+    PFN_ENUMIFACE enumIface;
+    PFN_IFACEDETAIL detail;
+    HDEVINFO set;
+    MK_IFD ifd;
+    SP_DEVINFO_DATA di;
+    DWORD i;
+    DWORD need;
+    DWORD dn;
+    DWORD up;
+    ULONG bus;
+    ULONG addr;
+    INST_U32 chain[64];
+    int n;
+    int behind = 0;
+    union {
+        DWORD Size;
+        char Bytes[1024];
+    } d;
+
+    if (sa == NULL || api.GetClassDevs == NULL || api.Destroy == NULL) {
+        return 0;
+    }
+    enumIface = (PFN_ENUMIFACE)GetProcAddress(sa, "SetupDiEnumDeviceInterfaces");
+    detail = (PFN_IFACEDETAIL)GetProcAddress(sa, "SetupDiGetDeviceInterfaceDetailA");
+    if (enumIface == NULL || detail == NULL) {
+        return 0;
+    }
+    set = api.GetClassDevs(&mkDiskGuid, NULL, NULL, MK_DIGCF_PRESENT | MK_DIGCF_DEVICEINTERFACE);
+    if (set == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    for (i = 0; !behind; i++) {
+        memset(&ifd, 0, sizeof(ifd));
+        ifd.cbSize = sizeof(ifd);
+        if (!enumIface(set, NULL, &mkDiskGuid, i, &ifd)) {
+            break;
+        }
+        memset(&d, 0, sizeof(d));
+        /* SP_DEVICE_INTERFACE_DETAIL_DATA_A's cbSize: the packed DWORD and
+         * one character on x86, 8 on x64. */
+        d.Size = sizeof(void *) == 8 ? 8 : 5;
+        memset(&di, 0, sizeof(di));
+        di.cbSize = sizeof(di);
+        need = 0;
+        if (!detail(set, &ifd, &d, sizeof(d), &need, &di)) {
+            continue;
+        }
+        if (mk_flush_disk_of(d.Bytes + 4) != disk) {
+            continue;
+        }
+        n = 0;
+        dn = di.DevInst;
+        while (n < 64 && api.Parent(&up, dn, 0) == MK_CR_SUCCESS) {
+            dn = up;
+            if (mk_prop_dword(dn, MK_CM_DRP_BUSNUMBER, &bus) &&
+                mk_prop_dword(dn, MK_CM_DRP_ADDRESS, &addr)) {
+                chain[n++] = (INST_U32)(((bus & 0xFFUL) << 8) | (((addr >> 16) & 0x1FUL) << 3) |
+                                        (addr & 7UL));
+            }
+        }
+        behind = mk_flush_behind(chain, n, members, m);
+        break;
+    }
+    api.Destroy(set);
+    return behind;
+}
+
+/* One notice's work, owned by its worker thread from start to end: the
+ * volumes found, a flush thread each, then the outcomes logged and the
+ * block freed - all off the control dispatcher's thread, which waits for
+ * it at most MK_FLUSH_BOUND_MS from the notice. A notice that finds the
+ * previous one's worker still running starts nothing (flushBusy). */
+typedef struct _MK_FLUSH_OP {
+    DWORD Event;
+    int Members;
+    INST_U32 Member[MK_FLUSH_MAX_MEMBERS];
+    MK_FLUSH_JOB Job[26];
+} MK_FLUSH_OP;
+
+static volatile LONG flushBusy;
+
+static DWORD WINAPI mk_flush_one(LPVOID p)
+{
+    MK_FLUSH_JOB *j = (MK_FLUSH_JOB *)p;
+    HANDLE h;
+
+    h = CreateFileA(j->Path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    NULL, OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        j->Error = GetLastError();
+        InterlockedExchange((LONG *)&j->Done, 2);
+        return 0;
+    }
+    if (!FlushFileBuffers(h)) {
+        j->Error = GetLastError();
+        CloseHandle(h);
+        InterlockedExchange((LONG *)&j->Done, 2);
+        return 0;
+    }
+    CloseHandle(h);
+    InterlockedExchange((LONG *)&j->Done, 1);
+    return 0;
+}
+
+static DWORD WINAPI mk_flush_work(LPVOID p)
+{
+    MK_FLUSH_OP *op = (MK_FLUSH_OP *)p;
+    HANDLE th[26];
+    char root[4];
+    int i;
+    int n = 0;
+    int t = 0;
+    UINT type;
+    long disk;
+    DWORD tid;
+    DWORD start;
+    DWORD left;
+
+    start = GetTickCount();
+    for (i = 0; i < 26; i++) {
+        root[0] = (char)('A' + i);
+        root[1] = ':';
+        root[2] = '\\';
+        root[3] = '\0';
+        type = GetDriveTypeA(root);
+        if (type != DRIVE_FIXED && type != DRIVE_REMOVABLE) {
+            continue;
+        }
+        sprintf(op->Job[n].Path, "\\\\.\\%c:", 'A' + i);
+        disk = mk_flush_disk_of(op->Job[n].Path);
+        if (disk < 0 || !mk_flush_disk_behind(disk, op->Member, op->Members)) {
+            continue;
+        }
+        op->Job[n].Done = 0;
+        op->Job[n].Error = 0;
+        th[t] = CreateThread(NULL, 0, mk_flush_one, &op->Job[n], 0, &tid);
+        if (th[t] != NULL) {
+            t++;
+        } else {
+            op->Job[n].Done = 2;
+            op->Job[n].Error = GetLastError();
+        }
+        n++;
+    }
+    if (n == 0) {
+        mk_log("suspend notice %lu: no volume behind a tunnel port", (unsigned long)op->Event);
+    }
+    if (t != 0) {
+        left = GetTickCount() - start;
+        left = left < MK_FLUSH_BOUND_MS ? MK_FLUSH_BOUND_MS - left : 0;
+        (void)WaitForMultipleObjects((DWORD)t, th, TRUE, left);
+    }
+    for (i = 0; i < n; i++) {
+        if (op->Job[i].Done == 1) {
+            mk_log("suspend notice %lu: %s flushed", (unsigned long)op->Event, op->Job[i].Path + 4);
+        } else if (op->Job[i].Done == 2) {
+            mk_log("suspend notice %lu: %s flush failed, error %lu", (unsigned long)op->Event,
+                   op->Job[i].Path + 4, (unsigned long)op->Job[i].Error);
+        } else {
+            mk_log("suspend notice %lu: %s flush not finished within %lu ms",
+                   (unsigned long)op->Event, op->Job[i].Path + 4,
+                   (unsigned long)MK_FLUSH_BOUND_MS);
+        }
+    }
+    /* The jobs are the flush threads' until they end: the block is freed
+     * only after every one has, however long that takes. */
+    if (t != 0) {
+        (void)WaitForMultipleObjects((DWORD)t, th, TRUE, INFINITE);
+    }
+    for (i = 0; i < t; i++) {
+        CloseHandle(th[i]);
+    }
+    free(op);
+    InterlockedExchange((LONG *)&flushBusy, 0);
+    return 0;
+}
+
+static void mk_flush(DWORD event)
+{
+    MK_FLUSH_OP *op;
+    HANDLE w;
+    DWORD tid;
+    int i;
+    int m;
+
+    m = (int)flushMemberCount;
+    if (m <= 0) {
+        return;
+    }
+    if (InterlockedExchange((LONG *)&flushBusy, 1) != 0) {
+        mk_log("suspend notice %lu: the last notice's flush still running",
+               (unsigned long)event);
+        return;
+    }
+    op = (MK_FLUSH_OP *)calloc(1, sizeof(*op));
+    if (op == NULL) {
+        InterlockedExchange((LONG *)&flushBusy, 0);
+        return;
+    }
+    op->Event = event;
+    if (m > MK_FLUSH_MAX_MEMBERS) {
+        m = MK_FLUSH_MAX_MEMBERS;
+    }
+    for (i = 0; i < m; i++) {
+        op->Member[i] = flushMembers[i];
+    }
+    op->Members = m;
+    w = CreateThread(NULL, 0, mk_flush_work, op, 0, &tid);
+    if (w == NULL) {
+        free(op);
+        InterlockedExchange((LONG *)&flushBusy, 0);
+        return;
+    }
+    (void)WaitForSingleObject(w, MK_FLUSH_BOUND_MS);
+    CloseHandle(w);
+}
+
 static DWORD mk_poll(void)
 {
     int any;
@@ -5286,6 +5666,7 @@ static DWORD mk_poll(void)
         return 10000;
     }
     any = mk_read_nhis();
+    mk_flush_note();
     /* The scrub every poll; when it found a copy, or every
      * MK_INVENTORY_MS, the inventory too, since a device Windows found
      * meanwhile may have taken the name from it. */
@@ -5348,7 +5729,8 @@ static void mk_set_status(DWORD state, DWORD exitCode)
     status.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
     status.dwCurrentState = state;
     status.dwControlsAccepted = state == SERVICE_RUNNING ?
-        (SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN) : 0;
+        (SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN |
+         (powerEvents ? MK_SERVICE_ACCEPT_POWEREVENT : 0)) : 0;
     status.dwWin32ExitCode = exitCode;
     status.dwServiceSpecificExitCode = 0;
     status.dwCheckPoint = 0;
@@ -5368,6 +5750,21 @@ static VOID WINAPI mk_handler(DWORD control)
     if (statusHandle != (SERVICE_STATUS_HANDLE)0) {
         SetServiceStatus(statusHandle, &status);
     }
+}
+
+/* The extended handler (2000 and later): the power events too. */
+static DWORD WINAPI mk_handler_ex(DWORD control, DWORD type, LPVOID data, LPVOID ctx)
+{
+    (void)data;
+    (void)ctx;
+    if (control == MK_SERVICE_CONTROL_POWEREVENT) {
+        if (mk_flush_wants((INST_U32)type)) {
+            mk_flush(type);
+        }
+        return NO_ERROR;
+    }
+    mk_handler(control);
+    return NO_ERROR;
 }
 
 static int mk_wow64(void)
@@ -5411,10 +5808,19 @@ static int mk_prepare(void)
 static VOID WINAPI mk_service_main(DWORD argc, LPSTR *argv)
 {
     DWORD wait;
+    PFN_REGISTER_EX regEx;
 
     (void)argc;
     (void)argv;
-    statusHandle = RegisterServiceCtrlHandlerA(MK_SERVICE, mk_handler);
+    regEx = (PFN_REGISTER_EX)GetProcAddress(GetModuleHandleA("advapi32.dll"),
+                                            "RegisterServiceCtrlHandlerExA");
+    if (regEx != NULL) {
+        statusHandle = regEx(MK_SERVICE, mk_handler_ex, NULL);
+        powerEvents = statusHandle != (SERVICE_STATUS_HANDLE)0;
+    }
+    if (statusHandle == (SERVICE_STATUS_HANDLE)0) {
+        statusHandle = RegisterServiceCtrlHandlerA(MK_SERVICE, mk_handler);
+    }
     if (statusHandle == (SERVICE_STATUS_HANDLE)0) {
         return;
     }

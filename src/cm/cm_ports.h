@@ -349,4 +349,66 @@ ULONG CmPortsRelease(ULONG markedByThis, ULONG reenumOn);
 ULONG CmPortsKeepPresent(PULONG known, ULONG count, const ULONG *present,
                          ULONG presentCount);
 
+/*
+ * Windows 98 and ME, design record 34 section 3.3.7 item 1: TRUE while a
+ * chain operation on member `i`, taken at generation `taken`, may still
+ * read configuration space below the member or call CONFIGMG for it: the
+ * worker not leaving, the member owned (`active`), its generation now
+ * (`genNow`) the one taken, and the member in none of `held`, the members
+ * owing CONTROLLER_UNAVAILABLE's removal or its no-scan re-enumeration, or
+ * under a retirement barrier. The worker takes `taken` before it reads the
+ * gates, so a loss posted after that read still makes the operation stale:
+ * every post that owes a removal or a no-scan re-enumeration also advances
+ * the generation.
+ */
+BOOLEAN CmPortsChainCurrent(BOOLEAN leaving, ULONG active, ULONG held,
+                            ULONG genNow, ULONG taken, ULONG i);
+
+/*
+ * The systems of design record 31 sections 4.8 and 4.10 (task 48.29),
+ * from the kernel's shared data page's NtMajorVersion and NtMinorVersion
+ * (6.3 on 8.1, 10.0 on 10, whatever the image's manifest says).
+ * CmPortsTagOs: 1 where the child gives the tunnel id, NT 5.0 to 6.3
+ * (2000 to 8.1). CmPortsKeptOs: 1 where the bridge's child is kept
+ * attached across a removal of its device's stack (section 4.10, K1),
+ * NT 6.3 alone.
+ */
+ULONG CmPortsTagOs(ULONG major, ULONG minor);
+ULONG CmPortsKeptOs(ULONG major, ULONG minor);
+
+/*
+ * The kept child's state (design record 31 section 4.10, K3): one value
+ * under the child's lock. CmPortsKeptStep gives the state after `event`
+ * and, in *action, what the caller does for it (CM_KEPT_A_*, any of them
+ * or none). CmPortsKeptAdmits: 1 when a dispatch may take a reference in
+ * that state (every state but Detached). CmPortsKeptLast: what the release
+ * that left `count` references does, in `state`, at an IRQL above
+ * PASSIVE_LEVEL or not: nothing, the destruction now, or the destruction
+ * handed to the child's work item.
+ */
+#define CM_KEPT_ATTACHED        0UL
+#define CM_KEPT_STARTING        1UL
+#define CM_KEPT_LOGICAL         2UL
+#define CM_KEPT_DETACHED        3UL
+
+#define CM_KEPT_E_REMOVED       0UL /* the forwarded removal returned     */
+#define CM_KEPT_E_START         1UL /* a start admitted, before forwarding */
+#define CM_KEPT_E_START_OK      2UL /* the start completed with success   */
+#define CM_KEPT_E_START_FAIL    3UL /* the start failed below             */
+#define CM_KEPT_E_CALLBACK      4UL /* FastIoDetachDevice for the object  */
+
+#define CM_KEPT_A_DEPART        0x01UL  /* record the departure (once)    */
+#define CM_KEPT_A_PRESENT       0x02UL  /* presence back (KeptLogical 0)  */
+#define CM_KEPT_A_ABSENT        0x04UL  /* presence away (KeptLogical 1)  */
+#define CM_KEPT_A_END_DEPART    0x08UL  /* the entry brought up to date   */
+#define CM_KEPT_A_DETACH        0x10UL  /* detach from the object below   */
+#define CM_KEPT_A_DROP_ATTACH   0x20UL  /* release the attach's reference */
+ULONG CmPortsKeptStep(ULONG state, ULONG event, PULONG action);
+ULONG CmPortsKeptAdmits(ULONG state);
+
+#define CM_KEPT_L_NONE          0UL
+#define CM_KEPT_L_DESTROY       1UL
+#define CM_KEPT_L_QUEUE         2UL
+ULONG CmPortsKeptLast(ULONG count, ULONG state, ULONG aboveP);
+
 #endif /* CM_PORTS_H */

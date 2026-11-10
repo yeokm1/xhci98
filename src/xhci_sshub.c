@@ -55,6 +55,34 @@ ULONG XhciSsHubLinkState(ULONG status)
     return (status & XHCI_SSHUB_PORT_LINK_MASK) >> XHCI_SSHUB_PORT_LINK_SHIFT;
 }
 
+ULONG XhciSsHubPortEmpty(ULONG status)
+{
+    return ((status & XHCI_SSHUB_PORT_CONNECTION) == 0 &&
+            XhciSsHubLinkState(status) == XHCI_SSHUB_LINK_RX_DETECT) ? 1UL
+                                                                  : 0UL;
+}
+
+ULONG XhciSsHubGiveUpRearm(ULONG answered, ULONG status)
+{
+    if (!answered) {
+        return 1;
+    }
+    return (XhciSsHubSendState(status) == XHCI_SSHUB_SEND_DONE) ? 1UL : 0UL;
+}
+
+ULONG XhciSsHubSendState(ULONG status)
+{
+    ULONG link;
+
+    link = XhciSsHubLinkState(status);
+    if (link == XHCI_SSHUB_LINK_INACTIVE ||
+        link == XHCI_SSHUB_LINK_COMPLIANCE) {
+        return XHCI_SSHUB_SEND_OWED;
+    }
+    return (link == XHCI_SSHUB_LINK_DISABLED) ? XHCI_SSHUB_SEND_DONE
+                                              : XHCI_SSHUB_SEND_ENDED;
+}
+
 /* Whether the machine holds something a disconnect takes away (as
  * xhci_hub.c's). */
 static ULONG xhciSsHubHolds(ULONG state)

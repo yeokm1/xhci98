@@ -793,6 +793,185 @@ static void test_confirm_chained(void)
           why == CM_MK_CONF_OK, "a member's own: confirmed");
 }
 
+/* Design record 34 section 3.12 items 5 and 6 (task 48.30): the token's
+ * one rule, CmMarksGrant, and the confirmation of a chained entry by its
+ * token's kid generation. */
+static void test_grant(void)
+{
+    PVOID snap[4];
+    ULONG seq[4];
+    ULONG tok[CM_MK_TOK_WORDS];
+    ULONG kgens[4];
+    UCHAR v[CM_QC_BYTES];
+    PCM_MARK e;
+    PCM_MARK o;
+    ULONG why;
+    ULONG gens[4];
+
+    CHECK(CmMarksSeqAfter(5, 4) && !CmMarksSeqAfter(4, 4) && !CmMarksSeqAfter(3, 4),
+          "stamps: later only");
+    CHECK(!CmMarksSeqAfter(0, 4), "stamp 0: no provenance");
+    CHECK(CmMarksSeqAfter(2, 0xFFFFFFF0UL), "stamps: across the wrap");
+    CmMarksReset(&t);
+    snap[0] = P(3);
+    snap[1] = P(4);
+    seq[0] = 20;
+    seq[1] = 10;
+    (VOID)CmMarksMake(&t, 1, 0x0520, L1, snap, 2, FALSE, TRUE, 7);
+    tok[0] = CM_MK_TOK_VALID | 2UL | (1UL << 8);
+    tok[1] = 0x55;
+    tok[2] = 3;
+    tok[3] = 15;    /* the arm */
+    tok[4] = 21;    /* the learning */
+    CHECK_EQ(CmMarksGrant(&t, 1, L1, snap, seq, 2, tok, 8), 1,
+             "the PDO first reported by a query begun after the arm granted");
+    e = CmMarksFind(&t, P(3));
+    o = CmMarksFind(&t, P(4));
+    CHECK(e->Tok[0] == tok[0] && e->Tok[1] == 0x55 && e->Tok[2] == 3, "its token");
+    CHECK(o->Tok[0] == 0, "one reported before the arm: none");
+    seq[1] = 15;
+    CHECK_EQ(CmMarksGrant(&t, 1, L1, snap, seq, 2, tok, 9), 0, "a stamp at the arm: none");
+    seq[1] = 0;
+    CHECK_EQ(CmMarksGrant(&t, 1, L1, snap, seq, 2, tok, 9), 0,
+             "a filter's first answer (stamp 0): none");
+    seq[1] = 30;
+    o->PendingAt = 40;
+    CHECK_EQ(CmMarksGrant(&t, 1, L1, snap, seq, 2, tok, 9), 0, "a departure recorded: none");
+    o->PendingAt = 0;
+    CHECK_EQ(CmMarksGrant(&t, 2, L1, snap, seq, 2, tok, 9), 0, "another member: none");
+    CHECK_EQ(CmMarksGrant(&t, 1, L2, snap, seq, 2, tok, 9), 0, "another landing: none");
+    tok[0] &= ~CM_MK_TOK_VALID;
+    CHECK_EQ(CmMarksGrant(&t, 1, L1, snap, seq, 2, tok, 9), 0, "no token: nothing");
+    tok[0] |= CM_MK_TOK_VALID;
+    /* Never changed: a later token leaves the first. */
+    tok[1] = 0x66;
+    (VOID)CmMarksGrant(&t, 1, L1, snap, seq, 2, tok, 9);
+    CHECK(e->Tok[1] == 0x55, "a token once set is never changed");
+    CHECK(o->Tok[1] == 0x66, "the other granted now");
+    /* Kept through burial. */
+    (VOID)CmMarksBury(&t, 1, 0x0520, L1, &snap[1], 1, TRUE, 50);
+    CHECK(e->Tomb && e->Tok[1] == 0x55, "kept through burial");
+    /* The same PDO made again under the landing: an older entry carried
+     * it, so its provenance is not this transaction's. */
+    (VOID)CmMarksMake(&t, 1, 0x0520, L1, snap, 1, FALSE, TRUE, 60);
+    e = CmMarksFind(&t, P(3));
+    CHECK(e != NULL && !e->Tomb && e->Tok[0] == 0, "remade: no token yet");
+    seq[0] = 40;
+    CHECK_EQ(CmMarksGrant(&t, 1, L1, snap, seq, 1, tok, 61), 0,
+             "a PDO a tombstone of the landing carries: never");
+
+    /* The confirmation by the token's generation. */
+    CmMarksReset(&t);
+    snap[0] = P(5);
+    (VOID)CmMarksMake(&t, 1, 0x0520, L1, snap, 1, FALSE, TRUE, 7);
+    e = CmMarksFind(&t, P(5));
+    e->Flags = CM_QM_EF_LOCATED;
+    e->Bus = 9;
+    e->Address = 0;
+    tok[1] = 0x55;
+    seq[0] = 20;
+    (VOID)CmMarksGrant(&t, 1, L1, snap, seq, 1, tok, 8);
+    e->PendingAt = 50;
+    e->PendingGen = 0x55;
+    gens[0] = 0;
+    gens[1] = 7;
+    kgens[0] = 0x55;
+    kgens[1] = 0;
+    memset(v, 0, sizeof(v));
+    put32(v, CM_QC_O_EPOCH_LO, 1);
+    put32(v, CM_QC_O_EPOCH_HI, 2);
+    put32(v, CM_QC_O_MEMBER, 0x0520);
+    put32(v, CM_QC_O_BUS, 9);
+    put32(v, CM_QC_O_ADDRESS, 0);
+    put32(v, CM_QC_O_SERIAL, e->Serial);
+    put32(v, CM_QC_O_GEN, 0x55);
+    CHECK(CmMarksConfirmEx(&t, v, CM_QC_BYTES, 1, 2, TRUE, gens, 2, kgens, 4, &why) == e &&
+          why == CM_MK_CONF_OK, "a chained entry with its token: confirmed by its kid");
+    CHECK(CmMarksConfirmEx(&t, v, CM_QC_BYTES, 1, 2, FALSE, gens, 2, kgens, 4, &why) == NULL &&
+          why == CM_MK_CONF_CHAINED, "no USB4 profile: refused");
+    CHECK(CmMarksConfirm(&t, v, CM_QC_BYTES, 1, 2, TRUE, gens, 2, &why) == NULL &&
+          why == CM_MK_CONF_GEN, "no kids given: refused");
+    kgens[0] = 0x56;
+    CHECK(CmMarksConfirmEx(&t, v, CM_QC_BYTES, 1, 2, TRUE, gens, 2, kgens, 4, &why) == NULL &&
+          why == CM_MK_CONF_GEN, "the kid connected again: refused");
+    kgens[0] = 0x55;
+    put32(v, CM_QC_O_GEN, 7);
+    CHECK(CmMarksConfirmEx(&t, v, CM_QC_BYTES, 1, 2, TRUE, gens, 2, kgens, 4, &why) == NULL &&
+          why == CM_MK_CONF_GEN, "the port's generation is not the kid's: refused");
+    put32(v, CM_QC_O_GEN, 0x55);
+    e->PendingGen = 7;
+    CHECK(CmMarksConfirmEx(&t, v, CM_QC_BYTES, 1, 2, TRUE, gens, 2, kgens, 4, &why) == NULL &&
+          why == CM_MK_CONF_GEN, "a departure under another generation: refused");
+    e->PendingGen = 0x55;
+    CHECK(CmMarksConfirmEx(&t, v, CM_QC_BYTES, 1, 2, TRUE, gens, 2, kgens, 0, &why) == NULL &&
+          why == CM_MK_CONF_GEN, "a kid past the kids given: refused");
+    /* The tombstone that left with its departure: confirmable once. */
+    (VOID)CmMarksBury(&t, 1, 0x0520, L1, snap, 0, TRUE, 60);
+    CHECK(CmMarksConfirmEx(&t, v, CM_QC_BYTES, 1, 2, TRUE, gens, 2, kgens, 4, &why) == e &&
+          why == CM_MK_CONF_OK, "its tombstone, the departure kept: confirmed");
+    e->LeftPendingAt = 0;
+    CHECK(CmMarksConfirmEx(&t, v, CM_QC_BYTES, 1, 2, TRUE, gens, 2, kgens, 4, &why) == NULL,
+          "once consumed: refused");
+}
+
+/* A departure's generation (CmMarksDepartGen), as the removal and a kept
+ * child's logical removal record it (record 31 section 4.10, K4): a
+ * chained device that connected again without its parent has a kid
+ * generation that is not its member port's, and its departure must still
+ * be confirmable. */
+static void test_depart_gen(void)
+{
+    PVOID snap[1];
+    ULONG seq[1];
+    ULONG tok[CM_MK_TOK_WORDS];
+    ULONG gens[2];
+    ULONG kgens[4];
+    UCHAR v[CM_QC_BYTES];
+    ULONG why;
+    PCM_MARK e;
+
+    CmMarksReset(&t);
+    snap[0] = P(7);
+    (VOID)CmMarksMake(&t, 1, 0x0520, L1, snap, 1, FALSE, TRUE, 7);
+    e = CmMarksFind(&t, P(7));
+    CHECK(e != NULL && e->Tok[0] == 0, "made, no token");
+    CHECK_EQ(CmMarksDepartGen(e, 7), 7, "no token: the member's generation");
+    e->Flags = CM_QM_EF_LOCATED;
+    e->Bus = 9;
+    e->Address = 0;
+    memset(tok, 0, sizeof(tok));
+    tok[0] = CM_MK_TOK_VALID | (1UL << 8);
+    tok[1] = 0x91;
+    tok[3] = 10;
+    seq[0] = 20;
+    CHECK_EQ(CmMarksGrant(&t, 1, L1, snap, seq, 1, tok, 8), 1, "token granted");
+    /* The member port's generation 7, the kid's 0x91 (it connected again
+     * without its parent). */
+    gens[0] = 0;
+    gens[1] = 7;
+    kgens[0] = 0x91;
+    kgens[1] = 0;
+    kgens[2] = 0;
+    kgens[3] = 0;
+    CHECK_EQ(CmMarksDepartGen(e, gens[1]), 0x91, "a token: the kid's generation");
+    memset(v, 0, sizeof(v));
+    put32(v, CM_QC_O_EPOCH_LO, 1);
+    put32(v, CM_QC_O_EPOCH_HI, 2);
+    put32(v, CM_QC_O_MEMBER, 0x0520);
+    put32(v, CM_QC_O_BUS, 9);
+    put32(v, CM_QC_O_ADDRESS, 0);
+    put32(v, CM_QC_O_SERIAL, e->Serial);
+    put32(v, CM_QC_O_GEN, 0x91);
+    e->PendingAt = 50;
+    e->PendingGen = CmMarksDepartGen(e, gens[1]);
+    CHECK(CmMarksConfirmEx(&t, v, CM_QC_BYTES, 1, 2, TRUE, gens, 2, kgens, 4, &why) == e &&
+          why == CM_MK_CONF_OK, "the kept child's departure: confirmed");
+    /* What the member's generation would have done. */
+    e->PendingGen = gens[1];
+    CHECK(CmMarksConfirmEx(&t, v, CM_QC_BYTES, 1, 2, TRUE, gens, 2, kgens, 4, &why) == NULL &&
+          why == CM_MK_CONF_GEN, "recorded under the member's generation: refused");
+}
+
 int main(void)
 {
     test_may_mark();
@@ -804,6 +983,8 @@ int main(void)
     test_confirm();
     test_landings();
     test_confirm_chained();
+    test_grant();
+    test_depart_gen();
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;
 }

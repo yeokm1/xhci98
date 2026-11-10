@@ -45,6 +45,14 @@ typedef struct _CM_STATUS_IN {
                                4 + n: an eject in progress there
                                (CM_ST_F_BLOCKED_*, CM_ST_F_EJECTING_SHIFT;
                                task 43.18)                                */
+    ULONG KidBridge[4];     /* design record 34 section 3.12 item 9: kid
+                               slot n+1's chain port (XHCI_TBT_BDF) while
+                               its occupancy stands, else 0              */
+    ULONG InferPort;        /* record 22 section 7.6.2: the USB4 port whose
+                               PCIe tunnel an inferred eject tore down and
+                               the read-back confirmed closed, for its
+                               connection now, else 0                    */
+    ULONG InferBdf;         /* the member it reached                     */
 } CM_STATUS_IN, *PCM_STATUS_IN;
 
 /*

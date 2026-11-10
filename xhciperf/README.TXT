@@ -48,8 +48,10 @@ Using it
   More...       a size sweep, the pause between tests, a warm-up, the
                 seed, and the verification's choices.
 
-Start runs the tests; Stop ends them after the requests already sent. The
-results are on the Summary and Sweep pages, in MB/s (or MiB/s, View menu),
+Start runs the tests; Stop ends them after the requests already sent. On
+Windows 98 SE and ME a request sent cannot be cancelled: Stop, and closing
+the window, wait for the disk to answer it. The results are on the
+Summary and Sweep pages, in MB/s (or MiB/s, View menu),
 with the requests per second and the mean time per request, and the
 processor's cost: how busy the whole system's processors were during each
 test and the processor time per request (on Windows 2000 and later also

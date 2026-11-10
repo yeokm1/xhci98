@@ -1052,6 +1052,7 @@ VOID XhciXferQueueInit(PXHCI_TRANSFER_QUEUE queue)
     queue->MidTdDeferralsTailed = 0;
     queue->MidTdDeferralsTailedSpurious = 0;
     queue->MidTdDeferralsLost = 0;
+    queue->IsoErrorHolds = 0;
     queue->MidTdTailCount = 0;
     for (i = 0; i < XHCI_XFER_MID_TD_TAIL; i++) {
         queue->MidTdTailIndex[i] = XHCI_XFER_NO_INDEX;
@@ -2767,9 +2768,35 @@ ULONG XhciXferQueueRestart(PXHCI_TRANSFER_QUEUE queue)
  * IRQL: called at DISPATCH_LEVEL under the controller lock; pure, so any IRQL
  * is safe.
  */
+static ULONG xhciXferDrainSettle(PXHCI_TRANSFER_QUEUE queue,
+                                 PXHCI_RING ring,
+                                 PXHCI_XFER_EVENT_RESULT result,
+                                 ULONG passed);
+
 ULONG XhciXferDrainSettled(PXHCI_TRANSFER_QUEUE queue,
                            PXHCI_RING ring,
                            PXHCI_XFER_EVENT_RESULT result)
+{
+    return xhciXferDrainSettle(queue, ring, result, 0);
+}
+
+/*
+ * The same settle where the controller is proven past every held TD - a
+ * stopped endpoint's saved dequeue (XhciXferStopPlace) or an isochronous
+ * Ring Underrun or Overrun (hcd_dev.c) - so an isochronous error's hold,
+ * which an empty event ring does not end (task 48.21), is settled too.
+ */
+ULONG XhciXferDrainSettledPassed(PXHCI_TRANSFER_QUEUE queue,
+                                 PXHCI_RING ring,
+                                 PXHCI_XFER_EVENT_RESULT result)
+{
+    return xhciXferDrainSettle(queue, ring, result, 1);
+}
+
+static ULONG xhciXferDrainSettle(PXHCI_TRANSFER_QUEUE queue,
+                                 PXHCI_RING ring,
+                                 PXHCI_XFER_EVENT_RESULT result,
+                                 ULONG passed)
 {
     XHCI_TD_COMPLETION completion;
     PXHCI_TRANSFER walk;
@@ -2797,10 +2824,20 @@ ULONG XhciXferDrainSettled(PXHCI_TRANSFER_QUEUE queue,
         return XHCI_XFER_BAD_PARAM;
     }
 
+    /*
+     * An isochronous error's hold (XHCI_XFER_FLAG_ERROR_HELD, task 48.21) is
+     * passed over by the empty ring's settle: after an error the xHC may
+     * advance to the next TD only at the next service interval (4.10.3.2
+     * p.187), so its tail can still come after a pass read the ring empty.
+     * Its own end is the tail, a later group's sweep, or the proof that
+     * `passed` carries. A short packet's hold behind it that this settle
+     * retires sweeps it, being proof the controller passed it too.
+     */
     owner = NULL;
     ahead = 0;
     for (walk = queue->Head; walk != NULL; walk = walk->Next) {
-        if ((walk->Flags & XHCI_XFER_FLAG_SHORT_DEFERRED) != 0) {
+        if ((walk->Flags & XHCI_XFER_FLAG_SHORT_DEFERRED) != 0 &&
+            (passed || (walk->Flags & XHCI_XFER_FLAG_ERROR_HELD) == 0)) {
             owner = walk;
             break;
         }
@@ -4479,9 +4516,25 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
      * retires the group then (xhciXferIsoSettle) with the packets' own
      * results. The window that leaves - a tail written after that empty read,
      * against TRBs a new request may already own - is the bulk path's, stated
-     * there. An *error* on an earlier TRB of the final packet arms nothing:
-     * p.201 promises its tail, and a controller that withholds that one too
-     * still leaves the request to the sweep or a cancellation.
+     * there.
+     *
+     * **An error on an earlier TRB of the final packet is held the same way
+     * (task 48.21).** The xHC advances past the TD after the error as after a
+     * short packet (p.188: "after the xHC generates an event for either
+     * condition, the xHC may automatically advance to the next TD"), and
+     * p.201 promises the tail on the IOC TRB; a controller that withholds it
+     * left the request, before this, to the sweep, so a request with no
+     * successor waited for its cancellation. The hold is ended by the tail
+     * while the request is queued, whatever code it carries, or by a later
+     * group's sweep, as before; and by proof that the controller has passed
+     * the group - a Ring Underrun or Overrun on the endpoint, which it posts
+     * only after every TD queued before it, or a stopped endpoint's saved
+     * dequeue (XhciXferDrainSettledPassed). **Not** by an empty event ring:
+     * after an error the xHC may advance only "for the next ESIT" (4.10.3.2
+     * p.187), so the tail can follow a pass that read the ring empty. It is
+     * counted in `IsoErrorHolds` as well as `MidTdDeferrals`. TRB Error is
+     * not held: it leaves the endpoint in Error, and the thread's stop and
+     * drain ends the request (`NeedsRecovery`, above).
      *
      * **Not** `StartFrame + NumberOfPackets + 1`: a draft of this comment named
      * that as the thing which gives up on the request, and it is not. That
@@ -4499,16 +4552,24 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
     if (reportedIndex != owner->LastIndex) {
         if (owner->IsoPacketsAnswered >= owner->IsoPacketCount) {
             queue->IsoGroupsAwaitingTail++;
-            /* The final packet ended short before its TD's last TRB: held
-             * for its tail, or for the settle (above). The duplicate branch
-             * never reaches here with reportedIndex short of its packet's
-             * tail, so this is the event that answered the packet. */
-            if (completionCode == XHCI_CC_SHORT_PACKET &&
+            /* The final packet ended short, or in an error other than TRB
+             * Error, before its TD's last TRB: held for its tail, or for
+             * the settle (above). The duplicate branch never reaches here
+             * with reportedIndex short of its packet's tail, so this is the
+             * event that answered the packet. */
+            if ((code.Class == XHCI_XFER_CC_SHORT ||
+                 (code.Class == XHCI_XFER_CC_ERROR &&
+                  completionCode != XHCI_CC_TRB_ERROR && !code.Fatal)) &&
                 packetIndex + 1 == owner->IsoPacketCount &&
                 packetTail == owner->LastIndex &&
                 reportedIndex != packetTail &&
                 (owner->Flags & XHCI_XFER_FLAG_SHORT_DEFERRED) == 0) {
                 owner->Flags |= XHCI_XFER_FLAG_SHORT_DEFERRED;
+                owner->Flags &= ~XHCI_XFER_FLAG_ERROR_HELD;
+                if (code.Class != XHCI_XFER_CC_SHORT) {
+                    owner->Flags |= XHCI_XFER_FLAG_ERROR_HELD;
+                    queue->IsoErrorHolds++;
+                }
                 owner->ShortTrbPA = eventTrbPA;
                 queue->MidTdDeferrals++;
             }
@@ -4518,10 +4579,16 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
 
     /* A held final packet's tail arrived while the request was still queued:
      * the conforming controller's path, resolved and counted as the bulk
-     * path resolves it (XhciXferEvent). Any other code on the tail leaves
-     * the flag for the unlink to count as an observation lost. */
+     * path resolves it (XhciXferEvent). Any other code on a short packet's
+     * tail leaves the flag for the unlink to count as an observation lost;
+     * an error's tail is its tail whatever its code (p.201 has a skipped
+     * TD's IOC report Missed Service, for one). */
     if ((owner->Flags & XHCI_XFER_FLAG_SHORT_DEFERRED) != 0) {
-        if (completionCode == XHCI_CC_SHORT_PACKET) {
+        if ((owner->Flags & XHCI_XFER_FLAG_ERROR_HELD) != 0) {
+            owner->Flags &= ~(XHCI_XFER_FLAG_SHORT_DEFERRED |
+                              XHCI_XFER_FLAG_ERROR_HELD);
+            queue->MidTdDeferralsTailed++;
+        } else if (completionCode == XHCI_CC_SHORT_PACKET) {
             owner->Flags &= ~XHCI_XFER_FLAG_SHORT_DEFERRED;
             queue->MidTdDeferralsTailed++;
         } else if (completionCode == XHCI_CC_SUCCESS) {
@@ -4593,7 +4660,8 @@ static VOID xhciXferIsoFinish(PXHCI_TRANSFER_QUEUE queue,
 
     for (walk = queue->Head, i = 0; i < ahead && walk != NULL; i++) {
         if ((walk->Flags & XHCI_XFER_FLAG_SHORT_DEFERRED) != 0) {
-            walk->Flags &= ~XHCI_XFER_FLAG_SHORT_DEFERRED;
+            walk->Flags &= ~(XHCI_XFER_FLAG_SHORT_DEFERRED |
+                             XHCI_XFER_FLAG_ERROR_HELD);
             queue->MidTdShortRetires++;
         }
         if (walk->IsoPacketsAnswered < walk->IsoPacketCount) {
@@ -4615,7 +4683,9 @@ static VOID xhciXferIsoFinish(PXHCI_TRANSFER_QUEUE queue,
 
 /*
  * XhciXferDrainSettled's isochronous half: `owner` held its final packet for
- * a tail (XhciXferIsoEvent), the flag is already cleared, and a drain pass
+ * a tail (XhciXferIsoEvent) after a short packet or an error (task 48.21),
+ * the flag is already cleared, and a drain pass (a short packet's hold
+ * only)
  * has read the event ring empty or a stopped endpoint's saved dequeue shows
  * the controller past the group (XhciXferStopPlace), so the tail is not
  * coming. The hold is re-validated against the ring before anything is
@@ -4644,6 +4714,7 @@ static ULONG xhciXferIsoSettle(PXHCI_TRANSFER_QUEUE queue,
     ULONG packetHead;
     ULONG packetTail;
 
+    owner->Flags &= ~XHCI_XFER_FLAG_ERROR_HELD;
     if (owner->IsoParams != NULL && owner->IsoPacketCount != 0 &&
         owner->IsoPacketsAnswered >= owner->IsoPacketCount &&
         XhciRingIndexFromPA(ring, owner->ShortTrbPA, &index) ==

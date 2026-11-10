@@ -1,6 +1,52 @@
 # Design Record 35 - Thunderbolt Networking: a Host-to-Host Link
 
-Status: revision 17, 2026-11-08: the 98 SE and ME install of the
+Status: revision 30, 2026-11-10: the MAC in a Login Response packed
+and read with its first byte in bits 7:0 of DW 19, as Windows 11 and
+Linux pack it (section 2.1, from the owner's bench).
+Revision 29, 2026-11-10: on 98 SE and ME the NDIS 5
+miniport makes every receive indication, send completion and reset
+completion from an NDIS timer's routine, never from the connection
+manager's DPC or a caller's context (section 7.8, task 48.38, from the
+98 TCP/IP's exceptions 0E with the ring interrupt on).
+Revision 28, 2026-11-10: the reads made afresh bounded
+across reads, so a peer that notifies, or changes its block, during
+every read cannot hold the discovery in PROPS (section 3.18).
+Revision 27, 2026-11-10: a peer's Properties Changed
+Notification arriving while this end's Properties Read is out makes the
+read again once that one completes (section 3.18).
+Revision 26, 2026-11-10: a Properties Changed Notification sent
+to every peer at the start of its handshake, as Linux does (section
+3.18, from the emulator legs of task 48.38).
+Revision 25, 2026-11-09: the networking data ring's interrupt
+coded (section 5.5, task 48.38; "As coded" there, with the service
+block's two words at 92 and 96 and the block grown to 104 bytes).
+Revision 24, 2026-11-09: the networking data ring's interrupt
+designed (section 5.5, task 48.38) and section 5.4 corrected to what is
+built (the data rings polled only), from round 7 of the owner's bench.
+Revision 23, 2026-11-09: a record's paths torn down at a
+disconnect too, as Linux does (section 3.17, from the owner's Linux run),
+and an adopted peer stopping short: no approve, no networking offered,
+and XHCITR saying why (section 3.16, from rounds 4 to 6 of the owner's
+bench), reviewed and revised.
+Revision 22, 2026-11-09: a Properties Read Request with no
+record, from the computer the firmware last announced at that direct
+link, starts a record of its own (section 3.15), from round 3 of the
+owner's bench, reviewed and revised.
+Revision 21, 2026-11-09: a UUID Request with no record
+answered with this domain's UUID, and what such packets are logged
+(section 3.14), from round 2 of the owner's bench, reviewed and revised.
+Revision 20, 2026-11-09: from the owner's bench with
+section 3.12's logging, a Login Response matched whatever its Request
+ID (section 4.5, Windows 11) and a request for no record asking the
+firmware to announce again (section 3.13), reviewed and revised.
+Revision 19, 2026-11-09: the status query the xHCI98 USB
+Tree reads (section 17, task 48.18) and the network PDO's removal made
+correct whatever order the PnP manager delivers it in (section 6.6,
+task 48.16), reviewed and revised.
+Revision 18, 2026-11-09: the engine's drops, Error Responses and
+inter-domain counters written to the log (section 3.12), from the owner's
+bench of that day, reviewed and revised.
+Revision 17, 2026-11-08: the 98 SE and ME install of the
 network adapter copies nothing and Setup places `xhcinet.sys` itself
 (sections 8.2 and 9.5), the owner's decision of that day, reviewed and
 revised.
@@ -244,8 +290,17 @@ receive service touch at DISPATCH_LEVEL under a lock of their own.
   for a Thunderbolt 3 peer). A Login Response carries a status (0
   success; 1 to `0x7FFFFFFF` reserved and taken as failure; from
   `0x80000000` vendor failures), the responder's MAC address (DW 19 the
-  most significant four bytes, DW 20 the rest) and its length, typically
-  6. A responder that already has a login with another requester fails
+  "most significant" four bytes, DW 20 the rest) and its length, typically
+  6. DW 19 holds the MAC's first four bytes and DW 20 its last two, each
+  DW filled from its least significant byte: the first MAC byte is bits
+  7:0 of DW 19, the fifth bits 7:0 of DW 20. Linux's `thunderbolt-net`
+  packs it so (it copies the six bytes over the two DWs in host order,
+  `tbnet_login_response`, and each DW goes out big-endian, `tb_ctl_tx`),
+  and so does Windows 11 (the owner's bench, 2026-11-10: its adapter
+  B0-59-89-DC-A6-40 arrived as DW 19 `0xDC8959B0`, DW 20 `0x40A6`).
+  Drivers before 3.4.3.0 took the first byte from bits 31:24 and built
+  their own the same way, so a peer reading it as Windows and Linux do
+  saw it reversed in each DW; no login depends on the field. A responder that already has a login with another requester fails
   the new one. Each side logs in to the other: a CM may enable its
   inbound path once it has sent a successful Login Response, its
   outbound one once it has received one, and both by the time both have
@@ -760,8 +815,9 @@ The discovery protocol identifies each domain by a 128-bit UUID (IDS
   request's ([tbnet] section 2.4 point 1). So a response is accepted with
   the two UUIDs in either order, and a Logout Response is matched by its
   type, route, protocol UUID and UUID pair while a Logout is
-  outstanding, its Request ID not checked; a Login Response keeps the
-  Request ID check, which Linux's copy of the request's id meets. A
+  outstanding, its Request ID not checked; since revision 20 a Login
+  Response is matched the same way, its Request ID logged when it is not
+  one this login sent (section 4.5, Windows 11's own counter). A
   control request
   and an inter-domain request are never outstanding at once; the thread
   serialises them. The bound is IDS's: one second a try, ten resends,
@@ -1174,7 +1230,8 @@ else runs inside the client's existing entry points.
   records per NHI (`TBT_ICM_MAX_XD`, a two-port controller's two links);
   a third connection is refused, logged (`cm.xdp.full`). Each of these
   ends is the peer gone: no Logout and no teardown, since the firmware
-  has said something at that place [inf].
+  has said something at that place [inf] (revision 23, section 3.17:
+  the teardown is sent at these ends too).
 - **The record.** The engine is given the event's local UUID as this
   domain's (section 3.1), its remote UUID, and its local route, the CM
   bit clear, as the peer's route (section 3.2), and starts at PROPS. The
@@ -1359,6 +1416,525 @@ What needs no change:
   Alpine Ridge layouts (section 3.10's row, matched), and Linux's runtime
   suspend 18 s after an unplug: this driver waits on none of them.
 
+### 3.12 The drops in the log (the owner's bench, 2026-11-09)
+
+The owner's bench of 2026-11-09 (the P14s's Alpine Ridge firmware CM on
+98 SE, cabled to a Framework 13 on Windows 11 with its inbox USB4 P2P
+adapter, `3.4.2.0`) ended with the property exchange done both ways and
+this host's Logins never answered (`cm.net.login.none`), while 144
+inter-domain packets reached the engine; whatever they were, the engine
+dropped them without a trace, and neither its counters
+(`TBT_XDP_COUNTERS`) nor the firmware CM's (`TBT_ICM_XD_COUNTERS`) were
+ever written anywhere. Read from that log: Windows 11's block carries
+`vendorid` 045Eh and `deviceid` 083Fh, and offers USB4NET.
+
+So the engine now says why it drops (every flavour; the log ring at
+`XhciCmLogVerbosity` 2 holds it):
+
+- **Each drop** is still counted (Strays or Malformed), and the first
+  `TBT_XDP_DROPS_LOGGED` (16) of a peer record each write
+  `cm.xdp.drop` = the reason (bits 23:16; `TBT_XDP_DROP_*`: 1 malformed,
+  2 another route, 3 USB4NET before the peer's UUID is known, 4 USB4NET
+  whose Requester and Responder are not this record's pair either way,
+  5 a Login not from Remote to Local, 6 a Logout the same, 7 a Login
+  Response no Login awaits (until revision 20 also one of another
+  Request ID, section 4.5), 8 a Logout
+  Response no Logout awaits, 9 another USB4NET type, 10 a discovery
+  response with no request out or another SN, 11 the wrong response
+  type), the PDF (15:12; a response handled past the intake is written
+  as 7), the decoder's kind (11:8) and the packet type (7:0). A route
+  drop adds `cm.xdp.drop.route` (the route's low word), a Login
+  Response drop `cm.xdp.drop.id` (its Request ID).
+- **The UUIDs once.** At the record's first drop that is a UUID mismatch
+  (reasons 4 to 6) the engine writes this record's Local and Remote and
+  the packet's Requester and Responder as 32 `cm.xdp.uuidw` lines, each
+  a 16-bit half: index (23:16) = UUID x 8 + word x 2 + half (UUID 0
+  Local, 1 Remote, 2 Requester, 3 Responder; word as `TBT_UUID`'s
+  `Dw`; half 0 the low one), so the mismatch is read off the log.
+- **Error Responses.** Every Error Response the peer sends (IDS 2.11) is
+  counted (`ErrorsReceived`) and the first 16 of a record written as
+  `cm.xdp.err.rx` = its code (23:8) and SN (7:0), whether or not a
+  discovery request of this host's awaited it: an Error Response to a
+  Login lands there.
+- **The counters** at the Login's minute unanswered (beside
+  `cm.net.login.none`) and at the record's end (an unplug, a stop):
+  `cm.xdp.n.rx` (packets the engine took), `cm.xdp.n.malformed`,
+  `cm.xdp.n.strays`, `cm.xdp.n.errors`, `cm.net.n.logins` (Logins sent
+  23:12, received 11:0, each held at FFFh) and `cm.net.n.loginfail`
+  (failures answered 23:12, refused 11:0); under the firmware CM,
+  after them, `cm.icm.xd.packets`, `cm.icm.xd.nopeer` and
+  `cm.icm.xd.overflows`; and the first 16 packets for no record each
+  write `cm.icm.xd.nopeer.route` (the PDF in 27:24, the route's low
+  word in 23:0).
+
+The host suite `test_tbt_xdp` holds the bound, the reason, the UUID dump
+and the counters (`test_drop_log`).
+
+### 3.13 A request with no record: the firmware asked to announce again (the owner's bench, 2026-11-09)
+
+Read on the owner's bench with section 3.12's logging (the P14s on 98 SE,
+the Framework on Windows 11, plug order 3: the cable pulled and put back
+at the Framework while the service was up). The record ended with the
+link (`cm.net.link.down`). No XDomain connected followed, and 11 packets
+reached this driver for no record (`cm.icm.xd.nopeer.route=06000001`: PDF
+6 requests from route 1, the direct link). Windows' adapter was gone and
+its ping failed. The Alpine Ridge firmware sends its connected event only
+after the far end answers its own UUID Request (section 2.7, the
+emulator's model of it in section 10). A firmware that asked once at the
+link's return, before Windows was ready, and never again leaves the link
+unannounced, which section 2.7 point 6 named as a risk.
+
+So a request (PDF 6) from a direct link (a route of one level) that
+matches no record asks for another driver ready (`tbtIcmRediscover`, the
+mechanism a lost announcement already uses, "tunnels survive it"). At
+every driver ready the firmware sends a new UUID Request, and the event
+follows its answer. The bounds:
+- at most once each `TBT_ICM_XD_NOPEER_ASK_MS` (10 s);
+- at most `TBT_ICM_XD_NOPEER_ASK_MAX` (6) times for each direct route
+  (its adapter) until an XDomain connected event for that route resets
+  its count, then left until one comes; another route's announcement,
+  which every driver ready repeats, resets only its own;
+- logged as `cm.icm.xd.nopeer.ask` (the route) and counted
+  (`cm.icm.xd.nopeer.asks`).
+The request itself is still answered Not Ready (section 3.1) where it is
+a discovery request. Host vector: `test_tbt_icm`, `test_xd_nopeer_ask`.
+
+### 3.14 The far end's UUID Request with no record (the owner's bench, round 2)
+
+Round 2 of the owner's bench (2026-11-09, section 3.13's change in, plug
+order 3, the cable pulled and put back at the Framework):
+- **No announcement.** Neither the firmware's disconnected event at the
+  pull, nor the two driver readies section 3.13 asked for
+  (`cm.icm.xd.nopeer.ask`), brought another XDomain connected, or any
+  other event.
+- **Eleven requests** (PDF 6) reached this host's ring for no record,
+  answered Not Ready. Eleven is a first request and IDS 3.1's ten
+  resends.
+- **Windows' adapter** was gone.
+
+The reading this section acts on: these are Windows' UUID Requests after
+the replug. Section 2.7 found that the firmware answers them itself at a
+link's first coming up; here they reach the host unanswered. Windows'
+discovery stays at its first step while they go unanswered, and it is
+then not a far end that answers the firmware's own UUID Request, which
+the firmware's connected event waits for. Linux answers a UUID Request at
+the domain's level, whether or not it holds an XDomain for the route
+(`xdomain.c` `tb_xdp_handle_request`).
+
+So a UUID Request (type 12, or the older type 1) that matches no record
+is answered here with this domain's UUID, the `local_uuid` of the
+firmware's last connected event (`XdLocal`). The answer carries the
+request's SN and route, and its Source Route where the type asks for one.
+- Before any connected event, nothing is known to answer with, and the
+  answer stays Not Ready (section 3.1).
+- Every other request still gets Not Ready.
+- Section 3.13's driver ready is asked for as before.
+- The first 16 such packets of an NHI's life also log their decoder kind,
+  type and SN (`cm.icm.xd.nopeer.type`), so the next bench reading names
+  them; the answers are counted (`cm.icm.xd.nopeer.uuids`).
+
+The reading is settled only by the next bench round. Host vector:
+`test_tbt_icm`, `test_xd_nopeer_uuid`.
+
+### 3.15 A peer that reads this domain's properties with no announcement (the owner's bench, round 3)
+
+Round 3 of the owner's bench (2026-11-09, sections 3.13 and 3.14 in, plug
+order 3, the cable pulled and put back at the Framework while the service
+was up):
+- **The pull** as before: `cm.xdp.disconnected`, `cm.net.down`, the
+  record's end (`cm.xdp.end=00000103`).
+- **Eleven requests** for no record, about 1 s apart over 10.5 s, from
+  15 s after the pull: every one a Properties Read Request
+  (`cm.icm.xd.nopeer.type` 00020300 to 00020303: kind discovery, type 3,
+  SN 0 to 3 in turn, the resends of IDS 3.1 included). No UUID Request
+  (`cm.icm.xd.nopeer.uuids` 0), so section 3.14's answer never ran.
+- **The two driver readies** of section 3.13 were answered with the
+  firmware's ready flags (`tbt.icm.ready-flags=000000E2`) and nothing
+  else: no XDomain connected, no other event.
+- Then nothing; Windows' adapter was gone.
+
+The reading: Windows 11 keeps the far domain's UUID across the replug and
+goes straight to reading its properties, so the far end never answers a
+UUID Request of the firmware's, and the Alpine Ridge firmware, which
+announced the peer at the first connection, does not announce it again.
+Nothing public names an ICM command that makes the firmware announce an
+XDomain (Linux `icm.c` has none; its rescan is the driver ready section
+3.13 already sends) [linux]. Answering the request without a record
+would only move the far end's discovery on: this host still needs a
+record for its own properties read, the login and the approve.
+
+**The kept places.** The place of the last connected event at each
+direct link is kept (`XdKnown`, one entry per record slot): link, depth,
+route, remote route and both UUIDs. A place is section 3.10's: on Falcon
+and Alpine Ridge the depth and the physical port (a lane and its dual are
+one place), on Titan Ridge and Ice Lake the route. Every later connected
+event at a place replaces its entry; a new place takes a free entry, else
+the entries in turn. An entry is cleared when a device is announced at
+its place (depth 1 on its physical port, or its route), and every entry
+at the client's session boundaries (every `tbtIcmXdEndAll`: `TbtIcmUnbind`,
+`TbtIcmSuspend`, `TbtIcmLost`, a failure after activation, the entries of
+`TbtIcmResume` and `TbtIcmRecover`). `XdLocal` (section 3.14) is kept as
+today.
+
+**The change: a record adopted from the request.** A packet with no
+record is adopted where all of these hold:
+- `XhciCmNet` is on, the client bound, the controller's access granted
+  (`tbtIcmXdAccess`), and no announcement waits in the event queue;
+- it is a discovery request of type 3 (a Properties Read Request), PDF 6;
+- its route is a direct link (one level, the CM bit clear) and equals a
+  kept place's route;
+- its Destination UUID is that place's `local_uuid` and its Source UUID
+  that place's remote UUID: the computer the firmware announced there,
+  reading this domain as the firmware named it. Another computer at that
+  place is not adopted (the firmware would not name it in a disconnected
+  event, and Falcon and Alpine Ridge match those by the remote UUID);
+- no record holds that remote UUID and no record is at that place;
+- a record slot is free;
+- fewer than `TBT_ICM_XD_ADOPT_MAX` (3) records were adopted at that place
+  since its last connected event.
+
+**Where.** The packet loop of `tbtIcmXdRun` does not change records while
+it takes packets (`XdTaking`). The request is kept (one per NHI,
+`XdAdopt`; a second in the same pass is dropped, the far end resends) and
+every condition checked again right after the loop, where records may
+change and after the queue is empty; then the record is made and the
+request handed to its engine. An adopted request gets no Not Ready and
+asks no driver ready (section 3.13); one that fails a condition keeps
+sections 3.13 and 3.14's handling. A pending one is dropped at the
+session boundaries.
+
+**The record.** Made by its own path, not `tbtIcmXdApply`: `tbtIcmXdBegin`
+with the kept place and UUIDs, started at PROPS, marked `Adopted`, logged
+(`cm.xdp.adopt`: the slot, link and route) and counted
+(`cm.icm.xd.adopted`, with the counters of section 3.12). It ends no
+other record, replaces no device and settles no owed teardown: a request
+proves nothing about the firmware's paths, so an owed teardown (section
+3.10) is still sent before its approve, and the fence still holds.
+
+**The paths** (replaced by section 3.16 in revision 23: an adopted
+record brings no service up). The service comes up as for an announced record: the
+approve (section 5.2) with the kept link info, or route, and the remote
+UUID. Whether the firmware builds paths for an XDomain it did not
+announce again is not known [inf]. An approve answered with the error
+flag is handled as today (`cm.net.approve.fail`, the rings down, no
+service, the engine logs out) and also latches the record
+(`AdoptRefused`, `cm.xdp.adopt.refused`): no rings and no approve again,
+however often the far end logs in, until the record is announced or
+ends.
+
+**Its identity.** An adopted record holds the computer the firmware
+announced at its place: the identity its approve, its teardown and a
+disconnected event are keyed by. A Changed Notification naming another
+domain, which moves an ordinary record's engine to that peer (IDS 3.7),
+ends an adopted record instead, with the Logout and teardown an ordinary
+end sends (`cm.xdp.adopt.other`, counted). The new domain then needs an
+announcement of its own, or a request at a place the firmware named.
+
+**Its end and its bounds.**
+- As any record: a disconnected event naming its remote UUID (Falcon and
+  Alpine Ridge) or route (Titan Ridge and Ice Lake), a connected event or
+  a device at its place, the session boundaries.
+- A connected event for its remote UUID at its place keeps it
+  (`cm.xdp.again`) and makes it an ordinary record (the latch cleared).
+- A rediscovery's driver ready marks it stale like any record unless its
+  service is up (section 3.10's reconciliation ends a record the firmware
+  does not announce again, and the firmware never announced this one).
+- An adopted record whose discovery failed (the engine at ERROR or LOOP,
+  no service) is ended after the next packet loop
+  (`cm.xdp.adopt.end`), with the Logout and teardown an ordinary end
+  sends, so the far end's next request may adopt again within the
+  place's budget.
+
+Host vector: `test_tbt_icm`, `test_xd_adopt_props`, replaying round 3: a
+connected event at route 1, the service up, the disconnected event, then
+the far host (sending no UUID Request) reading this domain's properties:
+a record adopted, the request answered, no Not Ready, no driver ready,
+the service up again with one approve at the kept link info; a driver
+ready keeps it; a connected event makes it ordinary; a disconnect ends
+it. Then an approve refused for an adopted record: latched, one approve
+in a minute. Then a Changed Notification from another domain on an
+adopted record's link: the record ended, that domain adopting nothing.
+Refused: another Destination UUID, another computer's Source UUID, a
+route never announced, a route of two levels; the places forgotten at a
+suspend.
+
+### 3.16 An adopted peer stops short: no approve, no networking offered (rounds 4 to 6)
+
+Rounds 4 to 6 of the owner's bench (2026-11-09, section 3.15 in, the
+P14s on 98 SE, the Framework on Windows 11):
+- **Plug order 3** (the cable pulled and put back at the Framework):
+  the record adopted, both logins done, the approve sent at the kept
+  link info and answered without the error flag, the carrier up on both
+  ends, Windows' adapter back, and no frame crossed either way.
+- The approve was the same bytes as the one that works at a fresh plug
+  (section 3.15's record is a copy of the last connected event). Resetting
+  Windows' adapter did not help; only restarting the P14s did.
+- In the emulator, a re-plug at the far end with the firmware announcing
+  the peer again ran ring 1 down and up in one boot and carried frames
+  both ways (run-48, worker net3's replug leg). So the ring restart works,
+  and the dead path is the firmware's: it answers an approve for an
+  XDomain it did not announce again, and builds nothing.
+- Linux's firmware-CM client has no command that makes an Alpine Ridge
+  firmware announce again either; it would lose the link the same way
+  [linux] (`icm.c`, facts only).
+
+An adopted record therefore no longer brings the service up (the owner's
+decision of 2026-11-09: no carrier that carries nothing).
+
+**The change.** A record is adopted as section 3.15 says, and answers the
+far end's discovery as before, but while it is adopted:
+- this host's properties block for it has no `network` directory
+  (`TbtXdpPeerSetNetWanted` FALSE: the block of section 3.7 without
+  USB4NET), so the far end finds this computer and offers no login. A far
+  end that logs in anyway is refused (section 4.1's refusal, as with
+  `XhciCmNet` 0's block);
+- this host sends no Login, no approve and no teardown (nothing was
+  approved), raises no rings and no link;
+- when its engine has read the far end's block (`PeerReady`), it logs
+  `cm.xdp.adopt.unannounced` (the slot in 31:24, the route's low word in
+  15:0) and counts it (`cm.icm.xd.unannounced`, with section 3.12's
+  counters).
+
+`tbtIcmXdUp` also refuses an adopted record outright (no rings, no
+approve), whatever asked for it. Section 3.15's latch on a refused
+approve (`AdoptRefused`, `cm.xdp.adopt.refused`) goes: no adopted record
+sends an approve now.
+
+**Kept from section 3.15.** The adoption's conditions and budget (three a
+place until it is announced again), its end after a failed discovery
+(`cm.xdp.adopt.end`), the end at another domain's Changed Notification
+(`cm.xdp.adopt.other`; no Logout or teardown goes now, there being no
+service), its end at a disconnected event or at a device or another host
+at its place, and the session boundaries. A rediscovery's driver ready
+marks it stale as any record (no adopted record's service is up any
+more), so the reconciliation ends it; the far end's next Properties Read
+Request adopts again within the budget.
+
+**Why keep answering.** The far end's requests are still answered, so:
+- its discovery ends instead of resending for ever, and it shows no
+  network adapter rather than one that carries nothing;
+- this host keeps a record the user can see: XHCITR shows the link as
+  found and not connected, and why (section 17);
+- a real announcement promotes it. A connected event for its remote UUID
+  at its place (`cm.xdp.again`) makes it an ordinary record: its block is
+  rebuilt with the `network` directory, the far end is sent a Changed
+  Notification (IDS 3.7, `ChangedOwed`) and reads it again, and both
+  sides log in, approve and come up as at a fresh plug.
+
+**The status query** (section 17): the link entry of an adopted record
+carries `CM_QN_LF_UNANNOUNCED` (0x40), a new flag in a word that was
+reserved 0, so `CM_QN_VERSION` stays 1. XHCITR names such a link "found,
+not connected" and gives the reason in its details (section 17.7's
+drafts).
+
+**What the user does.** Restart the computer under xHCI98 with the cable
+in (plug order 2), as issue 28 says; whether a firmware restart could
+replace that is a bench question, not this driver's behaviour (the owner,
+2026-11-09).
+
+Host vector: `test_tbt_icm`, `test_xd_adopt_props`, replaying round 3:
+the record adopted and the request answered as before, then a minute
+with no Login from either side, no approve, no rings and no link, the
+far end's view of this block without USB4NET, and
+`cm.icm.xd.unannounced` counted once; a driver ready with no
+announcement ends it and the far end's next request adopts again; a
+connected event at the place promotes it,
+the far end reads the block again and the service comes up with one
+approve; a disconnected event ends it. Then a Changed Notification from
+another domain on an adopted record: ended, no Logout, no teardown, that
+domain adopting nothing. The refusals as before.
+
+### 3.17 The paths torn down at a disconnect too (the owner's Linux run, 2026-11-09)
+
+The owner ran Linux 7.0 on the P14s (the same Alpine Ridge firmware CM)
+against the same Framework on Windows 11, with `thunderbolt` dynamic
+debug: ping 4 of 4 after a fresh plug, after a re-plug at the Framework
+and after a re-plug at the P14s end, `thunderbolt0` made afresh each
+time and its receive count starting again at Windows' burst of a fresh
+login. Under Linux the firmware announced the peer again after a re-plug
+at the far end; under this driver it never did (sections 3.13 to 3.16).
+
+What Linux does at a disconnect that this driver did not, read for facts
+only [linux] [tbnet]:
+- The firmware's disconnected event removes the XDomain
+  (`icm_fr_xdomain_disconnected`, `remove_xdomain`), and once the event
+  is handled its services are unregistered
+  (`tb_domain_unregister_unplugged_xdomains`, `tb_xdomain_unregister`).
+- `thunderbolt-net` then stops its interface (`tbnet_remove`,
+  `unregister_netdev`, `tbnet_stop`) and calls `tbnet_tear_down` with a
+  Logout. Where both logins were done it sends up to ten Logouts (the one
+  into the dead link section 2.7 saw), stops its rings and **disables
+  the paths**: `tb_xdomain_disable_paths`, on Falcon and Alpine Ridge
+  `icm_fr_disconnect_xdomain_paths`, NHI mailbox `DISCONNECT_PA` (or
+  `_PB`) data 1, then data 2. Nothing on that path checks that the link
+  is gone.
+
+This driver ended such a record with nothing sent (section 3.10: "the
+firmware has said something at that place"). An Alpine Ridge firmware
+left holding the paths of an XDomain it reported gone is the leading
+reading of plug order 3 [inf].
+
+A second difference is not taken here: Linux runtime-suspends the NHI
+when nothing is connected (`icm_runtime_suspend`, mailbox
+`DRV_UNLOADS`; the run's log shows ring 0 stopped and started again
+about 6 s apart just before the fresh plug's announcement) and resumes
+it with a driver ready (`icm_runtime_resume`, `icm_complete`). The Linux
+run could not tell which of the two brought the announcement back; round
+7 did: with this section's teardown, the firmware announced the
+Framework again with no driver ready, ring 0 restart or rediscovery in
+between (the log goes from `cm.xdp.end` straight to `cm.xdp.connected`),
+so the teardown alone suffices and no held-awake Linux run is needed.
+
+**The change.** A record whose paths may stand (approved, or an approve
+never answered) has them torn down at every end, the firmware's own
+included: a disconnected event naming it, another host or a device
+announced at its place, a disconnect during its approve's wait. The
+teardown is section 3.10's (mailbox `0x10`/`0x11` data 1, 20 us, data 2
+on Falcon and Alpine Ridge; command `0x11` stage 1 then 2 by route on
+Titan Ridge and Ice Lake). Every teardown, this one and the orderly
+ones, is now sent outside the record's waits (no slot stamp), so an end
+the firmware announces while it runs cannot cut it short between its
+stages. This one is logged
+`cm.net.teardown.gone` (the slot) before `cm.net.teardown`, and counted
+(`TeardownsGone`). One that fails is not owed: the firmware ended the
+link, and section 3.10's owed teardown stays for the ends this driver
+chose. Still no Logout into a link the firmware reported gone. Nothing
+is sent where the host interface is lost.
+
+Section 3.16 stays: if the firmware still does not announce the peer
+again, the adopted record stops short.
+
+Two differences from Linux, judged and left:
+- **Titan Ridge and Ice Lake's teardown is keyed by route** (and the
+  remote UUID). A fast re-plug that brings a host back at the same route
+  cannot meet a stale teardown: the firmware's events are taken in order,
+  so the disconnect's teardown is sent before the new connected event is
+  applied, and the new record's approve comes only after both logins.
+  Linux has the same order and no guard; none is added.
+- **Falcon Ridge's E2E**: Linux reserves HopID 1 for the E2E credits
+  there (`QUIRK_E2E`, `pci.c`) and keeps E2E; this driver withdraws E2E on
+  Falcon Ridge (section 4.3), so a full receive ring drops there instead
+  of holding the peer back. A known difference; Falcon Ridge is not read
+  on hardware here.
+
+Host vectors: `test_tbt_icm`, `test_xd_unplug` (Alpine Ridge: mailbox
+`0x10` data 1 and 2 at the disconnect, no Logout, nothing owed),
+`test_xd_tr_gone` (Titan Ridge: both stages by route at the disconnect;
+refused at stage 1, nothing owed; a disconnect during an orderly
+teardown's stage 1, and stage 2 still sent), and the disconnect inside an
+approve's wait in `test_xd_approve_fails` (the teardown sent).
+
+### 3.18 A Properties Changed Notification to every new peer (the emulator legs of task 48.38, 2026-11-10)
+
+**Read.** Two cable pairs over `usb4-xdomain` (98 SE against XP, Alpine
+Ridge firmware CM at both ends, `7db0e1f9`), XP with
+`XhciCmRingInterrupt` 1: the link up at both ends, and no network after
+five minutes. The 98 SE end's first Properties Read was answered with
+vendor 8086, device 1 (`cm.xdp.ready=01860001`): the far firmware's own
+properties, given before the far driver answered, with no network
+service in them. The XP end read the 98 SE end's own properties at once,
+was ready and sent its Login; the 98 SE end received it and, holding the
+firmware's properties, never offered the network, so it sent no Login of
+its own. With both ends polled the same pair came up: the XP end owed a
+Properties Changed Notification because its service was offered only
+after its record began (a host whose block changes sends one, section
+2.1), the 98 SE end read the properties
+again 20 s in and found the network. With the ring interrupt the XP end
+is quicker, its service is already offered when its record begins,
+nothing is owed, and nothing tells the far end to read again.
+
+**What Linux does** [linux]: at the start of every handshake, once the
+far UUID is known (`tb_xdomain_state_work`, states `INIT` and `UUID`),
+`tb_xdomain_queue_properties_changed` sends a Properties Changed
+Notification to the new peer beside its own Properties Read, resent up
+to `XDOMAIN_RETRIES` times, whatever its own service did.
+
+**Decided.** `TbtXdpPeerStart` owes one Properties Changed Notification
+(`ChangedOwed`), under both connection managers, and so does the
+firmware CM's restart for another domain on the same link (IDS 3.7,
+`cm.xdp.newpeer`); the existing path sends it once this end is ready
+(as for a changed block, section 2.1, resent at most ten times, IDS
+3.3). A far end that is ready reads the properties again; one still
+discovering answers and goes on. A re-read on receiving a Changed
+Notification owes nothing, so two ends never trade them. The
+notification and a Properties Read share the one discovery slot, so a
+peer's notification arriving while this end's own is unanswered does
+not abort it: the read it asks for waits (`ReadOwed`) until this end's
+notification is answered, refused or given up, and starts then. Two
+notifications crossing are therefore each sent once and each answered;
+one lost is resent and still reaches the far end. The sends of one owed
+notification are counted across any read between (`ChangedSends`, at
+most ten resends, IDS 3.3) and counted afresh only when a new one is
+owed (a start, or this end's own block changing); a new one owed while
+the last is still out gets a fresh budget too, so a block change (an
+adopted record promoted, section 3.16) after the last send is still
+announced. A Changed
+Notification reaching an end that gave up before it knew the far UUID
+(ERROR from the UUID state) starts the whole handshake again rather than
+a Properties Read addressed to no one; the host vectors met this once
+the notification was sent at every start (a far software CM that had
+given up, restarted by the notification before the firmware CM's UUID
+Request reached it). A far end that
+had the firmware's properties now finds the network.
+
+A peer's notification can also arrive while this end's own Properties
+Read is out (revision 27, 2026-11-10, from the merge review of the
+revision 26 code). The read's last response may then still carry the
+block from before the change - the far firmware's answer, or a delayed
+one from the far driver - and the far end, its notification answered,
+sends no other. The notification is answered and latched (`ReadOwed`,
+in the PROPS state too), and when the read out ends - completed, its
+block not taken; refused by an Error Response or an impossible block
+size; or given up after its resends, as when the far block shrank under
+a request for its later words - one read is made afresh from the start
+(`cm.xdp.props.again`, value 0, 2 or 1), so what is adopted was read
+after the notification. Starting that read clears the latch, so a far
+end that keeps failing fails once more and no further.
+
+That bound holds for one notification only (revision 28, 2026-11-10,
+from the merge review of the revision 27 code). A peer that sends one
+during every read, or changes its block's generation in every read
+(IDS 3.2's read from the start), latched it again each time, and each
+read afresh started with a fresh resend budget: the engine stayed in
+PROPS, a completed read never reached READY (so a service whose peer
+had withdrawn its network directory never logged out), and a failing
+read never reached ERROR (so an adopted record's cleanup, section 3.16,
+never found it). The reads made afresh for either cause are now counted
+across reads (`PropsRestarts`), renewed only when a block is adopted or
+a new peer starts (a restart of the handshake, or a Changed
+Notification from another domain under the firmware CM). After
+`TBT_XDP_RESENDS` (10) of them the read fails instead: the block it
+gave is not taken, the engine goes to ERROR (`cm.xdp.props.spin`, the
+count), and a service still up from an earlier block, or its paths,
+ends with a Logout, as a withdrawn directory's would. The peer's next
+notification in ERROR is read as before, with no reads afresh left
+until a block is adopted.
+
+Host vectors: `test_tbt_xdp` (`test_changed_during_read`: B's
+notification reaching A between A's last Properties Read Request and
+its delayed response with B's old block, which has no network
+directory; A reads again and both ends log in;
+`test_changed_read_fails`: B's block shrinks under A's request for its
+later words, A's read given up and made afresh; `test_changed_read_refused`:
+the read refused after B's notification was answered, made afresh, both
+ends log in; `test_changed_every_read`: B notifies during every
+read of A's, each completing, with the service up: after ten reads
+afresh A is at ERROR, logging out, and B's next notification is read
+and the service comes back; `test_changed_every_failed_read`: the
+same with every read unanswered, from the first: ERROR, no block
+taken; `test_changed_at_start`: a start owes the
+notification and sends it once ready, the two crossing are each sent
+once, each end reads again once, none traded back in 60 s;
+`test_changed_lost`: one end's notification lost and the other's
+arriving first, the lost one resent and both ends reading again;
+`test_changed_after_budget`: the block changed after the startup
+notification's last unanswered send, announced and read; `test_firmware_nudge`: the far end in ERROR before
+the UUID restarts its handshake; `test_drop_log` drops A's notification
+to keep its UUID mismatch, and `test_linux_shapes` both ends' to keep its
+timing), `test_tbt_icm` (`test_xd_adopt_spin`: an adopted record
+whose far host notifies during every read ends by the failed record's
+cleanup), and the re-read settling in `test_u4xd`.
+
 ## 4. The USB4NET service
 
 ### 4.1 Who logs in
@@ -1475,6 +2051,45 @@ derivation of its own, not IDS 5.1.5.3's, and never reads the Login
 Response's MAC ([tbnet] section 2.4 point 8); nothing depends on either
 side's choice.
 
+### 4.5 Windows 11's Login Response (the owner's bench, 2026-11-09)
+
+Read on the owner's bench with section 3.12's logging (the P14s on 98 SE,
+the Framework on Windows 11, plug order 1: 98 SE up first, then the
+cable):
+- **The drops.** Every one of this host's 68 Logins in the first minute
+  was answered with a Login Response (`cm.xdp.n.strays=01000044`), and
+  each was dropped as reason 7 (`cm.xdp.drop=01077301`: a USB4NET Login
+  Response on PDF 7). Their Request IDs were 8, 9, ... 0x17 for the first
+  16 (`cm.xdp.drop.id`), while this host's Logins count from 1.
+- **Windows' own Logins.** Windows had sent 8 Logins of its own
+  (`cm.net.n.logins=01044008`, received 8), each answered with success.
+- **No UUID mismatch** was logged, no Error Response, nothing malformed.
+- **Windows' side.** Windows showed the adapter up and resolved no
+  neighbour (ping "Destination host unreachable"). It had logged in, but
+  this host's half never completed, so no path was built.
+
+The likely reading: Windows answers a Login with a Request ID taken from
+its own counter of USB4NET packets, here 8 after its 8 Logins, rather
+than copying the Login's. IDS 5.1.1 and Table 5-3 have the response copy
+it, and Linux's `thunderbolt-net` does (`tbnet_login_response`).
+- **Plug order 2** (98 SE started with the cable in) came up and pinged
+  4 of 4 the same day (`cm.net.up=0100080F`). Windows' counter then fell
+  within the range of this host's Request IDs, which section 3.2 accepts
+  ("any Request ID this login has used since it began").
+- **Linux** matches its own requests' responses by route and protocol
+  UUID alone and checks no Request ID (section 2.4).
+
+So a Login Response is now matched as a Logout Response already is: by
+its type, route, protocol UUID and UUID pair, while a Login of this
+host's is out (`NetState` LOGIN, no success yet, the slot active),
+whatever its Request ID. One whose ID is not one this login sent is
+counted (`LoginIdOther`, `cm.net.n.loginid` with the counters) and the
+first of each login logged (`cm.net.login.id`, its ID). A late answer to
+an earlier Login of the same login is the same answer, as before. A Login
+Response for no outstanding Login is still dropped (reason 7). Host
+vector: `test_tbt_xdp`, `test_login_resp_other_id` (a peer answering with
+the Login's ID plus 7).
+
 ## 5. The DMA paths and rings
 
 ### 5.1 The paths under the software CM
@@ -1495,7 +2110,10 @@ left after the control path and the flow-control-disabled pool, and the
 host router's `baMaxHI` from its Buffer Allocation Request (record 22
 section 6.7), else 14; at least 1 ([linux] `tb_dma_init_rx_path`,
 `TB_DMA_CREDITS`, `TB_MIN_DMA_CREDITS`). Below 1: no service, logged
-(`cm.net.credits`). The transmit entry's credits are the host interface
+(`cm.net.credits`). Above 127 it is clamped to 127, the largest value of
+PATH_CS_0's 7-bit Path Credits Allocated field (bits 23:17, Spec 8.2.3),
+since `baMaxHI` is 16 bits and Total Buffers 10, and logged
+(`cm.net.credits.clamp`). The transmit entry's credits are the host interface
 adapter's own, kept as read (above). Total Buffers is re-read after bonding (record 22
 section 6.8).
 
@@ -1608,9 +2226,13 @@ The receive service runs in one DPC (`KeInitializeDpc`), queued by:
   end, while the service is up; so `KeSetTimer` is never called on a
   timer still pending and never cancels an earlier expiry implicitly.
   Its DPC does one thing, the kick below;
-- **the ring interrupt**, where record 21 section 4.5 has it connected
-  and armed (`XhciCmRingInterrupt` 1 on NT; never on 98 SE and ME until
-  their route is read): the receive ring's Receive Data Buffer cause is
+- **the ring interrupt** - built by section 5.5 (task 48.38, revision
+  25; until then `cm_net.c` never opened a data ring's cause, and
+  `XhciCmRingInterrupt`'s arm opened ring 0's alone, so the poll timer
+  was the service's only clock and a receive descriptor's IE bit raised
+  nothing). Where record 21 section 4.5 has it connected
+  and armed (`XhciCmRingInterrupt` 1; on NT alone until task 48.26
+  connected it on 98 SE and ME too): the receive ring's Receive Data Buffer cause is
   opened beside ring 0's by the same arm. The existing service routine
   reads and acknowledges every status DW and passes no cause to its DPC
   ([code] `cm_rirqos.c`), and its classifier knows ring 0's receive bit
@@ -1620,8 +2242,11 @@ The receive service runs in one DPC (`KeInitializeDpc`), queued by:
   to the system), and the DPC, on every claim while a service is up,
   kicks the receive service unconditionally, which decides from the
   descriptors' DD bits as the poll does. No cause bitmap crosses from the
-  routine to the DPC; a spurious kick costs one empty pass. The status protocol, the storm count, the self-test and the
-  fall back to polling are record 21 section 4.5.2 to 4.5.6's, unchanged;
+  routine to the DPC; a spurious kick costs one empty pass. The status protocol (every status DW read; with auto-clear
+  disabled, the bits read written to Interrupt Status Clear), the storm
+  count, the self-test and the fall back to polling are record 21
+  section 4.5.2 to 4.5.6's, with the fast storm's mask covering both
+  causes (section 5.5);
   the poll timer stays armed as the fallback, as the idle poll does for
   ring 0.
 
@@ -1695,6 +2320,277 @@ a tick, a ceiling near 50 MB/s and a ping of up to one tick each way
 [inf]; the interrupt removes both limits on NT. End-to-end flow control,
 where on, makes a full receive ring hold the peer back instead of
 dropping (Spec 12.2), which is why it is on by default.
+
+### 5.5 The data ring's interrupt (task 48.38; design, revision 24)
+
+**Why.** The owner's bench round 7 (2026-11-09, the P14s on 98 SE, the
+Framework on Windows 11, `c9b30c64`) ran TBSPEED 30 s each way with each
+system's default socket buffers: 10.2 Mbit/s from the Framework, 25.3
+Mbit/s to it, flat every second; ping 7 to 19 ms, against 0.9 to 2.8 ms
+from Linux on the same machine and peer. No errors, drops or refusals.
+That is a window over a round trip: 98 SE's default receive window
+(about 8 KB, not read on the P14s) over about 7 ms is about 10 Mbit/s,
+and the round trip is the poll's: a frame waits up to one clock tick
+before the receive service sees it, and so does every TCP
+acknowledgement (section 5.4 as built). Every target polls: the tick is
+10 to 15.6 ms on NT too, so 2000 to 10 gain as well [inf].
+
+**What.** The receive service is also kicked from the NHI's line
+interrupt, per frame instead of per tick, wherever record 21 section 4.5
+has connected and proven that interrupt:
+- **The cause.** Ring `r`'s Receive Data Buffer cause is bit `N + r` of
+  the interrupt status, N the host interface's Total Paths, transmit
+  causes in bits 0 to N - 1 and receive causes from N (the layout
+  `CmRirqGeometry` already takes for ring 0's bit `N`; Linux `nhi.c`
+  `ring_interrupt_index`) [linux]. Ring 1, or ring 2 on Falcon Ridge (section 4.3).
+- **Opened** by the thread after the ring is set up and enabled
+  (`RingsUp`) and the service's DPCs are ready, through record 21 section
+  4.5.2's mask write for that bit (`CmRirqMaskWrite`): on Intel's host
+  interfaces a read-modify-write of the mask register `TBT_HI_IMR` DW
+  holding the bit, which keeps every other bit of that DW (ring 0's
+  enable among them when both are in it); on every other host interface
+  a write of the bit alone to the set register `TBT_HI_IMS` to open and
+  the clear register `TBT_HI_IMC` to mask, at that DW. The data bit may
+  sit in another DW than ring 0's (DW (N + r) / 32 against N / 32, for
+  example N = 31). It is read back proven (`CmRirqMaskProven` for
+  that bit) before it counts as open; not proven: logged, left masked,
+  the poll alone.
+- **Masked** first in the rundown (section 5.4), before `KeCancelTimer`,
+  and proven masked before the rings are disabled; at a fall back to
+  polling (record 21 section 4.5.5) with ring 0's.
+- **The service routine** claims the interrupt when ring 0's bit **or**
+  an open data ring's bit is set in the status it already reads
+  (`CmRirqClassify` given both bits; the line may be shared, and an
+  unclaimed interrupt of ours would be another device's to the system).
+- **The status protocol** is record 21 section 4.5.2's, unchanged and
+  now covering both causes: the routine reads every status DW (ISR,
+  `ceiling(3N / 32)` of them, whichever cause it claims for; the host
+  raises no new interrupt until all are read), and that read is the
+  acknowledgement wherever auto-clear is on. Where the start found Host
+  Interface Control bit 17, Disable ISR Auto-Clear, set (`AutoClearOff`,
+  firmware's or an earlier driver's; this driver never sets it), the
+  routine of a claimed interrupt also writes each DW's bits as read to
+  Interrupt Status Clear (`TBT_HI_ISC` + 4 x DW, every DW that read
+  non-zero and not all ones), so the data ring's bit is cleared by the
+  same write as ring 0's, or by its own DW's write when it lies in
+  another DW ([code] `cm_rirqos.c` `cmRirqStatus`). Without it a set
+  data bit would keep a level line asserted for good. The routine writes
+  nothing else, except the fast-storm mask below.
+- **The fast storm**, record 21 section 4.5.3 step 5, counts every
+  claim, whichever cause it was for: 64 claims with no DPC run between
+  them and the routine masks, at DIRQL, **both** causes - ring 0's bit
+  and the open data ring's bit - each by its host's contract (on Intel a
+  read-modify-write of each mask DW holding one, both bits cleared in the
+  one write when they share a DW; elsewhere each bit to `TBT_HI_IMC` at
+  its DW), clears `IrqArmed`, sets `IrqStormMasked` and returns TRUE
+  without queueing. Masking ring 0's bit alone would leave a data cause
+  asserting the line it storms on. The thread, when it next runs, takes
+  the whole interrupt, ring 0 and data, down to polling, logged (record
+  21 section 4.5.6), and proves both bits masked as the rundown does.
+- **The slow-storm watchdog, per cause.** Record 21's maintenance check
+  (`CmRirqBeforeMaint`, `CmRirqWatchPass`) declares a storm when more
+  than `CM_RIRQ_SLOW_STORM` (1000) claims came since the previous
+  maintenance pass and ring 0 received nothing. With the data cause open,
+  healthy traffic at the 128 us ceiling gives about 1,560 claims in a
+  200 ms idle period while ring 0 is quiet, which would latch the
+  interrupt off under load; and a single sum of both rings' progress
+  would let a frame a period on one ring hide a stuck cause on the other.
+  So the claims and the progress are kept **per open cause**:
+  - the service routine counts, beside its claims, the claims for each
+    cause it saw set in the status it read (ring 0's bit, the data
+    ring's bit; a claim with both counts for both);
+  - each cause's progress is its own ring's receive count: ring 0's as
+    today, and for the data ring the frames its receive service reaped
+    (descriptors with DD, `CM_NET`'s receive count, read without the
+    service's lock as a monotonic ULONG);
+  - the watchdog runs `CmRirqWatchPass`'s storm test once per open cause,
+    and a storm is declared when **any** cause had more than the bound of
+    its own claims with no progress of its own ring, whatever the other
+    did; the whole interrupt then latches to polling, logged with the
+    cause.
+  The fast count (64 claims with no DPC run) is unchanged. The suspect
+  run of the self-test (`CM_RIRQ_SUSPECT_RUN`) keeps ring 0's terms.
+- **The DPC**, on every claim while a service is up and not closing,
+  calls the kick (section 5.4) unconditionally; the receive service
+  decides from the descriptors' DD bits as the poll does. No cause bitmap
+  crosses from the routine to the DPC; a spurious kick costs one empty
+  pass.
+- **The poll stays**: the timer is still armed at every service, now as
+  the fallback for a lost or latched interrupt, its period unchanged.
+  Two kicks coalesce as before (section 5.4, the in-flight count).
+- **Transmit Done** (bit `r`) is not opened in this step: transmit
+  descriptors are reaped by every pass, and the client's
+  `TX_FULL_WAITS` (section 17) says whether a full transmit ring ever
+  waited. It is opened only if a bench reading shows such waits with the
+  receive interrupt on.
+- **Interrupt moderation.** The ring interrupt's arm writes the
+  throttling register of vector 0, `TBT_HI_ITR0` (`0x38C00`, 256 ns
+  units; Linux `REG_INT_THROTTLING_RATE`), as 0: unthrottled
+  ([code] `cm_rirqos.c`). With a data ring's cause open, line-rate
+  traffic would raise one interrupt per frame, and on 98 SE a DPC held
+  off for 64 claims trips the storm latch (`CM_RIRQ_STORM_CLAIMS`). Linux
+  throttles each ring's vector to 128 us (`tbnet_open`,
+  `tb_ring_throttling(ring, 128000)`; `nhi.c` writes
+  `DIV_ROUND_UP(interval, 256)` at `REG_INT_THROTTLING_RATE` + 4 x
+  vector) [linux]. So the data ring's opening writes `TBT_HI_ITR0` = 500
+  (128 us), and restores 0 when the cause is masked again. A line
+  interrupt is one vector, so the throttle applies to ring 0 too: an ICM
+  response or a hot plug waits at most 128 us more, against the 10 ms or
+  more of the poll it replaces, and no ring 0 timeout is near that
+  (record 21 section 5.4). At most about 7,800 interrupts a second; 64
+  claims with no DPC run between is then 8 ms of DPC starvation, the
+  latch's intent. The value stays fixed (no registry value) until a
+  bench reading asks for one.
+- **Receive buffers.** `XhciCmNetRxFrames` stays 128 by default (Linux
+  uses 256, `TBNET_RING_SIZE`). Polled, 128 frames of 4 KB a 10 ms tick
+  is a ceiling near 50 MB/s, and round 7 ran at 1 to 3 MB/s: the window
+  and the round trip limit it, not the ring. With the interrupt at 128 us
+  the ring refills far more often than it fills. 256 would double the
+  receive common buffer (512 KB to 1 MB of physically contiguous memory
+  per NHI, which a 98 SE machine finds harder). It is raised only if
+  round 8 shows the client's `RX_NO_BUFFER` or the ring's Buffer
+  Overflow counts moving at `-w 256`.
+
+**Where it runs.**
+- **98 SE and ME**: only with `XhciPfwNhiLine` 0 (XHCIPFW.VXD otherwise
+  frees the NHI's IRQ at every start, `docs/using/tuning.md`) and
+  `XhciCmRingInterrupt` 1, task 48.26's connection; otherwise the poll.
+- **2000 to 10**: with `XhciCmRingInterrupt` 1 where the start grants a
+  line and its self-test passes (record 21 section 4.5.4).
+- Under both connection managers: the firmware CM's ring 1 or 2, the
+  software CM's ring 1.
+
+**The value.** `XhciCmNetInterrupt`, REG_DWORD: 1 opens the data ring's
+cause where the ring interrupt is connected and proven, 0 keeps the poll
+alone; any other value refused, 1 stands. Default **1**, so the
+effective default is `XhciCmRingInterrupt`'s (0, the owner's of
+2026-10-29, still held): nothing changes for a user until that is 1.
+Written by every install path at 1 under `FLG_ADDREG_NOCLOBBER`, with an
+INF-gate row and a `tuning.md` row (the owner's rule of 2026-10-30).
+Read once per start as every value.
+
+**`XhciCmRingInterrupt` stays 0 by default** (the owner, 2026-11-09):
+revisited after this step is built and read on the P14s, with
+`XhciPfwNhiLine` 0 set for that bench run only.
+
+**The counters** (the counter block and the log): `cm.net.irq.open`
+(the cause opened and proven, the ring), `cm.net.irq.unproven` (its read
+back), `cm.net.irq.kicks` (kicks from the interrupt DPC),
+`cm.net.irq.claims` (claims with a data ring's bit set), and the
+service's `cm.net.kicks` as before. The status query's service block
+(section 17) takes two words, `CM_QN_VERSION` staying 1: at 92,
+reserved 0 before (so an older driver reads as polled), the data ring's
+interrupt state (0 polled, 1 open, 2 latched to polling); and at 96 the
+interrupt kicks, the block grown from 96 to 104 bytes (88 holds
+`RingsFailed`, revision 25's correction of revision 24's "88 and 92").
+XHCITR reads the kicks only from a block that long. XHCITR's details
+line (a draft for the owner): `Ring interrupt:       on (N wake-ups)` /
+`off (checked every clock tick)` / `off (fell back to checking every
+clock tick)`.
+
+**Host vectors.**
+- `test_cm_rirq`: the geometry's data ring bits (ring 1 and 2, N from 1
+  to `TBT_HI_CAPS_PATHS_MAX`, a bit in the next status DW);
+  `CmRirqClassify` with ring 0's bit, a data bit, both, neither, all ones;
+  the mask write for a data bit on both contracts, checking the offset
+  (`TBT_HI_IMR` + 4 x DW on Intel, `TBT_HI_IMS` or `TBT_HI_IMC` + 4 x DW
+  elsewhere), the value (Intel: the read DW with the bit set or cleared
+  and ring 0's enable kept; elsewhere: the bit alone), a data bit in ring
+  0's DW and in the next, and the proof read back; `CmRirqWatchPass`
+  per cause: 1,560 data claims in a period with data progress and ring
+  0 quiet (no storm); 1,560 data claims with no data progress (a storm);
+  a stuck ring 0 cause (1,100 ring 0 claims, no ring 0 progress) beside
+  a progressing data ring (a storm); a stuck data cause (1,100 data
+  claims, no data progress) beside a progressing ring 0 (a storm); both
+  of the last two with the DPC running between claims, so the fast count
+  does not fire; and ring 0's terms alone as before.
+- `test_cm_rirq`, the acknowledgement with auto-clear disabled (the
+  routine's ISC writes, taken into the pure half as a function from the
+  geometry, `AutoClearOff` and the DWs read to the writes to make, which
+  `cmRirqStatus` then makes): auto-clear on, no write for any status;
+  `AutoClearOff` with ring 0's bit alone, the data bit alone, both in one
+  DW (one write, both bits, at `TBT_HI_ISC` + 4 x DW), the data bit in the
+  next DW (two writes, each DW's bits at its own offset), a DW reading 0
+  (no write) and all ones (no write); and the fast storm's mask: on both
+  contracts, the writes that mask ring 0's and the data ring's bits in
+  one DW and in two, ring 0 alone when no data cause is open, and the
+  read back proving both.
+- `test_cm_net` (or the suite that holds the service's pure half): the
+  kick from the interrupt only while up and not closing; the rundown
+  masking before the timer's cancel; the latch leaving the poll alone.
+
+**Emulator legs** (section 11.3, `usb4-emu` with its NHI interrupt
+model):
+- 98 SE (`p98b` with `XhciPfwNhiLine` 0, `XhciCmRingInterrupt` 1) against
+  XP over `usb4-xdomain`, and XP against XP (NT): ping RTT and TBSPEED
+  `-w 64` both ways, interrupt on and off; `cm.net.irq.open` and the
+  kicks.
+- Sustained load: TBSPEED 120 s each way with the interrupt on and no
+  hot plug or ICM traffic, more than 1,000 healthy data claims in each
+  maintenance period: no latch (`cm.irq` stays armed), the claims and
+  kicks counted.
+- A shared line (the NHI's line shared with another device's).
+- The latch: a storm or a failing self-test, the service polling on.
+- Auto-clear disabled: the emulator's `usb4-generic` host interface
+  honours Host Interface Control bit 17 and `TBT_HI_ISC` (`usb4-host.c`,
+  `usb4_host_isr_read_clears` and the ISC write [emu]), but resets the bit
+  clear and has no property to preset it, and this driver never sets it,
+  so no emulator leg reaches `AutoClearOff` today: the host vectors above
+  carry it, and an emulator leg follows only when the emulator gains such
+  a property (an emulator change, not this step's). The Alpine Ridge
+  profile ignores ISC writes as the Intel register set does, so the leg
+  is the generic host interface's.
+- A cable pull and re-plug with the cause open (the rundown's mask).
+
+**The bench (round 8, the owner's P14s to the Framework)**: four runs,
+each TBSPEED `-w 64` and `-w 256` both ways, `ping -n 20`, then SAVE:
+1. as shipped (polled);
+2. `XhciPfwNhiLine` 0 and `XhciCmRingInterrupt` 1 (the interrupt on);
+3. run 1 with 98 SE's MSTCP `DefaultRcvWindow` 64240 (a restart);
+4. run 2 with it.
+Runs 1 and 3 against 2 and 4 separate the window from the latency; the
+counters say whether the interrupt carried the frames.
+
+**As coded (revision 25, 2026-11-09).**
+- `cm_rirq.c` (pure): the geometry's data cause (`CmRirqGeomData`, bit
+  N + r and its DW, set only while the cause is open), `CmRirqCauses`
+  and `CmRirqClassify` over every status DW, `CmRirqDataMaskWrite` and
+  its proof, `CmRirqMaskBoth` (both bits in the one write when they
+  share a DW) and `CmRirqBothMasked`, `CmRirqAckWrites` (the ISC writes
+  with `AutoClearOff`), and the per-cause watch (`CmRirqWatchDataStart`,
+  `CmRirqWatchData`); `CmRirqWatchPass`'s claims are now those that saw
+  ring 0's bit (`Claims0`).
+- `cm_rirqos.c`: the routine counts `Claims0` and `ClaimsData` beside
+  `Claims`, acknowledges through `CmRirqAckWrites`, and at a fast storm
+  masks both causes; the DPC queues `CM_WORK_RING` as before and, while
+  `DataOpen`, calls `CmNetIrqKick`. `CmRirqDataOpen` (from `cm_net.c`'s
+  `RingsUp`, after the rings run) records the ring asked for and opens
+  it at once where armed and proven, or after every later arm's
+  self-test (`cmRirqDataTry`), so a data interrupt never passes ring 0's
+  test; the self-test counts ring 0's own claims (`Claims0`), and a
+  watchdog retest masks the data cause first and opens it again after.
+  The opening writes `TBT_HI_ITR0` 500 and the mask, read back; not
+  proven, it is masked again, and where that is not proven either the
+  bit stays in the geometry (so the routine still claims and
+  acknowledges it, a shared line never left asserted by a bit of ours)
+  and the whole interrupt falls back to polling, which retires the line
+  (record 21 section 4.5.6). Such a bit is carried through every later
+  reconnect and arm, which masks and proves it before anything is
+  unmasked, and arms nothing where it cannot. `CmRirqDataClose`, first in the service's rundown,
+  masks it and writes `TBT_HI_ITR0` 0; a mask not read back takes the
+  whole interrupt down to polling (`CmRirqDown`'s fallback, record 21
+  section 4.5.6, which retires the line). Every order down masks both.
+- `cm_net.c`: `RxTaken` (every descriptor the service took, the data
+  cause's progress), `CmNetIrqKick` (under the service's lock, only while
+  the rings are on and not closing), the counter `cm.net.irq.kicks`, and
+  the query's two words (`CmRirqDataState`).
+- The log: `cm.net.irq.open` (the ring), `cm.net.irq.unproven`,
+  `cm.net.irq.unmasked`, `cm.net.irq.latched`, and at the stop
+  `cm.net.irq.claims`, `cm.net.irq.opens`, `cm.net.irq.unproven.n`,
+  `cm.net.irq.storms` and `cm.irq.claims.ring0`; a data storm logs
+  `cm.irq.storm` with bit 31 set.
+- `XhciCmNetInterrupt` is `CM_VAL_NET_IRQ`, a rule-table row (so the INF
+  gate's value table carries it), written 1 by both NHI INFs.
 
 ## 6. The interface between `xhcicm.sys` and the network drivers
 
@@ -1947,6 +2843,118 @@ A 4 KiB copy per USB4 frame is the cost (section 7.4).
   (`cm.net.dsn.none`) and the engine's own value. Under the firmware
   connection manager the link's rate and lanes are the firmware's and
   unread: `QueryInfo` reports both 0, unknown.
+
+### 6.6 The PDO's removal against a later start or BusRelations (task 48.16)
+
+The audit of 2026-11-06 left one question (`runs/run-47.md`, "47.1",
+"Left"; task 48.16): whether the network PDO's removal can overlap a
+later start of the NHI or a later BusRelations answer, read then as
+serialised by the PnP manager with no trace taken.
+
+**What the code relies on.** Five paths touch the PDO's bookkeeping -
+`CmNetStarted` (the NHI's start, and a deferred activation's
+BusRelations, record 32 section 12.8.15.16), `CmNetGone` (the NHI's
+surprise removal), `CmNetBusRelations`, `CmNetRemove` (the NHI's
+removal) and the PDO's own `IRP_MN_REMOVE_DEVICE` - and they share
+`CM_NET.Pdo`, `CM_NET.Report` and the PDO's `Reported`, `Nhi` and
+`Deleted` with no lock between them: the PDO's `Lock` guards only `Nhi`
+and `Users`. Every one runs in a PnP IRP, so the code is right exactly
+when the PnP manager never runs the PDO's removal beside the NHI's start
+or BusRelations. The NHI's own IRPs are one device's and are not in
+question; the PDO's removal is another device's. The DDK says when a
+bus driver is to delete a PDO (at the removal that follows its absence
+from BusRelations) but not that the removal of a child absent from one
+answer completes before its parent's next start or next relations
+query; on 98 SE and ME CONFIGMG runs one configuration call at a time,
+and on NT nothing this project has read settles it [inf].
+
+**The interleavings that would break.** (a) A start that wants the PDO
+reads `Pdo` non-NULL (an old PDO left out of an earlier answer, its
+removal not yet come), creates none and sets `Report`; then that removal
+reads `Report` 1 and keeps the PDO as if disabled, and the next
+BusRelations reports again an object the PnP manager had removed for its
+absence: a reuse of a removed PDO, which the bus-driver rule forbids.
+(b) The same removal reading `Report` 0 just before the start sets it:
+it clears `Pdo` and deletes the object while `CmNetStarted` still reads
+`Pdo->DeviceExtension` for `Reported` (a use after free), and `Report`
+is then 1 with no PDO, so no adapter appears until the NHI starts again.
+(c) A BusRelations that reads `Pdo` and is about to reference it while
+that removal clears and deletes it. Each needs the PDO's removal to run
+beside the NHI's start or relations query; none can happen if the PnP
+manager serialises them.
+
+**The change (revision 18): correct whichever order the PnP manager
+uses.**
+
+- `CM_NET.PdoLock`, a spin lock, guards `Pdo`, `Report`, a new
+  `Retired` and each PDO's `Reported` and new `Retired` flag. Every
+  decision on them, and the reference BusRelations takes, is made under
+  it; no IRP is sent and no device created or deleted with it held.
+- **Retired at the answer that leaves it out, once that answer has
+  succeeded.** When a BusRelations answer omits a PDO that an earlier
+  answer reported, that answer is where the PnP manager learns it is
+  gone - if the answer succeeds. So the omitting answer is sent down and
+  waited for (`CmForwardSync`) and completed here; only when it comes
+  back with success, and the PDO is still `Pdo` with `Report` 0, does it
+  move under `PdoLock` from `Pdo` to `Retired`, marked retired, so
+  nothing reports that object again. An answer that fails below leaves
+  it as it was, for the next answer to omit again. Its removal, whenever
+  it comes, finds it retired: it clears `Retired`, orphans it (`Nhi`
+  NULL, its calls waited out as today) and deletes it on NT once its
+  holds are gone (on 98 SE and ME it stays allocated, as today); and if
+  the NHI wants a PDO again by then (`Report` 1 and `Pdo` NULL) it calls
+  `IoInvalidateDeviceRelations` on the NHI. Once unlinked, the PDO is no
+  longer one the NHI's removal finds and waits out, so the PDO's removal
+  holds the NHI through `CM_NET.PdoCalls`, which `CmNetRemove` waits to
+  see at 0 before it returns: taken unconditionally before either link
+  is cleared (whether the PDO turns out kept, retired or unlinked), and
+  dropped only after the PDO's gate to the NHI (`Nhi` and `Users`,
+  `cm_netr.h` `CM_NETR_GATE`) is closed under the PDO's lock, every
+  interface call that entered it before then has left, and the
+  invalidation, if asked, is made; a kept PDO drops it at once. So an
+  interface call that took the NHI before or during the unlink never runs
+  on a freed NHI extension (corrected 2026-11-09: the hold was taken only
+  for the invalidation, after the unlink, and calls already inside were
+  not waited out; `test_cm_net`'s gate vectors).
+- **One deleter, and the object alive for each.** Two paths may delete a
+  PDO: its own removal (on NT, once orphaned) and the NHI's removal
+  (`CmNetRemove`, for a PDO the PnP manager has removed or never learned
+  of). Each takes a reference on the object for as long as it looks at
+  it (the PDO's removal on itself at entry, `CmNetRemove` under
+  `PdoLock` as it takes the pointers), and `IoDeleteDevice` is called by
+  whichever wins an interlocked claim (`DeleteClaim`), never twice; the
+  other only drops its reference. The object's memory then lasts until
+  the last reference goes, so neither reads a freed extension.
+- **A fresh PDO only once the old one is gone.** `CmNetStarted`, and
+  BusRelations when `Report` is 1 and there is no `Pdo`, create a PDO
+  only while `Retired` is NULL; with one retired and not yet removed,
+  the answer reports no network PDO, and the retired one's removal asks
+  for a new answer, which creates and reports a fresh one. So at no time
+  are two PDOs of the one instance id (`XHCICM\TBNET`, instance `0`)
+  reported under the NHI, and no removed object is reported again.
+- **Reported only once it succeeded.** The answer that adds the PDO is
+  also sent down and waited for, and the PDO marked `Reported` only when
+  it comes back with success; a PDO the PnP manager never learned of is
+  thus never retired to wait for a removal that cannot come.
+- **Kept across a disable** as today: a removal of the PDO that is still
+  `Pdo` with `Report` 1 keeps it (the bus-driver rule for a child still
+  present), and a removal of `Pdo` with `Report` 0 (the NHI's surprise
+  removal, which reports nothing again) retires and deletes it at once,
+  as today.
+- `CmNetStarted` reads the PDO's `Reported` under `PdoLock`; the
+  creation itself (`IoCreateDevice`) is outside the lock and installed
+  under it, and a PDO created by a path that then finds one installed
+  is deleted again (cannot happen while the NHI's own IRPs are serial,
+  and costs nothing to guard).
+- `CmNetRemove` (the NHI's removal) orphans a retired PDO too and
+  deletes it when its removal already came.
+
+**The leg** (`runs/run-48.md`, "48.16"): the overlap tried - the NHI
+started again with `XhciCmNet` turned off and on in quick succession, on
+98 SE (where a Device Manager disable is an orderly stop, section 6.1)
+and on XP, with a peer on the cable: the adapter leaves and comes back
+each time, no bugcheck and no Driver Verifier stop on XP, the CM log's
+`cm.net.pdo` serials each new.
 
 ## 7. The network drivers
 
@@ -2260,6 +3268,68 @@ keep no state across D3 but their counters.
   restart and for the Windows CD (its own networking files) when TCP/IP
   was never installed; that is the operating system's, said in the
   release notes [inf].
+- **The upcalls** (revision 29, task 48.38). On a system without WDM
+  1.10 (`IoIsWdmVersionAvailable(1, 0x10)` FALSE: 98 SE and ME), the x86
+  image makes no receive indication, send completion or reset completion
+  in the context that produced it - the connection manager's receive
+  service DPC (`Receive`, `TxDone`), `MiniportSendPackets`, the
+  connection manager's thread (`LinkChange`) or the adapter's own thread.
+  Each is queued under a lock of its own and an NDIS miniport timer is
+  set with no delay (`NdisMSetTimer` 0): each Ethernet frame the receive
+  callback assembled is copied into a byte ring (512 KiB, the most one
+  pass of the connection manager's 128-frame receive ring carries, halved
+  while it cannot be had, down to 128 KiB; a frame that does not fit is
+  dropped and counted as no buffer), completed sends go in a list
+  through `MiniportReserved` with their status, and the reset's
+  completion is a flag (`src\net\net_upq.c`, host suite `test_net_upq`).
+  The routine completes the sends, passes each frame up exactly as the
+  receive callback does elsewhere (copied into a packet of the pool,
+  split when longer than the maximum, with `NDIS_STATUS_RESOURCES` when
+  the pool runs low, so the pool recycles within the routine and a burst
+  between two of its runs costs ring bytes, not packets) and then
+  completes the reset, in that order, until every queue is empty. A
+  timer is set only when none is set and the routine is not running, and
+  two timers are set in turn, so no timer is set again from inside its
+  own routine and none whose routine may still be returning. The reset's
+  gate stays closed until the routine has made the reset's completion, so
+  no send made before the reset is completed after it; the gate is
+  retired before the upcall, so a reset NDIS issues from inside it keeps
+  its own. The halt, after `Close` and the sends quiet, waits for the
+  routine to deliver what is queued (frames dropped once halting),
+  however long that takes, logged every 2 s (`net.up.halt.wait`) - no
+  send is completed from the halt itself - and then cancels both timers
+  and waits for a routine still returning. A D3 does the same before its
+  `OID_PNP_SET_POWER` completes, as that OID asks before a sleep state:
+  the request stays pending, however long it takes, until the routine
+  has made every queued completion and returned (logged every 2 s,
+  `net.up.d3.wait`), the queues stopped in that same step and both
+  timers cancelled; the D0 turns delivery back on, a timer set for
+  anything queued meanwhile, before `Open`. Each frame carries the power
+  generation it arrived in, advanced when the D3 is asked, so no frame
+  from before a D3 is passed up after it. Status indications stay
+  direct. NT keeps the direct calls; the x64 image has none of this
+  code.
+  **Why.** With the ring interrupt on (section 5.5), 98 SE sending to XP
+  at 15 to 40 Mbit/s over the emulated link took fatal exceptions 0E at
+  `0028:C19D8D03`, `C19D8E73` and `C19D99C3` in 3 of 6 runs, after 5 to
+  25 s, at addresses a guest memory dump placed inside the 98 TCP/IP
+  (`MSTCP`), not in this project's images (task 48.38's emulator legs).
+  Raising to DISPATCH_LEVEL around the send completions alone changed
+  nothing. The usb-wdm-free network drivers, deserialized NDIS 5 WDM
+  miniports of the same project family, met the same exceptions and TCP
+  stalls on 98 SE with their indications and completions made from USB
+  completion routines, their own queues and pools intact, and none after
+  moving them to an NDIS timer's routine (that repository's
+  `docs/testing/2026-11-07-98se-tcp.md`, its `ethernet.md` section
+  4.4); this image had the other two changes of that record already
+  (every accepted send marked `NDIS_STATUS_PENDING`, the kernel's spin
+  locks through `USE_KLOCKS`). Why the DPC context is unsafe for the 98
+  TCP/IP was not read: no Microsoft binary is. The qemu flavour checks
+  the data path's invariants as it runs (a send accepted twice or
+  completed when not outstanding, a receive packet taken while out or
+  returned while free, an indicated length outside 14 to the maximum
+  frame) and logs them with the indications' and completions' sequence
+  numbers through the connection manager's log.
 
 ### 7.9 8, 8.1 and 10
 
@@ -2293,6 +3363,7 @@ row and a `tuning.md` row in the connection manager's table:
 | `XhciCmNetRxFrames` | 128 | 32 to 1024 | receive descriptors (4 KiB each) a service; the floor holds the largest packet (section 5.3) |
 | `XhciCmNetTxFrames` | 128 | 32 to 1024 | transmit descriptors a service; the same floor |
 | `XhciCmNetE2E` | 1 | 0 to 1 | advertise and use end-to-end flow control (section 5.3); 0 for a peer whose host interface mishandles it |
+| `XhciCmNetInterrupt` | 1 | 0 to 1 | the data ring's Receive Data Buffer cause opened where `XhciCmRingInterrupt`'s interrupt is connected and proven (section 5.5, task 48.38); 0 the poll alone |
 
 A value outside its range is refused and the default stands, logged
 (`cm.reg.range`), as for every `XhciCm*` value.
@@ -3114,6 +4185,411 @@ questions as asked follow.
 - **The `usb4-emu` model** (section 10): its own repository's work, on
   which every leg waits.
 
+## 17. The status query in the xHCI98 USB Tree (task 48.18)
+
+Task 48.18 (TRNET.1, the owner, 2026-11-09) shows Thunderbolt
+networking in the xHCI98 USB Tree: for each link on a controller this
+driver runs, its state, the peer, the speed and lanes, this adapter's
+MAC and, where Windows has one, its IP address, whether end-to-end flow
+control is in use, the frames and bytes sent and received with the error
+and drop counters, and `XhciCmNet`'s value; the same in the saved report
+and the snapshot. It is read only: nothing in this section changes a
+setting, the service or the link, and it adds no value a user sets.
+
+### 17.1 The door
+
+A sixth request on the query device of design record 25 section 4
+(`\\.\XHCICM<n>`, the device XHCITR already opens for the tree, the log,
+the PCI answer, the marks and the firmware tables), so no new device, no
+new name and no new access rule:
+
+- `CM_QN_IOCTL`, `CTL_CODE(FILE_DEVICE_UNKNOWN 0x22, 0xA45,
+  METHOD_BUFFERED, FILE_ANY_ACCESS)` = `0x00222914`, beside `xhcicm`'s
+  0xA40 to 0xA44 and `xhci98`'s 0xA48 and 0xA49 (`src\xhci_qry.h`'s
+  list is extended to name it); no input; opened with no access rights,
+  so a standard user reads it on every system.
+- The sizing rules of `CM_Q_IOCTL`, with `CM_QN_HDR_BYTES` for
+  `CM_Q_HDR_BYTES`: an output buffer under the header is
+  `STATUS_BUFFER_TOO_SMALL` with nothing; one under the whole answer
+  gets the header alone with `CM_QN_O_BYTES` the size needed; otherwise
+  the whole answer. The removed-device answer is `CM_Q_IOCTL`'s
+  (`STATUS_DEVICE_REMOVED`, `STATUS_NO_SUCH_DEVICE` on 98 SE and ME).
+  Before the thread's first pass has built one the answer is
+  `STATUS_DEVICE_NOT_READY`, as the marks answer's (an empty answer
+  would read as "no link", which is not known).
+- A driver from before this task answers `STATUS_INVALID_DEVICE_REQUEST`
+  (Win32 `ERROR_INVALID_FUNCTION`), which XHCITR shows as "not served by
+  this xhcicm.sys".
+
+The layout is a new shared header, `src\cm\cm_qnet.h`, in `cm_query.h`'s
+form (no DDK or Windows type, little-endian 32-bit words at fixed
+offsets, readers take bytes and never overlay a structure), included by
+the driver, by XHCITR (`xhcitr\tr_net.c`) and by the host tests. It is
+kept out of `cm_query.h` so that file's other answers are untouched.
+
+### 17.2 The answer
+
+Four parts, each found through the header and each with its own size,
+so a part can grow at its end without a new version:
+
+**The header** (`CM_QN_HDR_BYTES`, 64):
+
+| Offset | Field |
+|---|---|
+| 0 | magic `0x4E4D4358` ('XCMN') |
+| 4 | version, 1 |
+| 8 | the whole answer's bytes (in a header alone, the size to ask for) |
+| 12 | flags, `CM_QN_F_*` (below) |
+| 16, 20 | `CM_Q_O_EPOCH_*` of this start (low, high) |
+| 24 | the pass it was built at (`CM_Q_O_PASS`'s count) |
+| 28 | ms since that pass at the answer, from the same running clock; `CM_Q_UNKNOWN` before the first |
+| 32 | `XhciCmNet` as this start read it (0 or 1) |
+| 36 | `XhciCmNetE2E` as this start read it |
+| 40 | the connection manager this start runs (`CM_ST_CM_*`) |
+| 44 | the service block's offset |
+| 48 | its bytes |
+| 52 | the first link entry's offset |
+| 56 | the link entries' shape: count 15:0, entry bytes 31:16 |
+| 60 | the client block's offset, 0 when there is none (its bytes are its own first word) |
+
+Flags: `CM_QN_F_STOPPING` 0x01 the NHI is stopping; `CM_QN_F_PDO`
+0x02 the network PDO exists and was reported this start; `CM_QN_F_OPEN`
+0x04 a network driver holds the service open (`Open` without its
+`Close`); `CM_QN_F_UP` 0x08 the service is up; `CM_QN_F_MAC` 0x10
+this domain's MAC is read; `CM_QN_F_CLIENT` 0x20 the client block
+follows; `CM_QN_F_LINKS_CUT` 0x40 more peer records than entries
+(never with this version's four).
+
+**The service block** (`CM_QN_SVC_BYTES`, 104; 96 before revision 25,
+`CM_QN_SVC_MIN_BYTES`, the least a reader takes): one per NHI, the
+adapter's, from `CM_NET` under its `Lock` (section 6.5):
+
+| Offset | Field |
+|---|---|
+| 0 | `CM_QN_S_*`: 0 off (`XhciCmNet` 0, or no PDO), 1 no network driver (the PDO is there, no `Open`), 2 waiting (open, no service up), 3 up |
+| 4 | the link it runs on: the software CM's USB4 port (1-based), the firmware CM's peer record's link number; 0 while down |
+| 8 to 13 | this adapter's MAC (zeros until `CM_QN_F_MAC`) |
+| 16 to 21 | the peer's MAC from its Login Response, while up |
+| 24 | the peer's `prtcstns`, while up |
+| 28 | the `prtcstns` this host offers (`WantedStns`; 0 before an `Open`) |
+| 32 | end-to-end flow control in use on the rings (`CM_NET.E2E`), 1 or 0, while up |
+| 36 | the link's whole rate in Mb/s (`LinkMbps`, every lane counted), 0 unknown |
+| 40 | lanes, 1 or 2, 0 unknown (the firmware CM: always unknown, section 3.10) |
+| 44 | the largest Ethernet frame (`QueryInfo`'s `MaxFrame` rule) |
+| 48, 52 | the transmit and receive rings' descriptors, while up |
+| 56 | the service's generation |
+| 60 | frames handed to the network driver (`Counters.RxFrames`) |
+| 64 | of them with CRC Error or Buffer Overflow (`RxErrors`) |
+| 68 | received and dropped here: an EOF PDF not 2, or no client or link (`RxBadPdf` + `RxUnheld`) |
+| 72 | transmit descriptors posted (`TxFrames`) |
+| 76 | reservations refused (too few descriptors free, another outstanding, the service down or closing) and stale commits (`TxRefused` + `TxStale`) |
+| 80 | link ups (`LinkUps`) |
+| 84 | link downs (`LinkDowns`) |
+| 88 | services the rings failed to start (`RingsFailed`) |
+| 92 | the data ring's interrupt (section 5.5): 0 polled, 1 open, 2 asked for and latched to polling; reserved 0 before revision 25 |
+| 96 | the interrupt DPC's kicks of the receive service (`IrqKicks`); from revision 25 |
+| 100 | reserved, 0 |
+
+The counters are counted from the NHI's device object's creation (its
+`AddDevice`), across every stop and start since, as the `cm.net.*`
+counters each stop logs; they wrap at 2^32. The answer's epoch says
+which start the state is of; the counters are not reset by one.
+
+**The link entries** (`CM_QN_LINK_BYTES`, 160 each, at most
+`CM_QN_MAX_LINKS` 4): one per peer record in use, in the record's own
+order: the software CM's `Xd[]` (USB4 ports 1 to `TBT_U4_MAX_PORTS`,
+`TbtU4Peer`), or the firmware CM's (`TBT_ICM_MAX_XD` slots, `Xd[slot]`).
+A record is there from the moment the connection manager finds a host
+rather than a device on that link until the peer's end (section 3.8),
+so "no entry" is "no other computer found":
+
+| Offset | Field |
+|---|---|
+| 0 | the link: the USB4 port (software CM), or the record's link number (firmware CM, `Addr.Link`) |
+| 4 | `CM_QN_LF_*`: 0x01 the remote UUID is known, 0x02 the peer's block was read and parsed (`RemoteValid`), 0x04 it offers USB4NET (a `network` directory, section 3.7), 0x08 this record carries the service (`CM_NET.Port` names it and the service is up), 0x10 the firmware CM's record, 0x20 the lane width was read by this driver (the software CM), 0x80 the whole texts at 160 and 225 (revision 23; a reader refuses the flag in an entry shorter than 292 bytes), 0x40 the firmware CM's record adopted and not announced again (section 3.16) |
+| 8 | the discovery state (`TBT_XDP_S_*`, section 3.5) |
+| 12 | the service state (`TBT_NET_S_*`, section 4) |
+| 16 to 31 | the peer's UUID as `TBT_UUID`'s four words carry it, the inter-domain packets' (zero unless flag 0x01) |
+| 32 | the peer's `vendorid` |
+| 36 | its `deviceid` |
+| 40 | its `devicerv` |
+| 44 | its `prtcstns` (its `network` directory's, 0 without one) |
+| 48 to 80 | its `vendorid` text (32 characters as the parser kept them, NUL-padded, NUL at 80) |
+| 81 to 113 | its `deviceid` text, the same (Linux puts the computer's host name there, section 2.3) |
+| 114, 115 | reserved, 0 |
+| 116 | the link's whole rate in Mb/s, 0 unknown (`cmNetLinkRate` for this port; the firmware CM: 0) |
+| 120 | lanes, 0 unknown |
+| 124 | inter-domain packets sent (`TBT_XDP_COUNTERS.Sent`) |
+| 128 | received (`Received`) |
+| 132 | resent (`Resends`) |
+| 136 | malformed, dropped (`Malformed`) |
+| 140 | this host's Logins, each half held at FFFFh: sent 15:0 (`LoginsSent`, every attempt, resends counted), answered with a failure status 31:16 (`LoginFailures`) |
+| 144 | the peer's Logins, the same: received 15:0 (`LoginsReceived`, before they are checked), refused 31:16 (`LoginsRefused`) |
+| 148 | services up (`ServicesUp`) |
+| 152 | services that failed (`ServiceFailures`) |
+| 156 | discovery restarts (`Restarts`) |
+| 160 to 224 | revision 23, with flag 0x80: its `vendorid` text whole (64 characters, `TBT_XDP_TEXT_MAX` since revision 23, NUL-padded, NUL at 224); the field at 48 keeps its first 32 for a reader before it |
+| 225 to 289 | its `deviceid` text whole, the same |
+| 290, 291 | reserved, 0 |
+
+The texts are bytes the peer sent: the builder keeps only 0x20 to 0x7E
+and writes every other byte as `?`, so the answer, the window and the
+report carry ASCII alone whatever a peer publishes. Fields of the
+peer's block are zero unless flag 0x02.
+
+**The client block** (present with `CM_QN_F_CLIENT`; its first word its
+bytes, at most `CM_QN_CLIENT_MAX` 96): what the network driver counts,
+given through the new `Stats` callback (section 17.3), word for word
+`XHCI_CM_NET_STATS` from its `Size` on, so the driver's counters reach
+the answer as the driver gave them:
+
+| Offset | Field |
+|---|---|
+| 0 | `Size`, the block's bytes |
+| 4 | the driver: 1 `xhcinet.sys` (NDIS 5), 2 `xhcinet6.sys` (NDIS 6) |
+| 8 | its MTU (`XhciNetMtu` as applied) |
+| 12 | `XHCI_CM_NET_STATS_F_*`: 0x01 the byte counts are 32 bits and wrap (the NDIS 5 image), 0x02 the adapter is in D3 or paused |
+| 16 | packets sent (`TxOk`, `OID_GEN_XMIT_OK`'s value) |
+| 20, 24 | bytes sent, low and high |
+| 28 | packets received (`RxOk`, `OID_GEN_RCV_OK`'s) |
+| 32, 36 | bytes received, low and high |
+| 40 | send errors (`OID_GEN_XMIT_ERROR`'s: `TxErrors` and the three `NET_TXDROP_*` reasons) |
+| 44 | receive errors (`OID_GEN_RCV_ERROR`'s: every `NET_RXDROP_*` and `NET_SEGDROP_*` reason) |
+| 48 | receives dropped for want of a packet (`RxNoBuffer`, `OID_GEN_RCV_NO_BUFFER`'s) |
+| 52 | sends completed as not sent because the link was down (`TxDown`) |
+| 56 | frames that arrived while the link was down (`RxNotUp`) |
+| 60 | large segments split on receive (`RxSplit`) |
+| 64 | sends that waited for a free descriptor (`TxFullWaits`) |
+| 68 to 95 | reserved, 0 |
+
+The send and receive counts are the same values the adapter answers to
+the general statistics OIDs, so the window and `netstat -e` agree.
+
+### 17.3 Who fills what
+
+- **`xhcicm.sys`, on its thread, after each pass** (`CmQueryPublish`,
+  beside the marks): `CmNetQueryFill` (`cm_net.c`) gathers the inputs -
+  the service block's fields copied from `CM_NET` under its `Lock`, the
+  link entries from the peer records (thread-owned, read with no lock:
+  only this thread writes them), the two values from `CM_VALS` - and the
+  pure `CmNetQueryBuild` (`src\cm\cm_qnet.c`, host-tested) lays them out
+  into a thread-owned buffer, `CM_NHI.NetQBuf`; the bytes are copied into
+  the query device's extension under its `Lock` with the pass and tick
+  of the publication they belong to (`NetQPass`, `NetQTick`), and the
+  IOCTL copies them out under that lock, filling in that pass, its age
+  and the stopping flag as `CmMarksAnswer` does (`CmNetQueryAnswer`,
+  pure, in `cm_qnet.c`).
+- **The network driver**, through a fourth callback,
+  `Stats(ClientContext, Stats)`, added at the end of
+  `XHCI_CM_NET_CALLBACKS` (`src\xhci_cmnet.h`). The thread calls it once
+  per publish, while a client is open, under the callbacks' existing
+  discipline (`cmNetCbEnter` under `Lock`, the call with no lock held,
+  `cmNetCbLeave`), so `Close` waits it out as it waits out `LinkChange`.
+  It is called at PASSIVE_LEVEL; it copies its counters into the caller's
+  `XHCI_CM_NET_STATS` (`Size` set by the caller) and returns: no wait, no
+  lock beyond a spin lock it already uses, no call back into the
+  interface. The 32-bit counters are read without the send or receive
+  lock, as the OID handlers read them: a value may be one frame behind,
+  never torn in a 32-bit word. The NDIS 6 driver's 64-bit byte counts are
+  the exception: their two words are read under the adapter's `Lock`,
+  which their writers hold, as its statistics OID reads them, so no pair
+  is torn across a carry.
+  The interface's version stays 1. The callbacks' `Size` already
+  carries their shape: `Open` accepts a `Size` of at least the three
+  callbacks' (`XHCI_CM_NET_CALLBACKS_V1_BYTES`), copies the fields one by
+  one rather than the structure, and takes `Stats` only from a `Size`
+  that covers it, so an older network driver opens a newer `xhcicm.sys`
+  with no client block in the answer; a newer network driver's larger
+  `Size` passes an older `xhcicm.sys`'s check (`Size` at least its own),
+  which never calls `Stats`. One package carries both drivers, so the
+  mixed pair is an install interrupted between them, and both orders
+  still run the service.
+- **XHCITR**: the IP address and the far side's kind (section 17.5), and
+  the text. Nothing in the drivers knows the IP address: it is the
+  network stack's, so XHCITR asks Windows for it, by the MAC.
+
+### 17.4 98 SE and ME, NT, and IRQL
+
+The same request, layout and code on every system; nothing in it is
+system-specific in the driver. The query device is reached on 98 SE and
+ME as for the other answers (XHCITR's `open_device` with its 9x access
+retry). The NDIS 5 image's byte counters are 32 bits (flag 0x01); the
+NDIS 6 image's are 64. XHCITR64 reads the same bytes as XHCITR. The
+amd64 `xhcicm.sys` and network images build the same code; the layout
+has no pointer and no size that differs between them.
+
+IRQL: the build at PASSIVE_LEVEL on the thread, no lock held but
+`CM_NET.Lock` for the service block's copy (a spin lock, held for the
+copy alone) and the query device's `Lock` for the publish; the `Stats`
+callback at PASSIVE_LEVEL with no `xhcicm.sys` lock held; the IOCTL at
+PASSIVE_LEVEL on the caller's thread, the device's `Lock` for the copy.
+No allocation: `NetQBuf` and the extension's copy are fixed arrays of
+`CM_QN_MAX_BYTES` (64 + 96 + 4 x 160 + 96 = 896 bytes). No registry
+access, so 98 SE's and ME's rule against registry access away from S0
+(record 24's task 46.14 section in `cm_statos.c`) is not concerned.
+
+### 17.5 XHCITR
+
+**Where.** Under each NHI in the "Thunderbolt and USB4" part, beside its
+"Driver log (xhcicm)" and "PCI configuration" nodes, one node,
+"Thunderbolt networking", when the driver serves the answer and its
+`XhciCmNet` is 1 or a link entry is present; with `XhciCmNet` 0 and no
+link the NHI's details carry the one line "Thunderbolt networking: off"
+instead, so a machine that does not use it gains no node. The answer is
+read at each refresh (one request per NHI), so the node's label can say
+the state: "Thunderbolt networking - up, 40 Gb/s", "- no other computer
+connected", "- connecting", "- no network driver". Each link entry is a
+child node, "Link on port N - <state>: <peer>". The details are read
+again when a node is selected (as the PCI answer is), and the answer's
+epoch is checked against the tree's: another start says "press F5". A
+link's node finds its entry in the new answer by its link number and,
+where both answers know it, the peer's UUID, never by its place in the
+list; a link gone or another computer on it says "press F5".
+
+**The far side's kind** (pure, `tr_net.c`, host-tested), from the peer's
+block alone, never guessed: `vendorid` 1D6Bh with the text "Linux" is
+"Linux (thunderbolt_net)", the device text being its host name (section
+2.3); the text "xHCI98" with the device text "xhcicm" is "xHCI98";
+`vendorid` 045Eh is "Windows (USB4 P2P network adapter)", the id the
+owner's bench of 2026-11-09 read in Windows 11's block (section 3.12;
+its texts were not read, so the rule is the id's alone); any other block
+is shown as its texts and ids with "kind not known".
+
+**The IP address.** `GetAdaptersInfo` of `iphlpapi.dll`, loaded at run
+time (`LoadLibrary`, no new import, so the import gate's lists are
+unchanged), the adapter whose `Address` is the answer's MAC, every IPv4
+address of its list with its mask; "none" where the adapter has no
+address yet, "not read" where the DLL or the routine is absent or the
+call fails (with its error). It is read when the node is selected and
+for the report, never at a refresh. The address is the adapter's, not
+the peer's: the peer's is not knowable from this side.
+
+**The details** (drafts for the owner, section 17.7), for example:
+
+```
+Thunderbolt networking
+  XhciCmNet:            1 (on)
+  State:                up
+  Network adapter:      02-1D-6B-81-87-4F
+  IP address:           169.254.211.195 (255.255.0.0)
+  Link:                 port 1, 40 Gb/s, 2 lanes
+  Flow control:         end-to-end
+  Largest frame:        1514 bytes
+  Sent:                 1 234 packets, 1 567 890 bytes
+  Received:             1 200 packets, 1 456 000 bytes
+  Errors:               0 sending, 0 receiving
+  Dropped:              0 sending (link down), 0 receiving (no buffer
+                        0, link down 0)
+  Connection manager:   12 frames dropped (bad or unheld), 0 sends refused
+  As of:                pass 812, 240 ms ago
+```
+
+and for a link:
+
+```
+Link on port 1
+  State:                logged in (the service is up)
+  Discovery:            ready
+  Other computer:       myhost (Linux (thunderbolt_net))
+  Its IDs:              vendor 1D6B "Linux", device 0004 "myhost",
+                        revision 80000100
+  Its UUID:             01234567-89AB-CDEF-0123-456789ABCDEF
+  Speed:                40 Gb/s, 2 lanes
+  Its MAC:              02-...
+  Flow control offered: end-to-end, frame IDs, large frames
+  Inter-domain packets: 40 sent, 38 received, 2 resent, 0 malformed
+  Logins:               3 sent (0 failed), 1 received (0 refused)
+```
+
+**The saved report** carries the nodes' details as it carries every
+node's (`write_report`), so it needs nothing of its own; `/report`
+does the same. **The snapshot**: the device report (`XHCITR.DEV`, the
+`.DEV` of `/snapshot`, design record 25 section 15) gains a section,
+"Thunderbolt networking (xhcicm.sys)", after its installed files: for
+each query device `XHCICM0` to `XHCICM15` that opens and answers, the
+same text under the query device's name; with none, the one line "none
+answered". The device report is pasted publicly, and withholds every
+instance part that can be a serial number (`dev_public_id`), so its
+networking text withholds the same class of data: both MACs, the peer's
+UUID, the IP address and the peer's two texts (the other computer's
+host name among them) are not printed there, each said as not
+included; the kind, the ids, the state, the speed and every counter
+are.
+
+XHCITR's new code is in its own files: `xhcitr\tr_net.c` with
+`tr_net.h`, pure (the parser of the answer, the kind, the labels and
+the details text, host-tested by `test\test_trnet.c` under /Za), and
+`xhcitr\tr_netw.c`, the half that calls Windows (the request with the
+98 SE and ME access retry, the IP lookup, the `.DEV` section).
+`GetAdaptersInfo`'s two structures are restated there from their
+documented layout, as MSVC 6.0 has no `iptypes.h`, and only their leading
+fields are read, each entry through its own `Next`. `xhcitr.c` gains a
+node kind (`K_NET`), the read at the refresh, the nodes' details and
+the one line in the NHI's details; `tr_snap.c` one call into
+`tr_netw.c` for the `.DEV` section; `build.cmd` and
+`test\run-host-tests.cmd` the new files.
+
+### 17.6 Tests
+
+- **Host vectors** (`test\test_cm_qnet.c`): the builder over each
+  state (off, no driver, waiting, up), each connection manager, zero to
+  four links, a peer text with bytes outside 0x20 to 0x7E, the MAC and
+  counter placement, the client block absent and present at a smaller
+  and a larger `Size` (taken to `CM_QN_CLIENT_MAX`); the answer's sizing
+  (a buffer under the header, under the answer, whole), the pass and age
+  and the stopping flag. `test\test_trnet.c`: the parser's refusals (a
+  wrong magic or version, an offset or shape past the bytes given, a
+  count past four, a client block whose `Size` passes the answer), the
+  kind rules, the label for each state, and the details text, each line
+  within 79 columns.
+- **`test_cm_net`** gains `Open`'s `Size` rules (the three callbacks'
+  size accepted with no `Stats`, a smaller one refused) where it can be
+  reached without the DDK; the rest is the legs'.
+- **Gates.** No new import in any driver image (the build uses only what
+  `cm_qryos.c` and `cm_net.c` already import); XHCITR's import gate
+  unchanged (`iphlpapi.dll` is loaded at run time).
+- **Legs** (`runs/run-48.md`, "48.18"): two guests joined by
+  `usb4-xdomain` (section 10), each with this build, each running
+  XHCITR `/report`, the report's networking nodes read with a ping and a
+  file copy between them: 98 SE with ME, 2000 with XP, XP x64 with
+  Vista, 7 with 8, 8.1 with 10, the x64 ends on the amd64 images (the
+  in-guest signature of the throwaway certificate), at least one pair on
+  each connection manager. Each reads the state, the peer's kind
+  (xHCI98 on both ends here; a Linux end once, for its host name), the
+  MAC against `ipconfig`'s, the IP address, the counters moving with
+  the traffic, E2E against the log's `cm.net.rings`, a cable pull (the
+  link entry gone, the state "no other computer connected") and a
+  replug.
+
+### 17.7 The strings
+
+Every new string the window, the report and the `.DEV` show is a draft
+for the owner (task 46.18's rule) and is listed verbatim in the task's
+report; the console carries none (no console line is added).
+
+Revision 23 also widens the entry to 292 bytes for the peer's whole
+texts: the parser kept 32 characters and the owner's bench read Windows
+11's device text, "Windows USB4(TM) Connection Manager" (35), as
+"Windows USB4(TM) Connection Mana" on screen and in the saved report
+(round 7). A reader takes entries of 160 bytes (a driver before it,
+the 32 characters) or more (`CM_QN_LINK_MIN_BYTES`), and a details line
+too long for 79 columns puts the text on the next line, indented 4.
+
+Revision 23 (section 3.16) adds, for a link entry with
+`CM_QN_LF_UNANNOUNCED`: the node's state "found, not connected" whatever
+the peer offers, a details line "Not connected:" with the reason, and,
+where every link entry has the flag, the networking node's label "-
+not connected".
+
+### 17.8 What it does not do
+
+- It sets nothing: no MTU, no flow control, no address, no log in or out.
+- It does not show the peer's IP address or anything the peer has not
+  published in its block.
+- It does not read the link's counters in the host interface's
+  hardware: the counts are the drivers' own.
+- It names no peer kind it has not read a block of.
+
 ## Appendix A. The binary readings behind `legal-provenance.md` section 4
 
 Each item is a reading of a third-party binary, in the words of the
@@ -3126,7 +4602,7 @@ them from the row that points here and its neighbours.
 
 | Item | Fact | Method | Where recorded |
 |---|---|---|---|
-| A.1 | **The NDIS.SYS imports of `xhcinet.sys` x86 on 98 SE and ME (task 45.59 step S6, design record 35 section 7.8)**: each of its 24 `NDIS.SYS` pairs is a NUL-delimited name in `WINDOWS\SYSTEM\NDIS.VXD` of 98 SE (166,029 bytes, SHA-256 `71C52BC6AEDD76AED7B6E3D87B413689C3C711A1D896DA9FA36435BA1363FF94`, dated 1999-04-23) and of ME (157,397 bytes, `9E0F9ADA90BDC93985858D14A451AB706584FFC4E6F49BA69F48C00C7A332DB2`, 2000-06-08), the files of the q35 base images, whose LE resident and non-resident name tables hold only `NDIS` and `NDIS_DDB`; the reading discriminates (`NdisQueryBufferSafe` is a name of ME's file and not of 98 SE's; `NdisAllocateNetBufferList` of neither). Besides: each pair is declared in the Windows 2000 DDK's `BINARY_COMPATIBLE` `ndis.h` "so that we don't use functions that aren't available on Windows 9x" (the header's comment, line 27), and each is among the imports of `usb-wdm-free`'s `cdcnet.sys` (`src/net/cdcnet/imports-ndis5.txt` at `57ba809`), an NDIS 5.0 WDM miniport recorded loading and passing traffic on 98 SE and ME (`docs/testing/2026-10-22-cdcnet-9x.md` there). `xhcinet.sys`'s own load on 98 SE and ME was then read (2026-11-01, `runs/run-45.md` "45.59 (legs, continued)": loaded, the service up, ping both ways, in the emulator) | static: export names alone (a NUL-delimited name search with a script of this project, and the LE header's two name tables), the owner's rule of 2026-10-31, 14:40, which admits a Microsoft binary's export names for the import gate's baselines and nothing else; documentation (the DDK header); runtime (another driver's recorded load, QEMU only) | `scripts/import-gate/xhcinet-imports.allow` (each `NDIS.SYS` row: `bc-header`, `ndisvxd-name 98SE ME`, `w98-runtime cdcnet-9x`), `ndisvxd-baselines.expected` (the two files) and `net98-runtime.list`, enforced by `check-imports.ps1 -GateProfile net98` |
+| A.1 | **The NDIS.SYS imports of `xhcinet.sys` x86 on 98 SE and ME (task 45.59 step S6, design record 35 section 7.8)**: each of its 27 `NDIS.SYS` pairs is a NUL-delimited name in `WINDOWS\SYSTEM\NDIS.VXD` of 98 SE (166,029 bytes, SHA-256 `71C52BC6AEDD76AED7B6E3D87B413689C3C711A1D896DA9FA36435BA1363FF94`, dated 1999-04-23) and of ME (157,397 bytes, `9E0F9ADA90BDC93985858D14A451AB706584FFC4E6F49BA69F48C00C7A332DB2`, 2000-06-08), the files of the q35 base images, whose LE resident and non-resident name tables hold only `NDIS` and `NDIS_DDB`; the reading discriminates (`NdisQueryBufferSafe` is a name of ME's file and not of 98 SE's; `NdisAllocateNetBufferList` of neither). Besides: each pair is declared in the Windows 2000 DDK's `BINARY_COMPATIBLE` `ndis.h` "so that we don't use functions that aren't available on Windows 9x" (the header's comment, line 27), and each is among the imports of `usb-wdm-free`'s `cdcnet.sys` (`src/net/cdcnet/imports-ndis5.txt` at `57ba809`), an NDIS 5.0 WDM miniport recorded loading and passing traffic on 98 SE and ME (`docs/testing/2026-10-22-cdcnet-9x.md` there). `xhcinet.sys`'s own load on 98 SE and ME was then read (2026-11-01, `runs/run-45.md` "45.59 (legs, continued)": loaded, the service up, ping both ways, in the emulator) | static: export names alone (a NUL-delimited name search with a script of this project, and the LE header's two name tables), the owner's rule of 2026-10-31, 14:40, which admits a Microsoft binary's export names for the import gate's baselines and nothing else; documentation (the DDK header); runtime (another driver's recorded load, QEMU only) | `scripts/import-gate/xhcinet-imports.allow` (each `NDIS.SYS` row: `bc-header`, `ndisvxd-name 98SE ME`, `w98-runtime cdcnet-9x`), `ndisvxd-baselines.expected` (the two files) and `net98-runtime.list`, enforced by `check-imports.ps1 -GateProfile net98` |
 | A.2 | **The imports of `xhcinet6.sys` on 8, 8.1 and 10, x86 and x64 (task 45.59 step S7, design record 35 section 7.9)**: every `NTOSKRNL.EXE`, `HAL.DLL` and `NDIS.SYS` name it imports is in the export tables of the 8.1 and 10 `ntoskrnl.exe`, `hal.dll` and `ndis.sys` of its architecture, and on x86 also of Windows 7 SP1 x86's kernel and HAL; the 8.1 and 10 x86 `hal.dll` export `KfAcquireSpinLock` and `KfReleaseSpinLock` as forwarders to the kernel (`dumpbin /exports`: "forwarded to ntoskrnl.KfAcquireSpinLock"), which the kernel exports. The files: Windows 8.1 Update x86 and x64 (`ntoskrnl.exe` 6.3.9600.17415, `hal.dll` 6.3.9600.17196, `ndis.sys` 6.3.9600.17399) and Windows 10 x86 and x64 (`ntoskrnl.exe` 10.0.19041.2965, `hal.dll` 10.0.19041.2728, `ndis.sys` 10.0.19041.1387), each one's size and SHA-256 in its manifest, taken by the owner on 2026-10-31 with `7z e` out of the project's q35 base images, read-only, into the untracked `tools\win81-x86-extracted` and the three others. Only the export names were read (the owner, 2026-10-31: export-table reads for the gate's baselines, export names only); no code, no other header | static (`dumpbin /exports`, run by the gate at every build; nothing executed, nothing disassembled) | `scripts/import-gate/net6-win81-x86-baselines.expected` and its three siblings, `xhcinet6-imports.allow` and `xhcinet6-imports-amd64.allow`, enforced by `check-imports.ps1 -GateProfile net6` |
 
 ## Sources

@@ -556,7 +556,74 @@ PCM_MARK CmMarksConfirm(PCM_MARKS m, const UCHAR *v, ULONG bytes,
                         ULONG epochLo, ULONG epochHi, BOOLEAN checkGen,
                         const ULONG *portGen, ULONG ports, PULONG why)
 {
+    return CmMarksConfirmEx(m, v, bytes, epochLo, epochHi, checkGen, portGen,
+                            ports, NULL, 0, why);
+}
+
+ULONG CmMarksSeqAfter(ULONG a, ULONG b)
+{
+    return (ULONG)(a != 0 && a != b && (a - b) < 0x80000000UL);
+}
+
+ULONG CmMarksDepartGen(const CM_MARK *e, ULONG memberGen)
+{
+    return (e->Tok[0] & CM_MK_TOK_VALID) != 0 ? e->Tok[1] : memberGen;
+}
+
+ULONG CmMarksGrant(PCM_MARKS m, ULONG member, ULONG landing,
+                   PVOID const *snap, const ULONG *seq, ULONG count,
+                   const ULONG *tok, ULONG now)
+{
+    ULONG i;
+    ULONG j;
+    ULONG k;
+    ULONG n;
+    BOOLEAN ok;
+    PCM_MARK e;
+
+    n = 0;
+    if (m == NULL || tok == NULL || (tok[0] & CM_MK_TOK_VALID) == 0 ||
+        landing == 0 || snap == NULL || seq == NULL) {
+        return 0;
+    }
+    for (i = 0; i < CM_QM_MAX_ENTRIES; i++) {
+        e = &m->E[i];
+        if (e->Pdo == NULL || e->Tomb || e->Member != member ||
+            e->Landing != landing || e->Tok[0] != 0 || e->PendingAt != 0) {
+            continue;
+        }
+        ok = FALSE;
+        for (k = 0; k < count; k++) {
+            if (snap[k] == e->Pdo && CmMarksSeqAfter(seq[k], tok[3])) {
+                ok = TRUE;
+            }
+        }
+        for (j = 0; j < CM_QM_MAX_ENTRIES && ok; j++) {
+            if (m->E[j].Pdo == e->Pdo && m->E[j].Tomb &&
+                m->E[j].Landing == landing) {
+                /* The same PDO under this landing before: its provenance
+                 * is not this transaction's. */
+                ok = FALSE;
+            }
+        }
+        if (ok) {
+            e->Tok[0] = tok[0];
+            e->Tok[1] = tok[1];
+            e->Tok[2] = tok[2];
+            CmMarksTouch(m, e, now);
+            n++;
+        }
+    }
+    return n;
+}
+
+PCM_MARK CmMarksConfirmEx(PCM_MARKS m, const UCHAR *v, ULONG bytes,
+                          ULONG epochLo, ULONG epochHi, BOOLEAN checkGen,
+                          const ULONG *portGen, ULONG ports,
+                          const ULONG *kidGen, ULONG kids, PULONG why)
+{
     ULONG serial;
+    ULONG kid;
     ULONG i;
     ULONG pendingAt;
     ULONG pendingGen;
@@ -592,9 +659,12 @@ PCM_MARK CmMarksConfirm(PCM_MARKS m, const UCHAR *v, ULONG bytes,
         *why = CM_MK_CONF_SERIAL;
         return NULL;
     }
-    if (e->Landing != 0) {
-        /* Windows' own eject of a chained unit is the whole eject; a
-         * member eject would take the first device's tunnel. */
+    if (e->Landing != 0 &&
+        (!checkGen || (e->Tok[0] & CM_MK_TOK_VALID) == 0)) {
+        /* Windows' own eject of a chained unit is the whole eject unless
+         * its token names the kid whose tunnel it came through (design
+         * record 34 section 3.12); a member eject would take the first
+         * device's tunnel. */
         *why = CM_MK_CONF_CHAINED;
         return NULL;
     }
@@ -611,9 +681,17 @@ PCM_MARK CmMarksConfirm(PCM_MARKS m, const UCHAR *v, ULONG bytes,
         *why = CM_MK_CONF_NOT_PENDING;
         return NULL;
     }
-    if (checkGen &&
-        (cmMkGet32(v, CM_QC_O_GEN) != pendingGen || e->Member >= ports ||
-         portGen[e->Member] != pendingGen)) {
+    if (e->Landing != 0) {
+        kid = (e->Tok[0] >> 8) & 0xFFUL;
+        if (cmMkGet32(v, CM_QC_O_GEN) != pendingGen ||
+            pendingGen != e->Tok[1] || kidGen == NULL || kid == 0 ||
+            kid > kids || kidGen[kid - 1] != e->Tok[1]) {
+            *why = CM_MK_CONF_GEN;
+            return NULL;
+        }
+    } else if (checkGen &&
+               (cmMkGet32(v, CM_QC_O_GEN) != pendingGen ||
+                e->Member >= ports || portGen[e->Member] != pendingGen)) {
         *why = CM_MK_CONF_GEN;
         return NULL;
     }

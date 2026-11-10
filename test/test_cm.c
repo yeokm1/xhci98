@@ -255,6 +255,9 @@ static void test_values(void)
     CHECK_EQ(v.Value[CM_VAL_NET_RX_FRAMES], 128, "XhciCmNetRxFrames defaults to 128");
     CHECK_EQ(v.Value[CM_VAL_NET_TX_FRAMES], 128, "XhciCmNetTxFrames defaults to 128");
     CHECK_EQ(v.Value[CM_VAL_NET_E2E], 1, "XhciCmNetE2E defaults to 1");
+    CHECK_EQ(v.Value[CM_VAL_NET_IRQ], 1, "XhciCmNetInterrupt defaults to 1");
+    CHECK_EQ(v.Value[CM_VAL_INFER_AT_START], 0,
+             "XhciCmInferAtStart defaults to 0 (record 22 section 7.6.2)");
     CHECK_EQ(v.Found | v.Refused | v.Clamped, 0, "nothing found yet");
     CHECK_EQ(v.TunnelBridgeChars, 0, "no bridge override");
     for (i = 0; i < CM_VAL_COUNT; i++) {
@@ -300,6 +303,15 @@ static void test_values(void)
     CHECK_EQ(v.Value[CM_VAL_NET_TX_FRAMES], 128, "XhciCmNetTxFrames 1025 refused");
     CmValuesTake(&v, CM_VAL_NET_E2E, 1, 0);
     CHECK_EQ(v.Value[CM_VAL_NET_E2E], 0, "XhciCmNetE2E 0 taken");
+    CmValuesTake(&v, CM_VAL_NET_IRQ, 1, 0);
+    CHECK_EQ(v.Value[CM_VAL_NET_IRQ], 0, "XhciCmNetInterrupt 0 taken");
+    CmValuesTake(&v, CM_VAL_NET_IRQ, 1, 2);
+    CHECK_EQ(v.Value[CM_VAL_NET_IRQ], 1, "XhciCmNetInterrupt 2 refused: 1 stands");
+    CmValuesTake(&v, CM_VAL_INFER_AT_START, 1, 1);
+    CHECK_EQ(v.Value[CM_VAL_INFER_AT_START], 1, "XhciCmInferAtStart 1 taken");
+    CmValuesTake(&v, CM_VAL_INFER_AT_START, 1, 2);
+    CHECK_EQ(v.Value[CM_VAL_INFER_AT_START], 0,
+             "XhciCmInferAtStart 2 refused: the default 0 stands");
     CmValuesDefault(&v);
 
     CmValuesTake(&v, CM_VAL_MODE, 1, 0);
@@ -507,6 +519,24 @@ static void test_values(void)
     CHECK_EQ(v.Gen4Elr, 1, "all-ones is refused");
     CmValuesTakeGen4Elr(&v, 0, 0);
     CHECK_EQ(v.Gen4ElrFound | v.Gen4ElrRefused, 0, "a later absent read clears both");
+    /* XhciCmSleepEntry (task 48.35, decision U36): the same rule, its
+     * default 1 since the emulator legs passed. */
+    CmValuesDefault(&v);
+    CHECK_EQ(CM_SLEEP_ENTRY_DEFAULT, 1, "XhciCmSleepEntry defaults to 1");
+    CHECK_EQ(v.SleepEntry, 1, "1 after CmValuesDefault");
+    CmValuesTakeSleepEntry(&v, 0, 0);
+    CHECK(v.SleepEntry == CM_SLEEP_ENTRY_DEFAULT && v.SleepEntryFound == 0 &&
+          v.SleepEntryRefused == 0, "absent: the default, nothing found");
+    CmValuesTakeSleepEntry(&v, 1, 1);
+    CHECK(v.SleepEntry == 1 && v.SleepEntryFound == 1 && v.SleepEntryRefused == 0,
+          "1 is taken");
+    CmValuesTakeSleepEntry(&v, 1, 0);
+    CHECK(v.SleepEntry == 0 && v.SleepEntryFound == 1, "0 is taken");
+    CmValuesTakeSleepEntry(&v, 1, 2);
+    CHECK(v.SleepEntry == CM_SLEEP_ENTRY_DEFAULT && v.SleepEntryRefused == 1 &&
+          v.SleepEntryRaw == 2, "2 is refused: the default stands, the value recorded");
+    CmValuesTakeSleepEntry(&v, 0, 0);
+    CHECK_EQ(v.SleepEntryFound | v.SleepEntryRefused, 0, "a later absent read clears both");
     CHECK_EQ(v.Found | v.Refused, 0, "the rule table's bits untouched by it");
 }
 

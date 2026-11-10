@@ -5,7 +5,9 @@
  * lists, checked against the INFs that match them; Windows 98's PCI
  * device ids; the bridge filter's snapshot; the resume hold's bound; and
  * design record 31's tunnel id: the compatible-id rewrite, the chain's
- * depth bound and its re-attach.
+ * depth bound and its re-attach; design record 34 section 3.3.7 item 1's
+ * admission of a chain operation against a loss posted in between; and the
+ * kept child's systems, state and reference rule (record 31 section 4.10).
  */
 
 #include <stdio.h>
@@ -844,6 +846,398 @@ static void test_chain_depth(void)
     CHECK_EQ(CmPortsChainReads(1, 0), 0, "a function that is not a bridge never reads");
 }
 
+/* ---- record 34 section 3.3.7 item 1: a chain operation's admission ----- */
+
+/* The CONFIGMG worker's request words, as cm_cfgwk.c keeps them under its
+ * lock, with the posts that change them. */
+typedef struct {
+    ULONG Exit;
+    ULONG Active;
+    ULONG ReqGone;
+    ULONG NoScan;
+    ULONG Hold;
+    ULONG Gen[4];
+} WK_WORDS;
+
+/* cmWkGoneReq: CmCfgwkUnavailable and CmCfgwkGone. */
+static void wkPostGone(WK_WORDS *w, ULONG members)
+{
+    ULONG i;
+
+    members &= w->Active;
+    w->ReqGone |= members;
+    w->NoScan |= members;
+    for (i = 0; i < 4; i++) {
+        if (members & (1UL << i)) {
+            w->Gen[i]++;
+        }
+    }
+}
+
+/* CmCfgwkPost: a healthy request clears the no-scan mode. */
+static void wkPostReenum(WK_WORDS *w, ULONG members)
+{
+    ULONG i;
+
+    w->NoScan &= ~members;
+    for (i = 0; i < 4; i++) {
+        if (members & (1UL << i)) {
+            w->Gen[i]++;
+        }
+    }
+}
+
+/* The gates the worker reads before the operation (the lock-held ones). */
+static ULONG wkGates(const WK_WORDS *w, ULONG i)
+{
+    return ((w->ReqGone | w->NoScan | w->Hold) & (1UL << i)) == 0;
+}
+
+static BOOLEAN wkCurrent(const WK_WORDS *w, ULONG i, ULONG taken)
+{
+    return CmPortsChainCurrent((BOOLEAN)(w->Exit != 0), w->Active,
+                               w->ReqGone | w->NoScan | w->Hold, w->Gen[i],
+                               taken, i);
+}
+
+static void test_chain_admit(void)
+{
+    WK_WORDS w;
+    ULONG taken;
+
+    memset(&w, 0, sizeof(w));
+    w.Active = 0x3;
+    w.Gen[1] = 7;
+    taken = w.Gen[1];
+    CHECK(wkGates(&w, 1), "healthy: the gates pass");
+    CHECK(wkCurrent(&w, 1, taken), "healthy: admitted");
+
+    /* The race: the generation taken first, the gates read clear, then a
+     * CONTROLLER_UNAVAILABLE posted before the admission. */
+    taken = w.Gen[1];
+    CHECK(wkGates(&w, 1), "the gates read clear");
+    wkPostGone(&w, 0x2);
+    CHECK(!wkCurrent(&w, 1, taken), "a loss between the gates and the admission: refused");
+    /* The old order took the generation after the post: the loss's own
+     * generation, which the no-configuration words still refuse. */
+    CHECK(!wkCurrent(&w, 1, w.Gen[1]), "the loss's own generation: still refused while owed");
+    /* The removal done and its no-scan re-enumeration done: clear again,
+     * but an operation taken before the loss stays stale. */
+    w.ReqGone = 0;
+    w.NoScan = 0;
+    CHECK(!wkCurrent(&w, 1, taken), "taken before the loss: stale after it, whatever follows");
+    CHECK(wkCurrent(&w, 1, w.Gen[1]), "taken after the loss was dealt with: admitted");
+
+    /* A loss then a healthy post before the admission: NoScan cleared
+     * again, the generation moved twice: refused. */
+    taken = w.Gen[1];
+    wkPostGone(&w, 0x2);
+    w.ReqGone = 0;
+    wkPostReenum(&w, 0x2);
+    CHECK_EQ(w.NoScan & 0x2, 0, "the healthy post cleared the no-scan mode");
+    CHECK(!wkCurrent(&w, 1, taken), "a loss and a healthy post in between: refused");
+
+    /* A loss on another member leaves this one admitted. */
+    taken = w.Gen[1];
+    wkPostGone(&w, 0x1);
+    CHECK(wkCurrent(&w, 1, taken), "another member's loss: this member still admitted");
+    CHECK(!wkCurrent(&w, 0, w.Gen[0]), "the lost member: refused");
+
+    /* A retirement barrier raised (no generation step) refuses it too. */
+    taken = w.Gen[1];
+    w.Hold = 0x2;
+    CHECK(!wkCurrent(&w, 1, taken), "a barrier on the member: refused");
+    w.Hold = 0;
+    CHECK(wkCurrent(&w, 1, taken), "the barrier lifted: admitted again");
+
+    /* Ownership lost, the worker leaving, a member out of range. */
+    w.Active = 0x1;
+    CHECK(!wkCurrent(&w, 1, taken), "the member no longer owned: refused");
+    w.Active = 0x3;
+    w.Exit = 1;
+    CHECK(!wkCurrent(&w, 1, taken), "the worker leaving: refused");
+    w.Exit = 0;
+    CHECK(!CmPortsChainCurrent(FALSE, 0xFFFFFFFFUL, 0, 0, 0, 32),
+          "a member index past the word: refused");
+}
+
+/* ---- the kept child (design record 31 section 4.10) -------------------- */
+
+static void test_kept_os(void)
+{
+    CHECK_EQ(CmPortsTagOs(5, 0), 1, "2000: the id");
+    CHECK_EQ(CmPortsTagOs(5, 2), 1, "XP x64 and 2003: the id");
+    CHECK_EQ(CmPortsTagOs(6, 0), 1, "Vista: the id");
+    CHECK_EQ(CmPortsTagOs(6, 2), 1, "8: the id");
+    CHECK_EQ(CmPortsTagOs(6, 3), 1, "8.1: the id, with the kept child");
+    CHECK_EQ(CmPortsTagOs(10, 0), 0, "10: no id");
+    CHECK_EQ(CmPortsTagOs(6, 4), 0, "6.4 (a 10 preview): no id");
+    CHECK_EQ(CmPortsTagOs(4, 0), 0, "below 2000: no id");
+    CHECK_EQ(CmPortsKeptOs(6, 3), 1, "8.1: kept");
+    CHECK_EQ(CmPortsKeptOs(6, 2), 0, "8: not kept");
+    CHECK_EQ(CmPortsKeptOs(6, 1), 0, "7: not kept");
+    CHECK_EQ(CmPortsKeptOs(5, 1), 0, "XP: not kept");
+    CHECK_EQ(CmPortsKeptOs(10, 0), 0, "10: not kept");
+    CHECK_EQ(CmPortsKeptOs(6, 4), 0, "6.4: not kept");
+}
+
+/* A model of one kept child over the pure functions: the state, the
+ * references (the attach's first), whether its departure is recorded,
+ * how many were, and who destroyed it. */
+typedef struct _KEPT_MODEL {
+    ULONG State;
+    ULONG Refs;
+    ULONG Departed;
+    ULONG Departures;
+    ULONG Present;
+    ULONG Attached;     /* still attached to the object below          */
+    ULONG Destroyed;    /* 0 not, 1 at PASSIVE_LEVEL, 2 by the work item */
+    ULONG Uses;         /* a use of the child after its destruction    */
+} KEPT_MODEL;
+
+static void kmInit(KEPT_MODEL *m)
+{
+    memset(m, 0, sizeof(*m));
+    m->State = CM_KEPT_ATTACHED;
+    m->Refs = 1;
+    m->Present = 1;
+    m->Attached = 1;
+}
+
+static void kmRelease(KEPT_MODEL *m, ULONG aboveP)
+{
+    ULONG l;
+
+    if (m->Destroyed) {
+        m->Uses++;
+        return;
+    }
+    m->Refs--;
+    l = CmPortsKeptLast(m->Refs, m->State, aboveP);
+    if (l == CM_KEPT_L_DESTROY) {
+        m->Destroyed = 1;
+    } else if (l == CM_KEPT_L_QUEUE) {
+        /* The work item runs later, at PASSIVE_LEVEL. */
+        m->Destroyed = 2;
+    }
+}
+
+static void kmEvent(KEPT_MODEL *m, ULONG event)
+{
+    ULONG a;
+
+    if (m->Destroyed) {
+        m->Uses++;
+        return;
+    }
+    m->State = CmPortsKeptStep(m->State, event, &a);
+    if ((a & CM_KEPT_A_DEPART) != 0 && !m->Departed) {
+        m->Departed = 1;
+        m->Departures++;
+    }
+    if ((a & CM_KEPT_A_PRESENT) != 0) {
+        m->Present = 1;
+    }
+    if ((a & CM_KEPT_A_ABSENT) != 0) {
+        m->Present = 0;
+    }
+    if ((a & CM_KEPT_A_END_DEPART) != 0) {
+        m->Departed = 0;
+    }
+    if ((a & CM_KEPT_A_DETACH) != 0) {
+        m->Attached = 0;
+    }
+    if ((a & CM_KEPT_A_DROP_ATTACH) != 0) {
+        kmRelease(m, 0);
+    }
+}
+
+/* A dispatch's admission: a reference, or refused. */
+static ULONG kmEnter(KEPT_MODEL *m)
+{
+    if (m->Destroyed) {
+        m->Uses++;
+        return 0;
+    }
+    if (!CmPortsKeptAdmits(m->State)) {
+        return 0;
+    }
+    m->Refs++;
+    return 1;
+}
+
+static void kmRemove(KEPT_MODEL *m, ULONG callbackInside)
+{
+    if (!kmEnter(m)) {
+        return;
+    }
+    if (callbackInside) {
+        kmEvent(m, CM_KEPT_E_CALLBACK);
+    }
+    kmEvent(m, CM_KEPT_E_REMOVED);
+    kmRelease(m, 0);
+}
+
+static void kmStart(KEPT_MODEL *m, ULONG ok)
+{
+    if (!kmEnter(m)) {
+        return;
+    }
+    kmEvent(m, CM_KEPT_E_START);
+    kmEvent(m, ok ? CM_KEPT_E_START_OK : CM_KEPT_E_START_FAIL);
+    kmRelease(m, 0);
+}
+
+static void test_kept_step(void)
+{
+    ULONG a;
+    ULONG s;
+
+    s = CmPortsKeptStep(CM_KEPT_ATTACHED, CM_KEPT_E_REMOVED, &a);
+    CHECK_EQ(s, CM_KEPT_LOGICAL, "attached, removed: logical");
+    CHECK_EQ(a, CM_KEPT_A_DEPART | CM_KEPT_A_ABSENT, "the departure, no presence");
+    s = CmPortsKeptStep(CM_KEPT_STARTING, CM_KEPT_E_REMOVED, &a);
+    CHECK_EQ(s, CM_KEPT_LOGICAL, "starting, removed: logical");
+    CHECK_EQ(a, CM_KEPT_A_DEPART | CM_KEPT_A_ABSENT, "the departure");
+    s = CmPortsKeptStep(CM_KEPT_LOGICAL, CM_KEPT_E_REMOVED, &a);
+    CHECK_EQ(s, CM_KEPT_LOGICAL, "a second removal: logical");
+    CHECK_EQ(a, 0, "nothing more");
+    s = CmPortsKeptStep(CM_KEPT_LOGICAL, CM_KEPT_E_START, &a);
+    CHECK_EQ(s, CM_KEPT_STARTING, "logical, a start: starting");
+    CHECK_EQ(a, 0, "no presence yet");
+    s = CmPortsKeptStep(CM_KEPT_STARTING, CM_KEPT_E_START_OK, &a);
+    CHECK_EQ(s, CM_KEPT_ATTACHED, "the start done: attached");
+    CHECK_EQ(a, CM_KEPT_A_PRESENT | CM_KEPT_A_END_DEPART,
+             "presence back, the departure ended");
+    s = CmPortsKeptStep(CM_KEPT_STARTING, CM_KEPT_E_START_FAIL, &a);
+    CHECK_EQ(s, CM_KEPT_LOGICAL, "a failed start: logical");
+    CHECK_EQ(a, 0, "still no presence");
+    s = CmPortsKeptStep(CM_KEPT_ATTACHED, CM_KEPT_E_START, &a);
+    CHECK_EQ(s, CM_KEPT_ATTACHED, "a start while attached (its first): no change");
+    CHECK_EQ(a, 0, "nothing");
+    s = CmPortsKeptStep(CM_KEPT_ATTACHED, CM_KEPT_E_START_OK, &a);
+    CHECK_EQ(s, CM_KEPT_ATTACHED, "its success: attached");
+    CHECK_EQ(a, 0, "nothing");
+    s = CmPortsKeptStep(CM_KEPT_LOGICAL, CM_KEPT_E_START_OK, &a);
+    CHECK_EQ(s, CM_KEPT_LOGICAL, "a success not after a start: no change");
+    for (s = CM_KEPT_ATTACHED; s <= CM_KEPT_LOGICAL; s++) {
+        CHECK_EQ(CmPortsKeptStep(s, CM_KEPT_E_CALLBACK, &a), CM_KEPT_DETACHED,
+                 "the callback from any state: detached");
+        CHECK_EQ(a, CM_KEPT_A_DETACH | CM_KEPT_A_DROP_ATTACH | CM_KEPT_A_ABSENT,
+                 "detach, the attach's reference dropped, no presence");
+        CHECK_EQ(CmPortsKeptAdmits(s), 1, "admitted before detached");
+    }
+    CHECK_EQ(CmPortsKeptStep(CM_KEPT_DETACHED, CM_KEPT_E_CALLBACK, &a),
+             CM_KEPT_DETACHED, "a second callback: detached");
+    CHECK_EQ(a, 0, "nothing twice");
+    CHECK_EQ(CmPortsKeptStep(CM_KEPT_DETACHED, CM_KEPT_E_START, &a),
+             CM_KEPT_DETACHED, "detached is final");
+    CHECK_EQ(a, 0, "nothing");
+    CHECK_EQ(CmPortsKeptStep(CM_KEPT_DETACHED, CM_KEPT_E_REMOVED, &a),
+             CM_KEPT_DETACHED, "a removal after the callback inside it");
+    CHECK_EQ(a, CM_KEPT_A_DEPART, "its departure recorded");
+    CHECK_EQ(CmPortsKeptAdmits(CM_KEPT_DETACHED), 0, "nothing admitted once detached");
+    CHECK_EQ(CmPortsKeptLast(0, CM_KEPT_DETACHED, 0), CM_KEPT_L_DESTROY,
+             "the last release, detached, passive: destroyed now");
+    CHECK_EQ(CmPortsKeptLast(0, CM_KEPT_DETACHED, 1), CM_KEPT_L_QUEUE,
+             "above passive: the work item");
+    CHECK_EQ(CmPortsKeptLast(1, CM_KEPT_DETACHED, 0), CM_KEPT_L_NONE,
+             "a reference left: nothing");
+    CHECK_EQ(CmPortsKeptLast(0, CM_KEPT_LOGICAL, 0), CM_KEPT_L_NONE,
+             "never destroyed before detached");
+}
+
+static void test_kept_orders(void)
+{
+    KEPT_MODEL m;
+    ULONG held;
+
+    /* A disable and enable: logical, re-armed, never destroyed. */
+    kmInit(&m);
+    kmRemove(&m, 0);
+    CHECK_EQ(m.State, CM_KEPT_LOGICAL, "disable: logical");
+    CHECK_EQ(m.Departures, 1, "disable: one departure");
+    CHECK_EQ(m.Present, 0, "disable: no presence");
+    CHECK_EQ(m.Attached, 1, "disable: still attached");
+    kmStart(&m, 1);
+    CHECK_EQ(m.State, CM_KEPT_ATTACHED, "enable: attached");
+    CHECK_EQ(m.Present, 1, "enable: presence");
+    CHECK_EQ(m.Departed, 0, "enable: the departure ended");
+    CHECK_EQ(m.Refs, 1, "enable: the attach's reference alone");
+    CHECK_EQ(m.Destroyed, 0, "enable: not destroyed");
+    kmRemove(&m, 0);
+    CHECK_EQ(m.Departures, 2, "a second disable: a new departure");
+
+    /* A parent's removal: the removal, then the callback outside any
+     * dispatch, which destroys. */
+    kmInit(&m);
+    kmRemove(&m, 0);
+    kmEvent(&m, CM_KEPT_E_CALLBACK);
+    CHECK_EQ(m.State, CM_KEPT_DETACHED, "parent: detached");
+    CHECK_EQ(m.Destroyed, 1, "parent: destroyed by the callback, passive");
+    CHECK_EQ(m.Departures, 1, "parent: one departure");
+    CHECK_EQ(m.Uses, 0, "parent: no use after");
+
+    /* A surprise unplug: the callback inside the forwarded removal; the
+     * removal's own release destroys. */
+    kmInit(&m);
+    kmRemove(&m, 1);
+    CHECK_EQ(m.Destroyed, 1, "unplug: destroyed by the removal's release");
+    CHECK_EQ(m.Departures, 1, "unplug: its departure recorded");
+    CHECK_EQ(m.Attached, 0, "unplug: detached");
+    CHECK_EQ(m.Uses, 0, "unplug: no use after");
+
+    /* A removal, a refused start (nothing forwarded: no step), then the
+     * callback. */
+    kmInit(&m);
+    kmRemove(&m, 0);
+    held = kmEnter(&m);
+    kmRelease(&m, 0);
+    CHECK_EQ(held, 1, "refused start: admitted, nothing stepped");
+    CHECK_EQ(m.State, CM_KEPT_LOGICAL, "refused start: logical");
+    kmEvent(&m, CM_KEPT_E_CALLBACK);
+    CHECK_EQ(m.Destroyed, 1, "refused start, callback: destroyed");
+    CHECK_EQ(m.Departures, 1, "refused start: one departure");
+
+    /* A failed start: logical, no presence, the departure kept. */
+    kmInit(&m);
+    kmRemove(&m, 0);
+    kmStart(&m, 0);
+    CHECK_EQ(m.State, CM_KEPT_LOGICAL, "failed start: logical");
+    CHECK_EQ(m.Present, 0, "failed start: no presence");
+    CHECK_EQ(m.Departed, 1, "failed start: still departed");
+    kmRemove(&m, 0);
+    CHECK_EQ(m.Departures, 1, "failed start, removal: no second departure");
+
+    /* A repeated removal, then the callback inside the second. */
+    kmInit(&m);
+    kmRemove(&m, 0);
+    kmRemove(&m, 1);
+    CHECK_EQ(m.Departures, 1, "repeated: one departure");
+    CHECK_EQ(m.Destroyed, 1, "repeated: destroyed by the second removal's release");
+
+    /* The callback while a usage notification is in flight: the
+     * completion's release, above passive, hands it to the work item. */
+    kmInit(&m);
+    held = kmEnter(&m);
+    kmEvent(&m, CM_KEPT_E_CALLBACK);
+    CHECK_EQ(m.Destroyed, 0, "usage: not destroyed under it");
+    CHECK_EQ(kmEnter(&m), 0, "usage: a later dispatch refused");
+    kmRelease(&m, 1);
+    CHECK_EQ(held, 1, "usage: it held a reference");
+    CHECK_EQ(m.Destroyed, 2, "usage: the work item destroys");
+    CHECK_EQ(m.Departures, 0, "usage: no removal stepped (the destruction records it)");
+    CHECK_EQ(m.Uses, 0, "usage: no use after");
+
+    /* The uninstall: the stack removed (logical), then the PDO deleted. */
+    kmInit(&m);
+    kmRemove(&m, 0);
+    kmEvent(&m, CM_KEPT_E_CALLBACK);
+    CHECK_EQ(m.Destroyed, 1, "uninstall: destroyed by its callback");
+    CHECK_EQ(m.Departures, 1, "uninstall: one departure");
+    CHECK_EQ(m.Uses, 0, "uninstall: no use after");
+}
+
 int main(void)
 {
     test_families();
@@ -858,6 +1252,10 @@ int main(void)
     test_keep_present();
     test_tunnel_ids();
     test_chain_depth();
+    test_chain_admit();
+    test_kept_os();
+    test_kept_step();
+    test_kept_orders();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

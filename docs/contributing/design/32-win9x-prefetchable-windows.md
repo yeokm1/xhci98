@@ -1,6 +1,12 @@
 # Design Record 32 - Prefetchable Windows Above 4 GB Closed Before Windows 98 SE and ME Read Them
 
-Status: draft 16, 2026-11-06: section 11.5.5, new - 10 read again (task
+Status: draft 18, 2026-11-09: section 11.5.7, the owner's answers to
+Q26 to Q29 (a, b, a, b). Draft 17, 2026-11-09: section 11.5.6, new - 10 in the filter
+role (task 48.27): 10 takes 8's and 8.1's role and installer kind, the
+hazards 10 widens (fast startup, an upgrade to a later release, Secure
+Boot turned on later), the previews of the entry role's removal, its
+legs, and the owner's questions Q26 to Q29,
+before any code. Draft 16, 2026-11-06: section 11.5.5, new - 10 read again (task
 47.14): a boot-start upper filter of the root bus, installed with its
 image path written as `REG_EXPAND_SZ`, acts before the PCI driver reads
 the bridges at every start read, as on 8 and 8.1; 10's role and code
@@ -1310,6 +1316,217 @@ was not what stopped 45.9's starts; the difference left is the
 service's `ImagePath`, absent in 45.9's install and written here [inf].
 The filter role's use on 10 (section 11.5.2 gives 10 none) stays planned
 work, its design and code (PFW8.1).
+
+#### 11.5.6 10 in the filter role (task 48.27, put to the owner)
+
+Task 48.27 (was PFW8.1; the owner, 2026-11-09): the windows above 4 GB
+closed on the 32-bit 10 by section 11.5.2's filter role, which section
+11.5.5 read acting in time there. This section is the design, put to the
+owner before any code (Q26 to Q29 below) and answered on 2026-11-09
+(section 11.5.7).
+
+**What is read, and what is not.** Read [emu]: a boot-start upper filter
+of `ACPI\PNP0A08\0`, its service's `ImagePath` written, initialised and
+acting before the PCI driver's probe at every start read (four, section
+11.5.5), on the q35 10 x86 base (19041), fast startup off, one root bus,
+with the probe image, not `XHCIPFW.SYS`. Not read on 10, each a leg below
+or a question: `XHCIPFW.SYS`'s own filter role there (its version test,
+its "late" check against the `SOFTWARE` hive, its log); a start with
+fast startup on, Windows 10's default; an in-place upgrade to a later
+release of 10; any build but the q35 base's (section 11.1's 19045
+reading was the entry-time probe's, not a filter's), and none before
+2004 (no such medium is at hand: the 32-bit 10 medium here is 22H2).
+
+**The change.** No new mechanism: 10 takes 8's and 8.1's.
+
+- **The driver**: `PfwNtRole` gives 10.0 the filter role (`PsGetVersion`
+  answers 10.0 there [inf]; the image logs "not a system it acts on" on
+  10 today, so the leg reads `XhciPfwRole` 2 before anything else). Every
+  later version keeps "neither role". Nothing else in the image changes:
+  the root bus's first start, its bus range, the hold inside
+  `KeIpiGenericCall` (it resolves on 10 [inf], as on 8 and 8.1), the
+  "late" check, the log and its account of root buses.
+- **The installer**: `inst_pfw_sys` gives the 32-bit 10.0 the kind
+  `INST_PFW_SYS_FILTER`, as 8 and 8.1 (from build 19041 under Q29 (b),
+  which needs the build passed to it). `INST_PFW_SYS_GONE` then serves
+  only 10 before 19041 under Q29 (b), and no system under (a), where it is
+  removed with its paths (the console's line "XHCIPFW.SYS is not offered
+  on Windows 10.", the refusal of `/xhcipfw` there, the pass that removed
+  this installer's entry-role image whatever the boxes); under (b) its
+  texts name the build ("before version 2004"). What `GONE` did is kept
+  on a filter-kind 10 by the filter kind's own pass,
+  "the installation it replaces" (section 11.5.2): an entry-role install
+  of this installer's (service `xhcipfw`, record `XhciPfw`, only ever a
+  test install of `3.3.0.0` there) is removed by its own names and record
+  before the filter role's run, any root bus entry naming `xhcipfw` taken
+  out first. A 10 machine updated from `3.4.x` holds no filter of this
+  installer's (none was offered there), so the update places it fresh,
+  under the names and record of section 11.5.2. The box, its default and
+  the console's question as on 8 and 8.1 (Q26).
+- **The previews read both installations, as the run does.** The run
+  removes the entry role's install before the filter role's
+  (`pfwsys_run_locked`), but `/list`, `/uninstall /list` and the window's
+  Summary read only the role the system is offered (`pfwsys_list` and the
+  plan's line). On the filter kind, 8 and 8.1 today and 10 with this
+  change, a machine holding only `3.3.0.0`'s `XhciPfw` record would show
+  no removal while the run removes it. So every preview on the filter
+  kind reads the entry role's record and service first, read-only, by the
+  same ownership rules, and says its outcome before the filter role's
+  line; with the box unticked or the Thunderbolt support left out too, as
+  the run removes it whatever the boxes. The outcomes are the run's two
+  kinds and the preview keeps them apart: removed, or another
+  installation's and kept, after which the run goes on to the filter
+  role, whose line follows; or blocked - its record, or an image the
+  record holds, cannot be read - after which the run stops the pass and
+  leaves the filter role unchanged (`pfwsys_run_locked` skips it), so the
+  preview says that the filter role is left unchanged in place of its
+  line.
+- **The texts** (drafts for the owner, the readme's 10 paragraph and its
+  recovery paragraph): 10 joins 8 and 8.1 wherever they are named for
+  the filter (the readme, `README.md` and the release notes; the
+  `/xhcipfw` line of the readme's switches, "the 32-bit Vista to 10"),
+  from version 2004 under Q29 (b), the earlier builds keeping today's
+  "not offered" lines with the version named.
+
+**What 10 adds to the hazards of section 11.5.2.** The one hazard of the
+role stands as on 8 and 8.1: a root bus whose stack names a filter that
+does not load does not start, and Windows stops with
+`INACCESSIBLE_BOOT_DEVICE`; the installer's order of changes and the
+readme's recovery route answer it. Three ways in are wider on 10 or not
+yet stated:
+
+- **Fast startup**, on by default on 8 to 10. A fast-startup start
+  resumes the kernel and sends the root bus no start, so the step does
+  not run (section 11.2); the windows are those Windows assigned at the
+  full start before it, restored by Windows as at any resume [inf]. The
+  installer's restart is a full start (a restart does not use fast
+  startup [inf]), so the install's own restart closes the windows. A
+  shut down and power on instead, after the install, resumes a kernel
+  that read the windows above 4 GB, and the devices behind them stay at
+  problem 12 until a restart [inf]. The readme says "restart" for it. The
+  same holds on 8 and 8.1, where every reading was taken with fast
+  startup off. Legs read both on 10 (below). No change to fast startup's
+  setting is proposed (a power policy is not this installer's).
+- **Windows Setup run over the installed system**: a feature update by
+  full Setup (not by an enablement package, which installs no new
+  system), an upgrade from a setup medium, or an in-place repair
+  installation, on any release of 10. Whether it carries the root bus's
+  `UpperFilters` entry and the `xhcipff` service, a service with no INF,
+  across it is not read.
+  Three outcomes: both carried (the step runs on); both dropped (the
+  windows are no longer closed, the devices behind them at problem 12 as
+  without the package, and the installer run again puts it back); the
+  entry carried and the service dropped, or its image not copied (the
+  stop above, and the readme's recovery route). The same holds for 8's
+  upgrade to 8.1. A root bus driver reinstalled by Windows (a newer
+  `machine.inf` through Windows Update) may drop the device's filter
+  entries [inf]: the safe direction, the step no longer running. Q27.
+- **Secure Boot turned on after the install.** With Secure Boot on, the
+  32-bit 8 to 10 do not load a driver that is not signed (record 26
+  section 5.3.3), so the root bus's filter would not load and the start
+  would stop as above. The install itself is refused then, the box being
+  the Thunderbolt box's child and that box refused with Secure Boot on;
+  only a later change in the firmware's setup reaches it. This holds for
+  8 and 8.1 as shipped. The readme's recovery paragraph gains it as a
+  cause: turn Secure Boot off again, or remove the entries as it says.
+
+"Above 4G Decoding" on is unchanged: 10 x86 shows Windows' recovery
+screen with the step and without it (section 11.1), and the readme's
+advice to set it off stands.
+
+**Host vectors**: `PfwNtRole` for 10.0 (the filter role) and 10.1 and
+11.0 (neither); `inst_pfw_sys` for 10.0 x64 (none) and for 10.0 x86 by
+Q29: under (a) every build `INST_PFW_SYS_FILTER` and no remaining use of
+`INST_PFW_SYS_GONE`; under (b) build 19040 `INST_PFW_SYS_GONE`, 19041
+and 19045 `INST_PFW_SYS_FILTER`, and `GONE`'s own vectors kept (removed
+whatever the boxes and whether the package carries the file, removed at
+the uninstall, no box, both switches' lines); `inst_pfw_box` and
+`inst_pfw_mode` for the filter kind on 10, as for 8.1.
+
+**Legs** (q35 10 x86, the 4G-off layout with the ORICO at power-on, two
+processors, from the package, each as section 11.5.3 reads 8 and 8.1):
+
+- the install (the box ticked with the Thunderbolt box, the service's
+  group, the entry on `ACPI\PNP0A08\0`, the record), then three cold
+  starts with fast startup off: the trace order (the step's close before
+  the PCI driver's probe), `XhciPfwRole` 2, `XhciPfwMode` 2,
+  `XhciPfwSkippedAny` 0, `XhciPfwRootBuses` 1, no "late" bit, the
+  bridges at problem 0;
+- fast startup on: the install's restart (the step runs), then a shut
+  down and power on (no step, the windows and devices as the full start
+  left them, the NVMe on `stornvme`); and a fresh overlay installed and
+  then shut down instead of restarted (problem 12 until a restart, then
+  problem 0);
+- the update over itself (entries kept, the image's slot moved), the
+  uninstall (entries first, then the service and the files; a cold start
+  after it), the recovery route (the image removed by hand: the stop;
+  the entry removed from the recovery environment's registry editor:
+  the start), Safe Mode (loaded, nothing written, the "safe mode" bit);
+- an entry-role `xhcipfw` placed by `3.3.0.0`'s installer on a fresh
+  overlay, then this package: removed before the filter is placed;
+- the previews on the filter kind (8.1 and 10): `/list`, `/uninstall
+  /list`, the box unticked, the Thunderbolt support left out, each with
+  `3.3.0.0`'s entry-role install present (removed, then the filter's
+  line), another installation's `xhcipfw` (kept, then the filter's
+  line), an unreadable record and an unreadable image the record holds
+  (blocked, the filter role said to be left unchanged), each preview
+  then compared with what the run itself does;
+- each of the above on the q35 10 x86 base with its build read from the
+  guest and written in the run record;
+- Q27's leg if the owner chooses it.
+
+**Q26, 10's box.** (a) As on 8 and 8.1: offered, ticked whenever the
+Thunderbolt 3 / USB4 box is (Q9); (b) offered, unticked by default on 10
+alone; (c) not offered, as today. Recommended (a): 10 then reads as 8.1
+does, and on a board that leaves the USB4 ports' windows above 4 GB the
+devices behind them work instead of sitting at problem 12.
+
+**Q27, Windows Setup run over the installed system.** (a) Accepted as
+an unmeasured risk, the readme's recovery route naming it as a cause (as
+8's upgrade to 8.1 is today); (b) read first on a guest: the 22H2 setup
+medium run as an in-place repair installation over a 10 x86 guest with
+the filter installed, then the filter entries, the service, the image it
+names and this installer's record read after it, and a cold start on
+the 4G-off layout; (c) the readme also asks the user to untick
+XHCIPFW.SYS (or uninstall) before running Windows Setup and to run
+Setup again after it. Recommended (b), then (a) or (c) by what it shows:
+an enablement package (19041 to 19045) installs no new system, but full
+Setup and a repair installation do, on every release, and the medium for
+(b) is at hand.
+
+**Q28, fast startup.** (a) The installer's restart, and the readme's
+"restart" after an install or update, as proposed; fast startup left as
+the user has it; (b) the installer also turns fast startup off on 8 to
+10 when it places the filter. Recommended (a): the one start that
+matters after the install is the installer's own restart, a full start,
+and a fast-startup start keeps what that start assigned [inf], which
+the legs read.
+
+**Q29, which builds of 10.** (a) Every 32-bit 10 build (10240 to 19045);
+(b) the builds read, 19041 and later, the installer reading the build as
+`inst_os_kind` already does, with earlier builds kept as today (not
+offered, an earlier test install of this installer's removed).
+Recommended (b): the filter is boot-critical, an earlier build's
+handling of a boot-start root bus filter is not read and no medium for
+one is at hand, and a build not offered loses only the step, as today.
+With (b) `INST_PFW_SYS_GONE` stays, for 10 before 19041 alone, and the
+previews' paragraph above covers it unchanged.
+
+#### 11.5.7 The owner's decisions (2026-11-09)
+
+- **Q26 (a)**: offered on 10 as on 8 and 8.1, ticked whenever the
+  Thunderbolt 3 / USB4 box is.
+- **Q27 (b)**: read first. Among the legs, the first is the 22H2 x86
+  medium run as an in-place repair installation over a 10 x86 guest with
+  the filter installed, then the filter entries, the service, the image
+  it names and this installer's record read, and a cold start on the
+  4G-off layout; what it shows decides between accepting the risk (a)
+  and the readme's warning (c).
+- **Q28 (a)**: fast startup left as the user has it; the readme says
+  restart after an install or update.
+- **Q29 (b)**: 19041 (version 2004) and later only; earlier builds of
+  10 keep `INST_PFW_SYS_GONE` (not offered, an earlier test install of
+  this installer's removed).
 
 ## 12. The USB4 host's own functions on an IRQ 98 SE and ME cannot give (task 46.11)
 

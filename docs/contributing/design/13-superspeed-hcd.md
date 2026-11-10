@@ -18,8 +18,11 @@ what Phase 25 leaves open; section 14 is a cancelled TD behind the head
 (task 43.64), section 15 a device kept across its SuperSpeed link's
 recovery (task 45.41), section 16 a UAS drive's pass-through and SMART
 (task 45.52), section 17 a UAS drive in Safely Remove Hardware (task
-45.61), and section 18 a departed device's isochronous requests on 98 SE
-and ME (Phase 47). Appendix A is the full Windows 98 export table.
+45.61), section 18 a departed device's isochronous requests on 98 SE
+and ME (Phase 47), section 19 two departures in the xHCI core (task
+48.21), section 20 the bus information a USB PDO answers (task
+48.13), and section 21 a SuperSpeed link that keeps failing after it
+trains (issue 29). Appendix A is the full Windows 98 export table.
 
 **Since 2026-10-02 the successor is `xhci98.sys` and `src\` is the
 successor's** (owner, the same day, after task 25.8 had first built it as
@@ -905,6 +908,26 @@ The limits, all of them the user's to know:
    Windows 2000 still stops as
    above (release notes, "Known limitations"). Issue 16
    (`docs/issues/16-w2k-f6-first-gui-boot-usbd.md`) is the write-up.
+   **Since 3.4.3.0 the entry serves 32-bit XP too (task 48.25; owner,
+   2026-11-09).** XP SP3's text mode drives a USB keyboard through
+   `XHCI98` as 2000's does, and lays down `hidusb.sys`, `kbdhid.sys` and
+   `kbdclass.sys` but not `hidclass.sys`, `hidparse.sys` or `usbd.sys`
+   (read offline from the stopped disk), so its first GUI-mode boot does
+   not stop but the USB keyboard has no driver until Installing Devices
+   ends, and Installing Devices waits at XP's unsigned-driver question
+   ("... has not passed Windows Logo testing ...") for a key: no
+   transfer on the keyboard's endpoint at all. With `XHCI98W2K` and XP's
+   own three files from its `I386` the keyboard answered that question
+   and every later page (runtime, QEMU, a USB keyboard alone on
+   `qemu-xhci`, no PS/2 key event in the whole leg; `runs/run-48.md`,
+   48.25). The entry's description became "xHCI98 USB 3 Controller
+   (2000/XP, USB keyboard/mouse, files from CD)" (the owner's wording:
+   no "32-bit", as no 2000 is x64 and the XP x64 file has no such entry;
+   `OEM-ARCH` exempts it) and `d2`'s "USBD.SY_
+   HIDCLASS.SY_ HIDPARSE.SY_ from the 32-bit Windows 2000/XP CD"; its id
+   `XHCI98W2K` and its shape are unchanged, and `XHCI98` stays the
+   default (with no USB keyboard on the controller, XP needs no second
+   disk). The XP x64 file has no such entry; XP x64 was not read.
 
 **What the gate holds.** `scripts\inf-gate\check-txtsetup-oem.ps1` (run by
 `build-driver.cmd` on every build, self-tested by mutation first, and by
@@ -917,9 +940,11 @@ the INF's NT 5.x install sections copy from the disk (`OEM-COPY`, since
 2026-10-14), the service the INF adds, the INF's model ids
 and no `USB\` id, no Microsoft file, 8.3 names, an architecture word in each
 description, the two files equal outside those descriptions and their `dll`
-lines, the x86 file's Windows 2000 entry to the shape in limit 7
-(`OEM-W2K`: its own sections, `d2`, the three `d2` lines and the
-`[Config.*]` values, the only place the three Microsoft names may appear),
+lines, the x86 file's "files from CD" entry (Windows 2000 and XP) to the
+shape in limit 7 (`OEM-W2K`: its own sections, `d2`, the three `d2` lines
+and the `[Config.*]` values, the only place the three Microsoft names may
+appear; its description and `d2`'s naming Windows 2000/XP, `OEM-DEFAULT`
+and `OEM-DISK`),
 and in a
 package the file at the root with every file it names on `d1` beside it and
 no Microsoft file, nor a compressed name of one (`PKG-MSFILE`).
@@ -10096,8 +10121,10 @@ what it answers is descriptors it holds and a record it keeps.
    configuration, 10.8): the caller's descriptor (`XhciPipeRecordCheck`)
    is a configuration descriptor whose `wTotalLength` is at least 9, whose
    `bConfigurationValue` is the copy's, and whose descriptors walk
-   cleanly; every `USBD_INTERFACE_INFORMATION` lies within the URB's
-   `Length`, names an interface number and alternate the copy carries,
+   cleanly; every `USBD_INTERFACE_INFORMATION` lies within the list -
+   the first entry bounded by its own `Length`, later ones by the URB's
+   (`XhciPipeSelectListBytes`; since `3.4.3.0` a URB's header length is
+   counted, never refused, owner 2026-11-10) - names an interface number and alternate the copy carries,
    each interface once, with room for that alternate's pipes. A failure
    refuses the select (`USBD_STATUS_INVALID_PARAMETER`,
    `STATUS_INVALID_PARAMETER`; too small a `Length`,
@@ -12549,6 +12576,665 @@ table. Then the owner's UAC 2 devices by passthrough under load. Real
 controllers, which no emulator stands for, read the 1,024-entry segment
 first on the owner's machines.
 
+### 11.11 Every transfer through buffers the driver owns (task 48.33, design before code)
+
+**Why.** Task 48.33 (the owner, 2026-11-09, after task 48.32's review,
+design record 17 section 4.13.7): a controller that cannot be proven to
+have stopped writing to memory keeps today every buffer it may write into,
+and the clients' own buffers are among them, because section 11.3 maps
+the clients' pages for the controller to write into directly. Those
+requests then stay pending for ever and a class driver's removal waits
+on them (record 17 section 4.13.1). If the controller only ever wrote
+into memory this driver owns, an unproven stop could complete every
+client request, keep only its own memory out of use, and let the removal
+finish. This section designs that: every transfer's data staged through
+driver-owned DMA buffers, copied in before an OUT and out after an IN.
+Written before code, reviewed and revised; its open points are the
+owner's questions in section 11.11.10. Record 17 section 4.13.8 states
+the stop's side.
+
+**What changes, in one line.** Section 11.3's route - the client's pages
+mapped through the adapter's map registers - is replaced by one in which
+the controller sees only common buffer of this driver's: every data TRB
+names staging memory, never a client page, and no map register is ever
+asked for a transfer. The map pump, its channel requests, the
+register-free check (`hcdWideCheck`) and the map pump's quarantine
+(`HcdDmaMapDrain`, `MapQuarantined`) go; the staging admission
+(section 11.11.3) takes the pump's place.
+
+**The switch** (owner, 2026-11-09, after the code): staging is gated by
+`XhciDmaStaging`, read once at each start (`hcd_ctl.c`, `stage.switch`
+noted and printed with the effective value), written by both INFs under
+the don't-overwrite rule. **Off by default** (owner, 2026-11-10, for
+3.4.3.0): the INFs write 0, and absent or a DWORD 0 is 0, any other DWORD
+1 (`xhci_stage.c`, `XhciStagingOn`). The owner chose to ship without a
+speed cost not yet measured on real hardware - the emulator's readings
+(section 11.11.9; `runs/run-48.md`, "48.33") cost 9 to 19 % on 98 SE and
+up to 73 % on 7 x64, relative only - so 3.4.3.0 runs as 3.4.2.0 did
+unless a user sets 1; the default is revisited after the owner's bench
+speed checks. (From 2026-11-09 to 2026-11-10 the INFs wrote 1 and any
+value but a DWORD 0 was 1.) At 0 every transfer goes
+direct as in 3.4.2.0 - section 11.3's map pump, its register-free check,
+promotion and quarantine, all kept beside staging and run only then - and
+so does the stop: a PCI command word read as all ones is again a
+function off the bus (`XhciStageCommandProof`), and an unproven stop keeps
+its devices' records and the clients' requests pending, the old wait
+(record 17 section 4.13.1); no pool, window or pipe staging is made.
+
+**What does not change.** Enumeration's own transfers keep the driver's
+scratch (section 5.3), which is already its own memory and is kept with
+the common buffer. A Setup stage carries its 8 bytes in the TRB
+(Immediate Data) and a zero-length transfer names no buffer; neither needs
+staging.
+
+#### 11.11.1 The staging memory
+
+Three kinds, all common buffer from the adapter the HCD already has
+(`AllocateCommonBuffer`, cached, as section 11.1 requires), each
+allocation checked whole below 4 GB - its logical address's high part 0
+and `bytes - 1 <= 0xFFFFFFFF - LowPart` - and given back at once
+otherwise (a check `HcdDmaStreamAlloc` widens to, from its high part
+alone today):
+
+- **Slabs** of 64 KiB, the unit of large staging. `AllocateCommonBuffer`
+  promises page alignment only (section 11.6.1), so a slab is not assumed
+  64 KiB aligned: its runs are cut at every 64 KB line (xHCI 1.2c 6.4.1),
+  so a slab is at most two TRBs (one when it happens to be aligned). No
+  over-allocation to align: half the memory for one TRB is not worth it.
+- **Small buffers** of `HCD_STAGE_SMALL` bytes (1 KiB, and at least the
+  largest information unit `xhciuas.sys` posts), one for each transfer
+  record (`HCD_XFER`), carved at 1 KiB alignment from page-aligned memory,
+  so none crosses a 64 KB line. They come with the pipe: a pipe's records'
+  small buffers are allocated when the pipe opens (`hcd_cfg.c`, at
+  PASSIVE_LEVEL, beside its ring), a stream endpoint's inside its stream
+  block (`HcdDmaStreamAlloc`, which grows by the streams' records times
+  `HCD_STAGE_SMALL`, and by a page a stream for the streams' reserves),
+  and given back when the pipe closes.
+- **Reserves**, the staging a pipe can always move with, whatever the
+  shared pool holds (section 11.11.3, "progress"): each bulk pipe without
+  streams one slab of its own; each stream of a stream endpoint (each
+  stream's `HCD_PIPE`) one page of its own, inside the stream block; each
+  interrupt pipe one page; each device's default pipe one page; each
+  controller one slab for control data stages longer than a page; an
+  isochronous pipe its own (section 11.11.5). **A reserve is mandatory**:
+  it is taken when the pipe opens, at PASSIVE_LEVEL, before the pipe is
+  exposed - a free slab of the shared pool moved to it, or one more
+  allocation then - and a pipe that cannot get it does not open: the
+  SELECT_CONFIGURATION, SELECT_INTERFACE or stream open fails with
+  `USBD_STATUS_NO_MEMORY`, as one fails today when its ring cannot be
+  had, counted (`StageNoReserve`). A slab reserve goes back to the shared
+  pool when its pipe closes; a page reserve is freed with its pipe.
+
+**The shared pool.** Slabs allocated at the controller's start, at
+PASSIVE_LEVEL, one allocation each, up to the budget (Q-STG.2), and
+never shrunk while the controller runs. Its **capacity** is what was
+granted, not the budget: an allocation that fails stops the growth there,
+counted (`StageSlabsShort`), and the controller starts with what it has;
+a start with no slab at all still runs, every large request then using
+its pipe's reserve. Every allocation of staging, at the start or at a
+pipe's open, is charged to the quarantine ledger first (section 11.11.6). The pool does not grow at run time: no allocation
+waits on a DPC, and Windows' common-buffer allocations after the start
+are the ones most likely to fail. Memory counted is the backing
+allocations' size, not the usable bytes.
+
+#### 11.11.2 A TD's geometry
+
+The TD builders keep their SG representation (`USBPORT_SCATTER_GATHER_LIST`
+with `SgOffset`, section 11.3), built now from staging runs: an element is
+a run inside one slab, or one small buffer, cut at the 64 KB line. Each
+path's limits are stated in bytes and in elements separately:
+
+| Path | Today | With staging |
+| --- | --- | --- |
+| Sequential chunk (`hcdPlanChunk`) | the map grant, at most `HCD_SG_ELEMENTS` (32) page runs, about 128 KiB | at most `HCD_STAGE_TD_SLABS` slabs (16, 1 MiB), at most 32 elements (two a slab); a chunk that is not the last ends on a packet boundary, as today |
+| Wide, two TDs pipelined (section 11.6) | the whole URB's page runs, at most `XHCI_XPIPE_WIDE_ELEMENTS` (513), TDs cut by `XhciXpipePlan`'s TRB budget | each TD at most `HCD_STAGE_TD_SLABS` slabs (1 MiB) as well as within `XhciXpipePlan`'s TRB budget (`XHCI_XFER_MAX_WIDE_DATA_TRBS`); each TD admitted on its own as it is planned, both TDs' staging held while both are on the ring |
+| A stream's whole-URB TD (`hcdWideBigOne`) | the URB's length | the URB's length when it is at most `HCD_STAGE_TD_SLABS` slabs and admitted whole, else sequential chunks on its stream ring |
+| Control data stage | one chunk, never split | a small buffer, or slabs from the control reserve or the shared pool, never split; a data stage longer than `HCD_STAGE_TD_SLABS` slabs is refused as one longer than the grant is today |
+| Isochronous | one chunk, never split, page-cut fragments from the client's page offset | section 11.11.5 |
+
+The wide route's eligibility changes: the register-free grant
+(`MapGrantRaw` `0x80001`) and the check are gone, so promotion asks only
+`XhciWideMap`; a URB whose TDs cannot all be planned within the limits
+above runs sequentially, as an unpromoted one does today.
+`XhciXpipePromote`'s grant arms go with the check; its host vectors
+follow.
+
+#### 11.11.3 Admission
+
+A TD is **admitted** when its record holds all the staging the TD needs,
+taken in one step under `StageLock`: a TD never holds part of its staging
+while it waits for the rest, so no two waiters can hold pieces of each
+other's. In order of preference:
+
+1. a transfer of at most `HCD_STAGE_SMALL` bytes takes its record's small
+   buffer, which no other record uses: it never waits;
+2. otherwise the TD's slabs from the shared pool, all at once;
+3. otherwise its pipe's reserve, the TD re-planned to fit it (a slab: a
+   sequential chunk of at most 64 KiB; a page: of at most 4 KiB, ending
+   on a packet boundary as any chunk that is not the last does), or, for
+   a control data stage longer than a page, the controller's control
+   slab, a control data stage never being split;
+4. otherwise it waits on `StageQueue`, cancellable (below).
+
+**Progress.** Each pipe has its own reserve (section 11.11.1), held only
+by that pipe's own TDs, so a pipe never waits for another pipe's
+progress, only, for its throughput, for shared slabs. A TD waits only
+while its own pipe's earlier TDs hold the pipe's reserve, and those are
+ahead of it on the same ring: a pipe without streams completes its TDs in
+order, and a stream's `HCD_PIPE` is its own ring. So:
+
+- an idle receive read (a network adapter's, a HID report) holds at most
+  its own pipe's reserve and shared slabs it took while they were free; a
+  transmit, a control request or another function of the same composite
+  device has its own pipe and reserve and is not held up by it;
+- `xhciuas.sys` posts a command's status read, then its data on the
+  command's stream, then the command itself (`uas_xport.c`); the status
+  read takes its small buffer and the data its stream's own reserve,
+  free because that stream carries one command at a time, both at
+  submission and inline, so both are on the ring before the command is
+  submitted;
+- a control data stage longer than a page waits only for the shared pool
+  or the controller's control slab, held by another device's control
+  transfer on the ring; a device that never finishes one holds it until
+  its client cancels or times out the request, the one cross-device wait
+  left, counted (`StageControlWaits`, and the longest).
+
+**Order within a pipe.** Each pipe (each stream's `HCD_PIPE` on its own)
+admits and publishes its TDs in submission order: a TD is not admitted,
+not even into its small buffer, while an earlier TD of the same pipe is
+`WAITING` or `FILLING` - the pipe's gate stays shut through its head's
+copy until the head is `READY` - and a TD sent back to `WAITING` (a
+window that would not map, section 11.11.4) keeps its place at its
+pipe's head with the gate still shut, its `Exclusive` decision taken
+again when it is admitted again. So no later TD of the pipe holds staging
+while an earlier one still waits for its own. So a later request
+never reaches the device before an earlier one of its pipe, and a
+successor never takes the pipe's reserve while an earlier request of
+the pipe still needs it. Whether a request needs the pipe to itself for
+several TDs (`pipe->Exclusive`, set today before mapping in `hcdGo`) is
+decided once its first TD's staging is chosen - a request that fit one
+TD of shared slabs may need several on its pipe's reserve - under the
+controller lock, before any successor of the pipe can be admitted, which
+the order rule already holds back. Different pipes stay independent.
+
+**Fairness.** `StageQueue` is served in arrival order when staging comes
+back, a waiter skipped only when the slabs free do not cover it; a waiter
+skipped `HCD_STAGE_SKIPS` times (8) takes step 3 instead, as soon as its
+pipe's reserve is free.
+
+**Where it runs.** At submission (`HcdIoSubmit`, <= DISPATCH_LEVEL, no
+lock held), and when staging comes back, from `StageDpc` (the pump's
+`MapDpc` renamed and counted at queue time as it is, `StageDpcsInFlight`),
+never under the controller lock. A refill of a wide record
+(`HcdIoRefillFlush`, which runs under the controller lock) only publishes
+TDs already admitted and filled; a refill that needs more staging queues
+the record to `StageDpc`.
+
+**Record states.** A TD's staging state, under `StageLock`: `NONE`,
+`WAITING` (on `StageQueue`), `FILLING` (an OUT copy running), `READY`
+(filled, or an IN, not yet published), `PUBLISHED` (on the ring),
+`DRAINING` (an IN copy-out running), `COPY_PENDING` (an IN whose copy-out
+could not map its window, on `StageCopyQueue`, owned by no processor),
+and `FREE`. `FILLING` and `DRAINING` are owned by the processor that set
+them: nothing else touches the record's staging or the client's buffer
+while they hold. The move from `READY` to `PUBLISHED` happens under the
+controller lock, which the drain takes as well, so a drain sees a record
+either `READY` (and ends it) or `PUBLISHED` (and finds it on the engine's
+queue). Lock order: the controller lock, then `StageLock`, never the
+reverse; no copy runs under either.
+
+**Who runs staging work**, counted in `StageOwners` from the moment it
+starts until it lets go: an admission pass (at submission or in
+`StageDpc`), a record `FILLING` or `DRAINING`, and a publication between
+taking a `READY` record and releasing the controller lock. `StageDpc`
+is counted from its queueing (`StageDpcsInFlight`), and
+`StageRetryTimer` from its setting (section 11.11.4).
+
+**Cancellation.** A `WAITING` or `COPY_PENDING` record is unlinked under
+`StageLock` by its cancel routine or by the drain, needing neither the
+controller thread nor any staging to come back; a record in `FILLING` or
+`DRAINING` is marked and finished by its owner when its copy ends, as a
+record in the map pump is finished today by `HcdIoMapped` when it sees
+`Gone` or `Closed`.
+
+#### 11.11.4 The copies
+
+- **OUT**: the client's bytes copied into the TD's staging once it is
+  admitted (`FILLING`), outside the controller lock, before its first TRB
+  is published. For a wide record, each TD's bytes as that TD is admitted.
+- **IN**: at the TD's completion, in the deferred work after the
+  controller lock is released (`HcdIoDeferred`, where the unmap runs
+  today), the actual length the controller reports for that TD
+  (`DRAINING`), then the request completes or its next TD is planned.
+  Only a TD that completed (its Transfer Event read) is copied out; a TD
+  drained or stopped without one copies nothing, and its request reports
+  the bytes earlier TDs copied out.
+- **Bounds.** Every TD on every route is at most `HCD_STAGE_TD_SLABS`
+  slabs (1 MiB, section 11.11.2), so one TD's copy is at most 1 MiB; a
+  pass of the deferred work copies whole TDs and, once it has copied
+  1 MiB, requeues the rest to `StageDpc`, so a completion burst does not
+  hold the processor for a whole multi-megabyte URB.
+
+**The client's buffer needs a system address**, the design's hardest
+point (Q-STG.1). The driver reaches a buffer today only through its
+physical pages. A copy needs a virtual address valid in any context:
+
+- a URB with `TransferBuffer` (non-paged, the USB contract): the driver
+  already builds its MDL with `MmBuildMdlForNonPagedPool`
+  (`HcdPoolMdlBuild`), so `MappedSystemVa` holds it;
+- an MDL with `MDL_MAPPED_TO_SYSTEM_VA` or `MDL_SOURCE_IS_NONPAGED_POOL`
+  set: `MappedSystemVa`, the first arm of `MmGetSystemAddressForMdl` that
+  `hcdCopyAnswer` already takes;
+- any other MDL - a storage request's data from the file system, or a
+  user buffer locked for direct I/O, which `usbstor.sys` and
+  `xhciuas.sys` pass for disk data (`xhciuas.sys` builds a partial MDL
+  over the request's own, `uas_mem.c`) - must be mapped. Both routines
+  that do it have Windows 98 SE evidence: `MmMapLockedPages` (16 stock
+  98 SE images, `uhcd.sys` among them; Appendix A row 134) and
+  `MmUnmapLockedPages` (5, row 136); and `IoBuildPartialMdl` (row 129)
+  for a window of a client's MDL. `MmMapLockedPagesSpecifyCache` is not
+  in 98's kernel; on NT it returns NULL instead of stopping the system
+  when its last argument says so, and Windows 2000's kernel exports it
+  (to be confirmed against the import gate's 2000 baselines). Plain
+  `MmMapLockedPages` on 2000 stops the system when system address space
+  runs out, unless the MDL carries `MDL_MAPPING_CAN_FAIL`, which the
+  DDK's `wdm.h` gives WDM 1.0 drivers as the way to make it fail instead
+  (set and reset under the driver's own synchronization). What NTKERN does
+  when it cannot map is unread.
+
+The design's route (Q-STG.1's recommendation): **the driver never
+changes the client's MDL.** A copy of a buffer with no system address
+maps a **window** of it - at most 64 KiB - through a partial MDL the
+driver owns (`IoBuildPartialMdl` over the client's MDL into one of the
+controller's preallocated window MDLs, `HCD_STAGE_WINDOWS` of them, each
+sized for 64 KiB plus a page, taken under `StageLock`), copies, and
+unmaps it at once (`MmUnmapLockedPages`, then the partial MDL reused).
+The mapping call:
+
+- **amd64** (XP x64, Vista and 7 x64): `MmMapLockedPagesSpecifyCache`,
+  `KernelMode`, `MmCached`, no bugcheck on failure, imported statically
+  (no 98 image is built for amd64);
+- **x86 on 2000 to 10**: `MmMapLockedPagesSpecifyCache` likewise, its
+  address asked once at the controller's start, at PASSIVE_LEVEL, of the
+  x86 helper's routine service (record 18; `xhcihlpr.sys` already
+  resolves routines with `MmGetSystemRoutineAddress` for `xhcicm.sys`)
+  and kept; with no helper answer, `MmMapLockedPages` on the window MDL
+  with `MDL_MAPPING_CAN_FAIL` set, which the driver owns and so may set
+  without racing anyone;
+- **98 SE and ME**: `MmMapLockedPages` on the window MDL; whether NTKERN
+  returns NULL or fails otherwise when it cannot map is read by a leg
+  before the code is final (`xfer.stage.mapfail` noted on each NULL).
+
+A window that will not map, or no free window MDL, is never a reason to
+go direct. For an OUT the TD gives its staging back and waits again
+(`WAITING`, at its pipe's head); for an IN the TD's staging stays held,
+the record `COPY_PENDING` on `StageCopyQueue`; both cancellable and
+counted (`StageMapFails`). Their retries are bounded: a pass of
+`StageDpc` tries each blocked record at most once; a record that found no
+free window MDL is tried again when a window is given back; a record
+whose mapping failed is tried again from `StageRetryTimer`, 10 ms after
+the failure and doubling to 1 s while failures continue, never from the
+failing pass itself. The timer is a producer like `StageDpc`: counted
+from its setting, cancelled and joined by the stop's rundown (section
+11.11.6, step 3). A record whose mapping has failed for
+`HCD_STAGE_MAP_GIVEUP` (5 s) is ended `USBD_STATUS_NO_MEMORY` (an IN's
+data already moved is then lost, as a transfer error loses it), noted
+(`xfer.stage.giveup`). An isochronous request is never retried: section
+11.11.5. The window's cost (the mapping, and the TLB flush its unmapping
+needs) is part of what section 11.11.9 measures.
+
+#### 11.11.5 Isochronous
+
+**Memory.** Each isochronous pipe takes, when it opens, one allocation of
+its own (mandatory, as any reserve, section 11.11.1): `HCD_ISO_PIPE_XFERS`
+records' shares, each sized for the pipe's own packet bound
+(`IsoMaxPackets`: 62 on a pool ring, up to 128 on a ring page, section
+11.8 point 4) times the endpoint's bytes per service interval, at most
+128 KiB - the 32 pages a URB's single chunk can span under the map
+registers today (`hcdPlanChunk`), so no URB admitted today is refused
+for want of a share - the arithmetic checked against overflow. Within a share the packets are
+laid out back to back at the driver's own offsets; a packet is cut where
+it crosses a 64 KB line, so it is at most two fragments (the allocation is contiguous, so
+no slab end cuts it; an endpoint whose payload per service interval is
+longer than 64 KiB fails its open, counted), which `hcdIsoFill`'s two-fragment
+packets already carry. The share's size is the packets' payload exactly:
+the layout loses nothing to packing. `hcdIsoFill` builds the fragments
+from this layout, not from the client MDL's page offset; the copy maps
+each packet's client offset (`IsoPacket[i].Offset`) to its staging
+offset.
+
+**Admission.** An isochronous URB is never queued and never retried: its
+service window would pass. It is admitted at submission into its record's
+share or not at all; a URB with more packets or bytes than a share holds,
+or whose OUT copy cannot map its window at once, is refused at
+submission with `USBD_STATUS_NO_MEMORY`, as a URB the map registers could
+not cover is refused today, counted (`IsoStageRefused`).
+
+**Copies.** An OUT copies every packet in before publication; an IN
+copies back each packet's own actual length, and only for a packet the
+controller reported, leaving failed and unreported packets' client
+bytes untouched. An IN whose copy-out cannot map its window goes
+`COPY_PENDING` as any IN does (section 11.11.4). Copies of isochronous
+data count in the per-pass bound like any other.
+
+#### 11.11.6 The unproven stop
+
+Every allocation the controller can name is now the driver's: the common
+buffer (rings, contexts, the event ring and its enlarged backing, the
+scratchpad), the enumeration scratch, the stream blocks and isochronous
+rings (`HcdDmaStreamAlloc`, current and retired), and the staging (the
+shared pool, every reserve, every small buffer, every isochronous
+allocation). At a stop or removal whose quiesce cannot prove the
+controller stopped (record 17 sections 4.6 and 4.13.8, the all-ones
+fallback included), in this order:
+
+1. **Admission closed.** `StageClosed` is set under `StageLock`: no TD is
+   admitted, no staging is handed out, no copy or admission pass starts,
+   no pipe opens.
+2. **Every device drained, as a proven stop drains it.** `HcdIoDeviceDrain`
+   no longer returns early when the buffer is pinned: it runs
+   `HcdCfgFlushDevice` and `HcdIoDrainPipe` on every pipe, and the drain
+   also unlinks every `WAITING` and `COPY_PENDING` record of the pipe and
+   ends it with the drain's status. A record that was `PUBLISHED` ends
+   with the drain's status and copies nothing out (its staging may still
+   be written). All devices are drained before any is waited for, as
+   today.
+3. **The processors' staging work joined** (`HcdStageDrain`, which takes
+   `HcdDmaMapDrain`'s place): `StageRetryTimer` cancelled, then until
+   `StageDpcsInFlight`, the timer's count and `StageOwners` are all 0. A `FILLING` or `DRAINING` record's owner finishes its copy,
+   sees the record drained and ends it rather than publishing it; an
+   admission pass sees `StageClosed` and stops. This wait is on processor
+   work alone, never on the controller or the HAL, so it ends; only then
+   are records, pipes or window MDLs freed or a restart allowed.
+4. **The client requests completed.** A containment
+   (`HcdEnumContain`, record 17 section 4.6) that cannot prove the stop
+   no longer keeps its devices (`hcdDrainAll`'s pinned rule): it takes
+   the proven containment's route (`hcdDropAll`), every device drained
+   and leaving through the existing departure, so its PDOs are reported
+   gone and removed without waiting for a stop of the controller; only the
+   memory kept differs. Each record's IRP ends with
+   `DEVICE_GONE` and takes the departure route it takes today (section
+   10.5): `HcdIoPark` holds a departed device's request on its PDO,
+   cancellable, until its client aborts or cancels it or the PDO is
+   stopped, surprise removed or removed, each completing it `CANCELED`.
+   That route exists because Windows 98 SE's `hidclass.sys` resubmits at
+   once a read failed `DEVICE_GONE` while its device is still started
+   (section 10.5), and an unproven stop keeps it. What makes it end is the
+   controller FDO's own stop or removal: before that completes, every
+   child PDO's held requests are released `CANCELED`
+   (`HcdIoParkedRelease`, by then under the PDO's closing mark, so none is
+   held again and a resubmission is refused at the next tick,
+   `HcdIoRefuseLater`), whether or not the PDO was stopped first. Door
+   requests are completed first, as today.
+5. **The driver's memory kept.** Every allocation above, and the adapter
+   (whose common buffers they are), is kept, never freed and never reused,
+   for the rest of the boot (Q-STG.3), its charge in the ledger (below)
+   turned from live to kept. The device records, the pipes and their
+   transfer records, the window MDLs and the wide pool's entries are
+   processor-only memory and go back once step 3 has run. No map register
+   was ever asked for a transfer, so the HAL holds nothing for one.
+
+The early return in `HcdIoDeviceDrain` and the device record kept by
+`HcdIoDeviceGone` go; so do `hcdPdoQuiesce`'s skipped wait for a pinned
+buffer (`hcd_pdo.c`), `HcdDmaWideClose`'s kept pool, and the map pump's
+quarantine (`MapQuarantined`, and the refusal of a later start on the
+FDO in `hcd_pnp.c`), since no channel request is ever outstanding.
+
+**Selective suspend.** A client's idle callback is the client's code, and
+no completion of transfers proves it will return. The rundown keeps its
+abandonment exactly as today (`HcdSuspIdleRundown`, `hcdSuspCbAbandon`,
+`IdlePinned`, `IdleQuarantined`, `hcd_susp.c`); only its trigger is
+renamed: it reads the stop's `IdleAbandon`, which every stop that sets
+`CommonBufferPinned` today sets, instead of the pin itself. A callback
+still running when the stop abandons it keeps its PDO, as today; it is
+the one exception to "every client request completes".
+
+**The all-ones fallback.** `xhciTryClearBusMaster` stops taking `FFFFh`
+as proof at both of its reads (the first read of the Command register and
+its read-back after the write): either returns "not proven", and the stop
+takes this section. That keeps the driver's memory and completes the
+clients - no hang, and no free of memory the controller may still write.
+
+**The quarantine ledger and its bound.** One for the driver image, not
+per controller, since a controller removed and found again is a new FDO:
+the bytes of every allocation the controller could name, each charged
+before it is made - the common buffer, the event ring's backing, the
+enumeration scratch, the shared pool, every reserve and small buffer,
+every stream block and isochronous ring and allocation, the retired ones
+included - at its allocation size, padding included. A charge is live
+while the allocation is, kept once an unproven stop keeps it (the total
+unchanged), and returned only when the allocation is freed. An
+allocation whose charge would take the total past the cap (Q-STG.3) is
+not made: a start fails (`CM_PROB_FAILED_START`), a pipe open fails as
+above, noted (`dma.quarantine.cap`). The ledger lives as long as what it
+counts: at the first kept allocation the driver clears its
+`DriverUnload`, under the ledger's lock, so the image, and the ledger in
+it, stays loaded for the rest of the boot. Today's `CommonBuffersKept`
+counter stays, as this controller's share.
+
+#### 11.11.7 What may stay direct (Q-STG.4)
+
+The design's position is **none**. Every exception reopens the hang for
+the requests it covers:
+
+- **isochronous**: audio and video clients resubmit continuously; direct
+  DMA there leaves them pending at an unproven stop, as today, and their
+  class drivers' removals wait on them;
+- **controllers that cannot leave the bus** (a root-complex-integrated
+  controller): an unproven stop there is a wedged controller, exactly the
+  hang being removed;
+- **`xhciuas.sys`'s own buffers**: from the HCD's side they are a client's
+  buffers like any other; completing their requests hands them back.
+
+What may be direct without reopening it is the driver's own memory alone:
+enumeration's scratch and the hub's status buffer, whose lifetime the
+quarantine keeps.
+
+#### 11.11.8 Each target
+
+- **98 SE and ME (NTKERN)**: `AllocateCommonBuffer` through the same
+  adapter (section 11.2's route, observed granting 400 KiB); a grant of
+  many 64 KiB allocations is unread (a leg reads the shared pool's
+  capacity); the window mapping's failure is unread (section 11.11.4).
+  98 and ME never sent a URB the wide route would promote (section
+  11.6), and still do not.
+- **2000 and XP x86**: as above; the mapping as section 11.11.4 states.
+  2000 under PAE, and 32-bit Vista to 10 with memory that may lie above
+  4 GB, today get real map registers and the HAL's bounce buffers
+  (section 11.6.1); with staging the HAL holds none for a transfer, its
+  bounce copy replaced by the driver's own.
+- **Vista and 7 x86 and x64, XP x64**: the common buffer below 4 GB from a
+  `Dma32BitAddresses` adapter is the HAL's to place; each allocation's
+  whole range checked as above.
+
+#### 11.11.9 Verification
+
+**Safety**, before performance: a qemu-flavour switch
+(`XhciQemuStageFault`, qemu only, exempt from the registry rule) makes the
+stop's quiesce report "not proven" at a chosen point, and holds the record
+there long enough for the stop to meet it:
+
+- a record `WAITING` (pool exhausted by a second switch shrinking it),
+  `FILLING`, `READY`, `PUBLISHED` and in flight, `DRAINING`,
+  `COPY_PENDING`, and mid-way through a wide record's refill; a
+  `StageDpc` queued and running; a stream request of a UAS drive; an
+  isochronous pipe running; a slow or door request queued; a PDO in
+  selective suspend with its idle callback returned and still running;
+  a departed device's held request; a PDO not stopped before the FDO's
+  removal;
+- each leg reads: every client request completed exactly once - the
+  qemu flavour logs each URB IRP's submission and completion with a
+  sequence number of its own, and the log shows one completion for each
+  submission and none twice - and the per-PDO pending count back to 0;
+  no copy after a completion (a staging pattern written by the switch is
+  never found in a completed buffer); every data address published on a
+  ring inside an allocation the ledger holds (checked at publication in
+  the qemu flavour, `StageForeignAddress`, which must stay 0); every
+  exposed allocation kept (the ledger's count against the allocations
+  made); the controller's removal finished; and a mapping failure
+  injected (a switch making the window mapping fail N times) delaying and
+  never losing a copy;
+- a pipe's head sent back to `WAITING` by a failed mapping while the
+  shared pool is taken meanwhile by another pipe's receive: no successor
+  of the head admitted, the head moving on its pipe's reserve;
+- a mapping failure that never ends (the switch failing every window
+  mapping), each blocked request ended at `HCD_STAGE_MAP_GIVEUP`, the
+  retry timer's rate read, and a stop meanwhile joining the timer;
+- a containment with no proof (the qemu flavour's injection, record 17
+  section 5), every PDO's requests completed and the PDOs removed with
+  the controller left started;
+- repeated: twenty removals and re-plugs of an emulated controller
+  (QEMU's `device_del` and `device_add` over QMP), the ledger bounded and
+  the cap's refusal read; and the last controller removed, so the image
+  would unload, then one added again, the ledger's total carried over;
+- on 98 SE, ME, 2000, XP and 7 x64, as the roadmap names; 2000 under PAE
+  and 7 x64 with 6 GB give the HAL real map registers today and show that
+  none is asked for any more.
+
+**Performance**, on q35 guests of 98 SE, 2000 and 7 x64 with a UAS drive
+and a Bulk-Only stick on the emulator's xHCI: XHCIPERF's sequential read
+and write, and CrystalDiskMark 2.2 on 98 SE, with today's route (the base
+build) and with staging, matched workloads; recorded each time: the
+throughput, the guest's CPU load, the bytes copied and the time spent
+copying (`StageCopyTicks`), the longest copy pass, the TD geometry
+(elements and bytes per TD), the waits for staging and the longest, the
+shared pool's high-water mark, the reserves taken, and the window
+mappings and their failures; the same with an audio stream running beside the storage load,
+reading isochronous underruns and packet errors. The emulator's numbers
+are relative only; real controllers are the owner's bench.
+
+#### 11.11.10 Owner's questions
+
+- **Q-STG.1, the client's buffer's address** (section 11.11.4).
+- **Q-STG.2, the shared pool's budget** (section 11.11.1).
+- **Q-STG.3, the quarantine's bound** (section 11.11.6).
+- **Q-STG.4, what may stay direct** (section 11.11.7).
+
+Each, with its options and a recommendation, was put to the owner before
+any code. **The owner's decisions (2026-11-09):**
+
+- **Q-STG.1: (a).** A window of at most 64 KiB through a partial MDL the
+  driver owns (`IoBuildPartialMdl`), mapped and unmapped at once, the
+  client's MDL never changed. amd64: `MmMapLockedPagesSpecifyCache`. x86 on
+  2000 to 10: the same routine through `xhcihlpr.sys`'s routine service,
+  else `MmMapLockedPages` with `MDL_MAPPING_CAN_FAIL` on the driver's own
+  window MDL. 98 SE and ME: `MmMapLockedPages`, its failure behaviour read
+  on 98 SE with a leg first. The import gate's evidence rules apply
+  (Appendix A rows 129, 134 and 136).
+- **Q-STG.2: (b).** A setting, `XhciStagePoolKiB`, default 2048, range 256
+  to 16384, written at its default by the INFs (AddReg, no overwrite), with
+  an INF-gate row and a `tuning.md` row; the measurement may move the
+  default before release, and is reported.
+- **Q-STG.3: (a).** Kept for the boot (until Windows restarts), one
+  ledger for the driver, capped at 64 MiB; past the cap a start fails
+  (Code 10) or a pipe open fails until Windows restarts.
+- **Q-STG.4: (a).** Nothing stays direct.
+
+#### 11.11.11 The code as built (task 48.33)
+
+Built on branch `w48-pci` to the sections above and the decisions in
+section 11.11.10, reviewed and revised (`src\hcd_stage.c`, its pure half
+`src\xhci_stage.c` with `test\test_stage.c`, and the hooks in
+`hcd_io.c`, `hcd_dma.c`, `hcd_cfg.c`, `hcd_enum.c`, `hcd_ctl.c`,
+`hcd_pdo.c`, `hcd_pnp.c`, `hcd_svc.c` and `xhci_init.c`). Where it departs
+from the text above, and why:
+
+- **No promotion.** The wide route (section 11.6) and a stream's whole-URB
+  TD (section 11.7) are withdrawn rather than staged TD by TD: with every
+  transfer staged a sequential chunk is up to 1 MiB (eight times today's
+  128 KiB grant), and the register-free grant and check promotion stood on
+  went with the map pump. `XhciWideMap` is still read and noted
+  (`xfer.wide.*`) and promotes nothing; `HcdDmaWideOpen` makes no pool, so
+  `hcd_io.c`'s pipelined machine is never entered (its code stays, for a
+  later task to stage or remove). `tuning.md` says so.
+- **Who owns a pipe is decided at the start, from the pipe's reserve.** A
+  request longer than its pipe's reserve and its small buffer
+  (`HcdStageMulti`) owns its pipe from `hcdGo`, as a request split into
+  chunks did; any other is admitted whole or not at all, so it never
+  becomes one. That keeps section 11.11.3's order rule without deciding
+  ownership after a successor may already be queued.
+- **The admission pass selects under the controller lock and
+  `StageLock`**, the TD's gate (its pipe's owner) read and its staging
+  taken in one hold; the OUT copy and the publication run after both are
+  released. One pass runs at a time; a pipe whose head cannot move is held
+  back for the rest of the pass, so arrival order within a pipe is kept;
+  there is no skip counter, since a waiter takes its pipe's reserve as soon
+  as the shared pool cannot cover it.
+- **Shared slabs.** A request that owns its pipe takes what the pool has
+  free (at least one slab, its chunk cut to whole packets) rather than
+  falling to its 64 KiB reserve; a control data stage takes all it needs
+  or none.
+- **A slab reserve** is one more allocation at the pipe's open, else a
+  free slab of the pool moved to it; the allocated one is freed with the
+  pipe, the moved one goes back to the pool.
+- **A stream endpoint's streams' staging** is one block of its own beside
+  the stream block (every stream's page reserve, then its records' small
+  buffers), freed with the streams.
+- **x86 under NT maps through `MmMapLockedPages` with
+  `MDL_MAPPING_CAN_FAIL`** on the window MDL, the decision's second route;
+  the helper's routine service is not asked (`xhci98.sys` still sends the
+  helper's V2.0 block), left to a later step.
+- **A URB with a `TransferBuffer`** is copied through that address; no MDL
+  is built for it any more.
+- **Selective suspend** is unchanged: `CommonBufferPinned` is still set by
+  exactly the stops that abandon a running idle callback.
+- **The departure's held requests** at an unproven stop are released at
+  the controller's own stop, after its devices are dropped
+  (`HcdIoParkCloseAll`): a controller-wide mark, set first, keeps any
+  later request from being held until the next start, and every child
+  PDO's held requests - listed, gone or removed - complete `CANCELED`.
+  A containment without proof keeps them held until that stop, and a
+  proven stop keeps today's route.
+- **A zero-length request** goes through admission too, with no staging,
+  so it keeps its place behind an earlier request of its pipe still
+  waiting (an isochronous one is published at once, as before).
+- **A copy that cannot proceed** - its window would not map, or the pass
+  has copied its 1 MiB bound (the deferred work's copy-outs and the
+  retries alike) - is queued again only under the controller lock and
+  `StageLock`, and only when nothing has ended it: admission closed, its
+  device or pipe gone, its IRP cancelled, the shutdown latched, or the
+  give-up reached, each of which ends it at once with its status. A drain
+  either finds it queued or the copy sees the mark. `StageDpc` and the
+  retry timer run with admission closed, so whatever waits ends. The
+  give-up is measured on the controller's tolerance clock (100 ms ticks),
+  which no wall-clock change moves.
+- **The control slab is mandatory**: a start that cannot allocate it
+  fails, as one without a window MDL does.
+- **An isochronous URB's packets** are laid in the share from packet 0's
+  offset (`StageIsoBase`), so a URB whose first packet starts past the
+  buffer's start fits as it did under the map registers; only packets the
+  controller reported good are copied out, a failed packet reporting no
+  bytes.
+- **The ledger** charges the controller's block, the enumeration scratch
+  and the event ring's block as well, at whole pages; an allocation it
+  refuses is noted `dma.quarantine.cap`, the first kept one
+  `dma.quarantine.first`.
+- **The readings** (section 11.11.9) are log notes at each stop
+  (`stage.*`), not counter words; the qemu flavour's switches are
+  `XhciQemuStagePool` (the pool's slabs at most) and `XhciQemuStageFault`
+  (bit 0: every stop's quiesce reported not proven; bit 1: on Windows 98
+  and ME an MDL's copy goes through a window even when the MDL carries a
+  system address, the window MDL's `MDL_MAPPED_TO_SYSTEM_VA` and
+  `MDL_SOURCE_IS_NONPAGED_POOL` cleared after `IoBuildPartialMdl`, so that
+  `MmMapLockedPages` and the probe are reached by mass storage there, which
+  never maps a window otherwise; bits 15:8: that many window mappings
+  failed, 255 all) and `XhciQemuStageMapProbe` (the first
+  window copy of a start first maps its span through that many window MDLs
+  of the probe's own, at most 32,768, none unmapped, stopping at a mapping
+  that returns NULL, prints the count and the outcome on the 0xE9 channel,
+  notes them `stage.probe.*` and unmaps each through its own MDL: the 98 SE
+  reading of section 11.11.4), with `stage.foreign` counting any
+  published element outside its TD's staging, and `stage.direct.buffer`,
+  `stage.direct.mdl` and `stage.direct.low` counting the copies made
+  through a URB's `TransferBuffer`, through an MDL's `MappedSystemVa`, and
+  through an address below 0x80000000 (a copy runs in whatever process
+  context its DPC finds, so only a system address is valid in every one;
+  the first addresses of each kind, and the counts at each stop, printed on
+  the 0xE9 channel). The per-URB sequence log and
+  the fault points that hold a record in a chosen state are not built.
+- **Owed:** the 98 SE leg reading `MmMapLockedPages`' failure; the
+  measurement and the legs of section 11.11.9.
+
 ## 12. What Phase 25 leaves open, and where each item binds
 
 Phase 25 read contracts and built a scaffold; it ran nothing on a guest. Every
@@ -14840,6 +15526,476 @@ read as ME's do (`runs/run-47.md`). The code:
   or a reset's drain leaves the PDO listed). The select itself is refused
   `DEVICE_GONE` at the next tick as before; a ghost's select is answered
   earlier by `hcdGhostUrb` and never reaches it.
+
+## 19. Two departures in the xHCI core (task 48.21, 2026-11-09)
+
+Two items the audit of 2026-11-06 left (`runs/run-47.md`, "47.1", "Left"),
+both in the pure core with host vectors (`test\test_iso.c`,
+`test\test_pipe.c`).
+
+### 19.1 An error on an isochronous final packet's earlier TRB
+
+A packet split across a page is a two-TRB TD. The audit's fix held a
+request whose final packet ended **short** on the first TRB, for the tail
+or for the drain's settle on an empty event ring, because QEMU's xHC sends
+no tail and a request with no successor queued never completed. An
+**error** there still waited for the tail, on the strength of p.201 ("if
+IOC = '1' in an Event Data or Normal TRB then it returns Missed Service
+Error"), and a controller that withheld that tail too left the request to
+a later group's sweep or to its cancellation.
+
+`XhciXferIsoEvent` now holds that request too: the event that answers the
+final packet on an earlier TRB of its TD, with a code the isochronous
+decoder classes as an error, arms `XHCI_XFER_FLAG_SHORT_DEFERRED` with
+`XHCI_XFER_FLAG_ERROR_HELD` beside it. p.188 is the reason the TD is over
+at that event: "after the xHC generates an event for either condition, the
+xHC may automatically advance to the next TD", its example a USB
+Transaction Error on an Isoch IN transfer. Unlike a short packet's, the
+hold is **not** ended by a drain pass that reads the event ring empty:
+after an error the xHC may advance "for the next ESIT" (4.10.3.2 p.187),
+so the tail can follow such a pass, and retiring then would hand back TRBs
+the controller still owns. It ends in one of four ways:
+
+- the tail arrives while the request is queued, with **any** code (an
+  error's tail may repeat the error, report Missed Service as p.201 has a
+  skipped TD's IOC do, or Success): the request ends by position as
+  before, counted `MidTdDeferralsTailed`;
+- a Ring Underrun or Overrun on the endpoint (`hcd_dev.c`, `hcdIsoEvent`):
+  the xHC found the ring empty, so it has consumed every TRB queued before
+  that event, and a tail it sent was written to the same event ring before
+  it and consumed already. The settle (`XhciXferDrainSettledPassed`,
+  `xhciXferIsoSettle`) re-validates the hold against the ring and retires
+  the group, the packets keeping the results their events wrote and the
+  request its status and FAILED latch, counted `MidTdShortRetires`, the
+  tail's index recorded so a late tail on unowned TRBs counts
+  `MidTdShortTails` and completes nothing. It runs before the underrun's
+  doorbell, so a queue that held only that request is not restarted for
+  an empty ring at every interval;
+- a stopped endpoint's saved dequeue showing the controller past the group
+  (`HcdDevStopSettle`, `XhciXferStopPlace`), settled the same way;
+- a later group's event sweeps it, as any held request, and so does the
+  empty ring's settle of a short packet's hold behind it, which proves the
+  controller past it too.
+
+Not held: TRB Error, which leaves the endpoint in Error and is ended by the
+thread's stop and drain (`NeedsRecovery`); a fatal code; an error on an
+interior packet or on the final packet's last TRB, which the next event or
+the event itself already ends. `IsoErrorHolds` counts the error's holds
+inside `MidTdDeferrals`, whose five-way partition holds with them in it,
+so the short-packet verdict of `XHCI_TRANSFER_QUEUE` is the short packet's
+alone while it reads 0. The window the hold leaves - a tail written just
+after the empty read - is the short packet's, unchanged.
+
+### 19.2 An endpoint whose Max Packet Size is outside its speed's table
+
+At USB 2.0 speeds `XhciPipeEndpointParams` refused an endpoint whose
+`wMaxPacketSize` its speed and type do not list (USB 2.0 5.6.3, 5.7.3,
+5.8.3, Table 9-14), so a device declaring, say, a 64-byte High-Speed bulk
+endpoint was refused its configuration. It is now driven:
+
+| Declared size | Programmed | `MpsOutside` |
+|---|---|---|
+| a size the table lists | as declared | `XHCI_PIPE_MPS_LISTED` |
+| under the speed and type's maximum, not listed (an FS bulk 24, an HS bulk 64, an HS endpoint with additional transactions under 513 or 683) | as declared | `XHCI_PIPE_MPS_UNLISTED` |
+| above it (maximum: LS interrupt 8; FS interrupt and bulk 64, FS isochronous 1023; HS bulk 512, HS interrupt and isochronous 1024) | the maximum | `XHCI_PIPE_MPS_CLAMPED` |
+
+Under the maximum the declared size is kept because the Endpoint Context
+"shall correlate" with the device's own settings (4.6.6 p.63) and the
+device packetises by what it declared; above it no packet of that endpoint
+can be larger on the wire. The client is given the programmed size in the
+pipe information (`USBD_PIPE_INFORMATION.MaximumPacketSize`), and
+`MpsDeclared` keeps the descriptor's. Still refused: size 0 on anything
+but an isochronous endpoint, and a zero-bandwidth endpoint asking for
+additional transactions; a high-bandwidth count of 3 stays reserved.
+SuperSpeed is unchanged - its sizes are USB 3.2 Table 9-26's (bulk 1024,
+1024 whenever bMaxBurst is nonzero), refused outside them.
+
+**The log.** A Configure Endpoint that opens such an endpoint records, in
+every flavour, `cfg.ep.mps`: the slot in bits 31:24, the DCI in 23:16, the
+kind (1 unlisted, 2 clamped) in 13:12 and the declared size in 10:0
+(`hcd_cfg.c`, `hcdCfgConfigureAdd`), at `XhciLogVerbosity` 2 or above.
+
+**Owed.** QEMU's devices declare listed sizes only, so no guest reads either
+case; the host vectors are the evidence.
+
+## 20. The bus information a USB PDO answers (task 48.13, 2026-11-09)
+
+`IRP_MN_QUERY_BUS_INFORMATION` asks a PDO for a `PNP_BUS_INFORMATION`:
+the bus type GUID, the legacy interface type and a bus number, which the
+PnP manager keeps as the devnode's `BusTypeGuid`, `LegacyBusType` and
+`BusNumber` (SetupAPI's `SPDRP_BUSTYPEGUID`, `SPDRP_LEGACYBUSTYPE`,
+`SPDRP_BUSNUMBER`) for class drivers and user-mode components to read.
+Until this task no PDO of this bus answered it: the IRP kept the status it
+arrived with, and those properties were absent.
+
+### 20.1 What Windows' own stacks answer (runtime)
+
+Read in QEMU guests with Windows' own EHCI and UHCI stacks (a stick and a
+tablet on EHCI; a hub, a mouse behind it and QEMU's composite
+`usb-audio` on UHCI) and, on 10, its own xHCI stack for `qemu-xhci` (a
+stick, a hub with a mouse, a UAS disk), by a small guest tool that lists
+every present devnode's three properties (`runs/run-48.md`, "48.13"):
+
+| Devnode | 2000 SP4 | XP SP3 | 7 SP1 x86 | 10 x64 |
+|---|---|---|---|---|
+| Root hub (`USB\ROOT_HUB`, `ROOT_HUB20`, `ROOT_HUB30`) | USB, 15, 0 | USB, 15, 0 | USB, 15, 0 | USB, 15, 0 |
+| Hub, device, composite parent | USB, 15, 0 | USB, 15, 0 | USB, 15, 0 | USB, 15, 0 |
+| A composite device's function (`&MI_00`) | none | USB, 15, 0 | USB, 15, 0 | USB, 15, 0 |
+| HID child, `USBSTOR` disk (not the bus's) | none, none | HID, 15, n; none | HID, 15, n; none | HID, 15, n; none |
+
+"USB" is `GUID_BUS_TYPE_USB`, `{9D7DEBBC-C85D-11D1-9EB4-006008C3A19A}`;
+15 is `PNPBus`; the bus number is 0 on every controller's devnodes, two
+controllers alike. On 2000 the composite device's functions are the hub
+driver's own PDOs and answer nothing; from XP they are `usbccgp`'s and
+answer as the device does. 10's `USBHUB3` answers as `usbhub` does.
+
+### 20.2 The answer
+
+`HcdPdoBusInformation` (`hcd_pdo.c`) answers `GUID_BUS_TYPE_USB`,
+`PNPBus` and 0 for the root hub PDO (`hcd_rh.c`) and every device PDO -
+devices, hubs and composite parents - in a buffer from
+`HcdPoolAllocHandedOff`, which the PnP manager frees; and for a function
+PDO only where `IoIsWdmVersionAvailable(1, 0x20)` (XP and later), so on
+2000 it answers nothing, as Windows' own stack does there, and on 98 SE
+and ME it answers nothing either. The HID and storage devnodes above are
+not this bus's PDOs and do not change.
+
+## 21. A SuperSpeed link that keeps failing after it trains (issue 29, 2026-11-09)
+
+Status: 2026-11-09, reviewed and revised. Written from the owner's bench report of
+2026-11-09 (issue 29); F8 and 21.5 added the same day at the owner's
+request.
+
+### 21.1 The report
+
+An HP EliteBook 8470p (Intel 7 Series xHCI `8086:1E31`, subsystem
+`103C:179B`, the issue 27 machine), Windows XP x64 SP2, `3.4.2.0`,
+`XhciIntelPortSwitch` 1, every other value at its default. A Realtek
+RTL8157 5 GbE adapter (`0BDA:8157`) on either SuperSpeed connector of the
+left side is not usable; on the right side, a port Windows' own EHCI driver
+serves, it works at High Speed with `rtl815x`. The same adapter ran at
+SuperSpeed on development host A, passed through to guests, under the
+host's own xHCI stack (`usb-wdm-free`, `docs/testing/2026-11-07-rtl8157-hardware.md`).
+The snapshot, 143 s after the controller's start, decoded against
+`xhci_enum.h` (`enum.port.*`), `xhci_link.h` (`XHCI_LINK_ACT_*`),
+`xhci_enum.h` (`XHCI_LKEEP_*`) and `hcd_pdo.c` (`pnp.pdo`):
+
+| Notes | Reading |
+|---|---|
+| `enum.port.look=040080B9`, `enum.port.reset=040002A0`, `enum.port.fail=04010001` | USB 2.0 port 4: a connection (CCS, PLS 7, CSC); the enumeration's reset ended with CCS 0 and PLS 5 (RxDetect): cause 1, the reset, no retry |
+| `enum.port.look=080410B0` | USB3 port 8, machine Empty, action 4 (warm reset), PLS 6 (SS.Inactive), CCS 0, changes CSC and PLC |
+| `enum.port.look=08008A83` | port 8, Empty, CONNECT fed: CCS, PED, PLS 0 (U0), changes CSC, WRC, PRC - the warm reset's end |
+| the two above, four times, then `enum.port.quiet=08000008` | the port's eight note bursts spent; 346 more refused |
+| `enum.port.look=07008083` to `enum.port.end=070A0000` | port 7, a fresh connection (CSC alone), reset, SuperSpeed (PSIV 4, 5000 Mbit/s), slot 1, `dev.ss.vidpid=0BDA8157`, Present |
+| `link.keep=00070007`, `enum.port.look=07B450B0` | the link in SS.Inactive under the bound adapter; the keep refused, 7 (not a UAS device); dropped and warm-reset |
+| the second run, slot 2; `link.keep=00070004`, `enum.port.look=07A450B0` | enumerated again; the link failed before its PDO started (keep refused, 4) |
+| `pnp.pdo=00071700`, `pnp.pdo=00070200` | the first PDO's surprise removal and removal |
+| `070410B0` / `07008A83` alternating, `enum.port.quiet=07000008` | as port 8; 178 more refused |
+| `SsWarmResets` 270 (272 at the dump), `SsLinksGivenUp` 0 | |
+
+`dev.ss.maxpower.ma` 544 is the adapter's own bMaxPower; the rest of the
+counters (20 bulk transfers, 622950 bytes, `rtl815x` started on the first
+enumeration) show the adapter worked for a while on port 7.
+
+### 21.2 The reading
+
+**The link.** Between each warm reset's end and the next SS.Inactive less
+than 100 ms passed: the CONNECT the reset's end fed began the attach
+debounce (`HCD_DEBOUNCE_MS`), and no enumeration reset followed, so the
+port read disconnected when the debounce ended. Only a fresh connection
+held long enough to enumerate. SS.Inactive is a link failure with the
+device attached (USB 3.2 7.5.2, p.163-164): the SuperSpeed link of this
+adapter on these connectors does not hold U0. Nothing this driver writes
+between the reset's end and the failure explains it: the CONNECT feed and
+the debounce touch no register. The snapshot alone cannot tell its
+cause; the Linux reading below points to the laptop's SuperSpeed path.
+
+**Port 4.** The notes do not give port 4's device or speed (a USB 2.0
+port's speed is valid only after its reset, xHCI 1.2c p.376), so what
+follows is an inference, consistent with the specification and with the
+plug-in: a connection on USB 2.0 port 4 whose reset ended disconnected,
+and port 8's first look right after, a SuperSpeed link in SS.Inactive. A
+device on USB 2.0 that receives a USB 2.0 bus reset returns to Rx.Detect
+while its eSS.Disabled count is below 3, and drops its USB 2.0 connection
+once its SuperSpeed port enters training (USB 3.2 7.5.1.2.3, p.163; 10.18.1
+and Figure 10-26, p.457). That reads as the adapter on port 4 - its first
+SuperSpeed attempt already failed - sent back to SuperSpeed by the
+enumeration's own reset, port 4 and port 8 being one connector, as the
+pairing convention says. The snapshot cannot exclude a USB 2.0 failure of
+its own; the bench kit's USB 2.0 hub or cable reading settles it.
+
+**Ours.** The warm-reset budget of 29-A.2 (`XHCI_LINK_MAX_WARM_RESETS`,
+three) is refilled by every reading of a trained link (`XhciLinkDecide`),
+and each warm reset here ends trained, so the budget never runs out: the
+port is warm-reset for as long as the device stays plugged in (270 in
+about two minutes), the passive give-up never comes, and the device never
+reaches its USB 2.0 path. Nor would the give-up take it there: a device
+whose link is in SS.Inactive stays there until a warm reset or the loss of
+the far end's receiver terminations (USB 3.2 7.5.2, p.164), and the host's
+port in SS.Inactive keeps its terminations. A host withdraws them by taking
+the port to SS.Disabled: a PORTSC write with PED = 1 takes a USB3 port from
+any state but Powered-off to Disabled, and a write of PLS = RxDetect with
+LWS takes it out again (xHCI 1.2c 4.19.1.2.1, p.279-280; PORTSC, p.372 and
+p.374). The device's upstream port, finding no terminations, goes through
+Rx.Detect to eSS.Disabled and connects on USB 2.0 (Figure 10-26). That is
+29-A.5's hold, which until now only a function driver's request starts.
+
+**What Linux does [linux].** v6.12 `drivers/usb/core/hub.c`, read for this
+section: `port_event` warm-resets a port whose link needs it at every such
+event, with no count across events; the attach debounce wants the
+connection stable for 100 ms in 25 ms steps within 2 s
+(`HUB_DEBOUNCE_STABLE`, `HUB_DEBOUNCE_STEP`, `HUB_DEBOUNCE_TIMEOUT`); an
+enumeration is tried `PORT_INIT_TRIES` (4) times with a port power cycle
+at the halfway point; `hub_port_disable` on a SuperSpeed hub sets the link
+to U3, not SS.Disabled. Nothing there sends such a device to USB 2.0 on
+purpose. `drivers/usb/host/xhci-pci.c` gives `8086:1E31` the endpoint
+limit, software bandwidth checking and the shutdown switch to EHCI
+(`XHCI_EP_LIMIT_QUIRK`, `XHCI_SW_BW_CHECKING`, `XHCI_SPURIOUS_REBOOT`),
+and every Intel controller `XHCI_LPM_SUPPORT`, `XHCI_INTEL_HOST` and
+`XHCI_AVOID_BEI`; none concerns a link that fails. The compliance-mode
+recovery timer of `xhci.c` applies to four HP workstation models
+(`xhci_compliance_mode_recovery_timer_quirk_check`), not to this laptop,
+and to Compliance Mode, not SS.Inactive.
+
+What else Linux does on this controller, against this driver (v6.12,
+`drivers/usb/host/pci-quirks.c`, `xhci.c`, `hub.c`):
+
+- The port switchover (`usb_enable_intel_xhci_ports`): USB3_PSSEN written
+  with USB3PRM, then XUSB2PR with XUSB2PRM, at the BIOS handoff before the
+  controller's reset and again at every resume. `xhci_psw.c` writes the
+  same registers in the same order with the same masks (the snapshot:
+  `psw.usb3pssen` and `psw.xusb2pr` 0F) before the reset: no difference.
+- The compliance-mode timer (`compliance_mode_recovery`, every 2 s,
+  `COMP_MODE_RCVRY_MSECS`) polls for PLS = Compliance Mode only, because
+  that state raises no port status change, on the four HP workstations
+  whose SN65LVPE502CP re-driver causes it, and stops once every USB3 port
+  has seen U0. SS.Inactive raises PLC (the snapshot's looks carry it) and
+  needs no poll. This driver warm-resets Compliance Mode at a port's
+  inspection but does not poll for it; on those workstations that is a
+  gap, not this issue.
+- USB3 link power management: on every Intel controller
+  (`XHCI_LPM_SUPPORT`) Linux enables U1 and U2 with Intel's timeouts
+  (`xhci_enable_usb3_lpm_timeout`); this driver never enables them, so a
+  device here stays in U0 unless it is suspended. Off is the conservative
+  side; it cannot be what takes the link to SS.Inactive.
+- On SS.Inactive under an enumerated device (the port's child),
+  `port_event` first waits up to `DETECT_DISCONNECT_TRIES` (5) x 20 ms for
+  the port's own disconnect detection, then resets the device with a warm
+  reset; with no child - a link failing before enumeration, as most of
+  these did - it warm-resets the port at once (`HUB_BH_RESET_TIME` 50 ms),
+  as this driver does. A hot reset is
+  used for an enumeration on a link in U0, as here. No retry count spans
+  those events.
+- `XHCI_SPURIOUS_REBOOT` (this driver's `XhciIntelShutdownToEhci`, on for
+  `8086:1E31`), `XHCI_EP_LIMIT_QUIRK`, `XHCI_SW_BW_CHECKING` and
+  `XHCI_AVOID_BEI` concern shutdown, endpoint and bandwidth accounting and
+  interrupt moderation; `XHCI_PME_STUCK_QUIRK` is not set for this
+  controller.
+
+None of these is a step Linux takes on this controller's link that this
+driver omits. The reading that decides between the link and this driver
+is Linux itself on the same connectors (the bench kit's live USB step).
+
+**The deciding reading (Linux on the 8470p, 2026-11-09).** The owner
+booted Kubuntu 26.04.1 (Linux 7.0.0-30) live on the same laptop and read
+the left connectors with the bench kit's `R8157.SH`
+(`temp\8470p-rtl8157\r8157-20261109-191058`, not tracked; connectors as
+the owner labelled them):
+
+- the RTL8157 in the front connector: `usb usb3-port4: Cannot enable.
+  Maybe the USB cable is bad?` every 4 s for the whole minute; nothing
+  enumerated, nothing on USB 2.0;
+- the RTL8157 in the back connector: enumerated at SuperSpeed on usb 3-3
+  (`cdc_ncm` bound), then `USB disconnect` after 36 s and `Cannot enable`
+  on usb3-port3 from then on;
+- the SanDisk 3.2 Gen1 stick (`0781:55AB`) in the front connector: during
+  its capture, `device descriptor read/8, error -110` at SuperSpeed on
+  usb 3-3 for two device numbers and Linux's `attempt power cycle` on
+  usb3-port3 (the halfway point of `hub_port_connect`'s
+  `PORT_INIT_TRIES`), a High Speed connection on usb 2-3, then the stick,
+  named, at High Speed on usb 2-4. The log names no device for the usb 3-3
+  failures or the usb 2-3 connection: they may be the stick's or what was
+  left of the RTL8157's port.
+
+The RTL8157's failures reproduce under Linux's own driver on both
+connectors, so this driver is not needed for them; the stick's reading is
+consistent with that and settles nothing alone. That points to the
+laptop's SuperSpeed path as the cause - provisionally: the fault itself
+(connector, internal cable, re-driver, the controller's port) is not
+read, and a connector-labelled capture of another USB 3 device would
+confirm it. Linux retries the RTL8157 without end as `3.4.2.0`
+did. The log does not show that the stick's move to USB 2.0 followed from
+the power cycle, or that it was the same attachment throughout.
+
+Open: the front connector's port numbers differ between the two devices -
+usb3-port4 for the RTL8157, usb3-port3 and then USB 2.0 ports 3 and 4 for
+the stick. Either this controller's SuperSpeed-to-USB 2.0 pairing is not
+the convention's (xHCI ports 5-8 to 1-4 in order), or the port-4
+`Cannot enable` lines were not the RTL8157's. The bench kit's XP x64
+readings, each with its connector named, pin the pairing under this
+driver; until then F5's companion release rests on the convention, as
+before.
+
+### 21.3 The change: a flapping link sent to USB 2.0
+
+A root port's link that keeps failing is sent to its USB 2.0 companion with
+29-A.5's hold, and its warm resets are bounded. The device then runs at
+High Speed, as it does on a USB 2.0 port.
+
+**F1, the count.** Each root port keeps an `XHCI_LINK_FLAP` record
+(`xhci_link.h`, beside `XHCI_LINK_PORT`; `HCD_PORT.Flap`). A failure is an
+inspection of a USB3 root port that is about to write the ordinary warm
+reset for a link read in SS.Inactive or Compliance Mode: after section 15's
+keep has declined it, and neither for Cold Attach Status nor
+`XhciStuckLinkReset`'s. Failures are counted in a fixed window of
+`XHCI_LINK_FLAP_WINDOW` (600 tolerance-clock ticks, nominally 60 s) opened
+by the first; a failure after the window opens a new one at 1.
+
+**F2, cleared.** The record is cleared by a fresh attach - a sample (the
+PORTSC read before its change bits are acknowledged) of a trained link
+(CCS, PED, U0) with CSC and neither WRC nor PRC: a link that trained with no
+reset of this driver's - by a sample with PP clear, by a flap hold's
+release (F5), and at the controller's start with the link's record. An
+RxDetect sample does not clear it: whether it is a departure or a warm
+reset's passing state cannot be told from one PORTSC (the comment at
+`XhciLinkDecide`).
+
+**F3, the send.** The first `XHCI_LINK_FLAP_LIMIT` (3) failures of a window
+are warm-reset as before. The next one is sent to USB 2.0 instead of
+warm-reset, when the port has a USB 2.0 companion and the controller is
+running: in one controller-lock section the inspection checks that no
+hold or request owns the port and a hold entry is free, and claims it -
+`Used`, not `Pending`, reason `HCD_HOLD_REASON_LINK_FLAP`, the port,
+`SettleGen` from `SettleAsked`, and the pure hold begun as kind
+`XHCI_HOLD_FLAP` with the companion and no identity (`XhciHoldBeginFlap`).
+The hold is counted with the unidentified ones (`HoldsUnidentified`).
+Only then, outside the lock, it writes PED (`XhciPortscDisable` on the
+sample), which takes the port from SS.Inactive or Compliance Mode to
+Disabled (4.19.1.2.1). The machine is fed the disconnect it was owed, the
+warm reset is not written and its charge is refunded (`XhciLinkRefund`).
+The entry owns the port from the claim on: a disable that completes late
+completes on a held port, which `hcdPortChanged` does not serve.
+
+**F4, the stop.** When the claim cannot be had - no companion, the table
+full, the port already owned - or `XhciSsFlapFallback` is 0 (F8), the failure is given up instead
+(`XHCI_LINK_ACT_GIVE_UP`, counted in `SsLinksGivenUp`, the charge refunded)
+and the record is marked stopped: every later failure is given up the same
+way until F2. A link given up stays in SS.Inactive, as 29-A.2's give-up
+leaves it; it no longer takes a warm reset every half second.
+
+**F5, the release.** The companion's disconnect after a connect seen since
+the hold began releases a flap hold (`XhciHoldCompanionDisconnect`), and
+`hcdHoldRelease` writes RxDetect, so the connector's next device is offered
+SuperSpeed again; no identity is compared, because the hold is the
+link's, not one device's. The release clears the port's record. A release
+whose PORTSC read is unreadable re-arms nothing and ends nothing: the
+entry stays (its pure hold already ended), the port stays held and
+unserved, and the read counts as the port's unreadable one, which owes its
+inspection again; that inspection tries the release once more, and reads
+that stay unreadable hand the controller to recovery, whose reset forgets
+the hold. 29-A.5's own holds take the same path. A start
+or a controller reset forgets every hold (`hcdHoldsForget`). A flap hold
+whose companion never shows a connect - the device left before it reached
+USB 2.0, or the convention pairs the port wrongly on that controller -
+lasts until the next start, as 29-A.5's unidentified holds do, and a
+SuperSpeed device plugged into that connector meanwhile runs at High
+Speed. That is a known limit, not a guarantee of release.
+
+**F6, the notes.** `link.flap` = port in 31:24, event in 23:16, the
+window's count in 7:0, written on transitions only: 1 a failure warm-reset
+and counted, 2 a failure sent to USB 2.0 (the hold claimed), 3 given up
+(the record newly stopped), 4 released. At most
+`XHCI_LINK_FLAP_LIMIT` + 1 a window and port, and one release a hold; a
+stopped port's later failures write nothing new.
+
+**F7, settle.** The claim sets `SettleGen`, so a flap hold whose companion
+has not shown a connect is in flight for the first answer's settle
+(`XhciEnumHoldInFlight` takes any kind), as 29-A.5's holds are, and a
+device sent back at the start is waited for within `XhciFirstEnumWaitMs`.
+
+**F8, the switch.** `XhciSsFlapFallback` (REG_DWORD, machine-wide in
+`Services\USB` or the controller's key, as every xhci98 value; the owner,
+2026-11-09): 1, the default the INFs write, sends; 0 keeps 3.4.x's warm
+resets but bounded - the failure past the limit is given up (F4) instead
+of sent, on a root port and a hub port alike. Absent, or anything but a
+DWORD 0, is 1. Read at every start (`link.flap.fallback` notes it). The
+pure decision is `XhciLinkFlapDecide`: a send only with the switch on and
+a USB 2.0 path to send to. `XhciLinkKeep` and section 15 are unchanged; a
+UAS drive kept in place spends its keeps first, and only the failures it
+is dropped for count.
+
+The link itself is not mended: on the 8470p the adapter runs at
+480 Mbit/s.
+
+### 21.4 Tests
+
+`test\test_link.c`: `XhciLinkFlapFailure` and `XhciLinkFlapSample` through
+the 8470p's sequence (a fresh attach, three failures warm-reset, the fourth
+sent), the window's expiry across a wrap, the fresh-attach and PP clears,
+an RxDetect sample and a warm reset's end (CSC with WRC and PRC) that do
+not clear, the stop and its end at a fresh attach; `XhciHoldBeginFlap` and
+the companion rule (a disconnect before a connect keeps, after one
+releases, with no identity); `XhciEnumHoldInFlight` for the flap kind;
+`XhciLinkFlapDecide`'s table (the switch off, no USB 2.0 path); a hub
+port's sequence to its stop and the empty port's clear.
+
+### 21.5 A SuperSpeed hub's downstream port
+
+The same loop exists one tier down: `HcdSsHubPortLook` marks a port whose
+link reads SS.Inactive or Compliance Mode, the device is torn down, and
+`HcdSsHubPortRecover` sends BH_PORT_RESET within 29-A.2's budget, which
+an enabled reset refills (`q->Link.WarmResets = 0`). The rule there:
+
+- **Count.** `HcdSsHubPortRecover` counts each warm reset it is about to
+  send in the port's own `XHCI_LINK_FLAP` (the same window and limit).
+- **Send.** Past the limit, with `XhciSsFlapFallback` on and the hub's
+  USB 2.0 half live and paired with it (`hcdSsHubPartner`, the test
+  `HcdSsHubCountPair` already makes, `XhciSsHubLooksPaired`), the port is
+  taken to SS.Disabled by `HcdHubPortDisable` - SET_FEATURE(PORT_LINK_STATE)
+  eSS.Disabled, which sends the port to DSPORT.Disabled (USB 3.2 10.3.1.9)
+  and withdraws its terminations, so the device connects on the hub's USB
+  2.0 half. That function's own schedule re-arms the port to RxDetect
+  after 2 s, doubling to 64 s; a device by then on USB 2.0 stays there
+  (it retries SuperSpeed only at a USB 2.0 reset or a VBUS change, Figure
+  10-26), and the port is ready for the next SuperSpeed device. No hold is
+  kept: a hub port has no companion pairing to release on.
+- **A send that fails on the wire.** By the time the send is made the
+  port's change bits are acknowledged, its recovery taken and its device
+  torn down, and an interrupt-driven hub reports nothing more. So
+  `HcdHubFlapSend` keeps a failed send pending (`hub->DisablePorts`) and
+  tries it again on the hub's re-arm tick, which `HcdHubCollect` polls at
+  every pass whatever the hub reports; after `XHCI_LINK_DISABLE_TRIES` (3)
+  failed attempts in all the link is given up as below
+  (`XhciLinkDisableOutcome`); a recovery that reaches the send again while
+  it is pending - a polled hub looks at every port - attempts nothing and
+  keeps the count (`XhciLinkDisableEnter`). Each retry first reads the
+  port afresh (`XhciSsHubSendState`): a link still in SS.Inactive or
+  Compliance Mode is tried again; one already in SS.Disabled - the hub
+  applied an earlier request whose completion failed - is a send, with
+  the re-arm a send schedules; any other state (a departure, a new
+  connection), or a device on the port, ends it and clears the departed
+  device's budgets, as a look's empty reading (`XhciSsHubPortEmpty`)
+  does. The
+  empty-port reading that clears the flap record ends it too, so the next
+  device never inherits it. After the last failed attempt the port is read once more:
+  in SS.Disabled (that request applied though its completion failed), or
+  with no answer, it is scheduled for its re-arm anyway, which acts on a
+  Disabled port alone (`XhciSsHubGiveUpRearm`); no further disable is
+  sent. If that read finds the send ended - the port empty, or a
+  replacement connected - the departed device's budgets are cleared and
+  nothing is given up. Notes: event 4, a send pending after a failed attempt.
+- **Stop.** Otherwise - the switch off, or no USB 2.0 half - the failure
+  is given up: no BH_PORT_RESET, counted once in `SsHubLinksGivenUp`, and
+  every later failure the same until the port reads empty.
+- **Clear.** The record is cleared where the port reads empty (no
+  connection, RxDetect), where the budget was refilled before, and when the
+  hub is configured. A device that stays on SuperSpeed after a re-arm and
+  fails again is counted again: at most `XHCI_LINK_FLAP_LIMIT` warm resets
+  a window between re-arms, the re-arms at least 2 s and at most 64 s
+  apart.
+- **Notes.** `link.flap.hub` = hub index in 31:24, port in 23:16, event in
+  15:8 (1 counted, 2 sent, 3 given up, 4 a send pending after a failed
+  attempt), the window's count in 7:0.
 
 ## Appendix A. The Windows 98 export evidence, pair by pair (task 25.3)
 

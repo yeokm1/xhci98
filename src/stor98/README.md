@@ -139,14 +139,10 @@ What was run on these systems is in [docs/TESTING.md](docs/TESTING.md) ("Windows
 
 ## Updating the driver
 
-- **Windows 98 SE / ME (known issue).** Update Stor98 (or switch to it from another NVMe
-  driver) with the drive unplugged, or with nothing using its volume, then shut down and
-  start the computer again rather than restart it with the drive attached. If the drive
-  then reads "not ready", unplug it, restart, and plug it in again. After an in-place
-  update with the volume in use followed by a warm restart, ME has stopped at restart with
-  a VCACHE error and then hung in ScanDisk, or the volume has come back "not ready";
-  whether the update itself or the warm restart of Windows 98 SE / ME causes it is not
-  known.
+- **Windows 98 SE / ME.** Update Stor98 (or switch to it from another NVMe driver) with
+  the drive unplugged, or with nothing using its volume, then restart Windows. If the
+  drive then reads "not ready", unplug it, restart, and plug it in again (xhci98
+  3.4.3.0; up to 3.4.2.0 this readme asked for a shutdown and a fresh start).
 - **With xhci98's own USB4 connection manager.** On a USB4 host run
   by xhci98's connection manager, changing the driver of a tunnelled NVMe drive stops the
   device, which the connection manager takes as an eject: it tears the tunnel down.
@@ -201,6 +197,7 @@ Where they are set:
 | Gone deadline (advanced: leave at the default) | `StorGoneMs` (DWORD or string) | `storgonems=` | milliseconds | 5000 (5 s) | 1-600000 | 0 or above the range: the default |
 | Write-idle time before a flush | `StorWriteIdleMs` (DWORD or string) | `storwriteidlems=` | milliseconds | 1000 (1 s) | 10 and up | below 10: 10 |
 | Hold before busy, 98 SE / ME (advanced: leave at the default) | `StorHold9xMs` (DWORD or string) | none | milliseconds | 4000 (4 s) | 1000-10000 | refused: the default stands |
+| Take a controller the BIOS set up, 98 SE only, ignored on ME (xhci98 3.4.3.0; advanced) | `StorTakeFirmware` (DWORD or string), and per controller `stortakefirmware=` in its `AdapterSettings` | none | - | 0 | 0-1 | anything but an exact 1 or 0: no setting (left) |
 
 Each refusal or clamp is recorded in the driver's debug log (the debug-port build), not
 shown to the user.
@@ -246,6 +243,29 @@ the update and the default applies: rename it in `DriverParameter`, with the sam
   time after which the 98 SE port was seen to reset the bus over a request held too
   long (13.2 s, PLAN "Gone state and its deadline", 9x); a lower value means
   more busy completions while the driver is full.
+- **Take a controller the BIOS set up** (Windows 98 SE only, new in xhci98 3.4.3.0;
+  PLAN "Taking a controller the BIOS set up") is off by default: Stor98 leaves an NVMe
+  controller it finds already enabled or ready (PLAN 3.1), because the BIOS may still be
+  serving its drive through INT 13h, and that drive runs in MS-DOS compatibility mode
+  with Stor98's controller at Code 10. On Windows ME Stor98 always leaves it and ignores
+  both settings below, because taking such a controller can hang ME's start; `StorFind`
+  then says "left: already set up, StorTakeFirmware ignored on Windows ME" (or "...
+  stortakefirmware=1 ignored ..."). `StorTakeFirmware` = 1 takes every such
+  controller at its next start. For one controller alone, add the string value
+  `AdapterSettings` = `stortakefirmware=1` to that controller's driver key
+  (`HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\Class\SCSIAdapter\NNNN`,
+  the one whose `DriverDesc` is Stor98's; other entries separated by semicolons):
+  Windows 98 SE hands that string to the driver; `stortakefirmware=0` there leaves
+  that controller whatever `StorTakeFirmware` says. Only an exact `1` or `0` counts.
+  Taking it disables the controller and sets it up again, so the BIOS's own requests to
+  it end: it can hang Windows' start or corrupt data if the BIOS still uses the drive (a
+  DOS box or MS-DOS mode, or the drive the computer started from), and a drive the BIOS
+  also gave a letter may show twice. Leave it off unless it has been tried on that
+  computer. Each controller's last start is recorded as `StorFind
+  <bus>.<device>.<function>` in `HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\stor98`
+  ("taken: already set up, overridden by StorTakeFirmware" or "... by
+  stortakefirmware=1"; "left: already set up" when it was not taken), beside `StorFind`,
+  the last start of any.
 
 ### Polling mode
 

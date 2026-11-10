@@ -32,6 +32,72 @@ static volatile const char CmVersionString[] = "xhcicm " XHCI_VER_STR;
 
 PDRIVER_OBJECT CmDriverObject;
 
+/* ---- the kept child's driver-wide part (design record 31 section 4.10,
+ * task 48.29): the system, the detach owner and the callback ---- */
+
+ULONG CmKeptOn;
+static FAST_IO_DISPATCH cmFastIo;
+static KSPIN_LOCK cmDetachLock;
+
+VOID CmCommonInit(PCM_COMMON common)
+{
+    common->Detach = CM_DETACH_NONE;
+    KeInitializeEvent(&common->DetachDone, NotificationEvent, FALSE);
+}
+
+BOOLEAN CmDetachOnce(PCM_COMMON common, BOOLEAN wait)
+{
+    KIRQL irql;
+    ULONG was;
+
+    KeAcquireSpinLock(&cmDetachLock, &irql);
+    was = common->Detach;
+    if (was == CM_DETACH_NONE) {
+        common->Detach = CM_DETACH_CLAIMED;
+    }
+    KeReleaseSpinLock(&cmDetachLock, irql);
+    if (was == CM_DETACH_NONE) {
+        IoDetachDevice(common->Lower);
+        KeAcquireSpinLock(&cmDetachLock, &irql);
+        common->Detach = CM_DETACH_DONE;
+        KeReleaseSpinLock(&cmDetachLock, irql);
+        KeSetEvent(&common->DetachDone, IO_NO_INCREMENT, FALSE);
+        return TRUE;
+    }
+    if (wait) {
+        (VOID)CmWaitEvent(&common->DetachDone, 0);
+    }
+    return FALSE;
+}
+
+/*
+ * The I/O manager's notice that the object below one of this driver's
+ * attached objects is being deleted (FastIoDetachDevice; set only with
+ * CmKeptOn): the filters and children are cm_filt.c's; the NHI's and a
+ * mailbox member's object is detached here, and its removal in progress
+ * (the object below deleted inside its forwarded removal) skips its own
+ * detach and deletes it. The I/O manager calls it from IoDeleteDevice,
+ * at PASSIVE_LEVEL.
+ */
+static VOID cmFastIoDetach(PDEVICE_OBJECT source, PDEVICE_OBJECT target)
+{
+    PCM_COMMON common;
+
+    if (source == NULL || source->DriverObject != CmDriverObject) {
+        return;
+    }
+    common = (PCM_COMMON)source->DeviceExtension;
+    if (common->Kind == CM_KIND_FILTER || common->Kind == CM_KIND_CHILD) {
+        CmFilterDetachCb((PCM_FILTER)common, target);
+        return;
+    }
+    if ((common->Kind == CM_KIND_NHI || common->Kind == CM_KIND_MEMBER) &&
+        common->Lower == target) {
+        /* Detached when this returns, whoever claimed it (K6). */
+        (VOID)CmDetachOnce(common, TRUE);
+    }
+}
+
 /* The hardware id list IoGetDeviceProperty returns for a PCI function:
  * four or five ids of about 50 characters each. A longer list is read as
  * no list (CM_ROLE_NONE). */
@@ -319,6 +385,9 @@ static NTSTATUS cmDispatchPnp(PDEVICE_OBJECT device, PIRP irp)
     if (((PCM_COMMON)device->DeviceExtension)->Kind == CM_KIND_MEMBER) {
         return CmOscmPnp((PCM_MEMBER)device->DeviceExtension, irp);
     }
+    if (((PCM_FILTER)device->DeviceExtension)->Kept) {
+        return CmKeptDispatch((PCM_FILTER)device->DeviceExtension, irp);
+    }
     return CmFilterPnp((PCM_FILTER)device->DeviceExtension, irp);
 }
 
@@ -335,6 +404,9 @@ static NTSTATUS cmDispatchPower(PDEVICE_OBJECT device, PIRP irp)
     }
     if (((PCM_COMMON)device->DeviceExtension)->Kind == CM_KIND_MEMBER) {
         return CmOscmPower((PCM_MEMBER)device->DeviceExtension, irp);
+    }
+    if (((PCM_FILTER)device->DeviceExtension)->Kept) {
+        return CmKeptDispatch((PCM_FILTER)device->DeviceExtension, irp);
     }
     return CmFilterPower((PCM_FILTER)device->DeviceExtension, irp);
 }
@@ -356,6 +428,9 @@ static NTSTATUS cmDispatchOther(PDEVICE_OBJECT device, PIRP irp)
         /* The network PDO has no lower object (cm_net.c). */
         return CmNetPdoOther((PCM_NETPDO)common, irp);
     }
+    if (common->Kind == CM_KIND_CHILD && ((PCM_FILTER)common)->Kept) {
+        return CmKeptDispatch((PCM_FILTER)common, irp);
+    }
     IoSkipCurrentIrpStackLocation(irp);
     return IoCallDriver(common->Lower, irp);
 }
@@ -370,6 +445,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         return STATUS_UNSUCCESSFUL;
     }
     CmDriverObject = DriverObject;
+    KeInitializeSpinLock(&cmDetachLock);
     CmPoolInit();
     /* The unload routine is set before CmNvlinkInit: on NT, the load that
      * publishes the link-state table takes the routine away there, before
@@ -399,6 +475,19 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
          * design record 33's. */
         CmReadIrqGate();
         CmReadBreqGate();
+        /* Design record 31 section 4.10 (K1, K7): the kept child on 8.1
+         * alone, its callback through this table only, and the image
+         * resident for the boot, so no callback or work item of a kept
+         * child runs in an unloaded image. */
+        CmKeptOn = CmPortsKeptOs(SharedUserData->NtMajorVersion,
+                                 SharedUserData->NtMinorVersion);
+        if (CmKeptOn) {
+            CmZero(&cmFastIo, sizeof(cmFastIo));
+            cmFastIo.SizeOfFastIoDispatch = sizeof(cmFastIo);
+            cmFastIo.FastIoDetachDevice = cmFastIoDetach;
+            DriverObject->FastIoDispatch = &cmFastIo;
+            DriverObject->DriverUnload = NULL;
+        }
     }
     return STATUS_SUCCESS;
 }

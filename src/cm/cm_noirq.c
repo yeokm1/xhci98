@@ -176,7 +176,7 @@ static VOID niDiag(PCM_NI_MEMBER m, CM_NI_DEV *d, ULONG status,
     m->Diag[2] = d->Bdf;
     m->Diag[3] = (d->Pin & 0xFFUL) | ((d->Line & 0xFFUL) << 8);
     m->Diag[4] = (d->Irq & 0xFFUL) | ((d->State & 0xFFUL) << 8) |
-                 ((d->Why & 0xFFUL) << 16);
+                 ((d->Why & 0xFFUL) << 16) | ((d->Kind & 0xFFUL) << 24);
     m->Diag[5] = d->ProbBefore;
     m->Diag[6] = ((d->LastStep & 0xFFFFUL) << 16) | (d->LastCr & 0xFFFFUL);
     m->Diag[7] = status;
@@ -204,6 +204,7 @@ static VOID niPending(CM_NI_DEV *d)
     d->State = CM_NI_S_PENDING;
     d->Why = CM_NI_W_NONE;
     d->Step = NI_AD_HEADER;
+    d->WaitDrv = 0;
 }
 
 static VOID niExclude(PCM_NI_MEMBER m, CM_NI_DEV *d, ULONG why)
@@ -219,12 +220,89 @@ static VOID niExclude(PCM_NI_MEMBER m, CM_NI_DEV *d, ULONG why)
     niDiag(m, d, 0, 0);
 }
 
+/* The window's one deadline, as ms from its opening (record 28 section
+ * 14.3): CM_NOIRQ_WINDOW_MS after the later of the opening and the last
+ * hold, never past CM_NOIRQ_HOLD_MS. */
+static ULONG niWindowLen(const CM_NI_MEMBER *m)
+{
+    ULONG len;
+
+    len = CM_NOIRQ_WINDOW_MS;
+    if (m->HaveHold) {
+        len = niSince(m->HoldAt, m->WindowFrom);
+        if (len >= CM_NOIRQ_HOLD_MS - CM_NOIRQ_WINDOW_MS) {
+            return CM_NOIRQ_HOLD_MS;
+        }
+        len += CM_NOIRQ_WINDOW_MS;
+    }
+    return len;
+}
+
+/* Time the worker was held inside a call (record 28 section 14.6): `held`
+ * ms, measured by the call, move the window (its opening and its last
+ * hold) and the attempts' deadlines forward, up to CM_NOIRQ_HOLD_MS each;
+ * never more of the window than has passed since its opening. */
+static VOID niCredit(PCM_NI_MEMBER m, ULONG held, ULONG now)
+{
+    ULONG c;
+    ULONG k;
+    CM_NI_DEV *d;
+
+    if (held <= CM_NI_BLOCK_MS) {
+        return;
+    }
+    m->C.Credited++;
+    m->LogCredit = 1;
+    m->LogCreditV = held;
+    if (m->WindowOpen) {
+        c = CM_NOIRQ_HOLD_MS - m->Credit;
+        if (c > held) {
+            c = held;
+        }
+        if (c > niSince(now, m->WindowFrom)) {
+            c = niSince(now, m->WindowFrom);
+        }
+        /* The last hold moves only when it came before the held call; one
+         * made while the call was outstanding stays. */
+        if (m->HaveHold && niSince(now, m->HoldAt) >= held) {
+            m->HoldAt += c;
+            if (niSince(m->HoldAt, m->WindowFrom) >
+                niSince(now, m->WindowFrom)) {
+                m->HoldAt = now;
+            }
+        } else if (m->HaveHold && niSince(m->HoldAt, m->WindowFrom) < c) {
+            m->HoldAt = m->WindowFrom + c;  /* not before the new opening */
+        }
+        m->WindowFrom += c;
+        m->Credit += c;
+    }
+    for (k = 0; k < CM_NOIRQ_DEVICES; k++) {
+        d = &m->Dev[k];
+        if (!d->Used || (d->State != CM_NI_S_ACTIVE &&
+                         d->State != CM_NI_S_ATTEMPTED)) {
+            continue;
+        }
+        c = CM_NOIRQ_HOLD_MS - d->Credit;
+        if (c > held) {
+            c = held;
+        }
+        d->Deadline += c;
+        d->AttemptedAt += c;
+        d->Credit += c;
+    }
+}
+
+VOID CmNiCredit(PCM_NI_MEMBER m, ULONG held, ULONG now)
+{
+    niCredit(m, held, now);
+}
+
 /* The admission window still open at `now` (a result that comes back
  * after it closed admits nothing). */
 static ULONG niWindowLive(const CM_NI_MEMBER *m, ULONG now)
 {
     return (ULONG)(m->WindowOpen &&
-                   niSince(now, m->WindowFrom) < CM_NOIRQ_WINDOW_MS);
+                   niSince(now, m->WindowFrom) < niWindowLen(m));
 }
 
 /* An attempt ended FAILED: an uncommitted configuration it added stays a
@@ -261,6 +339,37 @@ static VOID niForget(PCM_NI_MEMBER m, CM_NI_DEV *d)
     niZero(d, sizeof(CM_NI_DEV));
 }
 
+/* An entry refused by its header leaves the entries for the refused list
+ * (record 28 section 14.5): not read again in the generation. */
+static VOID niSkip(PCM_NI_MEMBER m, CM_NI_DEV *d)
+{
+    ULONG k;
+
+    /* A free line first; a full list overwrites in turn. */
+    for (k = 0; k < CM_NOIRQ_SKIPS && m->SkipDn[k] != 0; k++) {
+    }
+    if (k == CM_NOIRQ_SKIPS) {
+        k = m->SkipNext % CM_NOIRQ_SKIPS;
+        m->SkipNext = (k + 1) % CM_NOIRQ_SKIPS;
+    }
+    m->SkipDn[k] = d->Dn;
+    m->SkipHash[k] = d->Hash;
+    m->SkipSeq[k] = d->WalkSeq;
+    niForget(m, d);
+}
+
+/* An entry that may go to the refused list: refused by its header, with
+ * no journal and no operation of its outstanding. */
+static ULONG niSkippable(PCM_NI_MEMBER m, ULONG k)
+{
+    CM_NI_DEV *d = &m->Dev[k];
+
+    return (ULONG)(d->Used && d->State == CM_NI_S_EXCLUDED &&
+                   d->Why == CM_NI_W_HEADER &&
+                   niJrn(m, d->Dn, d->Hash, 0) == NULL &&
+                   (m->Out.Id == 0 || m->Out.Dev != k));
+}
+
 VOID CmNiInit(PCM_NI_MEMBER m, ULONG portBdf)
 {
     niZero(m, sizeof(CM_NI_MEMBER));
@@ -276,11 +385,22 @@ VOID CmNiOpenWindow(PCM_NI_MEMBER m, ULONG gen, ULONG now)
 
     m->WindowOpen = 1;
     m->WindowFrom = now;
+    m->HaveHold = 0;
+    m->HoldAt = now;
+    m->HeldThis = 0;
+    m->HoldV = 0;
+    m->Credit = 0;
     if (m->HaveGen && m->Gen == gen) {
         return;
     }
     m->Gen = gen;
     m->HaveGen = 1;
+    /* Every devnode judged once more under a new generation. */
+    for (k = 0; k < CM_NOIRQ_SKIPS; k++) {
+        m->SkipDn[k] = 0;
+        m->SkipHash[k] = 0;
+    }
+    m->SkipNext = 0;
     for (k = 0; k < CM_NOIRQ_DEVICES; k++) {
         d = &m->Dev[k];
         if (!d->Used || d->State == CM_NI_S_ACTIVE ||
@@ -403,6 +523,14 @@ VOID CmNiWalkDone(PCM_NI_MEMBER m, ULONG complete)
     if (!complete) {
         return;
     }
+    /* So are the refused list's lines it did not meet (record 28
+     * section 14.5): a devnode that comes back is judged afresh. */
+    for (k = 0; k < CM_NOIRQ_SKIPS; k++) {
+        if (m->SkipDn[k] != 0 && m->SkipSeq[k] != m->WalkSeq) {
+            m->SkipDn[k] = 0;
+            m->SkipHash[k] = 0;
+        }
+    }
     /* A complete walk proves the others gone: forgotten, their journals
      * retired, nothing of theirs freed. An attempt in progress is left to
      * its own reads, which see the disappearance. */
@@ -424,6 +552,17 @@ VOID CmNiSeen(PCM_NI_MEMBER m, ULONG dn, ULONG hash, ULONG bdf, ULONG rot)
 
     if (!m->WindowOpen || dn == 0) {
         return;
+    }
+    for (k = 0; k < CM_NOIRQ_SKIPS; k++) {
+        if (m->SkipDn[k] != dn) {
+            continue;
+        }
+        if (m->SkipHash[k] == hash) {
+            m->SkipSeq[k] = m->WalkSeq; /* refused by its header */
+            return;
+        }
+        m->SkipDn[k] = 0;               /* the handle reused */
+        m->SkipHash[k] = 0;
     }
     free = NI_NONE;
     for (k = 0; k < CM_NOIRQ_DEVICES; k++) {
@@ -453,14 +592,10 @@ VOID CmNiSeen(PCM_NI_MEMBER m, ULONG dn, ULONG hash, ULONG bdf, ULONG rot)
     }
     if (free == NI_NONE) {
         /* Full: an entry refused by its header (a bridge, another class)
-         * makes room, its devnode judged again if it is met again. */
+         * makes room, its devnode on the refused list (section 14.5). */
         for (k = 0; k < CM_NOIRQ_DEVICES && free == NI_NONE; k++) {
-            d = &m->Dev[k];
-            if (d->State == CM_NI_S_EXCLUDED && d->Why == CM_NI_W_HEADER &&
-                d->WalkSeq != m->WalkSeq &&
-                niJrn(m, d->Dn, d->Hash, 0) == NULL &&
-                (m->Out.Id == 0 || m->Out.Dev != k)) {
-                niForget(m, d);
+            if (niSkippable(m, k)) {
+                niSkip(m, &m->Dev[k]);
                 free = k;
             }
         }
@@ -487,6 +622,134 @@ VOID CmNiUnresolved(PCM_NI_MEMBER m)
     m->C.Unresolved++;
 }
 
+ULONG CmNiInstalling(ULONG status, ULONG problem)
+{
+    return (ULONG)((status & CM_NI_DN_HAS_PROBLEM) != 0 &&
+                   (problem == 0x01UL || problem == 0x08UL ||
+                    problem == 0x12UL || problem == 0x1CUL));
+}
+
+ULONG CmNiWalkInstalling(ULONG statusCr, ULONG status, ULONG problem,
+                         ULONG driverCr)
+{
+    if (statusCr == CM_NI_CR_SUCCESS && CmNiInstalling(status, problem)) {
+        return 1;
+    }
+    return (ULONG)(driverCr == CM_NI_CR_NO_SUCH_VALUE);
+}
+
+ULONG CmNiUnenumerated(ULONG bus, ULONG present, const ULONG *met,
+                       ULONG metN, ULONG metMax)
+{
+    ULONG dev;
+    ULONG k;
+
+    if (bus == 0 || bus > 0xFFUL || metN > metMax) {
+        return 0;
+    }
+    for (dev = 0; dev < 32; dev++) {
+        if ((present & (1UL << dev)) == 0) {
+            continue;
+        }
+        for (k = 0; k < metN; k++) {
+            if ((met[k] >> 3) == ((bus << 5) | dev)) {
+                break;
+            }
+        }
+        if (k == metN) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+ULONG CmNiAwaited(ULONG classRev)
+{
+    return (ULONG)(classRev != 0xFFFFFFFFUL &&
+                   ((classRev >> 16) == 0x0604UL ||
+                    (classRev >> 8) == 0x010802UL ||
+                    (classRev >> 8) == 0x0C0330UL));
+}
+
+ULONG CmNiIsBridge(ULONG classRev)
+{
+    return (ULONG)(classRev != 0xFFFFFFFFUL &&
+                   (classRev >> 16) == 0x0604UL);
+}
+
+/* Record 28 section 14.3: a pass at `now` that found a driver being
+ * installed holds the open window - its last hold moved to `now` - while
+ * its opening is less than CM_NOIRQ_HOLD_MS ago (niWindowLen keeps that
+ * bound). The first hold of a window is counted and owes its log line
+ * (`value`, CM_NI_HOLD_*). */
+static VOID niHold(PCM_NI_MEMBER m, ULONG now, ULONG value)
+{
+    if (!m->WindowOpen || niSince(now, m->WindowFrom) >= CM_NOIRQ_HOLD_MS) {
+        return;
+    }
+    m->HaveHold = 1;
+    m->HoldAt = now;
+    m->HoldV = value;
+    if (!m->HeldThis) {
+        m->HeldThis = 1;
+        m->C.Held++;
+        m->LogHold = 1;
+        m->LogHoldV = value;
+    }
+}
+
+/* The window closes at `now`: why, and when from its opening and from its
+ * last hold, owed to the log (cm.reenum.9x.noirq.close and .close.hold). */
+static VOID niClosed(PCM_NI_MEMBER m, ULONG now)
+{
+    ULONG why;
+    ULONG open;
+    ULONG held;
+
+    open = niSince(now, m->WindowFrom) / 1000UL;
+    held = m->HaveHold ? niSince(now, m->HoldAt) / 1000UL : open;
+    if (!m->HaveHold) {
+        why = CM_NI_CLOSE_UNHELD;
+    } else if (niWindowLen(m) >= CM_NOIRQ_HOLD_MS) {
+        why = CM_NI_CLOSE_BOUND;
+    } else {
+        why = CM_NI_CLOSE_AFTER_HOLD;
+    }
+    m->LogClose = 1;
+    m->LogCloseV = (why << 24) | ((open > 0xFFFUL ? 0xFFFUL : open) << 12) |
+                   (held > 0xFFFUL ? 0xFFFUL : held);
+    m->LogCloseHoldV = m->HaveHold ? m->HoldV : 0;
+}
+
+ULONG CmNiLogNext(PCM_NI_MEMBER m, PULONG what, PULONG value)
+{
+    if (m->LogHold) {
+        m->LogHold = 0;
+        *what = CM_NI_LOG_HOLD;
+        *value = m->LogHoldV;
+        return 1;
+    }
+    if (m->LogCredit) {
+        m->LogCredit = 0;
+        *what = CM_NI_LOG_CREDIT;
+        *value = m->LogCreditV;
+        return 1;
+    }
+    if (m->LogClose == 1) {
+        m->LogClose = 2;
+        *what = CM_NI_LOG_CLOSE;
+        *value = m->LogCloseV;
+        return 1;
+    }
+    if (m->LogClose == 2) {
+        m->LogClose = 0;
+        *what = CM_NI_LOG_CLOSE_HOLD;
+        *value = m->LogCloseHoldV;
+        return 1;
+    }
+    return 0;
+}
+
 VOID CmNiPass(PCM_NI_MEMBER m, const CM_NI_CTX *ctx)
 {
     ULONG k;
@@ -495,10 +758,26 @@ VOID CmNiPass(PCM_NI_MEMBER m, const CM_NI_CTX *ctx)
 
     m->Pass++;
     m->Cur = CM_NOIRQ_DEVICES;
-    closing = (ULONG)(m->WindowOpen &&
-                      niSince(ctx->Now, m->WindowFrom) >= CM_NOIRQ_WINDOW_MS);
+    /* A bridge being installed (the walk's reading), or an entry still
+     * waiting for its driver at its last reading - however late this pass
+     * comes - holds the window before anything closes on it (record 28
+     * section 14.3). */
+    if (ctx->WalkHold != 0) {
+        niHold(m, ctx->Now, ctx->WalkHold);
+    }
     for (k = 0; k < CM_NOIRQ_DEVICES; k++) {
         d = &m->Dev[k];
+        if (d->Used && d->State == CM_NI_S_PENDING && d->WaitDrv) {
+            niHold(m, ctx->Now, CM_NI_HOLD_ENTRY | (d->Bdf & 0xFFFFUL));
+            break;
+        }
+    }
+    closing = (ULONG)(m->WindowOpen && !niWindowLive(m, ctx->Now));
+    for (k = 0; k < CM_NOIRQ_DEVICES; k++) {
+        d = &m->Dev[k];
+        if (niSkippable(m, k)) {
+            niSkip(m, d);
+        }
         if (!d->Used) {
             continue;
         }
@@ -524,6 +803,7 @@ VOID CmNiPass(PCM_NI_MEMBER m, const CM_NI_CTX *ctx)
         }
     }
     if (closing) {
+        niClosed(m, ctx->Now);
         m->WindowOpen = 0;
     }
 }
@@ -550,25 +830,44 @@ static ULONG niIs(const char *s, ULONG bytes, const char *want)
     return (ULONG)(i == bytes || s[i] == '\0');
 }
 
-ULONG CmNiBindFlags(ULONG dlFound, const char *dl, ULONG dlBytes,
-                    ULONG pdFound, const char *pd, ULONG pdBytes)
+ULONG CmNiBindFlagsKind(ULONG kind, ULONG dlFound, const char *dl,
+                        ULONG dlBytes, ULONG pdFound, const char *pd,
+                        ULONG pdBytes)
 {
     ULONG f;
+    const char *wantDl;
+    const char *wantPd;
 
+    /* The pairs the INFs' 98 SE and ME sections write: Stor98's and
+     * xhci98.inf's (record 28 sections 4 and 14.2). */
+    if (kind == CM_NI_KIND_XHCI) {
+        wantDl = "*NTKERN";
+        wantPd = "xhci98.sys";
+    } else {
+        wantDl = "*IOS";
+        wantPd = "stor98.mpd";
+    }
     f = 0;
     if (dlFound) {
         f |= CM_NI_BIND_DL;
-        if (dl != NULL && niIs(dl, dlBytes, "*IOS")) {
+        if (dl != NULL && niIs(dl, dlBytes, wantDl)) {
             f |= CM_NI_BIND_DL_IOS;
         }
     }
     if (pdFound) {
         f |= CM_NI_BIND_PD;
-        if (pd != NULL && niIs(pd, pdBytes, "stor98.mpd")) {
+        if (pd != NULL && niIs(pd, pdBytes, wantPd)) {
             f |= CM_NI_BIND_PD_STOR98;
         }
     }
     return f;
+}
+
+ULONG CmNiBindFlags(ULONG dlFound, const char *dl, ULONG dlBytes,
+                    ULONG pdFound, const char *pd, ULONG pdBytes)
+{
+    return CmNiBindFlagsKind(CM_NI_KIND_NVME, dlFound, dl, dlBytes,
+                             pdFound, pd, pdBytes);
 }
 
 ULONG CmNiStor98Version(const char *text, ULONG bytes)
@@ -694,6 +993,7 @@ static VOID niOp(PCM_NI_MEMBER m, CM_NI_DEV *d, ULONG kind, PCM_NI_OP op)
     op->Hash = d->Hash;
     op->Bdf = d->Bdf;
     op->LcKind = CM_NI_BASIC_LOG_CONF;
+    op->FnKind = d->Kind;
 }
 
 /* The resource type of each descriptor-reading phase. */
@@ -818,6 +1118,7 @@ ULONG CmNiNext(PCM_NI_MEMBER m, const CM_NI_CTX *ctx, PCM_NI_OP op)
         d = &m->Dev[m->Cur];
         if (d->Used && d->Pass == m->Pass && niWant(m, d, ctx, op)) {
             m->Out = *op;
+            m->OutAt = ctx->Now;
             return 1;
         }
         m->Cur = CM_NOIRQ_DEVICES;
@@ -834,6 +1135,7 @@ ULONG CmNiNext(PCM_NI_MEMBER m, const CM_NI_CTX *ctx, PCM_NI_OP op)
         if (niWant(m, d, ctx, op)) {
             m->Cur = k;
             m->Out = *op;
+            m->OutAt = ctx->Now;
             return 1;
         }
     }
@@ -962,6 +1264,7 @@ static VOID niGate(PCM_NI_MEMBER m, CM_NI_DEV *d, const CM_NI_CTX *ctx,
         m->C.Candidates++;
         m->C.Reprocesses++;
         d->State = CM_NI_S_ACTIVE;
+        d->Credit = 0;               /* a new attempt's own allowance */
         d->Deadline = ctx->Now + CM_NOIRQ_TXN_MS;
         d->ReprocOnly = 1;
         d->Alt = c->Lc;
@@ -1010,6 +1313,7 @@ static VOID niMemOnly(PCM_NI_MEMBER m, CM_NI_DEV *d, const CM_NI_CTX *ctx)
     m->C.Reprocesses++;
     m->C.MemOnly++;
     d->State = CM_NI_S_ACTIVE;
+    d->Credit = 0;               /* a new attempt's own allowance */
     d->Deadline = ctx->Now + CM_NOIRQ_TXN_MS;
     d->ReprocOnly = 1;
     d->Alt = 0;
@@ -1045,7 +1349,9 @@ static VOID niDescriptor(PCM_NI_MEMBER m, CM_NI_DEV *d, const CM_NI_CTX *ctx,
             niMemOnly(m, d, ctx);
             return;
         }
-        if (!d->HaveIrq || d->MemCount == 0) {
+        /* The xHCI kind takes the memory-only form alone (record 28
+         * section 14.2): nothing is created for it. */
+        if (!d->HaveIrq || d->MemCount == 0 || d->Kind == CM_NI_KIND_XHCI) {
             niExclude(m, d, CM_NI_W_CONFIG);
             return;
         }
@@ -1061,6 +1367,7 @@ static VOID niDescriptor(PCM_NI_MEMBER m, CM_NI_DEV *d, const CM_NI_CTX *ctx,
         /* Every rule passed: ACTIVE, on its own deadline. */
         m->C.Candidates++;
         d->State = CM_NI_S_ACTIVE;
+        d->Credit = 0;               /* a new attempt's own allowance */
         d->Deadline = ctx->Now + CM_NOIRQ_TXN_MS;
         d->ReprocOnly = 0;
         d->Alt = 0;
@@ -1126,8 +1433,16 @@ static VOID niHeader(PCM_NI_MEMBER m, CM_NI_DEV *d, const CM_NI_RES *res)
     }
     d->Pin = (res->Val[15] >> 8) & 0xFFUL;
     d->Line = res->Val[15] & 0xFFUL;
-    if ((res->Val[2] >> 8) != 0x010802UL ||
-        ((res->Val[3] >> 16) & 0x7FUL) != 0) {
+    /* NVM Express, or (record 28 section 14) an xHCI controller. */
+    if ((res->Val[2] >> 8) == 0x010802UL) {
+        d->Kind = CM_NI_KIND_NVME;
+    } else if ((res->Val[2] >> 8) == 0x0C0330UL) {
+        d->Kind = CM_NI_KIND_XHCI;
+    } else {
+        niExclude(m, d, CM_NI_W_HEADER);
+        return;
+    }
+    if (((res->Val[3] >> 16) & 0x7FUL) != 0) {
         niExclude(m, d, CM_NI_W_HEADER);
         return;
     }
@@ -1178,6 +1493,8 @@ VOID CmNiTake(PCM_NI_MEMBER m, const CM_NI_CTX *ctx, const CM_NI_RES *res)
     }
     op = m->Out;
     niZero(&m->Out, sizeof(CM_NI_OP));
+    /* The call held the worker this long (record 28 section 14.6). */
+    niCredit(m, niSince(ctx->Now, m->OutAt), ctx->Now);
     d = op.Dev < CM_NOIRQ_DEVICES ? &m->Dev[op.Dev] : NULL;
     if (d == NULL || !d->Used || d->Txn != op.Txn || d->Dn != op.Dn ||
         d->Hash != op.Hash ||
@@ -1225,6 +1542,7 @@ VOID CmNiTake(PCM_NI_MEMBER m, const CM_NI_CTX *ctx, const CM_NI_RES *res)
     case CM_NI_OP_STATUS:
         if (res->Cr != CM_NI_CR_SUCCESS) {
             if (d->State == CM_NI_S_PENDING || d->State == CM_NI_S_ATTEMPTED) {
+                d->WaitDrv = 0;
                 d->Step = NI_AT_WAIT;
             } else {
                 niFail(m, d, CM_NI_W_ADMISSION, res->Cr, 0, 0);
@@ -1249,6 +1567,10 @@ VOID CmNiTake(PCM_NI_MEMBER m, const CM_NI_CTX *ctx, const CM_NI_RES *res)
                 niExclude(m, d, CM_NI_W_NO_PIN);
                 break;
             }
+            /* An installation problem: its driver being installed (record
+             * 28 section 14.3 item 2). */
+            d->WaitDrv = (ULONG)(rule == 0 &&
+                                 CmNiInstalling(res->Status, res->Problem));
             if (rule == 0) {
                 d->Step = NI_AT_WAIT;
             } else if (rule == 2) {
@@ -1279,21 +1601,31 @@ VOID CmNiTake(PCM_NI_MEMBER m, const CM_NI_CTX *ctx, const CM_NI_RES *res)
         break;
     case CM_NI_OP_BINDING:
         if (d->Step == NI_AD_BIND) {
-            if (res->Cr != CM_NI_CR_SUCCESS || res->Bind == 0 ||
-                (res->Bind & (CM_NI_BIND_DL | CM_NI_BIND_PD)) !=
-                    (CM_NI_BIND_DL | CM_NI_BIND_PD)) {
-                d->Step = NI_AT_WAIT;   /* not bound yet, or being bound */
+            if (res->Cr != CM_NI_CR_SUCCESS) {
+                d->WaitDrv = 0;
+                d->Step = NI_AT_WAIT;   /* a read that failed */
                 break;
             }
+            if ((res->Bind & (CM_NI_BIND_DL | CM_NI_BIND_PD)) !=
+                (CM_NI_BIND_DL | CM_NI_BIND_PD)) {
+                d->WaitDrv = 1;         /* not bound yet, or being bound */
+                d->Step = NI_AT_WAIT;
+                break;
+            }
+            d->WaitDrv = 0;
             if (res->Bind != CM_NI_BIND_OK) {
                 niExclude(m, d, CM_NI_W_NOT_STOR98);
                 break;
             }
-            if (ctx->Stor98 == CM_NI_STOR98_FAILED) {
+            /* The installer's record is Stor98's alone; xhci98.sys has
+             * none (record 28 section 14.2, rule 4). */
+            if (d->Kind == CM_NI_KIND_NVME &&
+                ctx->Stor98 == CM_NI_STOR98_FAILED) {
                 d->Step = NI_AT_WAIT;
                 break;
             }
-            if (ctx->Stor98 != CM_NI_STOR98_OK) {
+            if (d->Kind == CM_NI_KIND_NVME &&
+                ctx->Stor98 != CM_NI_STOR98_OK) {
                 niExclude(m, d, CM_NI_W_NOT_STOR98);
                 break;
             }

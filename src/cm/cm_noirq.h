@@ -14,7 +14,12 @@
  * creation (the memory-only form, record 28 section 12; read on 98 SE,
  * task 44.30), nothing is added and the devnode is reprocessed once a
  * generation. Stor98 (0.4.0.0 or later) then reads pin and a line
- * of 0 or FFh and polls. This file holds everything of that which reads
+ * of 0 or FFh and polls. Since task 48.36 (record 28 section 14) an xHCI
+ * controller bound to xhci98.sys, which polls with no interrupt resource,
+ * takes the memory-only form too, and that form alone; and the window is
+ * held while a bridge below the member, or a function's own driver, is
+ * being installed (section 14.3).
+ * This file holds everything of that which reads
  * no OS state: the candidate rules (section 4 rules 1 to 5), the result
  * table, the per-device attempt state and the journal across generations,
  * the gate over the existing configurations, the descriptor copy rules,
@@ -50,8 +55,17 @@
 
 /* Bounds and budgets (record 28 section 4). */
 #define CM_NOIRQ_WINDOW_MS      10000UL /* a member's admission window     */
+#define CM_NOIRQ_HOLD_MS        1800000UL /* ... held while a driver is
+                                           being installed, at most this
+                                           long from its opening; and the
+                                           held time credited, at most
+                                           this much a window and an
+                                           attempt (record 28 14.3, 14.6) */
 #define CM_NOIRQ_TXN_MS         30000UL /* an attempt's own budget         */
 #define CM_NOIRQ_DEVICES        8UL     /* devices a member                */
+#define CM_NOIRQ_SKIPS          32UL    /* devnodes refused by their header,
+                                           kept off the entries (record 28
+                                           section 14.5)                  */
 #define CM_NOIRQ_ATTEMPTS       3UL     /* configurations created a devnode,
                                            in the member's life           */
 #define CM_WK_NOIRQ_MEM         9UL     /* memory descriptors copied       */
@@ -60,6 +74,12 @@
 #define CM_NI_READY_AFTER_MS    3000UL  /* ATTEMPTED with the problem still
                                            there this long: the one
                                            Setup_DevNode(READY) fallback  */
+#define CM_NI_BLOCK_MS          2000UL  /* a call held the worker longer than
+                                           this: credited (record 28 14.6) */
+
+/* The function's kind, from its class code (record 28 section 14). */
+#define CM_NI_KIND_NVME         0UL     /* 010802h, on Stor98              */
+#define CM_NI_KIND_XHCI         1UL     /* 0C0330h, on xhci98.sys          */
 
 /* Values of CONFIGMG.H (cm_cfgmg.h cites the lines). */
 #define CM_NI_LCPRI_FORCECONFIG 0x0000UL
@@ -96,7 +116,7 @@
 #define CM_NI_W_OFF             1UL     /* XhciCmNoIrqStart 0              */
 #define CM_NI_W_NOT_CONFIG      2UL     /* started, or another problem     */
 #define CM_NI_W_HEADER          3UL     /* class, header, pin, line, I/O   */
-#define CM_NI_W_NOT_STOR98      4UL
+#define CM_NI_W_NOT_STOR98      4UL     /* not the kind's driver           */
 #define CM_NI_W_INTERRUPT       5UL     /* routable, or routed             */
 #define CM_NI_W_CONFIG          6UL     /* the configurations' shape       */
 #define CM_NI_W_LEFTOVER        7UL     /* ... one exactly at SUBOPTIMAL
@@ -131,8 +151,10 @@
 #define CM_NI_OP_STATUS         2UL     /* Get_DevNode_Status(Dn) and the
                                            instance id's hash              */
 #define CM_NI_OP_BINDING        3UL     /* Read_Registry_Value(Dn, software
-                                           key) of DevLoader, PortDriver:
-                                           Bind (CmNiBindFlags)            */
+                                           key) of DevLoader and, by
+                                           FnKind, PortDriver (NVMe) or
+                                           NTMPDriver (xHCI): Bind
+                                           (CmNiBindFlagsKind)             */
 #define CM_NI_OP_PORT_INTR      4UL     /* PCI.VXD: the member's 3Ch in
                                            Val[0], its id (00h) in Val[1] */
 #define CM_NI_OP_LC_LIST        5UL     /* Get_First/Next_Log_Conf(Dn, LcKind)
@@ -160,11 +182,14 @@
 #define CM_NI_OP_READY          12UL    /* Setup_DevNode(Dn, READY)        */
 #define CM_NI_OP_LINE           13UL    /* PCI.VXD: 3Ch of Bdf, logged     */
 
-/* CM_NI_RES.Bind (CmNiBindFlags). */
+/* CM_NI_RES.Bind (CmNiBindFlagsKind). For the xHCI kind the second value
+ * is NTMPDriver and the names *NTKERN and xhci98.sys (record 28 14.2). */
 #define CM_NI_BIND_DL           0x01UL  /* DevLoader read                  */
-#define CM_NI_BIND_DL_IOS       0x02UL  /* ... and it is *IOS              */
-#define CM_NI_BIND_PD           0x04UL  /* PortDriver read                 */
-#define CM_NI_BIND_PD_STOR98    0x08UL  /* ... and it is stor98.mpd        */
+#define CM_NI_BIND_DL_IOS       0x02UL  /* ... and it is *IOS (NVMe) or
+                                           *NTKERN (xHCI)                  */
+#define CM_NI_BIND_PD           0x04UL  /* PortDriver (NTMPDriver) read    */
+#define CM_NI_BIND_PD_STOR98    0x08UL  /* ... and it is stor98.mpd (NVMe)
+                                           or xhci98.sys (xHCI)            */
 #define CM_NI_BIND_OK           0x0FUL
 
 /* CM_NI_RES.Place. */
@@ -195,6 +220,7 @@ typedef struct _CM_NI_OP {
     ULONG Off;              /* RD_READ, ADD_RD: in the member's Desc      */
     ULONG Len;              /* RD_READ: the room; ADD_RD: the length      */
     ULONG ResType;          /* RD_READ: the resource type asked for       */
+    ULONG FnKind;           /* BINDING: CM_NI_KIND_* of the entry         */
 } CM_NI_OP, *PCM_NI_OP;
 
 typedef struct _CM_NI_RES {
@@ -228,6 +254,10 @@ typedef struct _CM_NI_CTX {
                                the worker not leaving, the claim held,
                                no loss owed (record 28, "the controller's
                                loss and the member's gates")             */
+    ULONG WalkHold;         /* the pass's walk met a bridge being
+                               installed: its hold's log value
+                               (CM_NI_HOLD_BRIDGE, record 28 14.3 item
+                               1), 0 for none                            */
 } CM_NI_CTX, *PCM_NI_CTX;
 
 /* The numbering's interrupt outcomes for one member and generation
@@ -299,6 +329,12 @@ typedef struct _CM_NI_DEV {
     ULONG LastCr;
     ULONG Pin0Gen;          /* a pin-0 function counted for gen + 1       */
     ULONG WalkSeq;          /* the walk it was last met in                */
+    ULONG Credit;           /* ms of held time credited to this attempt   */
+    ULONG Kind;             /* CM_NI_KIND_*, from the header (rule 3)     */
+    ULONG WaitDrv;          /* PENDING, its last reading: its driver not
+                               installed yet - an installation problem,
+                               or the kind's pair not written (record 28
+                               section 14.3 item 2)                      */
 } CM_NI_DEV;
 
 typedef struct _CM_NI_COUNTERS {
@@ -319,13 +355,16 @@ typedef struct _CM_NI_COUNTERS {
     ULONG Pin0Started;      /* ... started                                */
     ULONG Unresolved;       /* descendants whose id named no location     */
     ULONG NoRoom;           /* descendants met with every entry in use    */
+    ULONG Held;             /* windows held (record 28 section 14.3)      */
+    ULONG Credited;         /* calls whose held time was credited (14.6)  */
 } CM_NI_COUNTERS;
 
 /* XhciCmNoIrqDiag (record 28 section 7), twelve dwords: 0 sequence, 1 the
  * member, 2 the function, 3 its pin 7:0 and line 15:8 as read, 4 the
  * interrupt outcome used (CM_NI_IRQ_*) 7:0 with the entry's state
- * (CM_NI_S_*) 15:8 and its reason (CM_NI_W_*) 23:16 - the last attempt
- * or refusal -, 5 the problem before, 6 the step
+ * (CM_NI_S_*) 15:8, its reason (CM_NI_W_*) 23:16 and its kind
+ * (CM_NI_KIND_*) 31:24 - the last attempt or refusal -, 5 the problem
+ * before, 6 the step
  * reached (an CM_NI_OP_* kind, 31:16) and its CONFIGRET (15:0), 7 the
  * status after, 8 the problem after, 9 configurations created 15:0 and
  * candidates 31:16, 10 refusals packed four bits a reason (reasons 1 to
@@ -338,7 +377,20 @@ typedef struct _CM_NI_MEMBER {
     ULONG Gen;              /* the publication generation now             */
     ULONG HaveGen;
     ULONG WindowOpen;
-    ULONG WindowFrom;
+    ULONG WindowFrom;       /* the window's opening (moved by a credit)   */
+    ULONG HaveHold;         /* a pass of this window held it ...          */
+    ULONG HoldAt;           /* ... the last such pass (record 28 14.3)    */
+    ULONG HeldThis;         /* held since it opened (counted, logged)     */
+    ULONG OutAt;            /* the clock when Out was handed out          */
+    ULONG Credit;           /* ms of held time credited to the window     */
+    ULONG LogHold;          /* a hold's line owed (CmNiLogNext) ...       */
+    ULONG LogHoldV;         /* ... its value                              */
+    ULONG LogCredit;        /* a credit's line owed ...                   */
+    ULONG LogCreditV;       /* ... its value                              */
+    ULONG HoldV;            /* the last hold's source (CM_NI_HOLD_*)      */
+    ULONG LogClose;         /* the close's lines owed ...                 */
+    ULONG LogCloseV;        /* ... its reason and times ...               */
+    ULONG LogCloseHoldV;    /* ... and the last hold's source             */
     ULONG Pass;
     ULONG WalkSeq;          /* bumped by every walk (CmNiWalkBegin)       */
     ULONG NextId;
@@ -348,6 +400,11 @@ typedef struct _CM_NI_MEMBER {
     ULONG IrqGen;           /* ... for this generation                    */
     CM_NI_DEV Dev[CM_NOIRQ_DEVICES];
     CM_NI_JRN Jrn[CM_NOIRQ_DEVICES];
+    ULONG SkipDn[CM_NOIRQ_SKIPS];       /* the refused list: handle (0 a
+                                           free line) ...                */
+    ULONG SkipHash[CM_NOIRQ_SKIPS];     /* ... and the id's hash         */
+    ULONG SkipSeq[CM_NOIRQ_SKIPS];      /* ... and the walk last meeting it */
+    ULONG SkipNext;                     /* the line written next         */
     CM_NI_COUNTERS C;
     ULONG Diag[CM_NI_DIAG_WORDS];
     ULONG DiagSeq;
@@ -360,7 +417,9 @@ VOID CmNiInit(PCM_NI_MEMBER m, ULONG portBdf);
 /*
  * The result of a Reenumerate_DevNode of the member this driver asked for
  * came back (a tunnel up, a resync, a retry): its no-IRQ window opens for
- * CM_NOIRQ_WINDOW_MS. `gen` is the member's publication generation after
+ * CM_NOIRQ_WINDOW_MS, held past that while a driver is being installed
+ * (to CM_NOIRQ_HOLD_MS at most, record 28 section 14.3). `gen` is the
+ * member's publication generation after
  * it; a new one sets every entry not ACTIVE or ATTEMPTED back to PENDING
  * (the journal kept, rule 1); those two run to their deadlines and are
  * read again once they end.
@@ -392,6 +451,81 @@ ULONG CmNiBusy(const CM_NI_MEMBER *m);
 ULONG CmNiWindow(const CM_NI_MEMBER *m);
 
 /*
+ * Record 28 section 14.3: nonzero for a devnode status and problem that
+ * say its driver is still being installed - DN_HAS_PROBLEM with
+ * CM_PROB_NOT_CONFIGURED (1), CM_PROB_DEVLOADER_NOT_FOUND (8),
+ * CM_PROB_REINSTALL (18) or CM_PROB_FAILED_INSTALL (28). A pass whose walk
+ * met a bridge being installed (CM_NI_CTX.WalkHold), or with an entry
+ * PENDING for its driver (CM_NI_DEV.WaitDrv), holds the window: it closes
+ * CM_NOIRQ_WINDOW_MS after the last such pass, never later than
+ * CM_NOIRQ_HOLD_MS after its opening.
+ */
+ULONG CmNiInstalling(ULONG status, ULONG problem);
+/* ... and the walk's whole reading of a descendant: its status read
+ * (`statusCr`, `status`, `problem`) saying so, or its hardware key's
+ * Driver value read as absent (`driverCr` CR_NO_SUCH_VALUE: Windows has
+ * installed no driver for it yet - a new devnode before its wizard, whose
+ * status shows no problem yet). A read that failed otherwise says
+ * nothing. */
+#define CM_NI_CR_NO_SUCH_VALUE  0x25UL
+ULONG CmNiWalkInstalling(ULONG statusCr, ULONG status, ULONG problem,
+                         ULONG driverCr);
+/* Nonzero for a function's dword at 08h (class code 31:8) that names a
+ * PCI-to-PCI bridge (class 06h, subclass 04h): the walk reads the
+ * installation of these alone (record 28 section 14.3 item 1). */
+ULONG CmNiIsBridge(ULONG classRev);
+
+/* A device answering on secondary bus `bus` (`present`, function 0's
+ * answer a bit per device) at which the walk placed none of its `metN`
+ * devnodes (`met`, their locations, bus 15:8 and devfn 7:0): Windows has
+ * not enumerated it yet, so the window holds (record 28 section 14.3
+ * item 1, 98 SE's one-at-a-time enumeration). 0 for bus 0, or when the
+ * walk met more than `metMax` and kept them not whole. */
+ULONG CmNiUnenumerated(ULONG bus, ULONG present, const ULONG *met,
+                       ULONG metN, ULONG metMax);
+
+/* A function whose devnode the window waits for when it answers with none
+ * (CmNiUnenumerated's `present`): a PCI-to-PCI bridge, which brings more
+ * devnodes, or a class this record starts (010802h, 0C0330h); not another
+ * class (a network function with no driver for the system), nor a read
+ * that failed (all ones). */
+ULONG CmNiAwaited(ULONG classRev);
+
+/* The hold's log value (cm.reenum.9x.noirq.hold): its source in 31:24 -
+ * a bridge the walk met (its depth below the member 15:8, its problem 7:0,
+ * FFh for no Driver value or FEh for a function behind it with no child
+ * devnode yet), or an entry waiting for its driver (its location 15:0) -
+ * record 28 section 14.4. */
+#define CM_NI_HOLD_BRIDGE       0x01000000UL
+#define CM_NI_HOLD_ENTRY        0x02000000UL
+#define CM_NI_HOLD_NO_DRIVER    0xFFUL
+#define CM_NI_HOLD_NO_CHILD     0xFEUL
+
+/* A call outside the operations (the walk) held the worker `held` ms:
+ * credited to the window and the attempts as an operation's is (record
+ * 28 section 14.6), when above CM_NI_BLOCK_MS. */
+VOID CmNiCredit(PCM_NI_MEMBER m, ULONG held, ULONG now);
+
+/* A line the caller owes the log: 1 with *what (CM_NI_LOG_*) and *value,
+ * each line once; 0 when none is owed. Read after CmNiPass, CmNiTake and
+ * CmNiCredit (record 28 section 14.4). */
+#define CM_NI_LOG_HOLD          1UL     /* cm.reenum.9x.noirq.hold         */
+#define CM_NI_LOG_CREDIT        2UL     /* cm.reenum.9x.noirq.credit: the
+                                           call's held ms                  */
+#define CM_NI_LOG_CLOSE         3UL     /* cm.reenum.9x.noirq.close: why
+                                           31:24 (CM_NI_CLOSE_*), seconds
+                                           from the opening 23:12 and from
+                                           the last hold (or the opening)
+                                           11:0, each held at FFFh         */
+#define CM_NI_LOG_CLOSE_HOLD    4UL     /* cm.reenum.9x.noirq.close.hold:
+                                           the last hold's source
+                                           (CM_NI_HOLD_*), 0 for none      */
+#define CM_NI_CLOSE_UNHELD      1UL     /* 10 s from the opening, no hold  */
+#define CM_NI_CLOSE_AFTER_HOLD  2UL     /* 10 s from the last hold         */
+#define CM_NI_CLOSE_BOUND       3UL     /* CM_NOIRQ_HOLD_MS reached        */
+ULONG CmNiLogNext(PCM_NI_MEMBER m, PULONG what, PULONG value);
+
+/*
  * The walk met a descendant of the member: devnode `dn`, its instance
  * id's hash, its location and the swizzle of the bridges above it (the
  * sum of their device numbers). Inside the window only; a handle met
@@ -420,6 +554,11 @@ VOID CmNiTake(PCM_NI_MEMBER m, const CM_NI_CTX *ctx, const CM_NI_RES *res);
  * bytes at most): CM_NI_BIND_* (case not significant). */
 ULONG CmNiBindFlags(ULONG dlFound, const char *dl, ULONG dlBytes,
                     ULONG pdFound, const char *pd, ULONG pdBytes);
+/* ... for a kind (CM_NI_KIND_*): the xHCI kind's DevLoader and NTMPDriver
+ * against *NTKERN and xhci98.sys. */
+ULONG CmNiBindFlagsKind(ULONG kind, ULONG dlFound, const char *dl,
+                        ULONG dlBytes, ULONG pdFound, const char *pd,
+                        ULONG pdBytes);
 /* The installer's Stor98 Version, a REG_SZ "a.b.c.d": CM_NI_STOR98_OK at
  * 0.4.0.0 or later, CM_NI_STOR98_OLD otherwise or unparsed. */
 ULONG CmNiStor98Version(const char *text, ULONG bytes);

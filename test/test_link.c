@@ -934,8 +934,230 @@ static void test_refund(void)
     CHECK_EQ(link.GaveUp, 1, "the give-up recorded");
 }
 
+/*
+ * Issue 29 (design record 13 section 21): the 8470p's RTL8157, whose link
+ * trains, fails to SS.Inactive, is warm-reset, trains and fails again.
+ */
+static void test_flap(void)
+{
+    XHCI_LINK_FLAP f;
+    XHCI_LINK_HOLD h;
+    ULONG fresh;
+    ULONG warmEnd;
+    ULONG inactive;
+    ULONG base;
+    ULONG i;
+
+    fresh = portsc(XHCI_PLS_U0, ENAB | XHCI_PORTSC_CSC);
+    warmEnd = portsc(XHCI_PLS_U0, ENAB | XHCI_PORTSC_CSC | XHCI_PORTSC_WRC |
+                                      XHCI_PORTSC_PRC);
+    inactive = portsc(XHCI_PLS_INACTIVE, XHCI_PORTSC_CSC | XHCI_PORTSC_PLC);
+
+    XhciLinkFlapInit(&f);
+    XhciLinkFlapSample(&f, fresh);
+    for (i = 1; i <= XHCI_LINK_FLAP_LIMIT; i++) {
+        XhciLinkFlapSample(&f, inactive);
+        CHECK_EQ(XhciLinkFlapFailure(&f, 100 + i), XHCI_FLAP_WARM,
+                 "a failure within the limit: warm reset");
+        CHECK_EQ(f.Count, i, "counted");
+        XhciLinkFlapSample(&f, warmEnd);
+        CHECK_EQ(f.Count, i, "a warm reset's end does not clear");
+    }
+    XhciLinkFlapSample(&f, portsc(XHCI_PLS_RX_DETECT, XHCI_PORTSC_CSC));
+    CHECK_EQ(f.Count, XHCI_LINK_FLAP_LIMIT, "an RxDetect sample does not clear");
+    CHECK_EQ(XhciLinkFlapFailure(&f, 110), XHCI_FLAP_SEND,
+             "the failure past the limit: sent to USB 2.0");
+    CHECK_EQ(XhciLinkFlapFailure(&f, 111), XHCI_FLAP_SEND,
+             "and the next, while not stopped");
+    CHECK_EQ(XhciLinkFlapStop(&f), 1, "stopped: the transition");
+    CHECK_EQ(XhciLinkFlapStop(&f), 0, "stopped again: no transition");
+    CHECK_EQ(XhciLinkFlapFailure(&f, 112), XHCI_FLAP_STOPPED,
+             "a stopped record gives up");
+    CHECK_EQ(XhciLinkFlapFailure(&f, 112 + XHCI_LINK_FLAP_WINDOW),
+             XHCI_FLAP_STOPPED, "the window does not end the stop");
+    XhciLinkFlapSample(&f, warmEnd);
+    CHECK_EQ(f.Stopped, 1, "a warm reset's end does not end it");
+    XhciLinkFlapSample(&f, fresh);
+    CHECK_EQ(f.Stopped, 0, "a fresh attach ends it");
+    CHECK_EQ(f.Count, 0, "and clears the count");
+
+    /* The window: a failure after it opens a new one at 1. */
+    XhciLinkFlapInit(&f);
+    base = 0xFFFFFF00UL;
+    (VOID)XhciLinkFlapFailure(&f, base);
+    (VOID)XhciLinkFlapFailure(&f, base + 0x10UL);
+    CHECK_EQ(f.Count, 2, "two in the window");
+    CHECK_EQ(XhciLinkFlapFailure(&f, base + XHCI_LINK_FLAP_WINDOW - 1),
+             XHCI_FLAP_WARM, "the last tick of the window, across a wrap");
+    CHECK_EQ(f.Count, 3, "three");
+    CHECK_EQ(XhciLinkFlapFailure(&f, base + XHCI_LINK_FLAP_WINDOW),
+             XHCI_FLAP_WARM, "past the window: a new one");
+    CHECK_EQ(f.Count, 1, "counted from 1");
+    CHECK_EQ(f.First, base + XHCI_LINK_FLAP_WINDOW, "opened now");
+
+    /* PP clear clears; a fresh attach needs CSC and no reset change. */
+    f.Count = 2;
+    XhciLinkFlapSample(&f, fresh & ~XHCI_PORTSC_PP);
+    CHECK_EQ(f.Count, 0, "PP clear clears");
+    f.Count = 2;
+    XhciLinkFlapSample(&f, portsc(XHCI_PLS_U0, ENAB));
+    CHECK_EQ(f.Count, 2, "trained with no CSC: not a fresh attach");
+    XhciLinkFlapSample(&f, portsc(XHCI_PLS_U0, ENAB | XHCI_PORTSC_CSC |
+                                                XHCI_PORTSC_PRC));
+    CHECK_EQ(f.Count, 2, "CSC with PRC: a reset's end");
+    XhciLinkFlapSample(&f, portsc(XHCI_PLS_U0, ENAB | XHCI_PORTSC_CSC |
+                                                XHCI_PORTSC_PR));
+    CHECK_EQ(f.Count, 2, "still in reset");
+    XhciLinkFlapSample(&f, 0xFFFFFFFFUL);
+    CHECK_EQ(f.Count, 2, "unreadable says nothing");
+    XhciLinkFlapSample(NULL, fresh);
+    CHECK_EQ(XhciLinkFlapFailure(NULL, 0), XHCI_FLAP_WARM, "no record");
+    CHECK_EQ(XhciLinkFlapStop(NULL), 0, "no record: no stop");
+
+    /* The hold: no identity; released by the companion's departure after
+     * a connect, kept by one before it. */
+    CHECK_EQ(XhciHoldBeginFlap(&h, 8, 4), XHCI_HOLD_FLAP, "a flap hold");
+    CHECK_EQ(h.Companion, 4, "its companion");
+    CHECK_EQ(h.Held.Valid, 0, "no identity");
+    CHECK_EQ(XhciHoldCompanionPortsc(&h, XHCI_PORTSC_PP | XHCI_PORTSC_CSC),
+             XHCI_HOLD_KEEP, "a departure before any connect keeps it");
+    CHECK_EQ(XhciEnumHoldInFlight(0, h.Kind, h.Companion, h.ConnectSeen), 1,
+             "in flight for the settle until the companion connects");
+    CHECK_EQ(XhciHoldCompanionPortsc(&h, XHCI_PORTSC_PP | XHCI_PORTSC_CCS |
+                                             XHCI_PORTSC_CSC),
+             XHCI_HOLD_KEEP, "the device on the companion");
+    CHECK_EQ(h.ConnectSeen, 1, "the connect seen");
+    CHECK_EQ(XhciEnumHoldInFlight(0, h.Kind, h.Companion, h.ConnectSeen), 0,
+             "no longer in flight");
+    CHECK_EQ(XhciHoldCompanionPortsc(&h, XHCI_PORTSC_PP | XHCI_PORTSC_CSC),
+             XHCI_HOLD_RELEASE, "its departure releases, with no identity");
+    CHECK_EQ(h.Kind, XHCI_HOLD_NONE, "the hold ended");
+    CHECK_EQ(XhciHoldBeginFlap(&h, 8, 0), XHCI_HOLD_ORPHAN,
+             "no companion: an orphan");
+    CHECK_EQ(XhciHoldBeginFlap(NULL, 8, 4), XHCI_HOLD_NONE, "no hold");
+
+    /* F8 and 21.5: what a failure past the limit gets. */
+    CHECK_EQ(XhciLinkFlapDecide(XHCI_FLAP_WARM, 0, 0), XHCI_FLAP_WARM,
+             "within the limit: warm, whatever the switch");
+    CHECK_EQ(XhciLinkFlapDecide(XHCI_FLAP_SEND, 1, 1), XHCI_FLAP_SEND,
+             "on, a USB 2.0 path: sent");
+    CHECK_EQ(XhciLinkFlapDecide(XHCI_FLAP_SEND, 0, 1), XHCI_FLAP_STOPPED,
+             "XhciSsFlapFallback 0: given up, still bounded");
+    CHECK_EQ(XhciLinkFlapDecide(XHCI_FLAP_SEND, 1, 0), XHCI_FLAP_STOPPED,
+             "no companion or USB 2.0 half: given up");
+    CHECK_EQ(XhciLinkFlapDecide(XHCI_FLAP_STOPPED, 1, 1), XHCI_FLAP_STOPPED,
+             "stopped stays stopped");
+
+    /* A SuperSpeed hub's port (21.5): BH_PORT_RESET's end is not read as
+     * a sample, the empty port clears; with no USB 2.0 half and the
+     * switch on, three resets and then the stop, which holds until the
+     * port reads empty. */
+    XhciLinkFlapInit(&f);
+    for (i = 1; i <= XHCI_LINK_FLAP_LIMIT; i++) {
+        CHECK_EQ(XhciLinkFlapDecide(XhciLinkFlapFailure(&f, 50 + i), 1, 0),
+                 XHCI_FLAP_WARM, "a hub port's failure within the limit");
+    }
+    CHECK_EQ(XhciLinkFlapDecide(XhciLinkFlapFailure(&f, 60), 1, 0),
+             XHCI_FLAP_STOPPED, "no USB 2.0 half: stopped");
+    CHECK_EQ(XhciLinkFlapStop(&f), 1, "the stop's transition");
+    CHECK_EQ(XhciLinkFlapDecide(XhciLinkFlapFailure(&f, 61), 1, 1),
+             XHCI_FLAP_STOPPED, "a half that appears later does not undo it");
+    XhciLinkFlapInit(&f);
+    CHECK_EQ(XhciLinkFlapDecide(XhciLinkFlapFailure(&f, 70), 1, 1),
+             XHCI_FLAP_WARM, "the empty port's clear: a fresh count");
+}
+
+/*
+ * Issue 29, a hub port's send (record 13 section 21.5): an interrupt-driven
+ * hub reports nothing after the port's change was acknowledged, so the
+ * send's retries come from the re-arm tick alone. The first SET_FEATURE
+ * fails, the tick's retry succeeds; and three failures give the link up.
+ */
+static void test_hub_disable_retry(void)
+{
+    XHCI_LINK_DISABLE d;
+    ULONG pending;
+    ULONG outcome;
+    ULONG ticks;
+    ULONG wire[3];
+    ULONG i;
+
+    /* The wire: the first attempt fails, the next succeeds. No hub
+     * notification arrives; only the ticks drive the retries. */
+    wire[0] = 0;
+    wire[1] = 1;
+    wire[2] = 1;
+    XhciLinkDisableInit(&d);
+    outcome = XhciLinkDisableOutcome(&d, wire[0]);
+    CHECK_EQ(outcome, XHCI_DISABLE_RETRY, "the first attempt failed: pending");
+    pending = (outcome == XHCI_DISABLE_RETRY);
+    ticks = 0;
+    for (i = 1; pending && i < 3; i++) {
+        ticks++;
+        outcome = XhciLinkDisableOutcome(&d, wire[i]);
+        pending = (outcome == XHCI_DISABLE_RETRY);
+    }
+    CHECK_EQ(outcome, XHCI_DISABLE_DONE, "the tick's retry sent it");
+    CHECK_EQ(ticks, 1, "one tick, no notification");
+    CHECK_EQ(d.Tries, 0, "the record cleared after the send");
+
+    XhciLinkDisableInit(&d);
+    CHECK_EQ(XhciLinkDisableOutcome(&d, 0), XHCI_DISABLE_RETRY, "fail 1");
+    CHECK_EQ(XhciLinkDisableOutcome(&d, 0), XHCI_DISABLE_RETRY, "fail 2");
+    CHECK_EQ(XhciLinkDisableOutcome(&d, 0), XHCI_DISABLE_GIVE_UP,
+             "fail 3: given up, bounded");
+    CHECK_EQ(d.Tries, 0, "and cleared for the next send");
+    CHECK_EQ(XhciLinkDisableOutcome(&d, 1), XHCI_DISABLE_DONE,
+             "a first attempt that works is sent at once");
+    CHECK_EQ(XhciLinkDisableOutcome(NULL, 0), XHCI_DISABLE_GIVE_UP,
+             "no record: no retry");
+
+    /* A polled hub: the recovery reaches the send again between ticks
+     * while it is pending; it attempts nothing and keeps the count, so
+     * three failed sends in all give the link up. */
+    pending = 0;
+    i = 0;
+    if (XhciLinkDisableEnter(&d, pending)) {
+        i++;
+        pending = XhciLinkDisableOutcome(&d, 0) == XHCI_DISABLE_RETRY;
+    }
+    CHECK_EQ(pending, 1, "the first send failed: pending");
+    CHECK_EQ(XhciLinkDisableEnter(&d, pending), 0,
+             "a look before the tick: no attempt");
+    CHECK_EQ(d.Tries, 1, "the count kept");
+    i++;
+    pending = XhciLinkDisableOutcome(&d, 0) == XHCI_DISABLE_RETRY;
+    CHECK_EQ(pending, 1, "the tick's retry failed: still pending");
+    CHECK_EQ(XhciLinkDisableEnter(&d, pending), 0,
+             "another look: no attempt");
+    i++;
+    outcome = XhciLinkDisableOutcome(&d, 0);
+    CHECK_EQ(outcome, XHCI_DISABLE_GIVE_UP, "the third failure: given up");
+    CHECK_EQ(i, XHCI_LINK_DISABLE_TRIES, "three attempts in all");
+    CHECK_EQ(XhciLinkDisableEnter(&d, 0), 1,
+             "a later send, nothing pending: attempted afresh");
+
+    /* Pending send, the retry reads the port empty (the flap record
+     * cleared there), a replacement connects before the next look: its
+     * first failure gets a fresh budget. */
+    {
+        XHCI_LINK_FLAP f;
+
+        XhciLinkFlapInit(&f);
+        for (i = 0; i <= XHCI_LINK_FLAP_LIMIT; i++) {
+            (VOID)XhciLinkFlapFailure(&f, 10 + i);
+        }
+        CHECK_EQ(f.Count, XHCI_LINK_FLAP_LIMIT + 1, "the old device past it");
+        XhciLinkFlapInit(&f);
+        CHECK_EQ(XhciLinkFlapDecide(XhciLinkFlapFailure(&f, 20), 1, 1),
+                 XHCI_FLAP_WARM, "the replacement's first failure: warm");
+    }
+}
+
 int main(void)
 {
+    test_flap();
+    test_hub_disable_retry();
     test_refund();
     test_stuck_polling();
     test_classify();

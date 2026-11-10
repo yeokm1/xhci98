@@ -701,7 +701,7 @@ const char *tr_ni_why(TR_U32 v)
     case 1: return "XhciCmNoIrqStart is 0";
     case 2: return "started, or another problem";
     case 3: return "its header (class, pin, line or I/O)";
-    case 4: return "not Stor98's";
+    case 4: return "not its driver (Stor98 / xhci98.sys)";
     case 5: return "its interrupt is routable or routed";
     case 6: return "its configurations' shape";
     case 7: return "a left-over configuration";
@@ -713,6 +713,15 @@ const char *tr_ni_why(TR_U32 v)
     case 13: return "the controller (lost, gated or claimed)";
     case 14: return "a step refused";
     case 15: return "no longer admitted";
+    default: return "not one this tool knows";
+    }
+}
+
+const char *tr_ni_kind(TR_U32 v)
+{
+    switch (v) {
+    case 0: return "an NVMe controller, for Stor98";
+    case 1: return "an xHCI controller, for xhci98.sys";
     default: return "not one this tool knows";
     }
 }
@@ -767,6 +776,8 @@ void tr_nidiag_text(TR_TEXT *t, const TR_DVAL *v, int nt)
               (unsigned long)((w >> 8) & 0xFFUL), tr_ni_state((w >> 8) & 0xFFUL),
               (unsigned long)((w >> 16) & 0xFFUL),
               tr_ni_why((w >> 16) & 0xFFUL));
+    tr_printf(t, "    Kind %lu: %s\n", (unsigned long)(w >> 24),
+              tr_ni_kind(w >> 24));
     tr_printf(t, "    Problem before: %lu\n", (unsigned long)rd32(b + 20));
     w = rd32(b + 24);
     tr_printf(t, "    Step reached %lu: %s, CONFIGRET %lu\n",

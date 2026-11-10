@@ -21,6 +21,15 @@
 #include "tbt_fake.h"
 #include "test_harness.h"
 
+/* A sleep that lasts 55 ms whatever is asked (a coarse system tick). */
+static void coarseSleep(PVOID ctx, ULONG ms)
+{
+    (void)ctx;
+    (void)ms;
+    g_fake.AskedUs += 55000UL;
+    g_fake.NowUs += 55000UL;
+}
+
 static const TBT_CFG g_cfg = { NULL, fakeCfgRead, fakeCfgWrite };
 
 static void test_match(void)
@@ -199,6 +208,25 @@ static void test_platform(void)
     CHECK_EQ(TbtHwPlatformSuspend(icl, &g_cfg, &g_fakeHost, TRUE, FALSE), TBT_E_TIMEOUT,
              "never done: timeout");
     CHECK_EQ(g_fake.Cfg[0xF0 / 4], (0x03UL << 1) | 1UL, "GO2SX_NO_WAKE sent, left set");
+    /* A coarse tick (record 22 section 11.1.7, task 48.35): each 1 ms
+     * sleep lasts 55 ms; the 500 ms bound holds on the elapsed clock, with
+     * the tick's allowance, where a count of 500 sleeps took 27.5 s. */
+    fakeReset();
+    {
+        TBT_HOST coarse;
+        unsigned long t0;
+
+        coarse = g_fakeHost;
+        coarse.Sleep = coarseSleep;
+        coarse.TickUs = 55000UL;
+        t0 = g_fake.NowUs;
+        CHECK_EQ(TbtHwPlatformSuspend(icl, &g_cfg, &coarse, TRUE, FALSE), TBT_E_TIMEOUT,
+                 "coarse tick: never done, timeout");
+        CHECK(g_fake.NowUs - t0 <= 500000UL + 2UL * 55000UL,
+              "coarse tick: ended within the bound and a tick");
+        CHECK(g_fake.NowUs - t0 + 55000UL >= 500000UL,
+              "coarse tick: not before the bound, less a tick of the quantised clock");
+    }
     fakeReset();
     CHECK_EQ(TbtHwPlatformSuspend(icl, &g_cfg, &g_fakeHost, FALSE, TRUE), TBT_OK,
              "no ICM: nothing");

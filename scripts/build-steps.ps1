@@ -30,6 +30,12 @@ freshly linked EXE blocked, not a test failure).
 The build's architecture, x86 or amd64: the x86 run alone rebuilds XHCITR
 and XHCIPERF and runs Stor98's unit suite.
 
+.PARAMETER Stor98Only
+build-driver.cmd's Stor98-only run (stor98 in place of the flavour,
+roadmap-usb4 task 48.9): only the steps Stor98's images and INFs need,
+its INF gate and the interface header with their self-tests and, on the
+x86 run, its unit suite.
+
 .PARAMETER SelfTest
 Run the runner over stand-in steps instead, and check what it does.
 
@@ -41,6 +47,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build-steps.ps1 -Arch x86
 param(
     [ValidateSet("x86", "amd64")]
     [string]$Arch = "x86",
+    [switch]$Stor98Only,
     [switch]$SelfTest
 )
 
@@ -117,6 +124,7 @@ function Get-BuildSteps {
     $s += New-Step "vm-matrix" "VM matrix verdict self-tests" (Get-PsRun "scripts\vm-matrix\selftest.ps1") $matrixFail
     $s += New-Step "msi86-trace" "VM matrix: the M86 trace validator's self-tests" (Get-PsRun "scripts\vm-matrix\check-msi86-trace.ps1" "-SelfTest") $matrixFail
     $hdrFail = "src\cm\stor98cm.h is not src\stor98\include\stor98cm.h, the master, byte for byte - see the check's output."
+    $s += New-Step "precut-selftest" "pre-cut.ps1 self-tests" (Get-PsRun "scripts\package\pre-cut.ps1" "-SelfTest") "pre-cut.ps1's self-tests failed, so its refusals and its steps before a cut cannot be trusted (task 48.10)."
     $s += New-Step "stor98-header-selftest" "Stor98 interface header: self-tests" (Get-PsRun "scripts\check-stor98-header.ps1" "-SelfTest") $hdrFail
     $s += New-Step "stor98-header" "Stor98 interface header" (Get-PsRun "scripts\check-stor98-header.ps1") $hdrFail @("stor98-header-selftest")
     $toolFail = "xhcitr\build.cmd or xhciperf\build.cmd failed: XHCITR, which compiles the installer's pure half, or XHCIPERF is not current."
@@ -144,6 +152,14 @@ function Get-BuildSteps {
     $first = @()
     foreach ($id in $long) { $first += @($s | Where-Object { $_.Id -eq $id }) }
     return @($first + @($s | Where-Object { $long -notcontains $_.Id }))
+}
+
+function Get-Stor98Steps {
+    # The Stor98-only run's block (task 48.9): Get-BuildSteps' Stor98 rows,
+    # taken from that table so the two cannot drift, with what they wait for.
+    param([string]$Arch)
+    $ids = @("stor98-inf-selftest", "stor98-inf", "stor98-header-selftest", "stor98-header", "stor98-unit")
+    return @(Get-BuildSteps -Arch $Arch | Where-Object { $ids -contains $_.Id })
 }
 
 function Format-StepSpan {
@@ -396,6 +412,12 @@ function Invoke-RunnerSelfTest {
             Assert-True (@($ids | Select-Object -Unique).Count -eq $ids.Count) "an id is used twice in the $ar table."
             foreach ($x in $t) { foreach ($a in $x.After) { Assert-True ($ids -contains $a) "$ar step '$($x.Id)' waits for '$a', not in the table." } }
             Assert-True ((($ids -contains "xhcitr-build") -and ($ids -contains "stor98-unit")) -eq ($ar -eq "x86")) "the x86-only steps are wrong in the $ar table."
+            $t = @(Get-Stor98Steps -Arch $ar)
+            $ids = @($t | ForEach-Object { $_.Id })
+            $want = @("stor98-inf-selftest", "stor98-inf", "stor98-header-selftest", "stor98-header")
+            if ($ar -eq "x86") { $want += "stor98-unit" }
+            Assert-True ((@($ids | Sort-Object) -join ",") -eq (@($want | Sort-Object) -join ",")) "the $ar Stor98-only table is '$($ids -join ",")'."
+            foreach ($x in $t) { foreach ($a in $x.After) { Assert-True ($ids -contains $a) "$ar Stor98-only step '$($x.Id)' waits for '$a', not in its table." } }
         }
     } finally {
         Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
@@ -416,5 +438,6 @@ if ($SelfTest) {
 
 $max = Get-StepMax
 $logDir = Join-Path $repo ("out\steps-" + $Arch)
-$rc = Invoke-BuildSteps -Steps @(Get-BuildSteps -Arch $Arch) -Max $max -LogDir $logDir -Root $repo -Write { param($l) Write-Host $l }
+$steps = if ($Stor98Only) { @(Get-Stor98Steps -Arch $Arch) } else { @(Get-BuildSteps -Arch $Arch) }
+$rc = Invoke-BuildSteps -Steps $steps -Max $max -LogDir $logDir -Root $repo -Write { param($l) Write-Host $l }
 exit $rc

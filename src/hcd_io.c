@@ -1,18 +1,19 @@
 /*
  * hcd_io.c - the URB transfer path: a device PDO's request onto a pipe,
- * through the map pump, onto the ring, and back (roadmap-hcd.md task
- * 26-A.5; design record 13 sections 6 and 11.3).
+ * through staging, onto the ring, and back (roadmap-hcd.md task 26-A.5;
+ * design record 13 sections 6 and 11.11).
  *
  * A submission takes one of the pipe's preallocated records (HCD_XFER,
- * hcd.h), builds or borrows the MDL, and queues the record on the map pump
- * (hcd_dma.c), whose execution routine maps the chunk and hands it back to
+ * hcd.h), borrows the URB's MDL or notes its TransferBuffer, and hands the
+ * record to staging (hcd_stage.c, task 48.33), which gives the TD buffers
+ * of the driver's own, copies an OUT's bytes in and hands it back to
  * HcdIoMapped, which publishes it through the transfer engine (xhci_xfer.c)
  * under the controller lock and rings the doorbell. The event DPC retires it
  * (hcd_dev.c -> HcdIoRetired) onto the controller's done list, and the
- * deferred work after the lock's release (HcdIoDeferred) unmaps it, starts
- * the next chunk or completes the IRP. A record never leaves its pipe and a
- * transfer allocates nothing but, for a URB without one, its MDL (section
- * 7.5 rule 3).
+ * deferred work after the lock's release (HcdIoDeferred) copies an IN's
+ * bytes out and gives the staging back, then starts the next chunk or
+ * completes the IRP. A record never leaves its pipe and a transfer
+ * allocates nothing (section 7.5 rule 3).
  *
  * The device record lives while any URB holds it: hcd_urb.c takes a
  * reference (Refs) under PdoListLock while the PDO still names the record,
@@ -32,6 +33,7 @@
 #include "xhci_xfer.h"
 #include "xhci_pipe.h"
 #include "xhci_dbg.h"
+#include "xhci_stage.h"
 
 /* ----------------------------------------------------------------------- */
 /* Pipes                                                                    */
@@ -58,8 +60,11 @@ VOID HcdIoPipeInitCount(PHCD_PIPE pipe, PHCD_USB_DEVICE dev, ULONG records)
         pipe->Xfers[i].RefillQueued = 0;
         pipe->Xfers[i].RefillNext = NULL;
         pipe->Xfers[i].Probe = 0;
+        pipe->Xfers[i].StageState = HCD_STAGE_S_NONE;
+        pipe->Xfers[i].StageKind = HCD_STAGE_K_NONE;
     }
     pipe->TruncHeld = 0;
+    pipe->ReserveSlab = 0xFFFFFFFFUL;
 }
 
 VOID HcdIoPipeInit(PHCD_PIPE pipe, PHCD_USB_DEVICE dev)
@@ -186,7 +191,8 @@ static ULONG hcdIsData(PHCD_XFER x)
 /* Submission                                                               */
 /* ----------------------------------------------------------------------- */
 
-/* The next chunk: the pages it may span are bounded by the adapter's grant
+/* XhciDmaStaging 0 alone (as 3.4.2.0; staging plans its own chunks,
+ * hcd_stage.c). The next chunk: the pages it may span are bounded by the adapter's grant
  * and by the SG elements a record carries; a control transfer is one TD and
  * cannot be split, and neither is an isochronous one - its second chunk
  * would reach the ring only after the first retired, a gap in the stream
@@ -229,6 +235,18 @@ static ULONG hcdPlanChunk(PHCD_CONTROLLER hc, PHCD_XFER x)
     return 1;
 }
 
+/* Whether a request may need several TDs and so owns its pipe from its
+ * start: with staging, longer than its pipe's reserve (HcdStageMulti, task
+ * 48.33); with XhciDmaStaging 0, its first chunk short of its length, as
+ * in 3.4.2.0. IRQL: any. */
+static ULONG hcdMulti(PHCD_CONTROLLER hc, PHCD_XFER x)
+{
+    if (hc->Staging) {
+        return HcdStageMulti(x);
+    }
+    return (x->Length != 0 && x->Chunk < x->Length) ? 1UL : 0UL;
+}
+
 /* ----------------------------------------------------------------------- */
 /* Stage 2: two TDs of one URB on the ring (36.24; record 13 section 11.6) */
 /* ----------------------------------------------------------------------- */
@@ -237,7 +255,7 @@ static VOID hcdChunkPublished(PHCD_CONTROLLER hc, PHCD_PIPE pipe,
                               PHCD_XFER x, const XHCI_XSTAT_STAMP *entered);
 
 /*
- * Point 1, at the fill: a record that may be pipelined claims a free wide
+ * XhciDmaStaging 0 alone (as 3.4.2.0). Point 1, at the fill: a record that may be pipelined claims a free wide
  * entry; whether it is pipelined is settled by its first mapping. One that
  * the span limits or an empty pool turn away is counted and stays
  * sequential. IRQL: <= DISPATCH_LEVEL, no lock held.
@@ -697,14 +715,24 @@ VOID HcdIoRefillFlush(PHCD_CONTROLLER hc)
  * offered to its machine, which latches the status unless an earlier end
  * did and stops further TDs; the TDs on the ring are the thread's to take
  * off (they retire with their stopped progress). A record held mapped
- * leaves its pipe's held list here. Nothing for any other record.
- * Controller lock held.
+ * leaves its pipe's held list here. Any other record goes to staging's
+ * cancel (task 48.33). Controller lock held.
  */
 VOID HcdIoWideStop(PHCD_CONTROLLER hc, PHCD_XFER x, LONG usbd)
 {
     ULONG flags;
 
-    if (!x->Promoted || x->Rec.Finalized) {
+    if (!x->Promoted) {
+        /* Task 48.33: a record waiting for staging, or for a window to
+         * copy out through, leaves its queue for the done list now
+         * (hcd_stage.c); the caller runs the deferred work. Nothing with
+         * XhciDmaStaging 0, as in 3.4.2.0. */
+        if (hc->Staging) {
+            HcdStageCancelLocked(hc, x, usbd);
+        }
+        return;
+    }
+    if (x->Rec.Finalized) {
         return;
     }
     if (x->State == HCD_XFER_HELD) {
@@ -791,6 +819,9 @@ static VOID NTAPI hcdCancel(PDEVICE_OBJECT DeviceObject, PIRP Irp)
         HcdIoWideStop(hc, x, HCD_XFER_CANCEL_STATUS(x));
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
+    /* A record staging's cancel moved (HcdIoWideStop) completes now; one
+     * on the ring is the thread's. */
+    HcdIoDeferred(hc);
     HcdThreadWake(hc);
     (VOID)InterlockedDecrement(&hc->CancelsRunning);
 }
@@ -1106,16 +1137,38 @@ static VOID hcdWaitingLaunch(PHCD_CONTROLLER hc, PHCD_XFER x)
                                                                      : NULL);
 }
 
-/* A record on its way: mapped by the pump, or published at once when it
- * moves no data. IRQL: <= DISPATCH_LEVEL, no lock held. */
+/* A record on its way: an isochronous one into its own share or refused
+ * (NO_MEMORY), never queued; any other to staging's admission
+ * (hcd_stage.c) - one that moves no data too, so it keeps its place in
+ * its pipe's order behind an earlier request still waiting. IRQL:
+ * <= DISPATCH_LEVEL, no lock held. */
 static VOID hcdStart(PHCD_CONTROLLER hc, PHCD_XFER x)
 {
-    if (x->Length == 0) {
-        HcdIoMapped(hc, x, 1);
-    } else {
-        x->State = HCD_XFER_MAPPING;
-        HcdDmaMapQueue(hc, x);
+    if (!hc->Staging) {
+        /* XhciDmaStaging 0: the map pump, as in 3.4.2.0. */
+        if (x->Length == 0) {
+            HcdIoMapped(hc, x, 1);
+        } else {
+            x->State = HCD_XFER_MAPPING;
+            HcdDmaMapQueue(hc, x);
+        }
+        return;
     }
+    x->State = HCD_XFER_MAPPING;
+    if (x->Isoch) {
+        if (x->Length == 0) {
+            HcdIoMapped(hc, x, 1);
+            return;
+        }
+        if (!HcdStageIsoFill(hc, x)) {
+            x->Status = HCD_USBD_NO_MEMORY;
+            HcdIoMapped(hc, x, 0);
+            return;
+        }
+        HcdIoMapped(hc, x, 1);
+        return;
+    }
+    HcdStageSubmit(hc, x);
 }
 
 /* A refusal at submission: the device reference goes back now, and the
@@ -1264,10 +1317,12 @@ static ULONG hcdSgPa(const USBPORT_SCATTER_GATHER_LIST *sg, ULONG offset,
 }
 
 /*
- * The record's block from its URB and its mapped chunk, each packet one or
- * two page-bounded fragments: the pump cuts its elements at page bounds
- * (hcd_dma.c), so a fragment never spans two. Rewritten whole each time, so
- * a record held mapped is filled again when released. IRQL:
+ * The record's block from its URB and its staged share, each packet one or
+ * two page-bounded fragments at the client's own offsets in the share
+ * (task 48.33, record 13 section 11.11.5): the share is contiguous and
+ * its elements are cut at 64 KB lines (hcd_stage.c), which are page
+ * bounds, so a fragment never spans two. Rewritten whole each time, so a
+ * record held staged is filled again when released. IRQL:
  * <= DISPATCH_LEVEL.
  */
 static ULONG hcdIsoFill(PHCD_XFER x)
@@ -1286,7 +1341,8 @@ static ULONG hcdIsoFill(PHCD_XFER x)
     it = &((PURB)x->Urb)->UrbIsochronousTransfer;
     blk = hcdIsoBlock(x);
     n = it->NumberOfPackets;
-    page = BYTE_OFFSET(MmGetMdlVirtualAddress(x->Mdl));
+    /* With XhciDmaStaging 0 the client's own page offset (hcdFill). */
+    page = x->StagePage;
     blk->Signature = USBPORT_ISO_SIGNATURE;
     blk->NumberOfPackets = n;
     blk->SgElementCount = x->Sg.List.SgElementCount;
@@ -1296,7 +1352,8 @@ static ULONG hcdIsoFill(PHCD_XFER x)
         for (b = 0; b < sizeof(*p); b++) {
             ((PUCHAR)p)[b] = 0;
         }
-        off = it->IsoPacket[i].Offset;
+        /* The packet's place in the share (task 48.33). */
+        off = it->IsoPacket[i].Offset - x->StageIsoBase;
         p->Length = XhciPipeIsoLength(
             (const XHCI_PIPE_ISO_PACKET *)it->IsoPacket, n, x->Length, i);
         p->FragmentCount = 1;
@@ -1591,6 +1648,15 @@ static LONG hcdFill(PHCD_CONTROLLER hc, PHCD_XFER x, PVOID urb,
     x->Urb = urb;
     x->Mdl = NULL;
     x->OwnMdl = 0;
+    x->SysVa = NULL;
+    x->StageState = HCD_STAGE_S_NONE;
+    x->StageKind = HCD_STAGE_K_NONE;
+    x->StageCount = 0;
+    x->StageEvent = 0;
+    x->StageCopied = 0;
+    x->StageAbandon = 0;
+    x->StageWaited = 0;
+    x->StageMapFails = 0;
     x->MapBase = NULL;
     x->MapCount = 0;
     x->Wide = NULL;
@@ -1666,38 +1732,82 @@ static LONG hcdFill(PHCD_CONTROLLER hc, PHCD_XFER x, PVOID urb,
             return HCD_USBD_INVALID_PARAMETER;
         }
         x->Mdl = req->Mdl;
-    } else if (req->Buffer != NULL) {
+    } else if (req->Buffer != NULL && !hc->Staging) {
+        /* XhciDmaStaging 0: an MDL of this driver's, as in 3.4.2.0. */
         x->Mdl = HcdPoolMdlBuild(req->Buffer, req->Length);
         if (x->Mdl == NULL) {
             return HCD_USBD_NO_MEMORY;
         }
         x->OwnMdl = 1;
+    } else if (req->Buffer != NULL) {
+        /* Non-paged by the USB contract: copied through its own address
+         * (hcd_stage.c), so no MDL is built for it any more. */
+        x->SysVa = (PUCHAR)req->Buffer;
     } else {
         (VOID)InterlockedIncrement((PLONG)&hc->Counters.UrbsMalformed);
         return HCD_USBD_INVALID_PARAMETER;
     }
-    if (!hcdPlanChunk(hc, x)) {
-        if (x->OwnMdl) {
-            HcdPoolMdlFree(x->Mdl);
+    if (!hc->Staging) {
+        /* XhciDmaStaging 0: the first chunk planned and a wide entry
+         * claimed, as in 3.4.2.0; the isochronous packets at the
+         * client's own offsets (hcdIsoFill). */
+        x->StageIsoBase = 0;
+        x->StagePage = BYTE_OFFSET(MmGetMdlVirtualAddress(x->Mdl));
+        if (!hcdPlanChunk(hc, x)) {
+            if (x->OwnMdl) {
+                HcdPoolMdlFree(x->Mdl);
+            }
+            x->Mdl = NULL;
+            x->OwnMdl = 0;
+            if (x->Isoch) {
+                (VOID)InterlockedIncrement(
+                    (PLONG)&hc->Hc.IsoRefusalsTooLarge);
+            }
+            return HCD_USBD_INVALID_PARAMETER;
         }
+        hcdWideClaim(hc, x);
+        return XHCI_USBD_STATUS_SUCCESS;
+    }
+    /* Task 48.33 (record 13 section 11.11.5): an isochronous URB longer,
+     * from packet 0's offset, than its record's share is refused, as one
+     * the map registers could not cover was; a control data stage is at
+     * most 64 KiB by its wLength and fits a slab, and one claiming more is
+     * refused. */
+    if (x->Control && x->Length > XHCI_STAGE_SLAB) {
+        /* Longer than any wLength: never staged, as one longer than the
+         * map grant was never mapped. */
+        (VOID)InterlockedIncrement((PLONG)&hc->Counters.UrbsMalformed);
         x->Mdl = NULL;
-        x->OwnMdl = 0;
-        if (x->Isoch) {
-            (VOID)InterlockedIncrement((PLONG)&hc->Hc.IsoRefusalsTooLarge);
-        }
+        x->SysVa = NULL;
         return HCD_USBD_INVALID_PARAMETER;
     }
-    hcdWideClaim(hc, x);
+    x->StageIsoBase = 0;
+    if (x->Isoch) {
+        /* Packet 0's offset: the share holds the packets from there
+         * (hcd_stage.c, HcdStageIsoFill); hcdIsoAdmit has checked every
+         * offset within the buffer and in order. */
+        x->StageIsoBase =
+            ((PURB)urb)->UrbIsochronousTransfer.IsoPacket[0].Offset;
+    }
+    if (x->Isoch && (x->StageIsoBase > x->Length ||
+                     x->Length - x->StageIsoBase > x->Pipe->IsoShareBytes)) {
+        (VOID)InterlockedIncrement((PLONG)&hc->IsoStageRefused);
+        (VOID)InterlockedIncrement((PLONG)&hc->Hc.IsoRefusalsTooLarge);
+        x->Mdl = NULL;
+        x->SysVa = NULL;
+        return HCD_USBD_NO_MEMORY;
+    }
     return XHCI_USBD_STATUS_SUCCESS;
 }
 
 /*
  * A filled record's IRP made cancellable and the record started. A request
- * split into chunks owns the pipe from its start, and a request started
- * while another owns it waits here unmapped, on the pipe's Held list: it
- * holds no map registers the owner's next chunk may need, and it cannot
- * land between two of the owner's chunks. HcdIoPipeRelease starts it.
- * IRQL: <= DISPATCH_LEVEL, no lock held.
+ * that may be split into chunks - longer than its pipe's reserve
+ * (HcdStageMulti, task 48.33) - owns the pipe from its start, and a
+ * request started while another owns it waits here unstaged, on the
+ * pipe's Held list: it holds no staging the owner's next chunk may need,
+ * and it cannot land between two of the owner's chunks. HcdIoPipeRelease
+ * starts it. IRQL: <= DISPATCH_LEVEL, no lock held.
  */
 static VOID hcdGo(PHCD_CONTROLLER hc, PHCD_XFER x)
 {
@@ -1735,7 +1845,7 @@ static VOID hcdGo(PHCD_CONTROLLER hc, PHCD_XFER x)
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         return;
     }
-    if (x->Length != 0 && x->Chunk < x->Length) {
+    if (hcdMulti(hc, x)) {
         pipe->Exclusive = x;
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
@@ -2053,6 +2163,9 @@ VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
     if (answer == XHCI_XFER_OK) {
         x->State = HCD_XFER_ON_RING;
         x->Engine = 1;
+        if (hc->Staging) {
+            HcdStagePublishedLocked(hc, x);
+        }
         /* The device's sequence moves from here (hcd_cfg.c reads it once
          * the endpoint is paused and settled; reviewed and revised after
          * c4ec1c3). */
@@ -2177,7 +2290,7 @@ again:
                 if (owner != NULL) {
                     continue;
                 }
-                if (x->Length != 0 && x->Chunk < x->Length) {
+                if (hcdMulti(hc, x)) {
                     pipe->Exclusive = x;
                 }
             }
@@ -2356,6 +2469,8 @@ ULONG HcdIoPipeMarkAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd)
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     hcdWaitingRefuse(&waiting, pipe->Device, usbd);
+    /* Task 48.33: what staging's cancel moved (HcdIoWideStop). */
+    HcdIoDeferred(hc);
     return marked;
 }
 
@@ -2452,6 +2567,7 @@ VOID HcdIoCancelPdo(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     hcdWaitingRefuse(&waiting, dev, HCD_USBD_CANCELED);
+    HcdIoDeferred(hc);
     XHCI_DBG_VALUE("hcd: function PDO requests cancelled, MI",
                    pdo->Func.FirstInterface);
     HcdThreadWake(hc);
@@ -2567,6 +2683,10 @@ static VOID hcdIoRetire(PHCD_CONTROLLER hc, PXHCI_TRANSFER t, ULONG removed)
         hcdWideRetired(hc, x, t, removed);
         return;
     }
+    /* Task 48.33: retired by its Transfer Event, or taken off; an IN taken
+     * off while the controller may still be mastering copies nothing
+     * (hcd_stage.c, hcdStageCopyOut). */
+    x->StageEvent = removed ? 0UL : 1UL;
     /* 36.24: a refill the ring had no room for waits for another TD of the
      * pipe to leave it (section 11.6, point 6). */
     owner = x->Pipe->Exclusive;
@@ -2604,9 +2724,11 @@ VOID HcdIoRemoved(PHCD_CONTROLLER hc, PXHCI_TRANSFER t)
 }
 
 /*
- * Everything on the done list: give the chunk's map registers back, start
- * the next chunk of a bulk or interrupt transfer that moved all it asked
- * for, or complete the IRP - the URB's length and status written, its MDL
+ * Everything on the done list: an IN's bytes copied out and the chunk's
+ * staging given back (hcd_stage.c, HcdStageComplete; a copy-out that could
+ * not map waits there and comes back later), then the next chunk of a
+ * bulk or interrupt transfer that moved all it asked for started, or the
+ * IRP completed - the URB's length and status written, its MDL
  * freed if this driver built it, the record freed under the lock, and the
  * device reference returned last. IRQL: <= DISPATCH_LEVEL, no lock held.
  */
@@ -2631,11 +2753,15 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
     ULONG pieceOk;
     ULONG piece;
     ULONG rest;
+    ULONG staged;
     PVOID parkHandle;
     PVOID parkParent;
     XHCI_XSTAT_STAMP entered;
     XHCI_XSTAT_STAMP done;
 
+    /* Task 48.33: the bytes this pass has copied out (HcdStageComplete's
+     * bound). */
+    staged = 0;
     for (;;) {
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
         if (IsListEmpty(&hc->DoneList)) {
@@ -2650,7 +2776,12 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
         pieceOk = 0;
         piece = 0;
         dev = x->Pipe->Device;
-        HcdDmaUnmap(hc, x);
+        if (!hc->Staging) {
+            /* XhciDmaStaging 0: the chunk's map registers back. */
+            HcdDmaUnmap(hc, x);
+        } else if (!HcdStageComplete(hc, x, &staged)) {
+            continue;
+        }
         engine = x->Engine;
         if (engine) {
             status = x->Xfer.UsbdStatus;
@@ -2689,14 +2820,14 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
             more = status == XHCI_USBD_STATUS_SUCCESS && !x->Control &&
                    x->Engine && bytes == x->Chunk && x->Offset < x->Length &&
                    !dev->Gone && !x->Pipe->Closed && !x->CancelRequested;
-            if (more && hcdPlanChunk(hc, x)) {
+            if (more && (hc->Staging || hcdPlanChunk(hc, x))) {
                 x->State = HCD_XFER_MAPPING;
                 x->Engine = 0;
                 if (hcdIsData(x)) {
-                    /* 36.21: this pass's cost, before the map pump may
-                     * run the next chunk's publication inside the call,
-                     * and the mapping's start, which the publication
-                     * closes (hcdChunkPublished). */
+                    /* 36.21: this pass's cost, before staging may run
+                     * the next chunk's publication inside the call, and
+                     * the staging's start, which the publication closes
+                     * (hcdChunkPublished). */
                     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
                     HcdTscStamp(&x->MapQueued);
                     (VOID)XhciXstatInterval(&hc->Xstat.Complete,
@@ -2705,7 +2836,11 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
                                             &x->MapQueued);
                     XhciControllerLockRelease(&hc->Hc, oldIrql);
                 }
-                HcdDmaMapQueue(hc, x);
+                if (hc->Staging) {
+                    HcdStageSubmit(hc, x);
+                } else {
+                    HcdDmaMapQueue(hc, x);
+                }
                 continue;
             }
             if (x->CancelRequested && status == XHCI_USBD_STATUS_SUCCESS &&
@@ -2920,8 +3055,9 @@ VOID HcdIoDrainPipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd)
     }
 }
 
-/* Until every record of the pipe is free - a record still in the map pump
- * finishes through HcdIoMapped, which sees Gone or Closed. IRQL:
+/* Until every record of the pipe is free - a record in staging finishes
+ * through HcdIoMapped, which sees Gone or Closed, and one waiting for
+ * staging was taken off its queue by the drain (HcdIoWideStop). IRQL:
  * PASSIVE_LEVEL. */
 static VOID hcdWaitPipeOne(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
 {
@@ -2977,8 +3113,11 @@ VOID HcdIoWaitPipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
  * every device first and waits after (HcdIoDeviceGone), so no device's wait
  * holds up another's drain - a request of one waiting for map registers
  * another's outstanding transfers keep would otherwise never end (batch
- * (c)). Idempotent. Returns 0 when the
- * device must be kept (DMA not proven stopped). IRQL: PASSIVE_LEVEL.
+ * (c)). Idempotent. Task 48.33 (record 17 section 4.13.8): a controller
+ * that may still be mastering is drained as one that stopped is - it
+ * names only this driver's memory, which the stop keeps - so the device
+ * is never kept and 1 is returned; with XhciDmaStaging 0, as in 3.4.2.0,
+ * it is kept and 0 returned. IRQL: PASSIVE_LEVEL.
  */
 ULONG HcdIoDeviceDrain(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
@@ -2993,11 +3132,11 @@ ULONG HcdIoDeviceDrain(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
      * when the record must be kept, so neither the thread's wait for the
      * references nor a door FDO's REMOVE waits on it (task 36.45). */
     HcdDoorFlushDevice(hc, dev);
-    if (hc->CommonBufferPinned) {
-        /* The controller could not be proven to have stopped mastering:
-         * its rings still name the clients' buffers, so none goes back.
-         * The URBs stay pending and the record stays allocated (batch
-         * (c)). */
+    if (hc->CommonBufferPinned && !hc->Staging) {
+        /* XhciDmaStaging 0, as in 3.4.2.0: the controller could not be
+         * proven to have stopped mastering and its rings still name the
+         * clients' buffers, so none goes back. The URBs stay pending and
+         * the record stays allocated (batch (c)). */
         return 0;
     }
     HcdCfgFlushDevice(hc, dev);
@@ -3200,7 +3339,10 @@ ULONG HcdIoPark(PHCD_DEVICE_PDO pdo, PIRP irp, PVOID urb, PVOID handle,
         return 0;
     }
     IoAcquireCancelSpinLock(&cancelIrql);
-    if (pdo->Closing || irp->Cancel) {
+    /* Task 48.33: none held after an unproven stop released them
+     * (HcdIoParkCloseAll); the caller completes it as for a closing PDO. */
+    if (pdo->Closing || irp->Cancel ||
+        (pdo->Controller != NULL && pdo->Controller->ParkClosed)) {
         IoReleaseCancelSpinLock(cancelIrql);
         return 0;
     }
@@ -3394,6 +3536,64 @@ ULONG HcdIoParkedRelease(PHCD_DEVICE_PDO pdo, ULONG aborted)
     }
     if (n != 0) {
         XHCI_DBG_VALUE("hcd: held URBs released, count", n);
+    }
+    return n;
+}
+
+/*
+ * Task 48.33 (design record 13 section 11.11.6, step 4; record 17 section
+ * 4.13.8): an unproven stop of the controller - its devices already
+ * drained and gone - releases every child PDO's held requests CANCELED
+ * before the stop completes, whether or not PnP stopped the PDO first, so
+ * no client request outlives the stop: a rebalance stops the controller
+ * alone and its children's own stops may never come. ParkClosed is set
+ * first, an interlocked write, so a request reaching HcdIoPark after the
+ * sweep, which reads it under the cancel spin lock the sweep takes, is not
+ * held but completed as on a closing PDO; the next start clears it. The
+ * IRPs are taken off under PdoListLock and the cancel spin lock and
+ * completed with neither held, each still counted on its PDO, which its
+ * REMOVE therefore keeps. A proven stop keeps today's route. Returns how
+ * many. IRQL: PASSIVE_LEVEL, the thread stopped.
+ */
+ULONG HcdIoParkCloseAll(PHCD_CONTROLLER hc)
+{
+    LIST_ENTRY mine;
+    PLIST_ENTRY entry;
+    PHCD_DEVICE_PDO pdo;
+    PHCD_DEVICE_PDO lists[3];
+    PIRP irp;
+    KIRQL listIrql;
+    KIRQL cancelIrql;
+    ULONG n;
+    ULONG i;
+
+    (VOID)InterlockedExchange((PLONG)&hc->ParkClosed, 1);
+    InitializeListHead(&mine);
+    KeAcquireSpinLock(&hc->PdoListLock, &listIrql);
+    lists[0] = hc->DevicePdos;
+    lists[1] = hc->GonePdos;
+    lists[2] = hc->RemovedPdos;
+    for (i = 0; i < 3; i++) {
+        for (pdo = lists[i]; pdo != NULL; pdo = pdo->Next) {
+            IoAcquireCancelSpinLock(&cancelIrql);
+            while (!IsListEmpty(&pdo->ParkedIrps)) {
+                entry = RemoveHeadList(&pdo->ParkedIrps);
+                irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
+                (VOID)IoSetCancelRoutine(irp, NULL);
+                pdo->ParkedCount--;
+                InsertTailList(&mine, entry);
+            }
+            IoReleaseCancelSpinLock(cancelIrql);
+        }
+    }
+    KeReleaseSpinLock(&hc->PdoListLock, listIrql);
+    n = 0;
+    while (!IsListEmpty(&mine)) {
+        entry = RemoveHeadList(&mine);
+        irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
+        hcdParkedComplete((PHCD_DEVICE_PDO)irp->Tail.Overlay.DriverContext[2],
+                          irp);
+        n++;
     }
     return n;
 }

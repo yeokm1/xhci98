@@ -467,6 +467,22 @@ typedef struct _XHCI_TBT_BINDS {
     ULONG BaseBdf[XHCI_TBT_MAX_TUNNELS];
     ULONG BaseBus[XHCI_TBT_MAX_TUNNELS];
     ULONG BaseSeen[XHCI_TBT_MAX_TUNNELS];
+    ULONG BaseDown;     /* bit i: BaseBdf[i]'s port read DOWN at a reading
+                           where nothing answered behind it, and nothing
+                           has been read answering there since (the link
+                           evidence of record 22 section 7.6.4)             */
+    ULONG BaseHeld;     /* bit i: BaseBdf[i] read occupied at an attempt
+                           that ended before the baseline moved: its
+                           BaseDown bit stands only while it stays occupied */
+    /* the narrowed rule's at-start ports and start reading (record 22
+       section 7.6.3) */
+    ULONG AtStart;      /* bit n-1: port n pending with a tunnel found up at
+                           start, no TUNNEL_UP since (XhciTbtLearnAtStart)  */
+    ULONG StartTaken;   /* the start reading below was taken                */
+    ULONG StartOk;      /* ... and is trusted                               */
+    ULONG StartCount;
+    ULONG StartBdf[XHCI_TBT_MAX_TUNNELS];   /* the members then             */
+    ULONG StartOcc;     /* bit i: StartBdf[i] had a function behind it      */
 } XHCI_TBT_BINDS, *PXHCI_TBT_BINDS;
 
 /* XhciTbtTopoAddNamed's, XhciTbtLearnArm's and XhciTbtLearn's return. */
@@ -499,6 +515,11 @@ typedef struct _XHCI_TBT_BINDS {
 #define XHCI_TBT_MAP_BAD_PARAM      13UL
 #define XHCI_TBT_MAP_NOT_UP         14UL /* learn: no XhciTbtLearnUp for the
                                             port pending                    */
+#define XHCI_TBT_MAP_SHAPE          15UL /* learn: the port pending alone,
+                                            but what its member gained is
+                                            no tunnel's far end and carries
+                                            no link evidence (record 22
+                                            section 7.6.4)                  */
 
 /* Zeroes `binds`: nothing known, nothing armed. */
 VOID XhciTbtBindsInit(PXHCI_TBT_BINDS binds);
@@ -557,10 +578,14 @@ ULONG XhciTbtTopoAddAcpi(PXHCI_TBT_CFG io, PXHCI_TBT_TOPO topo, ULONG bdf);
  * device (any device number's function 0 newly answering) while that
  * port's PCIe tunnel, and no other not yet attributed, had come up. A
  * gain on a bridge bound to another port (named or learned) is that
- * port's own and explains nothing here.
+ * port's own and explains nothing here. What the member gained must be a
+ * tunnel's far end, or carry the link's evidence (XhciTbtGainAdmits,
+ * record 22 section 7.6.4).
  *
  * XhciTbtLearnArm takes the baseline: for every member, its secondary bus
- * and which devices answer there. The caller arms after each discovery it
+ * and which devices answer there, and for each empty member whether its
+ * port reads DOWN (or an earlier baseline read it so with the member empty
+ * since, kept by location: BaseDown). The caller arms after each discovery it
  * acts on and after each tunnel-down it handles; XhciTbtLearn moves the
  * baseline forward itself. Returns 0, UNREAD (a member could not be read:
  * not armed) or BAD_PARAM (an empty set among them).
@@ -586,6 +611,24 @@ VOID XhciTbtLearnUp(PXHCI_TBT_BINDS binds, ULONG port);
 VOID XhciTbtLearnDown(PXHCI_TBT_BINDS binds, ULONG port);
 
 /*
+ * The narrowed rule's at-start ports (record 22 section 7.6.3).
+ * XhciTbtLearnAtStart marks a pending, unbound port whose PCIe tunnel was
+ * found up at start (the driver half calls it at the start alone, after
+ * XhciTbtLearnUp); a port newly marked makes the next full reading of the
+ * set (XhciTbtLearnArm's, or XhciTbtLearn's) the start reading: the
+ * members, which had a function behind them, and whether it is trusted -
+ * every member of source SWITCH or ROUTER, every pending port an at-start
+ * port, every occupied member no binding explains holding device 0 alone,
+ * an Upstream Switch Port (a tunnel's far end, never a function of the
+ * controller's own), and as many of those as at-start ports.
+ * XhciTbtLearnNotAtStart ends the mark, at every TUNNEL_UP of the
+ * port; XhciTbtLearnDown, a LEARNED or KNOWN outcome and XhciTbtLearnBound
+ * end it too. With no mark left the start reading is forgotten.
+ */
+VOID XhciTbtLearnAtStart(PXHCI_TBT_BINDS binds, ULONG port);
+VOID XhciTbtLearnNotAtStart(PXHCI_TBT_BINDS binds, ULONG port);
+
+/*
  * For the PCIe tunnel of `port` that came up (each TBT_U4_ACT_TUNNEL_UP
  * whose port and generation are still live; again later while it returns
  * NOT_GAINED). The outcomes, in this order:
@@ -594,13 +637,21 @@ VOID XhciTbtLearnDown(PXHCI_TBT_BINDS binds, ULONG port);
  *   - the port not pending (no XhciTbtLearnUp): NOT_UP, nothing read;
  *   - no baseline, or one taken over another set: NOT_ARMED, and one is
  *     taken now;
- *   - a member that cannot be read, or whose secondary bus moved: UNREAD,
- *     the baseline kept;
+ *   - a member that cannot be read, or whose secondary bus moved, or the
+ *     one gain's shape or port reading (XhciTbtGainAdmits) that cannot be
+ *     read: UNREAD, the baseline kept;
  *   - otherwise every member is read and the baseline moves to this
  *     reading; then, counting gains on bridges not bound to another port:
  *     none: NOT_GAINED (the device may still answer Configuration Request
  *     Retry; the port stays pending); more than one, or another port
- *     pending: SEVERAL; the bridge that gained inactive (`active`, per
+ *     pending: SEVERAL - unless (record 22 section 7.6.3) the start
+ *     reading is taken and trusted, every other pending port is an
+ *     at-start port and this one is not, every member is active, the
+ *     bridge that gained was a member at the start reading and empty
+ *     then, and XhciTbtGainAdmits admits what it gained; one gain with
+ *     the port pending alone that XhciTbtGainAdmits does not admit (no
+ *     tunnel's far end, no link evidence): SHAPE; the bridge that gained
+ *     inactive (`active`, per
  *     member as XhciTbtExclusive gives it; NULL for all active):
  *     INACTIVE; conflicted or bound elsewhere: CONFLICT; else LEARNED,
  *     the port's bridge for the instance. Only LEARNED (and KNOWN) ends
@@ -686,6 +737,102 @@ VOID XhciTbtLearnPass(PXHCI_TBT_LEARN_CLOCK clk);
 VOID XhciTbtLearnEnd(PXHCI_TBT_LEARN_CLOCK clk, ULONG port);
 ULONG XhciTbtLearnBound(PXHCI_TBT_BINDS binds, ULONG port);
 
+/* ---- a tunnel found up at start: its port inferred (record 22 7.6.2) -- */
+
+/*
+ * XHCI_TBT_INFER_IN.RouterLink[]: the host router's PCIe Down adapter of
+ * each host USB4 port as read once (ADP_PCIE_CS_0, the caller's read):
+ * UP with Path Enable set and the LTSSM in L0, L1, Recovery or
+ * Recovery.Idle; DOWN with Path Enable clear or the LTSSM in Detect; NONE
+ * for a port with no PCIe Down adapter; UNKNOWN for a failed read or any
+ * other LTSSM value (a transitional one included).
+ */
+#define XHCI_TBT_RLINK_NONE         0UL
+#define XHCI_TBT_RLINK_UP           1UL
+#define XHCI_TBT_RLINK_DOWN         2UL
+#define XHCI_TBT_RLINK_UNKNOWN      3UL
+
+typedef struct _XHCI_TBT_INFER_IN {
+    ULONG Usb4Host;     /* the host router is USB4, not Thunderbolt 3      */
+    ULONG Ports;        /* host USB4 ports, 1 to XHCI_TBT_MAX_PORTS        */
+    ULONG UpMask;       /* bit n-1: port n's PCIe tunnel is up             */
+    ULONG Conflict;     /* bit n-1: port n conflicted for the inference    */
+    ULONG RouterLink[XHCI_TBT_MAX_PORTS];   /* XHCI_TBT_RLINK_*, by port-1 */
+    const ULONG *Active;    /* per member as XhciTbtExclusive gives it,
+                               NULL for all active                         */
+} XHCI_TBT_INFER_IN, *PXHCI_TBT_INFER_IN;
+
+typedef struct _XHCI_TBT_INFER_OUT {
+    ULONG Port;         /* 1-based, the port inferred                      */
+    ULONG Member;       /* its index in topo->Set                          */
+    ULONG Bdf;          /* the member's location                           */
+    ULONG Buses;        /* the member's bus number register as read        */
+} XHCI_TBT_INFER_OUT, *PXHCI_TBT_INFER_OUT;
+
+/* XhciTbtInfer's return: MADE, or the first condition that failed. */
+#define XHCI_TBT_INFER_MADE         0UL
+#define XHCI_TBT_INFER_BAD_PARAM    1UL
+#define XHCI_TBT_INFER_HOST         2UL /* I2: a Thunderbolt 3 host        */
+#define XHCI_TBT_INFER_SET          3UL /* I3: not a discovered set of the
+                                           switch's own ports alone        */
+#define XHCI_TBT_INFER_INACTIVE     4UL /* I3: a member another domain
+                                           claims                          */
+#define XHCI_TBT_INFER_BOUND        5UL /* I4: a binding, of any kind, or
+                                           an overflow in the table        */
+#define XHCI_TBT_INFER_CONFLICTED   6UL /* I4: the port conflicted for the
+                                           inference                       */
+#define XHCI_TBT_INFER_NOT_ONE      7UL /* I5: not exactly one PCIe tunnel
+                                           up                              */
+#define XHCI_TBT_INFER_NOT_AT_START 8UL /* I5: that port no at-start port  */
+#define XHCI_TBT_INFER_PENDING      9UL /* I5: that port not pending, or
+                                           another port pending too        */
+#define XHCI_TBT_INFER_ROUTER       10UL /* I6: the router's links do not
+                                            read that port alone linked    */
+#define XHCI_TBT_INFER_NOT_ARMED    11UL /* I7: no learning baseline over
+                                            this set                       */
+#define XHCI_TBT_INFER_UNREAD       12UL /* I7: a register unreadable      */
+#define XHCI_TBT_INFER_NO_REPORT    13UL /* I7: a member that does not
+                                            report Link Active             */
+#define XHCI_TBT_INFER_MOVED        14UL /* I7: bus numbers changed, or not
+                                            the baseline's                 */
+#define XHCI_TBT_INFER_OCCUPANCY    15UL /* I7: not exactly one member with
+                                            a function behind it           */
+#define XHCI_TBT_INFER_LINKS        16UL /* I7: Link Active disagrees with
+                                            the occupancy                  */
+#define XHCI_TBT_INFER_SHAPE        17UL /* I7: what answers behind the
+                                            occupied member is not device 0
+                                            alone, an Upstream Switch Port */
+
+/*
+ * Record 22 section 7.6.2's conditions I2 to I7 over what the caller read
+ * (`in`: the router's side) and what this reads (the set, in one pass:
+ * every member's bus numbers, PCI Express capability, Link Capabilities
+ * and Link Status, the function-0 probe of every device number on its
+ * secondary bus and, where one answers, device 0's header type and PCI
+ * Express port type, then every member's bus numbers again). MADE with *out
+ * filled, or the first condition that failed (*out zeroed). It reads and
+ * changes nothing: the binding it describes is the caller's to keep,
+ * apart from `binds`, of which it reads the table, the pending and
+ * at-start marks and the baseline. The caller runs it again at the eject
+ * and compares.
+ */
+ULONG XhciTbtInfer(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
+                   const XHCI_TBT_BINDS *binds, const XHCI_TBT_INFER_IN *in,
+                   PXHCI_TBT_INFER_OUT out);
+
+/*
+ * The read-back after an inferred teardown (record 22 section 7.6.2):
+ * CLOSED when the member at `bdf` reads its bus number register equal to
+ * `buses`, Link Active reported and clear, and no function 0 answering on
+ * its secondary bus; OPEN when it is readable and Link Active is set or a
+ * function answers; UNREAD otherwise (a failed access, an all-ones
+ * register, moved bus numbers, Link Active not reported).
+ */
+#define XHCI_TBT_RB_CLOSED          1UL
+#define XHCI_TBT_RB_OPEN            2UL
+#define XHCI_TBT_RB_UNREAD          3UL
+ULONG XhciTbtInferReadBack(PXHCI_TBT_CFG io, ULONG bdf, ULONG buses);
+
 /* ---- the port reading (record 21 section 6.5) -------------------------- */
 
 /* XHCI_TBT_PORT.Verdict and XhciTbtPortRead's return. */
@@ -716,6 +863,8 @@ typedef struct _XHCI_TBT_PORT {
     ULONG ShpcSlots;    /* Number of Slots Implemented                      */
     ULONG ShpcPresent;  /* slots reporting a card present                   */
     ULONG ShpcFirst;    /* 1 + the first present slot's index, 0 for none   */
+    ULONG ShpcSeen;     /* every slot was read, whether or not the DWORD
+                           Select was then put back (ShpcValid needs both) */
 } XHCI_TBT_PORT, *PXHCI_TBT_PORT;
 
 /*
@@ -731,6 +880,37 @@ typedef struct _XHCI_TBT_PORT {
  * failure to put it back is ERROR.
  */
 ULONG XhciTbtPortRead(PXHCI_TBT_CFG io, ULONG bdf, PXHCI_TBT_PORT port);
+
+/*
+ * 1 when XhciTbtPortRead of the bridge at `bdf` is DOWN: it reports at
+ * least one of Link Active, Presence Detect State and the SHPC slots (the
+ * last only through an accessor that can write DWORD Select), and each
+ * one it reports says absent. Else 0, a failed read included.
+ */
+ULONG XhciTbtPortDown(PXHCI_TBT_CFG io, ULONG bdf);
+
+/*
+ * Whether a function newly answering behind the bridge at `bdf` (its
+ * secondary bus `bus`, `seen` the devices whose function 0 answers there,
+ * bit d for device d) may be taken for a tunnel's (record 22 section
+ * 7.6.4): YES when it is a tunnel's far end - device 0 alone, a
+ * PCI-to-PCI bridge whose PCI Express capability says Upstream Switch
+ * Port - or, for any other shape, when `wasDown` (the bridge's port read
+ * DOWN at an earlier reading where nothing answered behind it, and
+ * nothing has been read answering there since) and its port reads UP now;
+ * UNREAD when the shape, or that port reading, could not be read (a
+ * failed access, all-ones, the bridge gone) and no signal the reading
+ * did read whole before failing says absent; else NO. A host controller's
+ * own integrated function behind a port of its switch (its xHCI, its NHI)
+ * is an endpoint whose port does not read DOWN while it is there, so it
+ * is not YES. Reads only, but the SHPC reading's DWORD Select write where
+ * the accessor has one.
+ */
+#define XHCI_TBT_GAIN_NO            0UL
+#define XHCI_TBT_GAIN_YES           1UL
+#define XHCI_TBT_GAIN_UNREAD        2UL
+ULONG XhciTbtGainAdmits(PXHCI_TBT_CFG io, ULONG bdf, ULONG bus, ULONG seen,
+                        ULONG wasDown);
 
 /*
  * Folds a set's readings (verdicts[0..count-1]) into one for the poll of
@@ -867,9 +1047,14 @@ typedef struct _XHCI_TBT_CHAIN_PORT {
     ULONG Bdf;          /* its location                                     */
     ULONG Id;           /* its identity dword (vendor 15:0, device 31:16)   */
     ULONG Secondary;    /* its secondary bus at the walk                    */
+    ULONG Subordinate;  /* its subordinate bus at the walk                  */
     ULONG Member;       /* the member's index the caller passed             */
     ULONG Depth;        /* its bridge level below the member                */
     ULONG Unpowered;    /* 1: a Power Controller reading power off          */
+    ULONG Rot;          /* record 34 section 3.3.7 item 2: the device numbers
+                           of the bridges from the member's secondary bus
+                           down to and including it, summed mod 4 (the
+                           rotation of an interrupt pin read behind it)     */
 } XHCI_TBT_CHAIN_PORT, *PXHCI_TBT_CHAIN_PORT;
 
 typedef struct _XHCI_TBT_CHAIN_SET {

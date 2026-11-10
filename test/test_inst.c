@@ -820,7 +820,8 @@ static void test_real_infs(void)
             INST_U32 Def;
         } want[] = {
             { "XhciIntelPortSwitch", 0 }, { "XhciInterruptMode", 0 },
-            { "XhciLinkKeep", 1 }, { "XhciResumeKeep", 1 },
+            { "XhciLinkKeep", 1 }, { "XhciSsFlapFallback", 1 },
+            { "XhciResumeKeep", 1 },
             { "XhciUsb2Bos", 1 }, { "XhciImodInterval250ns", 160 },
             { "XhciLogVerbosity", 2 }, { "XhciLogDebugView", 0 },
             { "XhciPollIdleMs", 50 }, { "XhciPollActiveMs", 1 },
@@ -947,15 +948,16 @@ static void test_stor98_infs(void)
     CHECK(inst_inf_arch_ok(a64, INST_ARCH_AMD64), "stor98-x64.inf is amd64");
     /* Record 31 sections 4.7, 4.8 and 5.2 (owner, 2026-10-25): stor98.inf
      * the tunnel id alone on 2000 to 8 (Windows 2000 reads the undecorated
-     * section), the class as the compatible id on 8.1 and 10, as 3.2.0.0;
+     * section) and since section 4.10 (task 48.29) on 8.1 too, the class as
+     * the compatible id on 10, as 3.2.0.0;
      * stor98w9.inf, which 98 SE and ME install from, the id and the class.
      * The installer finds its candidates by class (section 7.2), a tagged
      * drive by the INF's id too. */
     for (sys = 0; sys < (int)(sizeof(systems) / sizeof(systems[0])); sys++) {
         char what[96];
         int undecorated = !systems[sys].Nt;
-        int nt63 = systems[sys].Nt && (systems[sys].Major > 6 ||
-                   (systems[sys].Major == 6 && systems[sys].Minor >= 3));
+        /* The class model: 10 alone (section 4.10). */
+        int nt63 = systems[sys].Nt && systems[sys].Major >= 10;
         e = env(systems[sys].Nt, systems[sys].Major, systems[sys].Minor,
                 systems[sys].Arch);
         sprintf(what, "%s: the models' ids", systems[sys].What);
@@ -986,18 +988,20 @@ static void test_stor98_infs(void)
               inst_eq(hw, INST_S98_TUNNEL_ID) && cp[0] == '\0',
               "x86 models before 6.3 (2000 too): the id as the hardware id");
         CHECK(s98_model_fields(x86, "Stor98_Models.NTx86.6.3", hw, cp) &&
+              inst_eq(hw, INST_S98_TUNNEL_ID) && cp[0] == '\0',
+              "x86 6.3 models: the id as the hardware id (the kept child)");
+        CHECK(s98_model_fields(x86, "Stor98_Models.NTx86.10.0", hw, cp) &&
               hw[0] == '\0' && inst_eq(cp, INST_S98_CLASS_ID),
-              "x86 6.3 models: the class as the compatible id, as 3.2.0.0");
-        CHECK(s98_model_fields(x86, "Stor98_Models.NTx86.10.0", hw, cp) == 0,
-              "x86: no 10.0 models");
+              "x86 10.0 models: the class as the compatible id, as 3.2.0.0");
         CHECK(s98_model_fields(a64, "Stor98_Models.NTamd64", hw, cp) &&
               inst_eq(hw, INST_S98_TUNNEL_ID) && cp[0] == '\0',
               "x64 models before 6.3: the id as the hardware id");
         CHECK(s98_model_fields(a64, "Stor98_Models.NTamd64.6.3", hw, cp) &&
+              inst_eq(hw, INST_S98_TUNNEL_ID) && cp[0] == '\0',
+              "x64 6.3 models: the id as the hardware id (the kept child)");
+        CHECK(s98_model_fields(a64, "Stor98_Models.NTamd64.10.0", hw, cp) &&
               hw[0] == '\0' && inst_eq(cp, INST_S98_CLASS_ID),
-              "x64 6.3 models: the class as the compatible id, as 3.2.0.0");
-        CHECK(s98_model_fields(a64, "Stor98_Models.NTamd64.10.0", hw, cp) == 0,
-              "x64: no 10.0 models");
+              "x64 10.0 models: the class as the compatible id, as 3.2.0.0");
     }
     /* Record 31 section 7.1: the bundled INFs are this project's Stor98
      * INF by the identity test the store removal and the 98 SE sweep
@@ -1286,6 +1290,132 @@ static void test_ids(void)
     CHECK_EQ(inst_bus_id("USB\\VID_046D&PID_C077\\5&1"), 0, "a device");
 }
 
+/* Record 23 section 5.3.1 (roadmap-usb4 task 48.19): very long hardware
+ * and compatible id lists and Driver values. */
+static void test_long_ids(void)
+{
+    static const char arr[] = "PCI\\CC_0C0330\0";
+    static const char cut[] = "USB\\VID_1234&PID_5678&REV_0001&MI_00";
+    char *big;
+    char *path;
+    char drv[INST_DRIVER_CHARS + 2];
+    size_t n;
+    size_t len;
+    size_t nb;
+    const char *p;
+    int i;
+
+    /* The accessor: the array when there is no copy, the copy when there
+     * is one, each with its own byte count. */
+    p = inst_ids_pick(arr, sizeof(arr), NULL, 0, &n);
+    CHECK(p == arr && n == sizeof(arr), "no copy: the array");
+    p = inst_ids_pick("", 0, arr, sizeof(arr), &n);
+    CHECK(p == arr && n == sizeof(arr), "a copy: the copy, whatever the array");
+
+    /* 98 SE's comma string, longer than the record's 2,048 bytes, split
+     * once at its final length in a buffer of that length and two bytes. */
+    big = (char *)malloc(4096 + 64);
+    CHECK(big != NULL, "memory for the long list");
+    if (big != NULL) {
+        big[0] = '\0';
+        for (i = 0; strlen(big) + sizeof(cut) + 8 < 4096; i++) {
+            if (i > 0) {
+                strcat(big, ",");
+            }
+            sprintf(big + strlen(big), "%s%03d", cut, i);
+        }
+        strcat(big, ",PCI\\CC_0C0330");
+        len = strlen(big);
+        CHECK(len > 2048, "the list is longer than the record's array");
+        nb = inst_ids_split(big, len + 2);
+        CHECK_EQ(nb, len + 2, "split at its final length");
+        CHECK(inst_msz_has(big, nb, "PCI\\CC_0C0330"), "its last id read");
+        CHECK(inst_msz_has(big, nb, "USB\\VID_1234&PID_5678&REV_0001&MI_00000"),
+              "its first id read");
+        free(big);
+    }
+
+    /* The configuration manager's answer, longer than the array, held
+     * whole: several strings, a comma list among them, every id read. */
+    big = (char *)malloc(4096 + 64);
+    CHECK(big != NULL, "memory for the CM's list");
+    if (big != NULL) {
+        memset(big, 0, 4096 + 64);
+        n = 0;
+        for (i = 0; n + sizeof(cut) + 8 < 4000; i++) {
+            sprintf(big + n, "%s%03d", cut, i);
+            n += strlen(big + n) + 1;
+        }
+        strcpy(big + n, "PCI\\VEN_1B36&DEV_000D,PCI\\CC_0C0330");
+        n += strlen(big + n) + 2;
+        CHECK(n > 2048, "the CM's list is longer than the record's array");
+        CHECK_EQ(inst_ids_commas(big, n), n, "its length kept");
+        CHECK(inst_msz_has(big, n, "PCI\\CC_0C0330"),
+              "an id after the first string, in a comma list");
+        CHECK(inst_msz_has(big, n, "PCI\\VEN_1B36&DEV_000D"),
+              "the comma list's first id");
+        CHECK(inst_msz_has(big, n, "USB\\VID_1234&PID_5678&REV_0001&MI_00000"),
+              "the first string");
+        free(big);
+    }
+
+    /* The type of a list read again at its size: NT a multi-string, 98
+     * SE and ME a string too; anything else is unreadable. */
+    CHECK(inst_cm_ids_type_ok(1, 7UL), "NT: REG_MULTI_SZ");
+    CHECK(!inst_cm_ids_type_ok(1, 1UL), "NT: REG_SZ refused");
+    CHECK(!inst_cm_ids_type_ok(1, 3UL), "NT: REG_BINARY refused");
+    CHECK(inst_cm_ids_type_ok(0, 1UL) && inst_cm_ids_type_ok(0, 7UL),
+          "98: REG_SZ or REG_MULTI_SZ");
+    CHECK(!inst_cm_ids_type_ok(0, 3UL) && !inst_cm_ids_type_ok(0, 4UL),
+          "98: REG_BINARY, REG_DWORD refused");
+
+    /* 98 SE and ME: the registry decides; absent from it, a list too big
+     * whose ask again failed is unreadable, any other answer kept as
+     * before (read, or no list: the root devnode's, read 2026-11-09). */
+    CHECK(inst_ids9x_ok(1, 1, INST_CR_BUFFER_SMALL), "registry read: read");
+    CHECK(!inst_ids9x_ok(-1, 1, INST_CR_SUCCESS), "registry unreadable");
+    CHECK(inst_ids9x_ok(0, 0, 0xFFFFFFFFUL), "absent, no devnode: absent");
+    CHECK(inst_ids9x_ok(0, 1, INST_CR_SUCCESS), "absent: the CM's list");
+    CHECK(inst_ids9x_ok(0, 1, INST_CR_NO_SUCH_VALUE), "absent both");
+    CHECK(!inst_ids9x_ok(0, 1, INST_CR_BUFFER_SMALL),
+          "absent, the CM's list too big to read again: unreadable");
+    CHECK(inst_ids9x_ok(0, 1, 0x13UL), "absent, another CM answer: no list");
+
+    /* The driver key path: 511 characters fit a buffer of
+     * INST_DRIVER_PATH_CHARS on both families; 512 do not, nor an empty
+     * value, nor a buffer one character short (out is then ""). */
+    path = (char *)malloc(INST_DRIVER_PATH_CHARS);
+    CHECK(path != NULL, "memory for the path");
+    if (path != NULL) {
+        memset(drv, 'A', INST_DRIVER_CHARS);
+        drv[38] = '\\';
+        drv[INST_DRIVER_CHARS] = '\0';
+        CHECK(inst_driver_key_path(path, INST_DRIVER_PATH_CHARS, 0, drv) &&
+              strlen(path) == strlen(INST_CLASS_ROOT_9X) + 1 + INST_DRIVER_CHARS &&
+              strncmp(path, INST_CLASS_ROOT_9X "\\", strlen(INST_CLASS_ROOT_9X) + 1) == 0,
+              "98: 511 characters fit");
+        CHECK(inst_driver_key_path(path, INST_DRIVER_PATH_CHARS, 1, drv) &&
+              strlen(path) == strlen(INST_CLASS_ROOT_NT) + 1 + INST_DRIVER_CHARS,
+              "NT: 511 characters fit");
+        CHECK(!inst_driver_key_path(path, INST_DRIVER_PATH_CHARS - 1, 0, drv) &&
+              path[0] == '\0', "a buffer one short: refused, empty");
+        drv[INST_DRIVER_CHARS] = 'A';
+        drv[INST_DRIVER_CHARS + 1] = '\0';
+        CHECK(!inst_driver_key_path(path, INST_DRIVER_PATH_CHARS, 1, drv) &&
+              path[0] == '\0', "512 characters: refused");
+        CHECK(!inst_driver_key_path(path, INST_DRIVER_PATH_CHARS, 1, ""),
+              "no Driver: no path");
+        CHECK(inst_driver_key_path(path, INST_DRIVER_PATH_CHARS, 1,
+                                   "{36FC9E60-C465-11CF-8056-444553540000}\\0001") &&
+              strcmp(path, "SYSTEM\\CurrentControlSet\\Control\\Class\\"
+                     "{36FC9E60-C465-11CF-8056-444553540000}\\0001") == 0,
+              "an ordinary driver key");
+        free(path);
+    }
+    CHECK(INST_DRIVER_BYTES >= INST_DRIVER_CHARS + 1 + 3,
+          "the record's Driver holds 511 characters and the readers' spare");
+}
+
 static void test_actions(void)
 {
     INST_DEV d;
@@ -1409,6 +1539,93 @@ static void test_actions(void)
     CHECK(inst_action_runs(INST_ACT_FILTER, 0), "filter runs");
     CHECK(!inst_action_runs(INST_ACT_CURRENT, 0), "current does not");
     CHECK(inst_action_runs(INST_ACT_CURRENT, 1), "current with /force");
+    CHECK(inst_same_ver_stale(1, 0, 0),
+          "5.4.1: the package's version with other bytes is stale");
+    CHECK(!inst_same_ver_stale(1, 0, 1) && !inst_same_ver_stale(1, 0, -1) &&
+          !inst_same_ver_stale(1, 1, 0) && !inst_same_ver_stale(1, -1, 0) &&
+          !inst_same_ver_stale(0, 0, 0) && !inst_same_ver_stale(-1, 0, 0),
+          "5.4.1: never for the same bytes, bytes not read, a newer or older "
+          "version, an absent or unreadable file");
+    CHECK(strcmp(inst_action_text(INST_ACT_CURRENT),
+                 "Keep (same version)") == 0 &&
+          strcmp(inst_action_row_text(INST_ACT_CURRENT, 0, 0, 0),
+                 "Keep (same version)") == 0,
+          "5.4.1: a current device left says so");
+    CHECK(strcmp(inst_action_row_text(INST_ACT_CURRENT, 1, 0, 0),
+                 "Replace files (same version)") == 0 &&
+          strcmp(inst_action_row_text(INST_ACT_CURRENT, 0, 0, 1),
+                 "Replace files (same version)") == 0,
+          "5.4.1: a repair, by reinstall or by file, says so");
+    CHECK(strcmp(inst_action_row_text(INST_ACT_CURRENT, 1, 1, 0),
+                 "Reinstall (/force)") == 0 &&
+          strcmp(inst_action_row_text(INST_ACT_NEWER, 1, 1, 0),
+                 "Reinstall (/force)") == 0,
+          "5.4.1: /force reinstalls");
+    CHECK(strcmp(inst_action_row_text(INST_ACT_UPDATE, 1, 0, 1),
+                 "Update") == 0 &&
+          strcmp(inst_action_row_text(INST_ACT_NEWER, 0, 0, 1),
+                 inst_action_text(INST_ACT_NEWER)) == 0,
+          "5.4.1: other actions keep their text");
+    CHECK(inst_x98_place9x(0, 1, 1, 0),
+          "5.4.1: 9x, a stale xhci98.sys placed by the tool");
+    CHECK(!inst_x98_place9x(1, 1, 1, 0) && !inst_x98_place9x(0, 0, 1, 0) &&
+          !inst_x98_place9x(0, 1, 0, 0) && !inst_x98_place9x(0, 1, 1, 1),
+          "5.4.1: never on NT, out of the run, not stale, or beside a "
+          "controller the helper installs");
+    {
+        int trap[INST_INF_COUNT];
+        int failed[INST_INF_COUNT];
+        memset(trap, 0, sizeof(trap));
+        memset(failed, 0, sizeof(failed));
+        CHECK(!inst_stale_blocked(inst_stale_infs(2, 0), trap, failed),
+              "5.4.1: xhcicm.sys free with no trap and no failure");
+        failed[INST_INF_CMF] = 1;
+        CHECK(inst_stale_blocked(inst_stale_infs(2, 0), trap, failed),
+              "5.4.1: a cancelled filter install (no NHI present) keeps "
+              "xhcicm.sys");
+        failed[INST_INF_CMF] = 0;
+        trap[INST_INF_CMF] = 1;
+        CHECK(inst_stale_blocked(inst_stale_infs(2, 0), trap, failed),
+              "5.4.1: a filter-only store trap (no NHI present) keeps "
+              "xhcicm.sys");
+        CHECK(!inst_stale_blocked(inst_stale_infs(0, 0), trap, failed) &&
+              !inst_stale_blocked(inst_stale_infs(0, 1), trap, failed),
+              "5.4.1: the filter's trap holds neither xhci98.sys nor "
+              "xhcihlpr.sys");
+        trap[INST_INF_CMF] = 0;
+        failed[INST_INF_CM] = 1;
+        CHECK(inst_stale_blocked(inst_stale_infs(0, 1), trap, failed) &&
+              inst_stale_blocked(inst_stale_infs(2, 0), trap, failed) &&
+              !inst_stale_blocked(inst_stale_infs(0, 0), trap, failed),
+              "5.4.1: a failed NHI install keeps xhcihlpr.sys and "
+              "xhcicm.sys, not xhci98.sys");
+        failed[INST_INF_CM] = 0;
+        trap[INST_INF_XHCI] = 1;
+        CHECK(inst_stale_blocked(inst_stale_infs(0, 1), trap, failed) &&
+              !inst_stale_blocked(inst_stale_infs(2, 0), trap, failed),
+              "5.4.1: the controller's trap keeps xhcihlpr.sys, not "
+              "xhcicm.sys");
+        trap[INST_INF_XHCI] = 0;
+        failed[INST_INF_S98] = 1;
+        CHECK(inst_stale_blocked(inst_stale_infs(3, 0), trap, failed) &&
+              !inst_stale_blocked(inst_stale_infs(1, 0), trap, failed) &&
+              !inst_stale_blocked(inst_stale_infs(4, 0), trap, failed),
+              "5.4.1: each single-INF file held by its own INF alone");
+        failed[INST_INF_S98] = 0;
+        failed[INST_INF_UAS] = 1;
+        CHECK(inst_stale_blocked(inst_stale_infs(1, 0), trap, failed),
+              "5.4.1: a failed absent UAS install keeps xhciuas.sys");
+    }
+    CHECK(inst_hlpr_stale_ok(1, 1, 1, 1) && inst_hlpr_stale_ok(1, 1, 1, 0) &&
+          inst_hlpr_stale_ok(1, 1, 0, 1),
+          "5.4.1: xhcihlpr.sys with either group in the run, none refused");
+    CHECK(!inst_hlpr_stale_ok(1, 0, 1, 1) && !inst_hlpr_stale_ok(0, 1, 1, 1) &&
+          !inst_hlpr_stale_ok(1, 0, 1, 0) && !inst_hlpr_stale_ok(0, 1, 0, 1),
+          "5.4.1: a refused connection manager group keeps xhcihlpr.sys "
+          "from the USB branch, and a refused USB group from the "
+          "connection manager's");
+    CHECK(!inst_hlpr_stale_ok(1, 1, 0, 0),
+          "5.4.1: neither group in the run");
     CHECK(inst_action_runs(INST_ACT_NEWER, 1), "newer with /force");
     CHECK(!inst_action_runs(INST_ACT_FOREIGN, 1), "foreign never, even /force");
 
@@ -1941,6 +2158,8 @@ static void test_values(void)
             INST_U32 Step;
         } add[] = {
             { "XhciLinkKeep", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x3, 0, 0, 0 },
+            { "XhciSsFlapFallback", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x3,
+              0, 0, 0 },
             { "XhciResumeKeep", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x3, 0, 0,
               0 },
             { "XhciUsb2Bos", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x3, 0, 0, 0 },
@@ -1961,7 +2180,7 @@ static void test_values(void)
               30000, 0 },
             { "XhciFirstEnumPortMs", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0, 0,
               30000, 0 },
-            { "XhciCmRingInterrupt", INST_INF_CM, INST_APPLY_NT_CM, 0x3, 0, 0,
+            { "XhciCmRingInterrupt", INST_INF_CM, INST_APPLY_CM, 0x3, 0, 0,
               0 },
             { "XhciCmUsb4V2", INST_INF_CM, INST_APPLY_CM, 0x3, 0, 0, 0 }
         };
@@ -2041,11 +2260,11 @@ static void test_values(void)
                                   sizeof(range));
             CHECK(inst_eq(range, "1 to 5000"), "a range text with no step");
             CHECK(!inst_value_in_range(wm, 0), "a list row is no range");
-            /* The ring interrupt: 2000 to 10 alone. */
-            CHECK(inst_value_greyed(ri, &e98) && inst_value_set_mask(ri, &e98) == 0
-                  && !inst_value_allowed(ri, &e98, 1) &&
-                  inst_eq(inst_value_only(ri), "Windows 2000 to 10 only"),
-                  "XhciCmRingInterrupt on 98 SE: greyed, refused");
+            /* The ring interrupt: every system since task 48.26. */
+            CHECK(!inst_value_greyed(ri, &e98) && inst_value_set_mask(ri, &e98)
+                  == 0x3 && inst_value_allowed(ri, &e98, 1) &&
+                  inst_value_only(ri) == NULL,
+                  "XhciCmRingInterrupt on 98 SE: taken (task 48.26)");
             CHECK(!inst_value_greyed(ri, &exp) && inst_value_set_mask(ri, &exp)
                   == 0x3 && inst_value_allowed(ri, &exp, 1),
                   "XhciCmRingInterrupt on XP: taken");
@@ -3077,21 +3296,18 @@ static void test_tb_lock_4622(void)
         CHECK_EQ(line, INST_FINAL_UNFINISHED, "steps left: said so");
         CHECK(strcmp(inst_final_text(INST_FINAL_DONE),
                      "Done. No restart is needed.") == 0 &&
-              strcmp(inst_final_text_cold(INST_FINAL_DONE, 1),
+              strcmp(inst_final_text_shown(INST_FINAL_DONE, 0),
                      "Done. No restart is needed.") == 0,
-              "the tools alone's last line, warm and cold");
-        CHECK(strcmp(inst_final_text_shown(INST_FINAL_UNFINISHED, 0, 0),
+              "the tools alone's last line");
+        CHECK(strcmp(inst_final_text_shown(INST_FINAL_UNFINISHED, 0),
                      "Not everything is done: see the steps in the log, then "
                      "restart Windows.") == 0 &&
-              strcmp(inst_final_text_shown(INST_FINAL_UNFINISHED, 1, 0),
-                     "Not everything is done: see the steps in the log, then "
-                     "shut down and\nstart Windows again.") == 0 &&
-              strcmp(inst_final_text_shown(INST_FINAL_UNFINISHED, 0, 1),
+              strcmp(inst_final_text_shown(INST_FINAL_UNFINISHED, 1),
                      inst_final_text(INST_FINAL_UNFINISHED)) == 0 &&
-              strcmp(inst_final_text_shown(INST_FINAL_UNFINISHED, 1, 1),
-                     inst_final_text_cold(INST_FINAL_UNFINISHED, 1)) == 0 &&
-              strcmp(inst_final_text_shown(INST_FINAL_RESTART, 0, 0),
+              strcmp(inst_final_text_shown(INST_FINAL_RESTART, 0),
                      inst_final_text(INST_FINAL_RESTART)) == 0 &&
+              strcmp(inst_final_text_shown(INST_FINAL_RESTART, 1),
+                     "Done. Please restart Windows now.") == 0 &&
               strstr(inst_final_text(INST_FINAL_UNFINISHED),
                      "follow the steps above first") != NULL,
               "the window's Finish: the log where no Steps page was shown");
@@ -3867,6 +4083,182 @@ static void test_tb_eject(void)
         CHECK_EQ(inst_port_usb3(r, 0x0020), CM_ST_TUN_UNKNOWN,
                  "no router: not known");
     }
+    /* The PCIe tunnel watched after an NT eject (record 24 section 5.2):
+     * closed, still named, or never named - a port whose bridge the
+     * connection manager does not know (a tunnel found up at start and
+     * never learned), which its teardown cannot close. */
+    {
+        unsigned char r[CM_ST_MAX_BYTES];
+        unsigned char *e1 = r + CM_ST_HDR_BYTES;
+        unsigned char *e2 = e1 + CM_ST_ENTRY_BYTES;
+
+        CHECK_EQ(CM_ST_O_ROUTER_COUNT, 72, "router count offset");
+        CHECK_EQ(CM_ST_TUN_EJECTED, 4, "ejected tunnel");
+        CHECK_EQ(CM_ST_HDR_BYTES, 128, "record header");
+        CHECK_EQ(CM_ST_ENTRY_BYTES, 128, "router entry");
+        memset(r, 0, sizeof(r));
+        put32(r, CM_ST_O_PORT_COUNT, 2);
+        put32(r, CM_ST_O_PORT_ACTIVE, 0x3);
+        put32(r, CM_ST_O_PORTS, 0x0200);
+        put32(r, CM_ST_O_PORTS + 4, 0x0208);
+        put32(r, CM_ST_O_ROUTER_COUNT, 2);
+        put32(e1, CM_ST_E_BRIDGE, 0x0018);
+        put32(e1, CM_ST_E_TUNNELS, CM_ST_TUN_UP);
+        put32(e2, CM_ST_E_BRIDGE, 0x0200);
+        put32(e2, CM_ST_E_TUNNELS, CM_ST_TUN_PRESERVED);
+        CHECK_EQ(inst_port_pcie(r, 0x0200), INST_PCIE_NAMED,
+                 "a router naming the port, its tunnel up: named");
+        put32(e2, CM_ST_E_TUNNELS, (CM_ST_TUN_UP << 4) | CM_ST_TUN_EJECTED);
+        CHECK_EQ(inst_port_pcie(r, 0x0200), INST_PCIE_CLOSED,
+                 "torn down after an eject: closed, the USB3 nibble aside");
+        CHECK_EQ(inst_port_pcie(r, 0x0208), INST_PCIE_UNNAMED,
+                 "another port: not named");
+        put32(e2, CM_ST_E_BRIDGE, CM_ST_UNKNOWN);
+        put32(e2, CM_ST_E_TUNNELS, CM_ST_TUN_PRESERVED);
+        CHECK_EQ(inst_port_pcie(r, 0x0200), INST_PCIE_UNNAMED,
+                 "an entry of no kind, its port not known: not read");
+        CHECK_EQ(CM_ST_KIND_USB4_PORT, 2, "a host port's router");
+        CHECK_EQ(CM_ST_KIND_USB4_LINK, 3, "a deeper router");
+        put32(e2, CM_ST_E_KIND, CM_ST_KIND_USB4_PORT);
+        CHECK_EQ(inst_port_pcie(r, 0x0200), INST_PCIE_UNMAPPED,
+                 "a host port's router, its tunnel kept from the start and "
+                 "its port not known: unmapped");
+        put32(e2, CM_ST_E_TUNNELS, (CM_ST_TUN_UP << 4) | CM_ST_TUN_UP);
+        CHECK_EQ(inst_port_pcie(r, 0x0200), INST_PCIE_UNMAPPED,
+                 "the same with its tunnel built: unmapped");
+        put32(r, CM_ST_O_PORT_ACTIVE, 0x2);
+        CHECK_EQ(inst_port_pcie(r, 0x0200), INST_PCIE_UNNAMED,
+                 "the port not an active member: not unmapped");
+        CHECK_EQ(inst_port_pcie(r, 0x0310), INST_PCIE_UNNAMED,
+                 "a chain port, never a member: not unmapped");
+        put32(r, CM_ST_O_PORT_ACTIVE, 0x3);
+        put32(e2, CM_ST_E_TUNNELS, CM_ST_TUN_NONE);
+        CHECK_EQ(inst_port_pcie(r, 0x0200), INST_PCIE_UNNAMED,
+                 "no PCIe tunnel on it: not unmapped");
+        put32(e2, CM_ST_E_TUNNELS, CM_ST_TUN_UP);
+        put32(e2, CM_ST_E_KIND, CM_ST_KIND_USB4_LINK);
+        CHECK_EQ(inst_port_pcie(r, 0x0200), INST_PCIE_UNNAMED,
+                 "a deeper router's entry: not read for unmapped");
+        put32(e2, CM_ST_E_KIND, CM_ST_KIND_USB4_PORT);
+        put32(e1, CM_ST_E_BRIDGE, 0x0200);
+        CHECK_EQ(inst_port_pcie(r, 0x0200), INST_PCIE_NAMED,
+                 "named by one entry, another not known: named");
+        put32(e1, CM_ST_E_BRIDGE, 0x0018);
+        put32(e2, CM_ST_E_KIND, 0);
+        /* The watch's end (inst_pcie_unbound): unmapped with the unit
+         * present before the call, never named in the watch, and still
+         * unmapped at its last, fresh read. */
+        CHECK(inst_pcie_unbound(INST_PCIE_UNMAPPED, 0, 1, INST_PCIE_UNMAPPED),
+              "unmapped before, never named, unmapped just now: the line for "
+              "an unknown port");
+        CHECK(!inst_pcie_unbound(INST_PCIE_NAMED, 0, 1, INST_PCIE_UNMAPPED),
+              "named before the call (the unit's router gone since, another "
+              "port's unbound): the plain line");
+        CHECK(!inst_pcie_unbound(INST_PCIE_UNNAMED, 0, 1, INST_PCIE_UNMAPPED),
+              "nothing known before the call: the plain line");
+        CHECK(!inst_pcie_unbound(INST_PCIE_UNMAPPED, 1, 1, INST_PCIE_UNMAPPED),
+              "named earlier in the watch: the plain line");
+        CHECK(!inst_pcie_unbound(INST_PCIE_UNMAPPED, 0, 0, INST_PCIE_UNMAPPED),
+              "an unmapped read, then reads that failed: the plain line");
+        CHECK(!inst_pcie_unbound(INST_PCIE_UNMAPPED, 0, 1, INST_PCIE_UNNAMED),
+              "no host port's router unmapped just now: the plain line");
+        CHECK(!inst_pcie_unbound(INST_PCIE_UNMAPPED, 0, 1, INST_PCIE_NAMED),
+              "named just now: the plain line");
+        /* Whether the last record stands as read just now
+         * (inst_watch_current): it must echo the ask made late in the
+         * watch; one still echoing the ask made before the call is a
+         * value written then, read again, however unmapped it reads. */
+        CHECK_EQ(CM_ST_O_ECHO, 124, "echo offset");
+        CHECK_EQ(CM_ST_O_STAGE, 32, "stage offset");
+        put32(r, CM_ST_O_STAGE, CM_ST_STAGE_ACTIVE);
+        put32(e2, CM_ST_E_KIND, CM_ST_KIND_USB4_PORT);
+        put32(e2, CM_ST_E_BRIDGE, CM_ST_UNKNOWN);
+        put32(e2, CM_ST_E_TUNNELS, CM_ST_TUN_PRESERVED);
+        put32(r, CM_ST_O_ECHO, 0x1111UL);
+        CHECK_EQ(inst_port_pcie(r, 0x0200), INST_PCIE_UNMAPPED,
+                 "a frozen record, read whole: unmapped");
+        CHECK(!inst_watch_current(r, 0x2223UL, 500UL),
+              "it echoes the ask made before the call, not the late one: "
+              "not current");
+        CHECK(!inst_pcie_unbound(INST_PCIE_UNMAPPED, 0,
+                                 inst_watch_current(r, 0x2223UL, 500UL),
+                                 inst_port_pcie(r, 0x0200)),
+              "so the plain line");
+        CHECK(!inst_watch_current(r, 0UL, 500UL),
+              "no late ask written (the key refused): not current");
+        put32(r, CM_ST_O_ECHO, 0x2223UL);
+        CHECK(inst_watch_current(r, 0x2223UL, 3000UL),
+              "the late ask echoed, read at the bound: current");
+        CHECK(inst_pcie_unbound(INST_PCIE_UNMAPPED, 0,
+                                inst_watch_current(r, 0x2223UL, 3000UL),
+                                inst_port_pcie(r, 0x0200)),
+              "so the line for an unknown port");
+        CHECK(inst_watch_current(r, 0x2223UL, INST_WATCH_ASK_MAX_MS),
+              "read at the limit after the late ask: current");
+        CHECK(!inst_watch_current(r, 0x2223UL, INST_WATCH_ASK_MAX_MS + 1UL),
+              "the late echo published, the record frozen since and the "
+              "last read made past the limit (the tool descheduled): not "
+              "current");
+        CHECK(!inst_pcie_unbound(INST_PCIE_UNMAPPED, 0,
+                                 inst_watch_current(r, 0x2223UL, 60000UL),
+                                 inst_port_pcie(r, 0x0200)),
+              "so the plain line");
+        /* At the bound (inst_watch_last): the record's age is taken at
+         * the decision. Read 3 s after the late ask, in time, then the
+         * tool descheduled and the decision made past the limit. */
+        CHECK(inst_watch_last(INST_PCIE_UNMAPPED, 0, r,
+                              inst_port_pcie(r, 0x0200), 0x2223UL, 1000UL,
+                              4000UL),
+              "the late echo read 3 s after the ask, decided at once: the "
+              "line for an unknown port");
+        CHECK(inst_watch_current(r, 0x2223UL, 3000UL) &&
+              !inst_watch_last(INST_PCIE_UNMAPPED, 0, r,
+                               inst_port_pcie(r, 0x0200), 0x2223UL, 1000UL,
+                               1000UL + INST_WATCH_ASK_MAX_MS + 1UL),
+              "current when read, the decision past the limit (the tool "
+              "descheduled after the read): the plain line");
+        CHECK(inst_watch_last(INST_PCIE_UNMAPPED, 0, r,
+                              inst_port_pcie(r, 0x0200), 0x2223UL, 1000UL,
+                              1000UL + INST_WATCH_ASK_MAX_MS),
+              "decided at the limit: the line for an unknown port");
+        CHECK(inst_watch_last(INST_PCIE_UNMAPPED, 0, r,
+                              inst_port_pcie(r, 0x0200), 0x2223UL,
+                              0xFFFFFC18UL, 2000UL),
+              "the tick count wrapped between the ask and the decision, "
+              "3 s apart: the line for an unknown port");
+        CHECK(!inst_watch_last(INST_PCIE_UNMAPPED, 0, r,
+                               inst_port_pcie(r, 0x0200), 0x2223UL,
+                               0xFFFFFC18UL, 6000UL),
+              "wrapped, 7 s apart: the plain line");
+        CHECK(!inst_watch_last(INST_PCIE_UNMAPPED, 0, 0, INST_PCIE_UNMAPPED,
+                               0x2223UL, 1000UL, 4000UL),
+              "the last read failed: the plain line");
+        CHECK(!inst_watch_last(INST_PCIE_UNMAPPED, 0, r,
+                               inst_port_pcie(r, 0x0200), 0UL, 1000UL,
+                               4000UL),
+              "no late ask written by this watch: the plain line");
+        put32(r, CM_ST_O_STAGE, CM_ST_STAGE_STOPPED);
+        CHECK(!inst_watch_current(r, 0x2223UL, 500UL),
+              "echoed by a stopping driver: not current");
+        put32(r, CM_ST_O_STAGE, 0);
+        put32(r, CM_ST_O_ECHO, 0);
+        put32(e2, CM_ST_E_KIND, 0);
+        put32(e2, CM_ST_E_BRIDGE, 0x0200);
+        put32(e2, CM_ST_E_TUNNELS, CM_ST_TUN_EJECTED);
+        put32(r, CM_ST_O_ROUTER_COUNT, 1);
+        CHECK_EQ(inst_port_pcie(r, 0x0200), INST_PCIE_UNNAMED,
+                 "an entry past the router count is not read");
+        put32(r, CM_ST_O_ROUTER_COUNT, 0);
+        CHECK_EQ(inst_port_pcie(r, 0x0018), INST_PCIE_UNNAMED,
+                 "no router: not named");
+        CHECK(strstr(inst_pcie_unbound_text(), "stays up until the device "
+                                               "is unplugged") != NULL &&
+                  strstr(inst_pcie_unbound_text(), "which of its ports") !=
+                      NULL,
+              "the line for a port the driver does not know");
+        CHECK(longest_line(inst_pcie_unbound_text()) <= 79,
+              "that line fits the console");
+    }
 
     /* The switches. */
     argv1[0] = "x";
@@ -4133,18 +4525,24 @@ static void test_tray(void)
              "a quote in the path");
     CHECK_EQ(inst_tray_run_data("", buf, sizeof(buf)), 0, "an empty path");
 
-    CHECK_EQ(inst_tray_copy_needed(0, NULL, 1, v300), 1, "absent: copied");
-    CHECK_EQ(inst_tray_copy_needed(0, NULL, -1, NULL), 1,
+    CHECK_EQ(inst_tray_copy_needed(0, NULL, 1, v300, 1), 1, "absent: copied");
+    CHECK_EQ(inst_tray_copy_needed(0, NULL, -1, NULL, 1), 1,
              "absent, package unread: copied");
-    CHECK_EQ(inst_tray_copy_needed(1, v300, 1, v301), 1, "older: copied");
-    CHECK_EQ(inst_tray_copy_needed(1, v300, 1, v300), 0, "equal: left");
-    CHECK_EQ(inst_tray_copy_needed(1, v301, 1, v300), 0, "newer: left");
-    CHECK_EQ(inst_tray_copy_needed(-1, NULL, 1, v300), 1,
+    CHECK_EQ(inst_tray_copy_needed(1, v300, 1, v301, 1), 1, "older: copied");
+    CHECK_EQ(inst_tray_copy_needed(1, v300, 1, v300, 1), 0, "equal: left");
+    CHECK_EQ(inst_tray_copy_needed(1, v301, 1, v300, 1), 0, "newer: left");
+    CHECK_EQ(inst_tray_copy_needed(-1, NULL, 1, v300, 1), 1,
              "installed unreadable: copied");
-    CHECK_EQ(inst_tray_copy_needed(1, v300, -1, NULL), 0,
+    CHECK_EQ(inst_tray_copy_needed(1, v300, -1, NULL, 1), 0,
              "package unreadable: left");
-    CHECK_EQ(inst_tray_copy_needed(-1, NULL, -1, NULL), 0,
+    CHECK_EQ(inst_tray_copy_needed(-1, NULL, -1, NULL, 1), 0,
              "both unreadable: left");
+    CHECK_EQ(inst_tray_copy_needed(1, v300, 1, v300, 0), 1,
+             "equal, other bytes: copied (record 23 section 5.4.1)");
+    CHECK_EQ(inst_tray_copy_needed(1, v300, 1, v300, -1), 0,
+             "equal, bytes not read: left");
+    CHECK_EQ(inst_tray_copy_needed(1, v301, 1, v300, 0), 0,
+             "newer, other bytes: left");
 
     CHECK_EQ(inst_tray_leftover(0, 0), INST_TRAY_BAK_NONE, "no .BAK, no tool");
     CHECK_EQ(inst_tray_leftover(0, 1), INST_TRAY_BAK_NONE, "no .BAK");
@@ -5933,7 +6331,8 @@ static void test_s98(void)
             strcat(key, "=");
             CHECK(has_text(block, key), "the row's DriverParameter key");
         } else {
-            CHECK(has_text(block, "98 SE / ME only"),
+            CHECK(has_text(block, inst_s98_me_refused(i) ?
+                                  "98 SE only, not ME" : "98 SE / ME only"),
                   "a row with no DriverParameter key says so");
         }
         /* Each field in its own column, as a whole value (a bottom of 0
@@ -5957,7 +6356,7 @@ static void test_s98(void)
         }
     }
     free(table);
-    CHECK(strcmp(INST_S98_TABLE_VERSION, "3.4.1.0") == 0,
+    CHECK(strcmp(INST_S98_TABLE_VERSION, "3.4.3.0") == 0,
           "the table is the bundled Stor98's");
 
     /* Which system each row is for. */
@@ -5981,6 +6380,42 @@ static void test_s98(void)
           inst_s98_check(INST_S98_INTWATCH, 0, "0", w, sizeof(w), &why) &&
           !inst_s98_check(INST_S98_INTWATCH, 1, "2", w, sizeof(w), &why),
           "the missed-interrupt watchdog: on by default, 0 or 1 (3.4.1.0)");
+    CHECK(inst_s98_applies(INST_S98_TAKEFW, 0) && !inst_s98_applies(INST_S98_TAKEFW, 1) &&
+          inst_s98_greyed(INST_S98_TAKEFW, 1) &&
+          strcmp(instS98Values[INST_S98_TAKEFW].Name9x, "StorTakeFirmware") == 0 &&
+          strcmp(inst_s98_default(INST_S98_TAKEFW, 0), "0") == 0 &&
+          strcmp(inst_s98_only(INST_S98_TAKEFW), "Windows 98 SE and ME only") == 0 &&
+          inst_s98_check(INST_S98_TAKEFW, 0, "1", w, sizeof(w), &why) &&
+          inst_s98_check(INST_S98_TAKEFW, 0, "0", w, sizeof(w), &why) &&
+          !inst_s98_check(INST_S98_TAKEFW, 0, "2", w, sizeof(w), &why),
+          "taking a controller the BIOS set up: 98 SE and ME only, off by default, 0 or 1 (3.4.3.0)");
+    CHECK(inst_s98_me_refused(INST_S98_TAKEFW) &&
+          !inst_s98_me_refused(INST_S98_HOLD9X) &&
+          !inst_s98_me_refused(INST_S98_WRITETHROUGH) &&
+          inst_s98_applies_os(INST_S98_TAKEFW, 0, 0) &&
+          !inst_s98_applies_os(INST_S98_TAKEFW, 0, 1) &&
+          !inst_s98_applies_os(INST_S98_TAKEFW, 1, 0) &&
+          !inst_s98_greyed_os(INST_S98_TAKEFW, 0, 0) &&
+          inst_s98_greyed_os(INST_S98_TAKEFW, 0, 1) &&
+          inst_s98_greyed_os(INST_S98_TAKEFW, 1, 0) &&
+          inst_s98_applies_os(INST_S98_HOLD9X, 0, 1) &&
+          !inst_s98_greyed_os(INST_S98_HOLD9X, 0, 1) &&
+          inst_s98_applies_os(INST_S98_GONE, 0, 1) &&
+          strcmp(inst_s98_only_os(INST_S98_TAKEFW, 1), INST_S98_ME_WHY) == 0 &&
+          strcmp(inst_s98_only_os(INST_S98_TAKEFW, 0), "Windows 98 SE and ME only") == 0 &&
+          strcmp(inst_s98_only_os(INST_S98_HOLD9X, 1), "Windows 98 SE and ME only") == 0 &&
+          inst_s98_only_os(INST_S98_GONE, 1) == NULL &&
+          !inst_s98_applies_os(-1, 0, 1) && !inst_s98_greyed_os(-1, 0, 1),
+          "StorTakeFirmware: not settable on ME, greyed there with why (48.28)");
+    inst_s98_meanings(INST_S98_TAKEFW, t, sizeof(t));
+    CHECK(strncmp(t, "0: leave it to the BIOS. 1: take it; ", 37) == 0 &&
+          strstr(t, "can hang Windows' start or corrupt data") != NULL,
+          "the Advanced dialog's text for StorTakeFirmware carries its warning");
+    inst_s98_meanings(INST_S98_INTWATCH, t, sizeof(t));
+    CHECK(strcmp(t, "0: keep waiting for interrupts. 1: poll once interrupts stop.") == 0,
+          "a 0-or-1 row's meanings");
+    inst_s98_meanings(INST_S98_GONE, t, sizeof(t));
+    CHECK(t[0] == '\0', "a row without meanings: none");
     inst_s98_default_text(INST_S98_WRITETHROUGH, 0, 1, t, sizeof(t));
     CHECK(strcmp(t, "auto (here: cacheoff)") == 0, "auto on ME");
     inst_s98_default_text(INST_S98_WRITETHROUGH, 1, 0, t, sizeof(t));
@@ -6269,15 +6704,6 @@ static void test_s98(void)
         CHECK(inst_s98_box_open(1, 1, 1) && !inst_s98_box_open(1, 1, 0) &&
               !inst_s98_box_open(1, 0, 1) && !inst_s98_box_open(0, 1, 1),
               "the window's box: open only under a ticked Thunderbolt box");
-        CHECK(strcmp(inst_final_text_cold(INST_FINAL_RESTART, 1),
-                     "Done. Please shut down and start Windows again.") == 0 &&
-              strstr(inst_final_text_cold(INST_FINAL_UNFINISHED, 1),
-                     "then shut down and\nstart Windows again.") != NULL &&
-              strcmp(inst_final_text_cold(INST_FINAL_RESTART, 0),
-                     inst_final_text(INST_FINAL_RESTART)) == 0 &&
-              strcmp(inst_final_text_cold(INST_FINAL_NO_CHANGES, 1),
-                     "No changes were made.") == 0,
-              "the shutdown's final lines");
     }
 
     /* The install record's two rules (record 26 section 6.3). */
@@ -6296,8 +6722,6 @@ static void test_s98(void)
           !inst_s98_service_removable(1, 0) &&
           !inst_s98_service_removable(0, 1),
           "the service goes only when nothing is bound and none was there");
-    CHECK(inst_s98_cold_start(0) && !inst_s98_cold_start(1),
-          "98 SE and ME: shut down, not restart");
     /* The record's Version (record 26 draft 43, task 44.30). */
     CHECK(inst_s98_version_owed(1, 1, 0, 0, 0, 1, 0),
           "98 SE and ME: a new copy carrying Stor98, no drive: written");
@@ -6369,21 +6793,31 @@ static void test_s98(void)
     CHECK(inst_s98_known_tunnel(0, 0, INST_S98_AT_UNKNOWN, 0),
           "98 SE and ME, not present: gone with its tunnel");
     /* Record 26 section 6.3, draft 16: 98 SE and ME's file update. */
-    CHECK(inst_s98_file_update(0, 1, INST_S98_SHARE_FREE, 1, -1),
+    CHECK(inst_s98_file_update(0, 1, INST_S98_SHARE_FREE, 1, -1, 1),
           "98: an older stor98.mpd, free: replaced as a file");
-    CHECK(!inst_s98_file_update(1, 1, INST_S98_SHARE_FREE, 1, -1),
+    CHECK(!inst_s98_file_update(1, 1, INST_S98_SHARE_FREE, 1, -1, 1),
           "NT: never (SetupAPI updates Stor98 there)");
-    CHECK(!inst_s98_file_update(0, 0, INST_S98_SHARE_FREE, 1, -1) &&
-          !inst_s98_file_update(0, 1, INST_S98_SHARE_HOLD, 1, -1) &&
-          !inst_s98_file_update(0, 1, INST_S98_SHARE_SAME, 1, -1),
+    CHECK(!inst_s98_file_update(0, 0, INST_S98_SHARE_FREE, 1, -1, 1) &&
+          !inst_s98_file_update(0, 1, INST_S98_SHARE_HOLD, 1, -1, 1) &&
+          !inst_s98_file_update(0, 1, INST_S98_SHARE_SAME, 1, -1, 1),
           "98: not without Stor98 in the run, nor under the shared-file "
           "rule");
-    CHECK(!inst_s98_file_update(0, 1, INST_S98_SHARE_FREE, 0, -1) &&
-          !inst_s98_file_update(0, 1, INST_S98_SHARE_FREE, -1, -1) &&
-          !inst_s98_file_update(0, 1, INST_S98_SHARE_FREE, 1, 0) &&
-          !inst_s98_file_update(0, 1, INST_S98_SHARE_FREE, 1, 1),
+    CHECK(!inst_s98_file_update(0, 1, INST_S98_SHARE_FREE, 0, -1, 1) &&
+          !inst_s98_file_update(0, 1, INST_S98_SHARE_FREE, -1, -1, 1) &&
+          !inst_s98_file_update(0, 1, INST_S98_SHARE_FREE, 1, 0, 1) &&
+          !inst_s98_file_update(0, 1, INST_S98_SHARE_FREE, 1, 1, 1),
           "98: not with no file, an unreadable one, the same release or a "
           "newer one");
+    CHECK(inst_s98_file_update(0, 1, INST_S98_SHARE_FREE, 1, 0, 0),
+          "98: the same release with other bytes: replaced (record 23 "
+          "section 5.4.1)");
+    CHECK(!inst_s98_file_update(0, 1, INST_S98_SHARE_FREE, 1, 0, -1) &&
+          !inst_s98_file_update(0, 1, INST_S98_SHARE_FREE, 1, 1, 0) &&
+          !inst_s98_file_update(1, 1, INST_S98_SHARE_FREE, 1, 0, 0) &&
+          !inst_s98_file_update(0, 1, INST_S98_SHARE_HOLD, 1, 0, 0) &&
+          !inst_s98_file_update(0, 0, INST_S98_SHARE_FREE, 1, 0, 0),
+          "98: not for unread bytes, a newer release, NT, a held file or "
+          "Stor98 out of the run");
     CHECK(strcmp(inst_page_text(INST_PT_S98_UNUSED),
                  "Disconnect all external NVMe drives before Setup "
                  "continues.") == 0 &&
@@ -6775,6 +7209,43 @@ static void test_s98_tunnel(void)
           !inst_s98_later_said(INST_S98_NEEDS_TB, 1, 0, 0),
           "shared: after the restart only when every holder is read then; "
           "no other reason");
+    /* Record 31 section 4.10 (task 48.29): on 8.1 a drive without the
+     * tunnel id is left; after the restart when the run changes the
+     * connection manager, else with no route. */
+    CHECK(inst_s98_noid_why(0, 0, 1, 1) == INST_S98_ELIGIBLE &&
+          inst_s98_noid_why(0, 0, 0, 0) == INST_S98_ELIGIBLE,
+          "noid: not 8.1, never");
+    CHECK(inst_s98_noid_why(1, 1, 1, 1) == INST_S98_ELIGIBLE &&
+          inst_s98_noid_why(1, 1, 0, 0) == INST_S98_ELIGIBLE,
+          "noid: 8.1 with the id: eligible");
+    CHECK(inst_s98_noid_why(1, 0, 1, 1) == INST_S98_SKIP_NOID_RUN,
+          "noid: 8.1, on Stor98, the connection manager changing: run again");
+    CHECK(inst_s98_noid_why(1, 0, 0, 1) == INST_S98_SKIP_NOID_MARK,
+          "noid: 8.1, on stornvme or none, changing: the mark service");
+    CHECK(inst_s98_noid_why(1, 0, 1, 0) == INST_S98_SKIP_NOID &&
+          inst_s98_noid_why(1, 0, 0, 0) == INST_S98_SKIP_NOID,
+          "noid: 8.1, the connection manager unchanged: no route");
+    CHECK(inst_s98_later_said(INST_S98_SKIP_NOID_RUN, 0, 0, 0) &&
+          inst_s98_later_said(INST_S98_SKIP_NOID_RUN, 0, 1, 0) &&
+          !inst_s98_later_said(INST_S98_SKIP_NOID_MARK, 1, 0, 0) &&
+          !inst_s98_later_said(INST_S98_SKIP_NOID, 1, 0, 0),
+          "noid: only the drive on Stor98 sends the user to a run after "
+          "the restart");
+    s = inst_s98_left_text(INST_S98_SKIP_NOID_RUN, 1, 1, 0);
+    CHECK(s != NULL && strstr(s, "after the restart") != NULL &&
+          strstr(s, "8.1") != NULL,
+          "noid run: its sentence");
+    s = inst_s98_left_text(INST_S98_SKIP_NOID_MARK, 1, 0, 0);
+    CHECK(s != NULL && strstr(s, "mark service") != NULL,
+          "noid mark: its sentence");
+    s = inst_s98_left_text(INST_S98_SKIP_NOID, 1, 0, 0);
+    CHECK(s != NULL && strstr(s, "no tunnel id") != NULL &&
+          strstr(s, "after the restart") == NULL,
+          "noid: no route, no promise");
+    CHECK(inst_s98_left_text(INST_S98_SKIP_NOID_RUN, 0, 0, 1) != NULL &&
+          inst_s98_left_text(INST_S98_SKIP_NOID_MARK, 0, 0, 1) != NULL &&
+          inst_s98_left_text(INST_S98_SKIP_NOID, 0, 0, 1) != NULL,
+          "noid: the window's short forms");
     /* 98 SE and ME: stor98.mpd put in IOSUBSYS before the first plug. */
     CHECK(inst_s98_mpd_place(0, 1, INST_S98_SHARE_FREE, 0, 0) &&
           !inst_s98_mpd_place(1, 1, INST_S98_SHARE_FREE, 0, 0) &&
@@ -8252,29 +8723,40 @@ static void test_pfw_inst(void)
           "/xhcipfw /thunderbolt /nostor98: not Stor98's child");
 
     /* Which systems (record 32 sections 7 and 11; the owner's Q6). */
-    CHECK(inst_pfw_sys(0, 4, 10, 1) == INST_PFW_SYS_9X, "98 SE, ME: the VxD");
-    CHECK(inst_pfw_sys(1, 5, 0, 1) == INST_PFW_SYS_ALWAYS, "2000: offered");
-    CHECK(inst_pfw_sys(1, 5, 1, 1) == INST_PFW_SYS_SEEN,
+    CHECK(inst_pfw_sys(0, 4, 10, 0, 1) == INST_PFW_SYS_9X,
+          "98 SE, ME: the VxD");
+    CHECK(inst_pfw_sys(1, 5, 0, 0, 1) == INST_PFW_SYS_ALWAYS,
+          "2000: offered");
+    CHECK(inst_pfw_sys(1, 5, 1, 0, 1) == INST_PFW_SYS_SEEN,
           "XP: offered, the problem read for the note");
-    CHECK(inst_pfw_sys(1, 5, 2, 1) == INST_PFW_SYS_NONE,
+    CHECK(inst_pfw_sys(1, 5, 2, 0, 1) == INST_PFW_SYS_NONE,
           "Server 2003: not offered");
-    CHECK(inst_pfw_sys(1, 6, 0, 1) == INST_PFW_SYS_SEEN &&
-          inst_pfw_sys(1, 6, 1, 1) == INST_PFW_SYS_SEEN,
+    CHECK(inst_pfw_sys(1, 6, 0, 0, 1) == INST_PFW_SYS_SEEN &&
+          inst_pfw_sys(1, 6, 1, 0, 1) == INST_PFW_SYS_SEEN,
           "Vista, 7 x86: offered");
     /* Task 44.72 (the owner, 2026-10-28): from 8 on the boot driver's
      * start races the PCI driver's; task 45.9 (the owner, 2026-10-29): a
-     * root bus filter on 8 and 8.1, not 10. */
-    CHECK(inst_pfw_sys(1, 6, 2, 1) == INST_PFW_SYS_FILTER &&
-          inst_pfw_sys(1, 6, 3, 1) == INST_PFW_SYS_FILTER,
+     * root bus filter on 8 and 8.1. */
+    CHECK(inst_pfw_sys(1, 6, 2, 0, 1) == INST_PFW_SYS_FILTER &&
+          inst_pfw_sys(1, 6, 3, 0, 1) == INST_PFW_SYS_FILTER,
           "8, 8.1 x86: offered, the filter role");
-    CHECK(inst_pfw_sys(1, 10, 0, 1) == INST_PFW_SYS_GONE,
-          "10 x86: not offered, an earlier one removed");
-    CHECK(inst_pfw_sys(1, 6, 4, 1) == INST_PFW_SYS_NONE &&
-          inst_pfw_sys(1, 11, 0, 1) == INST_PFW_SYS_NONE,
+    /* Task 48.27 (the owner, 2026-11-09, Q29 (b)): the filter role on 10
+     * from version 2004 (19041), the builds read; earlier builds as
+     * before. */
+    CHECK(inst_pfw_sys(1, 10, 0, 19040, 1) == INST_PFW_SYS_GONE &&
+          inst_pfw_sys(1, 10, 0, 10240, 1) == INST_PFW_SYS_GONE,
+          "10 x86 before 2004: not offered, an earlier one removed");
+    CHECK(inst_pfw_sys(1, 10, 0, 19041, 1) == INST_PFW_SYS_FILTER &&
+          inst_pfw_sys(1, 10, 0, 19045, 1) == INST_PFW_SYS_FILTER,
+          "10 x86 2004 and later: offered, the filter role");
+    CHECK(inst_pfw_sys(1, 10, 0, 19045, 0) == INST_PFW_SYS_NONE,
+          "10 x64: not offered");
+    CHECK(inst_pfw_sys(1, 6, 4, 0, 1) == INST_PFW_SYS_NONE &&
+          inst_pfw_sys(1, 11, 0, 19045, 1) == INST_PFW_SYS_NONE,
           "an unknown NT 6 or later: nothing");
-    CHECK(inst_pfw_sys(1, 6, 1, 0) == INST_PFW_SYS_NONE &&
-          inst_pfw_sys(1, 6, 2, 0) == INST_PFW_SYS_NONE &&
-          inst_pfw_sys(1, 10, 0, 0) == INST_PFW_SYS_NONE,
+    CHECK(inst_pfw_sys(1, 6, 1, 0, 0) == INST_PFW_SYS_NONE &&
+          inst_pfw_sys(1, 6, 2, 0, 0) == INST_PFW_SYS_NONE &&
+          inst_pfw_sys(1, 10, 0, 19045, 0) == INST_PFW_SYS_NONE,
           "64-bit: not offered");
 
     /* The box: the one decision (the owner's Q9), the Thunderbolt box's
@@ -9760,7 +10242,7 @@ static void test_help(void)
 {
     /* Each topic's paragraphs, in INST_HELP_* order. */
     static const size_t paras[INST_HELP_COUNT] = {
-        3, 3, 9, 8, 4, 3, 7, 8, 5, 3, 3, 4, 3, 2, 3, 3, 3, 1, 3, 2
+        3, 3, 9, 8, 4, 3, 7, 8, 5, 3, 3, 4, 3, 2, 3, 3, 1, 3, 2
     };
     static const char *const banned[] = {
         "tested", "testing", "emulat", "virtual machine", "experimental"
@@ -9790,7 +10272,6 @@ static void test_help(void)
         { INST_HK_PROGRESS, 1, INST_PV_9X, INST_HELP_PROGRESS_9X },
         { INST_HK_STEPS, 0, 0, INST_HELP_STEPS },
         { INST_HK_FINISH, 0, INST_FV_RESTART, INST_HELP_FINISH },
-        { INST_HK_FINISH, 0, INST_FV_SHUT, INST_HELP_FINISH_SHUT },
         { INST_HK_FINISH, 0, INST_FV_NONE, INST_HELP_FINISH_NONE },
         { INST_HK_FINISH, 1, INST_FV_RESTART, INST_HELP_UFINISH },
         { INST_HK_FINISH, 1, INST_FV_NONE, INST_HELP_FINISH_NONE }
@@ -9814,9 +10295,7 @@ static void test_help(void)
         { INST_HELP_FINISH, INST_PT_NOW, 1 },
         { INST_HELP_FINISH, INST_PT_LATER, 1 },
         { INST_HELP_UFINISH, INST_PT_NOW, 1 },
-        { INST_HELP_UFINISH, INST_PT_LATER, 1 },
-        { INST_HELP_FINISH_SHUT, INST_PT_SHUT_NOW, 1 },
-        { INST_HELP_FINISH_SHUT, INST_PT_SHUT_LATER, 0 }
+        { INST_HELP_UFINISH, INST_PT_LATER, 1 }
     };
     static const struct {
         int Topic;
@@ -10622,6 +11101,7 @@ int main(void)
     test_stor98_infs();
     test_parser();
     test_ids();
+    test_long_ids();
     test_actions();
     test_helpers();
     test_values();

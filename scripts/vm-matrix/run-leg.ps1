@@ -15,6 +15,12 @@ wizard), plugs the stick when asked, and gives the verdict: PASS when the
 guest says END, every check it names passed, each exit code is one the leg
 allows, and no step failed.
 
+A leg with Audio set (2000 to 7) also checks playback: its QEMU carries
+-audiodev none, the host plugs QEMU's usb-audio into the controller when the
+guest asks, and the guest plays the CD's WAV with WAVCHK.EXE (wavchk\, built
+by its build.cmd; the leg refuses to start without it), then reads XHCITR's
+report for refused URBs (checks audio-play and urbs-malformed).
+
 -Cold boots the first phase from the starting point's disk instead of
 restoring its saved state: the same leg, timed the way legs ran before the
 starting points (a cold start to the desktop first).
@@ -94,6 +100,17 @@ $autoWindow = ($mode -eq 'window' -and $def.ContainsKey('WindowKeys') -and @($de
 # the leg's deadline must not end it first (2026-10-29: it did, at 90 min).
 $operatorHours = 4
 if ($mode -eq 'window' -and -not $autoWindow -and -not $PSBoundParameters.ContainsKey('LegMinutes')) { $LegMinutes += $operatorHours * 60 }
+# Audio: the playback check of LEGNT.CMD (2000 to 7 only): the host plugs
+# QEMU's usb-audio when the guest asks, on a -audiodev none the leg's QEMU
+# carries outside the starting point's hash; the CD carries WAVCHK.EXE and
+# the WAV it plays.
+$audio = ($def.ContainsKey('Audio') -and $def.Audio)
+$backends = @()
+if ($audio) {
+    if ($guest.Family -eq '9x') { throw "leg ${Leg}: Audio is for the 2000 to 7 guests (LEGNT.CMD)" }
+    $wavChk = Get-LegWavChk
+    $backends = Get-LegAudioBackends
+}
 
 $rec = [ordered]@{
     leg = $Leg; guest = $guest.Id; mode = $mode; cold = [bool]$Cold; package = (Resolve-Path -LiteralPath $Package).Path
@@ -115,7 +132,14 @@ if ($guest.Family -eq '9x') {
     [IO.File]::WriteAllText((Join-Path $cd 'XHMODE.BAT'), "@echo off`r`nset XHMODE=$mode`r`nset XHARGS=$installArgs`r`n", [Text.Encoding]::ASCII)
 } else {
     Copy-Item -LiteralPath (Join-Path $legDir 'LEGNT.CMD') -Destination (Join-Path $cd 'XHLEG.CMD')
-    [IO.File]::WriteAllText((Join-Path $cd 'XHMODE.CMD'), "@echo off`r`nset `"XHMODE=$mode`"`r`nset `"XHARGS=$installArgs`"`r`n", [Text.Encoding]::ASCII)
+    $xa = ''; if ($audio) { $xa = '1' }
+    [IO.File]::WriteAllText((Join-Path $cd 'XHMODE.CMD'), "@echo off`r`nset `"XHMODE=$mode`"`r`nset `"XHARGS=$installArgs`"`r`nset `"XHAUDIO=$xa`"`r`n", [Text.Encoding]::ASCII)
+}
+if ($audio) {
+    New-Item -ItemType Directory -Force (Join-Path $cd 'XHWAV') | Out-Null
+    Copy-Item -LiteralPath $wavChk -Destination (Join-Path $cd 'XHWAV\WAVCHK.EXE')
+    New-LegToneWav (Join-Path $cd 'XHWAV\TONE.WAV')
+    Copy-Item -LiteralPath (Join-Path $legDir 'XHNORST.VBS') -Destination (Join-Path $cd 'XHWAV\XHNORST.VBS')
 }
 Copy-Item -LiteralPath $Package -Destination (Join-Path $cd 'PKG') -Recurse
 $rnd = New-Object byte[] (4MB)
@@ -172,6 +196,11 @@ function Read-LegLines {
                 }
             } catch { $rec.steps += "boot $($script:boot) stick plug FAILED: $_" }
         }
+        if ($ln -match '^XHLEG WANT plug-audio') {
+            if ($audio) {
+                try { Add-LegAudio $ports.Qmp; $rec.steps += "boot $($script:boot) audio plugged" } catch { $rec.steps += "boot $($script:boot) audio plug FAILED: $_" }
+            } else { $rec.steps += "boot $($script:boot) audio plug FAILED: the leg has no Audio" }
+        }
         if ($ln -match '^XHLEG WANT unplug-stick') {
             try { Remove-LegStick $ports.Qmp; $rec.steps += "boot $($script:boot) stick unplugged" } catch { $rec.steps += "boot $($script:boot) stick unplug FAILED: $_" }
         }
@@ -198,7 +227,7 @@ try {
         $hostStopped = $false
         try {
             if ($restore) {
-                $proc = Start-LegQemu -Config $cfg -Guest $guest -Ports $ports -Disk $disk -Iso $start.Idle -RunDir $RunDir -Tag $tag -Incoming -Name "xhleg-$Leg"
+                $proc = Start-LegQemu -Config $cfg -Guest $guest -Ports $ports -Disk $disk -Iso $start.Idle -RunDir $RunDir -Tag $tag -Incoming -Name "xhleg-$Leg" -Backends $backends
                 Restore-LegState $ports $start.State
                 Set-LegCd $ports $legIso
                 $null = Invoke-Qmp -Port $ports.Qmp -Command 'cont'
@@ -206,7 +235,7 @@ try {
             } elseif ($boot -eq 1 -and $guest.ContainsKey('ColdStep') -and (Test-LegDiskMedium $guest)) {
                 # A disk medium is there from power-on; the cold step clears
                 # the way while the poller may already have started the leg.
-                $proc = Start-LegQemu -Config $cfg -Guest $guest -Ports $ports -Disk $disk -Iso $legIso -RunDir $RunDir -Tag $tag -Name "xhleg-$Leg"
+                $proc = Start-LegQemu -Config $cfg -Guest $guest -Ports $ports -Disk $disk -Iso $legIso -RunDir $RunDir -Tag $tag -Name "xhleg-$Leg" -Backends $backends
                 $r = Invoke-LegHostStep -Step $guest.ColdStep -QmpPort $ports.Qmp -Dir $RunDir -Since $t0 -Process $proc -SerialPath $serial -Tag $tag -Layout $guest.Layout
                 $rec.steps += "boot $boot $r"
                 if ($r -match 'FAILED|no BOOT line') { throw "cold step: $r" }
@@ -214,13 +243,13 @@ try {
                 # A cold first start (-Cold) takes the guest's cold step with
                 # the empty CD in, and only then the leg's CD: the leg must not
                 # begin while the step is still clearing the way (XP's wizard).
-                $proc = Start-LegQemu -Config $cfg -Guest $guest -Ports $ports -Disk $disk -Iso $start.Idle -RunDir $RunDir -Tag $tag -Name "xhleg-$Leg"
+                $proc = Start-LegQemu -Config $cfg -Guest $guest -Ports $ports -Disk $disk -Iso $start.Idle -RunDir $RunDir -Tag $tag -Name "xhleg-$Leg" -Backends $backends
                 $r = Invoke-LegHostStep -Step $guest.ColdStep -QmpPort $ports.Qmp -Dir $RunDir -Since $t0 -Process $proc -SerialPath $serial -Tag $tag -Layout $guest.Layout
                 $rec.steps += "boot $boot $r"
                 if ($r -match 'FAILED|no BOOT line') { throw "cold step: $r" }
                 Set-LegCd $ports $legIso
             } else {
-                $proc = Start-LegQemu -Config $cfg -Guest $guest -Ports $ports -Disk $disk -Iso $legIso -RunDir $RunDir -Tag $tag -Name "xhleg-$Leg"
+                $proc = Start-LegQemu -Config $cfg -Guest $guest -Ports $ports -Disk $disk -Iso $legIso -RunDir $RunDir -Tag $tag -Name "xhleg-$Leg" -Backends $backends
             }
             # The step a start needs comes from the phase the last start ended
             # in (AfterPhaseN), so it follows the guest, not a count of starts.
@@ -360,6 +389,7 @@ if ($fnhPages) { $rec.steps += "Found New Hardware wizard pages answered: $fnhPa
 # The verdict.
 if (-not $ended) { $rec.reasons += 'the guest never said END' }
 $need = @('driver-file', 'list-current', 'stick-seen', 'stick-copy', 'list-removed')
+if ($audio) { $need += @('audio-play', 'urbs-malformed') }
 if ($def.ContainsKey('Checks')) { $need = @($def.Checks) }
 foreach ($c in $need) {
     if (-not $rec.checks.Contains($c)) { $rec.reasons += "check $c not reported" }

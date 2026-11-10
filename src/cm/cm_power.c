@@ -39,11 +39,12 @@
  * What the thread does at each (record 21 section 5.6):
  *   D3, system sleep: the held marks (CmReenumSuspend), then the client's
  *     suspend - rings stopped, then mailbox 0x05 and 0x07 where the row
- *     sends them. An integrated controller's sleep is unsupported (section
- *     1.4.3): its rings are stopped and nothing is sent. Under the USB4
- *     profile (record 22 sections 7.6 and 11) TbtU4Suspend instead: every
- *     tunnel up recorded as a resume obligation, then the rings stopped;
- *     nothing is sent to the fabric (no Guide chapter 8 sleep flow).
+ *     sends them; on the ICL row the link-controller mailbox GO2SX_NO_WAKE
+ *     after them (record 22 section 11.1.7, task 48.35). Under the USB4
+ *     profile (record 22 sections 7.6, 11 and 11.1) TbtU4Suspend instead:
+ *     every tunnel up recorded as a resume obligation, the Guide's sleep
+ *     entry with XhciCmSleepEntry 1 (section 11.1.5), then the rings
+ *     stopped.
  *   D3, shutdown: the unbind, if the stop has not already run it, and the
  *     Bus Master bit and platform power restored as at a stop. On Windows
  *     98 SE and ME a shutdown requests no device IRP (cm_pwrr.h, task
@@ -259,6 +260,18 @@ VOID CmNhiQuiesce(PCM_NHI nhi)
         cmU4Suspend(nhi);
     } else {
         TbtIcmSuspend(&nhi->Icm);
+        /* Record 22 section 11.1.7 (task 48.35): the ICL row's link
+         * controller told of the sleep, with no wake (decision U35), as
+         * Linux's pci.c icl_nhi_suspend_noirq does through the firmware;
+         * a timeout is logged by the call and the sleep goes on. Nothing
+         * applies on any other profile. */
+        if (CmNhiHwAccess(nhi) && nhi->Hw != NULL &&
+            (nhi->Hw->Flags & TBT_HW_ICL_POWER) != 0) {
+            nhi->Counters.LcGo2Sx++;
+            CmLogNote(nhi, "cm.lc.go2sx",
+                      (ULONG)(-TbtHwPlatformSuspend(nhi->Hw, &nhi->Cfg, &nhi->Host,
+                                                    TRUE, FALSE)));
+        }
     }
     nhi->Suspended = 1;
     CmNhiDrainActions(nhi);

@@ -47,14 +47,15 @@
  * 2^(1+1) entries: Stream IDs 1 to 3. */
 #define XHCI_STREAM_MIN_ENTRIES     4UL
 #define XHCI_STREAM_CONTEXT_BYTES   16UL
-/* Stream Context Type (Table 6-13 as transcribed; "to verify" there): 1 is
- * a Primary Transfer Ring, the only type an LSA = 1 array holds. */
+/* Stream Context Type (Table 6-13, p.421): 1 is a Primary Transfer Ring,
+ * the only type an LSA = 1 array holds (4.12.2.1, p.227). */
 #define XHCI_STREAM_SCT_PRIMARY_TR  1UL
 /* The common buffer is allocated in whole pages, which is what makes it
  * page-aligned (xhci-data-structures.md section 1). */
 #define XHCI_STREAM_PAGE_BYTES      4096UL
 
-/* USB 3.2 Table 9-27, the SuperSpeed Endpoint Companion descriptor. */
+/* USB 3.2 Table 9-28 (p.368), the SuperSpeed Endpoint Companion
+ * descriptor; its type is Table 9-6's 48. */
 #define XHCI_STREAM_DT_SS_COMPANION 0x30UL
 #define XHCI_STREAM_COMPANION_BYTES 6UL
 #define XHCI_STREAM_MAX_STREAMS_EXP 16UL
@@ -70,7 +71,8 @@
 /*
  * The largest Primary Stream Context Array the controller takes,
  * 2^(MaxPSASize+1) entries, from the HCCPARAMS1 value `hccparams1` (5.3.6,
- * bits 15:12); 0 when MaxPSASize is 0, "Streams are not supported". An
+ * Table 5-13, bits 15:12, p.353); 0 when MaxPSASize is 0, "where '0'
+ * indicates that Streams are not supported". An
  * all-ones read (a controller not decoding) is 0 as well.
  */
 ULONG XhciStreamHcEntries(ULONG hccparams1);
@@ -186,10 +188,11 @@ ULONG XhciStreamLayoutPlacedPad(ULONG entries, ULONG streams, ULONG paLow,
 /* ------------------------------------------------------------------ */
 
 /*
- * One Stream Context (6.2.4.1): DW0 the TR Dequeue Pointer with SCT 3:1 and
- * DCS 0, DW1 the pointer's high half (0), DW2 Stopped EDTLA (0 from
- * software), DW3 reserved. A `ringPA` of 0 with sct 0 and dcs 0 writes the
- * all-zero context Stream ID 0 and every unused ID take.
+ * One Stream Context (6.2.4.1, Tables 6-13 and 6-14, p.421-422): DW0 the TR
+ * Dequeue Pointer with SCT 3:1 and DCS 0, DW1 the pointer's high half (0),
+ * DW2 Stopped EDTLA 23:0 (0 from software), DW2 31:24 and DW3 RsvdO, 0 when
+ * first allocated (5.1.1, p.338). A `ringPA` of 0 with sct 0 and dcs 0
+ * writes the all-zero context Stream ID 0 and every unused ID take.
  * XHCI_STREAM_BAD_PARAM for a pointer with its low four bits set, a dcs
  * above 1 or an SCT above 7, or a nonzero SCT with no pointer.
  */

@@ -62,6 +62,11 @@ typedef struct _CM_MARK {
                                location | CM_MK_LANDING_VALID; 0 for a
                                child of the member itself. Kept through
                                its burial                                  */
+    ULONG Tok[3];           /* design record 34 section 3.12 item 5: the
+                               occupancy token of a chained entry (the
+                               valid bit, port 7:0 and kid 15:8; the kid's
+                               generation; the binding's epoch), set once
+                               by CmMarksGrant and never changed; 0 none  */
 } CM_MARK, *PCM_MARK;
 
 #define CM_MK_LANDING_VALID     0x10000UL
@@ -244,5 +249,45 @@ ULONG CmMarksAnswer(UCHAR *out, ULONG room, const UCHAR *built, ULONG bytes,
 PCM_MARK CmMarksConfirm(PCM_MARKS m, const UCHAR *v, ULONG bytes,
                         ULONG epochLo, ULONG epochHi, BOOLEAN checkGen,
                         const ULONG *portGen, ULONG ports, PULONG why);
+
+/*
+ * The same with the kids' generations (design record 34 section 3.12
+ * item 6): kidGen[k - 1] the generation kid slot k holds now (0 when
+ * unused), `kids` of them. An entry with a landing and a token is then
+ * confirmed under the USB4 profile (`checkGen`) by its token's
+ * generation - the confirmation's, its departure's and its kid's now -
+ * instead of its member's port; one with a landing and no token, or
+ * under any other profile, stays CM_MK_CONF_CHAINED. CmMarksConfirm is
+ * this with no kids.
+ */
+PCM_MARK CmMarksConfirmEx(PCM_MARKS m, const UCHAR *v, ULONG bytes,
+                          ULONG epochLo, ULONG epochHi, BOOLEAN checkGen,
+                          const ULONG *portGen, ULONG ports,
+                          const ULONG *kidGen, ULONG kids, PULONG why);
+
+/*
+ * The grant of design record 34 section 3.12 item 5, the one rule that
+ * sets a token: each current entry of `member` under landing `landing`
+ * with no token and no departure, whose PDO is snap[k] with seq[k] not 0
+ * and later than tok[3] (the transaction's arm, compared as elapsed
+ * counts), and whose PDO no tombstone of that landing carries, takes
+ * tok[0..2]. tok[0] without CM_MK_TOK_VALID grants nothing. Returns how
+ * many were granted.
+ */
+#define CM_MK_TOK_VALID         0x80000000UL
+#define CM_MK_TOK_WORDS         5UL     /* the three, then ArmSeq, LearnSeq */
+ULONG CmMarksGrant(PCM_MARKS m, ULONG member, ULONG landing,
+                   PVOID const *snap, const ULONG *seq, ULONG count,
+                   const ULONG *tok, ULONG now);
+
+/* 1 when stamp `a` is later than stamp `b` of the registration list's
+ * sequence (elapsed counts, wrap-safe); 0 for `a` 0. */
+ULONG CmMarksSeqAfter(ULONG a, ULONG b);
+
+/* The generation a departure of entry `e` is recorded under: a chained
+ * entry's token's kid generation when it has a token (design record 34
+ * section 3.12 item 5, which CmMarksConfirmEx reads), else `memberGen`,
+ * its member port's now. */
+ULONG CmMarksDepartGen(const CM_MARK *e, ULONG memberGen);
 
 #endif /* CM_MARKS_H */

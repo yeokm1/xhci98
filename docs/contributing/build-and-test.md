@@ -272,6 +272,7 @@ Setup scripts:
 | `scripts\package\make-package.ps1` | Assembles the install media both targets are installed from (`out\pkg-<flavor>-<arch>\`), staging against the layout `check-inf.ps1 -EmitMediaLayout` derives, and gates it. `-Arch x86` (default) or `amd64` moves three things at once and they are not separable: the obj subdirectory, which of the two INFs is staged, and the architecture both gates run under. `-TestSignPfx <pfx> -SignOnly` test-signs the binaries a gated `build-driver.cmd` run recorded in `out\gated-<arch>-<flavour>.txt` without running its host suite and import gates again ("Since 2.3.0.0 the x64 package is test-signed") |
 | `scripts\package\test-package.ps1` | The packager's regression tests; stand-ins only, run by `build-driver.cmd` |
 | `scripts\package\cut-builds.ps1` | A cut's two gated builds at once: `build-driver.cmd all` in this tree and `all -amd64` in a second worktree (`-X64Tree`; by default `<this tree>-x64`, made or brought to this tree's HEAD by the script, task 45.3), each with its own temporary folder and log, then the amd64 build and its records imported into this tree (`Import-GatedBuild`, `package-common.ps1`); `-Serial`, `-ImportOnly`. Roadmap-usb4 task 44.31; "The cut's two builds at once" and "A faster gated build" below |
+| `scripts\package\pre-cut.ps1` | Before a cut, after the version bump is committed: every input of the cut rebuilt in this tree - the text checks, `XHCIPFW`, `XHCIQUAL`, the mark service, the installer and its helper, then `build-driver.cmd all` and `all -amd64` here one after the other (or `-TwoTrees`, `cut-builds.ps1`) - and `make-release.ps1 -CheckOnly`, stopping at the first failure, each step's log in `out\pre-cut\`, every step with `XHCI98_FULL_SELFTESTS=1` and without `XHCI98_SELFTEST_SKIP_OK` (task 48.34). It refuses first unless the tree is clean, `releases\<version>\` is not there yet, no gated build lock is held and, while `wdmfree-pin.txt` names a usb-wdm-free release, `-WdmFreeRoot` or `scripts\local\usb-wdm-free` holds its tag at its commit; `-Plan` checks and lists, `-SelfTest` runs on fixture trees and stand-in steps (run by `build-driver.cmd`). Roadmap-usb4 task 48.10, after the `3.4.2.0` cut met a stale Stor98 and `XHCIQUAL` built in another tree |
 | `scripts\build-steps.ps1` | The checks of a gated build that need no DDK, run at once as separate processes, each with its own `TEMP` and log under `out\steps-<arch>\`, at most `XHCI98_BUILD_STEPS` at a time (default 4), each step's output printed whole when it ends and a table of results and times after them; `-SelfTest` on stand-in steps. Run by `build-driver.cmd` after its text checks. Roadmap-usb4 task 45.3; "A faster gated build" below |
 | `scripts\import-gate\test-flavour-rules.ps1` | Regression tests for the import allowlist's `FLAVORS` grammar (release, qemu and all; `both` and `debug` refused), on synthetic allowlists, and checks of the production files before anything is linked: every common-format allowlist (each `*.allow` but Stor98's, twelve) parses, and Stor98's under its own reader (`scripts\check-stor98-build.ps1 -ParseOnly`); each x86 allowlist that carries `HAL.dll!WRITE_PORT_UCHAR` (xhci98, xhcicm, xhcipfw) carries it in exactly one `qemu required` row, the row that keeps it out of every published binary; the qemu-only rows of every allowlist are exactly the ones it names; and the net98 and net6 profiles' row rules run on synthetic rows. Run by `build-driver.cmd` |
 
@@ -1303,7 +1304,8 @@ A pre-merge build of a branch may set `XHCI98_SELFTEST_SKIP_OK=1`, and
 then `build-driver.cmd all` lets that skip stand as any other build does;
 a cut never sets it, so a cut's builds, and any caller that sets
 `XHCI98_FULL_SELFTESTS=1`, still run the self-tests whole (owner,
-2026-10-30).
+2026-10-30). Since task 48.34 every pre-merge gated build sets it (below,
+"The INF gate's self-tests in six parts at once, and the pre-merge skip").
 
 ### The packager's self-tests, skipped when unchanged (owner, 2026-10-30)
 
@@ -1371,6 +1373,79 @@ file changed or deleted, an untracked file that is not ignored, a built
 other ignored file; a checkout appearing and a tag added to it move
 it; an inherited variable moves it, and the run's token and the build's
 step-clock variables do not.
+
+### The packager's self-tests in five parts at once (roadmap-usb4 task 48.11; owner, 2026-11-09)
+
+A run that is not skipped no longer runs its cases one after another in
+one process. `test-package.ps1` is in five parts, each its own block of
+the script: `package` (the packager's own cases), `upload` (the family
+layout and the upload set), `download` (the driver pack, the three
+downloads and the x64 four-directory tree's cases), `cut` (the release
+cut's texts, the source stamp, the publisher's payload and its tools) and `sign` (the x64 signatures and
+catalogs, the sign-only record, the import, `cut-builds.ps1`,
+`-CheckOnly` and the digest). The run that read the digest starts the
+five as children of itself (`-Part <name>`), each with its own log,
+prints each log whole when its part ends, with its exit, its checks and
+its time, and records the pass when all five passed. Each part runs the
+common setup (fixture repository P, the stand-in inputs, the baseline
+flat package) and what it reads of the parts before it - `download`
+the upload set's stand-in release and its clone with no `out\`, `cut`
+the report batches' specification, `sign` the releaser's text and
+fixture tree S - so the parts' checks add up to the serial run's plus
+the common ones counted in each. `-Serial` (or
+`XHCI98_PACKAGER_SERIAL=1`) runs them one after another in one process,
+as before; `-Part` runs one, and records nothing. Each part ends by
+saying its slowest sections.
+
+Measured on development host A (32 logical processors), `-Force`, the
+same tree: see `runs/run-48.md`, "48.11".
+
+### The INF gate's self-tests in six parts at once, and the pre-merge skip (roadmap-usb4 task 48.34; owner, 2026-11-09)
+
+The INF gate's self-tests (1,758 checks) were the longest step of a gated
+x86 build: 57:10 for 1,555 checks in one process (`runs/run-45.md`), the
+gate run once per case. Task 48.34 does two things.
+
+- **Six parts at once.** A run of `scripts\inf-gate\test-inf-checks.ps1`
+  that is not skipped starts six children of itself (`-Part 1` to
+  `-Part 6`), each with its own log in a folder under `TEMP`, prints each
+  log whole when its part ends, with its exit, its checks and its time,
+  and records the pass in the shared store only when all six exited 0
+  with no failed check and the digest taken again at the end is the one
+  the run began with. A part neither skips nor records. Every part runs
+  every section's code, so a value one section leaves for a later one is
+  there whichever part runs it; it calls the gate and counts checks only
+  in the sections the part table (`$script:partTable`) gives it, so the
+  six parts' checks add up to the one-process run's. The one gate answer
+  read across sections, the production INF's, is taken in every part and
+  counted in one. A section the table does not name (a new one) goes to a
+  part by its place among the sections, so no section is in none or in
+  two. The registry values' section (35 values, four gate runs each, a
+  third of the whole) is five sections of seven values. The table is
+  balanced by the sections' times as the parts print them ("the slowest
+  sections"); a new or grown section is moved there when one part runs
+  long. `-Serial` (or `XHCI98_INFTEST_SERIAL=1`) runs the one process of
+  before; `-Part` runs one part and records nothing.
+- **The pass shared, and taken by pre-merge builds (option (a)).** The
+  store `%LOCALAPPDATA%\xhci98\selftest-pass` (`XHCI98_SELFTEST_PASS_DIR`
+  when set; "The self-tests' skip across worktrees" below) already holds
+  one record per digest for every worktree of the host. A pre-merge gated
+  build sets `XHCI98_SELFTEST_SKIP_OK=1` in the `.cmd` that calls
+  `build-driver.cmd all`, so the INF gate's and the packager's
+  self-tests are skipped when a passing run with the same inputs is
+  recorded there, by any tree: a branch that touches none of their inputs
+  skips them.
+- **A cut always runs everything.** A cut's builds never set
+  `XHCI98_SELFTEST_SKIP_OK`: `build-driver.cmd all` without it sets
+  `XHCI98_FULL_SELFTESTS=1`, which wins over the skip, `cut-builds.ps1`
+  gives its builds that too (`package-common.ps1`), and
+  `scripts\package\pre-cut.ps1` gives each of its steps
+  `XHCI98_FULL_SELFTESTS=1` and clears `XHCI98_SELFTEST_SKIP_OK` for it,
+  whatever the session that started it holds, and gives the session its
+  values back after (its self-test checks both).
+
+Measured on development host A (32 logical processors), `-Force`, the
+same tree: see `runs/run-48.md`, "48.34".
 
 ### The self-tests' skip across worktrees (roadmap-usb4 task 45.51; owner, 2026-10-30)
 
@@ -4035,7 +4110,8 @@ binaries are never signed.
   so and the packager takes the key by path.
 - **How a cut signs.** `make-release.ps1 -TestSignPfx <path>` (releases
   `README.md`, "Cutting a release"); the password from
-  `XHCI98_TESTSIGN_PW` or a prompt. Each x64 leg's `make-package.ps1` signs
+  `XHCI98_TESTSIGN_PW` or, where that is unset or empty, a prompt (record 19
+  section 5). Each x64 leg's `make-package.ps1` signs
   copies of the two binaries after its import gates have read the build,
   checks each signature
   (thumbprint, SHA-1, digest, no timestamp) and that the copy is the build
@@ -5125,8 +5201,9 @@ driver at the F6 prompt. The install leg per target, in a virtual machine:
 1. Stage the package: `scripts\package\make-package.ps1 -Flavor release`
    (add `-Arch amd64` for XP x64). The directory is 8.3-clean and fits a
    1.44 MB floppy, so QEMU can serve it as one directly. **For a Windows
-   2000 leg that reaches GUI mode**, follow the release notes' "Installing
-   Windows 2000 from the F6 floppy": serve a COPY of the staged directory
+   2000 leg that reaches GUI mode, or a 32-bit XP leg with only a USB
+   keyboard**, follow the release notes' "Installing Windows 2000 from the
+   F6 floppy": serve a COPY of the staged directory
    (in a git-ignored leg directory, never the staged package itself, whose
    gate refuses them) with `USBD.SY_`, `HIDCLASS.SY_` and `HIDPARSE.SY_`
    added at its root, copied unchanged from the install CD's `I386`
@@ -5194,9 +5271,16 @@ qemu-system-i386 -machine pc -m 512 -smp 2 \
    3 Controller (32-bit Windows 2000/XP)" (or "... (Windows XP x64)";
    "xHCI98 USB 3.x Host Controller ..." before `3.3.0.0`); choose it with Enter, and press Enter again at the screen that
    lists it as the device Setup will load. On the 32-bit floppy the list
-   has a second entry, "xHCI98 USB 3 Controller (32-bit Windows 2000,
-   files from CD)" (Down arrow, then Enter): the Windows 2000 leg
-   with the three files picks it; a 32-bit XP leg keeps the first.
+   has a second entry, "xHCI98 USB 3 Controller (2000/XP, USB
+   keyboard/mouse, files from CD)" ("... (32-bit Windows 2000, files from CD)" before
+   `3.4.3.0`; Down arrow, then Enter): the Windows 2000 leg, and a 32-bit
+   XP leg with only a USB keyboard, with the three files from that
+   system's own CD, pick it; any other 32-bit XP leg keeps the first.
+   (XP's text mode lays down `hidusb.sys` and `kbdhid.sys` without
+   `hidclass.sys`, `hidparse.sys` and `usbd.sys`, so with the first entry
+   a USB keyboard is dead in the first GUI-mode boot until Installing
+   Devices ends, and that waits at the unsigned-driver question for a
+   key: design record 13 section 5.6, limit 7; task 48.25.)
 5. Setup loads its files and starts the kernel. Expect: the Welcome screen
    answers keystrokes sent to `ukbd` (the BIOS has handed the controller to
    the driver by then); the partition screen lists the USB disk beside the
@@ -7541,7 +7625,9 @@ and data on every path (`[Xhci.AddReg]` for 98 SE and ME,
 | `XhciPollIdleMs` | each start | 50 | 1-5000; 0 as 50 | 50 | yes |
 | `XhciPollActiveMs` | each start | 1 | 1 to the idle period; 0 as 1 | 1 | yes |
 | `XhciPollFineTimer` | each start; read on 98 SE and ME and no effect there | 0 | 0 off, any other 1 | 0 (since 38.3; 1 until the owner's change of 2026-10-14) | yes |
-| `XhciWideMap` | each start; takes effect on 2000 and later only | 0 | 0 off, any other on | 0 (since 36.51) | yes |
+| `XhciWideMap` | each start; takes effect on 2000 and later only, and from task 48.33 only with `XhciDmaStaging` 0 | 0 | 0 off, any other on | 0 (since 36.51) | yes |
+| `XhciStagePoolKiB` | each start | 2048 | 256-16384; outside, the nearer end | 2048 (since 48.33) | yes |
+| `XhciDmaStaging` | each start, latched for the started lifetime | 0 | 0 off (the map pump, as 3.4.2.0), any other DWORD on | 0 (owner, 2026-11-10; 1 from 48.33, owner 2026-11-09) | yes |
 | `XhciSelectiveSuspend` | each start | 0 | only 1 on | 0 (since 36.51) | yes |
 | `XhciSilentInstall` | each start, on 98 SE and ME only | 0 | only 1 on | 0 (since the owner's change of 2026-10-14; task 38.2 wrote none) | yes |
 | `XhciUsb2HubSpeedFallback` | each start | 1 | only 0 off | 1 (since 36.51) | yes |
@@ -7576,7 +7662,9 @@ read in `src\hcd_quirk.c`, 0 off, 1 Linux's listed controllers, 2 every
 controller where the record offers it; the log notes `quirk.<label>` and
 `hc.pci.rev` at each start and the counter block's words 199 to 232 are
 record 20 section 13.5, and the snapshot reader prints them as its "Linux quirks"
-block). **No
+block). Task 48.33 added two more, both written: `XhciStagePoolKiB` and
+`XhciDmaStaging` (owner, 2026-11-09; the latter written at 0 since the
+owner's change of 2026-11-10). **No
 value is a tri-state** whose absence means something no written number
 does, so none is left unwritten. Except for `XhciForceBulkOnly` since
 roadmap-hcd 37.2 (written 0, an absent one read as 1; above), what a
@@ -9103,6 +9191,54 @@ phase ends by switching the machine off:
    - `INSTALL /console /uninstall /yes /nopause` runs.
 3. After the next start, `/list` must succeed and show nothing current.
 
+**The playback check (2000; GitHub issue 32).** A leg with `Audio` in
+`release-legs.psd1` - `w2k-console` - adds two checks to the start after
+the install, right after `/list`. Its QEMU carries `-audiodev none`
+(outside the starting point's hash: a backend no saved state depends on),
+so nothing plays on the host. The guest says `XHLEG WANT plug-audio`, the
+host plugs QEMU's `usb-audio` into the controller, and the guest runs
+`WAVCHK.EXE` from the CD. That is a small program of the project's own
+(`scripts\vm-matrix\wavchk\`, C89, built by its `build.cmd` with the
+in-repo MSVC 6.0; never in a package): it waits up to 300 s for a waveOut
+device named "USB" - the one Windows installs for the device, answering
+the composite device's signature question on the way - opens it, plays a
+2 s 22.05 kHz tone the host wrote as a WAV, and says each call's
+`MMSYSERR` result, the device and the time the play took on COM1.
+`audio-play` passes only when the open succeeds (it is tried for 30 s, as
+Windows may still be finishing the install) and the play ends within
+twice its length plus 10 s but not in less than nine tenths of it. Then
+the guest runs the package's own `XHCITR /report` and `urbs-malformed`
+passes only when the report holds `xhci98.sys`'s counters and no
+`UrbsMalformed` among them (the trace's `URBs refused - malformed`). This
+is the check `3.4.2.0` would have failed: Windows 2000's `usbaudio.sys`
+leaves its streaming `SELECT_INTERFACE`'s header length at 0, that
+release refused it, and every client's open failed
+(`docs/issues/30-w2k-usbaudio-select-interface-header.md`). The project's
+own 2000 legs had seen the refusal and put it down to the emulated device
+(`lessons.md`, "A failure on one OS with an emulated device is checked
+against Windows' own driver for another controller before the emulator is
+blamed"). The check is 2000's only: XP's leg script is the same, so
+adding `Audio` to `xp-console` is a one-line change, not yet run; 98 SE
+cannot take it, since QEMU's `usb-audio` stops 98 SE's own
+`usbaudio.sys` under any stack (Phase 9). A leg with `Audio` refuses to
+start, and the matrix with it, until `WAVCHK.EXE` is built.
+
+Measured on 2026-11-10 (development host A, the q35 2000 base, QEMU
+11.1.2): against `releases\3.4.2.0`, `audio-play` failed (`waveOutOpen`
+`MMSYSERR` 32, refused 30 times) and `urbs-malformed` failed
+(`UrbsMalformed` 31), twice; against the 3.4.3.0 tree's package both
+passed (2 s played in 2033 to 2113 ms, no `UrbsMalformed`) in three runs
+of four. In the other, run beside another leg, the play ended after 511
+ms with its position unreadable (`MMSYSERR` 1) and only 430 isochronous
+packets answered, with no error counted: not explained yet, so a lone
+`audio-play` failure on a later tree is run again before it is read as a
+regression. In one run 2000 also asked "System Settings Change ... restart
+your computer now?" once the audio device was in; while that box is open
+Windows' install is still pending and the uninstall stops with exit 4, so
+the leg answers it with No (`leg\XHNORST.VBS`, up to 120 s, a log on COM1,
+not a check; the box did not come again in the two runs since, so that
+answer has not been seen on 2000 yet).
+
 Each exit code and check, and the logs, go to COM1 as `XHLEG ...` lines.
 The host reads only COM1, and every restart is a cold start that the host
 makes. QEMU runs with `-action reboot=shutdown`, so a guest's restart ends
@@ -9576,7 +9712,7 @@ that reason.
 | `CM-CLASSLINE` | Every NHI models section carries exactly one class line, `PCI\CC_0C0340` (design record 22 section 3.7), which its id lines outrank, and no other `PCI\CC_` id. |
 | `CM-NOROUTER` | No device router's or device-side bridge's id (Titan Ridge DD, Goshen Ridge, the Barlow Ridge hubs, AMD's USB4 router functions, ASM2464PD), no USB-only NHI and no unclaimed generation's id in any of the four (design record 22 section 3.1). |
 | `CM-PORTCC` | Every filter model binds `PCI\VEN_xxxx&DEV_xxxx&CC_0604` and nothing else: the driver takes the filter role by that class, and 98 SE's and ME's automatic search did not choose that form. |
-| `VAL-*` | Every install path writes every value the driver reads, once, at the default `cm_vals.c`'s rule table holds, as a `REG_DWORD` under `FLG_ADDREG_NOCLOBBER`, and nothing else; `XhciCmBridgeNumbering` and `XhciCmNoIrqStart`, read on 98 SE and ME alone, are written by the x86 INF's undecorated install alone, at their defaults in `cm_vals.h` (task 44.46); since task 45.50 (record 21 section 8.1) every path also writes `XhciCmAsmediaPcie7Credits` and `XhciCmUsb4V2` (and since task 45.56 `XhciCmGen4LinkRecovery`) at their `cm_vals.h` defaults and `XhciCmTunnelBridge` as the `REG_SZ` `auto` (flag `0x00000002`), the NT paths `XhciCmRingInterrupt` and the NT 5.x paths `XhciCmBridgeReq`, each on no other path. |
+| `VAL-*` | Every install path writes every value the driver reads, once, at the default `cm_vals.c`'s rule table holds, as a `REG_DWORD` under `FLG_ADDREG_NOCLOBBER`, and nothing else; `XhciCmBridgeNumbering` and `XhciCmNoIrqStart`, read on 98 SE and ME alone, are written by the x86 INF's undecorated install alone, at their defaults in `cm_vals.h` (task 44.46); since task 45.50 (record 21 section 8.1) every path also writes `XhciCmAsmediaPcie7Credits` and `XhciCmUsb4V2` (and since task 45.56 `XhciCmGen4LinkRecovery`) at their `cm_vals.h` defaults and `XhciCmTunnelBridge` as the `REG_SZ` `auto` (flag `0x00000002`), and the NT 5.x paths `XhciCmBridgeReq`, on no other path; every path `XhciCmRingInterrupt` since task 48.26 (the NT paths alone before). |
 | `CM-FILTER` | The install sections include `machine.inf` and need `PCI_DRV`, `PCI_DRV.HW` and `PCI_DRV.Services` (the 39-0.4 shape) so `pci.sys` stays the port's service, copy the driver from a source disk with no path (the `xhcicm.sys` beside the INF - `nt\`'s own in x86, the root's in x64: Vista's and 7's driver store refuses a source outside the INF's directory, error `0xA1`), write `HKR,,UpperFilters,0x00010008,"xhcicm"` in `.HW` and nothing else, and add the service without the function-driver flag. |
 | `CM-TWIN` | The x86 and amd64 INF of each kind bind the same ids and, for the NHI, write the same values but `XhciCmBridgeNumbering` and `XhciCmNoIrqStart`, which the x86 INF's 98 SE and ME install alone writes (task 44.46). |
 | `CM-DESC` | Every model line's description names its controller's generation, never the connection manager running it, and every description string reads as decided (record 21 section 3.3, "Class and names"): NHI lines `Tb2Desc` (Falcon Ridge), `NhiDesc` (Alpine Ridge, Titan Ridge, Ice Lake) or `U4Desc` (every other id and the class line); filter lines `TbBridgeDesc` (the Thunderbolt 2 and 3 generation's ports), `BridgeDesc` (QEMU's `1B36` bridges) or `U4BridgeDesc`; `CmSvcDesc` the same in all four. |
@@ -9586,7 +9722,7 @@ that reason.
 
 **Installing it by hand.** On Windows 98 SE and ME, Device Manager -> the NHI ("PCI System peripheral" or "Base system device", class 08/80) -> Update Driver -> Specify a location -> the package directory; on Windows 2000 and later, Update Driver -> Have Disk -> the same directory, `xhcicm.inf`. The filter INF (`nt\xhcicmf.inf` in the x86 package, `xhcicmf.inf` at the root of the x64 one) is for the NT targets alone, never pointed at from Windows 98 or ME: on each tunnel port (a Thunderbolt switch port, or the root port the platform tunnels through), Update Driver -> "Don't search" -> Have Disk -> the `nt\` directory on x86, the flavour directory itself on x64, which Windows 2000 also takes unforced and XP and 7 need (the unsigned INF otherwise loses to `machine.inf`; task 39-0.4, record 21 section 3.3). Once installed, the NHI reads "xHCI98 Thunderbolt 2 Controller", "xHCI98 Thunderbolt 3 Controller" or "xHCI98 USB4 Host Router" by its generation, and each port the filter attaches to "xHCI98 Thunderbolt PCI Bridge", "xHCI98 USB4 PCI Bridge" or "xHCI98 PCI Bridge".
 
-**The registry values** (record 21 section 8), in the NHI's driver key, each written by the INF at its default: `XhciCmMode` (1; 0 off, 2 the ICM client on an unlisted Intel NHI, 3 the software connection manager), `XhciCmApprove` (1), `XhciCmReenum` (1), `XhciCmPollIdleMs` (200, held to 50-5000), `XhciCmCmdTimeoutMs` (5000, held to 1000-60000), `XhciCmApproveTimeoutMs` (10000, the same bounds), `XhciCmSafeEject` (1), `XhciLogVerbosity` (0), and the USB4 profile's three of design record 22 section 12, `XhciCmUsb3Tunnel` (1), `XhciCmLaneBonding` (1) and `XhciCmPreOsCleanup` (0; 1 cleans what does not verify, 2 everything); on 98 SE and ME `XhciCmBridgeNumbering` (1) and `XhciCmNoIrqStart` (1) (task 44.46); `XhciCmAsmediaPcie7Credits` (0), `XhciCmUsb4V2` (1) and `XhciCmGen4LinkRecovery` (1, task 45.56); on 2000 to 10 `XhciCmRingInterrupt` (0), and on 2000 and XP `XhciCmBridgeReq` (1) (task 45.50); and `XhciCmTunnelBridge` (`REG_SZ`, written as `auto`, the driver's own finding: a comma-separated `bb:dd.f` list replaces the tunnel-port discovery). A switch out of its range is refused and its default stands; a period is held to its bounds; both are recorded in the log ring at start (`cm.values.refused`, `cm.values.clamped`).
+**The registry values** (record 21 section 8), in the NHI's driver key, each written by the INF at its default: `XhciCmMode` (1; 0 off, 2 the ICM client on an unlisted Intel NHI, 3 the software connection manager), `XhciCmApprove` (1), `XhciCmReenum` (1), `XhciCmPollIdleMs` (200, held to 50-5000), `XhciCmCmdTimeoutMs` (5000, held to 1000-60000), `XhciCmApproveTimeoutMs` (10000, the same bounds), `XhciCmSafeEject` (1), `XhciLogVerbosity` (0), and the USB4 profile's three of design record 22 section 12, `XhciCmUsb3Tunnel` (1), `XhciCmLaneBonding` (1) and `XhciCmPreOsCleanup` (0; 1 cleans what does not verify, 2 everything); on 98 SE and ME `XhciCmBridgeNumbering` (1) and `XhciCmNoIrqStart` (1) (task 44.46); `XhciCmAsmediaPcie7Credits` (0), `XhciCmUsb4V2` (1) and `XhciCmGen4LinkRecovery` (1, task 45.56); `XhciCmSleepEntry` (1, task 48.35); `XhciCmRingInterrupt` (0; on 2000 to 10 alone until task 48.26, on every system since), and on 2000 and XP `XhciCmBridgeReq` (1) (task 45.50); and `XhciCmTunnelBridge` (`REG_SZ`, written as `auto`, the driver's own finding: a comma-separated `bb:dd.f` list replaces the tunnel-port discovery). A switch out of its range is refused and its default stands; a period is held to its bounds; both are recorded in the log ring at start (`cm.values.refused`, `cm.values.clamped`).
 
 ## Appendix A. The binary readings behind `legal-provenance.md` section 4
 

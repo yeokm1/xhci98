@@ -58,6 +58,7 @@
 #include "cm_statb.h"
 #include "cm_live.h"
 #include "cm_qryb.h"
+#include "cm_qnetb.h"
 #include "cm_eject.h"
 #include "cm_irq.h"
 #include "cm_breq.h"
@@ -144,7 +145,17 @@ typedef struct _CM_COMMON {
     PDEVICE_OBJECT Self;
     PDEVICE_OBJECT Pdo;
     PDEVICE_OBJECT Lower;
+    /* Who detaches Lower (design record 31 section 4.10, K6): the removal
+     * or, on a system with the kept child, the I/O manager's
+     * FastIoDetachDevice callback: CM_DETACH_*, under CmDetachOnce's lock;
+     * DetachDone set once done. CmCommonInit at the object's creation. */
+    ULONG Detach;
+    KEVENT DetachDone;
 } CM_COMMON, *PCM_COMMON;
+
+#define CM_DETACH_NONE      0UL
+#define CM_DETACH_CLAIMED   1UL
+#define CM_DETACH_DONE      2UL
 
 /*
  * A member of the ASM4242 mailbox's exclusion (cm_oscnt.c; design record
@@ -184,6 +195,19 @@ typedef struct _CM_MEMBER {
 /* The Thunderbolt networking service (design record 35, task 45.59): the
  * network PDO's extension and the NHI's share, cm_net.c. */
 #include "cm_net.h"
+
+/* cm_entry.c, design record 31 section 4.10 (task 48.29). CmCommonInit:
+ * the detach claim's event, at an object's creation, before its attach.
+ * CmDetachOnce: Lower detached exactly once, by whichever of the removal
+ * and the callback claims it first; TRUE when this caller did it. `wait`:
+ * a caller that lost the claim waits until the winner has finished (every
+ * caller but a claim's own retry; the winner holds no lock across its
+ * IoDetachDevice). PASSIVE_LEVEL. CmKeptOn: the kept
+ * child's system (CmPortsKeptOs, 8.1 alone), read once in DriverEntry;
+ * only then does the driver carry FastIoDetachDevice. */
+VOID CmCommonInit(PCM_COMMON common);
+BOOLEAN CmDetachOnce(PCM_COMMON common, BOOLEAN wait);
+extern ULONG CmKeptOn;
 
 /* Counters of the NHI driver's own (record 21 section 8), beside the
  * ring's and the client's, emitted at stop as cm.* lines. */
@@ -234,6 +258,7 @@ typedef struct _CM_COUNTERS {
     ULONG IsoAsked;         /* record 22 10.5: isolation asked by xhci98   */
     ULONG IsoYes;           /* ... and answered yes                        */
     ULONG IsoNo;            /* ... and refused (the reason in cm.iso)      */
+    ULONG LcGo2Sx;          /* record 22 11.1.7: the ICL row's GO2SX sent  */
 } CM_COUNTERS;
 
 typedef struct _CM_NHI {
@@ -363,10 +388,44 @@ typedef struct _CM_NHI {
     ULONG U4CarryTick;
     XHCI_TBT_BINDS Binds;
     ULONG ArmOwed;
+    /* Design record 34 section 3.12 (task 48.30): the chained tunnels'
+     * structural and occupancy bindings and their transaction (tbt_chain.h),
+     * the thread's alone; whether a MAY_CONNECT refusal was logged. */
+    XHCI_CHAIN Chain;
+    ULONG ChainHeldLogged;
+    /* Each binding as last pushed to the registration side
+     * (CmReenumChainSet): used, member, chain port, its secondary bus,
+     * then the token's CM_MK_TOK_WORDS. */
+#define CM_CHAIN_PUSH_WORDS 9UL
+    ULONG ChainPushed[XHCI_CHAIN_BINDS][CM_CHAIN_PUSH_WORDS];
     /* Record 22 section 7.6's learning window per pending port (task
      * 44.57): when cmU4LearnPending tries it again, and the ports it
      * no longer tries (still pending). */
     XHCI_TBT_LEARN_CLOCK U4LearnClock;
+    /* Record 22 section 7.6.2 (task 48.43): the port of a tunnel found up
+     * at start inferred under XhciCmInferAtStart, kept apart from Binds
+     * and read by the eject's hand-off alone (cmU4EjectBridge); the
+     * read-back after its teardown; the closure it confirmed, for the
+     * status record; the ports conflicted for the inference. */
+    struct {
+        ULONG Valid;
+        ULONG Port;
+        ULONG Member;
+        ULONG Bdf;
+        ULONG Buses;
+        ULONG Gen;
+        ULONG Conflict;     /* bit n-1: no further inference on port n   */
+        ULONG Logged;       /* the last u4.infer.refused logged, plus 1  */
+        ULONG Checking;
+        ULONG CheckPort;
+        ULONG CheckBdf;
+        ULONG CheckBuses;
+        ULONG CheckGen;
+        ULONG CheckSince;
+        ULONG ClosedPort;   /* 0 for none                                */
+        ULONG ClosedBdf;
+        ULONG ClosedGen;
+    } U4Infer;
     ULONG U4BatchCount;
     TBT_U4_ACTION U4Batch[TBT_U4_ACTION_QUEUE];
     /* Per USB4 port, the connection generation whose PCIe path the
@@ -587,6 +646,8 @@ typedef struct _CM_NHI {
     ULONG QueryLastBytes;   /* the answer last published, for its content */
     UCHAR QueryLast[CM_Q_BUILD_MAX];    /* generation                    */
     UCHAR MarksBuf[CM_QM_MAX_BYTES];    /* the marks answer, thread-owned */
+    UCHAR NetQBuf[CM_QN_MAX_BYTES];     /* the networking answer, the same
+                                           (record 35 section 17)       */
     /* The counters' text for the log answer (record 25 section 4.5), the
      * thread's own, built after each pass and published with the answer. */
     ULONG QueryCtrBytes;
@@ -666,6 +727,12 @@ typedef struct _CM_QUERY_DEV {
     ULONG MarksRead;
     ULONG MarksReadAny;
     UCHAR Marks[CM_QM_MAX_BYTES];
+    /* The networking answer (record 35 section 17, task 48.18): as the
+     * thread last built it, under Lock; 0 bytes before the first. */
+    ULONG NetQBytes;
+    ULONG NetQPass;         /* Pass and PassTick when these bytes went in */
+    ULONG NetQTick;
+    UCHAR NetQ[CM_QN_MAX_BYTES];
     /* The firmware tables answer (task 46.21): the body the NHI handed
      * over at creation, never changed after, and its state, under Lock.
      * QaReaders counts the requests copying out of QaBody with Lock
@@ -864,11 +931,56 @@ typedef struct _CM_FILTER {
                                0 none yet)                                 */
     ULONG ChainMayLog;      /* a chained unit's: its Removable gate's last
                                logged reading (cm.chain.removable)         */
+    /* Design record 34 section 3.12 item 5 (task 48.30), a chain child's,
+     * under cmRegLock: its PDO's identity, shared by every filter on that
+     * PDO (taken at CmRegAttLink); the begin stamp of each snapshot PDO's
+     * first answer (0: the filter's first answer, no provenance); whether
+     * it has answered once and its last answer's begin stamp; the token
+     * it carries while classified at a bound chain port (CM_MK_TOK_WORDS,
+     * 0 none); and the hand-off's hold count (EjectHold above). */
+    ULONG PdoSeq;
+    ULONG AttSeq;           /* this filter's own stamp, never shared       */
+    ULONG SnapSeq[CM_SNAP_MAX];
+    ULONG ChainAnswered;
+    ULONG ChainAnsSeq;
+    ULONG ChainTok[5];
 
     /* ---- an ASM4242 downstream port's mailbox member (cm_oscnt.c,
      * record 32 section 12.8.15.7), a bridge filter's; Role 0 elsewhere */
     CM_OSC_MEMBER Osc;
+
+    /* ---- the kept child (design record 31 section 4.10, task 48.29): a
+     * child cmChildCreate made on a system with CmKeptOn; Kept is set at
+     * its creation and never changed. KeptState under Lock; the references
+     * are Outstanding (the attach holds the first). KeptLogical and
+     * KeptDeparted under cmRegLock. ---- */
+    ULONG Kept;
+    ULONG KeptState;        /* CM_KEPT_* (cm_ports.h)                      */
+    ULONG KeptLogical;      /* no presence in the marks (Logical, Detached) */
+    ULONG KeptDeparted;     /* its departure recorded, not yet ended        */
+    ULONG KeptRemoves;      /* logical removals seen (the log)              */
+    WORK_QUEUE_ITEM KeptWork;   /* its destruction above PASSIVE_LEVEL      */
 } CM_FILTER, *PCM_FILTER;
+
+/* cm_filt.c: the kept child (design record 31 section 4.10). The
+ * dispatch of every major function on one (admission and the lower
+ * object's reference, K3 and K7); the I/O manager's FastIoDetachDevice
+ * for a filter or child of this driver (K6); a child cmChildCreate makes
+ * on 8.1, made kept before its attach. PASSIVE_LEVEL for the
+ * callback; the dispatch at its request's IRQL. */
+NTSTATUS CmKeptDispatch(PCM_FILTER filter, PIRP irp);
+VOID CmKeptInit(PCM_FILTER child);
+VOID CmFilterDetachCb(PCM_FILTER filter, PDEVICE_OBJECT target);
+/* cm_reenum.c: the kept child's marks (K4, K5, K8). CmRegAttDepart: the
+ * departure recorded once and the child no presence, at a logical
+ * removal. CmRegKeptAbsent: no presence (the callback). CmRegKeptAttached:
+ * presence back and the departure ended, the entry brought up to date. CmRegKeptNote: a record of the kept child's to the first
+ * listed domain, reading neither Parent nor Bridge. Any IRQL <=
+ * DISPATCH_LEVEL but CmRegAttDepart, PASSIVE_LEVEL. */
+VOID CmRegAttDepart(PCM_FILTER filter, BOOLEAN afterQr);
+VOID CmRegKeptAbsent(PCM_FILTER filter);
+VOID CmRegKeptAttached(PCM_FILTER filter);
+VOID CmRegKeptNote(PCM_FILTER filter, const char *label, ULONG event);
 
 #define CM_CHAIN_UNKNOWN    0UL
 #define CM_CHAIN_BRIDGE     1UL /* PCI\CC_0604: reads its BusRelations      */
@@ -944,6 +1056,7 @@ VOID CmNhiU4Take(PCM_NHI nhi);
 VOID CmNhiWaitService(PCM_NHI nhi);
 BOOLEAN CmNhiActionLive(PCM_NHI nhi, const TBT_ICM_ACTION *action);
 ULONG CmNhiActionMember(PCM_NHI nhi, const TBT_ICM_ACTION *action);
+ULONG CmNhiPortMember(PCM_NHI nhi, ULONG port);
 
 /*
  * The liveness monitor's driver half (cm_live.h). On the thread: the
@@ -1295,7 +1408,15 @@ VOID CmNetBindOps(PCM_NHI nhi, BOOLEAN fw);
 VOID CmNetPass(PCM_NHI nhi);
 VOID CmNetAck(PCM_NHI nhi);
 VOID CmNetStopWork(PCM_NHI nhi);
+/* The ring interrupt's DPC, on a claim while the data ring's cause is
+ * open (record 35 section 5.5): the receive service kicked while it is up
+ * and not closing. DISPATCH_LEVEL. */
+VOID CmNetIrqKick(PCM_NHI nhi);
 VOID CmNetLogCounters(PCM_NHI nhi);
+/* The networking answer's inputs gathered and built into NetQBuf (record
+ * 35 section 17, task 48.18): its bytes. On the thread, PASSIVE_LEVEL, no
+ * lock held; calls the network driver's Stats callback. */
+ULONG CmNetQueryFill(PCM_NHI nhi);
 VOID CmNetStarted(PCM_NHI nhi);
 VOID CmNetGone(PCM_NHI nhi);
 VOID CmNetRemove(PCM_NHI nhi);

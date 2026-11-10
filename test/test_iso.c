@@ -70,6 +70,7 @@
 
 /* Completion codes, transcribed from Table 6-90. */
 #define WANT_CC_SUCCESS             1UL
+#define WANT_CC_TRANSACTION_ERROR   4UL
 #define WANT_CC_TRB_ERROR           5UL
 #define WANT_CC_STALL               6UL
 #define WANT_CC_INVALID_STREAM_TYPE 10UL
@@ -1324,8 +1325,12 @@ static void test_deferred_group_swept_by_a_later_one(void)
              (LONG)XHCI_USBD_STATUS_NOT_ACCESSED,
              "and the swept request says its packets were not accessed");
     CHECK_EQ(fix.queue.Count, 0UL, "the queue is empty");
-    CHECK_EQ(fix.queue.MidTdDeferrals, 0UL,
-             "a Missed Service mid-TD arms no short-packet deferral");
+    CHECK_EQ(fix.queue.MidTdDeferrals, 1UL,
+             "a Missed Service mid-TD on the final packet is held (48.21)");
+    CHECK_EQ(fix.queue.IsoErrorHolds, 1UL, "as an error's hold");
+    CHECK_EQ(fix.queue.MidTdShortRetires, 1UL,
+             "and the sweep settled it as an early retire");
+    CHECK_EQ(XhciXferDeferralsArmed(&fix.queue), 0UL, "nothing left held");
 }
 
 /* The audit of 2026-11-06's lone isochronous IN request: one request, its
@@ -1545,6 +1550,202 @@ static void test_split_short_hold_rules(void)
     CHECK_EQ(fix.queue.Count, 1UL, "the request stays queued");
     CHECK_EQ(fix.ring.Dequeue, 0UL, "nothing retired");
     CHECK_EQ(fix.queue.MidTdDeferralsLost, 1UL, "counted as lost");
+    CHECK(iso_partition_holds(&fix), "the partition holds");
+}
+
+/* DEV_NOT_RESPONDING, the status a Transaction Error decodes to. */
+#define WANT_USBD_DEV_NOT_RESPONDING 0xC0000005UL
+
+static void test_final_split_error_settles(void)
+{
+    ISO_FIXTURE fix;
+    XHCI_XFER_EVENT_RESULT result;
+    PUSBPORT_ISO_PACKET packet;
+
+    /*
+     * Task 48.21: a Transaction Error on the final packet's first TRB, and
+     * no tail after it. Before the hold the request waited for a later
+     * group's sweep or a cancellation; now proof that the controller passed
+     * the group (a Ring Underrun or Overrun, a stopped endpoint's dequeue)
+     * ends it with the packets' own results. An empty event ring is not
+     * that proof: the xHC may advance only at the next interval.
+     */
+    iso_fixture_init(&fix, 32);
+    iso_fixture_split_tail(&fix, 0);
+    packet = fix.iso[0].Block.Packet;
+    (VOID)iso_event(&fix, 0, WANT_CC_SUCCESS, 0, &result);
+    CHECK_EQ(iso_event(&fix, 1, WANT_CC_TRANSACTION_ERROR, 700, &result),
+             XHCI_XFER_OK, "the final packet fails on its first TRB");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_NONE, "which ends nothing");
+    CHECK_EQ(result.NeedsRecovery, 0UL, "and asks for no recovery");
+    CHECK_EQ(fix.transfers[0].Flags &
+                 (XHCI_XFER_FLAG_SHORT_DEFERRED | XHCI_XFER_FLAG_ERROR_HELD),
+             XHCI_XFER_FLAG_SHORT_DEFERRED | XHCI_XFER_FLAG_ERROR_HELD,
+             "the request is held for its tail, as an error's hold");
+    CHECK_EQ(XhciXferDeferralsArmed(&fix.queue), 1UL, "one hold armed");
+    CHECK_EQ(fix.queue.MidTdDeferrals, 1UL, "counted with the deferrals");
+    CHECK_EQ(fix.queue.IsoErrorHolds, 1UL, "and apart as an error's");
+
+    CHECK_EQ(XhciXferDrainSettled(&fix.queue, &fix.ring, &result),
+             XHCI_XFER_OK, "the empty ring's settle");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_NONE, "passes the error over");
+    CHECK_EQ(result.NeedsRecovery, 0UL, "and asks for nothing");
+    CHECK_EQ(XhciXferDeferralsArmed(&fix.queue), 1UL, "which stays held");
+    CHECK_EQ(fix.ring.Dequeue, 0UL, "its TRBs still the controller's");
+
+    CHECK_EQ(XhciXferDrainSettledPassed(&fix.queue, &fix.ring, &result),
+             XHCI_XFER_OK, "the settle on proof the controller passed it");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "completes it");
+    CHECK_EQ(result.CompletedCount, 1UL, "the one request");
+    CHECK_EQ(result.NeedsRecovery, 0UL, "with no recovery asked");
+    CHECK_EQ(fix.ring.Dequeue, 3UL, "the group's TRBs are back");
+    CHECK_EQ(fix.queue.Count, 0UL, "the queue is empty");
+    CHECK_EQ((ULONG)packet[1].Status, WANT_USBD_DEV_NOT_RESPONDING,
+             "the packet keeps its error");
+    CHECK_EQ((ULONG)packet[0].Status, WANT_USBD_SUCCESS,
+             "the packet before it its success");
+    CHECK_EQ((ULONG)fix.transfers[0].UsbdStatus, WANT_USBD_DEV_NOT_RESPONDING,
+             "the request says it lost a packet");
+    CHECK(fix.transfers[0].Flags & XHCI_XFER_FLAG_FAILED, "and is failed");
+    CHECK_EQ(fix.transfers[0].Flags & XHCI_XFER_FLAG_ERROR_HELD, 0UL,
+             "the hold's kind is cleared with it");
+    CHECK_EQ(fix.queue.MidTdShortRetires, 1UL, "an early retire");
+    CHECK_EQ(fix.queue.Errors, 1UL, "and the request's error counted once");
+    CHECK(iso_partition_holds(&fix), "the deferral partition holds");
+
+    /* A late tail on the unowned TRBs is recognised, not matched. */
+    CHECK_EQ(iso_event(&fix, 2, WANT_CC_TRANSACTION_ERROR, 324, &result),
+             XHCI_XFER_OK, "a late tail");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_NONE, "completes nothing");
+    CHECK_EQ(fix.queue.MidTdShortTails, 1UL, "the early retire's tail");
+}
+
+static void test_final_split_error_tailed(void)
+{
+    ISO_FIXTURE fix;
+    XHCI_XFER_EVENT_RESULT result;
+
+    /* A conforming controller: the error's tail arrives while the request
+     * is queued, carrying the error's code, and ends it by position - here
+     * after a drain pass read the ring empty between the two events. */
+    iso_fixture_init(&fix, 32);
+    iso_fixture_split_tail(&fix, 0);
+    (VOID)iso_event(&fix, 0, WANT_CC_SUCCESS, 0, &result);
+    (VOID)iso_event(&fix, 1, WANT_CC_TRANSACTION_ERROR, 700, &result);
+    CHECK_EQ(XhciXferDeferralsArmed(&fix.queue), 1UL, "held");
+    CHECK_EQ(XhciXferDrainSettled(&fix.queue, &fix.ring, &result),
+             XHCI_XFER_OK, "an empty pass before the tail");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_NONE, "settles nothing");
+    CHECK_EQ(XhciXferDeferralsArmed(&fix.queue), 1UL, "still held");
+    CHECK_EQ(iso_event(&fix, 2, WANT_CC_TRANSACTION_ERROR, 324, &result),
+             XHCI_XFER_OK, "the tail");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "ends the group");
+    CHECK_EQ(fix.queue.MidTdDeferralsTailed, 1UL, "answered by its tail");
+    CHECK_EQ(fix.queue.MidTdShortRetires, 0UL, "with no early retire");
+    CHECK_EQ(fix.queue.IsoPacketsAnswered, 2UL, "each packet answered once");
+    CHECK_EQ(fix.transfers[0].Flags &
+                 (XHCI_XFER_FLAG_SHORT_DEFERRED | XHCI_XFER_FLAG_ERROR_HELD),
+             0UL, "nothing left held on it");
+    CHECK(iso_partition_holds(&fix), "the partition holds");
+
+    /* A Missed Service tail after it (p.201) is its tail too, and so is a
+     * Success one: the error's hold takes any code. */
+    iso_fixture_init(&fix, 32);
+    iso_fixture_split_tail(&fix, 0);
+    (VOID)iso_event(&fix, 0, WANT_CC_SUCCESS, 0, &result);
+    (VOID)iso_event(&fix, 1, WANT_CC_MISSED_SERVICE, 700, &result);
+    CHECK_EQ(fix.queue.IsoErrorHolds, 1UL, "a Missed Service holds too");
+    CHECK_EQ(iso_event(&fix, 2, WANT_CC_SUCCESS, 0, &result), XHCI_XFER_OK,
+             "a Success tail");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "ends it");
+    CHECK_EQ(fix.queue.MidTdDeferralsTailed, 1UL, "as its tail");
+    CHECK_EQ(fix.queue.MidTdDeferralsTailedSpurious, 0UL,
+             "not as the short packet's Success quirk");
+    CHECK_EQ((ULONG)fix.transfers[0].UsbdStatus, WANT_USBD_NOT_ACCESSED,
+             "the request keeps the missed packet's status");
+    CHECK(iso_partition_holds(&fix), "the partition holds");
+}
+
+static void test_split_error_hold_rules(void)
+{
+    ISO_FIXTURE fix;
+    XHCI_XFER_EVENT_RESULT result;
+
+    /* A TRB Error is the thread's: the endpoint is in Error and the stop
+     * and drain end the request, so no hold is armed. */
+    iso_fixture_init(&fix, 32);
+    iso_fixture_split_tail(&fix, 0);
+    (VOID)iso_event(&fix, 0, WANT_CC_SUCCESS, 0, &result);
+    CHECK_EQ(iso_event(&fix, 1, WANT_CC_TRB_ERROR, 700, &result),
+             XHCI_XFER_OK, "a TRB Error mid-TD");
+    CHECK_EQ(result.NeedsRecovery, 1UL, "asks for the stop and drain");
+    CHECK_EQ(XhciXferDeferralsArmed(&fix.queue), 0UL, "and holds nothing");
+    CHECK_EQ(fix.queue.MidTdDeferrals, 0UL, "nothing armed");
+
+    /* An interior split packet's error holds nothing: the next packet's
+     * events carry the group on. */
+    iso_fixture_init(&fix, 32);
+    iso_init(&fix.iso[0]);
+    iso_add_split(&fix.iso[0], 0x0C101000UL, 700, 324, 700);
+    iso_add(&fix.iso[0], 0x0C102000UL, 192, 701);
+    iso_request(&fix.req, &fix.iso[0], 1, 1024, 0);
+    CHECK_EQ(XhciXferSubmitIso(&fix.queue, &fix.ring, &fix.req, 1,
+                               &fix.transfers[0], (PVOID)0x2000UL,
+                               fix.scratch, XHCI_XFER_MAX_ISO_TRBS,
+                               &fix.layout),
+             XHCI_XFER_OK, "a split first packet, then a single one");
+    (VOID)iso_event(&fix, 0, WANT_CC_TRANSACTION_ERROR, 700, &result);
+    CHECK_EQ(XhciXferDeferralsArmed(&fix.queue), 0UL,
+             "an interior packet's error holds nothing");
+    CHECK_EQ(iso_event(&fix, 2, WANT_CC_SUCCESS, 0, &result), XHCI_XFER_OK,
+             "the last packet's event");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "ends the group");
+
+    /* An error on the final packet's LAST TRB is the ordinary end. */
+    iso_fixture_init(&fix, 32);
+    iso_fixture_split_tail(&fix, 0);
+    (VOID)iso_event(&fix, 0, WANT_CC_SUCCESS, 0, &result);
+    CHECK_EQ(iso_event(&fix, 2, WANT_CC_TRANSACTION_ERROR, 24, &result),
+             XHCI_XFER_OK, "an error on the final TRB");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "completes at once");
+    CHECK_EQ(fix.queue.MidTdDeferrals, 0UL, "with nothing held");
+
+    /* An error's hold with a short packet's hold behind it: the empty
+     * ring's settle retires the short one, which proves the controller
+     * past the error's group too, so the sweep settles both. */
+    iso_fixture_init(&fix, 32);
+    iso_fixture_split_tail(&fix, 0);
+    (VOID)iso_event(&fix, 0, WANT_CC_SUCCESS, 0, &result);
+    (VOID)iso_event(&fix, 1, WANT_CC_TRANSACTION_ERROR, 700, &result);
+    iso_fixture_split_tail(&fix, 1);
+    (VOID)iso_event(&fix, 3, WANT_CC_SUCCESS, 0, &result);
+    (VOID)iso_event(&fix, 4, WANT_CC_SHORT_PACKET, 100, &result);
+    CHECK_EQ(fix.transfers[1].Flags &
+                 (XHCI_XFER_FLAG_SHORT_DEFERRED | XHCI_XFER_FLAG_ERROR_HELD),
+             XHCI_XFER_FLAG_SHORT_DEFERRED, "a short packet's hold");
+    CHECK_EQ(XhciXferDeferralsArmed(&fix.queue), 2UL, "two holds");
+    CHECK_EQ(XhciXferDrainSettled(&fix.queue, &fix.ring, &result),
+             XHCI_XFER_OK, "the empty ring's settle");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "retires the short");
+    CHECK_EQ(result.CompletedCount, 2UL, "sweeping the error's ahead of it");
+    CHECK(result.Completed == &fix.transfers[0], "oldest first");
+    CHECK_EQ(fix.transfers[0].Flags &
+                 (XHCI_XFER_FLAG_SHORT_DEFERRED | XHCI_XFER_FLAG_ERROR_HELD),
+             0UL, "the swept one's hold cleared");
+    CHECK_EQ(fix.queue.MidTdShortRetires, 2UL, "both early retires");
+    CHECK_EQ(fix.queue.IsoErrorHolds, 1UL, "the error's hold counted once");
+    CHECK_EQ(fix.ring.Dequeue, 6UL, "both groups' TRBs back");
+    CHECK(iso_partition_holds(&fix), "the partition holds");
+
+    /* The proven settle takes a short packet's hold as the empty ring's
+     * does. */
+    iso_fixture_init(&fix, 32);
+    iso_fixture_split_tail(&fix, 0);
+    (VOID)iso_event(&fix, 0, WANT_CC_SUCCESS, 0, &result);
+    (VOID)iso_event(&fix, 1, WANT_CC_SHORT_PACKET, 100, &result);
+    CHECK_EQ(XhciXferDrainSettledPassed(&fix.queue, &fix.ring, &result),
+             XHCI_XFER_OK, "a proven settle of a short packet's hold");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "completes it");
     CHECK(iso_partition_holds(&fix), "the partition holds");
 }
 
@@ -2687,6 +2888,9 @@ int main(void)
     test_final_split_short_tailed();
     test_final_split_short_swept();
     test_split_short_hold_rules();
+    test_final_split_error_settles();
+    test_final_split_error_tailed();
+    test_split_error_hold_rules();
     test_multi_trb_packet_length();
     test_frame_cadence_gate();
     test_trb_error_needs_recovery();

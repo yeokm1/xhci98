@@ -10,8 +10,9 @@
 ;   Server 2003 x64,
 ;   Vista x64, 7 x64,
 ;   8 x64
-;   Windows 8.1 x64,     [Stor98_Models.NTamd64.6.3]: the class id as a
-;   10 x64               compatible id (the [Manufacturer] note below).
+;   Windows 8.1 x64      [Stor98_Models.NTamd64.6.3]: the tunnel id alone.
+;   Windows 10 x64       [Stor98_Models.NTamd64.10.0]: the class id as a
+;                        compatible id (the [Manufacturer] note below).
 ;
 ; Where this INF goes, next to the amd64 stor98.sys in each:
 ;
@@ -58,7 +59,7 @@ Signature="$Windows NT$"
 Class=SCSIAdapter
 ClassGUID={4D36E97B-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=11/08/2026,3.4.2.0
+DriverVer=11/10/2026,3.4.3.0
 ; Made and test-signed by the packager alone (design record 19).
 CatalogFile=stor98.cat
 
@@ -76,19 +77,25 @@ stor98.sys=1
 ; design record 31). xhci98's connection manager gives such a drive one id
 ; of its own, PCI\XHCI98_TUNNEL&CC_010802, and on XP x64 to 8 x64 the model
 ; matches that id alone, so Windows never picks this INF for an internal
-; NVMe drive there. Windows 8.1 and 10 (NT 6.3 and later) restart a device
-; with its ids read again, which loses that id, and keep xhci98 3.2.0.0's
-; model: PCI\CC_010802 as the compatible id, hardware id empty, which
-; ranks below their own stornvme on an internal drive (owner, 2026-10-23,
-; roadmap-usb4 43.59, and 2026-10-25, record 31 section 4.8); there
-; Stor98 goes on a tunnelled drive by xhci98's installer or its
-; safe-removal mark service.
-%Mfg%=Stor98_Models,NTamd64,NTamd64.6.3
+; NVMe drive there. Windows 8.1 x64 (NT 6.3) matches the id alone too: it
+; restarts a device with its ids read again, and xhci98's connection
+; manager keeps its filter on the drive's PDO across every such restart
+; there, so the id is given again (record 31 section 4.10, task 48.29).
+; Windows 10 x64 gets no id and keeps xhci98 3.2.0.0's model:
+; PCI\CC_010802 as the compatible id, hardware id empty, which ranks below
+; its own stornvme on an internal drive (owner, 2026-10-23, roadmap-usb4
+; 43.59, and 2026-10-25, record 31 section 4.8). On 8.1 and 10 Stor98 goes
+; on a tunnelled drive by xhci98's installer or its safe-removal mark
+; service.
+%Mfg%=Stor98_Models,NTamd64,NTamd64.6.3,NTamd64.10.0
 
 [Stor98_Models.NTamd64]
 %Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL&CC_010802
 
 [Stor98_Models.NTamd64.6.3]
+%Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL&CC_010802
+
+[Stor98_Models.NTamd64.10.0]
 %Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_010802
 
 [Stor98_Inst.NTamd64]

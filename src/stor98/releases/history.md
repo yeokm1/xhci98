@@ -4,6 +4,23 @@ One entry per version, newest first, written for the person installing
 the driver; plain ASCII within 78 columns. Since 3.1.0.0 Stor98 is built
 and released as part of xhci98, with xhci98's version.
 
+## 3.4.3.0 - not yet released
+
+- Windows 98 SE: an NVMe drive the computer's BIOS has set up can be
+  taken by Stor98 anyway, for every such drive (StorTakeFirmware = 1) or
+  for one controller (stortakefirmware=1 in its AdapterSettings). Off by
+  default: it can hang Windows' start or corrupt data if the BIOS still
+  uses the drive (README, "Settings"). On Windows ME both are ignored and
+  such a drive is always left to the BIOS: taking it can hang ME's start.
+  Each controller's finding at start is kept as StorFind
+  <bus>.<device>.<function>.
+- Windows 98 SE / ME, updating: restart Windows after the update as on
+  any other system. Earlier readmes asked for a shutdown and a fresh
+  start rather than a restart; the problem behind that was seen only in
+  an emulator whose 98 SE and ME guests do not survive a warm restart
+  (README, "Updating the driver"). Update with the drive unplugged or
+  with nothing using its volume, as before.
+
 ## 3.4.2.0 - not yet released
 
 - A drive formatted with 4 KiB (4096-byte) sectors works on every

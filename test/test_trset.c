@@ -177,6 +177,7 @@ static void test_rules(void)
     const TRS_ROW *pfw = trs_row_find("XhciPfwNhiLine");
     const TRS_ROW *mk = trs_row_find("Restart");
     const TRS_ROW *h9 = trs_row_find("StorHold9xMs");
+    const TRS_ROW *tf = trs_row_find("StorTakeFirmware");
 
     env_98(&e);
     CHECK_EQ(trs_state(psw, &e), TRS_GREY, "no gated controller: greyed");
@@ -189,7 +190,7 @@ static void test_rules(void)
     e.PirqController = 1;
     CHECK_EQ(trs_state(ir, &e), TRS_SHOW, "every system");
     CHECK_EQ(trs_state(nr, &e), TRS_GREY, "98 SE: 2000 and XP only");
-    CHECK(strcmp(trs_only(nr), "Windows 2000 and XP only") == 0, "its text");
+    CHECK(strcmp(trs_only(nr, &e), "Windows 2000 and XP only") == 0, "its text");
     CHECK_EQ(trs_state(si, &e), TRS_SHOW, "silent install on 98 SE");
     CHECK_EQ(trs_state(pfw, &e), TRS_HIDE, "no XHCIPFW.VXD");
     e.Pfw = 1;
@@ -197,6 +198,21 @@ static void test_rules(void)
     CHECK_EQ(trs_loc(pfw), TRS_LOC_PFW, "its own key");
     CHECK_EQ(trs_state(mk, &e), TRS_HIDE, "no mark service on 98 SE");
     CHECK_EQ(trs_state(h9, &e), TRS_SHOW, "StorHold9xMs on 98 SE");
+    CHECK_EQ(trs_state(tf, &e), TRS_SHOW, "StorTakeFirmware on 98 SE");
+    CHECK(trs_only(tf, &e) != NULL &&
+          strcmp(trs_only(tf, &e), "Windows 98 SE and ME only") == 0,
+          "StorTakeFirmware's family on 98 SE");
+    e.Inst.Minor = 90;
+    CHECK_EQ(trs_state(tf, &e), TRS_GREY, "StorTakeFirmware greyed on ME (48.28)");
+    CHECK(strcmp(trs_only(tf, &e), INST_S98_ME_WHY) == 0, "and why");
+    CHECK_EQ(trs_state(h9, &e), TRS_SHOW, "StorHold9xMs still on ME");
+    {
+        char o[32];
+        const char *w;
+        CHECK(!trs_parse(tf, &e, "1", o, sizeof(o), &w),
+              "StorTakeFirmware refused on ME");
+    }
+    e.Inst.Minor = 10;
     n = trs_choices(im, &e, 1, v, 32);
     CHECK_EQ(n, 3, "no message-signalled interrupt on 98 SE");
 

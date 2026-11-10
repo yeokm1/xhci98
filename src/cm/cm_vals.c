@@ -35,7 +35,9 @@ static const CM_RULE cmRules[CM_VAL_COUNT] = {
     { 1,     1,    100,         CM_RULE_SWITCH }, /* XhciCmNetPollMs        */
     { 128,   32,   1024,        CM_RULE_SWITCH }, /* XhciCmNetRxFrames      */
     { 128,   32,   1024,        CM_RULE_SWITCH }, /* XhciCmNetTxFrames      */
-    { 1,     0,    1,           CM_RULE_SWITCH }  /* XhciCmNetE2E           */
+    { 1,     0,    1,           CM_RULE_SWITCH }, /* XhciCmNetE2E           */
+    { 1,     0,    1,           CM_RULE_SWITCH }, /* XhciCmNetInterrupt     */
+    { 0,     0,    1,           CM_RULE_SWITCH }  /* XhciCmInferAtStart     */
 };
 
 static WCHAR cmUpper(WCHAR c)
@@ -354,6 +356,7 @@ VOID CmValuesDefault(PCM_VALUES v)
     v->AsmPcie7 = CM_ASM_PCIE7_DEFAULT;
     v->Usb4V2 = CM_USB4_V2_DEFAULT;
     v->Gen4Elr = CM_GEN4_ELR_DEFAULT;
+    v->SleepEntry = CM_SLEEP_ENTRY_DEFAULT;
     v->BridgeReq = CM_BRIDGE_REQ_DEFAULT;
     v->RingIrq = CM_RING_IRQ_DEFAULT;
 }
@@ -446,6 +449,24 @@ VOID CmValuesTakeGen4Elr(PCM_VALUES v, ULONG found, ULONG raw)
         return;
     }
     v->Gen4Elr = raw;
+}
+
+VOID CmValuesTakeSleepEntry(PCM_VALUES v, ULONG found, ULONG raw)
+{
+    v->SleepEntry = CM_SLEEP_ENTRY_DEFAULT;
+    v->SleepEntryFound = 0;
+    v->SleepEntryRaw = 0;
+    v->SleepEntryRefused = 0;
+    if (!found) {
+        return;
+    }
+    v->SleepEntryFound = 1;
+    v->SleepEntryRaw = raw;
+    if (raw > 1) {
+        v->SleepEntryRefused = 1;
+        return;
+    }
+    v->SleepEntry = raw;
 }
 
 /* XhciCmAsm4242Handover (cm_vals.h): 0 or 1, else the default. */

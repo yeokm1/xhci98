@@ -26,6 +26,7 @@
 #include "xhci_hw.h"
 #include "xhci_usbport.h"
 #include "xhci_cmiso.h"
+#include "xhci_stage.h"
 
 /* The resource mask XhciInitController holds the start to. The miniport
  * settled it from the registration packet's interface version, because NT 6.x
@@ -94,6 +95,18 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * Read at every start; on Windows 2000 and later only, and only past the
  * start's register-free check (hcd_dma.c, HcdDmaWideOpen). */
 #define HCD_VALUE_WIDE_MAP      L"XhciWideMap"
+/* Task 48.33 (design record 13 section 11.11.1; Q-STG.2, the owner's
+ * answer (b)): the shared staging pool's budget in KiB, written by the
+ * INFs at 2048: absent or of another type is 2048, a value outside 256 to
+ * 16384 is held to the nearer end (xhci_stage.c, XhciStagePoolSlabs). Read
+ * at every start. */
+#define HCD_VALUE_STAGE_POOL    L"XhciStagePoolKiB"
+/* Every transfer staged through buffers the driver owns (task 48.33), or,
+ * at 0, the clients' buffers mapped through the map pump as in 3.4.2.0
+ * (owner, 2026-11-10: off by default, revisited after the bench speed
+ * checks): written by the INFs at 0; absent, or a DWORD 0, is 0, any
+ * other DWORD 1 (xhci_stage.c, XhciStagingOn). Read at every start. */
+#define HCD_VALUE_DMA_STAGING   L"XhciDmaStaging"
 /* Issue 18: the default speed IDs for a Full- or Low-Speed device behind a
  * hub on a USB 2.0 root port whose speed table names no such speed
  * (XhciPortPsivForHubChild), written by the INFs at 1 (task 36.51): only a
@@ -112,6 +125,11 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
 #define HCD_VALUE_USB2_BOS      L"XhciUsb2Bos"
 #define HCD_VALUE_RESUME_KEEP   L"XhciResumeKeep"
 #define HCD_VALUE_LINK_KEEP     L"XhciLinkKeep"
+/* Issue 29 (design record 13 section 21, F8): a SuperSpeed link that keeps
+ * failing is sent to USB 2.0 (1, the default, written by the INFs) or
+ * given up after the same count (0); absent, or anything but a DWORD 0, is
+ * 1. Read at every start. */
+#define HCD_VALUE_SS_FLAP       L"XhciSsFlapFallback"
 /* Task 45.45 (design record 08 section 14): the command-state checker
  * (hcd_strict.c), written by both INFs at 1: only a DWORD 0 turns it off;
  * absent, another number, another type or a failed read is on. Read at
@@ -531,6 +549,19 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
                 NT_SUCCESS(status) ? value : 0xFFFFFFFFUL);
     XhciLogNote(ext, "xfer.wide.switch", hc->WideSwitch);
 
+    /* Task 48.33: the staging pool's budget (HcdStageOpen notes what it
+     * made of it). */
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_STAGE_POOL, &value);
+    hc->StagePoolFound = NT_SUCCESS(status) ? 1UL : 0UL;
+    hc->StagePoolValue = NT_SUCCESS(status) ? value : 0;
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_DMA_STAGING, &value);
+    hc->Staging = XhciStagingOn(NT_SUCCESS(status) ? 1UL : 0UL, value);
+    ext->DmaStaging = hc->Staging;
+    XhciLogNote(ext, "stage.switch", hc->Staging);
+    XHCI_DBG_VALUE("hcd: XhciDmaStaging, effective", hc->Staging);
+
     /* Issue 18. */
     value = 0;
     status = hcdReadDword(hc, HCD_VALUE_HUB_SPEED, &value);
@@ -588,6 +619,11 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     hc->LinkKeepOn = (NT_SUCCESS(status) && value == 0) ? 0UL : 1UL;
     XhciLogNote(ext, "link.keep.on", hc->LinkKeepOn);
 
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_SS_FLAP, &value);
+    hc->SsFlapFallback = (NT_SUCCESS(status) && value == 0) ? 0UL : 1UL;
+    XhciLogNote(ext, "link.flap.fallback", hc->SsFlapFallback);
+
     /* Task 38.11: latched in the extension, which this start has zeroed
      * and which no in-place reinitialization zeroes again, so every version
      * check of the started lifetime uses this floor. */
@@ -611,6 +647,22 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     status = hcdReadDword(hc, HCD_VALUE_QEMU_MAP_GRANT, &value);
     hc->QemuMapGrant = NT_SUCCESS(status) ? value : 0;
     XhciLogNote(ext, "qemu.mapgrant", hc->QemuMapGrant);
+
+    /* Task 48.33 (design record 13 section 11.11.9), qemu only and written
+     * by no INF: the staging pool's slabs at most, and the fault switch
+     * (hcd.h, HCD_STAGE_QEMU_*). */
+    value = 0;
+    status = hcdReadDword(hc, L"XhciQemuStagePool", &value);
+    hc->QemuStagePool = NT_SUCCESS(status) ? value : HCD_STAGE_QEMU_POOL_NONE;
+    value = 0;
+    status = hcdReadDword(hc, L"XhciQemuStageFault", &value);
+    hc->QemuStageFault = NT_SUCCESS(status) ? value : 0;
+    value = 0;
+    status = hcdReadDword(hc, L"XhciQemuStageMapProbe", &value);
+    hc->QemuMapProbe = NT_SUCCESS(status) ? value : 0;
+    if (hc->QemuMapProbe > HCD_STAGE_QEMU_PROBE_MAX) {
+        hc->QemuMapProbe = HCD_STAGE_QEMU_PROBE_MAX;
+    }
 
     value = 0;
     status = hcdReadDword(hc, L"XhciQemuBigRefuse", &value);
@@ -3342,8 +3394,15 @@ static VOID hcdRelease(PHCD_CONTROLLER hc)
     XHCI_DBG_TEXT("hcd: release: timers");
     HcdTimersDrain(hc);
     XHCI_DBG_TEXT("hcd: release: DMA");
+    /* Task 48.33 (design record 13 section 11.11.6): staging's admission
+     * closed and its processor work joined, then the pool freed - or
+     * kept, with the rest of this driver's DMA memory, when the
+     * controller may still be mastering - before the adapter goes. */
     HcdDmaMapDrain(hc);
+    HcdStageDrain(hc);
+    HcdStageNotes(hc);
     HcdDmaWideClose(hc);
+    HcdStageClose(hc);
     HcdDmaClose(hc);
     XHCI_DBG_TEXT("hcd: release: BAR");
     if (hc->BarVa != NULL) {
@@ -3447,6 +3506,9 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
      * (reviewed and revised after 4de0f999). Before the start
      * admits anything, so no lock is needed against an admission. */
     hc->ShutLatched = 0;
+    /* Task 48.33: a new lifetime holds a departed device's requests again
+     * (hcd_io.c, HcdIoParkCloseAll). */
+    (VOID)InterlockedExchange((PLONG)&hc->ParkClosed, 0);
     hc->SuspendHaltProven = 0;
     /* Task 45.63: and the resume state, which a D0 the bus failed may have
      * left FAILED on this FDO: a start's controller runs. */
@@ -3527,6 +3589,12 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
     hcdXstatGrant(hc);
     /* 36.24: after the grant, before anything is enumerated. */
     HcdDmaWideOpen(hc);
+    /* Task 48.33: the staging pool, before anything is enumerated. */
+    status = HcdStageOpen(hc);
+    if (!NT_SUCCESS(status)) {
+        hcdRelease(hc);
+        return status;
+    }
     /* The design record 13 section 11.4 reading, on the debug channel
      * too: the log ring has no reader until 26-A.8. */
     XHCI_DBG_VALUE("hcd: start, map registers granted", hc->MapRegisters);
@@ -3758,6 +3826,15 @@ static VOID hcdStopBody(PHCD_CONTROLLER hc)
             XhciFailClosedDma(ext);
         }
     }
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* Task 48.33 (design record 13 section 11.11.9): XhciQemuStageFault
+     * bit 0 reports every stop's quiesce not proven, so a leg drives the
+     * unproven stop on an emulator whose controller always halts. */
+    if ((hc->QemuStageFault & HCD_STAGE_QEMU_UNPROVEN) != 0) {
+        XhciLogNote(ext, "qemu.stage.unproven", 1);
+        HcdSvcDmaNotStopped(ext);
+    }
+#endif
     /* Task 34.3: once the controller has halted, so the disconnects the
      * hand-back makes are seen by no running xHCI. */
     hcdPswEnd(hc);
@@ -3770,6 +3847,12 @@ static VOID hcdStopBody(PHCD_CONTROLLER hc)
      * registers back.
      */
     HcdEnumDrop(hc);
+    /* Task 48.33 (record 13 section 11.11.6, step 4): after an unproven
+     * stop no child PDO keeps a request held (hcd_io.c); with
+     * XhciDmaStaging 0 they stay held, as in 3.4.2.0. */
+    if (hc->CommonBufferPinned && hc->Staging) {
+        XhciLogNote(ext, "stage.parked.released", HcdIoParkCloseAll(hc));
+    }
     /* The idle callback thread's handoff, once the enum thread has exited
      * and the devices' slots are settled at their unlink (design record 14
      * section 4.4). */

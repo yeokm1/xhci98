@@ -177,6 +177,14 @@ typedef struct FAB_ROUTER {
     unsigned long SetCapsLastMeta;
     int ElrStuck;                   /* PORT_CS_19 Enable Gen 4 Link Recovery never
                                      * sets (task 45.56): a router that keeps it 0 */
+    /* Record 22 section 11.1 (task 48.35): Sleep Ready follows Enter Sleep
+     * at once (usb4-emu's usb4-router.c) unless NoSleepReady; SlpStuck: Enter
+     * Sleep never reads back set; SlpWrites counts writes that set it. */
+    int NoSleepReady;
+    int SlpStuck;
+    int ClxStuck;                   /* LANE_ADP_CS_1's CLx enables never clear */
+    int SlpNoClear;                 /* Enter Sleep, once set, never clears */
+    unsigned long SlpWrites;
 } FAB_ROUTER;
 
 typedef struct FAB_FRAME {

@@ -489,12 +489,19 @@
 #define TBT_USB4_MAJOR_1            1UL
 #define TBT_USB4_MAJOR_2            2UL
 /* ROUTER_CS_5 (Linux ROUTER_CS_5_*). */
+#define TBT_RTR5_SLP                0x00000001UL    /* 0 Enter Sleep (Spec 8.2.1.1) */
+#define TBT_RTR5_WOP                0x00000002UL    /* 1 Enable Wake on PCIe */
+#define TBT_RTR5_WOU                0x00000004UL    /* 2 Enable Wake on USB3 */
+#define TBT_RTR5_WOD                0x00000008UL    /* 3 Enable Wake on DP */
+#define TBT_RTR5_WAKE               0x0000000EUL
 #define TBT_RTR5_CNS                0x00800000UL    /* 23 CM TBT3 Not Supported */
 #define TBT_RTR5_PTO                0x01000000UL    /* 24 PCIe Tunneling On */
 #define TBT_RTR5_UTO                0x02000000UL    /* 25 USB3 Tunneling On */
 #define TBT_RTR5_HCO                0x04000000UL    /* 26 Internal Host Controller On */
 #define TBT_RTR5_CV                 0x80000000UL    /* 31 Configuration Valid */
 /* ROUTER_CS_6 (Linux ROUTER_CS_6_RR, _CR). */
+#define TBT_RTR6_SLPR               0x00000001UL    /* 0 Sleep Ready */
+#define TBT_RTR6_WAKE_STATUS        0x0000001CUL    /* 4:2 wake on PCIe, USB3, DP status */
 #define TBT_RTR6_RR                 0x01000000UL    /* 24 Router Ready */
 #define TBT_RTR6_CR                 0x02000000UL    /* 25 Configuration Ready */
 /* ROUTER_CS_26, Spec 8.3.1 (Linux ROUTER_CS_26_*). */
@@ -703,6 +710,7 @@
 #define TBT_LANE1_TLW_MASK          0x00000030UL    /* 5:4 Target Link Width */
 #define TBT_LANE1_TLW_SINGLE        0x00000010UL    /* 01b, the default */
 #define TBT_LANE1_TLW_DUAL          0x00000030UL    /* 11b */
+#define TBT_LANE1_TAL(v)            (((ULONG)(v) >> 6) & 0x3UL)     /* 7:6 Target Asymmetric Link (Spec 8.2.2.3) */
 #define TBT_LANE1_CL0S_EN           0x00000400UL    /* 10 */
 #define TBT_LANE1_CL1_EN            0x00000800UL    /* 11 */
 #define TBT_LANE1_CL2_EN            0x00001000UL    /* 12 */
@@ -733,10 +741,17 @@
 #define TBT_PORT18_BE               0x00000100UL    /* 8 Bonding Enabled */
 #define TBT_PORT18_TCM              0x00000200UL    /* 9 TBT3-Compatible Mode */
 #define TBT_PORT18_TIP              0x01000000UL    /* 24 AsymmetricTransitionInProgress */
+#define TBT_PORT18_RD               0x00002000UL    /* 13 Router Detected (Spec 8.2.2.4) */
+#define TBT_PORT18_WAKE_STATUS      0x000F0000UL    /* 19:16 wake on connect, disconnect, USB4, inter-domain status */
 #define TBT_PORT_CS_19              19UL
 #define TBT_PORT19_DPR              0x00000001UL    /* 0 Downstream Port Reset */
 #define TBT_PORT19_PC               0x00000008UL    /* 3 USB4 Port is Configured */
 #define TBT_PORT19_PID              0x00000010UL    /* 4 USB4 Port is Inter-Domain (task 45.59) */
+#define TBT_PORT19_WOC              0x00010000UL    /* 16 Enable Wake on Connect (Spec 8.2.2.4) */
+#define TBT_PORT19_WOD              0x00020000UL    /* 17 Enable Wake on Disconnect */
+#define TBT_PORT19_WOU4             0x00040000UL    /* 18 Enable Wake on USB4 Wake, default 1 */
+#define TBT_PORT19_WOI              0x00080000UL    /* 19 Enable Wake on Inter-Domain */
+#define TBT_PORT19_WAKE             0x000F0000UL
 #define TBT_PORT19_SAF              0x01000000UL    /* 24 StartAsymmetricFlow, never written 1 */
 #define TBT_PORT19_ILR              0x40000000UL    /* 30 Initiate Gen 4 Link Recovery, never written */
 #define TBT_PORT19_ELR              0x80000000UL    /* 31 Enable Gen 4 Link Recovery */
@@ -857,6 +872,9 @@
 #define TBT_LC_SX_CTRL_L1C          0x00010000UL    /* 16 odd adapter configured */
 #define TBT_LC_SX_CTRL_L2C          0x00100000UL    /* 20 even adapter configured */
 #define TBT_LC_SX_CTRL_UPSTREAM     0x40000000UL    /* 30 */
+#define TBT_LC_SX_CTRL_SLP          0x80000000UL    /* 31 sleep (lc.c tb_lc_set_sleep) */
+#define TBT_LC_SX_CTRL_WAKE         0x0000007EUL    /* 6:1 WOC, WOD, WODPC, WODPD, WOU4, WOP (tb_lc_set_wake) */
+#define TBT_LC_DESC_NLC(v)          ((ULONG)(v) & 0xFUL)            /* link controllers (TB_LC_DESC_NLC_MASK) */
 /* A port block's PORT_MODE (Linux TB_LC_PORT_MODE): bit 0 Downstream Port
  * Reset (lc.c tb_lc_reset_port, generations 2 and 3). */
 #define TBT_LC_PORT_MODE            0x26UL

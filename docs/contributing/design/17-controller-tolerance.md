@@ -80,6 +80,21 @@ same day to its seven questions are folded in (section 4.14.11), and the
 section was reviewed and revised (an eighth question, D8, the isochronous
 Frame ID below 1.0, answered (b) by the owner the same day). Nothing else changes.
 
+Revision 15, 2026-11-09, for roadmap-usb4 task 48.32 (was PCR.1): section
+4.13.7. The release the task asked for was designed, reviewed and
+revised, and is not built by the owner's decisions of the same day: the
+link above the controller read down proves no drain of writes already
+forwarded, and D3hot is not built either. The stop's all-ones
+fallback, an existing gap the review found, goes to task 48.33. Nothing
+else changes.
+
+Revision 16, 2026-11-09, for roadmap-usb4 task 48.33, a draft written
+before code: section 4.13.8. With every transfer staged through buffers
+the driver owns (design record 13 section 11.11), an unproven stop
+completes its clients' requests and keeps only the driver's own memory;
+the stop's all-ones fallback fails closed. The owner's questions are in
+record 13. Nothing else changes.
+
 ## 1. What is asked, and what is not
 
 A tester on an AMD AM5 board reports that a USB mouse randomly stops
@@ -1454,8 +1469,9 @@ Endpoint acts on every stream of it:
   paused or closed is rung, the failed stream's included, each with its
   Stream ID (`hcdCfgStreamKick`, which keeps its exclusion of a stream
   whose pipelined successor waits to be taken off): a doorbell rung for
-  another stream while the endpoint was Halted was ignored, and a stopped
-  stream endpoint restarts only for the streams rung. Past G only the
+  another stream while the endpoint was Halted was ignored (xHCI 4.7,
+  p.144), and work on each stream's ring takes a doorbell write of its own
+  (4.7, p.143). Past G only the
   retry's own pause is given back; a failed command leaves the endpoint
   paused for `hcdCfgFault`'s recovery, as 4.2's failed reset does. The
   pause, which 4.2 does without for an endpoint with one ring, holds
@@ -2196,6 +2212,203 @@ Legs on XP and 2000 (the dock, hot-plugged):
 - the controller's own report reading `RELEASED` with the tunnel proof;
 - the ASM4242's own xHCI, which is not behind a tunnel port, never
   answered.
+
+#### 4.13.7 Reopened for task 48.32: no new release proof
+
+**Why.** The owner took PCR.1 into Phase 48 on 2026-11-09 as task 48.32:
+the transfers a pinned containment keeps released once the controller is
+proven unable to write to memory, its configuration space all ones
+through a validated read, or D3hot read back. Its design was written and
+reviewed and revised over several rounds; the owner's decisions of the
+same day (Q-PCR.1 to Q-PCR.4) leave it at this: **no new proof releases
+anything**, and the known limitation stays as the release notes state
+it. An existing gap the review found, the stop's all-ones fallback, goes
+to task 48.33 (below).
+
+**The specifications cited.** The PCI Express Base Specification
+revision 2.0 and the PCI Bus Power Management Interface Specification
+1.2, the copies the owner added to `docs/references` (2026-11-09,
+Q-PCR.2; `docs/references/README.md` has their rows), cited by section
+and the page the copy prints.
+
+**The link above the controller read down: considered, not built.** The
+route the design proposed was the function's own vendor id read all ones
+through a validated read (each byte read twice through `HalGetBusData`,
+into buffers prefilled `5Ah` and `A5h`, counted only where both agree),
+and the nearest bridge on its recorded path that still answers, with the
+identity it had at the start, reading its Link Status's Data Link Layer
+Link Active (bit 13) at 0, at two walks 100 ms apart; the function
+associated with its place in the HAL's configuration space through its
+Interrupt Line byte. It shows that nothing more crosses the link and,
+since an Upstream Port's DL_Down is handled as a reset of its component,
+that the function will name none of its old memory when it returns
+(PCIe 2.0 section 2.9.1, pp. 130-131). It does **not** show that the writes
+the port had already forwarded upstream, into the root complex, have
+reached memory: 2.9.1 resets the component below and discards the
+affected transactions, and gives no bound for those. No cheap step that
+works everywhere closes that: a read of the surviving port, or of
+another device through it, or a processor read of memory, does not
+establish that they have drained. A release on it could hand back a page
+a write in flight then lands in. So it is not built (the owner,
+2026-11-09, Q-PCR.3 (b), after a review): where only this route would
+prove the controller stopped, the transfers stay kept and the disable or
+removal waits, as today. Nor is it kept as a diagnostic: its start-time
+scan and association are not cheap, and a reading that releases nothing
+is not worth that cost here.
+
+**Why Bus Master Enable read back clear differs.** The shipping proof
+(section 4.6) reads the Command register back from the function itself.
+A configuration read's completion may not pass the function's earlier
+posted writes on its way up (PCIe 2.0 section 2.4.1, the ordering rules
+D2a and D2b, p. 102; section 6.4, p. 374, on a host read flushing a
+device's earlier writes in traffic class 0), so that read-back can
+establish that earlier writes drained as well as that mastering stopped,
+subject to the writes' traffic class and attributes. A link that is down
+carries no such read from the function. Whether the USB4 tunnel's
+read-back (section 4.13.6) covers the queues on the root complex's side
+of the host router is not shown here. Both shipping proofs go to an
+audit of their own (the owner, 2026-11-09), not to this task.
+
+**D3hot read back: not built** (the owner, 2026-11-09, Q-PCR.1, after a
+review). The reasons, as reviewed:
+
+- PCI Express makes the termination of a function's requests, with their
+  completions outstanding, the software's prerequisite to D3hot (PCIe
+  2.0 section 5.3.1.4.1, pp. 301-302); a write of PMCSR does not replace
+  that quiescence. A controller that would not halt is one whose
+  quiescence the driver could not establish (whether it still has
+  completions outstanding is not known either way).
+- The PMCSR write's own completion may pass the function's posted writes
+  (PCIe 2.0 section 2.4.1, rule E2, p. 102), so the write proves nothing
+  of them. A successful read of PMCSR afterwards is a read completion,
+  which under D2a may not pass the function's earlier posted writes in
+  traffic class 0 without Relaxed Ordering (p. 102; section 6.4, p.
+  374), as the Bus Master Enable read-back above; so it is not the
+  drainage that D3hot lacks, but the quiescence before it and what
+  PowerState itself is worth from a function that would not stop.
+- A wedged xHCI may keep its configuration logic answering while its DMA
+  engine is stuck; that is an engineering inference, not a reading.
+- The function's own report is weaker than an observation made
+  independently above it.
+- A wrong release corrupts memory; keeping the buffers is the failure to
+  prefer.
+
+Neither the configuration space answering in D3hot (normal there) nor
+`No_Soft_Reset` (which does not weaken D3hot's prohibition on bus
+mastering, PCI PM 1.2 sections 5.4.1 and 5.6, and matters only
+at the return to D0) is a reason. To be reconsidered only for hardware
+whose vendor documents DMA gated and drained before D3hot is observable,
+with fault-injected evidence, and then only as corroboration of another
+proof.
+
+**The stop's all-ones fallback: to task 48.33.** The review found an
+existing gap beside this task. When the controller will not halt, the
+stop's quiesce falls back to clearing Bus Master Enable
+(`xhciTryClearBusMaster`, `xhci_init.c`), and that fallback takes a
+Command register reading `FFFFh` - at its first read or at its read-back
+after the write - as a device off the bus that masters nothing; its
+caller then frees every buffer with no pin. That is the very evidence
+section 4.13 rejects, reached by any stop that comes before a containment
+has pinned (a removal, a surprise removal, a disable within the
+containment's interval, a refused start). Failing closed there instead
+(the owner's first answer, Q-PCR.4 (a)) would keep the clients'
+transfers, and with them hang the removal wherever a class driver waits
+on a request (on 98 SE and ME always, on NT unless a tunnel statement
+proves isolation), because a client's buffer cannot be kept once its
+request completes. So the owner moved the fix to a task of its own,
+48.33 (2026-11-09): every transfer's data staged through buffers this
+driver owns, so that an unproven stop completes its clients' requests
+and keeps only the driver's own allocations out of use until the next
+start; the all-ones fallback folds into that design (design record 13
+section 11 and this record, written for 48.33). Until it lands the
+fallback stays as it is. A bridge's Bus Master Enable cleared as a proof
+(section 4.13.5, route 6) is not built either (the owner, 2026-11-09).
+
+**Verification.** No code changes for this task, so no host vectors or
+legs; its readings are the review's of this section and the
+specifications cited.
+
+#### 4.13.8 The unproven stop with every transfer staged (task 48.33, design before code)
+
+**Why.** Section 4.13.7 leaves no proof that releases the clients' buffers
+of a controller that may still write to memory, and the stop's all-ones
+fallback frees everything on evidence section 4.13 rejects. Task 48.33
+(the owner, 2026-11-09) removes the need for such a proof instead: every
+transfer's data is staged through buffers the driver owns (design record
+13 section 11.11), so the controller never names a client page, and a
+stop it cannot prove has only the driver's own memory to keep. Written
+before code, reviewed and revised with record 13 section 11.11; the
+owner's questions Q-STG.1 to Q-STG.4 are there.
+
+**What "unproven" covers.** Every stop, removal, surprise removal,
+refused start or containment whose quiesce does not prove the controller
+stopped mastering: section 4.6's routes as they are, with one change -
+`xhciTryClearBusMaster` (`xhci_init.c`) no longer takes a Command
+register reading `FFFFh`, at its first read or at its read-back after
+the write, as a device off the bus; either now reads "not proven". This
+is the gap section 4.13.7 handed to this task, closed by failing closed,
+which with staging costs no hang. `hcdContainProve` (`hcd_ctl.c`)
+already refuses all ones. Bus Master Enable read back clear and the USB4
+tunnel's statement (section 4.13.6) stay the proofs, unchanged (their
+audit is the coordinator's task, not this one).
+
+**What an unproven stop does** (record 13 section 11.11.6, in order):
+staging admission closed; every device drained exactly as a proven stop
+drains it (a containment without proof takes the proven containment's
+`hcdDropAll`, so its devices leave through the departure and their PDOs
+are removed with no stop of the controller needed), waiting requests unlinked from the staging queue; the
+processors' staging work joined (the staging DPC counted from its
+queueing, every admission pass, copy and publication in progress - a
+wait on processor work only); every client request ended with
+`DEVICE_GONE` and taken along today's departure route (held on its PDO,
+cancellable, where a departure holds it), and every request so held
+released `CANCELED` before the controller FDO's own stop or removal
+completes, whether or not its PDO was stopped first; every allocation the
+controller could name - the common buffer, the enumeration scratch,
+stream blocks and isochronous rings, and the staging pool, reserves and
+small buffers - kept with the adapter for the rest of the boot, its
+charge in the driver's quarantine ledger turned from live to kept (the
+image stays loaded from the first kept allocation, so the ledger and its
+cap last the boot); processor-only memory freed.
+
+**What it replaces.** `CommonBufferPinned` stops meaning "the clients'
+requests stay pending": `HcdIoDeviceDrain`'s early return, the device
+record `HcdIoDeviceGone` keeps, `hcdPdoQuiesce`'s skipped wait
+(`hcd_pdo.c`), `HcdDmaWideClose`'s kept pool and `HcdEnumContain`'s
+pinned route (`hcdDrainAll` keeping every device, `hcd_enum.c`) go; the map pump's
+quarantine (`MapQuarantined`, and the refusal of a later start on the
+same FDO in `hcd_pnp.c`) goes with the map pump, since no channel request
+is ever outstanding, while its rundown of processor work stays, as the
+staging drain. `CommonBufferPinned` stays as the mark that the memory is
+kept. The selective suspend rundown keeps its abandonment of a client's
+idle callback still running (`hcd_susp.c`), triggered by the stop as
+today. The release-notes limitation section 4.13 states - a disable of a
+controller closed off without proof waits for ever - is lifted for every
+client request but one: a client's idle callback still running when the
+stop abandons it, whose PDO stays kept as today (`IdleQuarantined`).
+
+**The owner's decisions (2026-11-09)**, recorded in full in record 13
+section 11.11.10: Q-STG.1 (a), the client's buffer copied through a 64 KiB
+window the driver owns; Q-STG.2 (b), the pool a setting,
+`XhciStagePoolKiB`, 2048 KiB by default; Q-STG.3 (a), every kept
+allocation kept until Windows restarts, one 64 MiB ledger for the driver,
+a start or a pipe open refused past it; Q-STG.4 (a), nothing stays
+direct. Built on branch `w48-pci` (record 13 section 11.11.11): the
+all-ones fallback fails closed at both reads, `HcdIoDeviceDrain`'s early
+return, `hcdPdoQuiesce`'s skipped wait, `HcdEnumContain`'s pinned route
+and the map pump's quarantine are gone, and an unproven stop closes
+staging's admission (`HcdSvcDmaNotStopped`), drains as a proven stop does
+and keeps its DMA memory through the ledger.
+
+**The switch.** All of the above holds with `XhciDmaStaging` 1 alone
+(record 13 section 11.11, "The switch"). Since the owner's change of
+2026-11-10 the default is 0: every transfer goes direct as in 3.4.2.0,
+and an unproven stop keeps its devices' records and the clients'
+requests pending, section 4.13.1's wait, until a user sets 1.
+
+**Owed.** The legs record 13 section 11.11.9 lists, on 98 SE, ME, 2000,
+XP and 7 x64, with the qemu flavour's fault switch at each point a
+request can be.
 
 ### 4.14 Controllers below xHCI 1.0: version 0.96 accepted (38.11, revision 14)
 

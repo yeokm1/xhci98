@@ -2804,9 +2804,17 @@ static VOID tbtIcmXdSync(PTBT_ICM icm, PTBT_ICM_XD x)
     }
 }
 
-/* Each record offered the service while the network driver holds it open
- * and no other record's is up; a change rebuilds that block and tells the
- * peer (TbtXdpPeerSetNetWanted). */
+/* Whether record `x` offers the service: the network driver holds it
+ * open, no other record's is up, and the firmware announced `x` (record
+ * 35 section 3.16: an adopted record offers none). */
+static BOOLEAN tbtIcmXdOffers(const TBT_ICM *icm, const TBT_ICM_XD *x,
+                              BOOLEAN adopted)
+{
+    return (BOOLEAN)(icm->NetWanted && !adopted && !tbtIcmXdOtherUp(icm, x));
+}
+
+/* Each record offered the service as tbtIcmXdOffers says; a change
+ * rebuilds that block and tells the peer (TbtXdpPeerSetNetWanted). */
 static VOID tbtIcmXdOffer(PTBT_ICM icm)
 {
     ULONG i;
@@ -2818,7 +2826,7 @@ static VOID tbtIcmXdOffer(PTBT_ICM icm)
         if (!x->Used) {
             continue;
         }
-        want = (BOOLEAN)(icm->NetWanted && !tbtIcmXdOtherUp(icm, x));
+        want = tbtIcmXdOffers(icm, x, x->Adopted);
         if (want != x->Peer.NetWanted ||
             (want && x->Peer.LocalProps.Prtcstns != icm->NetPrtcstns)) {
             TbtXdpPeerSetNetWanted(&x->Peer, want, icm->NetPrtcstns);
@@ -2932,13 +2940,19 @@ static VOID tbtIcmXdOwe(PTBT_ICM icm, const TBT_ICM_XD_ADDR *addr)
 }
 
 /* The teardown of record `x`'s paths, where the firmware may still hold
- * them: approved or never answered, and no end of the link announced. */
+ * them: approved or never answered. Also where the firmware announced the
+ * link's end (record 35 section 3.17: Linux's thunderbolt-net disables
+ * the paths at every end of a logged-in peer, a disconnect included, and
+ * an Alpine Ridge firmware left holding them announced no peer at that
+ * place again), and that one is never owed. Every teardown is sent
+ * outside the record's waits, so an end the firmware announces while it
+ * runs cannot cut it short between its two steps. */
 static VOID tbtIcmXdTeardown(PTBT_ICM icm, PTBT_ICM_XD x)
 {
     BOOLEAN held;
     LONG rc;
 
-    held = (BOOLEAN)((x->Approved || x->ApproveUnknown) && !x->FwGone);
+    held = (BOOLEAN)(x->Approved || x->ApproveUnknown);
     x->Approved = FALSE;
     x->ApproveUnknown = FALSE;
     if (!held) {
@@ -2946,7 +2960,11 @@ static VOID tbtIcmXdTeardown(PTBT_ICM icm, PTBT_ICM_XD x)
     }
     rc = TBT_E_STOPPED;
     if (tbtIcmXdAccess(icm)) {
-        rc = tbtIcmXdTeardownAt(icm, &x->Addr, TBT_ICM_XD_SLOT(x->Slot), x->Serial);
+        if (x->FwGone) {
+            icm->XdCounters.TeardownsGone++;
+            tbtIcmLog(icm, "cm.net.teardown.gone", x->Slot + 1);
+        }
+        rc = tbtIcmXdTeardownAt(icm, &x->Addr, TBT_ICM_NO_SLOT, 0);
     }
     if (rc != TBT_OK && !x->FwGone) {
         tbtIcmXdOwe(icm, &x->Addr);
@@ -3001,11 +3019,34 @@ static ULONG tbtIcmXdNow(PVOID context)
     return tbtIcmXdNowMs(((PTBT_ICM_XD)context)->Icm);
 }
 
+/* The ICM's own inter-domain counters (record 35 section 3.12): beside a
+ * record's, at the Login's minute unanswered and at a record's end. */
+static VOID tbtIcmXdLogCounters(PTBT_ICM icm)
+{
+    tbtIcmLog(icm, "cm.icm.xd.packets", icm->XdCounters.Packets);
+    tbtIcmLog(icm, "cm.icm.xd.nopeer", icm->XdCounters.NoPeer);
+    tbtIcmLog(icm, "cm.icm.xd.overflows", icm->XdCounters.PacketOverflows);
+    tbtIcmLog(icm, "cm.icm.xd.nopeer.asks", icm->XdCounters.NoPeerAsks);
+    tbtIcmLog(icm, "cm.icm.xd.nopeer.uuids", icm->XdCounters.NoPeerUuid);
+    tbtIcmLog(icm, "cm.icm.xd.adopted", icm->XdCounters.Adopted);
+    tbtIcmLog(icm, "cm.icm.xd.unannounced", icm->XdCounters.Unannounced);
+}
+
 static VOID tbtIcmXdLog(PVOID context, const char *label, ULONG value)
 {
     PTBT_ICM_XD x = (PTBT_ICM_XD)context;
+    const char *a = label;
+    const char *s = "cm.net.n.logins";
 
     tbtIcmLog(x->Icm, label, ((x->Slot + 1) << 24) | (value & 0x00FFFFFFUL));
+    /* After the engine's counters (TbtXdpPeerLogCounters), the ICM's. */
+    while (*a != '\0' && *a == *s) {
+        a++;
+        s++;
+    }
+    if (*a == '\0' && *s == '\0') {
+        tbtIcmXdLogCounters(x->Icm);
+    }
 }
 
 /*
@@ -3031,6 +3072,13 @@ static LONG tbtIcmXdUp(PVOID context, ULONG txHop, ULONG rxHop)
     }
     if (x->FwGone || x->EndPending) {
         return TBT_E_GONE;
+    }
+    if (x->Adopted) {
+        /* Record 35 section 3.16: the firmware answers an approve for a
+         * peer it did not announce again and builds nothing, so no rings
+         * and no approve until it is announced. */
+        tbtIcmLog(icm, "cm.net.unannounced", x->Slot + 1);
+        return TBT_E_STATE;
     }
     if (tbtIcmXdOtherUp(icm, x)) {
         tbtIcmLog(icm, "cm.net.busy", x->Slot + 1);
@@ -3150,6 +3198,13 @@ static VOID tbtIcmXdReady(PVOID context, const TBT_XDP_REMOTE *remote)
     tbtIcmLog(x->Icm, "cm.xdp.peer", ((x->Slot + 1) << 24) |
                                      ((remote->VendorId & 0xFFFUL) << 12) |
                                      (remote->DeviceId & 0xFFFUL));
+    if (x->Adopted) {
+        /* Record 35 section 3.16: found, and not connected - the
+         * firmware never announced it again. */
+        x->Icm->XdCounters.Unannounced++;
+        tbtIcmLog(x->Icm, "cm.xdp.adopt.unannounced",
+                  ((x->Slot + 1) << 24) | (x->Addr.Route.Lo & 0xFFFFUL));
+    }
 }
 
 /* ---- the records ------------------------------------------------------- */
@@ -3217,7 +3272,9 @@ static VOID tbtIcmXdEndPending(PTBT_ICM icm)
 
     for (i = 0; i < TBT_ICM_MAX_XD; i++) {
         if (icm->Xd[i].Used && icm->Xd[i].EndPending) {
-            tbtIcmXdEnd(icm, &icm->Xd[i], TRUE);
+            /* The firmware said the link went, except where the end was
+             * asked for as an orderly one (record 35 section 3.15). */
+            tbtIcmXdEnd(icm, &icm->Xd[i], (BOOLEAN)!icm->Xd[i].EndGrace);
         }
     }
 }
@@ -3227,10 +3284,12 @@ static VOID tbtIcmXdEndPending(PTBT_ICM icm)
  * and 3.10): the engine given the event's local UUID as this domain's and
  * its local route as the peer's, the block of section 3.7 (maxhopid 15:
  * the firmware's lane adapter is not read), a Max Output HopID of 15 and
- * no HopID known in use, and started at PROPS.
+ * no HopID known in use, and started at PROPS. `adopted`: made from a
+ * request with no announcement (sections 3.15 and 3.16), its block
+ * without the service.
  */
 static VOID tbtIcmXdBegin(PTBT_ICM icm, PTBT_ICM_XD x, ULONG slot,
-                          const TBT_ICM_XD_EVENT *e)
+                          const TBT_ICM_XD_EVENT *e, BOOLEAN adopted)
 {
     TBT_XDP_OPS ops;
     TBT_XDP_LOCAL props;
@@ -3250,6 +3309,7 @@ static VOID tbtIcmXdBegin(PTBT_ICM icm, PTBT_ICM_XD x, ULONG slot,
     x->Addr.Remote = e->Remote;
     x->RemoteRoute = e->RemoteRoute;
     x->Local = e->Local;
+    x->Adopted = adopted;
 
     tbtIcmZero(&ops, sizeof(ops));
     ops.Context = x;
@@ -3266,7 +3326,7 @@ static VOID tbtIcmXdBegin(PTBT_ICM icm, PTBT_ICM_XD x, ULONG slot,
     props.DeviceText = "xhcicm";
     props.DeviceRevision = icm->NetRevision;
     props.MaxHopId = TBT_ICM_XD_MAXHOP;
-    props.Network = (BOOLEAN)(icm->NetWanted && !tbtIcmXdOtherUp(icm, x));
+    props.Network = tbtIcmXdOffers(icm, x, adopted);
     props.Prtcstns = icm->NetPrtcstns;
     TbtXdpPeerInit(&x->Peer, &ops, &x->Addr.Route, &e->Local, &e->Remote, TRUE,
                    FALSE, &props, icm->NetMac, TBT_ICM_XD_MAXHOP, NULL);
@@ -3302,6 +3362,50 @@ static VOID tbtIcmXdDropDevice(PTBT_ICM icm, const TBT_ICM_XD_EVENT *e)
     }
 }
 
+/* Record 35 section 3.15: whether two direct links are one place as
+ * section 3.10 keys them - Falcon and Alpine Ridge the depth and the
+ * physical port (a lane and its dual), Titan Ridge and Ice Lake the
+ * route. */
+static BOOLEAN tbtIcmXdOnePlace(PTBT_ICM icm, ULONG linkA, ULONG depthA,
+                                const TBT_ROUTE *routeA, ULONG linkB,
+                                ULONG depthB, const TBT_ROUTE *routeB)
+{
+    if (tbtIcmByRoute(icm)) {
+        return TbtRouteEqual(routeA, routeB);
+    }
+    return (BOOLEAN)(depthA == depthB && tbtIcmPhyPort(linkA) == tbtIcmPhyPort(linkB));
+}
+
+/* Record 35 section 3.15: the place of a direct link's connected event,
+ * one entry a place (one per record slot, a new place replacing them in
+ * turn), its adoption budget renewed, for a record adopted there later. */
+static VOID tbtIcmXdKeep(PTBT_ICM icm, const TBT_ICM_XD_EVENT *e)
+{
+    ULONG i;
+    ULONG pick = TBT_ICM_MAX_XD;
+
+    for (i = 0; i < TBT_ICM_MAX_XD; i++) {
+        if (icm->XdKnownValid[i] &&
+            tbtIcmXdOnePlace(icm, icm->XdKnown[i].Link, icm->XdKnown[i].Depth,
+                             &icm->XdKnown[i].Route, e->Link, e->Depth, &e->Route)) {
+            pick = i;
+            break;
+        }
+    }
+    for (i = 0; pick == TBT_ICM_MAX_XD && i < TBT_ICM_MAX_XD; i++) {
+        if (!icm->XdKnownValid[i]) {
+            pick = i;
+        }
+    }
+    if (pick == TBT_ICM_MAX_XD) {
+        pick = icm->XdKnownNext % TBT_ICM_MAX_XD;
+        icm->XdKnownNext = (pick + 1) % TBT_ICM_MAX_XD;
+    }
+    icm->XdKnown[pick] = *e;
+    icm->XdKnownValid[pick] = TRUE;
+    icm->XdKnownAdopts[pick] = 0;
+}
+
 /*
  * Record 35 section 3.10's keying of a connected event (Linux icm.c
  * icm_fr_xdomain_connected, icm_tr_xdomain_connected), in its turn among
@@ -3312,12 +3416,17 @@ static VOID tbtIcmXdApply(PTBT_ICM icm, const TBT_ICM_XD_EVENT *e)
     ULONG i;
     PTBT_ICM_XD x;
 
+    /* This domain's UUID as the firmware names it, kept for the answers
+     * a request with no record gets (record 35 section 3.14). */
+    icm->XdLocal = e->Local;
+    icm->XdLocalValid = TRUE;
     tbtIcmXdEndPending(icm);
     if (!tbtIcmXdDirect(icm, e)) {
         icm->XdCounters.Deep++;
         tbtIcmLog(icm, "cm.xdp.deep", (e->Depth << 24) | (e->Route.Lo & 0xFFFFFFUL));
         return;
     }
+    tbtIcmXdKeep(icm, e);
     tbtIcmXdOwedSettle(icm, e, NULL);
     for (i = 0; i < TBT_ICM_MAX_XD; i++) {
         x = &icm->Xd[i];
@@ -3334,6 +3443,13 @@ static VOID tbtIcmXdApply(PTBT_ICM icm, const TBT_ICM_XD_EVENT *e)
             x->RemoteRoute = e->RemoteRoute;
             x->Peer.Route = e->Route;
             tbtIcmLog(icm, "cm.xdp.again", (i + 1) << 24);
+            if (x->Adopted) {
+                /* An adopted record announced: an ordinary one from now,
+                 * its block rebuilt with the service and the peer told
+                 * (record 35 section 3.16). */
+                x->Adopted = FALSE;
+                tbtIcmXdOffer(icm);
+            }
             return;
         }
         icm->XdCounters.Replaced++;
@@ -3355,7 +3471,7 @@ static VOID tbtIcmXdApply(PTBT_ICM icm, const TBT_ICM_XD_EVENT *e)
     tbtIcmXdDropDevice(icm, e);
     for (i = 0; i < TBT_ICM_MAX_XD; i++) {
         if (!icm->Xd[i].Used) {
-            tbtIcmXdBegin(icm, &icm->Xd[i], i, e);
+            tbtIcmXdBegin(icm, &icm->Xd[i], i, e, FALSE);
             return;
         }
     }
@@ -3378,6 +3494,17 @@ static VOID tbtIcmXdDeviceAt(PTBT_ICM icm, const TBT_ICM_ANNOUNCE *a)
         return;
     }
     tbtIcmXdOwedSettle(icm, NULL, a);
+    for (i = 0; i < TBT_ICM_MAX_XD; i++) {
+        /* A device is where that host was: no record is adopted there
+         * (record 35 section 3.15). */
+        if (icm->XdKnownValid[i] &&
+            (tbtIcmByRoute(icm)
+                 ? (a->RouteValid && TbtRouteEqual(&icm->XdKnown[i].Route, &a->Route))
+                 : (a->Depth == 1 &&
+                    tbtIcmPhyPort(icm->XdKnown[i].Link) == tbtIcmPhyPort(a->Link)))) {
+            icm->XdKnownValid[i] = FALSE;
+        }
+    }
     for (i = 0; i < TBT_ICM_MAX_XD; i++) {
         x = &icm->Xd[i];
         if (!x->Used) {
@@ -3472,6 +3599,11 @@ static VOID tbtIcmXdEvent(PTBT_ICM icm, const TBT_FRAME *f, ULONG code)
         return;
     }
     icm->XdCounters.Connected++;
+    if (e.Route.Hi == 0 && e.Route.Lo < TBT_ICM_XD_NOPEER_ROUTES) {
+        /* That route's host is announced: its budget again. Another
+         * route's (every driver ready repeats them) is its own. */
+        icm->XdNoPeerAskRun[e.Route.Lo] = 0;
+    }
     tbtIcmLog(icm, "cm.xdp.connected", (e.Link << 24) | (e.Depth << 16) |
                                        (e.Route.Lo & 0xFFFFUL));
     if (tbtIcmXdNow2(icm) && icm->QueueCount == 0) {
@@ -3542,6 +3674,8 @@ static VOID tbtIcmXdEnd(PTBT_ICM icm, PTBT_ICM_XD x, BOOLEAN gone)
         tbtIcmXdDown(x, gone);
     }
     tbtIcmXdPurge(icm, &x->Addr.Route);
+    /* Record 35 section 3.12: what the record took and dropped. */
+    TbtXdpPeerLogCounters(&x->Peer);
     slot = x->Slot;
     tbtIcmLog(icm, "cm.xdp.end", ((slot + 1) << 8) | (gone ? 1UL : 0UL) |
                                  (x->FwGone ? 2UL : 0UL));
@@ -3557,6 +3691,12 @@ static VOID tbtIcmXdEndAll(PTBT_ICM icm, BOOLEAN gone, BOOLEAN quiet)
     ULONG i;
     BOOLEAN saved;
 
+    /* A session boundary: the places the firmware announced are
+     * forgotten with the records (record 35 section 3.15). */
+    for (i = 0; i < TBT_ICM_MAX_XD; i++) {
+        icm->XdKnownValid[i] = FALSE;
+    }
+    icm->XdAdoptPending = FALSE;
     if (icm->XdTaking) {
         icm->XdEndOwed = TRUE;
         icm->XdEndOwedGone = (BOOLEAN)(icm->XdEndOwedGone || gone || quiet);
@@ -3582,6 +3722,8 @@ static VOID tbtIcmXdMarkStale(PTBT_ICM icm, BOOLEAN on)
     ULONG i;
 
     for (i = 0; i < TBT_ICM_MAX_XD; i++) {
+        /* An adopted record too (record 35 section 3.16: it carries no
+         * service, so the reconciliation ending it costs nothing). */
         icm->Xd[i].Stale = (BOOLEAN)(on && icm->Xd[i].Used);
     }
 }
@@ -3625,6 +3767,144 @@ static VOID tbtIcmXdSink(PVOID context, const TBT_FRAME *frame)
     icm->XdCounters.Packets++;
 }
 
+/*
+ * Record 35 section 3.15 (the owner's bench, round 3): whether a packet
+ * with no record is a Properties Read Request a record may be made from -
+ * a discovery request of type 3 from a direct link where the firmware
+ * announced a host since the bind, for this domain as that event named it
+ * (its Destination UUID the event's local_uuid), from a domain that names
+ * itself; a slot free; no record of that remote UUID or at that place;
+ * no announcement queued. `*known` is the kept place's entry.
+ */
+static BOOLEAN tbtIcmXdAdoptable(PTBT_ICM icm, const TBT_FRAME *f, ULONG kind,
+                                 const TBT_XDP_PKT *k, ULONG *known)
+{
+    ULONG i;
+    ULONG hit = TBT_ICM_MAX_XD;
+    BOOLEAN room = FALSE;
+    const TBT_ICM_XD_EVENT *e;
+    PTBT_ICM_XD x;
+
+    if (!icm->NetOn || !icm->Bound || !tbtIcmXdAccess(icm) || icm->QueueCount != 0 ||
+        f->Pdf != TBT_PDF_XDOMAIN_REQ || f->Words < 2 ||
+        kind != TBT_XDP_K_DISCOVERY || k->Response || k->Type != TBT_XDP_PROPS_REQ ||
+        k->Route.Hi != 0 || (k->Route.Lo & ~0xFFUL) != 0 || k->Route.Lo == 0) {
+        return FALSE;
+    }
+    for (i = 0; i < TBT_ICM_MAX_XD; i++) {
+        if (icm->XdKnownValid[i] && TbtRouteEqual(&icm->XdKnown[i].Route, &k->Route)) {
+            hit = i;
+            break;
+        }
+    }
+    if (hit == TBT_ICM_MAX_XD || !TbtUuidEqual(&k->Dst, &icm->XdKnown[hit].Local) ||
+        !TbtUuidEqual(&k->Src, &icm->XdKnown[hit].Remote) ||
+        icm->XdKnownAdopts[hit] >= TBT_ICM_XD_ADOPT_MAX) {
+        return FALSE;
+    }
+    e = &icm->XdKnown[hit];
+    for (i = 0; i < TBT_ICM_MAX_XD; i++) {
+        x = &icm->Xd[i];
+        if (!x->Used) {
+            room = TRUE;
+            continue;
+        }
+        if (TbtUuidEqual(&x->Addr.Remote, &k->Src) ||
+            tbtIcmXdOnePlace(icm, x->Addr.Link, x->Addr.Depth, &x->Addr.Route,
+                             e->Link, e->Depth, &e->Route)) {
+            return FALSE;
+        }
+    }
+    if (!room) {
+        return FALSE;
+    }
+    *known = hit;
+    return TRUE;
+}
+
+/* Record 35 section 3.15: whether a packet is a Changed Notification
+ * naming a domain other than `route`'s record holds - the one packet
+ * that moves an engine's peer identity (tbt_xdp.c, IDS 3.7). */
+static BOOLEAN tbtIcmXdOtherDomain(const TBT_FRAME *f, const TBT_UUID *remote)
+{
+    TBT_XDP_PKT k;
+
+    if (TbtXdpDecode(f->Pdf, f->Dw, f->Words, &k) != TBT_XDP_K_DISCOVERY ||
+        k.Response || k.Type != TBT_XDP_CHANGED) {
+        return FALSE;
+    }
+    return (BOOLEAN)!TbtUuidEqual(&k.Src, remote);
+}
+
+/*
+ * Record 35 section 3.15: the request kept by tbtIcmXdNoPeer, after the
+ * packet loop, where records may change - checked again (the loop may
+ * have changed what it was checked against), a record made at the kept
+ * place with the request's Source UUID as the remote UUID, never marked
+ * stale, then the request handed to its engine, which answers it.
+ */
+static VOID tbtIcmXdAdopt(PTBT_ICM icm)
+{
+    TBT_FRAME f;
+    TBT_XDP_PKT k;
+    TBT_ICM_XD_EVENT e;
+    PTBT_ICM_XD x;
+    ULONG kind;
+    ULONG known;
+    ULONG i;
+
+    /* An adopted record whose discovery failed (the engine at ERROR or
+     * LOOP, no service) ends here, so the next request may adopt again
+     * within the place's budget. */
+    for (i = 0; i < TBT_ICM_MAX_XD && tbtIcmXdNow2(icm); i++) {
+        x = &icm->Xd[i];
+        if (x->Used && x->Adopted && !x->EndPending &&
+            (x->Peer.State == TBT_XDP_S_ERROR || x->Peer.State == TBT_XDP_S_LOOP) &&
+            x->Peer.NetState != TBT_NET_S_UP) {
+            tbtIcmLog(icm, "cm.xdp.adopt.end", (i + 1) << 24);
+            tbtIcmXdEnd(icm, x, FALSE);
+        }
+    }
+    if (!icm->XdAdoptPending) {
+        return;
+    }
+    icm->XdAdoptPending = FALSE;
+    f = icm->XdAdopt;
+    if (!tbtIcmXdNow2(icm)) {
+        return;
+    }
+    kind = TbtXdpDecode(f.Pdf, f.Dw, f.Words, &k);
+    if (!tbtIcmXdAdoptable(icm, &f, kind, &k, &known)) {
+        return;
+    }
+    e = icm->XdKnown[known];
+    e.Kind = TBT_ICM_XE_CONNECTED;
+    for (i = 0; i < TBT_ICM_MAX_XD; i++) {
+        if (!icm->Xd[i].Used) {
+            break;
+        }
+    }
+    if (i == TBT_ICM_MAX_XD) {
+        return;
+    }
+    x = &icm->Xd[i];
+    tbtIcmXdBegin(icm, x, i, &e, TRUE);
+    icm->XdKnownAdopts[known]++;
+    icm->XdCounters.Adopted++;
+    tbtIcmLog(icm, "cm.xdp.adopt", ((i + 1) << 24) | (e.Link << 16) |
+                                   (e.Route.Lo & 0xFFFFUL));
+    icm->XdTaking = TRUE;
+    (VOID)TbtXdpPeerOnPacket(&x->Peer, f.Pdf, f.Dw, f.Words);
+    tbtIcmXdSync(icm, x);
+    icm->XdTaking = FALSE;
+    tbtIcmXdEndPending(icm);
+    if (icm->XdEndOwed) {
+        icm->XdEndOwed = FALSE;
+        tbtIcmXdEndAll(icm, icm->XdEndOwedGone, icm->XdEndOwedGone);
+        icm->XdEndOwedGone = FALSE;
+    }
+}
+
 /* A packet for no record: a discovery request answered Not Ready (record
  * 35 section 3.1: no UUID of this domain's for that link yet), anything
  * else dropped. */
@@ -3633,10 +3913,71 @@ static VOID tbtIcmXdNoPeer(PTBT_ICM icm, const TBT_FRAME *f)
     TBT_XDP_PKT k;
     ULONG buf[TBT_XDP_MAX_WORDS];
     ULONG words;
+    ULONG kind;
+    ULONG known;
 
     icm->XdCounters.NoPeer++;
-    if (TbtXdpDecode(f->Pdf, f->Dw, f->Words, &k) != TBT_XDP_K_DISCOVERY ||
-        k.Response || !tbtIcmXdAccess(icm)) {
+    if (icm->XdCounters.NoPeer <= TBT_XDP_DROPS_LOGGED) {
+        /* Record 35 section 3.12: a packet for no record, its route. */
+        tbtIcmLog(icm, "cm.icm.xd.nopeer.route",
+                  ((f->Pdf & 0xFUL) << 24) | (f->Words >= 2 ? (f->Dw[1] & 0x00FFFFFFUL) : 0UL));
+    }
+    kind = TbtXdpDecode(f->Pdf, f->Dw, f->Words, &k);
+    if (icm->XdCounters.NoPeer <= TBT_XDP_DROPS_LOGGED) {
+        /* Record 35 section 3.14: what it is - the decoder's kind 19:16,
+         * the type 15:8 (a discovery or USB4NET packet type), its SN. */
+        tbtIcmLog(icm, "cm.icm.xd.nopeer.type",
+                  ((kind & 0xFUL) << 16) | ((k.Type & 0xFFUL) << 8) | (k.Sn & 0xFFUL));
+    }
+    if (tbtIcmXdAdoptable(icm, f, kind, &k, &known)) {
+        /* Record 35 section 3.15: a record is made from it after the
+         * packet loop (tbtIcmXdAdopt); no Not Ready, no driver ready. */
+        if (!icm->XdAdoptPending) {
+            icm->XdAdoptPending = TRUE;
+            icm->XdAdoptKnown = known;
+            icm->XdAdopt = *f;
+        }
+        return;
+    }
+    /* Record 35 section 3.13 (the owner's bench, 2026-11-09): a request
+     * from a host on a direct link (one route level) that has no record
+     * means the firmware has not announced it - its own UUID Request at
+     * the link's return went unanswered and it does not ask again - so
+     * another driver ready makes it ask and announce, at most once each
+     * TBT_ICM_XD_NOPEER_ASK_MS. */
+    if (f->Pdf == TBT_PDF_XDOMAIN_REQ && f->Words >= 2 && icm->Bound &&
+        (f->Dw[0] & ~TBT_ROUTE_HI_CM) == 0 && f->Dw[1] != 0 &&
+        f->Dw[1] < TBT_ICM_XD_NOPEER_ROUTES &&
+        icm->XdNoPeerAskRun[f->Dw[1]] < TBT_ICM_XD_NOPEER_ASK_MAX &&
+        (!icm->XdNoPeerAsked ||
+         (ULONG)(tbtIcmXdNowMs(icm) - icm->XdNoPeerAskMs) >= TBT_ICM_XD_NOPEER_ASK_MS)) {
+        icm->XdNoPeerAsked = TRUE;
+        icm->XdNoPeerAskRun[f->Dw[1]]++;
+        icm->XdNoPeerAskMs = tbtIcmXdNowMs(icm);
+        icm->XdCounters.NoPeerAsks++;
+        icm->RediscoverPending = TRUE;
+        tbtIcmLog(icm, "cm.icm.xd.nopeer.ask", f->Dw[1] & 0xFFUL);
+    }
+    if (kind != TBT_XDP_K_DISCOVERY || k.Response || !tbtIcmXdAccess(icm)) {
+        return;
+    }
+    if ((k.Type == TBT_XDP_UUID_REQ || k.Type == TBT_XDP_UUID_REQ_TBT3) &&
+        icm->XdLocalValid) {
+        /* Record 35 section 3.14 (the owner's bench, 2026-11-09, plug
+         * order 3): after the far end's replug its UUID Requests reach
+         * this ring, unanswered by the firmware. Answered here with this
+         * domain's UUID as the firmware's last connected event gave it,
+         * as Linux answers a UUID Request at the domain's level
+         * (xdomain.c tb_xdp_handle_request), so the far end's discovery
+         * goes on and it can answer the firmware's own request. */
+        words = TbtXdpBuildUuidResponse(buf, &k.Route, k.Sn, &icm->XdLocal,
+                                        (BOOLEAN)(k.Type == TBT_XDP_UUID_REQ));
+        if (words != 0 &&
+            TbtRingSend(icm->Ring, TBT_PDF_XDOMAIN_RESP, buf, words) == TBT_OK) {
+            if (icm->XdCounters.NoPeerUuid++ == 0) {
+                tbtIcmLog(icm, "cm.icm.xd.nopeer.uuid", k.Route.Lo & 0x00FFFFFFUL);
+            }
+        }
         return;
     }
     words = TbtXdpBuildError(buf, &k.Route, k.Sn, TBT_XDP_ERR_NOT_READY);
@@ -3686,6 +4027,19 @@ static VOID tbtIcmXdRun(PTBT_ICM icm, BOOLEAN tick)
         }
         if (x == NULL) {
             tbtIcmXdNoPeer(icm, &f);
+        } else if (x->Adopted && tbtIcmXdOtherDomain(&f, &x->Addr.Remote)) {
+            /* Record 35 section 3.15: an adopted record holds the
+             * computer the firmware announced at its place - the
+             * identity a disconnected event and a promotion are keyed
+             * by. A Changed Notification from another domain, which
+             * would move an ordinary record's engine to that peer, ends
+             * it instead (no service: no Logout, no teardown, 3.16);
+             * the new domain needs an announcement, or a request of its
+             * own at a place the firmware named. */
+            icm->XdCounters.AdoptOther++;
+            tbtIcmLog(icm, "cm.xdp.adopt.other", (x->Slot + 1) << 24);
+            x->EndGrace = TRUE;
+            x->EndPending = TRUE;
         } else {
             (VOID)TbtXdpPeerOnPacket(&x->Peer, f.Pdf, f.Dw, f.Words);
             tbtIcmXdSync(icm, x);
@@ -3707,6 +4061,7 @@ static VOID tbtIcmXdRun(PTBT_ICM icm, BOOLEAN tick)
         tbtIcmXdEndAll(icm, icm->XdEndOwedGone, icm->XdEndOwedGone);
         icm->XdEndOwedGone = FALSE;
     }
+    tbtIcmXdAdopt(icm);
 }
 
 /* ---- the driver's entry points ----------------------------------------- */

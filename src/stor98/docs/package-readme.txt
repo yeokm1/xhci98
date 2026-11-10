@@ -195,9 +195,36 @@ Windows 8, 8.1 and 10 as well.
                                                    is answered busy (2000
                                                    to 7 use each request's
                                                    own timeout); advanced
+  StorTakeFirmware        -     0                  0 = leave a controller
+  98 SE only, not ME                               the BIOS set up, 1 =
+                                                   take it anyway;
+                                                   advanced: can hang
+                                                   Windows' start or
+                                                   corrupt data (below)
 
 Polling values outside their range are clamped to the nearer end;
 refusals and clamps are recorded only in the driver's debug log.
+
+A controller the BIOS set up (98 SE only): Stor98 leaves an NVMe
+controller it finds already enabled or ready, because the BIOS may
+still be serving its drive through INT 13h; the drive then runs in
+MS-DOS compatibility mode and Stor98's controller shows Code 10.
+On Windows ME it always leaves it: StorTakeFirmware and
+stortakefirmware=1 are ignored there, because taking such a controller
+can hang ME's start, and StorFind says "... ignored on Windows ME".
+StorTakeFirmware = 1 takes every such controller anyway, at its next
+start; to take one controller only, add the string value
+AdapterSettings = stortakefirmware=1 to that controller's key under
+HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\Class\
+SCSIAdapter (the one whose DriverDesc is Stor98's; separate other
+entries with semicolons), and stortakefirmware=0 there leaves that
+controller whatever StorTakeFirmware says. Only an exact 1 or 0
+counts. Taking it can hang Windows' start or corrupt data if the BIOS
+still uses the drive (a DOS box or MS-DOS mode, or the drive the
+computer started from): leave it off unless it has been tried on this
+computer. The value StorFind <bus>.<device>.<function> beside the
+settings records each controller's last start ("taken: already set
+up, overridden by ...").
 
 Renamed in xhci98 3.3.0.0, so that every name starts with Stor and the
 two families match: the NT keys maxtransferkb=, writethrough=,

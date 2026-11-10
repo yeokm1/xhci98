@@ -8,6 +8,9 @@ development host A), on Windows 2000 SP4, through text mode and GUI-mode
 Setup to the desktop and one ordinary restart. Real hardware is unread.
 The first entry, "(32-bit Windows 2000/XP)", still stops on Windows 2000
 as described here, and the release notes keep that as a known limitation.
+From `3.4.3.0` the second entry serves 32-bit XP as well, with XP's own
+three files, and is named "xHCI98 USB 3 Controller (2000/XP, USB
+keyboard/mouse, files from CD)" (task 48.25; issue 10, section 7).
 
 Targets affected: Windows 2000 (read on SP4) installed through the F6
 floppy on a machine whose USB is on an xHCI controller, when a USB

@@ -1,6 +1,8 @@
 # Design Record 31 - Stor98 for Tunnelled Drives Only: the Tunnel Id
 
-Status: draft 7, 2026-10-27: section 6.2, on 2000 and XP the
+Status: draft 8, 2026-11-09: section 4.10, the kept child's code on
+8.1 (task 48.29, the owner's A1), the update's gate carried by the
+mark service's own rule. Draft 7, 2026-10-27: section 6.2, on 2000 and XP the
 safe-removal mark's restart sets a plain driverless drive's install to
 run again, as the tag's restart does (task 44.52, owner 2026-10-27).
 Draft 6, 2026-10-25: Q1 settled by its reading - the class match
@@ -1075,6 +1077,260 @@ the removal paths of every NT target and five more reading campaigns.
 Under either, the Stor98 start failure of task 45.31 bears on 8.1's arm,
 which installs over `stornvme`, and is fixed first.
 
+### 4.10 The kept child's code on 8.1 (task 48.29; owner, 2026-11-09: A1, the code now)
+
+Section 4.9's design, taken by the owner as (A1) after the readings of
+task 48.29 on the prototype (`runs/run-48.md`, "48.29": 8.1 x64 under
+Driver Verifier, a parent's removal with the drive disabled, a removal
+held by open handles, a drive directly on a tunnel port, the uninstall),
+with the update from `3.3.0.0` (item 10) read as the code's first leg.
+This section is how the code carries items 1 to 11 out; where it
+departs from section 4.9 it says so and why. The prototype
+(`w48-stor-proto`) is the behavioural reference and is not merged.
+
+**K1. Systems.** Two pure answers of `cm_ports.c` from the shared data
+page's `NtMajorVersion` and `NtMinorVersion` (as `cmChildTagOs` reads
+them today): `CmPortsTagOs` (the id given: NT 5.0 to 6.3, so 2000 to 8.1;
+not 10, which reports 10.0) and `CmPortsKeptOs` (the kept child: 6.3
+alone). `DriverEntry` reads them once into `CmKeptOn`; only when it is
+set does the driver object carry a `FAST_IO_DISPATCH` with
+`FastIoDetachDevice`, and only then is the image pinned (K7). On every
+other system no removal path changes and no callback ever comes, since
+the I/O manager calls the routine only through that table. No registry
+value turns it off (the prototype's `XhciCmKeptProto` is not carried).
+
+**K2. Which objects are kept.** A child `cmChildCreate` made (the
+bridge's or a chain child's `BusRelations` attach) on a system with
+`CmKeptOn`: `Kept` set at its creation, never changed. The registered
+child (`CmChildAddDevice`), the bridge filters, the NHI and the mailbox
+members keep their stacks' lifetimes; with the table set they are
+nonetheless called back when the object below them is deleted, so each
+of them detaches through one owner (K6).
+
+**K3. The state and the reference rule.** Each kept child has
+`KeptState`, under its own `Lock`: Attached, Starting, Logical,
+Detached. The references are the existing `Outstanding` count, so the
+holds that already take it (`CmFilterTryHold` of the chain action, a
+usage notification) are references of the rule too: the attach holds
+the first; every dispatch of the child, of every major function, takes
+one at its entry under the lock and only while the state is not
+Detached (`cmFilterAcquire`, whose closed flag `Removing` is set with
+Detached), and also takes an object reference on the object below
+(`ObReferenceObject` on `Common.Lower`, which never changes after the
+attach), each released when the dispatch returns, except the usage
+notification's, released in its completion routine after its read of
+the lower object's `Flags`. A hold (`CmFilterTryHold`) likewise takes an
+object reference on the child's PDO, which the chain action then uses
+outside the registration list's lock (`IoInvalidateDeviceRelations`),
+released by `CmFilterUnhold`; every filter's holds do, kept or not. The
+transitions are one pure function, `CmPortsKeptStep(state, event,
+&action)`:
+
+| State | Event | Next | Action |
+|---|---|---|---|
+| Attached | the forwarded removal returned | Logical | record the departure |
+| Starting | the forwarded removal returned | Logical | record the departure |
+| Logical | the forwarded removal returned (a second removal) | Logical | none (recorded once) |
+| Logical | a start admitted | Starting | none |
+| Starting | the start completed with success below | Attached | presence back, end the departure |
+| Starting | the start failed | Logical | none |
+| Attached, Starting, Logical | the callback | Detached | detach, drop the attach's reference |
+| Detached | the forwarded removal returned (the PDO deleted inside it) | Detached | record the departure |
+| Detached | any other | Detached | none |
+
+and `CmPortsKeptLast(count, irqlAbovePassive)`: the release that drops
+`Outstanding` to zero, in the Detached state alone, destroys the child
+at `PASSIVE_LEVEL` and hands the destruction to the child's work item
+(K5) above it. The callback never waits: it claims Detached under the
+lock (closing admission), detaches, and drops the attach's reference; a
+dispatch that caused it (the removal whose forwarded request deleted the
+PDO) still holds its own, so the destruction is that dispatch's release.
+A start refused before it is forwarded (`CmRegStartAllowed`, the
+interrupt gate's failure) leaves Logical as it was.
+
+**K4. The removal.** `IRP_MN_REMOVE_DEVICE` on a kept child: the start
+flag cleared, the isolation binding gone (`CmRegIsoGone`) as today, the
+request forwarded and waited for, then the departure recorded once
+(`CmRegAttDepart`: the marks entry's removal count, and, after a
+query-remove with no other attachment present on the PDO, `PendingAt` and
+`PendingGen` as `CmRegAttRemoved` sets them; the child counted as no
+presence; its `Answered` and chain snapshot cleared, so every PDO its
+bridge reports after a restart is read as new), `QueryRemoved` and
+`SurpriseRemoved` cleared, the state stepped (Logical, or Detached kept),
+the request completed. The child stays attached and on the attachment
+list, and in its bridge's live count, so the eject's stackless test sees
+a bus child with nothing above it (section 4.9 item 6, read on 8 and 7).
+
+**K5. The destruction.** At `PASSIVE_LEVEL`: the departure recorded if
+no removal recorded it (a child destroyed while Attached, not expected:
+the PDO's own removal passes through the child first), then the
+attachment unlinked as `CmRegAttRemoved` unlinks it, the links of every
+other attachment naming it cleared (`Parent`; `Bridge` and the
+bridge's child count, item 7), and `IoDeleteDevice`. A release above
+`PASSIVE_LEVEL` (a usage notification's completion, a power or other
+dispatch running at `DISPATCH_LEVEL`) queues the child's own
+`WORK_QUEUE_ITEM`, set up when the child is made, to the system's
+delayed queue (`ExQueueWorkItem`, which 98 SE exports; the I/O manager's
+work item routines are absent there and the image is one for both); the
+routine destroys the child and touches nothing after `IoDeleteDevice`.
+Section 4.9 item 3's "a work item the child allocates" becomes this
+embedded item: nothing to allocate, so nothing can fail.
+
+**K6. One detach owner.** `CM_COMMON` gains the detach claim (`Detach`:
+0 none, 1 claimed, 2 done) and an event set at done, under one global
+spin lock (`CmDetachOnce`, the prototype's, its polling wait replaced by
+the event). The removal of every object kind (the bridge filter, the
+registered child, the NHI, the mailbox member) calls it where it called
+`IoDetachDevice`; whoever loses the claim, the removal or the callback,
+waits on the event until the winner's `IoDetachDevice` has returned, so
+the callback never returns with the object still attached (its
+contract). The winner holds no lock across its `IoDetachDevice`, so the
+wait cannot be on the waiter itself. For a non-kept object the callback only
+detaches (its removal in progress finishes the deletion, read: the
+callback came inside the forwarded removal); for a kept child it steps
+the state as K3 says. A callback whose `target` is not the object's
+`Common.Lower` is ignored and counted (read: never happened).
+
+**K7. Requests after Detached, and the image.** A dispatch refused
+admission completes a PnP or other request with
+`STATUS_NO_SUCH_DEVICE`, and starts the next power request
+(`PoStartNextPowerIrp`) before completing a power request the same way;
+nothing is forwarded to the detached object. While Logical every
+request passes down as today. With `CmKeptOn` the driver object's
+`DriverUnload` is cleared in `DriverEntry` (section 4.9 item 9; task
+45.31 already clears it once the link-state table is handed out, which
+on a system with Stor98 is every boot), so no work item routine and no
+callback can run in an unloaded image; nothing of a kept child survives
+the restart the uninstall asks for.
+
+**K8. Marks and presence.** `KeptLogical` is set at a removal and at
+Detached, stays set through Starting, and is cleared only at the
+transition to Attached: `cmMarkAtt` counts a kept child with it set as
+no presence (its location kept for the entry). So Starting is not yet
+presence, unlike section 4.9 item 6: the marks clear a pending departure
+for any attachment present, and a start that then failed would have
+lost it; the departure ends only at Attached. The
+transition to Attached brings the marks entry up
+to date (`cmMarkAttOf`) and clears the departure's flag, so the next
+removal records anew; `CmRegAttRemoved`'s own "last attachment leaves"
+test (a registered child above a kept one, removed after it) counts a
+Logical or Detached kept child as gone, as `CmRegAttDepart` does; the eject's departure test reads the entry as
+today. A kept child's records (`cm.kept.logical`, `.rearm`, `.cb`,
+`.final`, `.gone`, `.late`, `.cb.notlower`) go to the first listed
+domain as the prototype's did, reading neither `Parent` nor `Bridge`.
+
+**K9. The id on 8.1.** `cmChildIds` gives the id where `CmPortsTagOs`
+says, so 8.1 gets it with the kept child (section 4.8 had taken it away
+there). `stor98-x86.inf`'s `[Stor98_Models.NTx86.6.3]` and
+`stor98-x64.inf`'s `[Stor98_Models.NTamd64.6.3]` match the tunnel id
+alone, as the undecorated and `NTamd64` sections do; new sections
+`[Stor98_Models.NTx86.10.0]` and `[Stor98_Models.NTamd64.10.0]` keep
+the class model for 10 (`%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_010802`),
+named on the `[Manufacturer]` line after the 6.3 decoration.
+`check-stor98-inf.ps1` holds the new shape and its self-test the
+vectors (the class back on 6.3, the id on 10, a 10.0 section missing).
+98 SE and ME read `stor98-9x.inf`, untouched.
+
+**K10. The update from an earlier release on 8.1 (item 10, changed in
+its gate).** Until the restart the earlier `xhcicm.sys` runs and gives
+no id on 8.1, so no present drive matches the id model, and an install
+by model selection would find no Stor98 model ("Stor98's model is not
+in the driver list"). Three parts:
+
+- *The installer.* On 8.1, a present tunnel drive the plan would install
+  or update (`Runs`, eligible by place) whose compatible ids lack the
+  id is left with a reason of its own, `INST_S98_SKIP_NOID`. A drive on
+  Stor98 (the earlier class model) keeps it across the restart (its
+  matching id, the class, stays among its ids, read in 45.11), and its
+  `LEFT:` text and the run's end say to run Setup again after the
+  restart, as for a place read later (`s98_later_of`, exit 4); a drive
+  on `stornvme` or with no driver is left to the mark service, which
+  takes it once it carries the id (below), and its text says so. The
+  earlier `stor98.inf` leaves the store (`s98_old_inf_nt`) only in a run
+  where no present drive was left so while on Stor98, since that
+  drive's driver key still names it until the run after the restart
+  moves it to the id model by the same per-device route (forced, as an
+  update; its own restart keeps the id through the kept child).
+- *The mark service.* Section 4.9 item 10 held the service back with a
+  persistent gate the installer would lift after the restart. Here the
+  service's own rule carries it: on 8.1 a drive is wanted only when its
+  compatible ids carry the id (`MK_S98_IN.TunnelId`, a new refusal
+  `MK_S98_W_NOID`, "no tunnel id (Windows 8.1 matches Stor98 by it)"),
+  which is exactly when the id model can match it; the earlier image
+  gives no id, so the service never tries before the new connection
+  manager runs, never leaves a failure record for it, and takes the
+  drive at its first poll after the restart. No value, no second gate,
+  and the same rule serves a first install, where the connection
+  manager does not run yet either.
+- *A drive that never gets the id on 8.1* (section 4.4's lasting causes:
+  a tunnel port with no filter of this driver's, such as an
+  override-only port, or a drive below the chain's depth bound) matches
+  no Stor98 model on 8.1 any more, since the 6.3 model is the id alone
+  (A1's structural rule there); `3.3.0.0`'s class model gave the service
+  a route for it. That route is withdrawn on 8.1, as on 2000 and XP
+  (section 11; the owner's decision, 2026-11-09: such a drive stays on
+  `stornvme`, with the installer saying so): the service logs the refusal above at each arrival, and
+  the installer's text tells the two cases apart by whether its run
+  changes the connection manager (`inst_tb_cm_changes`): if it does, the
+  id may come after the restart ("run Setup again after the restart" for
+  a drive on Stor98, "the mark service installs Stor98 after the
+  restart" otherwise); if it does not, the drive carries no id under the
+  running connection manager and the text says Stor98 cannot be put on
+  it on Windows 8.1. Such a drive already on Stor98 keeps it (the class,
+  its matching id, stays among its ids). The reason text "no id on
+  Windows 8.1 and later, by design" becomes "no id on Windows 10, by
+  design".
+- *Nothing for the drive already tagged.* A drive the new image tags
+  while it runs `stornvme` kept `stornvme` (read in 45.11, no event 400)
+  and is the mark service's, as above.
+
+**K11. Host vectors.** `test_cm_ports`: `CmPortsTagOs` and
+`CmPortsKeptOs` over 5.0 to 10.0; `CmPortsKeptStep` for every state and
+event; and orders written as sequences over the step and last-release
+functions, each asserting the state, who destroys (dispatch, callback,
+work item) and how many departures are recorded: a disable and enable;
+a removal, then the callback outside any dispatch (a parent's removal);
+the callback inside the forwarded removal (a surprise unplug); a
+removal, a refused start, then the callback; a failed start; a repeated
+removal; a callback while a usage notification is in flight, released
+in its completion above `PASSIVE_LEVEL`; the uninstall (every kept child
+Logical, then the callbacks). `test_inst`: the new reason and its texts,
+`inst_s98_later_said` with it, the old-INF hold. `mark_core.c`'s
+self-test: `mk_s98_wanted` on 8.1 with and without the id, and 2000 to 8
+unchanged.
+
+**What it does not change.** 2000 to 8 and 10 (no table, no kept child,
+the id as today); the 9x path; the registered child; the eject's
+evidence beyond what K4 and K8 say; the installer's other routes.
+
+**Legs** (`runs/run-48.md`, "48.29"): the update from `3.3.0.0` on 8.1
+x64 with one drive on Stor98 and one on `stornvme` first; then on 8.1
+x64 and x86, Driver Verifier's standard checks on `xhcicm.sys`: a
+parent's removal with the drive disabled, a removal held by open
+handles, a drive directly on a tunnel port, disable and enable, a
+parent's restart, a re-plug, a cold start and the uninstall.
+
+**A switch enclosure plugged after the start (read 2026-11-10).** On
+8.1 x86 in the emulator, an enclosure with a switch plugged into a
+tunnel port that was empty when Windows started left its upstream port
+at problem 31 (`CM_PROB_FAILED_ADD`; Kernel-PnP event 400, the port
+configured from `machine.inf`, then event 411 with status 0). It is not
+the kept child. It was read the same with the child destroyed at the
+port's removal, with a fresh child, whose attach was refused, put in
+its place, with no child of this driver on the port at all, with the
+`3.4.2.0` release, which keeps no child, and with an enclosure the
+system had installed before, plugged on a start it was absent from.
+QEMU's `info pci` showed the upstream port's bus numbers unset: the
+emulator build of the shared launcher gives each tunnel port one bus,
+and Windows had none to give the enclosure's switch (`runs/run-44.md`,
+"44.45": the emulator's per-port padding, `usb4-asm-usp`
+`fw-bus-pad`). With the padding (`fw-bus-pad=48`) the same first plug
+came up at problem 0, the drive on Stor98 through the mark service's
+8.1 arm, its kept child re-armed with the id at each restart. A restart
+of Windows numbered the switch and cleared the problem. Nothing of this
+section changes; on real hardware what the firmware gives each tunnel
+port decides it (record 22 section 18.1).
+
 ## 5. Windows 98 SE and ME: the class match kept, the id a statement
 
 ### 5.1 `Add_ID` on an active member's descendants
@@ -2076,8 +2332,12 @@ put (Q1 to Q3):
   worker's id is a statement only, and the tag window can miss a devnode
   whose wizard was open (section 5.1).
 - **The id lost at a restart of the device's own stack** (section 4.8):
-  on 8 to 10 a Stor98 drive that restarts its stack may leave Stor98; the
-  design is put to the owner with the scope options, not coded.
+  on 8.1 the kept child keeps it (section 4.10, task 48.29); on 2000 to
+  8 it is lost and the driver kept (read on 7 and 8); 10 gives no id.
+- **A tunnelled drive that never gets the id on 8.1** (section 4.10,
+  K10): no route to Stor98 there any more, as on 2000 and XP; it stays
+  on `stornvme` and the installer says so (the owner's decision,
+  2026-11-09).
 - **The first plug of a never-seen switch enclosure on 2000 and XP**
   arrives untagged (section 4.3, read): the service's unit restart once
   the bridges are installed, or a re-plug. The restart is refused for a

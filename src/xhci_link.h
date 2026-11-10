@@ -173,6 +173,85 @@ ULONG XhciLinkPortFeed(PXHCI_LINK_PORT link, ULONG usb3, ULONG portsc,
  */
 VOID XhciLinkRefund(PXHCI_LINK_PORT link);
 
+/*
+ * Issue 29 (design record 13 section 21): a root port's link that keeps
+ * failing - SS.Inactive or Compliance Mode, warm-reset, trained, failing
+ * again - is counted here, and past XHCI_LINK_FLAP_LIMIT failures in one
+ * window it is sent to its USB 2.0 companion by 29-A.5's hold (or, where no
+ * hold can be had, given up) instead of being warm-reset for as long as the
+ * device stays plugged in. 29-A.2's budget cannot bound it: every trained
+ * reading refills that budget, and each of these warm resets ends trained.
+ */
+#define XHCI_LINK_FLAP_LIMIT        3UL     /* warm resets a window       */
+#define XHCI_LINK_FLAP_WINDOW       600UL   /* tolerance-clock ticks, 60 s */
+
+typedef struct _XHCI_LINK_FLAP {
+    ULONG Count;            /* failures in the current window             */
+    ULONG First;            /* the tick of the window's first             */
+    ULONG Stopped;          /* given up: every failure until a clear      */
+} XHCI_LINK_FLAP, *PXHCI_LINK_FLAP;
+
+/* What one failure gets (XhciLinkFlapFailure). */
+#define XHCI_FLAP_WARM              0UL /* warm-reset it, as before       */
+#define XHCI_FLAP_SEND              1UL /* past the limit: send it to USB
+                                         * 2.0 (the caller falls back to
+                                         * XhciLinkFlapStop without one)  */
+#define XHCI_FLAP_STOPPED           2UL /* stopped: give it up            */
+
+VOID XhciLinkFlapInit(PXHCI_LINK_FLAP flap);
+
+/* A sample (the PORTSC read before its changes were acknowledged) that
+ * clears the record: PP clear, or a fresh attach - trained (CCS, PED, U0)
+ * with CSC and neither WRC nor PRC, a link that trained with no reset of
+ * the driver's. A warm reset's end (WRC, PRC) and an RxDetect reading do
+ * not clear it. */
+VOID XhciLinkFlapSample(PXHCI_LINK_FLAP flap, ULONG portsc);
+
+/* One failure the inspection is about to warm-reset, at tick `now`
+ * (unsigned arithmetic: the clock may wrap): counted in its window, a
+ * failure after the window opening a new one at 1. Returns XHCI_FLAP_*. */
+ULONG XhciLinkFlapFailure(PXHCI_LINK_FLAP flap, ULONG now);
+
+/* The send could not be had: the record is stopped. Returns 1 when it was
+ * not stopped before (the transition the note records). */
+ULONG XhciLinkFlapStop(PXHCI_LINK_FLAP flap);
+
+/* What a failure past the limit gets (F3, F4, F8): XHCI_FLAP_SEND only
+ * with XhciSsFlapFallback on (`fallbackOn`) and a USB 2.0 path to send it
+ * to (`usb2Path`: a root port's companion, a hub's USB 2.0 half);
+ * XHCI_FLAP_STOPPED otherwise. A failure within the limit, or a stopped
+ * one, keeps the verdict it had. Pure. */
+ULONG XhciLinkFlapDecide(ULONG verdict, ULONG fallbackOn, ULONG usb2Path);
+
+/*
+ * Issue 29, a hub port's send (design record 13 section 21.5): the
+ * SET_FEATURE(PORT_LINK_STATE) eSS.Disabled that sends it may fail on the
+ * wire, and by then the port's change bits are acknowledged, its device
+ * torn down and its recovery taken - an interrupt-driven hub reports
+ * nothing more. So the send stays pending and is tried again on the
+ * hub's own re-arm tick, at most XHCI_LINK_DISABLE_TRIES attempts in all;
+ * after the last failure the link is given up as F4's stop gives it up.
+ * XhciLinkDisableOutcome takes one attempt's result and says what
+ * follows. Pure.
+ */
+#define XHCI_LINK_DISABLE_TRIES     3UL
+
+#define XHCI_DISABLE_DONE           0UL /* sent: SS.Disabled             */
+#define XHCI_DISABLE_RETRY          1UL /* failed: try again next tick   */
+#define XHCI_DISABLE_GIVE_UP        2UL /* failed the last time: stop    */
+
+typedef struct _XHCI_LINK_DISABLE {
+    ULONG Tries;            /* attempts that failed since the send began */
+} XHCI_LINK_DISABLE, *PXHCI_LINK_DISABLE;
+
+VOID XhciLinkDisableInit(PXHCI_LINK_DISABLE d);
+ULONG XhciLinkDisableOutcome(PXHCI_LINK_DISABLE d, ULONG ok);
+
+/* A recovery that reaches the send again: 1 when an attempt is made now
+ * (the record begun afresh), 0 while a send is already `pending`, whose
+ * attempts and count stay the tick's. Pure. */
+ULONG XhciLinkDisableEnter(PXHCI_LINK_DISABLE d, ULONG pending);
+
 /* ------------------------------------------------------------------ */
 /* 29-A.5's hold                                                       */
 /* ------------------------------------------------------------------ */
@@ -199,6 +278,10 @@ typedef struct _XHCI_LINK_IDENTITY {
                                          * a failed identity read: until the
                                          * controller's next start          */
 #define XHCI_HOLD_ORPHAN            3UL /* no USB 2.0 companion: likewise   */
+#define XHCI_HOLD_FLAP              4UL /* issue 29: a failing link's, with
+                                         * no identity: released by the
+                                         * companion's first departure
+                                         * after a connect                  */
 
 typedef struct _XHCI_LINK_HOLD {
     ULONG Kind;             /* XHCI_HOLD_*                                */
@@ -220,6 +303,11 @@ typedef struct _XHCI_LINK_HOLD {
  * device `identity` describes (NULL: none read). Returns its kind. */
 ULONG XhciHoldBegin(PXHCI_LINK_HOLD hold, ULONG port, ULONG companion,
                     const XHCI_LINK_IDENTITY *identity);
+
+/* Begin issue 29's hold (XHCI_HOLD_FLAP) on `port`, whose companion is
+ * `companion`; with no companion it is an orphan, as XhciHoldBegin makes
+ * it (the caller sends no such port). Returns its kind. */
+ULONG XhciHoldBeginFlap(PXHCI_LINK_HOLD hold, ULONG port, ULONG companion);
 
 /* The companion port reported a connect. */
 VOID XhciHoldCompanionConnect(PXHCI_LINK_HOLD hold);

@@ -37,6 +37,7 @@
 #include "nvme2k.h"
 #include "utils.h"
 #include "dpkeys.h"
+#include "pciscan.h"
 
 ULONG PlatDmaPoolSize(VOID)
 {
@@ -421,10 +422,9 @@ VOID PlatWriteThroughSetting(IN PHW_DEVICE_EXTENSION DevExt, IN PCHAR ArgumentSt
 #ifdef NVME2K_W9X
     ULONG hk = 0, type = 0, cb, rc;
     CHAR buf[16];
-    ULONG ver = PlatGetVmmVersion() & 0xFFFF;
 
     UNREFERENCED_PARAMETER(ArgumentString);
-    me = (BOOLEAN)(ver >= 0x045A);
+    me = (BOOLEAN)PlatIsMe();
     if (PlatRegOpenKey(PLAT_HKLM, PLAT_WT_KEY, &hk) == 0) {
         cb = sizeof(buf) - 1;
         rc = PlatRegQueryValueEx(hk, "StorWriteThrough", NULL, &type, buf, &cb);
@@ -632,11 +632,15 @@ static ULONG PlatCatBdf(IN OUT PCHAR Buf, IN ULONG Pos, IN ULONG Size, IN ULONG 
 // class 010802 bars FE600004 00000000 00000000 00000000 00000000 00000000;
 // found 115.0.0; cmd 0006 cc 00000000 csts 00000000 taken; result 1"; with
 // decode found off "cmd 0004 cc 00000001 csts 00000001 decode on for the read
-// left: already set up". 320 bytes hold the longest.
+// left: already set up"; a set-up controller the user's option took "...
+// taken: already set up, overridden by stortakefirmware=1"; one the option
+// would take on Windows Me "... left: already set up, stortakefirmware=1
+// ignored on Windows ME". 384 bytes hold the longest.
 VOID PlatFindReport(IN const PLAT_FIND_INFO *Fi)
 {
-    CHAR text[320];
-    ULONG hk = 0, n;
+    CHAR text[384];
+    CHAR name[32];
+    ULONG hk = 0, n, m;
 
     n = PlatCat(text, 0, sizeof(text), "port ");
     n = PlatCatBdf(text, n, sizeof(text), Fi->PortBus, Fi->PortSlot);
@@ -680,6 +684,14 @@ VOID PlatFindReport(IN const PLAT_FIND_INFO *Fi)
             n = PlatCat(text, n, sizeof(text), Fi->FwTurnedOn ? " decode on for the read" : " decode off, not read");
         }
         n = PlatCat(text, n, sizeof(text), Fi->FwState == 0 ? " taken" :
+                    (Fi->FwState == 1 && Fi->FwTake) ?
+                        (Fi->FwTakeSrc == PCISCAN_TAKESRC_ADAPTER ?
+                             " taken: already set up, overridden by stortakefirmware=1" :
+                             " taken: already set up, overridden by StorTakeFirmware") :
+                    (Fi->FwState == 1 && Fi->FwTakeMe) ?
+                        (Fi->FwTakeSrc == PCISCAN_TAKESRC_ADAPTER ?
+                             " left: already set up, stortakefirmware=1 ignored on Windows ME" :
+                             " left: already set up, StorTakeFirmware ignored on Windows ME") :
                     Fi->FwState == 1 ? " left: already set up" :
                     Fi->FwState == 2 ? " left: no answer" :
                     Fi->FwState == 4 ? " left: command not restored" : " left: unreadable");
@@ -693,8 +705,34 @@ VOID PlatFindReport(IN const PLAT_FIND_INFO *Fi)
     n = PlatCatDec(text, n, sizeof(text), Fi->Result);
     if (PlatRegCreateKey(PLAT_HKLM, PLAT_WT_KEY, &hk) == 0) {
         PlatRegSetValueEx(hk, "StorFind", 0, PLAT_REG_SZ, text, n + 1);
+        if (Fi->Found) {
+            m = PlatCat(name, 0, sizeof(name), "StorFind ");
+            PlatCatBdf(name, m, sizeof(name), Fi->FoundBus, Fi->FoundSlot);
+            PlatRegSetValueEx(hk, name, 0, PLAT_REG_SZ, text, n + 1);
+        }
         PlatRegCloseKey(hk);
     }
+}
+
+int PlatIsMe(VOID)
+{
+    return (PlatGetVmmVersion() & 0xFFFF) >= 0x045A;
+}
+
+int PlatTakeFirmwareRaw(VOID)
+{
+    ULONG hk = 0, type = 0, cb;
+    UCHAR buf[8];
+    int present;
+
+    if (PlatRegOpenKey(PLAT_HKLM, PLAT_WT_KEY, &hk) != 0) {
+        return PCISCAN_TAKE_LEAVE;
+    }
+    cb = sizeof(buf);
+    present = (PlatRegQueryValueEx(hk, "StorTakeFirmware", NULL, &type, (PCHAR)buf, &cb) == 0 &&
+               cb <= sizeof(buf));
+    PlatRegCloseKey(hk);
+    return PciScanTakeGlobal(present, type, buf, cb);
 }
 #endif
 

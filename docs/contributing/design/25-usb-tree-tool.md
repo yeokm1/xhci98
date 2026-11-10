@@ -1,6 +1,17 @@
 # Design Record 25 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
-Status: revision 29, 2026-11-07 (roadmap-usb4 task 47.35, the owner's
+Status: revision 31, 2026-11-09 (roadmap-usb4 task 48.31's follow-up:
+on 98 SE and ME a unit's details read "Marked removable." or "Not marked
+removable.", the devnode's `DN_REMOVABLE` as Windows reports it, no
+longer "Marked removable by the Thunderbolt driver.", record 24 section
+4.3 revision 9, section 4.2);
+revision 30, 2026-11-09 (roadmap-usb4 task 48.17, was
+TRSTORNOTE.1: the optional USB drive notice, off by default, a tick box
+in the Settings window, section 7.8, with sections 11 and 22; revised
+the same day after its legs: a refresh at the poll's first tick, the
+re-send held while the Settings window is open, and XP's
+shell counted as one that answers for the drive balloon);
+revision 29, 2026-11-07 (roadmap-usb4 task 47.35, the owner's
 choices of that day: the Settings window and XHCITR /set, the
 drivers' registry values from Setup's own table on three tabs, with
 the restart they need, section 22, with sections 7.3 and 9);
@@ -314,7 +325,11 @@ branch, marked "(behind <router name>)".
   devnodes, whether Windows lists it in Safely Remove (record 24 section
   4.3) and the advice when not. Since revision 11 a unit whose capabilities
   say neither Removable nor SurpriseRemovalOK reads "Not marked
-  removable", with section 6.6's route; and a Thunderbolt 3 router behind
+  removable", with section 6.6's route; on 98 SE and ME (revision 31) the
+  unit reads "Marked removable." or "Not marked removable.", its
+  devnode's `DN_REMOVABLE` as Windows reports it and never who set it
+  (record 24 section 4.3: 98 SE and ME set the bit on nearly every
+  devnode); and a Thunderbolt 3 router behind
   a USB4 host (generation Thunderbolt 3, or USB4 Version major 0) has its
   lane-adapter rate worded "Thunderbolt 3, 20 Gbit/s per lane, x2 (40
   Gbit/s)", never as a USB4 generation (`tr_link_text_gen`). Since
@@ -915,7 +930,23 @@ record.
    the service stopped or absent, nothing confirms it: 10 s, then "The
    PCIe tunnel stays up until the device is unplugged, because the eject
    was not confirmed to the Thunderbolt driver; an eject made as an
-   administrator is confirmed by this tool itself."
+   administrator is confirmed by this tool itself." Whatever the kind,
+   when step 5's last query (with the unit present) showed its tunnel
+   port, an active member, named by no entry beside a host port's router
+   with its PCIe tunnel up and no tunnel port known, no read of the watch
+   named the port, and the last read, at the step that found the bound
+   passed, still shows it so (`inst_port_pcie`, `inst_pcie_unbound`: the
+   connection manager has no USB4 port to close), the line at the end is
+   record 24 section 5.2's for a port the driver does not know
+   (`tr_eject_end_text`, Phase 48, 2026-11-10). That last read counts
+   only when it is current (`tr_query_watch_current`): eject-ready by
+   step 1's gate, younger than `CM_Q_CURRENT_MS` with the time from
+   before the call that read it to the decision added (the driver
+   samples the age inside the call), and published at least
+   `CM_Q_NEW_PASSES` passes after step 5's answer, in the same start. The
+   query device answers from the driver's cached snapshot, so an answer
+   whose publication stalled would otherwise read unmapped through the
+   whole watch; such an answer keeps the kind's line.
 8. Release the mutex (if step 7 has not), then show the result: a message box from the
    window or a balloon (tooltip on 98 SE) from the tray.
 
@@ -1528,7 +1559,12 @@ The legs are with 43.28 (section 11, T.14).
 xhcicm=<n>] [/report <file>]`. `/report`
 writes the Save Report text and exits (for scripts and bug reports).
 Exit codes follow XHCIINST's (record 23 section 10). Since revision 7
-`/eject id=` names a unit or a USB device (section 6.5). Since revision 9
+`/eject id=` names a unit or a USB device (section 6.5); since Phase 48
+(2026-11-10) the ID of a devnode inside a unit (the drive in an
+enclosure, behind its switch ports) names that unit, as the window's
+Safely Remove on any node under a unit does, and the confirmation lists
+the whole unit (before, such an ID was refused as "No USB device, and
+no device behind a Thunderbolt port, has the instance ID ..."). Since revision 9
 the report carries each "Driver log" node's text (section 3.5). Since
 revision 11 `/eject` also takes `/result <name>` and `/confirmed <digest>`, which
 the tool passes to its own elevated run (section 6.6) and which nothing
@@ -2283,6 +2319,283 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
 The legs are roadmap-usb4 43.28 (section 11, T.13), and 43.66's for
 item 9; 44.80's for items 10 and 11 (`runs/run-44.md`, "44.80").
 
+### 7.8 The USB drive notice (revision 30, task 48.17)
+
+Roadmap-usb4 48.17 (was TRSTORNOTE.1; the owner, 2026-11-07, into Phase
+48 on 2026-11-09): an optional notice in the tray when a USB drive on a
+controller `xhci98.sys` drives is connected or removed, off by default,
+turned on by a tick box in the Settings window, per user; the same path
+as the Thunderbolt and USB4 notices (section 7.2: a balloon on 2000, ME
+and later; on 98 SE the tooltip's last event and the tool's pop-up of
+section 16), naming the drive and its letter where known. Its main use is
+98 SE without NUSB, where a USB drive has no storage driver, so no disk
+and no letter, while `xhci98.sys` still enumerates it and the tool still
+lists it. A draft of 2026-11-07 was reviewed and revised into this
+section; its observation model, identity and delivery are replaced.
+
+1. **The setting** (`tr_stor_on`, host-tested). The DWORD
+   `StorageNotice` under `HKCU\Software\xHCI98\XHCITR` (section 7.4's
+   key): only a `REG_DWORD` 1 is on; absent, 0, another type, size or
+   number is off. No computer-wide value, no installer box, no driver
+   value. The Settings window's tool tab (section 22 item 16) has the
+   tick box "USB &drive notices" under "Watch Windows' own USB ports
+   too", at the left margin; the quick-save hotkey's and its sound's rows
+   move 14 DLU down (the dialog keeps its 330 by 262 DLU). A click writes
+   the value at once, as the tab's other boxes do, and the box is then
+   filled again from what reads back, so a write that failed shows as it
+   is. No View-menu or icon-menu item: the owner named the Settings
+   window. Turned on, the next scan only records the drives there
+   (item 6), with no notice; turned off, the set, the queued notices and
+   any watched re-send (item 10) are dropped, and nothing more is read
+   for it.
+2. **What counts** (`stor_scan` in `xhcitr.c`, `tr_stor_*` in
+   `tr_core.c`). A port of the model (section 5) whose controller is
+   `xhci98.sys`'s (`UCTRL.Ours`), connected, not a hub, and either:
+   - holding a storage record in its controller's query answer (section
+     19: version 2 or later, the record at the port's root port and
+     route, `uport_xport`) - any record, UAS, Bulk-Only or refused, for
+     the device or any interface of a composite one. The bus writes it
+     when it makes the PDO, with no class driver above it, so a drive on
+     98 SE without NUSB counts; or
+   - where the answer is version 1 (a driver before 3.3.0.0), its device
+     descriptor's class 08 (`Conn.Dev[4]`): a drive that declares its
+     class per interface is not seen there.
+   No request is sent to a device to classify it. The query is the one
+   every refresh already makes of each `xhci98.sys` controller
+   (`fast_top_read`, section 7.7 item 10).
+3. **When.** At the end of every model refresh (`refresh_model`, after
+   `fast_scan`), by whichever path: the tray's refresh 500 ms after each
+   `DBT_DEVNODES_CHANGED`, F5, the window's automatic refresh and the
+   poll's change. Nothing is polled anew. A plug makes the bus's PDO and
+   so a devnode, with or without a driver, which is the devnode change
+   the refresh follows; an unplug removes it. Except on 98 SE (read in
+   this task's leg): there a stick with no driver brought no
+   `DBT_DEVNODES_CHANGED` until its Add New Hardware wizard was dismissed,
+   and its unplug none at all, so a drive came and went unseen until
+   another refresh. So, while the notice is on, each second's tick also
+   asks each `xhci98.sys` controller for its query answer's header alone
+   (88 bytes, `stor_poll`; no device request), and a storage part whose
+   size changed since the last tick asks for the same refresh a devnode
+   change does (`TIMER_CHANGE`, 500 ms), on every system. The bus writes
+   a record when it makes the PDO and drops it with the PDO, so a plug
+   and an unplug change the size; a swap within one second that keeps it
+   is not seen this way. The baseline is the last tick's own reading
+   (`TR_STOR_POLL`, `tr_stor_poll_step`, host-tested), never the
+   refresh's query, whose ports are read before its query is made and so
+   can sit either side of an unplug; and a controller with no baseline -
+   the first tick after the tray starts or the notice is turned on, or a
+   controller new to the model - asks for one refresh too, so a drive
+   gone between the refresh that counted it and that first tick (the tray
+   started with a stick in, and the stick pulled at once) is seen. A
+   failed read is kept as a baseline like any other, so a controller that
+   keeps failing asks for no refresh after its first. The baseline is
+   dropped whenever the tick box is clicked and whenever the set is
+   (item 1), so turning the notice off and on again while the Settings
+   window holds the poll still gives its first tick after the close no
+   baseline. While the Settings window
+   is open the model is held (`setOpen`) and no refresh runs; a refresh
+   asked for meanwhile (`setMissed`, set where `refresh_model` returns
+   for `setOpen`) is made when the window closes, whether or not an
+   option changed, and so is one whenever the notice is on (`stor_poll`
+   keeps its baseline while the window is open, but a drive gone and
+   another come meanwhile can leave the size as it was); it announces
+   what changed as any other. Only where
+   the icon is (the tray, `hTray`).
+4. **The key: one attachment** (`tr_stor_key`, host-tested). The
+   controller's driver key (its device path where it has none), the port
+   path and VID:PID, as section 7.7 item 4's key, and the record's Slot
+   ID (0 for item 2's class-08 case): the controller gives a device a
+   slot at each enumeration, so the same drive plugged in again between
+   two refreshes is, where its slot differs, one removal and one
+   arrival. Where the controller gives it the same slot (it may reuse the
+   lowest free one) such a replug is not seen; nor is a swap of two drives
+   of one VID:PID between two refreshes with the same slots. No serial
+   number is read: a key must not change when a read fails.
+5. **What the last refresh's drives are now** (`stor_resolve`). Each
+   drive kept from the last refresh is, in this one:
+   - **present**: its key is among this refresh's counted drives;
+   - **unknown**: its controller is not in the model, is not
+     `xhci98.sys`'s, or did not answer its query in this refresh; or its
+     port is in the model, read, connected, with the same VID:PID and no
+     record (the PDO not made yet, or being made again); or its port is
+     not in the model and the nearest port on its path that is, is a
+     connected hub (its ports not read), or no port on its path is (the
+     root hub not read);
+   - **gone**: its port is read and not connected, a hub, another
+     VID:PID or a record with another Slot ID; or its port is not in the
+     model and the nearest port on its path that is, is read and not
+     connected or not a hub (a hub unplugged with drives behind it).
+   An unknown drive is kept, with its name and whether it was announced,
+   and gives no notice; a failed read is never a removal.
+6. **Taken as they are, silently** (`tr_stor_step`'s quiet argument):
+   the tray's first refresh; the first refresh after the notice is
+   turned on; for one controller, the first refresh in which it answers
+   its query after one in which it did not (a start, an enable, a driver
+   update, a stop and start): its gone drives are dropped and its new
+   ones kept, with no notice, and its queued arrivals and removals
+   (item 8) are dropped; and every refresh from `PBT_APMSUSPEND` until
+   15 s after the resume (`PBT_APMRESUMEAUTOMATIC`, `PBT_APMRESUMESUSPEND`
+   or `PBT_APMRESUMECRITICAL`; `STOR_RESUME_MS`), since a resume may
+   enumerate every drive again with new slots: at the suspend every
+   queued group, held arrival and watched re-send (item 10) is dropped,
+   and nothing is sent until the 15 s are up. Quiet drives count as
+   announced, so a drive left in at login or across a sleep gets "was
+   removed" when it goes. What it costs: a drive plugged or unplugged
+   while asleep or while its controller was stopped is not announced.
+7. **The set** (`TR_STOR_SET`, 64 drives, `TR_STOR_MAX`): each drive's
+   key, controller key, port path, name and the name's rank (item 9),
+   and whether its arrival was announced or taken quietly. A drive past
+   64 is not kept and gets no notice. Removed drives leave the set when
+   their removal is queued.
+8. **The notices, queued and coalesced** (`TR_STOR_Q`, host-tested). Two
+   groups, removals and arrivals, each with its count, the key,
+   controller key and name of its first `TR_STOR_MAX` drives and the tick
+   of its first event. A new
+   drive (not quiet) joins the arrivals; a gone drive whose arrival is
+   still queued leaves the arrivals and is not queued as removed (an
+   attachment never announced is never announced as removed); any other
+   gone drive joins the removals. A group is sent (`stor_try_send`, at
+   each second's `TIMER_POLL`, never from inside a refresh, which may
+   still be building the model) when all of these hold:
+   - the icon is there (one owed before it is goes once it is) and the
+     notice is on;
+   - 1.5 s have passed since the group's first event (`STOR_GATHER_MS`),
+     so a burst that straddles two refreshes is one balloon;
+   - 5 s have passed since the tool last sent any other balloon (a
+     Thunderbolt or USB4 event, the unexpected-removal warning, a quick
+     save's end, the faster notice; `STOR_GAP_MS`): on XP and later a
+     second balloon from the icon replaces the first at once (section
+     7.6 item 4), and those outrank this notice;
+   - the "can run faster" notice (section 7.7) is neither owed nor held
+     (`fastPending`, `fastHold`), and its balloon's re-send watch
+     (`fastSend` not idle) has not been open for less than 100 s
+     (`TR_BS_NOSHOW_MS` and `TR_BS_WAIT_MS`, the longest that watch can
+     owe a re-send) since that balloon was sent: that notice outranks
+     this one, and the bound keeps a shell that never answers (2000,
+     where the watch can stay open) from holding this queue. Both
+     notices come for a drive that both count, the faster one first;
+   - for the arrivals, the hold: every arrival in the group has its
+     devnode (the port's `Dn`) and 3 s have passed since the group's first
+     event (`FAST_SETTLE_MS`, room for the disk and its letter), or 10 s
+     have (`STOR_HOLD_MS`); a drive with no storage driver (98 SE without
+     NUSB) never has a devnode the tree matches (the driver key is written
+     with a driver), so its notice comes at 10 s. Once every other
+     condition holds, the model is read again (`refresh_window`, as
+     `TIMER_CHANGE` does) immediately before the arrivals' text is made,
+     unless a refresh ran in this same tick: a disk's letter can come
+     after the last devnode change, and `disk_letters_nt` runs only in a
+     refresh. The conditions are checked again after it (it may have
+     found the drive gone), and only the arrivals counted in the model
+     then are sent: one whose controller stopped answering stays queued,
+     unknown (dropped silently if that controller answers again, item 6),
+     and waits another hold if it is the only one. The Settings window
+     being open defers the send to its close.
+   The removals go first; the arrivals then wait the 5 s after them (a
+   drive balloon counts as another for the other group). A
+   group's names are read again from the model when it is sent (an
+   arrival's, item 9), and the group is emptied once sent.
+9. **The name** (`tr_stor_name`, host-tested): the tree's label for the
+   device (`usb_label`: its disks' names and letters, "SanDisk Ultra
+   (F:)"), where its devnode gives one that is not a class name of
+   Windows' (`tr_name_generic`); else its product string; else the
+   devnode's class name; else "USB drive <VID:PID>". The product string
+   is the one section 7.7 item 4 asks for (string 0 for the first
+   language, then `iProduct`, through the hub), asked once per key and
+   only where the devnode gives no specific name, `iProduct` is not 0
+   and the drive is not behind a TT (section 7.7 item 1's reason), and
+   kept in the set answered or not, so a drive is asked two requests at
+   most while it stays on its port. Ranks, best first: a label with a
+   letter, a label, a product string, a class name, VID:PID. A present
+   drive's name is read again at every refresh and kept unless the new
+   one ranks lower, so a removal names the drive as it was best known
+   (its letter included) and not as a teardown half-read it.
+   `usb_label` lists disks only for a device the tree lists for Safely
+   Remove (`usb_listed`, section 6.5); a composite device it does not
+   list is named by its product string.
+10. **The texts and the path** (the owner's drafts of 2026-11-07, the
+    plural forms added):
+    - one arrival: "USB drive connected", "<name> is connected.";
+    - several: "USB drives connected", "<name> and <name> are
+      connected." or "<name>, <name> and <n> more are connected.";
+    - one removal: "USB drive removed", "<name> was removed.";
+    - several: "USB drives removed", "<name> and <name> were removed."
+      or "<name>, <name> and <n> more were removed.".
+    The count is exact; a name longer than fits is cut so that the text
+    stays within the balloon's 255 characters (`tr_stor_text`). The
+    information icon, never the warning: section 7.6's warning stays
+    Thunderbolt and USB4's, and a drive stopped with Safely Remove gets
+    "was removed." when it is unplugged. The balloon is sent as every
+    other one is (`tray_balloon_as`, the sound by the shell's rule; the
+    quick save's `NIIF_NOSOUND` is its own), as a third kind of its own
+    (`TRAY_BK_DRIVE`): on 98 SE `lastEvent` (the tooltip's "xHCI98 USB
+    Tree: <n> TB/USB4 - <text>", 63 characters; the red icon's tooltip
+    takes precedence, section 7.2.1) and the pop-up with its own id
+    (`TRAY_POP_DRIVE`). A click on it opens nothing (the clicks of
+    section 7.7 item 6 and of the quick save go by their own kinds).
+    A balloon the shell did not show is sent again once by section 7.7
+    item 9's rule, with its own state (`storSend`) and its own record of
+    which balloon a show is on (`storKind`, as `fastKind`), and not when
+    another balloon of the tool's was sent meanwhile; an arrivals'
+    balloon is sent again only while each of its drives is counted in
+    the model, and never once its controller was taken silently
+    (item 6); the faster notice's watch
+    is never open at the same time (item 8). Two differences from that
+    rule (`tr_stor_answers`, `tr_stor_resend_due`, host-tested). XP and
+    later (NT 5.1 up) count as shells that answer, for this balloon's
+    unanswered case, from the first balloon of the session: XP's leg
+    (`runs/run-48.md`, "48.17") lost the arrival of a stick's first plug
+    while Windows' Found New Hardware balloons held the area, before the
+    shell had answered anything, as 7 does behind its own; 2000, ME and
+    98 SE keep section 7.7's rule. And while the Settings window holds
+    the model (`setOpen`) the watch's tick waits, its state as it is: an
+    arrival's drives are counted again in the model that the window's
+    close reads (item 3), so a drive unplugged while the window was open
+    is not announced again as connected; the shell's own messages still
+    move the watch meanwhile.
+11. **Not done.** Windows' own controllers' drives; a drive's speed or
+    transport (section 19 has it); a removal of a drive on 98 SE and ME
+    told apart from an eject (none is: the unplug is what is announced,
+    on every system); serial numbers (item 4); a disk mounted later by a
+    driver installed by hand (the arrival's name is the one it had when
+    sent).
+12. **The record.** The README's notices part says it in one paragraph;
+    the release notes carry the owner's text. No line in Save Report: it
+    is a notice, not a reading.
+13. **Host vectors** (`test\test_tr.c`): `tr_stor_on` (absent, 0, 1, 2, a
+    `REG_SZ`, a short value); `tr_stor_key` with and without a slot, a
+    long path cut; `tr_stor_step`: the first refresh quiet, an arrival, a
+    removal, a replug with another slot, the same slot unseen, unknown
+    kept with no notice and later present or gone, a controller back
+    after a failed query quiet, a hub gone with two drives (one group of
+    two), 65 drives (the cap), an arrival gone before it was sent (nothing
+    either way), a removal of a quiet drive; `TR_STOR_Q`: the gather, the
+    gap, the hold (a devnode and 3 s, the 10 s), the faster notice's
+    precedence (owed, held, its watch open and its 100 s bound with a
+    shell that never answers), removals before arrivals, a controller's
+    queued drives dropped at its quiet rebase, everything dropped at a
+    suspend and nothing sent in the 15 s after the resume, the refresh
+    before the arrivals' text when their send waited past the last
+    refresh (a letter that came later), tick wrap; `tr_stor_name`'s ranks and the kept better name; `tr_stor_text`
+    for one, two, three and 70 names, a 300-character name;
+    `tr_stor_poll_step`: no baseline owes a refresh, a size change, a
+    drive gone during the refresh it asked for, a controller new to the
+    model once and its failed read then settled, a failed read answering,
+    matching by key; `tr_stor_answers` per system and
+    after an answer; `tr_stor_resend_due`: XP's unanswered balloon sent
+    again at 60 s, 2000's never, a lost balloon's due tick held while
+    the window is open and sent at the first tick after, a show while
+    held.
+14. **Legs** (T.20, section 11): 98 SE without NUSB (a QEMU USB stick
+    plugged and unplugged: the pop-up and the tooltip, its product name,
+    at 10 s), XP and 7 (the balloon with the letter, the removal by the
+    letter; on 7 the balloon after Windows' own, its re-send where 7
+    dropped it), and 2000 SP4 where the rig allows (a shell that reports
+    no balloon), each with the notice on and off (off: nothing); a hub
+    with two sticks unplugged (one balloon of two); a stick plugged while
+    the Settings window is open in a tray with no window, closed with no
+    change (announced at its close); the tray started with a stick in (no
+    notice; its removal announced).
+
 ## 8. Install, upgrade and uninstall
 
 - XHCIINST owns the tool's file (and its `.TMP`, `.BAK` and `.DEL`
@@ -2511,6 +2824,7 @@ a Gen 1 table, a rate above 5 Gbit/s with LP 0, the VL805's capture).
 | T.17 | 98 SE, 7 x86 | revision 21, section 18: an update to a higher version not restarted into - the status bar and the controller's and NHI's details say the running and installed versions differ; after the restart, the same |
 | T.18 | 7 x86 (QEMU `usb-uas` with a serial, UAS alone); the transport line on 98 SE | revision 21, section 19 item 7: the transport line and counters for the emulated drive; a stand-in INF binding Windows' `usbstor` to its devnode, the tool's binding check, the binding kept across an unplug and replug; the stand-in removed from the store, the entry uninstalled and the drive plugged in again, on `xhciuas`. The natural case (a drive offering both) is 44-E.5 |
 | T.19 | 98 SE (q35, `XHCIPFW.VXD` installed, the ASM4242 with its windows above 4 GB, the ORICO plugged after the start); 7 x86 or XP (q35, `xhcicm` with the emulator's NHI); 2000 on the Standard PC HAL once 44.53's code is merged | revision 23, section 20: the node's text in the window, Edit > Copy with nothing selected, and the same text in Save Report; on 98 SE `XHCIPFW`'s values and the connection manager's records decoded; on the NT system their NT wording and the slot of item 5 read through the log; on 2000 a hot plug's `cm.chain.irq` records in the slot |
+| T.20 | 98 SE without NUSB, XP, 7 (roadmap-usb4 48.17) | revision 30, section 7.8 item 14: a stick plugged and unplugged with the notice on and off; the name with its letter (XP, 7) or its product string (98 SE, at 10 s, the pop-up and the tooltip); a hub with two sticks unplugged as one balloon; a plug while the Settings window is open; the tray started with a stick in |
 
 ## 12. Decisions
 
@@ -4092,7 +4406,8 @@ that day are the ones below.
     quick-save hotkey and its sound: each saved for the user and in force
     at the click, as the menu items are; a notice option's scan waits for
     the window to close (its model is held while it is open,
-    `setToolRefresh`); Apply is greyed on that tab. The driver tabs' list takes the room (about ten
+    `setToolRefresh`); Apply is greyed on that tab. Since revision 30
+    the tab also has "USB &drive notices" (section 7.8 item 1). The driver tabs' list takes the room (about ten
     rows at 640x480). There is no Help button: this section never listed
     one.
 17. **Host vectors** (`test\test_trset.c`): every row classified, the

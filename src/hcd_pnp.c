@@ -60,8 +60,9 @@ static NTSTATUS hcdStart(PHCD_CONTROLLER hc, PIRP irp)
      * fails, unforwarded: on NT, PnP then removes the controller, on
      * Windows 98 and ME it stops it. No PnP manager has been seen to send
      * one. A start on an FDO whose map pump a fail-closed stop quarantined
-     * is refused the same way (hcd_dma.c, HcdDmaMapDrain), before anything
-     * of the lifetime is touched.
+     * (XhciDmaStaging 0 alone; hcd_dma.c, HcdDmaMapDrain) is refused the
+     * same way, before anything of the lifetime is touched; with staging
+     * no channel request is ever outstanding.
      */
     if (hc->ControllerStarted || hc->MapQuarantined) {
         XhciLogNote(&hc->Hc, "pnp.start.refused",

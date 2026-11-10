@@ -15,7 +15,9 @@
  * removal. Deleted at the NHI's removal once the PnP manager has removed
  * it, or at its own removal once the NHI has orphaned it (Windows 2000 and
  * later; on 98 SE and ME an orphan is left allocated, as more IRPs may
- * follow its removal there, hcd_pdo.c's measurement).
+ * follow its removal there, hcd_pdo.c's measurement). An answer that
+ * leaves it out retires it: never reported again, and no fresh PDO made
+ * until its removal has come (section 6.6, task 48.16).
  *
  * THE INTERFACE. IRP_MN_QUERY_INTERFACE for GUID_XHCI_CM_NET (version 1)
  * at the PDO, and the same table from IRP_MJ_INTERNAL_DEVICE_CONTROL
@@ -57,13 +59,15 @@ struct _CM_NHI;
 /* The network PDO's extension. */
 typedef struct _CM_NETPDO {
     CM_COMMON Common;       /* Kind CM_KIND_NETPDO; Pdo and Lower NULL     */
-    KSPIN_LOCK Lock;        /* guards Nhi and Users                        */
-    struct _CM_NHI *Nhi;    /* NULL once the NHI's removal orphaned it     */
-    LONG Users;             /* interface calls inside, Nhi taken           */
+    KSPIN_LOCK Lock;        /* guards Gate                                 */
+    CM_NETR_GATE Gate;      /* the way to the NHI (struct _CM_NHI *),      */
+                            /* closed by whichever removal unlinks it      */
     LONG Refs;              /* the interface's holds                       */
     ULONG Started;
     ULONG RemoveReceived;
-    ULONG Reported;         /* given in a BusRelations answer              */
+    ULONG Reported;         /* given in a BusRelations answer (PdoLock)    */
+    ULONG Retired;          /* left out of a later one (PdoLock)           */
+    LONG DeleteClaim;       /* the first to raise it to 1 deletes          */
     ULONG Deleted;
 } CM_NETPDO, *PCM_NETPDO;
 
@@ -93,11 +97,24 @@ typedef struct _CM_NET_COUNTERS {
     ULONG StopUnverified;   /* Ring Valid not read back clear              */
     ULONG MemKept;          /* the rings' memory kept at a stop            */
     ULONG NoMem;
+    ULONG IrqKicks;         /* kicks from the interrupt DPC (record 35 5.5) */
 } CM_NET_COUNTERS;
 
 typedef struct _CM_NET {
+    /* The PDO's bookkeeping, under PdoLock (record 35 section 6.6): every
+     * decision on Pdo, Report, Retired and a PDO's Reported and Retired,
+     * and BusRelations' reference, made under it; no IRP sent, no device
+     * made or deleted with it held. */
+    KSPIN_LOCK PdoLock;
     PDEVICE_OBJECT Pdo;     /* the network PDO, NULL before the first      */
     ULONG Report;           /* this start reports it                       */
+    PDEVICE_OBJECT Retired; /* left out of an answer, its removal not yet
+                               come: never reported again, and no fresh
+                               PDO made until it is gone                   */
+    LONG PdoCalls;          /* a PDO's removal holding the NHI: taken
+                               before it unlinks itself, dropped once its
+                               gate is closed and idle; the NHI's removal
+                               waits for 0                                 */
     KSPIN_LOCK Lock;
 
     /* The client (under Lock). */
@@ -140,6 +157,11 @@ typedef struct _CM_NET {
     CM_NETR_RES Res;
     ULONG PollMs;           /* XhciCmNetPollMs as this start read it       */
     ULONG BadPdfLogged;
+    /* Receive descriptors taken by the service (every one with DD, any
+     * kind), the data cause's progress for the watchdog (record 35
+     * section 5.5): written under Lock by the service's owner, read
+     * without it as a monotonic ULONG. */
+    volatile ULONG RxTaken;
 
     /* The rings' memory (cm_pool.c): at the first service after a start,
      * kept until the stop; MemMayRun while a ring may still write it. */

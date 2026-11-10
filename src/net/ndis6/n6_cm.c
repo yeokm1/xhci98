@@ -55,6 +55,7 @@ NDIS_STATUS Net6CmOpen(PNET6_ADAPTER a)
     cb.LinkChange = Net6CbLinkChange;
     cb.Receive = Net6CbReceive;
     cb.TxDone = Net6CbTxDone;
+    cb.Stats = Net6CbStats;
     cfg.Size = sizeof(cfg);
     cfg.MaxFrame = a->MaxFrame;
     status = a->Cm.Open(a->Cm.Header.Context, &cb, a, &cfg);
@@ -77,6 +78,40 @@ VOID Net6CmClose(PNET6_ADAPTER a)
     a->Cm.Close(a->Cm.Header.Context);
     a->CmOpen = 0;
     Net6CmLog(a, "net.close", a->TxOk);
+}
+
+/* The status query's counters (xhci_cmnet.h, design record 35 section
+ * 17): the values the statistics OIDs answer, read as they read them:
+ * the byte pairs under Lock, the rest with none. On xhcicm.sys's thread,
+ * PASSIVE_LEVEL; a field the
+ * caller's Size does not cover is left alone. */
+VOID NTAPI Net6CbStats(PVOID ctx, PXHCI_CM_NET_STATS s)
+{
+    PNET6_ADAPTER a = (PNET6_ADAPTER)ctx;
+
+    if (s == NULL || s->Size < sizeof(XHCI_CM_NET_STATS)) {
+        return;
+    }
+    s->Driver = XHCI_CM_NET_STATS_NDIS6;
+    s->Mtu = a->Mtu;
+    s->Flags = (a->PowerD3 || a->State != NET6_RUNNING) ? XHCI_CM_NET_STATS_F_ASLEEP : 0UL;
+    s->TxPackets = a->TxOk;
+    s->RxPackets = a->RxOk;
+    /* The 64-bit byte counts under the lock their writers hold, as the
+     * statistics OID reads them, so no pair is torn across a carry. */
+    NdisAcquireSpinLock(&a->Lock);
+    s->TxBytesLo = a->TxBytes;
+    s->TxBytesHi = a->TxBytesHi;
+    s->RxBytesLo = a->RxBytes;
+    s->RxBytesHi = a->RxBytesHi;
+    NdisReleaseSpinLock(&a->Lock);
+    s->TxErrors = Net6TxErrorTotal(a);
+    s->RxErrors = Net6RxErrorTotal(a);
+    s->RxNoBuffer = a->RxNoBuffer;
+    s->TxDown = a->TxDown;
+    s->RxNotUp = a->RxNotUp;
+    s->RxSplit = a->RxSplit;
+    s->TxFullWaits = a->TxFullWaits;
 }
 
 /* IRQL: <= DISPATCH_LEVEL. */

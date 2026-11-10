@@ -307,6 +307,112 @@ ULONG XhciLinkResetDone(ULONG portsc, PULONG warmSeen)
            XHCI_PORTSC_GET_PLS(portsc) == XHCI_PLS_U0;
 }
 
+/* ------------------------------------------------------------------ */
+/* Issue 29: a link that keeps failing (design record 13 section 21)   */
+/* ------------------------------------------------------------------ */
+
+VOID XhciLinkFlapInit(PXHCI_LINK_FLAP flap)
+{
+    if (flap == NULL) {
+        return;
+    }
+    flap->Count = 0;
+    flap->First = 0;
+    flap->Stopped = 0;
+}
+
+VOID XhciLinkFlapSample(PXHCI_LINK_FLAP flap, ULONG portsc)
+{
+    if (flap == NULL || portsc == 0xFFFFFFFFUL) {
+        return;
+    }
+    if ((portsc & XHCI_PORTSC_PP) == 0) {
+        XhciLinkFlapInit(flap);
+        return;
+    }
+    /* An RxDetect reading is not a clear: a departure and a warm reset's
+     * passing state read alike. A link that trained by itself is a new
+     * connection; one that trained at the end of a warm reset (WRC, PRC)
+     * is the same failing link. */
+    if ((portsc & XHCI_PORTSC_PR) == 0 &&
+        (portsc & XHCI_PORTSC_CCS) != 0 &&
+        (portsc & XHCI_PORTSC_PED) != 0 &&
+        XHCI_PORTSC_GET_PLS(portsc) == XHCI_PLS_U0 &&
+        (portsc & XHCI_PORTSC_CSC) != 0 &&
+        (portsc & (XHCI_PORTSC_WRC | XHCI_PORTSC_PRC)) == 0) {
+        XhciLinkFlapInit(flap);
+    }
+}
+
+ULONG XhciLinkFlapFailure(PXHCI_LINK_FLAP flap, ULONG now)
+{
+    if (flap == NULL) {
+        return XHCI_FLAP_WARM;
+    }
+    if (flap->Stopped) {
+        return XHCI_FLAP_STOPPED;
+    }
+    if (flap->Count == 0 || (now - flap->First) >= XHCI_LINK_FLAP_WINDOW) {
+        flap->Count = 0;
+        flap->First = now;
+    }
+    if (flap->Count < 0xFFUL) {
+        flap->Count++;
+    }
+    return (flap->Count > XHCI_LINK_FLAP_LIMIT) ? XHCI_FLAP_SEND
+                                                : XHCI_FLAP_WARM;
+}
+
+ULONG XhciLinkFlapDecide(ULONG verdict, ULONG fallbackOn, ULONG usb2Path)
+{
+    if (verdict != XHCI_FLAP_SEND) {
+        return verdict;
+    }
+    return (fallbackOn && usb2Path) ? XHCI_FLAP_SEND : XHCI_FLAP_STOPPED;
+}
+
+VOID XhciLinkDisableInit(PXHCI_LINK_DISABLE d)
+{
+    if (d != NULL) {
+        d->Tries = 0;
+    }
+}
+
+ULONG XhciLinkDisableEnter(PXHCI_LINK_DISABLE d, ULONG pending)
+{
+    if (pending) {
+        return 0;
+    }
+    XhciLinkDisableInit(d);
+    return 1;
+}
+
+ULONG XhciLinkDisableOutcome(PXHCI_LINK_DISABLE d, ULONG ok)
+{
+    if (d == NULL) {
+        return ok ? XHCI_DISABLE_DONE : XHCI_DISABLE_GIVE_UP;
+    }
+    if (ok) {
+        d->Tries = 0;
+        return XHCI_DISABLE_DONE;
+    }
+    d->Tries++;
+    if (d->Tries >= XHCI_LINK_DISABLE_TRIES) {
+        d->Tries = 0;
+        return XHCI_DISABLE_GIVE_UP;
+    }
+    return XHCI_DISABLE_RETRY;
+}
+
+ULONG XhciLinkFlapStop(PXHCI_LINK_FLAP flap)
+{
+    if (flap == NULL || flap->Stopped) {
+        return 0;
+    }
+    flap->Stopped = 1;
+    return 1;
+}
+
 ULONG XhciLinkPortFeed(PXHCI_LINK_PORT link, ULONG usb3, ULONG portsc,
                        ULONG enumState, PXHCI_LINK_ACTION action)
 {
@@ -432,6 +538,17 @@ ULONG XhciHoldBegin(PXHCI_LINK_HOLD hold, ULONG port, ULONG companion,
     return hold->Kind;
 }
 
+ULONG XhciHoldBeginFlap(PXHCI_LINK_HOLD hold, ULONG port, ULONG companion)
+{
+    if (XhciHoldBegin(hold, port, companion, NULL) == XHCI_HOLD_NONE) {
+        return XHCI_HOLD_NONE;
+    }
+    if (companion != 0) {
+        hold->Kind = XHCI_HOLD_FLAP;
+    }
+    return hold->Kind;
+}
+
 VOID XhciHoldCompanionConnect(PXHCI_LINK_HOLD hold)
 {
     if (hold == NULL || hold->Kind == XHCI_HOLD_NONE) {
@@ -480,8 +597,11 @@ ULONG XhciHoldCompanionDisconnect(PXHCI_LINK_HOLD hold)
     if (hold == NULL || hold->Kind == XHCI_HOLD_NONE) {
         return XHCI_HOLD_KEEP;
     }
-    if (hold->Kind == XHCI_HOLD_PAIRED && hold->ConnectSeen &&
-        hold->MatchSeen) {
+    /* Issue 29: a failing link's hold is the connector's, not one device's,
+     * so the companion's departure after a connect releases it. */
+    if ((hold->Kind == XHCI_HOLD_PAIRED && hold->ConnectSeen &&
+         hold->MatchSeen) ||
+        (hold->Kind == XHCI_HOLD_FLAP && hold->ConnectSeen)) {
         hold->Kind = XHCI_HOLD_NONE;
         hold->ConnectSeen = 0;
         hold->MatchSeen = 0;

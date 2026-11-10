@@ -17,6 +17,7 @@
 #include <ndis.h>
 #include "..\net_frame.h"
 #include "..\net_cmif.h"
+#include "..\net_upq.h"
 
 typedef XHCI_CM_NET_INFO NET_CM_INFO, *PNET_CM_INFO;
 
@@ -35,6 +36,33 @@ typedef XHCI_CM_NET_INFO NET_CM_INFO, *PNET_CM_INFO;
  * NDIS 6's NDIS_STATUS_MEDIA_DISCONNECTED; NDIS 5's headers have no such
  * send status, and NO_CABLE is the failure that says the same). */
 #define NET_STATUS_DOWN         NDIS_STATUS_NO_CABLE
+
+/*
+ * The upcalls of 98 SE and ME (record 35 section 7.8): the x86 NDIS 5.0
+ * image, on a system without WDM 1.10, makes no receive indication, send
+ * completion or reset completion from the connection manager's callbacks
+ * or from any other caller's context; each is queued and made by an NDIS
+ * miniport timer's routine. The NDIS 5.1 image (x64, NT only) has none of
+ * it.
+ */
+#if !defined(NDIS51_MINIPORT)
+#define NET_DEFER               1
+#else
+#define NET_DEFER               0
+#endif
+#define NET_UP_RING_MAX         524288UL /* the frame ring, tried first  */
+#define NET_UP_RING_MIN         131072UL /* and halved down to this      */
+#define NET_UP_HALT_MS          2000UL  /* a quiescence's log period, ms */
+
+/* The qemu flavour's checks of the data path (record 35 section 7.8):
+ * counters, invariants and sequence numbers logged through the
+ * connection manager; never in the release flavour. */
+#if defined(XHCI_FLAVOUR_QEMU)
+#define NET_DIAG                1
+#else
+#define NET_DIAG                0
+#endif
+#define NET_DIAG_SENDS          256UL   /* sends tracked for a duplicate  */
 
 /* The work the adapter's thread does at PASSIVE_LEVEL. */
 #define NET_WORK_NONE           0UL
@@ -116,6 +144,37 @@ typedef struct _NET_ADAPTER {
     ULONG RxNotUp;          /* frames while the link was down             */
     ULONG RxSplit;          /* large segments split                       */
     ULONG SegDrops[NET_SEGDROP_REASONS];
+
+#if NET_DEFER
+    /* The deferred upcalls (UpLock over Upq, a leaf: no other lock is
+     * taken under it). Upq's frames are copies, in UpRing, of the
+     * Ethernet frames the receive callback assembled; its completed sends
+     * are linked through NET_NEXT, each with its status in
+     * NET_DONE_STATUS. */
+    ULONG Defer;            /* set at initialisation, never changed       */
+    NDIS_SPIN_LOCK UpLock;
+    NET_UPQ Upq;
+    PUCHAR UpRing;
+    ULONG UpRingSize;
+    ULONG UpGen;            /* advanced at each D3: older frames dropped  */
+    NDIS_MINIPORT_TIMER UpTimer[2]; /* set in turn, never the one whose
+                               routine may still be returning            */
+    ULONG UpNext;
+#endif
+#if NET_DIAG
+    ULONG DgInCb;           /* inside a connection manager callback       */
+    ULONG DgInInd;          /* inside NdisMIndicateReceivePacket          */
+    ULONG DgIndSeq;         /* indications made                           */
+    ULONG DgCmpSeq;         /* send completions made                      */
+    ULONG DgAccSeq;         /* sends accepted                             */
+    ULONG DgCbUpcalls;      /* upcalls made inside a callback             */
+    ULONG DgSendInInd;      /* sends entered inside an indication         */
+    ULONG DgBad;            /* invariant breaches, every kind             */
+    ULONG DgFull;           /* sends untracked, the table full            */
+    ULONG DgNextLog;
+    ULONG RxState[NET_RX_PACKETS_MAX];  /* 1 out (pending or indicated)  */
+    PNDIS_PACKET DgSends[NET_DIAG_SENDS];
+#endif
 } NET_ADAPTER, *PNET_ADAPTER;
 
 /* n5_cm.c - the interface glue. */
@@ -126,6 +185,9 @@ VOID NetCmClose(PNET_ADAPTER a);                  /* PASSIVE */
 /* 1 when the connection manager answered, else 0 and *i zeroed. */
 ULONG NetCmQuery(PNET_ADAPTER a, PNET_CM_INFO i); /* <= DISPATCH */
 VOID NetCmLog(PNET_ADAPTER a, const char *label, ULONG value);
+ULONG NetTxErrorTotal(PNET_ADAPTER a);            /* any */
+ULONG NetRxErrorTotal(PNET_ADAPTER a);            /* any */
+VOID NTAPI NetCbStats(PVOID ctx, PXHCI_CM_NET_STATS s);      /* PASSIVE */
 
 /* n5_data.c - the data path. */
 VOID NetSendPackets(NDIS_HANDLE ctx, PPNDIS_PACKET packets, UINT count);
@@ -139,6 +201,14 @@ VOID NTAPI NetCbReceive(PVOID ctx, const VOID *frame, ULONG length,
 VOID NTAPI NetCbTxDone(PVOID ctx, ULONG count);              /* DISPATCH */
 NDIS_STATUS NetRxAlloc(PNET_ADAPTER a);           /* PASSIVE */
 VOID NetRxFree(PNET_ADAPTER a);                   /* PASSIVE */
+#if NET_DEFER
+NDIS_STATUS NetUpInit(PNET_ADAPTER a);            /* PASSIVE */
+VOID NetUpFree(PNET_ADAPTER a);                   /* PASSIVE */
+VOID NetUpStop(PNET_ADAPTER a);                   /* PASSIVE */
+VOID NetUpQuiet(PNET_ADAPTER a);                  /* PASSIVE */
+VOID NetUpWake(PNET_ADAPTER a);                   /* PASSIVE */
+VOID NetUpSleep(PNET_ADAPTER a);                  /* <= DISPATCH, TxLock */
+#endif
 
 /* The miniport's own copy and fill: no C runtime import. */
 VOID NetCopy(PUCHAR dst, const UCHAR *src, ULONG n);

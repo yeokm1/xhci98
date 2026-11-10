@@ -54,7 +54,17 @@ typedef struct _CM_RIRQ_SYNC {
     CM_RIRQ_GEOM Geom;
     ULONG Intel;
     ULONG AutoClearOff;
+    ULONG Ring;             /* the data ring to open                       */
+    ULONG How;              /* its opening: CM_RIRQ_DATA_*, or _LIVE       */
 } CM_RIRQ_SYNC;
+
+/* An opening whose mask was read back neither open nor masked again: the
+ * cause may be enabled unwatched, so the whole interrupt falls back. */
+#define CM_RIRQ_DATA_LIVE 3UL
+
+static VOID cmRirqDataOpened(PCM_NHI nhi, ULONG how);
+static ULONG cmRirqDataTry(PCM_NHI nhi);
+static BOOLEAN cmRirqDataShut(PCM_NHI nhi, BOOLEAN lost);
 
 static ULONG cmRirqRd(PCM_NHI nhi, ULONG offset)
 {
@@ -73,20 +83,105 @@ static VOID cmRirqWr(PCM_NHI nhi, ULONG offset, ULONG value)
 static VOID cmRirqStatus(PCM_NHI nhi, PULONG v, BOOLEAN clear)
 {
     CM_RIRQ_DRV *r;
+    CM_RIRQ_WRITE w[CM_RIRQ_MAX_DWORDS];
     ULONG i;
+    ULONG n;
 
     r = &nhi->Rirq;
     for (i = 0; i < r->Geom.Dwords && i < CM_RIRQ_MAX_DWORDS; i++) {
         v[i] = cmRirqRd(nhi, TBT_HI_ISR + 4UL * i);
     }
-    if (!clear || !r->AutoClearOff) {
+    if (!clear) {
         return;
     }
-    for (i = 0; i < r->Geom.Dwords && i < CM_RIRQ_MAX_DWORDS; i++) {
-        if (v[i] != 0 && v[i] != 0xFFFFFFFFUL) {
-            cmRirqWr(nhi, TBT_HI_ISC + 4UL * i, v[i]);
-        }
+    n = CmRirqAckWrites(&r->Geom, (BOOLEAN)(r->AutoClearOff != 0), v, w,
+                        CM_RIRQ_MAX_DWORDS);
+    for (i = 0; i < n; i++) {
+        cmRirqWr(nhi, w[i].Offset, w[i].Value);
     }
+}
+
+/* Both causes masked by the host's contract (ring 0's alone with no data
+ * cause in the geometry), each mask DW read back: TRUE when every one is
+ * proven masked (record 35 section 5.5). IRQL: DIRQL. */
+static BOOLEAN cmRirqMaskBothNow(PCM_NHI nhi)
+{
+    CM_RIRQ_DRV *r;
+    CM_RIRQ_WRITE w[2];
+    ULONG imr0;
+    ULONG imrData;
+    ULONG i;
+    ULONG n;
+
+    r = &nhi->Rirq;
+    imr0 = 0;
+    imrData = 0;
+    if (r->Intel) {
+        imr0 = cmRirqRd(nhi, TBT_HI_IMR + 4UL * r->Geom.CauseDw);
+        imrData = r->Geom.DataDw == r->Geom.CauseDw
+                      ? imr0
+                      : cmRirqRd(nhi, TBT_HI_IMR + 4UL * r->Geom.DataDw);
+    }
+    n = CmRirqMaskBoth(&r->Geom, (BOOLEAN)(r->Intel != 0), imr0, imrData, w);
+    for (i = 0; i < n; i++) {
+        cmRirqWr(nhi, w[i].Offset, w[i].Value);
+    }
+    imr0 = cmRirqRd(nhi, TBT_HI_IMR + 4UL * r->Geom.CauseDw);
+    imrData = r->Geom.DataBit != 0
+                  ? cmRirqRd(nhi, TBT_HI_IMR + 4UL * r->Geom.DataDw)
+                  : imr0;
+    return CmRirqBothMasked(&r->Geom, imr0, imrData);
+}
+
+/* The data cause's mask written by the host's contract and read back:
+ * TRUE when proven as asked. IRQL: DIRQL. */
+static BOOLEAN cmRirqDataMaskNow(PCM_NHI nhi, BOOLEAN open)
+{
+    CM_RIRQ_DRV *r;
+    CM_RIRQ_WRITE w;
+    ULONG imr;
+
+    r = &nhi->Rirq;
+    imr = 0;
+    if (r->Intel) {
+        imr = cmRirqRd(nhi, TBT_HI_IMR + 4UL * r->Geom.DataDw);
+    }
+    CmRirqDataMaskWrite(&r->Geom, (BOOLEAN)(r->Intel != 0), open, imr, &w);
+    if (w.Write) {
+        cmRirqWr(nhi, w.Offset, w.Value);
+    }
+    imr = cmRirqRd(nhi, TBT_HI_IMR + 4UL * r->Geom.DataDw);
+    return (BOOLEAN)(w.Write && CmRirqDataMaskProven(&r->Geom, open, imr));
+}
+
+/* The data cause opened inside an armed interrupt (the thread's
+ * CmRirqDataOpen, or the arm): the bit put in the geometry the routine
+ * reads, ITR[0] 128 us, the mask written and read back: CM_RIRQ_DATA_OPEN.
+ * Not proven, masked again: CM_RIRQ_DATA_UNPROVEN where that mask is read
+ * back, else CM_RIRQ_DATA_LIVE with the bit left in the geometry so the
+ * routine still claims it. No such ring: CM_RIRQ_DATA_POLL. IRQL: DIRQL. */
+static ULONG cmRirqDataOpenNow(PCM_NHI nhi, ULONG ring)
+{
+    CM_RIRQ_DRV *r;
+    CM_RIRQ_GEOM g;
+
+    r = &nhi->Rirq;
+    g = r->Geom;
+    if (!CmRirqGeomData(&g, ring)) {
+        return CM_RIRQ_DATA_POLL;
+    }
+    r->Geom = g;
+    cmRirqWr(nhi, TBT_HI_ITR0, CM_RIRQ_ITR_DATA);
+    if (cmRirqDataMaskNow(nhi, TRUE)) {
+        r->DataOpen = 1;
+        return CM_RIRQ_DATA_OPEN;
+    }
+    cmRirqWr(nhi, TBT_HI_ITR0, 0);
+    if (cmRirqDataMaskNow(nhi, FALSE)) {
+        (VOID)CmRirqGeomData(&r->Geom, 0);
+        return CM_RIRQ_DATA_UNPROVEN;
+    }
+    return CM_RIRQ_DATA_LIVE;
 }
 
 /* The cause masked by the host's contract, and the mask DW read back.
@@ -120,7 +215,7 @@ static BOOLEAN NTAPI cmRirqIsr(PKINTERRUPT Interrupt, PVOID Context)
     PCM_NHI nhi;
     CM_RIRQ_DRV *r;
     ULONG v[CM_RIRQ_MAX_DWORDS];
-    ULONG imr;
+    ULONG causes;
 
     UNREFERENCED_PARAMETER(Interrupt);
 
@@ -132,7 +227,7 @@ static BOOLEAN NTAPI cmRirqIsr(PKINTERRUPT Interrupt, PVOID Context)
     v[0] = 0;
     v[CM_RIRQ_MAX_DWORDS - 1] = 0;
     cmRirqStatus(nhi, v, FALSE);
-    switch (CmRirqClassify(&r->Geom, v[0], v[r->Geom.CauseDw])) {
+    switch (CmRirqClassify(&r->Geom, v)) {
     case CM_RIRQ_ISR_ONES:
         (VOID)InterlockedIncrement(&r->Ones);
         return FALSE;
@@ -141,8 +236,18 @@ static BOOLEAN NTAPI cmRirqIsr(PKINTERRUPT Interrupt, PVOID Context)
     default:
         break;
     }
+    causes = CmRirqCauses(&r->Geom, v);
     if (r->AutoClearOff) {
-        cmRirqStatus(nhi, v, TRUE);
+        /* Every DW read written back to Status Clear, the data ring's bit
+         * with ring 0's (record 35 section 5.5). */
+        CM_RIRQ_WRITE w[CM_RIRQ_MAX_DWORDS];
+        ULONG i;
+        ULONG n;
+
+        n = CmRirqAckWrites(&r->Geom, TRUE, v, w, CM_RIRQ_MAX_DWORDS);
+        for (i = 0; i < n; i++) {
+            cmRirqWr(nhi, w[i].Offset, w[i].Value);
+        }
     }
 #if defined(XHCI_FLAVOUR_QEMU)
     if (r->QemuDead ||
@@ -154,12 +259,20 @@ static BOOLEAN NTAPI cmRirqIsr(PKINTERRUPT Interrupt, PVOID Context)
     }
 #endif
     (VOID)InterlockedIncrement(&r->Claims);
+    if (causes & CM_RIRQ_CAUSE_RING0) {
+        (VOID)InterlockedIncrement(&r->Claims0);
+    }
+    if (causes & CM_RIRQ_CAUSE_DATA) {
+        (VOID)InterlockedIncrement(&r->ClaimsData);
+    }
     if (CmRirqBurstClaim(&r->Burst, r->DpcSeq)) {
         /* A level line asserted again at once after each acknowledgement,
          * with no DPC between: masked here, where the thread may never run
-         * (one processor). Masking only lowers an enable. */
-        (VOID)cmRirqMaskNow(nhi, FALSE, &imr);
+         * (one processor) - both causes, whichever stormed (record 35
+         * section 5.5). Masking only lowers an enable. */
+        (VOID)cmRirqMaskBothNow(nhi);
         r->Armed = 0;
+        r->DataOpen = 0;
         r->StormMasked = 1;
         return TRUE;
     }
@@ -185,6 +298,11 @@ static VOID NTAPI cmRirqDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
     nhi = (PCM_NHI)Context;
     (VOID)InterlockedIncrement(&nhi->Rirq.DpcSeq);
     (VOID)CmThrQueue(nhi, CM_WORK_RING, NULL);
+    /* The network service kicked on every claim while its cause is open
+     * (record 35 section 5.5); its descriptors decide, as the poll's. */
+    if (nhi->Rirq.DataOpen) {
+        CmNetIrqKick(nhi);
+    }
     (VOID)InterlockedDecrement(&nhi->Rirq.DpcsOwed);
 }
 
@@ -206,14 +324,74 @@ static BOOLEAN NTAPI cmRirqSyncArm(PVOID Context)
     nhi->Rirq.AutoClearOff = s->AutoClearOff;
     cmRirqStatus(nhi, v, TRUE);
     cmRirqWr(nhi, TBT_HI_ITR0, 0);
+    /* A data cause carried from before (its mask never proven, record 35
+     * section 5.5) is masked and proven first, and leaves the geometry
+     * only then; not proven, nothing is armed and the routine still
+     * claims it. */
+    if (nhi->Rirq.Geom.DataBit != 0) {
+        if (!cmRirqDataMaskNow(nhi, FALSE)) {
+            return FALSE;
+        }
+        (VOID)CmRirqGeomData(&nhi->Rirq.Geom, 0);
+    }
     CmRirqBurstReset(&nhi->Rirq.Burst, nhi->Rirq.DpcSeq);
     nhi->Rirq.StormMasked = 0;
+    nhi->Rirq.DataOpen = 0;
     nhi->Rirq.Armed = 1;
     s->Proven = cmRirqMaskNow(nhi, TRUE, &s->Imr);
     if (!s->Proven) {
         nhi->Rirq.Armed = 0;
         (VOID)cmRirqMaskNow(nhi, FALSE, &imr);
+        return FALSE;
     }
+    /* The data ring's cause is opened by the thread after the self-test
+     * (cmRirqDataTry), so its interrupts never pass ring 0's test. */
+    return TRUE;
+}
+
+/* The thread's CmRirqDataOpen inside the interrupt object's lock. IRQL:
+ * DIRQL (KeSynchronizeExecution). */
+static BOOLEAN NTAPI cmRirqSyncDataOpen(PVOID Context)
+{
+    CM_RIRQ_SYNC *s;
+
+    s = (CM_RIRQ_SYNC *)Context;
+    if (!s->Nhi->Rirq.Armed) {
+        s->How = CM_RIRQ_DATA_POLL;
+    } else if (s->Nhi->Rirq.DataOpen) {
+        s->How = CM_RIRQ_DATA_OPEN;
+    } else {
+        s->How = cmRirqDataOpenNow(s->Nhi, s->Ring);
+    }
+    s->Proven = (BOOLEAN)(s->How == CM_RIRQ_DATA_OPEN);
+    return s->Proven;
+}
+
+/* The data cause masked (the network service's rundown), ITR[0] back to
+ * 0, its bit out of the geometry once proven masked. IRQL: DIRQL
+ * (KeSynchronizeExecution). */
+static BOOLEAN NTAPI cmRirqSyncDataClose(PVOID Context)
+{
+    CM_RIRQ_SYNC *s;
+    PCM_NHI nhi;
+
+    s = (CM_RIRQ_SYNC *)Context;
+    nhi = s->Nhi;
+    nhi->Rirq.DataOpen = 0;
+    s->Proven = TRUE;
+    if (nhi->Rirq.Geom.DataBit == 0) {
+        return TRUE;
+    }
+    if (!s->Write) {
+        /* The host interface lost: nothing written, the bit kept so a
+         * routine still claims what it reads (record 35 section 5.5). */
+        return TRUE;
+    }
+    s->Proven = cmRirqDataMaskNow(nhi, FALSE);
+    if (s->Proven) {
+        (VOID)CmRirqGeomData(&nhi->Rirq.Geom, 0);
+    }
+    cmRirqWr(nhi, TBT_HI_ITR0, 0);
     return s->Proven;
 }
 
@@ -229,9 +407,17 @@ static BOOLEAN NTAPI cmRirqSyncDisarm(PVOID Context)
     s = (CM_RIRQ_SYNC *)Context;
     nhi = s->Nhi;
     nhi->Rirq.Armed = 0;
+    nhi->Rirq.DataOpen = 0;
     s->Proven = FALSE;
     if (s->Write && nhi->BarVa != NULL && nhi->Rirq.Geom.Dwords != 0) {
-        s->Proven = cmRirqMaskNow(nhi, FALSE, &s->Imr);
+        /* Both causes (record 35 section 5.5); the data bit leaves the
+         * geometry once proven masked, else the routine still claims it. */
+        s->Proven = cmRirqMaskBothNow(nhi);
+        s->Imr = cmRirqRd(nhi, TBT_HI_IMR + 4UL * nhi->Rirq.Geom.CauseDw);
+        if (s->Proven && nhi->Rirq.Geom.DataBit != 0) {
+            (VOID)CmRirqGeomData(&nhi->Rirq.Geom, 0);
+            cmRirqWr(nhi, TBT_HI_ITR0, 0);
+        }
         cmRirqStatus(nhi, v, TRUE);
     }
     return s->Proven;
@@ -292,12 +478,13 @@ VOID CmRirqStart(PCM_NHI nhi, PCM_PARTIAL_RESOURCE_LIST translated)
     r->CommandRead = 0;
     r->IntxOurs = 0;
     r->Retained = 0;
-    r->Noted9x = 0;
     r->Armed = 0;
     r->StormMasked = 0;
     r->QemuDeadAfter = nhi->Values.QemuIrqDead;
     r->QemuDead = 0;
     r->QemuDropped = 0;
+    r->DataWant = 0;
+    r->DataOpen = 0;
     CmZero(&r->Geom, sizeof(r->Geom));
     CmZero(&r->Watch, sizeof(r->Watch));
     r->Connects = 0;
@@ -345,7 +532,6 @@ VOID CmRirqStart(PCM_NHI nhi, PCM_PARTIAL_RESOURCE_LIST translated)
 static BOOLEAN cmRirqWanted(PCM_NHI nhi)
 {
     return CmRirqWanted(nhi->Rirq.Value,
-                        (BOOLEAN)IoIsWdmVersionAvailable(1, 0x10),
                         (BOOLEAN)(nhi->Rirq.HaveLine != 0),
                         (BOOLEAN)(nhi->Rirq.Failed != 0));
 }
@@ -430,12 +616,19 @@ VOID CmRirqDown(PCM_NHI nhi, ULONG why)
     nhi->Ring.RxIe = FALSE;
     if (!r->Connected) {
         r->Armed = 0;
+        r->DataOpen = 0;
         if (why == CM_RIRQ_DOWN_FALLBACK) {
             r->Failed = 1;
         }
         return;
     }
     r->Downs++;
+    if (r->DataOpen && why == CM_RIRQ_DOWN_FALLBACK) {
+        /* The data ring's cause latched to polling with ring 0's (record
+         * 35 section 5.5): the service's poll carries it from here. */
+        CmLogNote(nhi, "cm.net.irq.latched", r->Geom.DataRing);
+    }
+    CmRirqWatchDataStart(&r->Watch, FALSE, 0, 0);
     s.Nhi = nhi;
     s.Write = cmRirqMayWrite(nhi);
     s.Open = FALSE;
@@ -510,7 +703,9 @@ static BOOLEAN cmRirqSelfTest(PCM_NHI nhi)
 
     r = &nhi->Rirq;
     r->SelfTests++;
-    claims = r->Claims;
+    /* Ring 0's own claims (record 35 section 5.5): a data ring's claim
+     * proves nothing of ring 0's cause. */
+    claims = r->Claims0;
     seq = r->DpcSeq;
     if (!cmRirqMayWrite(nhi)) {
         return FALSE;
@@ -519,7 +714,7 @@ static BOOLEAN cmRirqSelfTest(PCM_NHI nhi)
                       r->Geom.CauseBit);
     start = cmRirqNow(nhi);
     for (n = 0; n <= CM_RIRQ_SELFTEST_MS; n++) {
-        if (r->Claims != claims && r->DpcSeq != seq) {
+        if (r->Claims0 != claims && r->DpcSeq != seq) {
             CmLogNote(nhi, "cm.irq.selftest", cmRirqNow(nhi) - start);
             return TRUE;
         }
@@ -529,7 +724,7 @@ static BOOLEAN cmRirqSelfTest(PCM_NHI nhi)
         cmRirqSleep1(nhi);
     }
     r->SelfTestFailures++;
-    CmLogNote(nhi, "cm.irq.selftest.fail", (ULONG)(r->Claims - claims));
+    CmLogNote(nhi, "cm.irq.selftest.fail", (ULONG)(r->Claims0 - claims));
     return FALSE;
 }
 
@@ -557,6 +752,14 @@ static VOID cmRirqUp(PCM_NHI nhi)
         CmLogNote(nhi, "cm.irq.none", 0x100UL | nhi->Ring.Paths);
         CmRirqDown(nhi, CM_RIRQ_DOWN_FALLBACK);
         return;
+    }
+    if (r->Geom.DataBit != 0 && r->Geom.Paths == s.Geom.Paths) {
+        /* A data cause whose mask was never proven (record 35 section
+         * 5.5) stays recognised through the reconnect and the arm, which
+         * proves it masked before anything is unmasked. */
+        s.Geom.DataRing = r->Geom.DataRing;
+        s.Geom.DataDw = r->Geom.DataDw;
+        s.Geom.DataBit = r->Geom.DataBit;
     }
     if (!r->CommandRead) {
         /* Section 4.5.6.1: bit 10 found set is never cleared here, and
@@ -610,6 +813,8 @@ static VOID cmRirqUp(PCM_NHI nhi)
     s.Open = TRUE;
     s.Proven = FALSE;
     s.Imr = 0;
+    s.Ring = 0;
+    s.How = 0;
     if (!cmRirqMayWrite(nhi) ||
         !KeSynchronizeExecution(r->Object, cmRirqSyncArm, &s)) {
         r->ArmFailures++;
@@ -620,7 +825,7 @@ static VOID cmRirqUp(PCM_NHI nhi)
     nhi->Ring.RxIe = TRUE;
     r->IrqMode = CM_RIRQ_MODE_LINE;
     r->MaintOwed = 1;
-    CmRirqWatchStart(&r->Watch, (ULONG)r->Claims, nhi->Ring.Counters.Rx);
+    CmRirqWatchStart(&r->Watch, (ULONG)r->Claims0, nhi->Ring.Counters.Rx);
     CmLogNote(nhi, "cm.irq.armed", s.Imr);
     /* A frame that landed between the stale status read and the unmask is
      * not left for the next one. */
@@ -631,8 +836,11 @@ static VOID cmRirqUp(PCM_NHI nhi)
             return;
         }
         r->SelfTestOwed = 0;
-        CmRirqWatchStart(&r->Watch, (ULONG)r->Claims, nhi->Ring.Counters.Rx);
+        CmRirqWatchStart(&r->Watch, (ULONG)r->Claims0, nhi->Ring.Counters.Rx);
     }
+    /* Ring 0 proven: the data ring's cause where it is asked for (record
+     * 35 section 5.5). */
+    (VOID)cmRirqDataTry(nhi);
 }
 
 VOID CmRirqBeforeMaint(PCM_NHI nhi)
@@ -644,24 +852,44 @@ VOID CmRirqBeforeMaint(PCM_NHI nhi)
     if (!r->Armed) {
         return;
     }
-    act = CmRirqWatchPass(&r->Watch, (ULONG)r->Claims, nhi->Ring.Counters.Rx,
+    act = CmRirqWatchPass(&r->Watch, (ULONG)r->Claims0, nhi->Ring.Counters.Rx,
                           TbtRingRxPending(&nhi->Ring));
+    /* Per cause (record 35 section 5.5): the data ring's claims against
+     * the frames its service took, whatever ring 0 did. */
+    if (CmRirqWatchData(&r->Watch, (ULONG)r->ClaimsData, nhi->Net.RxTaken)) {
+        r->Storms++;
+        r->DataStorms++;
+        CmLogNote(nhi, "cm.irq.storm", 0x80000000UL | (ULONG)r->ClaimsData);
+        CmRirqDown(nhi, CM_RIRQ_DOWN_FALLBACK);
+        return;
+    }
     if (act == CM_RIRQ_WATCH_STORM) {
         r->Storms++;
-        CmLogNote(nhi, "cm.irq.storm", (ULONG)r->Claims);
+        CmLogNote(nhi, "cm.irq.storm", (ULONG)r->Claims0);
         CmRirqDown(nhi, CM_RIRQ_DOWN_FALLBACK);
         return;
     }
     if (act == CM_RIRQ_WATCH_SELFTEST) {
         r->Suspects++;
         CmLogNote(nhi, "cm.irq.suspect", (ULONG)r->Claims);
+        /* The data cause masked for the test, so only ring 0's own
+         * interrupt can pass it, then opened again (record 35 5.5). */
+        if (r->DataOpen) {
+            CmRirqWatchDataStart(&r->Watch, FALSE, 0, 0);
+            if (!cmRirqDataShut(nhi, FALSE)) {
+                CmLogNote(nhi, "cm.net.irq.unmasked", r->Geom.DataRing);
+                CmRirqDown(nhi, CM_RIRQ_DOWN_FALLBACK);
+                return;
+            }
+        }
         if (!cmRirqSelfTest(nhi)) {
             r->Lost++;
             CmLogNote(nhi, "cm.irq.lost", r->Lost);
             CmRirqDown(nhi, CM_RIRQ_DOWN_FALLBACK);
             return;
         }
-        CmRirqWatchStart(&r->Watch, (ULONG)r->Claims, nhi->Ring.Counters.Rx);
+        CmRirqWatchStart(&r->Watch, (ULONG)r->Claims0, nhi->Ring.Counters.Rx);
+        (VOID)cmRirqDataTry(nhi);
     }
 }
 
@@ -674,7 +902,7 @@ VOID CmRirqAfterMaint(PCM_NHI nhi, ULONG periodMs)
         return;
     }
     UNREFERENCED_PARAMETER(periodMs);
-    CmRirqWatchDrained(&r->Watch, (ULONG)r->Claims);
+    CmRirqWatchDrained(&r->Watch, (ULONG)r->Claims0);
     r->MaintLast = cmRirqNow(nhi);
     r->MaintOwed = 0;
 }
@@ -699,7 +927,7 @@ VOID CmRirqWake(PCM_NHI nhi)
         CmLogNote(nhi, "u4.failed", nhi->U4.InertReason);
     }
     if (r->Armed) {
-        CmRirqWatchDrained(&r->Watch, (ULONG)r->Claims);
+        CmRirqWatchDrained(&r->Watch, (ULONG)r->Claims0);
     }
 }
 
@@ -733,13 +961,6 @@ VOID CmRirqService(PCM_NHI nhi, BOOLEAN polling, ULONG periodMs)
         return;
     }
     if (!polling) {
-        return;
-    }
-    if (r->Value == CM_RIRQ_VALUE_LINE && !IoIsWdmVersionAvailable(1, 0x10)) {
-        if (!r->Noted9x) {
-            r->Noted9x = 1;
-            CmLogNote(nhi, "cm.irq.9x", r->HaveLine);
-        }
         return;
     }
     if (!cmRirqWanted(nhi)) {
@@ -781,4 +1002,127 @@ VOID CmRirqLogCounters(PCM_NHI nhi)
     if (r->QemuDeadAfter != 0) {
         CmLogNote(nhi, "cm.irq.qemu.dropped", (ULONG)r->QemuDropped);
     }
+    CmLogNote(nhi, "cm.irq.claims.ring0", (ULONG)r->Claims0);
+    CmLogNote(nhi, "cm.net.irq.claims", (ULONG)r->ClaimsData);
+    CmLogNote(nhi, "cm.net.irq.opens", r->DataOpens);
+    CmLogNote(nhi, "cm.net.irq.unproven.n", r->DataUnproven);
+    CmLogNote(nhi, "cm.net.irq.storms", r->DataStorms);
+}
+
+/* ---------------------------------------------------------------------- */
+/* The networking data ring's cause (record 35 section 5.5, task 48.38)    */
+/* ---------------------------------------------------------------------- */
+
+/* After an opening, by the thread's call or an arm: counted and logged,
+ * and the data cause watched from now where open. */
+static VOID cmRirqDataOpened(PCM_NHI nhi, ULONG how)
+{
+    CM_RIRQ_DRV *r;
+
+    r = &nhi->Rirq;
+    if (how == CM_RIRQ_DATA_OPEN) {
+        r->DataOpens++;
+        CmRirqWatchDataStart(&r->Watch, TRUE, (ULONG)r->ClaimsData,
+                             nhi->Net.RxTaken);
+        CmLogNote(nhi, "cm.net.irq.open", r->Geom.DataRing);
+    } else {
+        r->DataUnproven++;
+        CmLogNote(nhi, "cm.net.irq.unproven", (how << 8) | r->DataWant);
+    }
+}
+
+/* The data cause opened where it is asked for and the interrupt is armed
+ * and proven (no self-test owed): CM_RIRQ_DATA_*. An opening left neither
+ * open nor proven masked takes the whole interrupt down to polling, where
+ * record 21 section 4.5.6 retires the line. PASSIVE_LEVEL, the thread. */
+static ULONG cmRirqDataTry(PCM_NHI nhi)
+{
+    CM_RIRQ_DRV *r;
+    CM_RIRQ_SYNC s;
+
+    r = &nhi->Rirq;
+    if (r->DataWant == 0 || !r->Connected || !r->Armed || r->Retained ||
+        r->SelfTestOwed || !cmRirqMayWrite(nhi)) {
+        return CM_RIRQ_DATA_POLL;
+    }
+    if (r->DataOpen) {
+        return CM_RIRQ_DATA_OPEN;
+    }
+    s.Nhi = nhi;
+    s.Write = TRUE;
+    s.Open = TRUE;
+    s.Proven = FALSE;
+    s.Imr = 0;
+    s.Ring = r->DataWant;
+    s.How = CM_RIRQ_DATA_POLL;
+    (VOID)KeSynchronizeExecution(r->Object, cmRirqSyncDataOpen, &s);
+    if (s.How == CM_RIRQ_DATA_POLL) {
+        return CM_RIRQ_DATA_POLL;
+    }
+    cmRirqDataOpened(nhi, s.How);
+    if (s.How == CM_RIRQ_DATA_LIVE) {
+        CmLogNote(nhi, "cm.net.irq.unmasked", s.Ring);
+        CmRirqDown(nhi, CM_RIRQ_DOWN_FALLBACK);
+        return CM_RIRQ_DATA_UNPROVEN;
+    }
+    return s.How;
+}
+
+/* The data cause masked, ITR[0] 0, the ask kept: TRUE when proven masked
+ * or never open. PASSIVE_LEVEL, the thread. */
+static BOOLEAN cmRirqDataShut(PCM_NHI nhi, BOOLEAN lost)
+{
+    CM_RIRQ_DRV *r;
+    CM_RIRQ_SYNC s;
+
+    r = &nhi->Rirq;
+    if (!r->Connected) {
+        r->DataOpen = 0;
+        return TRUE;
+    }
+    s.Nhi = nhi;
+    s.Write = (BOOLEAN)(!lost && cmRirqMayWrite(nhi));
+    s.Open = FALSE;
+    s.Proven = FALSE;
+    s.Imr = 0;
+    s.Ring = 0;
+    s.How = 0;
+    return KeSynchronizeExecution(r->Object, cmRirqSyncDataClose, &s);
+}
+
+ULONG CmRirqDataOpen(PCM_NHI nhi, ULONG ring, BOOLEAN lost)
+{
+    nhi->Rirq.DataWant = ring;
+    if (lost) {
+        return CM_RIRQ_DATA_POLL;
+    }
+    return cmRirqDataTry(nhi);
+}
+
+BOOLEAN CmRirqDataClose(PCM_NHI nhi, BOOLEAN lost)
+{
+    CM_RIRQ_DRV *r;
+
+    r = &nhi->Rirq;
+    r->DataWant = 0;
+    CmRirqWatchDataStart(&r->Watch, FALSE, 0, 0);
+    if (!cmRirqDataShut(nhi, lost)) {
+        CmLogNote(nhi, "cm.net.irq.unmasked", r->Geom.DataRing);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+ULONG CmRirqDataState(PCM_NHI nhi)
+{
+    CM_RIRQ_DRV *r;
+
+    r = &nhi->Rirq;
+    if (r->DataOpen) {
+        return 1;
+    }
+    if (r->DataWant != 0 && r->Value == CM_RIRQ_VALUE_LINE && r->Failed) {
+        return 2;
+    }
+    return 0;
 }

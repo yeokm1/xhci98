@@ -37,12 +37,34 @@ worktrees", is the design.
 Run every case even when the last passing run read the same inputs.
 XHCI98_FULL_SELFTESTS=1 does the same; a cut's builds set it.
 
+.PARAMETER Part
+One part of the cases alone (roadmap-usb4 task 48.11): package (the
+packager's own cases), upload (the family layout and the upload set),
+download (the driver pack, the three downloads and the x64 four-directory
+tree's cases, after the upload set's stand-in release), cut (the release
+cut's texts, the source stamp, the publisher's payload and its tools),
+or sign (the x64 signatures and catalogs, the sign-only record, the import, cut-builds.ps1, -CheckOnly
+and the digest). Each part runs the common setup and the baseline flat
+package first, and records no pass. Without -Part, a run that is not
+skipped runs the five parts at once, each in a process of its own with
+its output printed whole when it ends (as scripts\build-steps.ps1 runs
+its steps), and records the pass when all five passed.
+
+.PARAMETER Serial
+The five parts one after the other in this one process, as before task
+48.11; XHCI98_PACKAGER_SERIAL=1 does the same.
+
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\package\test-package.ps1
 #>
 
 [CmdletBinding()]
-param([switch]$Force)
+param(
+    [switch]$Force,
+    [ValidateSet("", "package", "upload", "download", "cut", "sign")]
+    [string]$Part = "",
+    [switch]$Serial
+)
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
@@ -333,7 +355,9 @@ $gitPolicy = Set-SelfTestGitPolicy -ScratchRoot $gitPolicyRoot -Keep @("TEMP", "
 $tempRoot = [System.IO.Path]::GetFullPath($env:TEMP)
 $env:TEMP = $tempRoot
 $env:TMP = $tempRoot
-$digest = if (Test-CmdAutoRun) { $null } else { Get-PackagerSelfTestDigest -Root $repo -Inherited $inherited }
+# A part (-Part) is run by the run that read the digest: it neither skips
+# nor records.
+$digest = if ($Part -ne "" -or (Test-CmdAutoRun)) { $null } else { Get-PackagerSelfTestDigest -Root $repo -Inherited $inherited }
 $fullAsked = $Force -or ("$env:XHCI98_FULL_SELFTESTS" -eq "1")
 if (-not $fullAsked -and $null -ne $digest) {
     $rec = Read-SelfTestPassRecord -Suite "packager" -Digest $digest
@@ -344,11 +368,100 @@ if (-not $fullAsked -and $null -ne $digest) {
     }
 }
 
+# The parts (task 48.11): which this process runs. "" with -Serial is all
+# of them, one after the other.
+function Test-PackagerPart {
+    param([string]$Name)
+    return ($Part -eq "" -or $Part -eq $Name)
+}
+
+# The five parts at once (task 48.11), unless one part or -Serial was
+# asked: each a child of this script with -Part, its own log, its output
+# printed whole when it ends; the pass recorded here when all five passed.
+if ($Part -eq "" -and -not $Serial -and "$env:XHCI98_PACKAGER_SERIAL" -ne "1") {
+    $parts = @("upload", "download", "package", "sign", "cut")
+    $logDir = Join-Path $tempRoot ("xhci98-packager-parts-" + [System.IO.Path]::GetRandomFileName())
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    $psExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+    $kids = @()
+    $wall = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        foreach ($pt in $parts) {
+            $log = Join-Path $logDir ($pt + ".log")
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = $env:ComSpec
+            $psi.Arguments = ('/d /s /c ""{0}" -NoProfile -ExecutionPolicy Bypass -File "{1}" -Part {2} > "{3}" 2>&1"' -f $psExe, $PSCommandPath, $pt, $log)
+            $psi.WorkingDirectory = (Get-Location).ProviderPath
+            $psi.UseShellExecute = $false
+            $psi.CreateNoWindow = $true
+            $kids += [pscustomobject]@{ Part = $pt; Log = $log; Watch = [System.Diagnostics.Stopwatch]::StartNew(); Process = [System.Diagnostics.Process]::Start($psi); Code = $null; Checks = 0; Failed = -1; Printed = $false }
+        }
+        while (@($kids | Where-Object { -not $_.Printed }).Count -gt 0) {
+            foreach ($k in $kids) {
+                if ($k.Printed -or -not $k.Process.HasExited) { continue }
+                $k.Watch.Stop()
+                $k.Code = $k.Process.ExitCode
+                $text = if (Test-Path -LiteralPath $k.Log) { [System.IO.File]::ReadAllText($k.Log) } else { "" }
+                Write-Host ""
+                Write-Host ("==== part {0}: exit {1}, {2}:{3:00} ====" -f $k.Part, $k.Code, [int][Math]::Floor($k.Watch.Elapsed.TotalMinutes), $k.Watch.Elapsed.Seconds) -ForegroundColor Cyan
+                Write-Host $text.TrimEnd()
+                $m = [regex]::Match($text, 'packager self-tests \(part \w+\) passed \((\d+) checks\)')
+                if ($m.Success) { $k.Checks = [int]$m.Groups[1].Value; $k.Failed = 0 }
+                $m = [regex]::Match($text, 'packager self-tests \(part \w+\) FAILED: (\d+) of (\d+) check')
+                if ($m.Success) { $k.Checks = [int]$m.Groups[2].Value; $k.Failed = [int]$m.Groups[1].Value }
+                $k.Printed = $true
+            }
+            Start-Sleep -Milliseconds 250
+        }
+    } finally {
+        foreach ($k in $kids) { if ($null -ne $k.Process -and -not $k.Process.HasExited) { $k.Process.WaitForExit() } }
+        Remove-Item -LiteralPath $logDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    Write-Host ""
+    foreach ($k in $kids) {
+        Write-Host ("  {0,-8} exit {1}, {2,5} checks, {3}:{4:00}" -f $k.Part, $k.Code, $k.Checks, [int][Math]::Floor($k.Watch.Elapsed.TotalMinutes), $k.Watch.Elapsed.Seconds)
+    }
+    $total = ($kids | Measure-Object -Property Checks -Sum).Sum
+    $bad = @($kids | Where-Object { $_.Code -ne 0 -or $_.Failed -ne 0 })
+    if ($bad.Count -gt 0) {
+        Write-Err ("packager self-tests FAILED in part {0} ({1}:{2:00} for the five at once)." -f (($bad | ForEach-Object { $_.Part }) -join ", "), [int][Math]::Floor($wall.Elapsed.TotalMinutes), $wall.Elapsed.Seconds)
+        exit 1
+    }
+    if ($null -ne $digest -and (Get-PackagerSelfTestDigest -Root $repo -Inherited $inherited) -eq $digest) {
+        [void](Write-SelfTestPassRecord -Suite "packager" -Digest $digest -Checks $total -Tree ([System.IO.Path]::GetFullPath($repo).TrimEnd('\')))
+    }
+    Write-Ok ("packager self-tests passed ({0} checks in five parts at once, {1}:{2:00})" -f $total, [int][Math]::Floor($wall.Elapsed.TotalMinutes), $wall.Elapsed.Seconds)
+    exit 0
+}
+
 $packager = Join-Path $PSScriptRoot "make-package.ps1"
 $releaser = Join-Path $PSScriptRoot "make-release.ps1"
 $prodInf = Join-Path $repo "src\xhci98.inf"
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "test-harness.ps1")
+
+# Each section's time (task 48.11): Write-Step, common.ps1's, here also
+# notes when the section before it ended; the slowest are said at the end.
+$script:stepWatch = [System.Diagnostics.Stopwatch]::StartNew()
+$script:stepTimes = New-Object System.Collections.ArrayList
+$script:stepName = "the setup"
+function Write-Step {
+    param([string]$Message)
+    [void]$script:stepTimes.Add([pscustomobject]@{ Name = $script:stepName; Seconds = $script:stepWatch.Elapsed.TotalSeconds })
+    $script:stepWatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $script:stepName = $Message
+    Write-Host ""
+    Write-Host "== $Message" -ForegroundColor Cyan
+}
+function Write-StepTimes {
+    [void]$script:stepTimes.Add([pscustomobject]@{ Name = $script:stepName; Seconds = $script:stepWatch.Elapsed.TotalSeconds })
+    Write-Host ""
+    Write-Host "the slowest sections:"
+    foreach ($t in @($script:stepTimes | Sort-Object Seconds -Descending | Select-Object -First 8)) {
+        $n = if ($t.Name.Length -gt 60) { $t.Name.Substring(0, 57) + "..." } else { $t.Name }
+        Write-Host ("  {0,6:N1} s  {1}" -f $t.Seconds, $n)
+    }
+}
 
 function Get-StandInSha {
     param([byte[]]$Bytes)
@@ -738,6 +851,35 @@ try {
         Assert-True (Test-Path -LiteralPath (Join-Path $flatOut $f)) "'$f' is missing from the flat package."
     }
 
+
+    # The report batches' fixtures (Get-ReportBatchFaults' controls), here
+    # before the parts, since two of them use it (task 48.11).
+    function New-ReportBatchFixture {
+        param([hashtable]$Spec)
+        $l = @("@echo off", ("rem " + $Spec.Name.ToUpperInvariant() + " - a fixture of test-package.ps1."))
+        if ($Spec.Win) { $l += @('if "%OS%"=="Windows_NT" goto nt', 'goto run', ':nt', 'cd /d "%~dp0"', ':run') }
+        if ($Spec.ContainsKey("ToolLast")) {
+            # The tool runs last and prints the outcome, its last line what
+            # to attach (owner, 2026-10-13); with ArgPass, Args ends in %1,
+            # passed on as it came for the tool to default and check.
+            if ($Spec.Win) { $l += "echo On Vista and 7: right-click it and choose Run as administrator." }
+            if ($Spec.Names.Count -gt 0) { $l += ("echo Attach the " + ($Spec.Names -join " and ") + " files the tool names.") }
+            $l += @(("if exist " + $Spec.Tool + ".EXE goto tool"), ("echo " + $Spec.Tool + ".EXE was not found in this directory."),
+                    "goto end", ":tool", ($Spec.Tool + " " + $Spec.Args), ":end", "pause")
+            return (($l -join "`r`n") + "`r`n")
+        }
+        $l += ("if not exist " + $Spec.Tool + ".EXE goto nofile")
+        $l += ($Spec.Tool + " " + $Spec.Args)
+        $l += "if errorlevel 4 goto failed"
+        if ($Spec.Win) { $l += "echo On Vista and 7: right-click it and choose Run as administrator." }
+        if ($Spec.Names.Count -gt 0) { $l += ("echo Attach the " + ($Spec.Names -join " and ") + " files named above.") }
+        $l += @("goto end", ":failed", "echo It did not finish. Read the lines above.", "goto end",
+                ":nofile", ("echo " + $Spec.Tool + ".EXE was not found in this directory."), ":end", "echo.", "pause")
+        return (($l -join "`r`n") + "`r`n")
+    }
+
+    # ---- part "package" (task 48.11: test-package.ps1 -Part; Test-PackagerPart) ----
+    if (Test-PackagerPart "package") {
     # --- the bundled Stor98 build (task 42-A.30) -----------------------------
     #
     # Since 3.1.0.0 a package bundles the Stor98 built from src\stor98 by
@@ -1221,29 +1363,6 @@ try {
     # rather than on the files, so they hold whatever the files' wording: each
     # good fixture must pass, every mutant be refused, and the harmless echo
     # text pass.
-    function New-ReportBatchFixture {
-        param([hashtable]$Spec)
-        $l = @("@echo off", ("rem " + $Spec.Name.ToUpperInvariant() + " - a fixture of test-package.ps1."))
-        if ($Spec.Win) { $l += @('if "%OS%"=="Windows_NT" goto nt', 'goto run', ':nt', 'cd /d "%~dp0"', ':run') }
-        if ($Spec.ContainsKey("ToolLast")) {
-            # The tool runs last and prints the outcome, its last line what
-            # to attach (owner, 2026-10-13); with ArgPass, Args ends in %1,
-            # passed on as it came for the tool to default and check.
-            if ($Spec.Win) { $l += "echo On Vista and 7: right-click it and choose Run as administrator." }
-            if ($Spec.Names.Count -gt 0) { $l += ("echo Attach the " + ($Spec.Names -join " and ") + " files the tool names.") }
-            $l += @(("if exist " + $Spec.Tool + ".EXE goto tool"), ("echo " + $Spec.Tool + ".EXE was not found in this directory."),
-                    "goto end", ":tool", ($Spec.Tool + " " + $Spec.Args), ":end", "pause")
-            return (($l -join "`r`n") + "`r`n")
-        }
-        $l += ("if not exist " + $Spec.Tool + ".EXE goto nofile")
-        $l += ($Spec.Tool + " " + $Spec.Args)
-        $l += "if errorlevel 4 goto failed"
-        if ($Spec.Win) { $l += "echo On Vista and 7: right-click it and choose Run as administrator." }
-        if ($Spec.Names.Count -gt 0) { $l += ("echo Attach the " + ($Spec.Names -join " and ") + " files named above.") }
-        $l += @("goto end", ":failed", "echo It did not finish. Read the lines above.", "goto end",
-                ":nofile", ("echo " + $Spec.Tool + ".EXE was not found in this directory."), ":end", "echo.", "pause")
-        return (($l -join "`r`n") + "`r`n")
-    }
     $latin1 = [System.Text.Encoding]::GetEncoding(28591)
     foreach ($spec in $reportBatchSpecs) {
         $fx = New-ReportBatchFixture -Spec $spec
@@ -1972,6 +2091,13 @@ try {
         "a relative -OutDir did not resolve against the caller's location; [Path]::GetFullPath uses the process directory, which Set-Location does not update."
 
 
+    }
+
+    # ---- part "upload" (task 48.11: test-package.ps1 -Part; Test-PackagerPart) ----
+    if ((Test-PackagerPart "upload") -or (Test-PackagerPart "download")) {
+    # Part "download" (the driver pack and the three downloads) shares the
+    # upload set's stand-in release and the clone with part "upload".
+    if (Test-PackagerPart "upload") {
     # --- the upload set is what actually gets downloaded --------------------
     #
     # `releases\<version>\` is the tracked half; the GitHub asset is the *other*
@@ -2119,6 +2245,111 @@ try {
     try { Assert-FamilyFromLegs -Root $famGood -FlatDirs @{ "x86" = $flat86 } -What "the stand-in" } catch { $msg = $_.Exception.Message }
     Assert-True ($msg -like "*nt-x64*") "Assert-FamilyFromLegs accepted a family folder no flat package of the cut fills: '$msg'."
 
+    # The key's path (task 48.12): read only outside the tree or under its
+    # git-ignored scripts\local\, never a tracked file there, never inside a
+    # folder the run fills. No key is opened: a refusal comes first.
+    $kpRepo = Join-Path $script:work "keypath-repo"
+    foreach ($d in @("scripts\local\testsign", "src", "out")) { New-Item -ItemType Directory -Force -Path (Join-Path $kpRepo $d) | Out-Null }
+    [System.IO.File]::WriteAllText((Join-Path $kpRepo ".gitignore"), "scripts/local/`nout/`n")
+    foreach ($f in @("scripts\local\testsign\k.pfx", "src\k.pfx", "out\k.pfx", "scripts\local\tracked.pfx")) { [System.IO.File]::WriteAllText((Join-Path $kpRepo $f), "not a key") }
+    $kpEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & git -C $kpRepo init -q 2>&1 | Out-Null
+        & git -C $kpRepo add .gitignore 2>&1 | Out-Null
+        & git -C $kpRepo add -f scripts/local/tracked.pfx 2>&1 | Out-Null
+        & git -C $kpRepo -c user.name=xhci98-test -c user.email=test@invalid commit -q -m a 2>&1 | Out-Null
+    } finally { $ErrorActionPreference = $kpEap }
+    $kpOut = Join-Path $script:work "keypath-out"
+    New-Item -ItemType Directory -Force -Path $kpOut | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $kpOut "k.pfx"), "not a key")
+    [System.IO.File]::WriteAllText((Join-Path $script:work "keypath-outside.pfx"), "not a key")
+    foreach ($kp in @(
+        @{ Path = (Join-Path $kpRepo "scripts\local\testsign\k.pfx"); Says = "" },
+        @{ Path = (Join-Path $script:work "keypath-outside.pfx"); Says = "" },
+        @{ Path = (Join-Path $kpRepo "src\k.pfx"); Says = "not in its git-ignored scripts\local\" },
+        @{ Path = (Join-Path $kpRepo "out\k.pfx"); Says = "not in its git-ignored scripts\local\" },
+        @{ Path = (Join-Path $kpRepo "scripts\local\tracked.pfx"); Says = "a file git tracks" },
+        @{ Path = (Join-Path $kpOut "k.pfx"); Says = "which this run fills for publication" })) {
+        $why = Get-TestSignPfxFault -PfxPath $kp.Path -Repo $kpRepo -Outputs @($kpOut)
+        Assert-True ((($kp.Says -eq "") -and ($why -eq "")) -or (($kp.Says -ne "") -and $why.Contains($kp.Says))) `
+            ("the key's path '{0}' was judged '{1}', not '{2}'." -f $kp.Path, $why, $kp.Says)
+    }
+    $kpPkg = [System.IO.File]::ReadAllText($packager)
+    $kpRel = [System.IO.File]::ReadAllText((Join-Path $repo "scripts\package\make-release.ps1"))
+    $kpAt = $kpRel.IndexOf('Get-TestSignPfxFault -PfxPath $TestSignPfx')
+    Assert-True ($kpPkg.Contains('Get-TestSignPfxFault -PfxPath $TestSignPfx -Repo $repo -Outputs @($OutDir)') -and
+                 $kpAt -gt 0 -and $kpAt -lt $kpRel.IndexOf('$testSignPassword = Get-TestSignPassword')) `
+        "make-package.ps1 or make-release.ps1 no longer holds the key's path before asking its password (task 48.12)."
+
+    # The password's source (task 48.12): XHCI98_TESTSIGN_PW unset or set but
+    # empty means the prompt, and an empty answer there is refused. Read-Host
+    # is stood in for inside the block; no key is opened. A variable set but
+    # empty cannot be made reliably in this process (.NET deletes one set to
+    # "", and reads one set through Win32 as "" or $null by the thread's last
+    # error), so that case passes the value as read (-FromEnvironment).
+    $pwVar = $script:TestSignPasswordVariable
+    $pwSaved = [Environment]::GetEnvironmentVariable($pwVar, "Process")
+    try {
+        & {
+            $pwState = @{ Prompted = 0; Answer = "" }
+            function Read-Host {
+                param([Parameter(Position = 0)][string]$Prompt, [switch]$AsSecureString)
+                $pwState.Prompted++
+                $s = New-Object System.Security.SecureString
+                foreach ($c in $pwState.Answer.ToCharArray()) { $s.AppendChar($c) }
+                return $s
+            }
+            foreach ($pc in @(
+                @{ Env = "set"; Value = "from-env"; Answer = "typed"; Want = "from-env"; Prompts = 0 },
+                @{ Env = "unset"; Value = $null; Answer = "typed"; Want = "typed"; Prompts = 1 },
+                @{ Env = "empty"; Value = ""; Answer = "typed"; Want = "typed"; Prompts = 1 },
+                @{ Env = "unset"; Value = $null; Answer = ""; Want = $null; Prompts = 1 },
+                @{ Env = "empty"; Value = ""; Answer = ""; Want = $null; Prompts = 1 })) {
+                $pwState.Prompted = 0
+                $pwState.Answer = $pc.Answer
+                $got = $null
+                $msg = ""
+                try {
+                    if ($pc.Env -eq "empty") {
+                        [Environment]::SetEnvironmentVariable($pwVar, $null, "Process")
+                        $got = Get-TestSignPassword -FromEnvironment ""
+                    } else {
+                        [Environment]::SetEnvironmentVariable($pwVar, $pc.Value, "Process")
+                        $got = Get-TestSignPassword
+                    }
+                } catch { $msg = $_.Exception.Message }
+                if ($null -eq $pc.Want) {
+                    Assert-True ($null -eq $got -and $msg -like "*no password was typed*") `
+                        ("with {0} {1} and an empty answer the password was not refused: '{2}' (task 48.12)." -f $pwVar, $pc.Env, $msg)
+                } else {
+                    Assert-True ($got -ceq $pc.Want -and $msg -eq "") `
+                        ("with {0} {1} the password was not the expected one ({2}) (task 48.12)." -f $pwVar, $pc.Env, $msg)
+                }
+                Assert-True ($pwState.Prompted -eq $pc.Prompts) `
+                    ("with {0} {1} the prompt was asked {2} times, not {3} (task 48.12)." -f $pwVar, $pc.Env, $pwState.Prompted, $pc.Prompts)
+            }
+        }
+    } finally {
+        [Environment]::SetEnvironmentVariable($pwVar, $pwSaved, "Process")
+    }
+    $pwAt = $kpRel.IndexOf('[string]::IsNullOrEmpty($testSignPassword)')
+    Assert-True ($pwAt -gt 0 -and $pwAt -lt $kpRel.IndexOf('[Environment]::SetEnvironmentVariable($script:TestSignPasswordVariable, $testSignPassword, "Process")')) `
+        "make-release.ps1 no longer refuses to hand its make-package.ps1 child an empty password (task 48.12)."
+
+    # The family rule of the upload set (task 48.12): a family tree is a
+    # version from 3.4.0.0; a flavour tree is any version's.
+    foreach ($fv in @(@{ Kind = "family"; V = "3.3.0.0"; Bad = $true }, @{ Kind = "family"; V = "3.4.0.0"; Bad = $false },
+                      @{ Kind = "family"; V = "3.10.0.0"; Bad = $false }, @{ Kind = "flavour"; V = "1.0.0.0"; Bad = $false },
+                      @{ Kind = "flavour"; V = "3.4.2.0"; Bad = $false })) {
+        $msg = ""
+        try { Assert-FamilyLayoutVersion -Kind $fv.Kind -Version $fv.V -What "the stand-in" } catch { $msg = $_.Exception.Message }
+        Assert-True (($msg -like "*published before 3.4.0.0*") -eq $fv.Bad) ("the family rule judged a {0} tree of {1} wrongly: '{2}'." -f $fv.Kind, $fv.V, $msg)
+    }
+    $mr = [System.IO.File]::ReadAllText((Join-Path $repo "scripts\package\make-release.ps1"))
+    Assert-True ($mr.Contains('Assert-FamilyLayoutVersion -Kind $setLayout -Version $Version') -and $mr.Contains('Assert-FamilyLayoutVersion -Kind $pubLayout -Version $Version')) `
+        "make-release.ps1 no longer holds the upload set's layout to its version (task 48.12)."
+
     # A tree with family folders and a flavour directory is neither layout.
     $copy = Join-Path $famWork ("case-" + [Guid]::NewGuid().ToString("N"))
     Copy-Item -LiteralPath $famGood -Destination $copy -Recurse
@@ -2180,6 +2411,8 @@ try {
         $diff = @($want.Keys | Where-Object { -not $engine.ContainsKey($_) -or $engine[$_] -ine $want[$_] } | ForEach-Object { "$_ -> $($want[$_]) (engine: $(if ($engine.ContainsKey($_)) { $engine[$_] } else { 'none' }))" }) +
                 @($engine.Keys | Where-Object { -not $want.ContainsKey($_) } | ForEach-Object { "$_ -> $($engine[$_]) (not in the table)" })
         Assert-True ($engine.Count -gt 0 -and $diff.Count -eq 0) ("the installer engine's source map is not package-common.ps1's family table:`n  " + ($diff -join "`n  "))
+    }
+
     }
 
     Write-Step "the upload set is complete install media in every flavour directory"
@@ -2356,6 +2589,7 @@ try {
         Remove-Item -LiteralPath (Join-Path $pubRoot "otherpkgs.txt") -Force
         Remove-Item -LiteralPath (Join-Path $pubRoot "wdmfree-pin.txt") -Force
 
+        if (Test-PackagerPart "upload") {
         # --- a tree published by Windows family (task 45.44) -----------------
         #
         # Design record 36 section 7.2: -UploadSetOnly rebuilds a version
@@ -2424,6 +2658,8 @@ try {
             Assert-True ($r.ExitCode -ne 0 -and $r.Output -match [regex]::Escape($bad.Says)) ("-UploadSetOnly took a family tree with $($bad.Why):`n" + $r.Output)
         }
 
+        }
+
         # --- assembled from the tracked directory alone ---------------------
         #
         # roadmap task 20.1. This mode used to require the gated
@@ -2450,6 +2686,7 @@ try {
         Assert-True (Test-Path -LiteralPath $uploadZip) "no upload archive was written when assembled without a package root."
         Assert-True (-not (Test-Path -LiteralPath $noOut)) "the run created the package root it was told did not exist."
 
+        if (Test-PackagerPart "upload") {
         # --- a malformed report batch in the published tree (task 38.1) -----
         #
         # The layout checks see names and places only, so a QUALREP.BAT in
@@ -2475,6 +2712,9 @@ try {
                                "-PackageRoot", $noOut, "-UploadDir", $upRoot)
         Assert-True ($r.ExitCode -eq 0) ("the upload set was not re-assembled once QUALREP.BAT was restored:`n" + $r.Output)
 
+        }
+
+        if (Test-PackagerPart "download") {
         # --- the driver pack (roadmap-usb4 task 43.3) -------------------------
         #
         # A stand-in usb-wdm-nonfree: a git repository of its own holding the
@@ -3481,6 +3721,9 @@ try {
                                "-PackageRoot", $noOut, "-UploadDir", $upRoot)
         Assert-True ($r.ExitCode -eq 0) ("the upload set was not re-assembled after the driver pack cases:`n" + $r.Output)
 
+        }
+
+        if (Test-PackagerPart "upload") {
         # --- the UAS class driver's pair (roadmap task 31-A.2) ---------------
         #
         # A flavour directory carrying xhciuas.inf is gated by that INF's own
@@ -3706,6 +3949,11 @@ try {
         Assert-True ($r.Output -match "release-x64") `
             ("expected the refusal to name the directory it wanted. Output:`n" + $r.Output)
 
+        }
+
+        # The four-directory tree and its signature and filter cases: part
+        # "download", which they balance (task 48.11).
+        if (Test-PackagerPart "download") {
         # --- and a published tree that DOES hold the 64-bit pair --------------
         #
         # Every case above assembles an x86-only tree, which is what the four
@@ -3927,6 +4175,9 @@ try {
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $up4 ("xhci98-" + $relVersion + ".zip")))) `
             "an upload archive was written around an x64 directory with an nt\ filter INF."
 
+        }
+
+        if (Test-PackagerPart "upload") {
         # --- the switches that contradict -UploadSetOnly --------------------
         Write-Step "-UploadSetOnly refuses the switches that contradict it"
         foreach ($bad in @(
@@ -4204,8 +4455,14 @@ try {
                 }
             }
         }
+        }
     }
 
+    }
+
+    # ---- part "cut" (task 48.11: test-package.ps1 -Part; Test-PackagerPart) ----
+    if (Test-PackagerPart "cut") {
+    if ($null -eq (Get-Variable -Name reportBatchSpecs -ErrorAction SilentlyContinue)) { $reportBatchSpecs = @(Get-ReportBatchSpecs) }
     # --- a release cut refuses the qemu flavour, and says why ---------------
     #
     # Task 13-L.1's single most important row. `qemu` carries the port-0xE9
@@ -6086,6 +6343,14 @@ try {
         "make-release.ps1's upload assembly no longer refuses the test client."
 
 
+    }
+
+    # ---- part "sign" (task 48.11: test-package.ps1 -Part; Test-PackagerPart) ----
+    if (Test-PackagerPart "sign") {
+    # What the earlier parts made that this one reads, made here when it
+    # runs alone: make-release.ps1's text and fixture tree S.
+    if ($null -eq (Get-Variable -Name releaserText -ErrorAction SilentlyContinue)) { $releaserText = [System.IO.File]::ReadAllText($releaser) }
+    if ($null -eq (Get-Variable -Name sx -ErrorAction SilentlyContinue)) { $sx = New-SourceFixtureTree -Dir (Join-Path $script:work "sx-tree") }
     # --- the x64 test signature (design record 19) --------------------------
     #
     # No key is needed or used here. The judgements are pure functions in
@@ -7357,6 +7622,89 @@ try {
         Remove-Item -LiteralPath $wLock -Recurse -Force -ErrorAction SilentlyContinue
     }
 
+    # The Stor98-only run's record (task 48.9): -Begin -Amend keeps the
+    # record, -Hash and -Capture take Stor98's images alone, and -Finish
+    # -Amend replaces their hashes only in a record of this commit from a
+    # clean tree; any other record is deleted. amd64, whose one Stor98 image
+    # keeps the case to eleven runs of the writer, in a repository of its
+    # own holding the writer and what it dot-sources, so its tree is clean.
+    Write-Step "the Stor98-only run's record: amended or deleted (-Amend)"
+    $amRepo = Join-Path $script:work "amend-repo"
+    foreach ($rel in @("scripts\common.ps1", "scripts\package\package-common.ps1", "scripts\package\write-gated-manifest.ps1")) {
+        $to = Join-Path $amRepo $rel
+        [void][System.IO.Directory]::CreateDirectory((Split-Path -Parent $to))
+        [System.IO.File]::Copy((Join-Path $fxRepo $rel), $to, $true)
+    }
+    [System.IO.File]::WriteAllText((Join-Path $amRepo ".gitignore"), "out/`n")
+    $amEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & git -C $amRepo init -q 2>&1 | Out-Null
+        & git -C $amRepo add -A 2>&1 | Out-Null
+        & git -C $amRepo -c user.name=xhci98-test -c user.email=test@invalid commit -q -m "amend fixture" 2>&1 | Out-Null
+        $amHead = ((& git -C $amRepo rev-parse HEAD 2>$null) | Out-String).Trim().ToLowerInvariant()
+    } finally { $ErrorActionPreference = $amEap }
+    $amWriter = Join-Path $amRepo "scripts\package\write-gated-manifest.ps1"
+    $amLock = Join-Path $amRepo "out\gated-amd64.lock"
+    New-Item -ItemType Directory -Force -Path $amLock | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $amLock "run.txt"), "fixture-amend-token`r`n")
+    $amImg = Join-Path $script:work "amend-stor98.sys"
+    [System.IO.File]::WriteAllText($amImg, "a new stor98.sys")
+    $amNew = Get-FileSha256 -Path $amImg
+    $amRec = Get-GatedManifestPath -Repo $amRepo -Arch amd64 -Flavor release
+    $amOld = @{ "xhci98.sys" = ("A" * 64); "stor98.sys" = ("B" * 64) }
+    $savedRun = $env:XHCI98_GATED_RUN
+    $script:amCalls = 0
+    function Invoke-AmendWriter {
+        param([string[]]$A)
+        $script:amCalls++
+        $ErrorActionPreference = "Continue"
+        $o = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $amWriter -Arch amd64 @A 2>&1 | Out-String
+        return @{ Rc = $LASTEXITCODE; Out = ($o -replace '\s+', ' ') }
+    }
+    try {
+        $env:XHCI98_GATED_RUN = "fixture-amend-token"
+        $w = Invoke-AmendWriter @("-RunStart")
+        Assert-True ($w.Rc -eq 0) ("-RunStart failed in the fixture:`n" + $w.Out)
+        foreach ($amCase in @(@{ Commit = $amHead; Keep = $true }, @{ Commit = ("0" * 40); Keep = $false })) {
+            [System.IO.File]::WriteAllText($amRec, (ConvertTo-GatedManifest -Arch amd64 -Flavor release -Commit $amCase.Commit -Dirty $false `
+                -TargetEvidence $false -Time "2026-11-09T00:00:00Z" -Sha256 $amOld))
+            $w = Invoke-AmendWriter @("-Flavor", "release", "-Begin", "-Amend")
+            Assert-True ($w.Rc -eq 0 -and (Test-Path -LiteralPath $amRec)) ("-Begin -Amend failed or did not keep the record:`n" + $w.Out)
+            if (-not $amCase.Keep) {
+                $w = Invoke-AmendWriter @("-Flavor", "release", "-Hash", "-Name", "xhci98.sys", "-Image", $amImg)
+                Assert-True ($w.Rc -ne 0 -and $w.Out.Contains("gates Stor98's images alone")) ("an amending run hashed xhci98.sys:`n" + $w.Out)
+            }
+            $w = Invoke-AmendWriter @("-Flavor", "release", "-Hash", "-Name", "stor98.sys", "-Image", $amImg)
+            Assert-True ($w.Rc -eq 0) ("-Hash of stor98.sys failed:`n" + $w.Out)
+            $w = Invoke-AmendWriter @("-Flavor", "release", "-Capture", "-Name", "stor98.sys", "-Image", $amImg)
+            Assert-True ($w.Rc -eq 0) ("-Capture of stor98.sys failed:`n" + $w.Out)
+            if (-not $amCase.Keep) {
+                $w = Invoke-AmendWriter @("-Flavor", "release", "-Finish")
+                Assert-True ($w.Rc -ne 0 -and $w.Out.Contains("finish it with -Amend")) ("a record begun with -Amend was finished without it:`n" + $w.Out)
+            }
+            $w = Invoke-AmendWriter @("-Flavor", "release", "-Finish", "-Amend")
+            Assert-True ($w.Rc -eq 0) ("-Finish -Amend failed:`n" + $w.Out)
+            if ($amCase.Keep) {
+                $m = ConvertFrom-GatedManifest -Text ([System.IO.File]::ReadAllText($amRec))
+                Assert-True ($m.Sha256["stor98.sys"] -eq $amNew -and $m.Sha256["xhci98.sys"] -eq ("A" * 64) -and $m.Commit -eq $amHead -and
+                             $m.Dirty -eq "0" -and $m.TargetEvidence -eq "0" -and $m.Sha256.Count -eq 2) `
+                    ("a record of this commit was not amended to the new Stor98 hash alone:`n" + [System.IO.File]::ReadAllText($amRec))
+            } else {
+                Assert-True (-not (Test-Path -LiteralPath $amRec) -and $w.Out.Contains("deleted")) ("a record of another commit was kept:`n" + $w.Out)
+            }
+        }
+        Assert-True ($w.Rc -eq 0 -and $amHead -match '^[0-9a-f]{40}$' -and $script:amCalls -eq 11) "the -Amend case ran the writer $($script:amCalls) times, not 11."
+    } finally {
+        $env:XHCI98_GATED_RUN = $savedRun
+        Remove-Item -LiteralPath $amRepo -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    $s98Text = [System.IO.File]::ReadAllText((Join-Path $repo "scripts\build-driver.cmd"))
+    Assert-True ($s98Text.Contains('if /i "%FLAVORS%"=="stor98" set "S98ONLY=1"') -and
+                 $s98Text.Contains('"%REPO%\scripts\build-steps.ps1" -Arch %ARCH% -Stor98Only') -and
+                 $s98Text.Contains("call :gated -Begin -Amend`r`nif errorlevel 1 exit /b 1`r`ncall :gatestor98`r`nif errorlevel 1 exit /b 1`r`ncall :gated -Finish -Amend")) `
+        "build-driver.cmd's Stor98-only run no longer begins each record with -Amend, gates Stor98's images and finishes it with -Amend."
+
     # Where the record is checked and written.
     $soPkgText = [System.IO.File]::ReadAllText($packager)
     $soCheckAt = $soPkgText.IndexOf('Get-GatedManifestFault -Manifest $gated')
@@ -7669,16 +8017,24 @@ try {
     } finally {
         foreach ($n in $dgSaved.Keys) { [Environment]::SetEnvironmentVariable($n, $dgSaved[$n]) }
     }
+    }
 } finally {
     if (Test-Path -LiteralPath $script:work) {
         Remove-Item -LiteralPath $script:work -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
+Write-StepTimes
 Write-Host ""
+$partSaid = if ($Part -ne "") { " (part $Part)" } else { "" }
 if ($script:failures.Count -gt 0) {
-    Write-Err ("packager self-tests FAILED: {0} of {1} check(s)." -f $script:failures.Count, $script:checks)
+    Write-Err ("packager self-tests{0} FAILED: {1} of {2} check(s)." -f $partSaid, $script:failures.Count, $script:checks)
     exit 1
+}
+if ($Part -ne "") {
+    # One part records no pass: the run that started the four does.
+    Write-Ok ("packager self-tests{0} passed ({1} checks)" -f $partSaid, $script:checks)
+    exit 0
 }
 # The record of this pass, for the next run's skip in any tree: written
 # only if what may be read is still what the run began with (a change

@@ -40,6 +40,18 @@ unchanged" and "The self-tests' skip across worktrees", is the design.
 Run every case even when the last passing run read the same files.
 XHCI98_FULL_SELFTESTS=1 does the same; cut-builds.ps1 sets it for a cut.
 
+.PARAMETER Part
+Run one part (1 to 6) of the cases and record nothing (roadmap-usb4 task
+48.34). With no -Part a run that is not skipped starts the six parts at
+once as children of its own, prints each log whole and records the pass
+when all six passed. Each part runs every section's code but calls the
+gate and counts checks only in the sections the part table gives it, so
+the parts' checks add up to the serial run's.
+
+.PARAMETER Serial
+The one-process run of before task 48.34 (XHCI98_INFTEST_SERIAL=1 does
+the same).
+
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\inf-gate\test-inf-checks.ps1
 #>
@@ -72,7 +84,12 @@ powershell -ExecutionPolicy Bypass -File scripts\inf-gate\test-inf-checks.ps1
 #
 
 [CmdletBinding()]
-param([switch]$Force)
+param(
+    [switch]$Force,
+    [ValidateSet("", "1", "2", "3", "4", "5", "6")]
+    [string]$Part = "",
+    [switch]$Serial
+)
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
@@ -184,7 +201,9 @@ $gitPolicyRoot = Join-Path ([System.IO.Path]::GetFullPath($env:TEMP)) ("xhci98-g
 $gitPolicy = $null
 try {
 $gitPolicy = Set-SelfTestGitPolicy -ScratchRoot $gitPolicyRoot
-$digest = Get-InfSelfTestDigest -Root $repo
+# A part (-Part) is run by the run that read the digest: it neither skips
+# nor records (task 48.34).
+$digest = if ($Part -ne "") { $null } else { Get-InfSelfTestDigest -Root $repo }
 $fullAsked = $Force -or ("$env:XHCI98_FULL_SELFTESTS" -eq "1")
 if (-not $fullAsked -and $null -ne $digest) {
     $rec = Read-SelfTestPassRecord -Suite "inf" -Digest $digest
@@ -195,7 +214,166 @@ if (-not $fullAsked -and $null -ne $digest) {
     }
 }
 
+# The six parts at once (task 48.34, as task 48.11 split the packager's
+# self-tests), unless one part or -Serial was asked: each a child of this
+# script with -Part, its own log, printed whole when it ends; the pass
+# recorded here when all six passed and what they read is unchanged.
+$partCount = 6
+if ($Part -eq "" -and -not $Serial -and "$env:XHCI98_INFTEST_SERIAL" -ne "1") {
+    $tempRoot = [System.IO.Path]::GetFullPath($env:TEMP)
+    $logDir = Join-Path $tempRoot ("xhci98-inf-parts-" + [System.IO.Path]::GetRandomFileName())
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    $psExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+    $kids = @()
+    $wall = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        foreach ($pt in 1..$partCount) {
+            $log = Join-Path $logDir ("part" + $pt + ".log")
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = $env:ComSpec
+            $psi.Arguments = ('/d /s /c ""{0}" -NoProfile -ExecutionPolicy Bypass -File "{1}" -Part {2} > "{3}" 2>&1"' -f $psExe, $PSCommandPath, $pt, $log)
+            $psi.WorkingDirectory = (Get-Location).ProviderPath
+            $psi.UseShellExecute = $false
+            $psi.CreateNoWindow = $true
+            $kids += [pscustomobject]@{ Part = $pt; Log = $log; Watch = [System.Diagnostics.Stopwatch]::StartNew(); Process = [System.Diagnostics.Process]::Start($psi); Code = $null; Checks = 0; Failed = -1; Printed = $false }
+        }
+        while (@($kids | Where-Object { -not $_.Printed }).Count -gt 0) {
+            foreach ($k in $kids) {
+                if ($k.Printed -or -not $k.Process.HasExited) { continue }
+                $k.Watch.Stop()
+                $k.Code = $k.Process.ExitCode
+                $text = if (Test-Path -LiteralPath $k.Log) { [System.IO.File]::ReadAllText($k.Log) } else { "" }
+                Write-Host ""
+                Write-Host ("==== part {0}: exit {1}, {2}:{3:00} ====" -f $k.Part, $k.Code, [int][Math]::Floor($k.Watch.Elapsed.TotalMinutes), $k.Watch.Elapsed.Seconds) -ForegroundColor Cyan
+                Write-Host $text.TrimEnd()
+                $m = [regex]::Match($text, 'INF gate self-tests \(part \d\) passed \((\d+) checks\)')
+                if ($m.Success) { $k.Checks = [int]$m.Groups[1].Value; $k.Failed = 0 }
+                $m = [regex]::Match($text, 'INF gate self-tests \(part \d\) FAILED: (\d+) of (\d+) check')
+                if ($m.Success) { $k.Checks = [int]$m.Groups[2].Value; $k.Failed = [int]$m.Groups[1].Value }
+                $k.Printed = $true
+            }
+            Start-Sleep -Milliseconds 250
+        }
+    } finally {
+        foreach ($k in $kids) { if ($null -ne $k.Process -and -not $k.Process.HasExited) { $k.Process.WaitForExit() } }
+        Remove-Item -LiteralPath $logDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    Write-Host ""
+    foreach ($k in $kids) {
+        Write-Host ("  part {0}  exit {1}, {2,5} checks, {3}:{4:00}" -f $k.Part, $k.Code, $k.Checks, [int][Math]::Floor($k.Watch.Elapsed.TotalMinutes), $k.Watch.Elapsed.Seconds)
+    }
+    $total = ($kids | Measure-Object -Property Checks -Sum).Sum
+    $bad = @($kids | Where-Object { $_.Code -ne 0 -or $_.Failed -ne 0 })
+    if ($bad.Count -gt 0) {
+        Write-Err ("INF gate self-tests FAILED in part {0} ({1}:{2:00} for the six at once)." -f (($bad | ForEach-Object { $_.Part }) -join ", "), [int][Math]::Floor($wall.Elapsed.TotalMinutes), $wall.Elapsed.Seconds)
+        exit 1
+    }
+    if ($null -ne $digest -and (Get-InfSelfTestDigest -Root $repo) -eq $digest) {
+        [void](Write-SelfTestPassRecord -Suite "inf" -Digest $digest -Checks $total -Tree ([System.IO.Path]::GetFullPath($repo).TrimEnd('\')))
+    }
+    Write-Ok ("INF gate self-tests passed ({0} checks in six parts at once, {1}:{2:00})" -f $total, [int][Math]::Floor($wall.Elapsed.TotalMinutes), $wall.Elapsed.Seconds)
+    exit 0
+}
+
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "test-harness.ps1")
+
+# The part table (task 48.34): each section, by its Write-Step title, to
+# the part that calls the gate and counts the checks in it; balanced by
+# the sections' measured times. A section not named here (a new one) goes
+# to a part by its place, so it is never in none or in two. Every part runs
+# every section's other code, so a value one section leaves for another is
+# there whichever part runs; the one gate result read across sections, the
+# production INF's baseline, is taken in every part ($script:gateAlways).
+# The registry values' five sections (below) share this title.
+$script:valuesTitle = "the routing quirk, the tolerance switch, the interval cap, the Average TRB Length switch, the command size, event delivery, the finer timer, the wide mapping, selective suspend, the silent install's switch, the hub speed fallback, the 0.96 floor and Linux's controller quirks, on both paths"
+$script:partTable = @{
+    "the [Manufacturer] decoration, in both directions" = 1
+    "the controller's property page" = 1
+    "staged package layout" = 1
+    "the moderation interval, on both paths" = 1
+    "the unpadded-DriverVer exception (task 12.4)" = 1
+    "the INF self-tests' set holds every tracked file their scripts name" = 1
+    "the 64-bit install footprint" = 1
+    "the shared pass store: one record per suite and digest, whole or none" = 1
+    "the install footprint" = 2
+    "the root hub's models and Power tab" = 2
+    "the USB\XHCI98_ namespace and the old ids" = 2
+    "the composite parents' models, copies and pages" = 2
+    "shared rules" = 2
+    "the skip's digest: every file in the set, and none outside it" = 2
+    "the 64-bit INF must pass its own profile" = 2
+    "the two INFs must agree about the package" = 2
+    ($script:valuesTitle + ": values 1 to 7") = 3
+    ($script:valuesTitle + ": values 29 to 35") = 3
+    "the external hubs' models, copies and Power tab" = 3
+    "Win98 parser traps" = 3
+    "file format" = 3
+    "the production INF must pass" = 3
+    ($script:valuesTitle + ": values 8 to 14") = 4
+    "the version cross-check and the single-source header" = 4
+    "shared rules, continued" = 4
+    "the branches that had no negative test" = 4
+    "the Intel port switchover's switch, on both paths" = 4
+    "the gate in process: each call its own state, its own exit code" = 4
+    ($script:valuesTitle + ": values 15 to 21") = 5
+    "the 64-bit file's OS-supplied files and registry values" = 5
+    "no idle-suspend registry value on any route" = 5
+    "usbui.dll on every route" = 5
+    "the virtual hub's values, refused on every path" = 5
+    "the 64-bit file's own install path" = 5
+    ($script:valuesTitle + ": values 22 to 28") = 6
+    "the files the OS supplies" = 6
+    "the two install paths" = 6
+    "the log's two per-device values" = 6
+    "the id source: src\xhci_hub.h" = 6
+}
+$script:stepIndex = -1
+$script:inPart = $true
+$script:gateAlways = $false
+$script:stepWatch = [System.Diagnostics.Stopwatch]::StartNew()
+$script:stepTimes = New-Object System.Collections.ArrayList
+$script:stepName = ""
+function Test-InfPartSection {
+    param([string]$Title, [int]$Index)
+    if ($Part -eq "") { return $true }
+    $n = if ($script:partTable.ContainsKey($Title)) { $script:partTable[$Title] } else { ($Index % $partCount) + 1 }
+    return ([string]$n -eq $Part)
+}
+function Write-Step {
+    param([string]$Message)
+    if ($script:stepName -ne "" -and $script:inPart) {
+        [void]$script:stepTimes.Add([pscustomobject]@{ Name = $script:stepName; Seconds = $script:stepWatch.Elapsed.TotalSeconds })
+    }
+    $script:stepWatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $script:stepIndex++
+    $script:stepName = $Message
+    $script:inPart = Test-InfPartSection -Title $Message -Index $script:stepIndex
+    if ($script:inPart) {
+        Write-Host ""
+        Write-Host "== $Message" -ForegroundColor Cyan
+    }
+}
+function Write-StepTimes {
+    if ($script:stepName -ne "" -and $script:inPart) {
+        [void]$script:stepTimes.Add([pscustomobject]@{ Name = $script:stepName; Seconds = $script:stepWatch.Elapsed.TotalSeconds })
+    }
+    Write-Host ""
+    Write-Host "the slowest sections:"
+    foreach ($t in @($script:stepTimes | Sort-Object Seconds -Descending | Select-Object -First 8)) {
+        $n = if ($t.Name.Length -gt 60) { $t.Name.Substring(0, 38) + "..." + $t.Name.Substring($t.Name.Length - 19) } else { $t.Name }
+        Write-Host ("  {0,6:N1} s  {1}" -f $t.Seconds, $n)
+    }
+}
+# test-harness.ps1's Assert-True, counting only in this part's sections.
+function Assert-True {
+    param([bool]$Condition, [string]$Message)
+    if (-not $script:inPart) { return }
+    $script:checks++
+    if (-not $Condition) {
+        $script:failures += $Message
+        Write-Host "FAIL: $Message" -ForegroundColor Red
+    }
+}
 
 function Invoke-GateHere {
     # The gate in this process (task 45.30), as `powershell -File` ran it:
@@ -207,6 +385,9 @@ function Invoke-GateHere {
     # its message, as the child process printed it and exited 1. Every
     # stream, Write-Host's among them, is the text returned.
     param([string[]]$GateArgs)
+    # Another part's section (task 48.34): no gate run, and nothing of its
+    # answer is counted there.
+    if (-not $script:inPart -and -not $script:gateAlways) { return @{ Output = ""; ExitCode = 0 } }
     # An array splatted on a script binds by position, so the arguments
     # are named here as powershell -File names them: "-Name value", or
     # "-Name" alone for a switch; anything else is positional.
@@ -354,7 +535,10 @@ try {
     New-Item -ItemType Directory -Path $script:work | Out-Null
 
     Write-Step "the production INF must pass"
+    # Read again by the pass store's section: taken in every part.
+    $script:gateAlways = $true
     $baseline = Invoke-Gate -Path $prodInf
+    $script:gateAlways = $false
     Assert-True ($baseline.ExitCode -eq 0) ("src\xhci98.inf does not pass its own gate:`n" + $baseline.Output)
     Assert-True ($baseline.Output -notmatch "FAIL \[") "src\xhci98.inf produced a FAIL line."
 
@@ -998,7 +1182,7 @@ try {
     # the interval, so the anchor carries them; $tailFor9x and $tailForNt are
     # the same block ending in each path's own successor line, which keeps
     # the two paths apart.
-    $tolRows   = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`nHKR,,XhciIntelNoRouteIrq,0x00010003,1`r`nHKR,,XhciTolerance,0x00010003,1`r`nHKR,,XhciIntervalCap,0x00010003,1`r`nHKR,,XhciAvgTrbEsit,0x00010003,0`r`nHKR,,XhciMaxTransferKB,0x00010003,1024`r`nHKR,,XhciInterruptMode,0x00010003,0`r`nHKR,,XhciPollIdleMs,0x00010003,50`r`nHKR,,XhciPollActiveMs,0x00010003,1`r`nHKR,,XhciPollFineTimer,0x00010003,0`r`nHKR,,XhciWideMap,0x00010003,0`r`nHKR,,XhciSelectiveSuspend,0x00010003,0`r`nHKR,,XhciSilentInstall,0x00010003,0`r`nHKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`nHKR,,XhciAccept096,0x00010003,1`r`nHKR,,XhciCommandCheck,0x00010003,1`r`nHKR,,XhciAcpiTables,0x00010003,1`r`n; The BOS read at High and Full Speed (design record 13 section 8.4.1), a`r`n; device kept across a resume's re-initialization (task 45.23) and across`r`n; its SuperSpeed link's recovery (task 45.41): on is each one's default`r`n; (absent, or anything but a DWORD 0, is on; src\hcd_ctl.c), written since`r`n; task 45.50 so that every value is in the key, ready to change.`r`nHKR,,XhciUsb2Bos,0x00010003,1`r`nHKR,,XhciResumeKeep,0x00010003,1`r`nHKR,,XhciLinkKeep,0x00010003,1`r`n; The event ring's size (task 47.30; design record 13 section 11.10): 1024`r`n; the larger ring, 256 the one-page ring of the releases before it.`r`n; Absent, or any other value, is 1024 (src\hcd_ctl.c).`r`nHKR,,XhciEventRingTrbs,0x00010003,1024`r`n; The Bulk-Only form's own instance id (roadmap-usb4 UASBOT.1; design record`r`n; 13 section 10.7): 1 gives a drive that offers UAS too a devnode of its own`r`n; where the bus offers it as Bulk-Only; 0 the one devnode of the releases`r`n; before. Absent, or anything but a DWORD 0, is 1 (src\hcd_ctl.c).`r`nHKR,,XhciBulkOnlyOwnId,0x00010003,1`r`n; Linux's xHCI controller quirks (roadmap-hcd task 38.10; design record 20`r`n; section 6.1): 0 off, 1 Linux's listed controllers, 2 every controller`r`n; where the record offers it. Absent reads as the default written here.`r`nHKR,,XhciMsiAvoid,0x00010003,1`r`nHKR,,XhciStreamsOff,0x00010003,1`r`nHKR,,XhciResumeReinit,0x00010003,1`r`nHKR,,XhciIntelShutdownToEhci,0x00010003,1`r`nHKR,,XhciShutdownReset,0x00010003,0`r`nHKR,,XhciSuspendHaltDelay,0x00010003,1`r`nHKR,,XhciSuspendHaltTimeout,0x00010003,1`r`nHKR,,XhciAsmediaFlowControl,0x00010003,1`r`nHKR,,XhciTiIntervalCap,0x00010003,1`r`nHKR,,XhciStuckLinkReset,0x00010003,1`r`nHKR,,XhciStreamRingPad,0x00010003,1`r`nHKR,,XhciControlLinkNoOp,0x00010003,1`r`nHKR,,XhciIsochSpuriousSuccess,0x00010003,1`r`nHKR,,XhciAmdSuspendBitClear,0x00010003,1`r`n"
+    $tolRows   = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`nHKR,,XhciIntelNoRouteIrq,0x00010003,1`r`nHKR,,XhciTolerance,0x00010003,1`r`nHKR,,XhciIntervalCap,0x00010003,1`r`nHKR,,XhciAvgTrbEsit,0x00010003,0`r`nHKR,,XhciMaxTransferKB,0x00010003,1024`r`nHKR,,XhciInterruptMode,0x00010003,0`r`nHKR,,XhciPollIdleMs,0x00010003,50`r`nHKR,,XhciPollActiveMs,0x00010003,1`r`nHKR,,XhciPollFineTimer,0x00010003,0`r`nHKR,,XhciWideMap,0x00010003,0`r`nHKR,,XhciSelectiveSuspend,0x00010003,0`r`nHKR,,XhciSilentInstall,0x00010003,0`r`nHKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`nHKR,,XhciAccept096,0x00010003,1`r`nHKR,,XhciCommandCheck,0x00010003,1`r`nHKR,,XhciAcpiTables,0x00010003,1`r`n; The BOS read at High and Full Speed (design record 13 section 8.4.1), a`r`n; device kept across a resume's re-initialization (task 45.23) and across`r`n; its SuperSpeed link's recovery (task 45.41): on is each one's default`r`n; (absent, or anything but a DWORD 0, is on; src\hcd_ctl.c), written since`r`n; task 45.50 so that every value is in the key, ready to change.`r`nHKR,,XhciUsb2Bos,0x00010003,1`r`nHKR,,XhciResumeKeep,0x00010003,1`r`nHKR,,XhciLinkKeep,0x00010003,1`r`n; A SuperSpeed link that keeps failing sent to USB 2.0 (issue 29, design`r`n; record 13 section 21): 1, the default, sends it; 0 gives it up after the`r`n; same count. Absent, or anything but a DWORD 0, is 1 (src\hcd_ctl.c).`r`nHKR,,XhciSsFlapFallback,0x00010003,1`r`n; The event ring's size (task 47.30; design record 13 section 11.10): 1024`r`n; the larger ring, 256 the one-page ring of the releases before it.`r`n; Absent, or any other value, is 1024 (src\hcd_ctl.c).`r`nHKR,,XhciEventRingTrbs,0x00010003,1024`r`n; The Bulk-Only form's own instance id (roadmap-usb4 UASBOT.1; design record`r`n; 13 section 10.7): 1 gives a drive that offers UAS too a devnode of its own`r`n; where the bus offers it as Bulk-Only; 0 the one devnode of the releases`r`n; before. Absent, or anything but a DWORD 0, is 1 (src\hcd_ctl.c).`r`nHKR,,XhciBulkOnlyOwnId,0x00010003,1`r`n; The staging pool's budget in KiB (task 48.33; design record 13 section`r`n; 11.11.1), from 256 to 16384: every transfer's data passes through`r`n; buffers of the driver's own. Absent reads as 2048 (src\hcd_ctl.c).`r`nHKR,,XhciStagePoolKiB,0x00010003,2048`r`n; Every transfer's data staged through buffers of the driver's own (task`r`n; 48.33; design record 13 section 11.11): 1; 0, the default, maps the`r`n; programs' own buffers for the controller, as 3.4.2.0 did. Absent reads`r`n; as 0, any other DWORD as 1 (src\hcd_ctl.c).`r`nHKR,,XhciDmaStaging,0x00010003,0`r`n; Linux's xHCI controller quirks (roadmap-hcd task 38.10; design record 20`r`n; section 6.1): 0 off, 1 Linux's listed controllers, 2 every controller`r`n; where the record offers it. Absent reads as the default written here.`r`nHKR,,XhciMsiAvoid,0x00010003,1`r`nHKR,,XhciStreamsOff,0x00010003,1`r`nHKR,,XhciResumeReinit,0x00010003,1`r`nHKR,,XhciIntelShutdownToEhci,0x00010003,1`r`nHKR,,XhciShutdownReset,0x00010003,0`r`nHKR,,XhciSuspendHaltDelay,0x00010003,1`r`nHKR,,XhciSuspendHaltTimeout,0x00010003,1`r`nHKR,,XhciAsmediaFlowControl,0x00010003,1`r`nHKR,,XhciTiIntervalCap,0x00010003,1`r`nHKR,,XhciStuckLinkReset,0x00010003,1`r`nHKR,,XhciStreamRingPad,0x00010003,1`r`nHKR,,XhciControlLinkNoOp,0x00010003,1`r`nHKR,,XhciIsochSpuriousSuccess,0x00010003,1`r`nHKR,,XhciAmdSuspendBitClear,0x00010003,1`r`n"
     $tailFor9x = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]"
     $tailForNt = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32"
     Write-Step "the Intel port switchover's switch, on both paths"
@@ -1042,8 +1226,10 @@ try {
     # anchors still reach the interval. XhciSilentInstall, after selective
     # suspend, ships at 0 with 1 its wrong one (owner, 2026-10-14: written
     # with its default like the others, design record 13 section 6.11.3).
-    Write-Step "the routing quirk, the tolerance switch, the interval cap, the Average TRB Length switch, the command size, event delivery, the finer timer, the wide mapping, selective suspend, the silent install's switch, the hub speed fallback, the 0.96 floor and Linux's controller quirks, on both paths"
-    foreach ($tv in @(
+    # Five sections of seven values each, by the values' place in the list
+    # (task 48.34): one section of them all was a third of the whole run,
+    # longer than any part could be.
+    $tvList = @(
         @{ Key = "maxxfer";   Row = "HKR,,XhciMaxTransferKB,0x00010003,1024`r`n"; Wrong = "HKR,,XhciMaxTransferKB,0x00010003,64`r`n"; Clob = "HKR,,XhciMaxTransferKB,0x00010001,1024`r`n" },
         @{ Key = "irqroute";  Row = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`n"; Wrong = "HKR,,XhciIntelIrqRoute,0x00010003,0`r`n"; Clob = "HKR,,XhciIntelIrqRoute,0x00010001,1`r`n" },
         @{ Key = "tolerance"; Row = "HKR,,XhciTolerance,0x00010003,1`r`n";   Wrong = "HKR,,XhciTolerance,0x00010003,0`r`n";   Clob = "HKR,,XhciTolerance,0x00010001,1`r`n" },
@@ -1063,8 +1249,11 @@ try {
         @{ Key = "usb2bos"; Row = "HKR,,XhciUsb2Bos,0x00010003,1`r`n"; Wrong = "HKR,,XhciUsb2Bos,0x00010003,0`r`n"; Clob = "HKR,,XhciUsb2Bos,0x00010001,1`r`n" },
         @{ Key = "resumekeep"; Row = "HKR,,XhciResumeKeep,0x00010003,1`r`n"; Wrong = "HKR,,XhciResumeKeep,0x00010003,0`r`n"; Clob = "HKR,,XhciResumeKeep,0x00010001,1`r`n" },
         @{ Key = "linkkeep"; Row = "HKR,,XhciLinkKeep,0x00010003,1`r`n"; Wrong = "HKR,,XhciLinkKeep,0x00010003,0`r`n"; Clob = "HKR,,XhciLinkKeep,0x00010001,1`r`n" },
+        @{ Key = "ssflap"; Row = "HKR,,XhciSsFlapFallback,0x00010003,1`r`n"; Wrong = "HKR,,XhciSsFlapFallback,0x00010003,0`r`n"; Clob = "HKR,,XhciSsFlapFallback,0x00010001,1`r`n" },
         @{ Key = "evtring"; Row = "HKR,,XhciEventRingTrbs,0x00010003,1024`r`n"; Wrong = "HKR,,XhciEventRingTrbs,0x00010003,256`r`n"; Clob = "HKR,,XhciEventRingTrbs,0x00010001,1024`r`n" },
         @{ Key = "botownid"; Row = "HKR,,XhciBulkOnlyOwnId,0x00010003,1`r`n"; Wrong = "HKR,,XhciBulkOnlyOwnId,0x00010003,0`r`n"; Clob = "HKR,,XhciBulkOnlyOwnId,0x00010001,1`r`n" },
+        @{ Key = "stagepool"; Row = "HKR,,XhciStagePoolKiB,0x00010003,2048`r`n"; Wrong = "HKR,,XhciStagePoolKiB,0x00010003,1024`r`n"; Clob = "HKR,,XhciStagePoolKiB,0x00010001,2048`r`n" },
+        @{ Key = "dmastaging"; Row = "HKR,,XhciDmaStaging,0x00010003,0`r`n"; Wrong = "HKR,,XhciDmaStaging,0x00010003,1`r`n"; Clob = "HKR,,XhciDmaStaging,0x00010001,0`r`n" },
         @{ Key = "msiavoid"; Row = "HKR,,XhciMsiAvoid,0x00010003,1`r`n"; Wrong = "HKR,,XhciMsiAvoid,0x00010003,0`r`n"; Clob = "HKR,,XhciMsiAvoid,0x00010001,1`r`n" },
         @{ Key = "streamsoff"; Row = "HKR,,XhciStreamsOff,0x00010003,1`r`n"; Wrong = "HKR,,XhciStreamsOff,0x00010003,0`r`n"; Clob = "HKR,,XhciStreamsOff,0x00010001,1`r`n" },
         @{ Key = "resreinit"; Row = "HKR,,XhciResumeReinit,0x00010003,1`r`n"; Wrong = "HKR,,XhciResumeReinit,0x00010003,0`r`n"; Clob = "HKR,,XhciResumeReinit,0x00010001,1`r`n" },
@@ -1079,7 +1268,12 @@ try {
         @{ Key = "ctlnoop"; Row = "HKR,,XhciControlLinkNoOp,0x00010003,1`r`n"; Wrong = "HKR,,XhciControlLinkNoOp,0x00010003,0`r`n"; Clob = "HKR,,XhciControlLinkNoOp,0x00010001,1`r`n" },
         @{ Key = "isochspur"; Row = "HKR,,XhciIsochSpuriousSuccess,0x00010003,1`r`n"; Wrong = "HKR,,XhciIsochSpuriousSuccess,0x00010003,0`r`n"; Clob = "HKR,,XhciIsochSpuriousSuccess,0x00010001,1`r`n" },
         @{ Key = "amdbitclr"; Row = "HKR,,XhciAmdSuspendBitClear,0x00010003,1`r`n"; Wrong = "HKR,,XhciAmdSuspendBitClear,0x00010003,0`r`n"; Clob = "HKR,,XhciAmdSuspendBitClear,0x00010001,1`r`n" }
-    )) {
+    )
+    for ($tvi = 0; $tvi -lt $tvList.Count; $tvi++) {
+        $tv = $tvList[$tvi]
+        if ($tvi % 7 -eq 0) {
+            Write-Step ("{0}: values {1} to {2}" -f $script:valuesTitle, ($tvi + 1), [Math]::Min($tvi + 7, $tvList.Count))
+        }
         Assert-RuleFires ($tv.Key + "-no-9x") "VAL-MISSING" {
             param($t) $t.Replace($tailFor9x, $tailFor9x.Replace($tv.Row, ""))
         }
@@ -2788,8 +2982,11 @@ try {
         @{ Key = "usb2bos"; Row = "HKR,,XhciUsb2Bos,0x00010003,1`r`n"; Wrong = "HKR,,XhciUsb2Bos,0x00010003,0`r`n" },
         @{ Key = "resumekeep"; Row = "HKR,,XhciResumeKeep,0x00010003,1`r`n"; Wrong = "HKR,,XhciResumeKeep,0x00010003,0`r`n" },
         @{ Key = "linkkeep"; Row = "HKR,,XhciLinkKeep,0x00010003,1`r`n"; Wrong = "HKR,,XhciLinkKeep,0x00010003,0`r`n" },
+        @{ Key = "ssflap"; Row = "HKR,,XhciSsFlapFallback,0x00010003,1`r`n"; Wrong = "HKR,,XhciSsFlapFallback,0x00010003,0`r`n" },
         @{ Key = "evtring"; Row = "HKR,,XhciEventRingTrbs,0x00010003,1024`r`n"; Wrong = "HKR,,XhciEventRingTrbs,0x00010003,256`r`n" },
         @{ Key = "botownid"; Row = "HKR,,XhciBulkOnlyOwnId,0x00010003,1`r`n"; Wrong = "HKR,,XhciBulkOnlyOwnId,0x00010003,0`r`n" },
+        @{ Key = "stagepool"; Row = "HKR,,XhciStagePoolKiB,0x00010003,2048`r`n"; Wrong = "HKR,,XhciStagePoolKiB,0x00010003,1024`r`n" },
+        @{ Key = "dmastaging"; Row = "HKR,,XhciDmaStaging,0x00010003,0`r`n"; Wrong = "HKR,,XhciDmaStaging,0x00010003,1`r`n" },
         @{ Key = "msiavoid"; Row = "HKR,,XhciMsiAvoid,0x00010003,1`r`n"; Wrong = "HKR,,XhciMsiAvoid,0x00010003,0`r`n" },
         @{ Key = "streamsoff"; Row = "HKR,,XhciStreamsOff,0x00010003,1`r`n"; Wrong = "HKR,,XhciStreamsOff,0x00010003,0`r`n" },
         @{ Key = "resreinit"; Row = "HKR,,XhciResumeReinit,0x00010003,1`r`n"; Wrong = "HKR,,XhciResumeReinit,0x00010003,0`r`n" },
@@ -3043,9 +3240,11 @@ try {
     }
 }
 
+Write-StepTimes
 Write-Host ""
+$partSaid = if ($Part -ne "") { " (part $Part)" } else { "" }
 if ($script:failures.Count -gt 0) {
-    Write-Err ("INF gate self-tests FAILED: {0} of {1} check(s)." -f $script:failures.Count, $script:checks)
+    Write-Err ("INF gate self-tests{0} FAILED: {1} of {2} check(s)." -f $partSaid, $script:failures.Count, $script:checks)
     exit 1
 }
 # The record of this pass, for the next run's skip in any tree: written
@@ -3054,7 +3253,7 @@ if ($script:failures.Count -gt 0) {
 if ($null -ne $digest -and (Get-InfSelfTestDigest -Root $repo) -eq $digest) {
     [void](Write-SelfTestPassRecord -Suite "inf" -Digest $digest -Checks $script:checks -Tree ([System.IO.Path]::GetFullPath($repo).TrimEnd('\')))
 }
-Write-Ok ("INF gate self-tests passed ({0} checks)" -f $script:checks)
+Write-Ok ("INF gate self-tests{0} passed ({1} checks)" -f $partSaid, $script:checks)
 exit 0
 } finally {
     Restore-SelfTestGitPolicy -Policy $gitPolicy

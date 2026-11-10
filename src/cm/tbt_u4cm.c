@@ -2162,6 +2162,11 @@ static LONG tbtU4WriteEntry(PTBT_U4CM cm, const TBT_ROUTE *r, ULONG adp,
               TBT_PATH1_ESE);
     e[1] |= (weight & TBT_PATH1_WEIGHT_MASK) |
             (TBT_PATH_PRIORITY_TUNNEL << TBT_PATH1_PRIO_SHIFT);
+    /* Initial Credits is 7 bits: a larger figure saturates, never wraps
+     * (each caller clamps its figure first; this is the backstop). */
+    if (credits > TBT_PATH_CREDITS_MAX) {
+        credits = TBT_PATH_CREDITS_MAX;
+    }
     if (lane || tbt3) {
         e[0] = (e[0] & ~TBT_PATH0_CREDITS_MASK) |
                ((credits << TBT_PATH0_CREDITS_SHIFT) & TBT_PATH0_CREDITS_MASK);
@@ -8757,6 +8762,13 @@ static LONG tbtU4KidPcieTunnel(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k, ULON
             rc = TBT_E_STATE;
         }
     }
+    if (rc == TBT_OK && tbtU4KidLive(cm, p, k, gen) && cm->KidGate != NULL) {
+        /* Record 34 section 3.12 item 2: the driver's baseline before the
+         * first Path Enable, so no function of this kid can answer before
+         * it is read. */
+        (VOID)cm->KidGate(cm->KidGateContext, TBT_U4_KIDGATE_ARM, p->Index,
+                          k->Index, gen);
+    }
     if (rc == TBT_OK && tbtU4KidLive(cm, p, k, gen)) {
         t->Written |= TBT_U4_E_DEV_ENABLE;
         rc = tbtU4Rmw(cm, &d->Route, TBT_CS_ADAPTER, dp, d->Adp[dp].CapAdp + TBT_PCIE_CS_0,
@@ -9813,6 +9825,13 @@ static VOID tbtU4KidService(PTBT_U4CM cm, PTBT_U4_PORT p)
             tbtU4Log(cm, "u4.kid.connect.deferred", (p->Index << 8) | a);
             continue;
         }
+        if (cm->KidGate != NULL &&
+            !cm->KidGate(cm->KidGateContext, TBT_U4_KIDGATE_MAY_CONNECT,
+                         p->Index, 0, 0)) {
+            /* Record 34 section 3.12 item 3: another kid's tunnel not yet
+             * attributed; the next tick asks again. */
+            continue;
+        }
         k = tbtU4KidSlot(cm, p, a);
         if (k == NULL) {
             continue;
@@ -9945,7 +9964,7 @@ static BOOLEAN tbtU4KidResume(PTBT_U4CM cm, PTBT_U4_OBLIGATION o, BOOLEAN moved)
             tbtU4KidTeardown(cm, p, k);
             met = TRUE;
         }
-    } else if (o->BuiltHere) {
+    } else if (o->BuiltHere || o->Prepared) {
         /* Rebuilt after its parent's (section 6.9), the old records gone
          * with the configuration the domain lost. */
         keep[0] = k->Index;
@@ -10151,6 +10170,12 @@ VOID TbtU4SetLinkDown(PTBT_U4CM cm, TBT_U4_LINKDOWN_FN fn, PVOID context)
 {
     cm->LinkDown = fn;
     cm->LinkDownContext = context;
+}
+
+VOID TbtU4SetKidGate(PTBT_U4CM cm, TBT_U4_KIDGATE_FN fn, PVOID context)
+{
+    cm->KidGate = fn;
+    cm->KidGateContext = context;
 }
 
 /* Section 3.5's failure after activation: the rings stopped - nothing of
@@ -11296,6 +11321,40 @@ LONG TbtU4Eject(PTBT_U4CM cm, ULONG port)
     return closed ? TBT_OK : TBT_E_STATE;
 }
 
+ULONG TbtU4PcieLinkClass(PTBT_U4CM cm, ULONG port)
+{
+    PTBT_U4_PORT p;
+    PTBT_U4_ROUTER h;
+    ULONG v;
+    ULONG s;
+
+    p = tbtU4PortOf(cm, port);
+    if (p == NULL || cm->Failed || cm->Contained) {
+        return TBT_U4_PLINK_UNKNOWN;
+    }
+    if (p->PcieDown == 0) {
+        return TBT_U4_PLINK_NONE;
+    }
+    h = &cm->HostRouter;
+    if (h->Tbt3 || p->PcieDown >= TBT_U4_MAX_ADP ||
+        h->Adp[p->PcieDown].CapAdp == 0) {
+        return TBT_U4_PLINK_UNKNOWN;
+    }
+    if (tbtU4Rd(cm, &h->Route, TBT_CS_ADAPTER, p->PcieDown,
+                h->Adp[p->PcieDown].CapAdp + TBT_PCIE_CS_0, &v) != TBT_OK) {
+        return TBT_U4_PLINK_UNKNOWN;
+    }
+    s = TBT_PCIE0_LTSSM(v);
+    if ((v & TBT_PCIE0_PE) == 0 || s == TBT_LTSSM_DETECT) {
+        return TBT_U4_PLINK_DOWN;
+    }
+    if (s == TBT_LTSSM_L0 || s == TBT_LTSSM_L1 || s == TBT_LTSSM_RECOVERY ||
+        s == TBT_LTSSM_RECOVERY_IDLE) {
+        return TBT_U4_PLINK_UP;
+    }
+    return TBT_U4_PLINK_UNKNOWN;
+}
+
 LONG TbtU4EjectPcie(PTBT_U4CM cm, ULONG port)
 {
     PTBT_U4_PORT p;
@@ -11336,6 +11395,668 @@ LONG TbtU4EjectPcie(PTBT_U4CM cm, ULONG port)
     p->State = TBT_U4_FAILED;
     p->Why = TBT_U4_WHY_EJECTED;
     return closed ? TBT_OK : TBT_E_STATE;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Record 22 section 11.1.5: the Guide's sleep entry (task 48.35)         */
+/* ---------------------------------------------------------------------- */
+
+#define TBT_U4_SLEEP_READY_US   500000UL    /* Guide 8.2.1.2 step 3's 500 ms */
+#define TBT_U4_SLEEP_ROUTERS    (1UL + TBT_U4_MAX_PORTS + TBT_U4_MAX_KIDS)
+
+/* A connection this driver runs: its router enumerated or adopted by this
+ * instance and its link configured, not HELD, not another domain's. */
+static BOOLEAN tbtU4SleepRuns(ULONG state, const TBT_U4_ROUTER *d)
+{
+    return (BOOLEAN)(d->Present && (state == TBT_U4_UP || state == TBT_U4_FAILED));
+}
+
+/* A Thunderbolt router's link controller `i` (record 22 section 19.4 item
+ * 3, [linux] lc.c tb_lc_set_sleep): its block, 0 for none. *n the count. */
+static ULONG tbtU4SleepLc(PTBT_U4CM cm, const TBT_U4_ROUTER *rt, ULONG i, PULONG n)
+{
+    ULONG desc;
+
+    *n = 0;
+    if (rt->CapLc == 0 ||
+        tbtU4Rd(cm, &rt->Route, TBT_CS_ROUTER, 0, rt->CapLc + TBT_LC_DESC, &desc) != TBT_OK) {
+        return 0;
+    }
+    *n = TBT_LC_DESC_NLC(desc);
+    if (i >= *n) {
+        return 0;
+    }
+    return rt->CapLc + TBT_LC_DESC_SIZE(desc) + i * TBT_LC_DESC_PORT_SIZE(desc);
+}
+
+/*
+ * Item 2's preflight for one link (`a` on router `ra`, the upstream end,
+ * and `b` on `rb`, the downstream one), both USB4 routers: a CLx enable set
+ * at either end cleared at both, the downstream end first, and read back;
+ * on a Gen 4 link each end's Target Asymmetric Link compared with its own
+ * Negotiated Link Width, nothing written (decision U31). FALSE fails the
+ * preflight. A Thunderbolt end has no such fields: nothing to check.
+ */
+static BOOLEAN tbtU4SleepLink(PTBT_U4CM cm, const TBT_U4_ROUTER *ra, ULONG a,
+                              const TBT_U4_ROUTER *rb, ULONG b, BOOLEAN gen4)
+{
+    ULONG v[2];
+    ULONG k;
+    ULONG want;
+    const TBT_U4_ROUTER *rt[2];
+    ULONG adp[2];
+
+    if (ra->Tbt3 || rb->Tbt3) {
+        return TRUE;
+    }
+    rt[0] = rb;
+    adp[0] = b;
+    rt[1] = ra;
+    adp[1] = a;
+    for (k = 0; k < 2; k++) {
+        if (tbtU4LaneRd(cm, rt[k], adp[k], &v[k]) != TBT_OK) {
+            tbtU4Log(cm, "u4.sleep.preflight", 0x100UL | (k << 4));
+            return FALSE;
+        }
+    }
+    if (((v[0] | v[1]) & TBT_LANE1_CLX_EN) != 0) {
+        for (k = 0; k < 2; k++) {
+            if ((v[k] & TBT_LANE1_CLX_EN) != 0 &&
+                (tbtU4LaneRmw(cm, rt[k], adp[k], TBT_LANE1_CLX_EN, 0) != TBT_OK ||
+                 tbtU4LaneRd(cm, rt[k], adp[k], &v[k]) != TBT_OK ||
+                 (v[k] & TBT_LANE1_CLX_EN) != 0)) {
+                tbtU4Log(cm, "u4.sleep.preflight", 0x200UL | (k << 4));
+                return FALSE;
+            }
+        }
+        cm->Counters.SleepClx++;
+        tbtU4Log(cm, "u4.sleep.clx", (a << 8) | b);
+    }
+    if (gen4) {
+        for (k = 0; k < 2; k++) {
+            want = TBT_LANE1_NLW(v[k]) == TBT_LANE_WIDTH_ASYM_TX ? 1UL :
+                   TBT_LANE1_NLW(v[k]) == TBT_LANE_WIDTH_ASYM_RX ? 2UL : 0UL;
+            if (TBT_LANE1_TAL(v[k]) != want) {
+                tbtU4Log(cm, "u4.sleep.asym", (k << 16) | v[k] >> 16);
+                tbtU4Log(cm, "u4.sleep.preflight", 0x300UL | (k << 4));
+                return FALSE;
+            }
+        }
+    }
+    return TRUE;
+}
+
+/*
+ * Item 4 for one router: its wake enables cleared, the values read kept
+ * (SleepWake, SleepWakePorts). A USB4 router: every downstream USB4 port's
+ * four enables, its upstream port's Enable Wake on USB4 Wake set (Table
+ * 8-1), a device router's ROUTER_CS_5 bits 3:1. A Thunderbolt device
+ * router: its link controllers' six SX_CTRL wake bits ([linux]
+ * tb_lc_set_wake); a Thunderbolt host router nothing (Linux writes none at
+ * route 0). FALSE when a write was not taken.
+ */
+static BOOLEAN tbtU4SleepWake(PTBT_U4CM cm, PTBT_U4_ROUTER rt, BOOLEAN host)
+{
+    ULONG a;
+    ULONG v;
+    ULONG n;
+    ULONG i;
+    ULONG lc;
+    BOOLEAN ok;
+
+    ok = TRUE;
+    rt->SleepWake = 0;
+    rt->SleepWakePorts = 0;
+    if (rt->Tbt3) {
+        if (host || rt->CapLc == 0) {
+            return TRUE;
+        }
+        for (i = 0; i < 2; i++) {
+            lc = tbtU4SleepLc(cm, rt, i, &n);
+            if (lc == 0) {
+                if (n == 0) {
+                    ok = FALSE;     /* the descriptor unread */
+                }
+                break;
+            }
+            if (tbtU4Rd(cm, &rt->Route, TBT_CS_ROUTER, 0, lc + TBT_LC_SX_CTRL, &v) != TBT_OK) {
+                ok = FALSE;
+                continue;
+            }
+            /* Kept before the write: a write applied whose answer is lost
+             * is still put back by a sleep that did not happen. */
+            rt->SleepWake |= (v & TBT_LC_SX_CTRL_WAKE) << (8 * i);
+            if (tbtU4Wr(cm, &rt->Route, TBT_CS_ROUTER, 0, lc + TBT_LC_SX_CTRL,
+                        v & ~TBT_LC_SX_CTRL_WAKE) != TBT_OK) {
+                ok = FALSE;
+            }
+        }
+        rt->SleepWakeSaved = TRUE;
+        return ok;
+    }
+    for (a = 1; a <= rt->MaxAdp && a < TBT_U4_MAX_ADP; a++) {
+        if (rt->Adp[a].Type != TBT_ADP_TYPE_LANE || rt->Adp[a].CapPort == 0) {
+            continue;
+        }
+        if (tbtU4Rd(cm, &rt->Route, TBT_CS_ADAPTER, a,
+                    rt->Adp[a].CapPort + TBT_PORT_CS_19, &v) != TBT_OK) {
+            ok = FALSE;
+            continue;
+        }
+        if (!host && a == rt->UpAdp) {
+            if ((v & TBT_PORT19_WOU4) == 0 &&
+                tbtU4Wr(cm, &rt->Route, TBT_CS_ADAPTER, a,
+                        rt->Adp[a].CapPort + TBT_PORT_CS_19,
+                        (v & ~(TBT_PORT19_ILR | TBT_PORT19_SAF)) | TBT_PORT19_WOU4) != TBT_OK) {
+                ok = FALSE;
+            }
+            continue;
+        }
+        if (a < 16) {
+            rt->SleepWakePorts |= ((v & TBT_PORT19_WAKE) >> 16) << (4 * ((a - 1) / 2));
+        }
+        if ((v & TBT_PORT19_WAKE) != 0 &&
+            tbtU4Wr(cm, &rt->Route, TBT_CS_ADAPTER, a, rt->Adp[a].CapPort + TBT_PORT_CS_19,
+                    v & ~(TBT_PORT19_WAKE | TBT_PORT19_ILR | TBT_PORT19_SAF)) != TBT_OK) {
+            ok = FALSE;
+        }
+    }
+    if (!host) {
+        if (tbtU4Rd(cm, &rt->Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_5, &v) != TBT_OK) {
+            ok = FALSE;
+        } else {
+            rt->SleepWake = v & TBT_RTR5_WAKE;
+            if ((v & TBT_RTR5_WAKE) != 0 &&
+                tbtU4Wr(cm, &rt->Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_5,
+                        v & ~TBT_RTR5_WAKE) != TBT_OK) {
+                ok = FALSE;
+            }
+        }
+    }
+    /* Every value read was kept before its write, whatever failed after
+     * it: the snapshot stands for each field it holds. */
+    rt->SleepWakeSaved = TRUE;
+    return ok;
+}
+
+/*
+ * Enter Sleep set (`on`) or cleared, read back, in the router's own type
+ * (record 22 section 11.1.5's preamble): ROUTER_CS_5 bit 0, or bit 31 of
+ * every link controller's SX_CTRL. A generation 1 Thunderbolt router (no
+ * link controller) has nothing: TBT_E_STATE, never prepared.
+ */
+static LONG tbtU4SleepBit(PTBT_U4CM cm, PTBT_U4_ROUTER rt, BOOLEAN on)
+{
+    ULONG v;
+    ULONG n;
+    ULONG i;
+    ULONG lc;
+    LONG rc;
+
+    if (!rt->Tbt3) {
+        rc = tbtU4Rmw(cm, &rt->Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_5,
+                      TBT_RTR5_SLP, on ? TBT_RTR5_SLP : 0);
+        if (rc == TBT_OK) {
+            rc = tbtU4Rd(cm, &rt->Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_5, &v);
+        }
+        if (rc == TBT_OK && ((v & TBT_RTR5_SLP) != 0) != on) {
+            rc = TBT_E_STATE;
+        }
+        return rc;
+    }
+    if (tbtU4SleepLc(cm, rt, 0, &n) == 0) {
+        return TBT_E_STATE;
+    }
+    for (i = 0; i < n; i++) {
+        lc = tbtU4SleepLc(cm, rt, i, &n);
+        if (lc == 0) {
+            return TBT_E_STATE;
+        }
+        rc = tbtU4Rmw(cm, &rt->Route, TBT_CS_ROUTER, 0, lc + TBT_LC_SX_CTRL,
+                      TBT_LC_SX_CTRL_SLP, on ? TBT_LC_SX_CTRL_SLP : 0);
+        if (rc == TBT_OK) {
+            rc = tbtU4Rd(cm, &rt->Route, TBT_CS_ROUTER, 0, lc + TBT_LC_SX_CTRL, &v);
+        }
+        if (rc != TBT_OK) {
+            return rc;
+        }
+        if (((v & TBT_LC_SX_CTRL_SLP) != 0) != on) {
+            return TBT_E_STATE;
+        }
+    }
+    return TBT_OK;
+}
+
+/* Item 2 of section 11.1.6: the wake enables item 4 cleared written back
+ * (an upstream port's Enable Wake on USB4 Wake left set, as Table 8-1
+ * wants it in any case). FALSE when a write was not taken. */
+static BOOLEAN tbtU4SleepWakeBack(PTBT_U4CM cm, PTBT_U4_ROUTER rt, BOOLEAN host)
+{
+    ULONG a;
+    ULONG i;
+    ULONG n;
+    ULONG lc;
+    ULONG bits;
+    BOOLEAN ok;
+
+    if (!rt->SleepWakeSaved) {
+        return TRUE;
+    }
+    ok = TRUE;
+    if (rt->Tbt3) {
+        for (i = 0; i < 2 && !host; i++) {
+            bits = (rt->SleepWake >> (8 * i)) & TBT_LC_SX_CTRL_WAKE;
+            if (bits == 0) {
+                continue;
+            }
+            /* A controller with bits to put back: an unreadable descriptor
+             * is a failure, never the end of the list. */
+            lc = tbtU4SleepLc(cm, rt, i, &n);
+            if (lc == 0 ||
+                tbtU4Rmw(cm, &rt->Route, TBT_CS_ROUTER, 0, lc + TBT_LC_SX_CTRL, 0, bits) != TBT_OK) {
+                ok = FALSE;
+            }
+        }
+        if (ok) {
+            rt->SleepWakeSaved = FALSE;
+        }
+        return ok;
+    }
+    for (a = 1; a <= rt->MaxAdp && a < 16 && a < TBT_U4_MAX_ADP; a++) {
+        if (rt->Adp[a].Type != TBT_ADP_TYPE_LANE || rt->Adp[a].CapPort == 0 ||
+            (!host && a == rt->UpAdp)) {
+            continue;
+        }
+        bits = ((rt->SleepWakePorts >> (4 * ((a - 1) / 2))) & 0xFUL) << 16;
+        if (bits != 0 &&
+            tbtU4Rmw(cm, &rt->Route, TBT_CS_ADAPTER, a, rt->Adp[a].CapPort + TBT_PORT_CS_19,
+                     TBT_PORT19_ILR | TBT_PORT19_SAF, bits) != TBT_OK) {
+            ok = FALSE;
+        }
+    }
+    if (!host && rt->SleepWake != 0 &&
+        tbtU4Rmw(cm, &rt->Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_5, 0,
+                 rt->SleepWake & TBT_RTR5_WAKE) != TBT_OK) {
+        ok = FALSE;
+    }
+    /* Kept until every field is back, for the log and a later look. */
+    if (ok) {
+        rt->SleepWakeSaved = FALSE;
+    }
+    return ok;
+}
+
+/*
+ * Section 11.1.5 items 2 to 7, at TbtU4Suspend, with the rings running,
+ * before they stop. Every router this instance runs - the kids, the depth
+ * 1 device routers of ports it runs, the host router - is collected; the
+ * preflight runs on every link first and, failing anywhere, leaves the
+ * whole domain out (nothing written but what the preflight wrote); then
+ * the wake enables, Enter Sleep (children first, the host last), and
+ * Sleep Ready waited 500 ms on the elapsed clock with safe points. Every
+ * obligation whose route is wholly prepared is marked Prepared.
+ */
+static VOID tbtU4SleepEnter(PTBT_U4CM cm)
+{
+    PTBT_U4_ROUTER rt[TBT_U4_SLEEP_ROUTERS];
+    BOOLEAN host[TBT_U4_SLEEP_ROUTERS];
+    ULONG n;
+    ULONG i;
+    ULONG left;
+    ULONG v;
+    PTBT_U4_PORT p;
+    PTBT_U4_KID k;
+    PTBT_U4_OBLIGATION o;
+    TBT_WAIT w;
+    BOOLEAN ok;
+
+    cm->Counters.SleepEntries++;
+    n = 0;
+    ok = TRUE;
+    for (i = 0; i < TBT_U4_MAX_KIDS; i++) {
+        k = &cm->Kids[i];
+        k->Dev.SleepSet = FALSE;
+        k->Dev.SleepTried = FALSE;
+        k->Dev.SleepReady = FALSE;
+        p = tbtU4PortOf(cm, k->Port);
+        if (!k->Used || p == NULL || !tbtU4SleepRuns(k->State, &k->Dev) ||
+            !tbtU4SleepRuns(p->State, &p->Dev)) {
+            continue;
+        }
+        cm->ActivePort = p->Index;
+        if (ok && !tbtU4SleepLink(cm, &p->Dev, k->ParentLane0, &k->Dev, k->Dev.UpAdp, k->Gen4)) {
+            ok = FALSE;
+        }
+        cm->ActivePort = 0;
+        host[n] = FALSE;
+        rt[n++] = &k->Dev;
+    }
+    for (i = 0; i < cm->PortCount; i++) {
+        p = &cm->Ports[i];
+        p->Dev.SleepSet = FALSE;
+        p->Dev.SleepTried = FALSE;
+        p->Dev.SleepReady = FALSE;
+        p->SleepCancelFailed = FALSE;
+        if (p->DpPreserved || (p->State == TBT_U4_HELD && p->Dev.Present)) {
+            cm->Counters.SleepUnrestorable++;
+            tbtU4Log(cm, "u4.sleep.unrestorable", (p->Index << 8) | p->State);
+        }
+        if (!tbtU4SleepRuns(p->State, &p->Dev)) {
+            continue;
+        }
+        cm->ActivePort = p->Index;
+        if (ok && !tbtU4SleepLink(cm, &cm->HostRouter, p->Lane0, &p->Dev, p->Dev.UpAdp,
+                                  p->Gen4)) {
+            ok = FALSE;
+        }
+        cm->ActivePort = 0;
+        host[n] = FALSE;
+        rt[n++] = &p->Dev;
+    }
+    for (i = 0; i < TBT_U4_MAX_LINKS; i++) {
+        if (cm->Links[i].Used) {
+            cm->Counters.SleepUnrestorable++;
+            tbtU4Log(cm, "u4.sleep.unrestorable", (cm->Links[i].Port << 8) | 0xFFUL);
+        }
+    }
+    cm->HostRouter.SleepSet = FALSE;
+    cm->HostRouter.SleepTried = FALSE;
+    cm->HostRouter.SleepReady = FALSE;
+    host[n] = TRUE;
+    rt[n++] = &cm->HostRouter;
+    if (!ok) {
+        cm->Counters.SleepPreflight++;
+        tbtU4Log(cm, "u4.sleep.preflight", 0);
+        return;
+    }
+    cm->SleepEntered = TRUE;
+    /* Item 4, then item 5: the order is Linux's, children first. */
+    for (i = 0; i < n; i++) {
+        /* A generation 1 Thunderbolt router has no sleep register and no
+         * wake bit to program: nothing is tried on it, and it is never
+         * prepared. */
+        rt[i]->SleepTried = (BOOLEAN)!(rt[i]->Tbt3 && rt[i]->CapLc == 0);
+        if (!tbtU4SleepWake(cm, rt[i], host[i])) {
+            cm->Counters.SleepRefused++;
+            tbtU4Log(cm, "u4.sleep.wake.refused", rt[i]->Route.Lo);
+        }
+    }
+    for (i = 0; i < n; i++) {
+        if (tbtU4SleepBit(cm, rt[i], TRUE) == TBT_OK) {
+            rt[i]->SleepSet = TRUE;
+            cm->Counters.SleepRouters++;
+        } else if (!(rt[i]->Tbt3 && rt[i]->CapLc == 0)) {
+            cm->Counters.SleepRefused++;
+            tbtU4Log(cm, "u4.sleep.refused", rt[i]->Route.Lo);
+        }
+    }
+    /* Item 6: Sleep Ready, the USB4 routers given Enter Sleep. */
+    TbtWaitStart(&w, cm->Host, TBT_U4_SLEEP_READY_US, FALSE);
+    for (;;) {
+        left = 0;
+        for (i = 0; i < n; i++) {
+            if (!rt[i]->SleepSet || rt[i]->Tbt3 || rt[i]->SleepReady) {
+                continue;
+            }
+            if (tbtU4Rd(cm, &rt[i]->Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_6, &v) == TBT_OK &&
+                (v & TBT_RTR6_SLPR) != 0) {
+                rt[i]->SleepReady = TRUE;
+                cm->Counters.SleepReady++;
+            } else {
+                left++;
+            }
+        }
+        if (left == 0 || TbtWaitDone(&w, cm->Host) || tbtU4Off(cm)) {
+            break;
+        }
+        tbtU4Pause(cm, &w);
+    }
+    for (i = 0; i < n; i++) {
+        if (rt[i]->SleepSet && !rt[i]->Tbt3 && !rt[i]->SleepReady) {
+            cm->Counters.SleepLate++;
+            tbtU4Log(cm, "u4.sleep.not-ready", rt[i]->Route.Lo);
+        }
+    }
+    /* Decision U34: an obligation whose route is wholly prepared. */
+    for (i = 0; i < TBT_U4_OBLIGATIONS; i++) {
+        o = &cm->Obligations[i];
+        o->Prepared = FALSE;
+        p = tbtU4PortOf(cm, o->Port);
+        if (!o->Used || p == NULL || !cm->HostRouter.SleepSet || !p->Dev.SleepSet) {
+            continue;
+        }
+        if (o->Kid != 0) {
+            k = tbtU4KidOf(cm, o->Kid);
+            o->Prepared = (BOOLEAN)(k != NULL && k->Dev.SleepSet);
+        } else {
+            o->Prepared = TRUE;
+        }
+    }
+    tbtU4Log(cm, "u4.sleep.entered", (cm->Counters.SleepRouters & 0xFFFFUL) |
+             ((cm->Counters.SleepLate & 0xFFUL) << 16));
+}
+
+/*
+ * Section 11.1.6 item 2, at TbtU4Resume once the host router is read
+ * again: a sleep that did not happen leaves the host router's Enter Sleep
+ * set (a domain that slept comes back with every configuration space at
+ * its defaults, Spec 4.5.2, and nothing more is read). Then Enter Sleep is
+ * cleared and the wake enables put back on every router the entry set,
+ * host router first; a device router where that fails marks its port
+ * (SleepCancelFailed: its obligations not met). `hostSaved` is the host
+ * router's sleep record kept across its walk: bit 0 SleepSet, bit 1
+ * SleepWakeSaved, bit 2 SleepTried, then SleepWake and SleepWakePorts.
+ */
+/* What the entry left on a router, read (section 11.1.6 item 2). */
+#define TBT_U4_SLP_UNREAD   0       /* a read that failed: nothing known */
+#define TBT_U4_SLP_LOST     1       /* its configuration gone (TopologyID Valid clear) */
+#define TBT_U4_SLP_STILL    2       /* configured, Enter Sleep set */
+#define TBT_U4_SLP_CLEAR    3       /* configured, Enter Sleep clear */
+
+static ULONG tbtU4SleepState(PTBT_U4CM cm, const TBT_U4_ROUTER *rt)
+{
+    ULONG v[3];
+    ULONG n;
+    ULONG lc;
+
+    if (!rt->Tbt3) {
+        if (tbtU4RdN(cm, &rt->Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_3, 3, v) != TBT_OK) {
+            return TBT_U4_SLP_UNREAD;
+        }
+        if (rt != &cm->HostRouter && (v[0] & TBT_RTR3_V) == 0) {
+            return TBT_U4_SLP_LOST;
+        }
+        return (v[2] & TBT_RTR5_SLP) != 0 ? TBT_U4_SLP_STILL : TBT_U4_SLP_CLEAR;
+    }
+    if (rt->CapLc == 0) {
+        return TBT_U4_SLP_CLEAR;    /* generation 1: no sleep register */
+    }
+    lc = tbtU4SleepLc(cm, rt, 0, &n);
+    if (lc == 0 ||
+        tbtU4Rd(cm, &rt->Route, TBT_CS_ROUTER, 0, lc + TBT_LC_SX_CTRL, v) != TBT_OK) {
+        return TBT_U4_SLP_UNREAD;
+    }
+    return (v[0] & TBT_LC_SX_CTRL_SLP) != 0 ? TBT_U4_SLP_STILL : TBT_U4_SLP_CLEAR;
+}
+
+/*
+ * One device router the entry touched, on host port `p` (its own, or a
+ * kid's below its parent's lane `kidLane`, 0 for none). The lane above it
+ * is read first - the host's lane 0, then a kid's parent lane: Lock set
+ * again there is the power-on default a sleep or a new connection leaves
+ * (Spec 4.5.2; record 22 section 7.1), so the router's configuration is
+ * lost and nothing is left to undo. A router read configured has Enter Sleep
+ * cleared if set and its saved wake enables put back; one read lost is
+ * the classification's. FALSE when a read failed or an owed write was not
+ * taken: the record is kept and the port held.
+ */
+static BOOLEAN tbtU4SleepUndo(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_ROUTER rt,
+                              ULONG kidLane)
+{
+    ULONG cs4;
+    ULONG st;
+    BOOLEAN ok;
+
+    if (tbtU4Rd(cm, &cm->HostRouter.Route, TBT_CS_ADAPTER, p->Lane0, TBT_ADP_CS_4,
+                &cs4) != TBT_OK ||
+        ((cs4 & TBT_ADP4_LOCK) == 0 && kidLane != 0 &&
+         tbtU4Rd(cm, &p->Dev.Route, TBT_CS_ADAPTER, kidLane, TBT_ADP_CS_4, &cs4) != TBT_OK)) {
+        return FALSE;
+    }
+    if ((cs4 & TBT_ADP4_LOCK) != 0) {
+        rt->SleepSet = FALSE;
+        rt->SleepTried = FALSE;
+        rt->SleepWakeSaved = FALSE;
+        return TRUE;
+    }
+    st = tbtU4SleepState(cm, rt);
+    if (st == TBT_U4_SLP_UNREAD) {
+        return FALSE;
+    }
+    ok = TRUE;
+    if (st == TBT_U4_SLP_STILL) {
+        ok = (BOOLEAN)(tbtU4SleepBit(cm, rt, FALSE) == TBT_OK);
+        if (ok) {
+            cm->Counters.SleepCancelled++;
+        }
+    }
+    if (st != TBT_U4_SLP_LOST && !tbtU4SleepWakeBack(cm, rt, FALSE)) {
+        ok = FALSE;
+    }
+    if (ok) {
+        rt->SleepSet = FALSE;
+        rt->SleepTried = FALSE;
+        rt->SleepWakeSaved = FALSE;
+    }
+    return ok;
+}
+
+static VOID tbtU4SleepCancel(PTBT_U4CM cm, const ULONG *hostSaved)
+{
+    PTBT_U4_ROUTER h;
+    PTBT_U4_PORT p;
+    PTBT_U4_KID k;
+    ULONG i;
+    ULONG st;
+    BOOLEAN ok;
+
+    h = &cm->HostRouter;
+    h->SleepSet = (BOOLEAN)((hostSaved[0] & 1UL) != 0);
+    h->SleepWakeSaved = (BOOLEAN)((hostSaved[0] & 2UL) != 0);
+    h->SleepTried = (BOOLEAN)((hostSaved[0] & 4UL) != 0);
+    h->SleepWake = hostSaved[1];
+    h->SleepWakePorts = hostSaved[2];
+    cm->SleepEntered = FALSE;
+    /* The host router: reconciled only where the entry wrote to it (a
+     * generation 1 host had nothing written); the device routers below
+     * whatever the host needed. */
+    if (h->SleepTried) {
+        /* The host router is read whatever its own entry's read-back said: a
+         * write may have been applied whose read-back failed. */
+        st = tbtU4SleepState(cm, h);
+        ok = TRUE;
+        if (st == TBT_U4_SLP_UNREAD) {
+            ok = FALSE;
+        } else if (st == TBT_U4_SLP_STILL) {
+            /* The sleep did not happen: the host's bit cleared, its wake
+             * enables put back. */
+            tbtU4Log(cm, "u4.sleep.cancel", 1);
+            ok = (BOOLEAN)(tbtU4SleepBit(cm, h, FALSE) == TBT_OK);
+            if (ok) {
+                cm->Counters.SleepCancelled++;
+            }
+            if (!tbtU4SleepWakeBack(cm, h, TRUE)) {
+                ok = FALSE;
+            }
+        } else if (h->SleepSet) {
+            /* Read back set at the entry and clear now: the host router's
+             * configuration went with the sleep, and the domain's with it. */
+            h->SleepSet = FALSE;
+            h->SleepTried = FALSE;
+            h->SleepWakeSaved = FALSE;
+            for (i = 0; i < cm->PortCount; i++) {
+                cm->Ports[i].Dev.SleepSet = FALSE;
+                cm->Ports[i].Dev.SleepTried = FALSE;
+                cm->Ports[i].Dev.SleepWakeSaved = FALSE;
+            }
+            for (i = 0; i < TBT_U4_MAX_KIDS; i++) {
+                cm->Kids[i].Dev.SleepSet = FALSE;
+                cm->Kids[i].Dev.SleepTried = FALSE;
+                cm->Kids[i].Dev.SleepWakeSaved = FALSE;
+            }
+            return;
+        } else {
+            /* Clear, and never read back set: whether the domain slept is read
+             * router by router at its lane (tbtU4SleepUndo). The host's wake
+             * enables are put back as read before the entry: the domain's own
+             * values whether or not it slept. */
+            tbtU4Log(cm, "u4.sleep.cancel", 2);
+            ok = tbtU4SleepWakeBack(cm, h, TRUE);
+        }
+        if (!ok) {
+            /* The host router, shared by every port, unread, left sleep-armed
+             * or with its wake enables not put back: no obligation is met,
+             * the record kept (section 11.1.6 item 2). */
+            tbtU4Log(cm, "u4.sleep.cancel.failed", 0);
+            for (i = 0; i < cm->PortCount; i++) {
+                cm->Ports[i].SleepCancelFailed = TRUE;
+            }
+            return;
+        }
+        h->SleepSet = FALSE;
+        h->SleepTried = FALSE;
+        h->SleepWakeSaved = FALSE;
+    }
+    for (i = 0; i < cm->PortCount; i++) {
+        p = &cm->Ports[i];
+        if (!p->Dev.SleepTried) {
+            continue;
+        }
+        cm->ActivePort = p->Index;
+        if (!tbtU4SleepUndo(cm, p, &p->Dev, 0)) {
+            p->SleepCancelFailed = TRUE;
+            tbtU4Log(cm, "u4.sleep.cancel.failed", p->Index);
+        }
+        cm->ActivePort = 0;
+    }
+    for (i = 0; i < TBT_U4_MAX_KIDS; i++) {
+        k = &cm->Kids[i];
+        p = tbtU4PortOf(cm, k->Port);
+        if (!k->Used || p == NULL || !k->Dev.SleepTried) {
+            continue;
+        }
+        cm->ActivePort = p->Index;
+        if (!tbtU4SleepUndo(cm, p, &k->Dev, k->ParentLane0)) {
+            p->SleepCancelFailed = TRUE;
+            tbtU4Log(cm, "u4.sleep.cancel.failed", (k->Index << 8) | p->Index);
+        }
+        cm->ActivePort = 0;
+    }
+}
+
+/* Section 11.1.6 item 3: a USB4 router's wake status after the resume, a
+ * diagnostic. */
+static VOID tbtU4WakeStatus(PTBT_U4CM cm, const TBT_U4_ROUTER *rt)
+{
+    ULONG v;
+    ULONG s;
+    ULONG a;
+
+    if (rt->Tbt3 || !rt->Present ||
+        tbtU4Rd(cm, &rt->Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_6, &v) != TBT_OK) {
+        return;
+    }
+    s = v & TBT_RTR6_WAKE_STATUS;
+    for (a = 1; a <= rt->MaxAdp && a < 16 && a < TBT_U4_MAX_ADP; a++) {
+        if (rt->Adp[a].Type == TBT_ADP_TYPE_LANE && rt->Adp[a].CapPort != 0 &&
+            tbtU4Rd(cm, &rt->Route, TBT_CS_ADAPTER, a,
+                    rt->Adp[a].CapPort + TBT_PORT_CS_18, &v) == TBT_OK) {
+            s |= ((v & TBT_PORT18_WAKE_STATUS) >> 16) << (4 + 4 * ((a - 1) / 2));
+        }
+    }
+    if (s != 0) {
+        tbtU4Log(cm, "u4.wake.status", s);
+    }
 }
 
 VOID TbtU4Suspend(PTBT_U4CM cm)
@@ -11400,6 +12121,14 @@ VOID TbtU4Suspend(PTBT_U4CM cm)
      * the sleep, set again by the tick after the resume. */
     if (cm->Stage == TBT_U4_STAGE_RUNNING && !cm->Failed) {
         tbtU4ElrAllOff(cm);
+    }
+    /* Record 22 section 11.1.5 (task 48.35): the Guide's sleep entry. */
+    cm->SleepEntered = FALSE;
+    for (i = 0; i < cm->PortCount; i++) {
+        cm->Ports[i].SleepCancelFailed = FALSE;
+    }
+    if (cm->Config.SleepEntry && cm->Stage == TBT_U4_STAGE_RUNNING && !cm->Failed) {
+        tbtU4SleepEnter(cm);
     }
     TbtRingStop(cm->Ring);
     cm->Suspended = TRUE;
@@ -11671,6 +12400,8 @@ LONG TbtU4Resume(PTBT_U4CM cm)
     PTBT_U4_PORT p;
     PTBT_U4_PORT saved;
     LONG rc;
+    ULONG hostSleep[3];
+    BOOLEAN entered;
 
     if (cm->Contained) {
         cm->Counters.ContainedRefused++;
@@ -11679,6 +12410,14 @@ LONG TbtU4Resume(PTBT_U4CM cm)
     if (cm->Failed) {
         return TBT_E_STATE;
     }
+    /* Section 11.1.6: the host router's sleep record, which its walk
+     * below reads afresh. */
+    entered = cm->SleepEntered;
+    hostSleep[0] = (entered && cm->HostRouter.SleepSet ? 1UL : 0UL) |
+                   (entered && cm->HostRouter.SleepWakeSaved ? 2UL : 0UL) |
+                   (entered && cm->HostRouter.SleepTried ? 4UL : 0UL);
+    hostSleep[1] = cm->HostRouter.SleepWake;
+    hostSleep[2] = cm->HostRouter.SleepWakePorts;
     tbtU4IsoRevokeAll(cm);
     cm->Suspended = FALSE;
     /* Several kilobytes: in the instance, never on the stack (a kernel
@@ -11758,6 +12497,12 @@ LONG TbtU4Resume(PTBT_U4CM cm)
         }
     }
     cm->Stage = TBT_U4_STAGE_RUNNING;
+    /* Section 11.1.6 items 2 and 3 (task 48.35). */
+    if (entered && !moved) {
+        tbtU4SleepCancel(cm, hostSleep);
+        tbtU4WakeStatus(cm, &cm->HostRouter);
+    }
+    cm->SleepEntered = FALSE;
     tbtU4HostTmu(cm);
     allMet = TRUE;
     for (k = 0; k < TBT_U4_OBLIGATIONS; k++) {
@@ -11794,6 +12539,10 @@ LONG TbtU4Resume(PTBT_U4CM cm)
         } else if (p->Generation != o->Generation) {
             /* Rebuilt for an earlier obligation of the same port. */
             met = (BOOLEAN)(o->Usb3 ? p->Usb3.Up : p->Pcie.Up);
+        } else if (p->SleepCancelFailed) {
+            /* Section 11.1.6 item 2: a sleep that did not happen, its
+             * Enter Sleep or wake enables not put back: not met. */
+            met = FALSE;
         } else if (!cm->BudgetSpent && !moved) {
             what = tbtU4ResumeClass(cm, p);
             if (what == TBT_U4_RES_LOST) {
@@ -11803,7 +12552,7 @@ LONG TbtU4Resume(PTBT_U4CM cm)
                 tbtU4DropLinks(cm, p);
                 tbtU4Teardown(cm, p);
                 met = TRUE;
-            } else if (what == TBT_U4_RES_LOST && o->BuiltHere &&
+            } else if (what == TBT_U4_RES_LOST && (o->BuiltHere || o->Prepared) &&
                        tbtU4HostClose(cm, p) && tbtU4HostRestore(cm, p)) {
                 /* The domain lost its configuration across the sleep; the
                  * host's side of the old paths proven closed first (its
@@ -11822,6 +12571,12 @@ LONG TbtU4Resume(PTBT_U4CM cm)
                 tbtU4Connect(cm, p, FALSE);
                 met = (BOOLEAN)(p->State == TBT_U4_UP &&
                                 (o->Usb3 ? p->Usb3.Up : p->Pcie.Up));
+                if (met && !o->BuiltHere) {
+                    /* Decision U34: a preserved tunnel, its port prepared
+                     * by this driver's sleep entry, rebuilt as its own. */
+                    cm->Counters.ResumePreservedRebuilt++;
+                    tbtU4Log(cm, "u4.resume.preserved-rebuilt", p->Index);
+                }
             } else if (what == TBT_U4_RES_SAME) {
                 met = tbtU4Verify(cm, p, o->Usb3);
                 if (!met && !o->Usb3 && p->Pcie.Up && p->State != TBT_U4_EMPTY) {
@@ -13743,6 +14498,10 @@ static LONG tbtU4XdEntry(PTBT_U4CM cm, ULONG adp, ULONG hop, ULONG outAdp, ULONG
     e[1] &= ~(TBT_PATH1_WEIGHT_MASK | TBT_PATH1_PRIO_MASK | TBT_PATH1_EFC |
               TBT_PATH1_ESE | TBT_PATH1_RSVDZ29);
     e[1] |= 1UL | (TBT_U4_XD_PRIORITY << TBT_PATH1_PRIO_SHIFT);
+    /* The 7-bit Initial Credits' backstop, as in tbtU4WriteEntry. */
+    if (credits > TBT_PATH_CREDITS_MAX) {
+        credits = TBT_PATH_CREDITS_MAX;
+    }
     if (lane) {
         e[0] = (e[0] & ~TBT_PATH0_CREDITS_MASK) |
                ((credits << TBT_PATH0_CREDITS_SHIFT) & TBT_PATH0_CREDITS_MASK);
@@ -13851,7 +14610,10 @@ static VOID tbtU4XdPathsDown(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_XD x)
  * NHI (section 13): refused while another port's is up. Credits for the
  * receive entry at the lane: the lesser of what the lane has left and the
  * host router's baMaxHI (14 without one), at least 1 (record 22 section
- * 6.8's accounting; [linux] tb_dma_init_rx_path).
+ * 6.8's accounting; [linux] tb_dma_init_rx_path), and at most 127, the
+ * largest figure PATH_CS_0's 7-bit Initial Credits holds (record 35
+ * section 5.1): baMaxHI is a 16-bit value and the lane's Total Buffers 10
+ * bits, and a figure of 128 or more must not wrap into the field.
  */
 static LONG tbtU4XdUp(PVOID context, ULONG txHop, ULONG rxHop)
 {
@@ -13899,6 +14661,10 @@ static LONG tbtU4XdUp(PVOID context, ULONG txHop, ULONG rxHop)
     if (credits < 1) {
         tbtU4Log(cm, "cm.net.credits", (p->Index << 16) | avail);
         return TBT_E_STATE;
+    }
+    if (credits > TBT_PATH_CREDITS_MAX) {
+        tbtU4Log(cm, "cm.net.credits.clamp", (p->Index << 16) | (credits & 0xFFFFUL));
+        credits = TBT_PATH_CREDITS_MAX;
     }
     e2e = (BOOLEAN)((tbtU4NetStns(cm) & x->Peer.RemoteInfo.Prtcstns &
                      TBT_NET_STNS_E2E) != 0);
@@ -14102,6 +14868,8 @@ static VOID tbtU4XdEnd(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN gone)
         TbtXdpPeerTick(&x->Peer);
     }
     TbtXdpPeerEnd(&x->Peer, TRUE);
+    /* Record 35 section 3.12: what the record took and dropped. */
+    TbtXdpPeerLogCounters(&x->Peer);
     cm->XdIn = in;
     if (!tbtU4Off(cm)) {
         tbtU4XdPid(cm, p, x, FALSE);

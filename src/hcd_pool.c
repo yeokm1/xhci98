@@ -176,11 +176,13 @@ VOID HcdPoolFreeForeign(PVOID p)
 }
 
 /*
- * The MDL for a URB that carries only a virtual TransferBuffer (design record
- * 13 section 11.3): the USB driver interface promises the buffer is
- * non-paged, so MmBuildMdlForNonPagedPool describes it with no probe and no
- * lock. Counted with the allocations, since it is this driver's until
- * HcdPoolMdlFree. NULL when the system has none. IRQL: <= DISPATCH_LEVEL.
+ * The MDL for a URB that carries only a virtual TransferBuffer, with
+ * XhciDmaStaging 0 alone (design record 13 section 11.3; staging copies
+ * such a buffer through its own address, task 48.33): the USB driver
+ * interface promises the buffer is non-paged, so MmBuildMdlForNonPagedPool
+ * describes it with no probe and no lock. Counted with the allocations,
+ * since it is this driver's until HcdPoolMdlFree. NULL when the system has
+ * none. IRQL: <= DISPATCH_LEVEL.
  */
 PMDL HcdPoolMdlBuild(PVOID va, ULONG bytes)
 {
@@ -194,10 +196,35 @@ PMDL HcdPoolMdlBuild(PVOID va, ULONG bytes)
     return mdl;
 }
 
+/* An MDL this file allocated (HcdPoolMdlBuild's, or a window,
+ * HcdPoolWindowMdl) freed. IRQL: <= DISPATCH_LEVEL. */
 VOID HcdPoolMdlFree(PMDL mdl)
 {
     if (mdl != NULL) {
         IoFreeMdl(mdl);
         (VOID)InterlockedDecrement(&HcdPoolOutstanding);
     }
+}
+
+/*
+ * Task 48.33 (design record 13 section 11.11.4): a window MDL - one the
+ * driver owns, sized for `bytes` of pages and describing none until
+ * IoBuildPartialMdl fills it over a client's MDL (hcd_stage.c). Counted
+ * with the allocations. NULL when the system has none. IRQL:
+ * PASSIVE_LEVEL.
+ */
+PMDL HcdPoolWindowMdl(ULONG bytes)
+{
+    PMDL mdl;
+
+    mdl = IoAllocateMdl(NULL, bytes, FALSE, FALSE, NULL);
+    if (mdl != NULL) {
+        (VOID)InterlockedIncrement(&HcdPoolOutstanding);
+    }
+    return mdl;
+}
+
+VOID HcdPoolWindowMdlFree(PMDL mdl)
+{
+    HcdPoolMdlFree(mdl);
 }

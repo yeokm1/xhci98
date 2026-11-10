@@ -61,6 +61,7 @@
 #define STG_HOLD9X              0x06    // arg: the 9x hold bound used, ms (StorHold9xMs or its default); 9x, every HwFindAdapter
 #define STG_HOLD9X_REFUSED      0x07    // arg: a hold bound outside 1000-10000 ms as read (StorHold9xMs, or hold9x= in a test build); the default stands
 #define STG_FIND_PORT           0x08    // arg: ConfigInfo's bus << 16 | slot (low 16 bits); 9x, every HwFindAdapter (nvme2k.c, PLAN 3.1)
+#define STG_FIND_TAKEFW         0x0C    // arg: PCISCAN_FW_* | the controller's setting (PCISCAN_TAKE_*, 0xFF none) << 8 | the global value << 16 | source (PCISCAN_TAKESRC_*) << 20 | taken << 24 | a take set aside on Me << 25; only where the "set up" refusal would apply
 #define STG_FIND_FIRMWARE       0x0A    // arg: PCISCAN_FW_* | CC low byte << 8 | CSTS low byte << 16 | read << 24 | decode turned on for the read << 25 | not put back << 26 | PCISCAN_REACH_* << 27; 9x, the found function before anything else is done to it (PLAN 3.1)
 #define STG_FIND_FWTEST         0x0B    // arg: STOR98_TEST_FWDECODEOFF only (nvme2k.c): the injection, the command word after the check, after the restore
 #define STG_FIND_PORT_RANGE     0x09    // arg: the low dword of the port's first access range, 0 for none; 9x

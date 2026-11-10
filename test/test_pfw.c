@@ -32,6 +32,7 @@ typedef struct FN {
     int FlipAfter;      /* 24h changes after so many reads of it (0)  */
     int Reads24;
     int Track;          /* every state after a write checked          */
+    PFW_U32 UpperMask;  /* bits 28h/2Ch implement (0: all 32)         */
 } FN;
 
 static FN fns[MAXFN];
@@ -100,6 +101,10 @@ void PfwCfgWrite(PFW_U32 bus, PFW_U32 devfn, PFW_U32 off, PFW_U32 val)
     if (off == 0x24) {
         /* The type nibbles are read-only: 1h, a 64-bit window. */
         f->Cfg[0x24 / 4] = (val & 0xFFF0FFF0UL) | 0x00010001UL;
+    } else if ((off == 0x28 || off == 0x2C) && f->UpperMask != 0) {
+        /* A bridge that decodes fewer than 64 address bits: the upper
+         * registers' unimplemented bits read 0. */
+        f->Cfg[off / 4] = val & f->UpperMask;
     } else {
         f->Cfg[off / 4] = val;
     }
@@ -272,6 +277,37 @@ static void test_close(void)
         sprintf(what, "write %d a third value, its undo ignored: parked", k);
         CHECK_EQ(act, PFW_ACT_PARKED, what);
         CHECK_EQ(f->Writes, k + 2, "parked: no write after the undo that failed");
+    }
+}
+
+/* A bridge whose Prefetchable Base and Limit Upper 32 Bits implement
+ * fewer than 32 bits (a 40-bit or 48-bit decoder; the unimplemented bits
+ * read 0): the close's first write, 28h = FFFFFFFFh, reads back as the
+ * mask, so the close is refused and undone and the bridge is left as it
+ * was found, every state on the way safe (the reading of the audit of
+ * 2026-11-06; nothing in the close is changed for it). */
+static void test_narrow_upper(void)
+{
+    static const PFW_U32 masks[2] = { 0x000000FFUL, 0x0000FFFFUL };
+    PFW_U32 after[3];
+    int m;
+    int l;
+    FN *f;
+    char what[96];
+
+    for (m = 0; m < 2; m++) {
+        for (l = 0; l < 3; l++) {
+            reset();
+            f = bridge(0, 3, 0, 1, 1, lows[l], 1, 0x40);
+            f->UpperMask = masks[m];
+            f->Track = 1;
+            sprintf(what, "upper mask %08lx low %08lx: refused", masks[m], lows[l]);
+            CHECK_EQ(PfwClose(0, 3 << 3, after), PFW_ACT_REFUSED, what);
+            CHECK(f->Cfg[0x24 / 4] == lows[l] && f->Cfg[0x28 / 4] == 1 &&
+                  f->Cfg[0x2C / 4] == 0x40, "narrow upper: the bridge as found");
+            CHECK_EQ(f->Writes, 2, "narrow upper: 28h, then its undo");
+            CHECK_EQ(unsafe, 0, "narrow upper: every state safe");
+        }
     }
 }
 
@@ -588,7 +624,9 @@ static void test_ntrole(void)
     CHECK_EQ(PfwNtRole(6, 2), PFW_ROLE_FILTER, "8: the filter role");
     CHECK_EQ(PfwNtRole(6, 3), PFW_ROLE_FILTER, "8.1: the filter role");
     CHECK_EQ(PfwNtRole(6, 4), PFW_ROLE_NONE, "6.4: neither");
-    CHECK_EQ(PfwNtRole(10, 0), PFW_ROLE_NONE, "10: neither");
+    CHECK_EQ(PfwNtRole(10, 0), PFW_ROLE_FILTER, "10: the filter role (48.27)");
+    CHECK_EQ(PfwNtRole(10, 1), PFW_ROLE_NONE, "10.1: neither");
+    CHECK_EQ(PfwNtRole(11, 0), PFW_ROLE_NONE, "11.0: neither");
     CHECK_EQ(PfwNtRole(4, 0), PFW_ROLE_NONE, "NT 4: neither");
 }
 
@@ -876,6 +914,7 @@ int main(void)
     test_ntsum();
     test_range();
     test_close();
+    test_narrow_upper();
     test_scan();
     test_bars();
     test_xhci();

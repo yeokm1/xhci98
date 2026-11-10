@@ -13,6 +13,9 @@ BOOLEAN CmRirqGeometry(ULONG paths, CM_RIRQ_GEOM *g)
     g->Dwords = 0;
     g->CauseDw = 0;
     g->CauseBit = 0;
+    g->DataRing = 0;
+    g->DataDw = 0;
+    g->DataBit = 0;
     if (paths == 0 || paths > TBT_HI_CAPS_PATHS_MAX) {
         return FALSE;
     }
@@ -23,12 +26,45 @@ BOOLEAN CmRirqGeometry(ULONG paths, CM_RIRQ_GEOM *g)
     return TRUE;
 }
 
-ULONG CmRirqClassify(const CM_RIRQ_GEOM *g, ULONG first, ULONG causeDw)
+BOOLEAN CmRirqGeomData(CM_RIRQ_GEOM *g, ULONG ring)
 {
-    if (first == 0xFFFFFFFFUL) {
+    ULONG bit;
+
+    g->DataRing = 0;
+    g->DataDw = 0;
+    g->DataBit = 0;
+    if (g->Paths == 0 || ring == 0 || ring >= g->Paths) {
+        return FALSE;
+    }
+    bit = g->Paths + ring;
+    g->DataRing = ring;
+    g->DataDw = bit / 32UL;
+    g->DataBit = 1UL << (bit % 32UL);
+    return TRUE;
+}
+
+ULONG CmRirqCauses(const CM_RIRQ_GEOM *g, const ULONG *v)
+{
+    ULONG c;
+
+    c = 0;
+    if (g->CauseBit != 0 && g->CauseDw < g->Dwords &&
+        (v[g->CauseDw] & g->CauseBit) != 0) {
+        c |= CM_RIRQ_CAUSE_RING0;
+    }
+    if (g->DataBit != 0 && g->DataDw < g->Dwords &&
+        (v[g->DataDw] & g->DataBit) != 0) {
+        c |= CM_RIRQ_CAUSE_DATA;
+    }
+    return c;
+}
+
+ULONG CmRirqClassify(const CM_RIRQ_GEOM *g, const ULONG *v)
+{
+    if (v[0] == 0xFFFFFFFFUL) {
         return CM_RIRQ_ISR_ONES;
     }
-    if ((causeDw & g->CauseBit) == 0) {
+    if (CmRirqCauses(g, v) == 0) {
         return CM_RIRQ_ISR_OTHER;
     }
     return CM_RIRQ_ISR_MINE;
@@ -52,13 +88,14 @@ BOOLEAN CmRirqBurstClaim(CM_RIRQ_BURST *b, LONG seq)
     return (BOOLEAN)(b->Burst >= CM_RIRQ_STORM_CLAIMS);
 }
 
-VOID CmRirqMaskWrite(const CM_RIRQ_GEOM *g, BOOLEAN intel, BOOLEAN open,
-                     ULONG imr, CM_RIRQ_WRITE *w)
+/* One DW's bits by the host's contract. */
+static VOID cmRirqBitsWrite(ULONG dw, ULONG bits, BOOLEAN intel, BOOLEAN open,
+                            ULONG imr, CM_RIRQ_WRITE *w)
 {
     w->Write = FALSE;
     w->Offset = 0;
     w->Value = 0;
-    if (g->CauseBit == 0) {
+    if (bits == 0) {
         return;
     }
     if (intel) {
@@ -66,24 +103,103 @@ VOID CmRirqMaskWrite(const CM_RIRQ_GEOM *g, BOOLEAN intel, BOOLEAN open,
             return;
         }
         w->Write = TRUE;
-        w->Offset = TBT_HI_IMR + 4UL * g->CauseDw;
-        w->Value = open ? (imr | g->CauseBit) : (imr & ~g->CauseBit);
+        w->Offset = TBT_HI_IMR + 4UL * dw;
+        w->Value = open ? (imr | bits) : (imr & ~bits);
         return;
     }
     w->Write = TRUE;
-    w->Offset = (open ? TBT_HI_IMS : TBT_HI_IMC) + 4UL * g->CauseDw;
-    w->Value = g->CauseBit;
+    w->Offset = (open ? TBT_HI_IMS : TBT_HI_IMC) + 4UL * dw;
+    w->Value = bits;
+}
+
+static BOOLEAN cmRirqBitsProven(ULONG bits, BOOLEAN open, ULONG imr)
+{
+    if (imr == 0xFFFFFFFFUL || bits == 0) {
+        return FALSE;
+    }
+    if (open) {
+        return (BOOLEAN)((imr & bits) == bits);
+    }
+    return (BOOLEAN)((imr & bits) == 0);
+}
+
+VOID CmRirqMaskWrite(const CM_RIRQ_GEOM *g, BOOLEAN intel, BOOLEAN open,
+                     ULONG imr, CM_RIRQ_WRITE *w)
+{
+    cmRirqBitsWrite(g->CauseDw, g->CauseBit, intel, open, imr, w);
 }
 
 BOOLEAN CmRirqMaskProven(const CM_RIRQ_GEOM *g, BOOLEAN open, ULONG imr)
 {
-    if (imr == 0xFFFFFFFFUL || g->CauseBit == 0) {
+    return cmRirqBitsProven(g->CauseBit, open, imr);
+}
+
+VOID CmRirqDataMaskWrite(const CM_RIRQ_GEOM *g, BOOLEAN intel, BOOLEAN open,
+                         ULONG imr, CM_RIRQ_WRITE *w)
+{
+    cmRirqBitsWrite(g->DataDw, g->DataBit, intel, open, imr, w);
+}
+
+BOOLEAN CmRirqDataMaskProven(const CM_RIRQ_GEOM *g, BOOLEAN open, ULONG imr)
+{
+    return cmRirqBitsProven(g->DataBit, open, imr);
+}
+
+ULONG CmRirqMaskBoth(const CM_RIRQ_GEOM *g, BOOLEAN intel, ULONG imr0,
+                     ULONG imrData, CM_RIRQ_WRITE *w)
+{
+    ULONG n;
+
+    n = 0;
+    if (g->DataBit != 0 && g->DataDw == g->CauseDw) {
+        cmRirqBitsWrite(g->CauseDw, g->CauseBit | g->DataBit, intel, FALSE,
+                        imr0, &w[0]);
+        return w[0].Write ? 1UL : 0UL;
+    }
+    cmRirqBitsWrite(g->CauseDw, g->CauseBit, intel, FALSE, imr0, &w[n]);
+    if (w[n].Write) {
+        n++;
+    }
+    if (g->DataBit != 0) {
+        cmRirqBitsWrite(g->DataDw, g->DataBit, intel, FALSE, imrData, &w[n]);
+        if (w[n].Write) {
+            n++;
+        }
+    }
+    return n;
+}
+
+BOOLEAN CmRirqBothMasked(const CM_RIRQ_GEOM *g, ULONG imr0, ULONG imrData)
+{
+    if (!cmRirqBitsProven(g->CauseBit, FALSE, imr0)) {
         return FALSE;
     }
-    if (open) {
-        return (BOOLEAN)((imr & g->CauseBit) != 0);
+    if (g->DataBit == 0) {
+        return TRUE;
     }
-    return (BOOLEAN)((imr & g->CauseBit) == 0);
+    return cmRirqBitsProven(g->DataBit, FALSE,
+                            g->DataDw == g->CauseDw ? imr0 : imrData);
+}
+
+ULONG CmRirqAckWrites(const CM_RIRQ_GEOM *g, BOOLEAN autoClearOff,
+                      const ULONG *v, CM_RIRQ_WRITE *w, ULONG max)
+{
+    ULONG i;
+    ULONG n;
+
+    n = 0;
+    if (!autoClearOff) {
+        return 0;
+    }
+    for (i = 0; i < g->Dwords && n < max; i++) {
+        if (v[i] != 0 && v[i] != 0xFFFFFFFFUL) {
+            w[n].Write = TRUE;
+            w[n].Offset = TBT_HI_ISC + 4UL * i;
+            w[n].Value = v[i];
+            n++;
+        }
+    }
+    return n;
 }
 
 VOID CmRirqWatchStart(CM_RIRQ_WATCH *w, ULONG claims, ULONG rx)
@@ -92,6 +208,28 @@ VOID CmRirqWatchStart(CM_RIRQ_WATCH *w, ULONG claims, ULONG rx)
     w->Suspects = 0;
     w->StormClaims = claims;
     w->StormRx = rx;
+}
+
+VOID CmRirqWatchDataStart(CM_RIRQ_WATCH *w, BOOLEAN on, ULONG claims,
+                          ULONG rx)
+{
+    w->DataOn = on ? 1UL : 0UL;
+    w->DataClaims = claims;
+    w->DataRx = rx;
+}
+
+BOOLEAN CmRirqWatchData(CM_RIRQ_WATCH *w, ULONG claims, ULONG rx)
+{
+    BOOLEAN storm;
+
+    if (!w->DataOn) {
+        return FALSE;
+    }
+    storm = (BOOLEAN)(claims - w->DataClaims > CM_RIRQ_SLOW_STORM &&
+                      rx == w->DataRx);
+    w->DataClaims = claims;
+    w->DataRx = rx;
+    return storm;
 }
 
 VOID CmRirqWatchDrained(CM_RIRQ_WATCH *w, ULONG claims)
@@ -141,9 +279,9 @@ BOOLEAN CmRirqDownFails(ULONG why, ULONG end)
                      end == CM_RIRQ_END_UNPROVEN);
 }
 
-BOOLEAN CmRirqWanted(ULONG value, BOOLEAN nt, BOOLEAN line, BOOLEAN failed)
+BOOLEAN CmRirqWanted(ULONG value, BOOLEAN line, BOOLEAN failed)
 {
-    return (BOOLEAN)(value == CM_RIRQ_VALUE_LINE && nt && line && !failed);
+    return (BOOLEAN)(value == CM_RIRQ_VALUE_LINE && line && !failed);
 }
 
 ULONG CmRirqLeftMs(ULONG now, ULONG due, ULONG limit)

@@ -1,9 +1,11 @@
 # Issue 10 - Windows XP installed from the F6 floppy: the USB keyboard is dead in GUI-mode Setup while Setup asks about this driver's signature, because Setup copies Windows' own HID and USB helper files only with its own host controller drivers
 
-Status: **a known limitation of `2.1.0.0`, not fixable from this
-package.** Found on roadmap task 33.3's legs, 2026-10-04, on the first
+Status: **a known limitation from `2.1.0.0`; on 32-bit XP worked around
+from `3.4.3.0` by the F6 floppy's "files from CD" entry (section 7, task
+48.25).** Found on roadmap task 33.3's legs, 2026-10-04, on the first
 package to carry `txtsetup.oem`. The release notes carry it beside the F6
-section and in "Known limitations"; the README carries a row.
+section and in "Known limitations"; the README carries a row. XP x64
+keeps it: its `txtsetup.oem` has no such entry, and it was not read.
 
 Targets affected: Windows XP SP3 (32-bit) and Windows XP x64 SP2, both
 supported in virtual machines only; every reading here is a QEMU reading
@@ -78,6 +80,9 @@ entered the repository, `out\` or a package.
 
 ## 3. Why it cannot be fixed from this package
 
+(As read on 2026-10-04. The package still carries none of the three
+files; the user can, as section 7 says.)
+
 - The three files are Microsoft's. The package carries no Microsoft file
   (`legal-provenance.md` section 5; the packager's `PKG-MSFILE` gate).
 - `txtsetup.oem` cannot reach the Windows source. `[Disks]` names an OEM
@@ -129,6 +134,26 @@ what it leaves on the target disk are two lists; a bus driver that replaces
 Microsoft's host controller driver inherits the first and loses the second.
 Read the target disk at the text-mode reboot, not the text-mode screen,
 before claiming a device works through GUI mode.
+
+## 7. The "files from CD" entry on 32-bit XP (task 48.25, 2026-11-09)
+
+The entry made for issue 16 on Windows 2000 (`XHCI98W2K`: the driver's
+lines, then `usbd.sys`, `hidclass.sys` and `hidparse.sys` from a second
+disk, `d2`, which is the same floppy once the user has copied
+`USBD.SY_`, `HIDCLASS.SY_` and `HIDPARSE.SY_` from the CD's `I386` to its
+root) answers this issue on 32-bit XP too, with XP's own three files:
+text mode copies them to the target disk, so the keyboard has its driver
+from the first GUI-mode boot. Read in QEMU on XP SP3 with a USB keyboard
+alone on `qemu-xhci` and no PS/2 key event in the whole leg: text mode as
+before, then the three dialogs of section 1 each answered from the USB
+keyboard (Left arrow to Yes, Enter), the keyboard enumerated again under
+the installed controller and went on working, and Regional Settings and
+Personalize were answered and typed with it (`runs/run-48.md`, 48.25).
+From `3.4.3.0` the entry is named "xHCI98 USB 3 Controller (2000/XP,
+USB keyboard/mouse, files from CD)" and its disk "USBD.SY_ HIDCLASS.SY_
+HIDPARSE.SY_ from the 32-bit Windows 2000/XP CD" (owner, 2026-11-09);
+design record 13 section 5.6, limit 7. The first entry still behaves as
+section 1 describes, and stays the default.
 
 ## Sources
 

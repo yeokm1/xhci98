@@ -61,7 +61,7 @@ A clause whose device is absent is a SKIP with a reason, which is a result.
 | 5.2 | A High-Speed flash drive | 480 Mbps, Bulk-Only. A USB 2.0 stick: a USB 3.x stick on a USB 3.x connector now runs at SuperSpeed, which is 5.8's reading, not this one |
 | 5.3 | A hub, plus a device to put behind it | Any USB 2.0 hub. Record whether it is self- or bus-powered and, if the tester can read it, its TT class: `bDeviceProtocol` 1 = single-TT, 2 = multi-TT, 0 = a Full-Speed USB 1.1 hub |
 | 5.4, optional | A USB Ethernet adapter | With a driver for the target OS. Without one it enumerates and does nothing, which tests the stack above this driver rather than this driver |
-| 5.5, optional | A USB Audio device | UAC 1.0, with the target OS's own driver. On Windows 98 SE, plug it in only once the machine has settled for a couple of minutes after a cold boot (the release notes' "Known limitations", the audio wedge) |
+| 5.5, optional; 7.22 | A USB Audio device | UAC 1.0, with the target OS's own driver. On Windows 98 SE, plug it in only once the machine has settled for a couple of minutes after a cold boot (the release notes' "Known limitations", the audio wedge) |
 | 5.7 | A UAS storage device | One that offers the UAS interface (`bInterfaceProtocol` `0x62`). A USB-to-SATA bridge or an enclosure is the usual form. Read at SuperSpeed on a USB 3.x connector; behind a USB 2.0 hub it runs at High Speed, which is a second reading |
 | 5.8 | A SuperSpeed device and a USB 3.x connector | Any USB 3.x storage device. Its SuperSpeed is witnessed by the driver's snapshot (step 8), not by Device Manager |
 | 7.3 | A composite device | One physical unit that is more than one thing at once: a headset with buttons, a keyboard with media keys |
@@ -82,7 +82,7 @@ is required, and a device that satisfies the property is as good.
 | 5.3 | Terminus 4-port `1A40:0101` (single-TT) or 7-port `1A40:0201` (multi-TT) | Plain USB 2.0 hubs, no SuperSpeed half, one chip and one tier. Adjacent product IDs from one vendor, so the pair changes only the TT class |
 | 5.3 | Avoid a hub enclosure containing cascaded chips, such as Genesys `05E3:0608` | Its sockets are not equivalent: three sit at tier 1 and four at tier 2, with different route strings and a different TT, so a reading depends on which socket was used |
 | 5.4 | An ASIX AX88772-based adapter, such as `0B95:7720` | ASIX parts have Windows 98 and Windows 2000 drivers. Read the chipset, not the packaging: the RTL8153 in most modern USB-C dongles has no driver for either target |
-| 5.5, 7.3 | C-Media `0D8C:0014`, or a Creative Sound Blaster Play! 2 `041E:323D` | UAC 1.0, Full Speed, and composite: audio interfaces with an HID beside them and no IAD, so one unit serves both the audio clause and the composite clause |
+| 5.5, 7.3, 7.22 | C-Media `0D8C:0014`, or a Creative Sound Blaster Play! 2 `041E:323D` | UAC 1.0, Full Speed, and composite: audio interfaces with an HID beside them and no IAD, so one unit serves both the audio clause and the composite clause |
 | 5.5 | Not a UAC 2.0 unit such as the Sound Blaster X4 `041E:3278` | These systems ship UAC 1.0 audio drivers, and that unit offers no UAC 1.0 fallback |
 | 5.7 | MSSU10-128GSR flash drive `090C:2320`, or the ASMedia USB-to-SATA bridge `174C:5106` | Both offer UAS at SuperSpeed. The ASMedia bridge offers both transports at both speeds, so it also serves the forced-Bulk-Only reading; the MSSU10 offers only Bulk-Only behind a USB 2.0 hub |
 | 5.8 | SanDisk 3.2Gen1 flash drive `0781:55AB` | SuperSpeed, Bulk-Only, so it reads SuperSpeed through Windows' own `usbstor.sys` with no UAS involved |
@@ -361,6 +361,7 @@ Windows 2000 SP4
 | 7.4 | Unplug everything from the machine's USB ports, leave it a full minute, then plug in a mouse | It enumerates on its own, with no Refresh |
 | 7.5 | Record only: look at the Driver tab | Write down the date and version shown. Under `1.x` the version was present and the date read `Not available` |
 | 7.6 | Disable the controller in Device Manager, then re-enable it once | It goes and comes back, with no crash |
+| 7.22 | With the USB Audio Class 1 device of 5.5 attached, play a WAV file in Sound Recorder (Windows' own `tada.wav` will do), then run DxDiag (Start, Run, `dxdiag`), Sound tab, Test DirectSound | Sound Recorder plays the file to the end and it is heard; DxDiag's test ends "All tests were successful." |
 
 Windows ME
 

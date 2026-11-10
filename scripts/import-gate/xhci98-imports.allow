@@ -139,6 +139,15 @@ ntoskrnl.exe!ExFreePool                      all  required  SITES=hcd_pool.obj t
 ntoskrnl.exe!IoAllocateMdl                   all  required  SITES=hcd_pool.obj the MDL rule (design record 13 section 7.5 rule 4); w2k-export; win98-precedent usbd.sys 4.10.2222 (NTOSKRNL.EXE!IoAllocateMdl, hint 2E) (+11 other 98 SE); ntkern-name
 ntoskrnl.exe!IoFreeMdl                       all  required  SITES=hcd_pool.obj the MDL rule (design record 13 section 7.5 rule 4); w2k-export; win98-precedent usbd.sys 4.10.2222 (NTOSKRNL.EXE!IoFreeMdl, hint 43) (+14 other 98 SE); ntkern-name
 ntoskrnl.exe!MmBuildMdlForNonPagedPool       all  required  SITES=hcd_pool.obj with the MDL it describes (design record 13 section 11.3); w2k-export; win98-precedent usbd.sys 4.10.2222 (NTOSKRNL.EXE!MmBuildMdlForNonPagedPool, hint 99) (+6 other 98 SE); ntkern-name
+# Task 48.33 (design record 13 section 11.11.4; Q-STG.1, the owner's answer
+# (a)): a client buffer with no system address copied through a window of
+# at most 64 KiB - a partial MDL the driver owns, mapped and unmapped at
+# once - never the client's MDL changed. MmMapLockedPagesSpecifyCache stays
+# denied on x86 (no Windows 98 export); under NT the window MDL carries
+# MDL_MAPPING_CAN_FAIL instead.
+ntoskrnl.exe!IoBuildPartialMdl               all  required  SITES=hcd_stage.obj the window over a client's MDL (design record 13 section 11.11.4); w2k-export; win98-precedent 1394bus.sys 4.10.2222 (NTOSKRNL.EXE!IoBuildPartialMdl, hint 33) (+1 other 98 SE: sbp2port.sys) (design record 13 Appendix A row 129)
+ntoskrnl.exe!MmMapLockedPages                all  required  SITES=hcd_stage.obj the window's mapping (design record 13 section 11.11.4); w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!MmMapLockedPages, hint 9D) (+15 other 98 SE); ntkern-name (design record 13 Appendix A row 134)
+ntoskrnl.exe!MmUnmapLockedPages              all  required  SITES=hcd_stage.obj the window's unmapping (design record 13 section 11.11.4); w2k-export; win98-precedent ohci1394.sys 4.10.2222 (NTOSKRNL.EXE!MmUnmapLockedPages, hint A7) (+4 other 98 SE) (design record 13 Appendix A row 136)
 # --- Task 26-A.5: cancellation of a pending URB (hcd_io.c). IoSetCancelRoutine ---
 # --- is a macro over InterlockedExchange in the Windows 2000 DDK's x86 wdm.h.   ---
 ntoskrnl.exe!IoAcquireCancelSpinLock         all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoAcquireCancelSpinLock, hint 29) (+9 other 98 SE); ntkern-name
@@ -197,7 +206,7 @@ IoFreeWorkItem              Not exported on Win98 (Oney p.375).
 IoAcquireRemoveLock         The IO_REMOVE_LOCK family is missing on Win98 SE (Oney p.191). Keep an outstanding-I/O count instead.
 IoReleaseRemoveLock         IO_REMOVE_LOCK family - missing on Win98 SE (Oney p.191).
 IoReleaseRemoveLockAndWait  IO_REMOVE_LOCK family - missing on Win98 SE (Oney p.191).
-MmMapLockedPagesSpecifyCache  Missing on Win98; MmGetSystemAddressForMdlSafe expands to it (Oney p.225). Task 25.7's transfer route needs no system mapping of a URB buffer.
+MmMapLockedPagesSpecifyCache  Missing on Win98; MmGetSystemAddressForMdlSafe expands to it (Oney p.225). Task 48.33's window maps with MmMapLockedPages, MDL_MAPPING_CAN_FAIL set under NT.
 MmGetPhysicalAddress        No Windows 98 binary precedent in any of the 86 scanned (task 25.3), and it would bypass the HAL's map registers; transfer buffers go through the DMA adapter's MapTransfer (design record 13 section 11).
 HalGetAdapter               No Windows 98 binary precedent (task 25.3). The DMA adapter comes from IoGetDmaAdapter, as Windows 98 SE's own uhcd.sys and openhci.sys get theirs, and the two routes are never mixed (design record 13 section 11).
 HalAllocateCommonBuffer     No Windows 98 binary precedent (task 25.3). Under ntddk.h a call by this name is a HAL import; call the adapter's DMA_OPERATIONS slot instead.

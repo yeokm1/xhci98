@@ -101,7 +101,11 @@ and if the tunnel is still up then it says the tunnel has not been seen
 closed and closes if the mark service confirms the eject. On Windows
 2000 without administrator rights, or with the mark service stopped,
 nothing confirms it and the tunnel stays up until you unplug the
-device.
+device. The tunnel also stays up when the Thunderbolt driver does not
+know which of its ports the device is on, as for a device already
+connected when Windows started on some computers; the tool then says
+so. The driver learns the port when a device is plugged in while
+Windows runs.
 
 Stopping a USB stick or disk
 ----------------------------
@@ -393,6 +397,14 @@ icon. The pop-up takes no focus; it closes after 10 seconds, or by its
 close box or a right click; a click on it does what a click on a
 balloon does; several wait their turn.
 
+USB drive notices are off unless you tick "USB drive notices" on the
+Settings window's xHCI98 USB Tree tab. Then the icon says when a USB drive
+on a controller xhci98.sys drives is connected or removed, naming it with
+its drive letter where Windows gave it one ("SanDisk Ultra (F:) is
+connected."), or by its product name where there is no storage driver,
+as on Windows 98 SE without one. A drive connected or removed while the
+computer sleeps is not reported.
+
 Can run faster
 --------------
 
@@ -475,7 +487,9 @@ From a command line
                                to <file> and exits
   XHCITR /eject id=<id>        stops the USB device or Thunderbolt/USB4
                                device with that Device Manager instance
-                               ID and exits
+                               ID and exits; the ID of a device inside
+                               a Thunderbolt/USB4 device (its drive,
+                               say) stops that whole device
   XHCITR /acpi <folder>        writes this computer's firmware (ACPI)
                                tables in <folder> and exits
   XHCITR /setlevel xhci98=<n> xhcicm=<n>

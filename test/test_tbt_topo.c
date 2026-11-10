@@ -49,6 +49,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "../src/cm/tbt_topo.h"
+#include "../src/cm/tbt_chain.h"
 #include "test_harness.h"
 
 typedef struct _TBT_VEC_FN {
@@ -85,6 +86,9 @@ typedef struct _MODEL {
     ULONG Reads;
     ULONG Writes;
     ULONG MaxBusRead;       /* the highest bus number read                  */
+    ULONG FlipBdf;          /* its ID dword answers a device only after ... */
+    ULONG FlipAfter;        /* ... this many reads of it (record 34 3.12)   */
+    ULONG FlipSeen;
 } MODEL;
 
 static MODEL model;
@@ -99,6 +103,7 @@ static VOID mreset(VOID)
     }
     model.FailBdf = XHCI_TBT_NO_BDF;
     model.FailOffset = XHCI_TBT_NO_BDF;
+    model.FlipBdf = XHCI_TBT_NO_BDF;
 }
 
 static MODEL_FN *mfind(ULONG bdf)
@@ -132,6 +137,11 @@ static ULONG mread(PVOID context, ULONG bdf, ULONG offset, PULONG value)
     }
     if ((offset & 3) != 0 || offset > 0xFC) {
         return 0;
+    }
+    if (bdf == model.FlipBdf && offset == 0) {
+        model.FlipSeen++;
+        *value = model.FlipSeen > model.FlipAfter ? 0x00101B36UL : 0xFFFFFFFFUL;
+        return 1;
     }
     f = mfind(bdf);
     if (f == NULL) {
@@ -1766,16 +1776,76 @@ static void test_failures(void)
     CHECK_EQ(XhciTbtPortRead(&io, B(2, 1, 0), &port), XHCI_TBT_PORT_ERROR,
              "the restoring write failed");
     CHECK_EQ(port.ShpcValid, 0, "and the reading is not kept");
+    CHECK_EQ(port.ShpcSeen, 1, "though every slot was read");
     model.FailWriteAt = 0;
     CHECK_EQ(XhciTbtPortRead(&io, B(2, 1, 0), &port), XHCI_TBT_PORT_UP,
              "next time it reads");
+
+    /* Record 22 section 7.6.4: every slot read empty, then only the
+     * restoring write failing, rejects an endpoint's gain as the whole
+     * reading (DOWN) would; the same failure with a card present is a
+     * reading not made; a whole reading up admits it. */
+    emu_i440fx_switch(0, 0);
+    ioreset();
+    mdev(4, 1, 0, 0x1B36, 0x0010, 0x010802UL);
+    model.FailWriteAt = model.Writes + 1 + 31 + 1;
+    CHECK_EQ(XhciTbtGainAdmits(&io, B(2, 1, 0), 4, 1UL << 1, 1),
+             XHCI_TBT_GAIN_NO, "gain: slots empty, the restore failed: NO");
+    mfind(B(2, 1, 0))->Shpc[XHCI_TBT_SHPC_SLOT0] = SHPC_CARD;
+    model.FailWriteAt = model.Writes + 1 + 31 + 1;
+    CHECK_EQ(XhciTbtGainAdmits(&io, B(2, 1, 0), 4, 1UL << 1, 1),
+             XHCI_TBT_GAIN_UNREAD, "gain: a card, the restore failed: UNREAD");
+    model.FailWriteAt = 0;
+    CHECK_EQ(XhciTbtGainAdmits(&io, B(2, 1, 0), 4, 1UL << 1, 1),
+             XHCI_TBT_GAIN_YES, "gain: a card, read whole: YES");
 }
 
 /* ---- the USB4 profile's correspondence (record 22 section 7.6) --------- */
 
 static XHCI_TBT_BINDS binds;
 
-/* A device behind a tunnel port: function 0 of device `dev` on `bus`. */
+/*
+ * The bridge whose secondary bus is `bus`: its Link Active and Presence
+ * Detect State (and an SHPC's slot 0) follow whether anything answers
+ * there, as a hot plug moves them.
+ */
+static VOID link_follow(ULONG bus)
+{
+    ULONG i;
+    ULONG d;
+    ULONG p;
+    ULONG any = 0;
+    MODEL_FN *f;
+    MODEL_FN *g;
+
+    for (d = 0; d < 32; d++) {
+        g = mfind(B(bus, d, 0));
+        if (g != NULL && (g->Cfg[0] != 0xFF || g->Cfg[1] != 0xFF)) {
+            any = 1;
+        }
+    }
+    for (i = 0; i < model.Count; i++) {
+        f = &model.Fn[i];
+        if ((f->Cfg[0x0E] & 0x7F) != 1 || f->Cfg[0x19] != bus ||
+            XHCI_TBT_BDF_BUS(f->Bdf) == bus) {
+            continue;
+        }
+        for (p = f->Cfg[0x34]; p != 0; p = f->Cfg[p + 1]) {
+            if (f->Cfg[p] == XHCI_TBT_CAP_PCIE) {
+                put16(f, p + 0x12, any ? XHCI_TBT_LINKSTA_DLLLA : 0);
+                put16(f, p + 0x1A, any ? XHCI_TBT_SLOTSTA_PDS : 0);
+                break;
+            }
+        }
+        if (f->ShpcCap != 0) {
+            f->Shpc[XHCI_TBT_SHPC_SLOT0] = any ? SHPC_CARD : SHPC_EMPTY;
+        }
+    }
+}
+
+/* A device behind a tunnel port, as a hot plug brings it: function 0 of
+ * device `dev` on `bus`, the port's link and presence following
+ * (link_follow). */
 static VOID dev_at(ULONG bus, ULONG dev, ULONG on)
 {
     MODEL_FN *f = mfind(B(bus, dev, 0));
@@ -1787,10 +1857,23 @@ static VOID dev_at(ULONG bus, ULONG dev, ULONG on)
         f = mdev(bus, dev, 0, 0x144D, 0xA808, 0x010802UL);
     }
     put16(f, 0x00, on ? 0x144D : 0xFFFF);
+    link_follow(bus);
 }
 
 #define dev_on(bus)     dev_at((bus), 0, 1)
 #define dev_off(bus)    dev_at((bus), 0, 0)
+
+/* An endpoint at device 0 of `bus` answering with no change to its port's
+ * link or presence (a function answering late, no hot plug). */
+static VOID dev_quiet(ULONG bus)
+{
+    MODEL_FN *f = mfind(B(bus, 0, 0));
+
+    if (f == NULL) {
+        f = mdev(bus, 0, 0, 0x144D, 0xA808, 0x010802UL);
+    }
+    put16(f, 0x00, 0x144D);
+}
 
 static ULONG named(ULONG port, ULONG bdf)
 {
@@ -3119,6 +3202,1686 @@ static void test_acpi(void)
     CHECK_EQ(topo.Source[0], XHCI_TBT_SRC_OVERRIDE, "acpi: OVERRIDE kept");
 }
 
+/* ---- the chained tunnels' bindings (record 34 section 3.12; task 48.30) */
+
+/* A function hidden from the model (unplugged). */
+static VOID mgone(ULONG bdf)
+{
+    MODEL_FN *f = mfind(bdf);
+
+    if (f != NULL) {
+        f->Bdf = 0x7FFFFFFFUL;
+    }
+}
+
+/*
+ * The emulator's dock with two chain ports: the tunnel port 02:01.0 (buses
+ * 4 to 8), the dock's upstream port 04:00.0 (5 to 8), its fixed port
+ * 05:00.0 to its NVMe on bus 6, chain ports 05:01.0 (bus 7) and 05:02.0
+ * (bus 8).
+ */
+static VOID chdock2(VOID)
+{
+    MODEL_FN *tp;
+
+    mreset();
+    ioreset();
+    tp = mbridge(2, 1, 0, 0x8086, 0x15C0, 4, 8);
+    mpcie(tp, 0x40, CH_DOWN, 1, 0, 0, CH_HPC, 0);
+    chbr(4, 0, 0, 0x8232, CH_UP, 5, 8, 0);
+    chbr(5, 0, 0, 0x8233, CH_DOWN, 6, 6, 0);
+    mdev(6, 0, 0, 0x1B36, 0x0010, 0x010802UL);
+    chbr(5, 1, 0, 0x8233, CH_DOWN, 7, 7, CH_HPC);
+    chbr(5, 2, 0, 0x8233, CH_DOWN, 8, 8, CH_HPC);
+}
+
+static XHCI_CHAIN ch;
+
+/* A kid's function on the chain port's bus `bus`, as its tunnel brings it:
+ * the port's presence follows (link_follow). */
+static VOID kid_on(ULONG bus, ULONG dev)
+{
+    mdev(bus, dev, 0, 0x1B36, 0x0010, 0x010802UL);
+    link_follow(bus);
+}
+
+static VOID kid_gone(ULONG bus)
+{
+    mgone(XHCI_TBT_BDF(bus, 0, 0));
+    link_follow(bus);
+}
+
+/* A kid's upstream switch port at device 0 of `bus`, its chain port's
+ * presence left as it is. */
+static VOID kid_usp(ULONG bus)
+{
+    MODEL_FN *f = mbridge(bus, 0, 0, 0x1B21, 0x2463, bus + 1, bus + 1);
+
+    mpcie(f, 0x80, XHCI_TBT_PCIE_TYPE_UP, 0, 0, 0, 0, 0);
+}
+
+static VOID chkid(XHCI_CHAIN_KID *k, ULONG kid, ULONG gen)
+{
+    memset(k, 0, sizeof(*k));
+    k->Port = 2;
+    k->Kid = kid;
+    k->KidGen = gen;
+    k->ParentGen = 9;
+    k->ParentUuid[0] = 0x11;
+    k->ParentUuid[1] = 0x22;
+    k->ParentPcieDown = 7;
+    k->KidRoute[0] = 0x0302;
+    k->KidUuid[0] = 0x33 + gen;
+    k->Member = 0;
+    k->MemberBdf = XHCI_TBT_BDF(2, 1, 0);
+}
+
+static VOID test_chain_bind(VOID)
+{
+    XHCI_CHAIN_BASE b;
+    XHCI_CHAIN_KID k;
+    ULONG tok[XHCI_CHAIN_TOK_WORDS];
+    ULONG why;
+    ULONG r;
+    ULONG i;
+    ULONG j;
+    ULONG epoch;
+    MODEL_FN *f;
+
+    /* Record 34 section 3.3.7 item 2: each candidate's rotation, the
+     * device numbers from the member's secondary bus summed mod 4. */
+    chdock(0);
+    CHECK(XhciTbtChainPorts(&io, XHCI_TBT_BDF(2, 1, 0), 0, &cs) == XHCI_TBT_CHAIN_COMPLETE &&
+          cs.Port[0].Rot == 1, "rotation: the dock's port 0 then device 1");
+    chdock2();
+    CHECK(XhciTbtChainPorts(&io, XHCI_TBT_BDF(2, 1, 0), 0, &cs) == XHCI_TBT_CHAIN_COMPLETE &&
+          cs.Count == 2 && cs.Port[0].Rot == 1 && cs.Port[1].Rot == 2,
+          "rotation: devices 1 and 2");
+
+    /* The reading: the dock, nothing chained, then something chained. */
+    chdock(0);
+    r = XhciChainRead(&io, XHCI_TBT_BDF(2, 1, 0), 0, &b);
+    CHECK(r == XHCI_CHAIN_READ_OK && b.Count == 1, "chain read: one port");
+    CHECK(b.Bdf[0] == XHCI_TBT_BDF(5, 1, 0) && b.Buses[0] == 0x0707UL &&
+          b.Seen[0] == 0, "chain read: the port, its buses, empty");
+    CHECK(model.Writes == 0, "chain read: reads only");
+    mdev(7, 0, 0, 0x1B36, 0x0010, 0x010802UL);
+    r = XhciChainRead(&io, XHCI_TBT_BDF(2, 1, 0), 0, &b);
+    CHECK(r == XHCI_CHAIN_READ_OK && b.Seen[0] == 1UL, "chain read: device 0");
+    /* Failures. */
+    model.FailBdf = XHCI_TBT_BDF(7, 0, 0);
+    model.FailOffset = 0;
+    CHECK(XhciChainRead(&io, XHCI_TBT_BDF(2, 1, 0), 0, &b) == XHCI_CHAIN_READ_UNREAD,
+          "chain read: a failed read is unread");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    f = mfind(XHCI_TBT_BDF(7, 0, 0));
+    put16(f, 0, 0x0001);
+    CHECK(XhciChainRead(&io, XHCI_TBT_BDF(2, 1, 0), 0, &b) == XHCI_CHAIN_READ_UNREAD,
+          "chain read: Retry Status is unread");
+    put16(f, 0, 0x1B36);
+    f = mfind(XHCI_TBT_BDF(5, 1, 0));
+    f->Cfg[0x1A] = 6;
+    CHECK(XhciChainRead(&io, XHCI_TBT_BDF(2, 1, 0), 0, &b) == XHCI_CHAIN_READ_NUMBER,
+          "chain read: a port not numbered inside the member's range");
+    chdock(0);
+    f = mfind(XHCI_TBT_BDF(5, 1, 0));
+    put32(f, 0x40 + XHCI_TBT_PCIE_SLOTCAP, 0);
+    CHECK(XhciChainRead(&io, XHCI_TBT_BDF(2, 1, 0), 0, &b) == XHCI_CHAIN_READ_NONE,
+          "chain read: no candidate");
+
+    /* A transaction learnt: the arm on an empty port, the kid's device
+     * answering after, one gain. */
+    chdock(0);
+    XhciChainInit(&ch, FALSE);
+    chkid(&k, 1, 5);
+    CHECK(XhciChainMayConnect(&ch, 0), "nothing open: a connect may start");
+    r = XhciChainArm(&ch, &io, &k, FALSE, 1000, 77, &why);
+    CHECK(r == XHCI_CHAIN_ARM_OPEN && ch.Txn.Open && ch.Txn.ArmSeq == 77,
+          "arm: open, the stamp kept");
+    CHECK(!XhciChainMayConnect(&ch, 1500), "a transaction open: a connect waits");
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 1100, &i) == XHCI_CHAIN_TRY_WAIT,
+          "try: nothing gained yet waits");
+    kid_on(7, 0);
+    r = XhciChainTry(&ch, &io, TRUE, FALSE, 1200, &i);
+    CHECK(r == XHCI_CHAIN_TRY_LEARNED && i < XHCI_CHAIN_BINDS, "try: learnt");
+    CHECK(ch.Bind[i].Bdf == XHCI_TBT_BDF(5, 1, 0) && ch.Bind[i].Port == 2 &&
+          ch.Bind[i].ParentGen == 9 && ch.Bind[i].ParentPcieDown == 7 &&
+          ch.Bind[i].MemberBdf == XHCI_TBT_BDF(2, 1, 0) &&
+          ch.Bind[i].Buses == 0x0707UL, "S: the link and the chain port");
+    CHECK(ch.Bind[i].Occupied && ch.Bind[i].Kid == 1 && ch.Bind[i].KidGen == 5 &&
+          ch.Bind[i].ArmSeq == 77 && ch.Bind[i].Epoch == 1, "O: the kid");
+    CHECK(!ch.Txn.Open && XhciChainMayConnect(&ch, 1300),
+          "learnt: closed, the kid settled, a connect may start");
+    CHECK(XhciChainOfKid(&ch, 1, 5) == i && XhciChainOfKid(&ch, 1, 6) == XHCI_CHAIN_BINDS,
+          "of the kid: its generation only");
+    CHECK(XhciChainOfPort(&ch, XHCI_TBT_BDF(2, 1, 0), XHCI_TBT_BDF(5, 1, 0)) == i,
+          "of the port");
+    XhciChainToken(&ch, i, tok);
+    CHECK(tok[0] == (XHCI_CHAIN_TOK_VALID | 2UL | (1UL << 8)) && tok[1] == 5 &&
+          tok[2] == 1, "the token");
+    CHECK(XhciChainTokenLive(&ch, i, tok), "the token live");
+    CHECK(XHCI_CHAIN_TOK_PORT(tok) == 2 && XHCI_CHAIN_TOK_KID(tok) == 1, "the token's fields");
+    /* The incarnation: the first fixes it, the same keeps it, another
+     * withdraws S. */
+    CHECK(XhciChainIncarnation(&ch, i, 40) && ch.Bind[i].Inc == 40, "incarnation fixed");
+    CHECK(XhciChainIncarnation(&ch, i, 40), "the same incarnation");
+    epoch = ch.Bind[i].Epoch;
+
+    /* The child unplugged (its slot freed): O withdrawn, S kept; plugged
+     * again (a new generation), learnt again on the same S. */
+    kid_gone(7);
+    CHECK(XhciChainKidCheck(&ch, 1, FALSE, 0) == 1 && ch.Bind[i].Used &&
+          !ch.Bind[i].Occupied, "the kid gone: O withdrawn, S kept");
+    CHECK(!XhciChainTokenLive(&ch, i, tok), "the old token dead");
+    chkid(&k, 1, 6);
+    CHECK(XhciChainArm(&ch, &io, &k, FALSE, 2000, 80, &why) == XHCI_CHAIN_ARM_OPEN,
+          "re-plug: armed");
+    kid_on(7, 0);
+    r = XhciChainTry(&ch, &io, TRUE, FALSE, 2100, &j);
+    CHECK(r == XHCI_CHAIN_TRY_LEARNED && j == i && ch.Bind[i].Epoch == epoch &&
+          ch.Bind[i].KidGen == 6, "re-plug: learnt on the same S");
+    CHECK(XhciChainIncarnation(&ch, i, 41) == 0 && !ch.Bind[i].Used,
+          "another incarnation: S withdrawn");
+
+    /* Not opened: no member, blocked, another kid unsettled, busy, the
+     * baseline unread; each kid left unsettled. */
+    chdock(0);
+    XhciChainInit(&ch, FALSE);
+    chkid(&k, 1, 5);
+    k.Member = XHCI_TBT_NO_MEMBER;
+    CHECK(XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why) == XHCI_CHAIN_ARM_MEMBER,
+          "arm: no member");
+    CHECK(!ch.Txn.Open && !XhciChainMayConnect(&ch, 9999), "unsettled: a connect waits");
+    CHECK(XhciChainMayConnect(&ch, 10000), "... for 10 s at most");
+    XhciChainInit(&ch, FALSE);
+    chkid(&k, 1, 5);
+    CHECK(XhciChainArm(&ch, &io, &k, TRUE, 0, 1, &why) == XHCI_CHAIN_ARM_OTHER,
+          "arm: blocked by an unowned path");
+    chkid(&k, 2, 7);
+    CHECK(XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why) == XHCI_CHAIN_ARM_OTHER,
+          "arm: another kid unsettled");
+    CHECK(XhciChainKidGone(&ch, 1, 5) == 0, "kid 1 resolved");
+    XhciChainInit(&ch, FALSE);
+    chkid(&k, 1, 5);
+    model.FailBdf = XHCI_TBT_BDF(7, 0, 0);
+    model.FailOffset = 0;
+    CHECK(XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why) == XHCI_CHAIN_ARM_READ &&
+          why == XHCI_CHAIN_READ_UNREAD, "arm: the baseline unread");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    XhciChainInit(&ch, FALSE);
+    CHECK(XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why) == XHCI_CHAIN_ARM_OPEN,
+          "arm: open");
+    chkid(&k, 2, 7);
+    CHECK(XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why) == XHCI_CHAIN_ARM_BUSY,
+          "arm: another transaction open");
+    kid_on(7, 0);
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 100, &i) == XHCI_CHAIN_TRY_SEVERAL,
+          "try: the second kid unsettled spoils it");
+
+    /* Two readings that differ (a device answering between them): not
+     * stable, not opened. */
+    chdock(0);
+    XhciChainInit(&ch, FALSE);
+    chkid(&k, 1, 5);
+    model.FlipBdf = XHCI_TBT_BDF(7, 0, 0);
+    model.FlipAfter = 1;
+    model.FlipSeen = 0;
+    CHECK(XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why) == XHCI_CHAIN_ARM_UNSTABLE &&
+          !ch.Txn.Open, "arm: two readings that differ");
+    model.FlipBdf = XHCI_TBT_NO_BDF;
+    /* A chain port that appears after the arm: the set changed. */
+    chdock2();
+    f = mfind(XHCI_TBT_BDF(5, 2, 0));
+    put32(f, 0x40 + XHCI_TBT_PCIE_SLOTCAP, 0);
+    XhciChainInit(&ch, FALSE);
+    CHECK(XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why) == XHCI_CHAIN_ARM_OPEN &&
+          ch.Txn.Base.Count == 1, "armed with one port");
+    put32(f, 0x40 + XHCI_TBT_PCIE_SLOTCAP, CH_HPC);
+    kid_on(7, 0);
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 10, &i) == XHCI_CHAIN_TRY_SPOILED,
+          "try: a new chain port spoils it");
+
+    /* The try's other outcomes. */
+    chdock(0);
+    XhciChainInit(&ch, FALSE);
+    chkid(&k, 1, 5);
+    (VOID)XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why);
+    CHECK(XhciChainTry(&ch, &io, FALSE, FALSE, 10, &i) == XHCI_CHAIN_TRY_CANCELLED &&
+          !ch.Txn.Open, "try: not live, cancelled");
+    (VOID)XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why);
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 10000, &i) == XHCI_CHAIN_TRY_EXPIRED,
+          "try: expired at 10 s");
+    (VOID)XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why);
+    kid_on(7, 0);
+    CHECK(XhciChainTry(&ch, &io, TRUE, TRUE, 10, &i) == XHCI_CHAIN_TRY_SEVERAL,
+          "try: blocked by an unowned path");
+    /* A device lost spoils it. */
+    (VOID)XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why);
+    kid_gone(7);
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 10, &i) == XHCI_CHAIN_TRY_SPOILED,
+          "try: a device lost");
+    /* The gain on a port busy at the baseline. */
+    kid_on(7, 0);
+    (VOID)XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why);
+    kid_on(7, 1);
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 10, &i) == XHCI_CHAIN_TRY_SEVERAL,
+          "try: a gain on a port busy at the baseline");
+    /* The candidate set changed. */
+    chdock(0);
+    (VOID)XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why);
+    f = mfind(XHCI_TBT_BDF(5, 1, 0));
+    f->Cfg[0x19] = 8;
+    f->Cfg[0x1A] = 8;
+    f = mfind(XHCI_TBT_BDF(2, 1, 0));
+    f->Cfg[0x1A] = 8;
+    f = mfind(XHCI_TBT_BDF(4, 0, 0));
+    f->Cfg[0x1A] = 8;
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 10, &i) == XHCI_CHAIN_TRY_SPOILED,
+          "try: a port's buses moved");
+
+    /* Two chain ports: two gains spoil; a learnt S naming one port and
+     * a later gain on the other is a conflict that withdraws it. */
+    chdock2();
+    XhciChainInit(&ch, FALSE);
+    chkid(&k, 1, 5);
+    CHECK(XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why) == XHCI_CHAIN_ARM_OPEN &&
+          ch.Txn.Base.Count == 2, "two ports: armed");
+    kid_on(7, 0);
+    kid_on(8, 0);
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 10, &i) == XHCI_CHAIN_TRY_SPOILED,
+          "two gains spoil");
+    chdock2();
+    XhciChainInit(&ch, FALSE);
+    (VOID)XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why);
+    kid_on(7, 0);
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 10, &i) == XHCI_CHAIN_TRY_LEARNED &&
+          ch.Bind[i].Bdf == XHCI_TBT_BDF(5, 1, 0), "learnt on the first port");
+    kid_gone(7);
+    (VOID)XhciChainKidGone(&ch, 1, 5);
+    chkid(&k, 1, 6);
+    (VOID)XhciChainArm(&ch, &io, &k, FALSE, 20, 2, &why);
+    kid_on(8, 0);
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 30, &j) == XHCI_CHAIN_TRY_CONFLICT &&
+          !ch.Bind[i].Used && ch.Conflicts == 1, "the same link on another port: a conflict");
+    /* A port check: another parent generation withdraws S. */
+    chdock(0);
+    XhciChainInit(&ch, FALSE);
+    chkid(&k, 1, 5);
+    (VOID)XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why);
+    kid_on(7, 0);
+    (VOID)XhciChainTry(&ch, &io, TRUE, FALSE, 10, &i);
+    CHECK(XhciChainPortCheck(&ch, 2, TRUE, 9) == 0 && ch.Bind[i].Used,
+          "the same parent: kept");
+    CHECK(XhciChainPortCheck(&ch, 3, TRUE, 1) == 0 && ch.Bind[i].Used,
+          "another port: kept");
+    CHECK(XhciChainKidCheck(&ch, 1, TRUE, 5) == 0 && ch.Bind[i].Occupied,
+          "the kid the same: kept");
+    CHECK(XhciChainKidCheck(&ch, 1, TRUE, 8) == 1 && !ch.Bind[i].Occupied,
+          "the kid connected again: O withdrawn");
+    CHECK(XhciChainPortCheck(&ch, 2, TRUE, 10) == (1UL << i) && !ch.Bind[i].Used,
+          "the parent connected again: S withdrawn");
+    /* Record 22 section 7.6.4: what the chain port gained must be a
+     * tunnel's far end, or come with its port read down at the arm and up
+     * now; a function answering with no presence change (one of the
+     * parent's own, answering late) spoils it and nothing is bound. */
+    chdock(0);
+    XhciChainInit(&ch, FALSE);
+    chkid(&k, 1, 5);
+    CHECK(XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why) == XHCI_CHAIN_ARM_OPEN &&
+          ch.Txn.Base.Down == 1, "shape: armed, the chain port read down");
+    mdev(7, 0, 0, 0x1B36, 0x0010, 0x010802UL);
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 10, &i) == XHCI_CHAIN_TRY_SHAPE &&
+          !ch.Txn.Open && XhciChainOfKid(&ch, 1, 5) == XHCI_CHAIN_BINDS,
+          "shape: an endpoint, its port still down: spoiled, nothing bound");
+    chdock(0);
+    XhciChainInit(&ch, FALSE);
+    put16(mfind(XHCI_TBT_BDF(5, 1, 0)), 0x40 + 0x1A, XHCI_TBT_SLOTSTA_PDS);
+    CHECK(XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why) == XHCI_CHAIN_ARM_OPEN &&
+          ch.Txn.Base.Down == 0, "shape: the port present at the arm");
+    kid_on(7, 0);
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 10, &i) == XHCI_CHAIN_TRY_SHAPE,
+          "shape: no down reading, the endpoint refused");
+    chdock(0);
+    XhciChainInit(&ch, FALSE);
+    (VOID)XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why);
+    kid_usp(7);
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 10, &i) == XHCI_CHAIN_TRY_LEARNED,
+          "shape: a far end learned with no presence change");
+    chdock(0);
+    XhciChainInit(&ch, FALSE);
+    (VOID)XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why);
+    kid_usp(7);
+    model.FailBdf = XHCI_TBT_BDF(7, 0, 0);
+    model.FailOffset = XHCI_TBT_CFG_HEADER;
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 10, &i) == XHCI_CHAIN_TRY_WAIT &&
+          ch.Txn.Open, "shape: unread, the transaction waits");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 20, &i) == XHCI_CHAIN_TRY_LEARNED,
+          "shape: then learned");
+    /* A gain whose port reading failed waits on B's arm-time evidence;
+     * B empty again before it is decided spoils the transaction, so a
+     * later answer never reuses that evidence. */
+    chdock(0);
+    XhciChainInit(&ch, FALSE);
+    (VOID)XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why);
+    kid_on(7, 0);
+    model.FailBdf = XHCI_TBT_BDF(5, 1, 0);
+    model.FailOffset = 0x40 + XHCI_TBT_PCIE_SLOTSTA;
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 10, &i) == XHCI_CHAIN_TRY_WAIT &&
+          ch.Txn.Answered == 1, "answered: the port unread, waits");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    mgone(XHCI_TBT_BDF(7, 0, 0));
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 20, &i) == XHCI_CHAIN_TRY_SPOILED &&
+          !ch.Txn.Open, "answered: empty again, spoiled");
+    /* A port reading that fails part-way keeps what it read whole: the
+     * chain port's Link Active read inactive, then its Slot Status read
+     * failing, spoils as the whole reading (DOWN) would; the port up
+     * later, the occupancy unchanged, learns nothing. */
+    chdock(0);
+    put32(mfind(XHCI_TBT_BDF(5, 1, 0)), 0x40 + XHCI_TBT_PCIE_LINKCAP,
+          XHCI_TBT_LINKCAP_DLLLARC);
+    XhciChainInit(&ch, FALSE);
+    CHECK(XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why) == XHCI_CHAIN_ARM_OPEN &&
+          ch.Txn.Base.Down == 1, "partial port: armed, the port read down");
+    mdev(7, 0, 0, 0x1B36, 0x0010, 0x010802UL);
+    model.FailBdf = XHCI_TBT_BDF(5, 1, 0);
+    model.FailOffset = 0x40 + XHCI_TBT_PCIE_SLOTSTA;
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 10, &i) == XHCI_CHAIN_TRY_SHAPE &&
+          !ch.Txn.Open && XhciChainOfKid(&ch, 1, 5) == XHCI_CHAIN_BINDS,
+          "partial port: link inactive, then Slot Status failing: spoiled");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    link_follow(7);
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 20, &i) != XHCI_CHAIN_TRY_LEARNED &&
+          XhciChainOfKid(&ch, 1, 5) == XHCI_CHAIN_BINDS,
+          "partial port: the port up later, nothing learned");
+    /* A failed read decides nothing: a device seen gained before it
+     * failed spoils the transaction at once, never left to a later read
+     * (a link coming up after it cannot admit it). */
+    chdock(0);
+    XhciChainInit(&ch, FALSE);
+    (VOID)XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why);
+    mdev(7, 0, 0, 0x1B36, 0x0010, 0x010802UL);
+    model.FailBdf = XHCI_TBT_BDF(7, 1, 0);
+    model.FailOffset = 0;
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 10, &i) == XHCI_CHAIN_TRY_SPOILED &&
+          !ch.Txn.Open, "partial: a gain seen before the read failed, spoiled");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    link_follow(7);
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 20, &i) == XHCI_CHAIN_TRY_NONE &&
+          XhciChainOfKid(&ch, 1, 5) == XHCI_CHAIN_BINDS,
+          "partial: the link up after it, nothing learned");
+    /* An answered candidate whose scan completes empty at a read that
+     * then fails on another candidate spoils it all the same. */
+    chdock2();
+    XhciChainInit(&ch, FALSE);
+    chkid(&k, 1, 5);
+    (VOID)XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why);
+    kid_on(7, 0);
+    model.FailBdf = XHCI_TBT_BDF(5, 1, 0);
+    model.FailOffset = 0x40 + XHCI_TBT_PCIE_SLOTSTA;
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 10, &i) == XHCI_CHAIN_TRY_WAIT &&
+          ch.Txn.Answered == 1, "answered: A gained, its port unread");
+    mgone(XHCI_TBT_BDF(7, 0, 0));
+    model.FailBdf = XHCI_TBT_BDF(8, 0, 0);
+    model.FailOffset = 0;
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 20, &i) == XHCI_CHAIN_TRY_SPOILED &&
+          !ch.Txn.Open, "answered: A empty while B fails, spoiled");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    /* A partial read that finds the candidate set changed spoils it: A,
+     * B and C armed, B gained and waits; A no candidate any more, B's scan
+     * complete and empty, C's failing - B read at A's place. */
+    chdock2();
+    mfind(XHCI_TBT_BDF(2, 1, 0))->Cfg[0x1A] = 9;
+    mfind(XHCI_TBT_BDF(4, 0, 0))->Cfg[0x1A] = 9;
+    chbr(5, 3, 0, 0x8233, CH_DOWN, 9, 9, CH_HPC);
+    XhciChainInit(&ch, FALSE);
+    chkid(&k, 1, 5);
+    CHECK(XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why) == XHCI_CHAIN_ARM_OPEN &&
+          ch.Txn.Base.Count == 3 && ch.Txn.Base.Down == 7,
+          "moved: three ports armed, all down");
+    kid_on(8, 0);
+    model.FailBdf = XHCI_TBT_BDF(5, 2, 0);
+    model.FailOffset = 0x40 + XHCI_TBT_PCIE_SLOTSTA;
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 10, &i) == XHCI_CHAIN_TRY_WAIT &&
+          ch.Txn.Answered == 2, "moved: B gained, its port unread");
+    put32(mfind(XHCI_TBT_BDF(5, 1, 0)), 0x40 + XHCI_TBT_PCIE_SLOTCAP, 0);
+    mgone(XHCI_TBT_BDF(8, 0, 0));
+    model.FailBdf = XHCI_TBT_BDF(9, 0, 0);
+    model.FailOffset = 0;
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 20, &i) == XHCI_CHAIN_TRY_SPOILED &&
+          !ch.Txn.Open, "moved: the set changed under a partial read, spoiled");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    /* A partial read is held to the whole reading's rules. A device of
+     * the baseline lost on a candidate scanned whole, while B's read
+     * fails: spoiled, so A restored and B then gaining commits nothing. */
+    chdock2();
+    mdev(7, 0, 0, 0x1B36, 0x0010, 0x010802UL);
+    XhciChainInit(&ch, FALSE);
+    chkid(&k, 1, 5);
+    CHECK(XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why) == XHCI_CHAIN_ARM_OPEN,
+          "partial: armed, A occupied, B empty");
+    put16(mfind(XHCI_TBT_BDF(7, 0, 0)), 0x00, 0xFFFF);
+    model.FailBdf = XHCI_TBT_BDF(8, 0, 0);
+    model.FailOffset = 0;
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 10, &i) == XHCI_CHAIN_TRY_SPOILED &&
+          !ch.Txn.Open, "partial: A's device lost, B unread: spoiled");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    put16(mfind(XHCI_TBT_BDF(7, 0, 0)), 0x00, 0x1B36);
+    kid_usp(8);
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 20, &i) == XHCI_CHAIN_TRY_NONE &&
+          XhciChainOfKid(&ch, 1, 5) == XHCI_CHAIN_BINDS,
+          "partial: A restored, B gaining: nothing commits");
+    /* A device lost among those read of a candidate whose scan failed. */
+    chdock(0);
+    mdev(7, 0, 0, 0x1B36, 0x0010, 0x010802UL);
+    XhciChainInit(&ch, FALSE);
+    (VOID)XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why);
+    put16(mfind(XHCI_TBT_BDF(7, 0, 0)), 0x00, 0xFFFF);
+    model.FailBdf = XHCI_TBT_BDF(7, 5, 0);
+    model.FailOffset = 0;
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 10, &i) == XHCI_CHAIN_TRY_SPOILED,
+          "partial: a device lost before the scan failed: spoiled");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    /* Two candidates gaining, then a failure: spoiled; one gaining beside
+     * an unowned path: spoiled (SEVERAL). */
+    chdock2();
+    XhciChainInit(&ch, FALSE);
+    (VOID)XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why);
+    kid_on(7, 0);
+    kid_on(8, 0);
+    model.FailBdf = XHCI_TBT_BDF(8, 1, 0);
+    model.FailOffset = 0;
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 10, &i) == XHCI_CHAIN_TRY_SPOILED,
+          "partial: two gains: spoiled");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    chdock2();
+    XhciChainInit(&ch, FALSE);
+    (VOID)XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why);
+    kid_on(7, 0);
+    model.FailBdf = XHCI_TBT_BDF(8, 0, 0);
+    model.FailOffset = 0;
+    CHECK(XhciChainTry(&ch, &io, TRUE, TRUE, 10, &i) == XHCI_CHAIN_TRY_SPOILED,
+          "partial: a gain beside an unowned path: spoiled");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    /* A candidate added to the set, then a failure reading it: spoiled,
+     * so the original set restored learns nothing. */
+    chdock(0);
+    XhciChainInit(&ch, FALSE);
+    (VOID)XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why);
+    mfind(XHCI_TBT_BDF(2, 1, 0))->Cfg[0x1A] = 8;
+    mfind(XHCI_TBT_BDF(4, 0, 0))->Cfg[0x1A] = 8;
+    f = chbr(5, 2, 0, 0x8233, CH_DOWN, 8, 8, CH_HPC);
+    model.FailBdf = XHCI_TBT_BDF(8, 0, 0);
+    model.FailOffset = 0;
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 10, &i) == XHCI_CHAIN_TRY_SPOILED &&
+          !ch.Txn.Open, "partial: a candidate added, its read failing: spoiled");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    /* An answered candidate still answering at a read that fails on
+     * another: spoiled, so its port reading down then up decides
+     * nothing. */
+    chdock2();
+    XhciChainInit(&ch, FALSE);
+    chkid(&k, 1, 5);
+    (VOID)XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why);
+    kid_on(7, 0);
+    model.FailBdf = XHCI_TBT_BDF(5, 1, 0);
+    model.FailOffset = 0x40 + XHCI_TBT_PCIE_SLOTSTA;
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 10, &i) == XHCI_CHAIN_TRY_WAIT &&
+          ch.Txn.Answered == 1, "answered: A gained, its port unread");
+    put16(mfind(XHCI_TBT_BDF(5, 1, 0)), 0x40 + 0x1A, 0);
+    model.FailBdf = XHCI_TBT_BDF(8, 0, 0);
+    model.FailOffset = 0;
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 20, &i) == XHCI_CHAIN_TRY_SPOILED &&
+          !ch.Txn.Open, "answered: still answering, B unread: spoiled");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    link_follow(7);
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 30, &i) == XHCI_CHAIN_TRY_NONE &&
+          XhciChainOfKid(&ch, 1, 5) == XHCI_CHAIN_BINDS,
+          "answered: its port up later, nothing learned");
+    /* A candidate found by a walk that then fails: a changed set,
+     * spoiled. */
+    chdock(0);
+    XhciChainInit(&ch, FALSE);
+    chkid(&k, 1, 5);
+    (VOID)XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why);
+    mfind(XHCI_TBT_BDF(2, 1, 0))->Cfg[0x1A] = 8;
+    mfind(XHCI_TBT_BDF(4, 0, 0))->Cfg[0x1A] = 8;
+    f = chbr(5, 2, 0, 0x8233, CH_DOWN, 8, 8, CH_HPC);
+    model.FailBdf = XHCI_TBT_BDF(6, 0, 0);
+    model.FailOffset = 0;
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 10, &i) == XHCI_CHAIN_TRY_SPOILED &&
+          !ch.Txn.Open, "walk: a candidate added, the walk failing: spoiled");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    /* A candidate's subordinate bus changed, the walk failing elsewhere:
+     * spoiled. */
+    chdock(0);
+    XhciChainInit(&ch, FALSE);
+    (VOID)XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why);
+    mfind(XHCI_TBT_BDF(2, 1, 0))->Cfg[0x1A] = 8;
+    mfind(XHCI_TBT_BDF(4, 0, 0))->Cfg[0x1A] = 8;
+    mfind(XHCI_TBT_BDF(5, 1, 0))->Cfg[0x1A] = 8;
+    model.FailBdf = XHCI_TBT_BDF(6, 0, 0);
+    model.FailOffset = 0;
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 10, &i) == XHCI_CHAIN_TRY_SPOILED &&
+          !ch.Txn.Open, "walk: a subordinate bus changed, the walk failing: spoiled");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    /* A walk that completes having seen a candidate's buses changed,
+     * then a candidate's bus register unread: spoiled. */
+    chdock(0);
+    XhciChainInit(&ch, FALSE);
+    (VOID)XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why);
+    mfind(XHCI_TBT_BDF(2, 1, 0))->Cfg[0x1A] = 8;
+    mfind(XHCI_TBT_BDF(4, 0, 0))->Cfg[0x1A] = 8;
+    mfind(XHCI_TBT_BDF(5, 1, 0))->Cfg[0x1A] = 8;
+    model.FailBdf = XHCI_TBT_BDF(5, 1, 0);
+    model.FailOffset = XHCI_TBT_CFG_BUSES;
+    model.FailNth = 2;
+    model.FailSeen = 0;
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 10, &i) == XHCI_CHAIN_TRY_SPOILED &&
+          !ch.Txn.Open, "walk: complete, buses changed, the reread failing: spoiled");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    model.FailNth = 0;
+    /* A walk that fails is never read as an unchanged set: a candidate
+     * gone, the walk failing, the candidate back and a gain: nothing is
+     * learned. */
+    chdock(0);
+    XhciChainInit(&ch, FALSE);
+    (VOID)XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why);
+    put16(mfind(XHCI_TBT_BDF(5, 1, 0)), 0x00, 0xFFFF);
+    model.FailBdf = XHCI_TBT_BDF(6, 0, 0);
+    model.FailOffset = 0;
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 10, &i) == XHCI_CHAIN_TRY_SPOILED &&
+          !ch.Txn.Open, "walk: a candidate gone, the walk failing: spoiled");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    put16(mfind(XHCI_TBT_BDF(5, 1, 0)), 0x00, 0x104C);
+    kid_usp(7);
+    CHECK(XhciChainTry(&ch, &io, TRUE, FALSE, 20, &i) == XHCI_CHAIN_TRY_NONE &&
+          XhciChainOfKid(&ch, 1, 5) == XHCI_CHAIN_BINDS,
+          "walk: restored, a gain: nothing learned");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    /* Withdrawn all: nothing open, nothing bound, nothing unsettled. */
+    (VOID)XhciChainArm(&ch, &io, &k, FALSE, 0, 1, &why);
+    XhciChainWithdrawAll(&ch);
+    CHECK(!ch.Txn.Open && XhciChainMayConnect(&ch, 1), "withdrawn all");
+    /* The epochs never repeat in the domain's life. */
+    epoch = ch.NextEpoch;
+    XhciChainInit(&ch, TRUE);
+    CHECK(ch.NextEpoch == epoch, "the epochs kept across a new start");
+}
+
+/* ---- record 22 sections 7.6.2 and 7.6.3 (task 48.43) ------------------- */
+
+static XHCI_TBT_INFER_IN iin;
+static XHCI_TBT_INFER_OUT iout;
+
+/*
+ * The ASM4242 host with its two tunnel ports 14:00.0 (bus 19, empty) and
+ * 14:01.0 (bus 49, the enclosure when `drive`), both reporting Link
+ * Active; port 1's tunnel found up at start, pending, marked at start;
+ * the baseline taken; the router reading port 1 linked and port 2 down.
+ */
+static VOID inf_setup(ULONG drive)
+{
+    ULONG i;
+
+    asmHost(drive);
+    family_asm(1);
+    ioreset();
+    find(B(0x7A, 0, 0), XHCI_TBT_NO_BDF);
+    XhciTbtBindsInit(&binds);
+    up(1);
+    XhciTbtLearnAtStart(&binds, 1);
+    arm();
+    for (i = 0; i < sizeof(iin) / sizeof(ULONG); i++) {
+        ((PULONG)&iin)[i] = 0;
+    }
+    iin.Usb4Host = 1;
+    iin.Ports = 2;
+    iin.UpMask = 1;
+    iin.RouterLink[0] = XHCI_TBT_RLINK_UP;
+    iin.RouterLink[1] = XHCI_TBT_RLINK_DOWN;
+    iin.Active = NULL;
+}
+
+static ULONG infer(VOID)
+{
+    return XhciTbtInfer(&io, &topo, &binds, &iin, &iout);
+}
+
+static VOID link_at(ULONG bdf, ULONG on)
+{
+    MODEL_FN *f = mfind(bdf);
+
+    put16(f, 0x80 + 0x12, on ? XHCI_TBT_LINKSTA_DLLLA : 0);
+}
+
+/* A tunnel's far end behind a member: an Upstream Switch Port at device 0
+ * of `bus`, as the enclosures present it. */
+static VOID usp_on(ULONG bus)
+{
+    MODEL_FN *f = mfind(B(bus, 0, 0));
+
+    if (f == NULL) {
+        f = mbridge(bus, 0, 0, 0x1B21, 0x2463, bus + 1, bus + 1);
+        mpcie(f, 0x80, XHCI_TBT_PCIE_TYPE_UP, 0, 0, 0, 0, 0);
+    }
+    put16(f, 0x00, 0x1B21);
+}
+
+/* The ASM4242's own xHCI's downstream port 14:02.0 made hot-plug capable
+ * and reporting Link Active (set: its xHCI answers), as the emulator's
+ * model had it: a third member of source SWITCH. */
+static VOID asm_xhci_member(VOID)
+{
+    MODEL_FN *f = mfind(B(0x14, 2, 0));
+
+    put16(f, 0x80 + 2, 0x2UL | (XHCI_TBT_PCIE_TYPE_DOWN << 4) |
+                       XHCI_TBT_PCIE_SLOT_IMPL);
+    put32(f, 0x80 + XHCI_TBT_PCIE_LINKCAP, XHCI_TBT_LINKCAP_DLLLARC);
+    put16(f, 0x80 + 0x12, XHCI_TBT_LINKSTA_DLLLA);
+    put32(f, 0x80 + XHCI_TBT_PCIE_SLOTCAP,
+          XHCI_TBT_SLOTCAP_HPC | XHCI_TBT_SLOTCAP_HPS);
+}
+
+/* inf_setup over the ASM4242 with its xHCI's port a member. */
+static VOID inf_setup_xhci(ULONG drive)
+{
+    inf_setup(drive);
+    asm_xhci_member();
+    find(B(0x7A, 0, 0), XHCI_TBT_NO_BDF);
+    XhciTbtBindsInit(&binds);
+    up(1);
+    XhciTbtLearnAtStart(&binds, 1);
+    arm();
+}
+
+static void test_infer(void)
+{
+    static const ULONG oneOff[2] = { 1, 0 };
+    ULONG k;
+    ULONG save;
+
+    /* Made: one tunnel, one occupied member, both links agreeing. */
+    inf_setup(1);
+    CHECK_EQ(topo.Tunnels, 2, "infer: the ASM4242 set of two");
+    CHECK_EQ(binds.AtStart, 1, "infer: port 1 marked at start");
+    CHECK_EQ(infer(), XHCI_TBT_INFER_MADE, "infer: made");
+    CHECK(iout.Port == 1 && iout.Member == 1 && iout.Bdf == B(0x14, 1, 0) &&
+          iout.Buses == get32(mfind(B(0x14, 1, 0)), 0x18),
+          "infer: port 1 is 14:01.0, its bus numbers kept");
+    /* Kept apart: the shared table, the member lookup and the pending
+     * mark are what they were. */
+    CHECK_EQ(binds.Count, 0, "infer: nothing entered in the shared table");
+    CHECK_EQ(member(1), XHCI_TBT_NO_MEMBER, "infer: port 1 still unbound");
+    CHECK_EQ(binds.Pending, 1, "infer: port 1 still pending");
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_NOT_GAINED,
+             "infer: the learning of port 1 goes on");
+    CHECK_EQ(infer(), XHCI_TBT_INFER_MADE, "infer: made again (the eject)");
+
+    /* I2 to I5. */
+    inf_setup(1);
+    iin.Usb4Host = 0;
+    CHECK_EQ(infer(), XHCI_TBT_INFER_HOST, "infer: a Thunderbolt 3 host");
+    inf_setup(1);
+    CHECK_EQ(XhciTbtInfer(&io, &topo, &binds, &iin, NULL),
+             XHCI_TBT_INFER_BAD_PARAM, "infer: no out");
+    iin.Ports = 0;
+    CHECK_EQ(infer(), XHCI_TBT_INFER_BAD_PARAM, "infer: no ports");
+    for (k = 0; k < 4; k++) {
+        inf_setup(1);
+        save = k == 0 ? XHCI_TBT_SRC_OVERRIDE
+             : k == 1 ? XHCI_TBT_SRC_ROOTPORT
+             : k == 2 ? XHCI_TBT_SRC_ROUTER : XHCI_TBT_SRC_SHPC;
+        topo.Source[0] = save;
+        CHECK_EQ(infer(), XHCI_TBT_INFER_SET,
+                 "infer: an override, listed root port, router-named or "
+                 "SHPC member refused");
+    }
+    inf_setup(1);
+    topo.Outcome = XHCI_TBT_TOPO_OVERRIDE;
+    CHECK_EQ(infer(), XHCI_TBT_INFER_SET, "infer: the override's set");
+    inf_setup(1);
+    topo.FindOutcome = XHCI_TBT_TOPO_UNLISTED;
+    CHECK_EQ(infer(), XHCI_TBT_INFER_SET,
+             "infer: a set the discovery did not make");
+    inf_setup(1);
+    iin.Active = oneOff;
+    CHECK_EQ(infer(), XHCI_TBT_INFER_INACTIVE, "infer: an inactive member");
+    inf_setup(1);
+    CHECK_EQ(named(2, B(0x14, 0, 0)), XHCI_TBT_MAP_KNOWN,
+             "infer: port 2 named 14:00.0");
+    CHECK_EQ(infer(), XHCI_TBT_INFER_BOUND,
+             "infer: never beside a named binding");
+    inf_setup(1);
+    binds.PortConflict = 2;
+    CHECK_EQ(infer(), XHCI_TBT_INFER_BOUND, "infer: a conflicted port");
+    inf_setup(1);
+    iin.Conflict = 1;
+    CHECK_EQ(infer(), XHCI_TBT_INFER_CONFLICTED,
+             "infer: the port conflicted for the inference");
+    inf_setup(1);
+    iin.UpMask = 0;
+    CHECK_EQ(infer(), XHCI_TBT_INFER_NOT_ONE, "infer: no tunnel up");
+    iin.UpMask = 3;
+    CHECK_EQ(infer(), XHCI_TBT_INFER_NOT_ONE, "infer: two tunnels up");
+    inf_setup(1);
+    XhciTbtLearnNotAtStart(&binds, 1);
+    CHECK_EQ(infer(), XHCI_TBT_INFER_NOT_AT_START,
+             "infer: a tunnel brought up since the start");
+    inf_setup(1);
+    up(2);
+    CHECK_EQ(infer(), XHCI_TBT_INFER_PENDING, "infer: another port pending");
+
+    /* I6: the router's links. */
+    for (k = 0; k < 6; k++) {
+        inf_setup(1);
+        if (k < 3) {
+            iin.RouterLink[0] = k == 0 ? XHCI_TBT_RLINK_DOWN
+                              : k == 1 ? XHCI_TBT_RLINK_UNKNOWN
+                                       : XHCI_TBT_RLINK_NONE;
+        } else {
+            iin.RouterLink[1] = k == 3 ? XHCI_TBT_RLINK_UP
+                              : k == 4 ? XHCI_TBT_RLINK_UNKNOWN
+                                       : XHCI_TBT_RLINK_NONE;
+        }
+        CHECK_EQ(infer(), XHCI_TBT_INFER_ROUTER,
+                 "infer: the router reads the port not linked, or another "
+                 "port linked or unknown");
+    }
+
+    /* I7: the PCI reading. */
+    inf_setup(1);
+    binds.Armed = 0;
+    CHECK_EQ(infer(), XHCI_TBT_INFER_NOT_ARMED, "infer: no baseline");
+    inf_setup(1);
+    model.FailBdf = B(0x14, 0, 0);
+    CHECK_EQ(infer(), XHCI_TBT_INFER_UNREAD, "infer: a member unreadable");
+    inf_setup(1);
+    model.FailBdf = B(0x49, 0, 0);
+    CHECK_EQ(infer(), XHCI_TBT_INFER_UNREAD,
+             "infer: the occupied bus unreadable");
+    inf_setup(1);
+    put32(mfind(B(0x14, 0, 0)), 0x80 + XHCI_TBT_PCIE_LINKCAP, 0);
+    CHECK_EQ(infer(), XHCI_TBT_INFER_NO_REPORT,
+             "infer: a member without Link Active Reporting");
+    inf_setup(1);
+    mfind(B(0x14, 0, 0))->Cfg[0x19] = 0x1A;
+    CHECK_EQ(infer(), XHCI_TBT_INFER_MOVED,
+             "infer: a secondary bus not the baseline's");
+    inf_setup(1);
+    dev_on(0x19);
+    link_at(B(0x14, 0, 0), 1);
+    CHECK_EQ(infer(), XHCI_TBT_INFER_OCCUPANCY, "infer: two occupied members");
+    inf_setup(0);
+    link_at(B(0x14, 1, 0), 1);
+    CHECK_EQ(infer(), XHCI_TBT_INFER_OCCUPANCY, "infer: none occupied");
+    /* A wrong inference refused: the links disagree with the occupancy. */
+    inf_setup(1);
+    link_at(B(0x14, 1, 0), 0);
+    CHECK_EQ(infer(), XHCI_TBT_INFER_LINKS,
+             "infer: the occupied member's link down");
+    inf_setup(1);
+    link_at(B(0x14, 0, 0), 1);
+    CHECK_EQ(infer(), XHCI_TBT_INFER_LINKS,
+             "infer: an empty member's link up");
+    /* What answers behind the one occupied member must be a tunnel's far
+     * end: the controller's own xHCI behind a member (the emulator's
+     * model) with port 1's function not answering yet, both links
+     * agreeing, is never taken for port 1's; nor an endpoint directly
+     * behind a tunnel port. */
+    inf_setup_xhci(0);
+    CHECK_EQ(topo.Tunnels, 3, "infer: the xHCI's port a third member");
+    CHECK_EQ(infer(), XHCI_TBT_INFER_SHAPE,
+             "infer: the xHCI's occupied member refused");
+    inf_setup(0);
+    dev_on(0x49);
+    link_at(B(0x14, 1, 0), 1);
+    CHECK_EQ(infer(), XHCI_TBT_INFER_SHAPE,
+             "infer: an endpoint behind the member refused");
+    inf_setup(1);
+    dev_at(0x49, 1, 1);
+    CHECK_EQ(infer(), XHCI_TBT_INFER_SHAPE,
+             "infer: a second device behind the member refused");
+    inf_setup(1);
+    model.FailBdf = B(0x49, 0, 0);
+    model.FailOffset = XHCI_TBT_CFG_HEADER;
+    CHECK_EQ(infer(), XHCI_TBT_INFER_UNREAD,
+             "infer: the far end's shape unreadable: unread, not a shape");
+
+    /* The re-check at the eject: a change since drops it. */
+    inf_setup(1);
+    CHECK_EQ(infer(), XHCI_TBT_INFER_MADE, "infer: made before the eject");
+    up(2);
+    CHECK_EQ(infer(), XHCI_TBT_INFER_PENDING,
+             "infer: the eject's re-check sees a second port pending");
+
+    /* The read-back. */
+    inf_setup(1);
+    CHECK_EQ(infer(), XHCI_TBT_INFER_MADE, "readback: made");
+    save = iout.Buses;
+    CHECK_EQ(XhciTbtInferReadBack(&io, iout.Bdf, save), XHCI_TBT_RB_OPEN,
+             "readback: the function still answers: open");
+    put16(mfind(B(0x49, 0, 0)), 0x00, 0xFFFF);
+    CHECK_EQ(XhciTbtInferReadBack(&io, iout.Bdf, save), XHCI_TBT_RB_OPEN,
+             "readback: nothing answers but Link Active set: open");
+    link_at(B(0x14, 1, 0), 0);
+    CHECK_EQ(XhciTbtInferReadBack(&io, iout.Bdf, save), XHCI_TBT_RB_CLOSED,
+             "readback: link down, nothing answering: closed");
+    CHECK_EQ(XhciTbtInferReadBack(&io, iout.Bdf, save ^ 0x100UL),
+             XHCI_TBT_RB_UNREAD, "readback: bus numbers moved: unread");
+    model.FailBdf = B(0x14, 1, 0);
+    CHECK_EQ(XhciTbtInferReadBack(&io, iout.Bdf, save), XHCI_TBT_RB_UNREAD,
+             "readback: the member unreadable: unread");
+}
+
+static void test_narrowed(void)
+{
+    /* Port 1's enclosure on 14:01.0 at start; port 2 plugged on 14:00.0
+     * while port 1 is pending: learned (formerly SEVERAL). */
+    inf_setup(1);
+    CHECK(binds.StartTaken && binds.StartOk && binds.StartCount == 2 &&
+          binds.StartOcc == 2, "narrowed: the start reading trusted");
+    up(2);
+    usp_on(0x19);
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_LEARNED,
+             "narrowed: port 2 learned while port 1 is pending");
+    CHECK_EQ(member(2), 0, "narrowed: port 2 is 14:00.0");
+    CHECK_EQ(binds.Pending, 1, "narrowed: port 1 still pending");
+    CHECK_EQ(binds.AtStart, 1, "narrowed: port 1 still at start");
+
+    /* A gain on the member occupied at start: never. */
+    inf_setup(1);
+    up(2);
+    dev_at(0x49, 1, 1);
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_SEVERAL,
+             "narrowed: a gain on the at-start member refused");
+
+    /* The start reading not trusted: no function behind any member. */
+    inf_setup(0);
+    CHECK(binds.StartTaken && !binds.StartOk,
+          "narrowed: fewer occupied members than at-start ports");
+    up(2);
+    usp_on(0x19);
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_SEVERAL,
+             "narrowed: an untrusted start reading refuses");
+
+    /* A bound member's occupancy does not make up the count: port 2 named
+     * 14:00.0 with its device, port 1's at-start function late; port 3's
+     * hot plug then sees 14:01.0 gain, which may be port 1's. */
+    asmHost(0);
+    family_asm(1);
+    ioreset();
+    find(B(0x7A, 0, 0), XHCI_TBT_NO_BDF);
+    XhciTbtBindsInit(&binds);
+    CHECK_EQ(named(2, B(0x14, 0, 0)), XHCI_TBT_MAP_KNOWN,
+             "narrowed: port 2 named 14:00.0");
+    usp_on(0x19);
+    up(1);
+    XhciTbtLearnAtStart(&binds, 1);
+    arm();
+    CHECK(binds.StartTaken && !binds.StartOk,
+          "narrowed: a bound member's occupancy not counted");
+    up(3);
+    usp_on(0x49);
+    CHECK_EQ(learn(3, NULL), XHCI_TBT_MAP_SEVERAL,
+             "narrowed: port 1's late function not taken for port 3");
+
+    /* A port not at start pending at the start reading. */
+    asmHost(1);
+    family_asm(1);
+    ioreset();
+    find(B(0x7A, 0, 0), XHCI_TBT_NO_BDF);
+    XhciTbtBindsInit(&binds);
+    up(1);
+    up(2);
+    XhciTbtLearnAtStart(&binds, 1);
+    arm();
+    CHECK(binds.StartTaken && !binds.StartOk,
+          "narrowed: another port pending at the start reading");
+    usp_on(0x19);
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_SEVERAL,
+             "narrowed: so port 2 is not learned");
+
+    /* Sources where a device can sit without a tunnel. */
+    asmHost(1);
+    family_asm(1);
+    ioreset();
+    find(B(0x7A, 0, 0), XHCI_TBT_NO_BDF);
+    topo.Source[0] = XHCI_TBT_SRC_ROOTPORT;
+    XhciTbtBindsInit(&binds);
+    up(1);
+    XhciTbtLearnAtStart(&binds, 1);
+    arm();
+    CHECK(binds.StartTaken && !binds.StartOk,
+          "narrowed: a listed root port member not trusted");
+    topo.Source[0] = XHCI_TBT_SRC_SWITCH;
+    up(2);
+    usp_on(0x19);
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_SEVERAL,
+             "narrowed: so port 2 is not learned");
+
+    /* A member not in the start reading. */
+    inf_setup(1);
+    binds.StartBdf[0] = B(0x14, 5, 0);
+    up(2);
+    usp_on(0x19);
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_SEVERAL,
+             "narrowed: a member not in the start reading refused");
+
+    /* The at-start mark ended by a TUNNEL_UP: the old rule. */
+    inf_setup(1);
+    XhciTbtLearnNotAtStart(&binds, 1);
+    CHECK(!binds.AtStart && !binds.StartTaken,
+          "narrowed: the start reading forgotten with the last mark");
+    up(2);
+    usp_on(0x19);
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_SEVERAL,
+             "narrowed: port 1 brought up again blocks as before");
+
+    /* Ended by its proof down: port 2 learned by the old rule. */
+    inf_setup(1);
+    XhciTbtLearnDown(&binds, 1);
+    CHECK(!binds.AtStart && !binds.Pending,
+          "narrowed: the mark ends with the pending mark");
+    up(2);
+    usp_on(0x19);
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_LEARNED,
+             "narrowed: port 2 alone pending, learned");
+
+    /* Marks only a pending, unbound port. */
+    XhciTbtBindsInit(&binds);
+    XhciTbtLearnAtStart(&binds, 1);
+    CHECK_EQ(binds.AtStart, 0, "narrowed: no mark for a port not pending");
+    inf_setup(1);
+    CHECK_EQ(named(1, B(0x14, 1, 0)), XHCI_TBT_MAP_KNOWN,
+             "narrowed: port 1 named");
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_KNOWN, "narrowed: port 1 known");
+    CHECK(!binds.AtStart && !binds.Pending,
+          "narrowed: a KNOWN outcome ends the mark");
+
+    /* The controller's own function counted for a tunnel (the emulator's
+     * model, its xHCI's port a member): port 1 preserved but its function
+     * not answering yet, the xHCI's occupied member alone making up the
+     * count. Not trusted; port 1's function answering during port 2's
+     * attempt is never taken for port 2's. */
+    inf_setup_xhci(0);
+    CHECK_EQ(topo.Tunnels, 3, "narrowed: the xHCI's port a third member");
+    CHECK(binds.StartTaken && !binds.StartOk && binds.StartOcc == 4,
+          "narrowed: the xHCI's occupied member makes the start reading "
+          "untrusted");
+    up(2);
+    usp_on(0x49);
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_SEVERAL,
+             "narrowed: port 1's late function not taken for port 2");
+    CHECK(binds.Count == 0 && member(2) == XHCI_TBT_NO_MEMBER &&
+          member(1) == XHCI_TBT_NO_MEMBER,
+          "narrowed: no binding entered in the shared table");
+    CHECK_EQ(binds.Pending, 3, "narrowed: both ports still pending");
+
+    /* The same with the xHCI not answering at the start reading: trusted
+     * (port 1's far end on 14:01.0), but the xHCI answering during port
+     * 2's attempt is no tunnel's far end; port 2's own then is. */
+    inf_setup_xhci(1);
+    put16(mfind(B(0x79, 0, 0)), 0x00, 0xFFFF);
+    XhciTbtBindsInit(&binds);
+    up(1);
+    XhciTbtLearnAtStart(&binds, 1);
+    arm();
+    CHECK(binds.StartTaken && binds.StartOk && binds.StartOcc == 2,
+          "narrowed: trusted with the xHCI silent");
+    up(2);
+    put16(mfind(B(0x79, 0, 0)), 0x00, 0x1B21);
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_SEVERAL,
+             "narrowed: the xHCI's function not taken for port 2");
+    CHECK_EQ(binds.Count, 0, "narrowed: nothing entered for it");
+    usp_on(0x19);
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_LEARNED,
+             "narrowed: port 2's far end then learned");
+    CHECK_EQ(member(2), 0, "narrowed: port 2 is 14:00.0");
+
+    /* A gain that is no switch's upstream port: refused when no link came
+     * up for it (record 22 section 7.6.4); learned when its port read down
+     * at the start reading and up now, as a hot plug's does. */
+    inf_setup(1);
+    up(2);
+    dev_quiet(0x19);
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_SEVERAL,
+             "narrowed: an endpoint gained with no link evidence refused");
+    CHECK_EQ(binds.Count, 0, "narrowed: nothing entered for an endpoint");
+    inf_setup(1);
+    up(2);
+    dev_on(0x19);
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_LEARNED,
+             "narrowed: an endpoint with the link's evidence learned");
+    CHECK_EQ(member(2), 0, "narrowed: port 2 is 14:00.0");
+
+    /* A shape that cannot be read is a reading not made: the gain is not
+     * consumed, and the next attempt learns it. */
+    inf_setup(1);
+    up(2);
+    usp_on(0x19);
+    model.FailBdf = B(0x19, 0, 0);
+    model.FailOffset = XHCI_TBT_CFG_HEADER;
+    model.FailNth = 1;
+    model.FailSeen = 0;
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_UNREAD,
+             "narrowed: the gain's shape unreadable: unread");
+    CHECK_EQ(binds.BaseSeen[0], 0, "narrowed: the baseline kept");
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_LEARNED,
+             "narrowed: learned once the shape reads");
+    CHECK_EQ(member(2), 0, "narrowed: port 2 is 14:00.0 after the retry");
+
+    /* Port 1's attempt between the two never consumes port 2's gain. */
+    inf_setup(1);
+    up(2);
+    usp_on(0x19);
+    model.FailBdf = B(0x19, 0, 0);
+    model.FailOffset = XHCI_TBT_CFG_HEADER;
+    model.FailNth = 1;
+    model.FailSeen = 0;
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_UNREAD,
+             "narrowed: interleaved: port 2's shape unreadable");
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_SEVERAL,
+             "narrowed: interleaved: port 1's attempt refuses the gain");
+    CHECK_EQ(binds.BaseSeen[0], 0,
+             "narrowed: interleaved: and leaves it unconsumed");
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_LEARNED,
+             "narrowed: interleaved: port 2 learned after the recovery");
+    CHECK_EQ(member(2), 0, "narrowed: interleaved: port 2 is 14:00.0");
+    /* Likewise with no read failure: port 1 tried first. */
+    inf_setup(1);
+    up(2);
+    usp_on(0x19);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_SEVERAL,
+             "narrowed: port 1 tried first refuses port 2's gain");
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_LEARNED,
+             "narrowed: port 2 learned after port 1's attempt");
+
+    /* The same at the start reading: not taken, then taken at the next
+     * reading. */
+    asmHost(1);
+    family_asm(1);
+    ioreset();
+    find(B(0x7A, 0, 0), XHCI_TBT_NO_BDF);
+    XhciTbtBindsInit(&binds);
+    up(1);
+    XhciTbtLearnAtStart(&binds, 1);
+    model.FailBdf = B(0x49, 0, 0);
+    model.FailOffset = XHCI_TBT_CFG_HEADER;
+    model.FailNth = 1;
+    model.FailSeen = 0;
+    arm();
+    CHECK(binds.Armed && !binds.StartTaken,
+          "narrowed: the start reading not taken on an unreadable shape");
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_NOT_GAINED,
+             "narrowed: port 1's next attempt reads again");
+    CHECK(binds.StartTaken && binds.StartOk && binds.StartOcc == 2,
+          "narrowed: the start reading taken and trusted then");
+
+    /* An unreadable shape of another member's function never holds up
+     * the rule for a port pending alone: port 1 at start, its member
+     * empty, the xHCI's member's header unreadable at every reading; port
+     * 1's far end then answering is learned as port 1's. */
+    inf_setup_xhci(0);
+    model.FailBdf = B(0x79, 0, 0);
+    model.FailOffset = XHCI_TBT_CFG_HEADER;
+    model.FailNth = 0;
+    XhciTbtBindsInit(&binds);
+    up(1);
+    XhciTbtLearnAtStart(&binds, 1);
+    arm();
+    CHECK(binds.Armed && !binds.StartTaken,
+          "narrowed: no start reading while the xHCI's shape is unreadable");
+    usp_on(0x49);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_LEARNED,
+             "narrowed: port 1 alone pending learned all the same");
+    CHECK_EQ(member(1), 1, "narrowed: port 1 is 14:01.0");
+    /* With port 2 pending too, the same unreadable shape holds the gain. */
+    inf_setup_xhci(0);
+    model.FailBdf = B(0x79, 0, 0);
+    model.FailOffset = XHCI_TBT_CFG_HEADER;
+    model.FailNth = 0;
+    XhciTbtBindsInit(&binds);
+    up(1);
+    XhciTbtLearnAtStart(&binds, 1);
+    arm();
+    up(2);
+    usp_on(0x19);
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_UNREAD,
+             "narrowed: port 2's gain held while no start reading is taken");
+    CHECK_EQ(binds.Count, 0, "narrowed: nothing entered while held");
+
+    /* A member another domain claims: refused. */
+    {
+        static const ULONG oneOff[2] = { 1, 0 };
+
+        inf_setup(1);
+        up(2);
+        usp_on(0x19);
+        CHECK_EQ(learn(2, oneOff), XHCI_TBT_MAP_SEVERAL,
+                 "narrowed: an inactive member refuses");
+    }
+}
+
+/*
+ * Record 22 section 7.6.4 (task 48.43): what a port pending alone may
+ * learn. A tunnel's far end (an Upstream Switch Port at device 0 alone)
+ * is learned; any other shape only on the link's evidence (its port read
+ * down with nothing behind it, up now); a function of the controller's
+ * own answering late is refused and nothing is bound; a shape or port
+ * that cannot be read is not consumed.
+ */
+static void test_alone(void)
+{
+    MODEL_FN *f;
+    ULONG over[1];
+
+    /* The ASM4242 with its own xHCI's port a member (the emulator's model),
+     * the xHCI not answering yet at the arm; port 2 plugged, pending
+     * alone; the xHCI answering during port 2's attempt is refused, and
+     * port 2's own far end then learned. */
+    inf_setup(0);
+    asm_xhci_member();
+    put16(mfind(B(0x79, 0, 0)), 0x00, 0xFFFF);
+    find(B(0x7A, 0, 0), XHCI_TBT_NO_BDF);
+    XhciTbtBindsInit(&binds);
+    CHECK_EQ(topo.Tunnels, 3, "alone: the xHCI's port a third member");
+    CHECK_EQ(arm(), 0, "alone: armed");
+    CHECK_EQ(binds.BaseDown, 3,
+             "alone: the tunnel ports down, the xHCI's port's link up");
+    up(2);
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_NOT_GAINED, "alone: nothing yet");
+    put16(mfind(B(0x79, 0, 0)), 0x00, 0x1B21);
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_SHAPE,
+             "alone: the xHCI answering late is refused");
+    CHECK(binds.Count == 0 && member(2) == XHCI_TBT_NO_MEMBER &&
+          binds.Pending == 2, "alone: nothing bound, port 2 still pending");
+    CHECK_EQ(binds.BaseSeen[2], 1, "alone: the xHCI's gain consumed");
+    usp_on(0x19);
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_LEARNED,
+             "alone: port 2's far end then learned");
+    CHECK_EQ(member(2), 0, "alone: port 2 is 14:00.0");
+
+    /* The reported case: port 1 found up at start, pending alone, its
+     * function not answering yet, the xHCI silent at the start reading;
+     * the xHCI answering during port 1's own attempt is never port 1's. */
+    inf_setup(0);
+    asm_xhci_member();
+    put16(mfind(B(0x79, 0, 0)), 0x00, 0xFFFF);
+    link_at(B(0x14, 1, 0), 1);
+    find(B(0x7A, 0, 0), XHCI_TBT_NO_BDF);
+    XhciTbtBindsInit(&binds);
+    up(1);
+    XhciTbtLearnAtStart(&binds, 1);
+    arm();
+    put16(mfind(B(0x79, 0, 0)), 0x00, 0x1B21);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_SHAPE,
+             "alone: at start, the xHCI not taken for port 1");
+    CHECK(binds.Count == 0 && binds.Pending == 1 && binds.AtStart == 1,
+          "alone: nothing bound, port 1 pending at start");
+    usp_on(0x49);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_LEARNED,
+             "alone: port 1's far end then learned");
+    CHECK_EQ(member(1), 1, "alone: port 1 is 14:01.0");
+
+    /* A real enclosure's far end needs no link evidence. */
+    inf_setup(0);
+    XhciTbtBindsInit(&binds);
+    arm();
+    up(2);
+    link_at(B(0x14, 0, 0), 1);
+    usp_on(0x19);
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_LEARNED, "alone: a far end learned");
+
+    /* A shape that cannot be read: not consumed, learned at the next
+     * attempt. */
+    inf_setup(0);
+    XhciTbtBindsInit(&binds);
+    arm();
+    up(2);
+    usp_on(0x19);
+    model.FailBdf = B(0x19, 0, 0);
+    model.FailOffset = XHCI_TBT_CFG_HEADER;
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_UNREAD,
+             "alone: the far end's shape unread");
+    CHECK_EQ(binds.BaseSeen[0], 0, "alone: the baseline kept");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_LEARNED, "alone: then learned");
+
+    /* A direct endpoint (the emulator's plain enclosure: its NVMe behind
+     * the tunnel port, no switch): learned on the link's evidence. */
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    over[0] = B(0, 5, 0);
+    findin(B(0, 4, 0), over, 1);
+    CHECK_EQ(arm(), 0, "direct: armed");
+    CHECK_EQ(binds.BaseDown, 1, "direct: the empty port read down");
+    up(1);
+    dev_on(1);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_LEARNED,
+             "direct: down, then up with the endpoint: learned");
+    CHECK_EQ(binds.BaseDown, 0, "direct: the evidence spent");
+
+    /* The endpoint's port unreadable at the gain: not consumed. */
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    findin(B(0, 4, 0), over, 1);
+    arm();
+    up(1);
+    dev_on(1);
+    model.FailBdf = B(0, 5, 0);
+    model.FailOffset = 0x40 + XHCI_TBT_PCIE_LINKSTA;
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_UNREAD,
+             "direct: the port unread at the gain");
+    CHECK(binds.BaseSeen[0] == 0 && binds.BaseDown == 1,
+          "direct: the baseline and the evidence kept");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_LEARNED, "direct: then learned");
+
+    /* A port reading that fails part-way keeps what it read whole: Link
+     * Active read inactive, then the Slot Status read failing, rejects
+     * the gain as the whole reading (DOWN) would; the port up later, the
+     * occupancy unchanged, learns nothing. */
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    findin(B(0, 4, 0), over, 1);
+    arm();
+    up(1);
+    dev_quiet(1);
+    model.FailBdf = B(0, 5, 0);
+    model.FailOffset = 0x40 + XHCI_TBT_PCIE_SLOTSTA;
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_SHAPE,
+             "direct: link inactive, then Slot Status failing: refused");
+    CHECK(binds.Count == 0 && binds.Pending == 1,
+          "direct: nothing bound, port 1 pending");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    port_up(mfind(B(0, 5, 0)), 1);
+    CHECK(learn(1, NULL) != XHCI_TBT_MAP_LEARNED && binds.Count == 0 &&
+          member(1) == XHCI_TBT_NO_MEMBER,
+          "direct: the port up later, the same endpoint, not learned");
+
+    /* An endpoint with no link change: refused, consumed, still pending. */
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    findin(B(0, 4, 0), over, 1);
+    arm();
+    up(1);
+    dev_quiet(1);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_SHAPE,
+             "direct: an endpoint with its port still down refused");
+    CHECK(binds.Count == 0 && binds.Pending == 1 && binds.BaseSeen[0] == 1,
+          "direct: nothing bound, consumed, port 1 pending");
+
+    /* The port's link up while nothing answered (no down reading): an
+     * endpoint answering later has no evidence. */
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    findin(B(0, 4, 0), over, 1);
+    port_up(mfind(B(0, 5, 0)), 1);
+    arm();
+    CHECK_EQ(binds.BaseDown, 0, "direct: up at the arm, no evidence");
+    up(1);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_NOT_GAINED, "direct: nothing yet");
+    CHECK_EQ(binds.BaseDown, 0, "direct: still none");
+    dev_quiet(1);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_SHAPE,
+             "direct: the late endpoint refused");
+
+    /* The evidence read at an attempt, and kept by location across a
+     * baseline taken again. */
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    findin(B(0, 4, 0), over, 1);
+    port_up(mfind(B(0, 5, 0)), 1);
+    arm();
+    up(1);
+    port_up(mfind(B(0, 5, 0)), 0);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_NOT_GAINED, "direct: down now");
+    CHECK_EQ(binds.BaseDown, 1, "direct: the evidence read at the attempt");
+    port_up(mfind(B(0, 5, 0)), 1);
+    CHECK_EQ(arm(), 0, "direct: armed again, the link up");
+    CHECK_EQ(binds.BaseDown, 1, "direct: the evidence kept by location");
+    dev_on(1);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_LEARNED, "direct: learned");
+
+    /* An arm that fails keeps the evidence: down, then the tunnel's link
+     * up with the endpoint silent, a re-arm failing on a read, a retry,
+     * then the endpoint learned. */
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    findin(B(0, 4, 0), over, 1);
+    CHECK_EQ(arm(), 0, "direct: armed, down");
+    CHECK_EQ(binds.BaseDown, 1, "direct: the evidence");
+    up(1);
+    port_up(mfind(B(0, 5, 0)), 1);
+    model.FailBdf = B(0, 5, 0);
+    model.FailOffset = XHCI_TBT_CFG_BUSES;
+    CHECK_EQ(arm(), XHCI_TBT_MAP_UNREAD, "direct: a re-arm failing");
+    CHECK(!binds.Armed && binds.BaseDown == 1,
+          "direct: not armed, the evidence kept");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    CHECK_EQ(arm(), 0, "direct: the retry armed, the link up");
+    CHECK_EQ(binds.BaseDown, 1, "direct: the evidence still kept");
+    dev_on(1);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_LEARNED,
+             "direct: the endpoint then learned");
+
+    /* A re-arm that reads A occupied and then fails on B spends A's
+     * evidence all the same: A read empty again with its link still up
+     * gives no new evidence, so A's endpoint answering again during
+     * another port's attempt is refused and nothing is bound. */
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    {
+        ULONG two[2];
+
+        two[0] = B(0, 5, 0);
+        two[1] = B(0, 6, 0);
+        findin(B(0, 4, 0), two, 2);
+    }
+    CHECK_EQ(arm(), 0, "spent: armed, both down");
+    CHECK_EQ(binds.BaseDown, 3, "spent: both carry the evidence");
+    dev_on(1);
+    model.FailBdf = B(0, 6, 0);
+    model.FailOffset = XHCI_TBT_CFG_BUSES;
+    CHECK_EQ(arm(), XHCI_TBT_MAP_UNREAD, "spent: A occupied, B unread");
+    CHECK_EQ(binds.BaseDown, 2, "spent: A's evidence spent, B's kept");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    put16(mfind(B(1, 0, 0)), 0x00, 0xFFFF);
+    port_up(mfind(B(0, 5, 0)), 1);
+    CHECK_EQ(arm(), 0, "spent: the retry, A empty with its link up");
+    CHECK_EQ(binds.BaseDown, 2, "spent: no evidence for A");
+    up(2);
+    dev_quiet(1);
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_SHAPE,
+             "spent: A's endpoint answering again is refused");
+    CHECK(binds.Count == 0 && member(2) == XHCI_TBT_NO_MEMBER,
+          "spent: nothing bound");
+
+    /* The same through an ordinary attempt: A answers (its link up), the
+     * attempt fails on B and ends before the baseline moves, so A's
+     * evidence is only held; A empty again at a complete reading spends
+     * it, and A answering again with its link still up is refused. */
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    {
+        ULONG two[2];
+
+        two[0] = B(0, 5, 0);
+        two[1] = B(0, 6, 0);
+        findin(B(0, 4, 0), two, 2);
+    }
+    CHECK_EQ(arm(), 0, "held: armed, both down");
+    up(1);
+    port_up(mfind(B(0, 5, 0)), 1);
+    dev_quiet(1);
+    model.FailBdf = B(0, 6, 0);
+    model.FailOffset = XHCI_TBT_CFG_BUSES;
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_UNREAD, "held: B unread");
+    CHECK(binds.BaseHeld == 1 && binds.BaseDown == 3,
+          "held: A's evidence held, not spent yet");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    put16(mfind(B(1, 0, 0)), 0x00, 0xFFFF);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_NOT_GAINED,
+             "held: A empty again, its link up");
+    CHECK(binds.BaseHeld == 0 && binds.BaseDown == 2,
+          "held: A's evidence spent");
+    put16(mfind(B(1, 0, 0)), 0x00, 0x144D);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_SHAPE,
+             "held: A answering again refused");
+    CHECK(binds.Count == 0 && member(1) == XHCI_TBT_NO_MEMBER,
+          "held: nothing bound");
+
+    /* Held evidence spent the moment its member reads empty, though
+     * another member fails at the same attempt: A answers while B fails,
+     * A empty while B still fails, then A answers again with B back. */
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    {
+        ULONG two[2];
+
+        two[0] = B(0, 5, 0);
+        two[1] = B(0, 6, 0);
+        findin(B(0, 4, 0), two, 2);
+    }
+    arm();
+    up(1);
+    port_up(mfind(B(0, 5, 0)), 1);
+    dev_quiet(1);
+    model.FailBdf = B(0, 6, 0);
+    model.FailOffset = XHCI_TBT_CFG_BUSES;
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_UNREAD, "gap: A answers, B unread");
+    put16(mfind(B(1, 0, 0)), 0x00, 0xFFFF);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_UNREAD,
+             "gap: A empty, B still unread");
+    CHECK(binds.BaseDown == 2 && binds.BaseHeld == 0,
+          "gap: A's held evidence spent at once");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    put16(mfind(B(1, 0, 0)), 0x00, 0x144D);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_SHAPE,
+             "gap: A answering again refused");
+    CHECK_EQ(binds.Count, 0, "gap: nothing bound");
+
+    /* A device seen in a member's scan that then fails counts: at an arm
+     * it spends the evidence, at an attempt it holds it. */
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    {
+        ULONG two[2];
+
+        two[0] = B(0, 5, 0);
+        two[1] = B(0, 6, 0);
+        findin(B(0, 4, 0), two, 2);
+    }
+    arm();
+    port_up(mfind(B(0, 5, 0)), 1);
+    dev_quiet(1);
+    model.FailBdf = B(1, 1, 0);
+    model.FailOffset = XHCI_TBT_CFG_ID;
+    CHECK_EQ(arm(), XHCI_TBT_MAP_UNREAD,
+             "scan: A's device 0 answers, device 1 unread");
+    CHECK_EQ(binds.BaseDown, 2, "scan: the arm spent A's evidence");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    put16(mfind(B(1, 0, 0)), 0x00, 0xFFFF);
+    CHECK_EQ(arm(), 0, "scan: armed, A empty with its link up");
+    CHECK_EQ(binds.BaseDown, 2, "scan: no evidence for A");
+    up(1);
+    put16(mfind(B(1, 0, 0)), 0x00, 0x144D);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_SHAPE,
+             "scan: A's endpoint refused");
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    {
+        ULONG two[2];
+
+        two[0] = B(0, 5, 0);
+        two[1] = B(0, 6, 0);
+        findin(B(0, 4, 0), two, 2);
+    }
+    arm();
+    up(1);
+    port_up(mfind(B(0, 5, 0)), 1);
+    dev_quiet(1);
+    model.FailBdf = B(1, 1, 0);
+    model.FailOffset = XHCI_TBT_CFG_ID;
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_UNREAD,
+             "scan: at an attempt, device 1 unread");
+    CHECK_EQ(binds.BaseDown, 2,
+             "scan: a gain on a scan that failed spends A's evidence");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_SHAPE,
+             "scan: the endpoint then refused (the recorded cost)");
+
+    /* A gain seen at an attempt that fails on another member, rejected
+     * outright (its port still down): spent, so the link coming up later
+     * never admits it. A gain whose port reads up there is held and then
+     * learned. */
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    {
+        ULONG two[2];
+
+        two[0] = B(0, 5, 0);
+        two[1] = B(0, 6, 0);
+        findin(B(0, 4, 0), two, 2);
+    }
+    arm();
+    up(1);
+    dev_quiet(1);
+    model.FailBdf = B(0, 6, 0);
+    model.FailOffset = XHCI_TBT_CFG_BUSES;
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_UNREAD,
+             "reject: A gains, port down, B unread");
+    CHECK_EQ(binds.BaseDown, 2, "reject: A's evidence spent");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    port_up(mfind(B(0, 5, 0)), 1);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_SHAPE,
+             "reject: the link up later admits nothing");
+    CHECK_EQ(binds.Count, 0, "reject: nothing bound");
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    {
+        ULONG two[2];
+
+        two[0] = B(0, 5, 0);
+        two[1] = B(0, 6, 0);
+        findin(B(0, 4, 0), two, 2);
+    }
+    arm();
+    up(1);
+    dev_on(1);
+    model.FailBdf = B(0, 6, 0);
+    model.FailOffset = XHCI_TBT_CFG_BUSES;
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_UNREAD,
+             "reject: A gains with its link up, B unread");
+    CHECK(binds.BaseDown == 3 && binds.BaseHeld == 1,
+          "reject: A's evidence held");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_LEARNED, "reject: then learned");
+
+    /* Held evidence behind a member scan that fails is spent: A gains
+     * with its link up while B is unread (held); then A's device 0 reads
+     * absent and device 1 fails; A answering again is refused. */
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    {
+        ULONG two[2];
+
+        two[0] = B(0, 5, 0);
+        two[1] = B(0, 6, 0);
+        findin(B(0, 4, 0), two, 2);
+    }
+    arm();
+    up(1);
+    dev_on(1);
+    model.FailBdf = B(0, 6, 0);
+    model.FailOffset = XHCI_TBT_CFG_BUSES;
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_UNREAD, "hidden: A held");
+    CHECK_EQ(binds.BaseHeld, 1, "hidden: A's evidence held");
+    put16(mfind(B(1, 0, 0)), 0x00, 0xFFFF);
+    model.FailBdf = B(1, 1, 0);
+    model.FailOffset = XHCI_TBT_CFG_ID;
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_UNREAD,
+             "hidden: A's device 0 absent, device 1 unread");
+    CHECK(binds.BaseHeld == 0 && (binds.BaseDown & 1) == 0,
+          "hidden: A's evidence spent");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    put16(mfind(B(1, 0, 0)), 0x00, 0x144D);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_SHAPE,
+             "hidden: A answering again refused");
+    CHECK_EQ(binds.Count, 0, "hidden: nothing bound");
+    /* The same at an arm. */
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    {
+        ULONG two[2];
+
+        two[0] = B(0, 5, 0);
+        two[1] = B(0, 6, 0);
+        findin(B(0, 4, 0), two, 2);
+    }
+    arm();
+    up(1);
+    dev_on(1);
+    model.FailBdf = B(0, 6, 0);
+    model.FailOffset = XHCI_TBT_CFG_BUSES;
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_UNREAD, "hidden arm: A held");
+    put16(mfind(B(1, 0, 0)), 0x00, 0xFFFF);
+    model.FailBdf = B(1, 1, 0);
+    model.FailOffset = XHCI_TBT_CFG_ID;
+    CHECK_EQ(arm(), XHCI_TBT_MAP_UNREAD,
+             "hidden arm: A's device 1 unread");
+    CHECK(binds.BaseHeld == 0 && (binds.BaseDown & 1) == 0,
+          "hidden arm: A's evidence spent");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    CHECK_EQ(arm(), 0, "hidden arm: armed, A empty with its link up");
+    CHECK_EQ(binds.BaseDown & 1, 0, "hidden arm: no evidence for A");
+    put16(mfind(B(1, 0, 0)), 0x00, 0x144D);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_SHAPE,
+             "hidden arm: A answering again refused");
+
+    /* The emulator's i440FX SHPC tunnel bridge, its NVMe at 01:01.0: the
+     * slot is read only through an accessor that can write DWORD Select;
+     * the driver's learning reads with none, so there is no evidence and
+     * the endpoint is refused; with one, learned. */
+    mreset();
+    ioreset();
+    mdev(0, 4, 0, 0x1B36, 0x00F4, 0x0C0340UL);
+    f = mbridge(0, 5, 0, 0x1B36, 0x0001, 1, 1);
+    mshpc(f, 0x48, 31, 0);
+    mslotid(f, 0x40);
+    CHECK_EQ(find(B(0, 4, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_SET,
+             "shpc: the SHPC bridge a member");
+    XhciTbtBindsInit(&binds);
+    io.Write = NULL;
+    arm();
+    CHECK_EQ(binds.BaseDown, 0, "shpc: no write, no slot reading");
+    up(1);
+    dev_at(1, 1, 1);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_SHAPE,
+             "shpc: no evidence, the endpoint refused");
+    dev_at(1, 1, 0);
+    ioreset();
+    XhciTbtBindsInit(&binds);
+    arm();
+    CHECK_EQ(binds.BaseDown, 1, "shpc: the slot read empty");
+    up(1);
+    dev_at(1, 1, 1);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_LEARNED,
+             "shpc: the card in the slot, learned");
+    CHECK_EQ(model.StrayWrites, 0, "shpc: DWORD Select alone written");
+}
+
 int main(void)
 {
     test_decoders();
@@ -3142,6 +4905,10 @@ int main(void)
     test_chain_ports();
     test_chain_owed();
     test_chain_port_test();
+    test_chain_bind();
+    test_infer();
+    test_narrowed();
+    test_alone();
     printf("test_tbt_topo: %d checks, %d failures\n", checks, failures);
     return failures;
 }

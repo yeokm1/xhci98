@@ -74,11 +74,11 @@ cl /nologo /W3 /WX /O2 /DXHCI_HOST_TEST /c /Fotr_psw.obj ..\src\xhci_psw.c
 if errorlevel 1 exit /b 1
 cl /nologo /W3 /WX /O2 /DXHCI_HOST_TEST /c /Fotr_pirq.obj ..\src\xhci_pirq.c
 if errorlevel 1 exit /b 1
-cl /nologo /W3 /WX /O2 /FeXHCITR.EXE xhcitr.c tr_core.c tr_set.c tr_red.c tr_log.c tr_pci.c tr_diag.c tr_acpi.c tr_pop.c tr_popw.c tr_snap.c ..\xhciinst\inst_core.c ..\xhciinst\inst_silent.c ..\xhciinst\inst_ej9x.c ..\xhcimark\mark_core.c tr_psw.obj tr_pirq.obj xhcitr.res %LIBS% /link /SUBSYSTEM:WINDOWS,4.0
+cl /nologo /W3 /WX /O2 /FeXHCITR.EXE xhcitr.c tr_core.c tr_set.c tr_red.c tr_log.c tr_pci.c tr_net.c tr_netw.c tr_diag.c tr_acpi.c tr_pop.c tr_popw.c tr_snap.c ..\xhciinst\inst_core.c ..\xhciinst\inst_silent.c ..\xhciinst\inst_ej9x.c ..\xhcimark\mark_core.c tr_psw.obj tr_pirq.obj xhcitr.res %LIBS% /link /SUBSYSTEM:WINDOWS,4.0
 if errorlevel 1 exit /b 1
 if not exist XHCITR.EXE exit /b 1
 endlocal
-del /q xhcitr.obj tr_core.obj tr_set.obj tr_red.obj tr_log.obj tr_pci.obj tr_diag.obj tr_acpi.obj tr_pop.obj tr_popw.obj tr_snap.obj inst_core.obj inst_silent.obj inst_ej9x.obj mark_core.obj tr_psw.obj tr_pirq.obj xhcitr.res 2>nul
+del /q xhcitr.obj tr_core.obj tr_set.obj tr_red.obj tr_log.obj tr_pci.obj tr_net.obj tr_netw.obj tr_diag.obj tr_acpi.obj tr_pop.obj tr_popw.obj tr_snap.obj inst_core.obj inst_silent.obj inst_ej9x.obj mark_core.obj tr_psw.obj tr_pirq.obj xhcitr.res 2>nul
 echo Built XHCITR.EXE
 
 if "%WANT64%"=="0" goto done
@@ -94,11 +94,11 @@ cl /nologo /W3 /WX /O2 /MT /DXHCI_HOST_TEST /c /Fotr_psw.obj ..\src\xhci_psw.c
 if errorlevel 1 exit /b 1
 cl /nologo /W3 /WX /O2 /MT /DXHCI_HOST_TEST /c /Fotr_pirq.obj ..\src\xhci_pirq.c
 if errorlevel 1 exit /b 1
-cl /nologo /W3 /WX /O2 /MT /FeXHCITR64.EXE xhcitr.c tr_core.c tr_set.c tr_red.c tr_log.c tr_pci.c tr_diag.c tr_acpi.c tr_pop.c tr_popw.c tr_snap.c ..\xhciinst\inst_core.c ..\xhciinst\inst_silent.c ..\xhciinst\inst_ej9x.c ..\xhcimark\mark_core.c tr_psw.obj tr_pirq.obj xhcitr64.res %LIBS% /link /SUBSYSTEM:WINDOWS,5.02 /MACHINE:X64
+cl /nologo /W3 /WX /O2 /MT /FeXHCITR64.EXE xhcitr.c tr_core.c tr_set.c tr_red.c tr_log.c tr_pci.c tr_net.c tr_netw.c tr_diag.c tr_acpi.c tr_pop.c tr_popw.c tr_snap.c ..\xhciinst\inst_core.c ..\xhciinst\inst_silent.c ..\xhciinst\inst_ej9x.c ..\xhcimark\mark_core.c tr_psw.obj tr_pirq.obj xhcitr64.res %LIBS% /link /SUBSYSTEM:WINDOWS,5.02 /MACHINE:X64
 if errorlevel 1 exit /b 1
 if not exist XHCITR64.EXE exit /b 1
 endlocal
-del /q xhcitr.obj tr_core.obj tr_set.obj tr_red.obj tr_log.obj tr_pci.obj tr_diag.obj tr_acpi.obj tr_pop.obj tr_popw.obj tr_snap.obj inst_core.obj inst_silent.obj inst_ej9x.obj mark_core.obj tr_psw.obj tr_pirq.obj xhcitr64.res 2>nul
+del /q xhcitr.obj tr_core.obj tr_set.obj tr_red.obj tr_log.obj tr_pci.obj tr_net.obj tr_netw.obj tr_diag.obj tr_acpi.obj tr_pop.obj tr_popw.obj tr_snap.obj inst_core.obj inst_silent.obj inst_ej9x.obj mark_core.obj tr_psw.obj tr_pirq.obj xhcitr64.res 2>nul
 echo Built XHCITR64.EXE
 
 :done

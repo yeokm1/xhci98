@@ -155,8 +155,9 @@ On 98 SE and ME, install Thunderbolt networking through `SETUP.EXE`. A manual Ha
 
 ### Things to know
 
-- Before standby or hibernation, stop and unplug every Thunderbolt or USB4 device. Standby with one attached is not supported.
+- Standby and hibernation with a Thunderbolt or USB4 drive attached are supported on Windows 2000 and later. On Windows 98 SE and ME, stop and unplug the drive first. On a computer whose firmware does not restore the Thunderbolt or USB4 connection at resume, stop the drive before standby or hibernation.
 - 98 SE and ME: a device plugged in after the start needs an interrupt from the BIOS (the P14s Gen 1 gives one). If it stays at Code 29, attach it at power-on with pre-boot support on. An NVMe drive on the bundled Stor98, installed or staged by `SETUP.EXE`, is the exception. It can start without one with Stor98 polling it (`XhciCmNoIrqStart`, on by default).
+- 98 SE and ME: a Thunderbolt dock's second and further USB controllers, which Windows leaves at Code 29 for want of an interrupt, now start without one, `xhci98.sys` polling them (`XhciCmNoIrqStart`), from the dock's first plug.
 - 98 SE and ME: the Thunderbolt driver stays loaded until a restart, so a disable, update or removal takes effect after one.
 - Settings: [Tuning](#tuning) if you want to see what settings are available.
 
@@ -348,7 +349,9 @@ The release notes' [Known limitations](docs/using/release-notes.md#known-limitat
 - **Windows 8, 8.1 and 10**
   - Secure Boot must be off, and the x64 editions need test-signing mode.
 - **Thunderbolt and USB4**
-  - Standby and hibernation with a device attached are not supported. Stop and unplug the device first.
+  - Standby and hibernation with a Thunderbolt or USB4 drive attached are supported on Windows 2000 and later. On Windows 98 SE and ME, stop and unplug the drive first. On a computer whose firmware does not restore the Thunderbolt or USB4 connection at resume, stop the drive before standby or hibernation.
+  - Windows ME (and rarely 98 SE): with a Thunderbolt dock or chain attached at power-on, the first start after the install can stop with a fatal exception 0E. Setting `XhciCmReenum` to `0` avoids it, at the cost of no automatic re-enumeration on 9x.
+  - Windows 2000: the first time a Thunderbolt dock is plugged in, Windows asks to restart for each of its PCI bridges; until the restart some of the dock's devices do not start.
   - Windows 2000 to 7 with a TB/USB4 host: ejecting a dock, or an enclosure with its own PCIe switch, stops it safely, but its connection stays up until you physically disconnect it.
   - A dual-mode NVMe enclosure (TB/USB4, and USB) may come up as a USB (UAS) disk instead. Unplug it and plug it in again to get the Thunderbolt or USB4 connection.
   - Stop a dock before unplugging it when a keyboard, mouse, tablet or similar device is on the dock's own USB controller.

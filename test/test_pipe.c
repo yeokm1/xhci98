@@ -28,6 +28,20 @@
 #include "../src/xhci_pipe.h"
 #include "test_harness.h"
 
+/* Kernel32's page calls, declared here: <windows.h> does not compile under
+ * the runner's /Za, and these are all the guard-page vector needs. */
+#define TP_MEM_COMMIT     0x00001000UL
+#define TP_MEM_RESERVE    0x00002000UL
+#define TP_MEM_RELEASE    0x00008000UL
+#define TP_PAGE_NOACCESS  0x01UL
+#define TP_PAGE_READWRITE 0x04UL
+__declspec(dllimport) void *__stdcall VirtualAlloc(void *address,
+                                                   size_t size,
+                                                   unsigned long type,
+                                                   unsigned long protect);
+__declspec(dllimport) int __stdcall VirtualFree(void *address, size_t size,
+                                                unsigned long type);
+
 /* ------------------------------------------------------------------ */
 /* Endpoint parameters                                                  */
 /* ------------------------------------------------------------------ */
@@ -254,99 +268,140 @@ static ULONG mps_status(ULONG attributes, ULONG wMaxPacketSize, ULONG speed)
     return ep_params(0x81, attributes, wMaxPacketSize, 1, speed, &ep);
 }
 
+/*
+ * One endpoint descriptor against the speed's table (task 48.21): accepted,
+ * the programmed size and the kind (XHCI_PIPE_MPS_*), the declared size
+ * kept in MpsDeclared.
+ */
+static void mps_case(ULONG attributes, ULONG wMaxPacketSize, ULONG speed,
+                     ULONG programmed, ULONG kind, const char *what)
+{
+    XHCI_PIPE_EP ep;
+
+    ep.MaxPacketSize = 0xEEEE;
+    ep.MpsOutside = 0xEEEE;
+    ep.MpsDeclared = 0xEEEE;
+    CHECK_EQ(ep_params(0x81, attributes, wMaxPacketSize, 1, speed, &ep),
+             XHCI_PIPE_OK, what);
+    CHECK_EQ(ep.MaxPacketSize, programmed, what);
+    CHECK_EQ(ep.MpsOutside, kind, what);
+    CHECK_EQ(ep.MpsDeclared, wMaxPacketSize & 0x07FFUL, what);
+}
+
 static void test_mps_limits(void)
 {
     XHCI_PIPE_EP ep;
 
-    /* USB 2.0 5.7.3: LS interrupt at most 8, FS interrupt at most 64. */
-    CHECK_EQ(mps_status(0x03, 8, XHCI_PIPE_SPEED_LOW), XHCI_PIPE_OK,
+    /* USB 2.0 5.7.3: LS interrupt at most 8, FS interrupt at most 64;
+     * above it the maximum, said so. */
+    mps_case(0x03, 8, XHCI_PIPE_SPEED_LOW, 8, XHCI_PIPE_MPS_LISTED,
              "LS interrupt 8");
-    CHECK_EQ(mps_status(0x03, 9, XHCI_PIPE_SPEED_LOW), XHCI_PIPE_MALFORMED,
-             "LS interrupt 9");
-    CHECK_EQ(mps_status(0x03, 64, XHCI_PIPE_SPEED_FULL), XHCI_PIPE_OK,
+    mps_case(0x03, 1, XHCI_PIPE_SPEED_LOW, 1, XHCI_PIPE_MPS_LISTED,
+             "LS interrupt 1");
+    mps_case(0x03, 9, XHCI_PIPE_SPEED_LOW, 8, XHCI_PIPE_MPS_CLAMPED,
+             "LS interrupt 9: programmed 8");
+    mps_case(0x03, 64, XHCI_PIPE_SPEED_LOW, 8, XHCI_PIPE_MPS_CLAMPED,
+             "LS interrupt 64: programmed 8");
+    mps_case(0x03, 64, XHCI_PIPE_SPEED_FULL, 64, XHCI_PIPE_MPS_LISTED,
              "FS interrupt 64");
-    CHECK_EQ(mps_status(0x03, 65, XHCI_PIPE_SPEED_FULL), XHCI_PIPE_MALFORMED,
-             "FS interrupt 65");
+    mps_case(0x03, 65, XHCI_PIPE_SPEED_FULL, 64, XHCI_PIPE_MPS_CLAMPED,
+             "FS interrupt 65: programmed 64");
+    mps_case(0x03, 2047, XHCI_PIPE_SPEED_FULL, 64, XHCI_PIPE_MPS_CLAMPED,
+             "FS interrupt 2047: programmed 64");
 
-    /* 5.8.3: FS bulk is exactly 8, 16, 32 or 64. */
-    CHECK_EQ(mps_status(0x02, 8, XHCI_PIPE_SPEED_FULL), XHCI_PIPE_OK,
+    /* 5.8.3: FS bulk is exactly 8, 16, 32 or 64; another size under 64
+     * as declared, above it 64. */
+    mps_case(0x02, 8, XHCI_PIPE_SPEED_FULL, 8, XHCI_PIPE_MPS_LISTED,
              "FS bulk 8");
-    CHECK_EQ(mps_status(0x02, 16, XHCI_PIPE_SPEED_FULL), XHCI_PIPE_OK,
+    mps_case(0x02, 16, XHCI_PIPE_SPEED_FULL, 16, XHCI_PIPE_MPS_LISTED,
              "FS bulk 16");
-    CHECK_EQ(mps_status(0x02, 32, XHCI_PIPE_SPEED_FULL), XHCI_PIPE_OK,
+    mps_case(0x02, 32, XHCI_PIPE_SPEED_FULL, 32, XHCI_PIPE_MPS_LISTED,
              "FS bulk 32");
-    CHECK_EQ(mps_status(0x02, 64, XHCI_PIPE_SPEED_FULL), XHCI_PIPE_OK,
+    mps_case(0x02, 64, XHCI_PIPE_SPEED_FULL, 64, XHCI_PIPE_MPS_LISTED,
              "FS bulk 64");
-    CHECK_EQ(mps_status(0x02, 7, XHCI_PIPE_SPEED_FULL), XHCI_PIPE_MALFORMED,
-             "FS bulk 7");
-    CHECK_EQ(mps_status(0x02, 9, XHCI_PIPE_SPEED_FULL), XHCI_PIPE_MALFORMED,
-             "FS bulk 9");
-    CHECK_EQ(mps_status(0x02, 24, XHCI_PIPE_SPEED_FULL), XHCI_PIPE_MALFORMED,
+    mps_case(0x02, 7, XHCI_PIPE_SPEED_FULL, 7, XHCI_PIPE_MPS_UNLISTED,
+             "FS bulk 7: as declared");
+    mps_case(0x02, 9, XHCI_PIPE_SPEED_FULL, 9, XHCI_PIPE_MPS_UNLISTED,
+             "FS bulk 9: as declared");
+    mps_case(0x02, 24, XHCI_PIPE_SPEED_FULL, 24, XHCI_PIPE_MPS_UNLISTED,
              "FS bulk 24, inside the range but not a listed size");
-    CHECK_EQ(mps_status(0x02, 63, XHCI_PIPE_SPEED_FULL), XHCI_PIPE_MALFORMED,
-             "FS bulk 63");
-    CHECK_EQ(mps_status(0x02, 65, XHCI_PIPE_SPEED_FULL), XHCI_PIPE_MALFORMED,
-             "FS bulk 65");
-    CHECK_EQ(mps_status(0x02, 512, XHCI_PIPE_SPEED_FULL), XHCI_PIPE_MALFORMED,
-             "FS bulk 512, the HS size");
+    mps_case(0x02, 63, XHCI_PIPE_SPEED_FULL, 63, XHCI_PIPE_MPS_UNLISTED,
+             "FS bulk 63: as declared");
+    mps_case(0x02, 65, XHCI_PIPE_SPEED_FULL, 64, XHCI_PIPE_MPS_CLAMPED,
+             "FS bulk 65: programmed 64");
+    mps_case(0x02, 512, XHCI_PIPE_SPEED_FULL, 64, XHCI_PIPE_MPS_CLAMPED,
+             "FS bulk 512, the HS size: programmed 64");
 
     /* 5.6.3: FS isochronous at most 1023. */
-    CHECK_EQ(mps_status(0x01, 1023, XHCI_PIPE_SPEED_FULL), XHCI_PIPE_OK,
+    mps_case(0x01, 1023, XHCI_PIPE_SPEED_FULL, 1023, XHCI_PIPE_MPS_LISTED,
              "FS isoch 1023");
-    CHECK_EQ(mps_status(0x01, 1024, XHCI_PIPE_SPEED_FULL), XHCI_PIPE_MALFORMED,
-             "FS isoch 1024");
+    mps_case(0x01, 1024, XHCI_PIPE_SPEED_FULL, 1023, XHCI_PIPE_MPS_CLAMPED,
+             "FS isoch 1024: programmed 1023");
+    CHECK_EQ(ep_params(0x81, 0x01, 1024, 1, XHCI_PIPE_SPEED_FULL, &ep),
+             XHCI_PIPE_OK, "FS isoch 1024 again");
+    CHECK_EQ(ep.MaxEsitPayload, 1023,
+             "Max ESIT Payload from the programmed size");
 
     /* 5.8.3: HS bulk is exactly 512. */
-    CHECK_EQ(mps_status(0x02, 512, XHCI_PIPE_SPEED_HIGH), XHCI_PIPE_OK,
+    mps_case(0x02, 512, XHCI_PIPE_SPEED_HIGH, 512, XHCI_PIPE_MPS_LISTED,
              "HS bulk 512");
-    CHECK_EQ(mps_status(0x02, 511, XHCI_PIPE_SPEED_HIGH), XHCI_PIPE_MALFORMED,
-             "HS bulk 511");
-    CHECK_EQ(mps_status(0x02, 513, XHCI_PIPE_SPEED_HIGH), XHCI_PIPE_MALFORMED,
-             "HS bulk 513");
-    CHECK_EQ(mps_status(0x02, 64, XHCI_PIPE_SPEED_HIGH), XHCI_PIPE_MALFORMED,
-             "HS bulk 64, the FS size");
-    CHECK_EQ(mps_status(0x02, 0x0800 | 512, XHCI_PIPE_SPEED_HIGH),
-             XHCI_PIPE_OK, "HS bulk 512 with 12:11 set: bits not read");
+    mps_case(0x02, 511, XHCI_PIPE_SPEED_HIGH, 511, XHCI_PIPE_MPS_UNLISTED,
+             "HS bulk 511: as declared");
+    mps_case(0x02, 513, XHCI_PIPE_SPEED_HIGH, 512, XHCI_PIPE_MPS_CLAMPED,
+             "HS bulk 513: programmed 512");
+    mps_case(0x02, 64, XHCI_PIPE_SPEED_HIGH, 64, XHCI_PIPE_MPS_UNLISTED,
+             "HS bulk 64, the FS size: as declared");
+    mps_case(0x02, 1024, XHCI_PIPE_SPEED_HIGH, 512, XHCI_PIPE_MPS_CLAMPED,
+             "HS bulk 1024, the SS size: programmed 512");
+    mps_case(0x02, 0x0800 | 512, XHCI_PIPE_SPEED_HIGH, 512,
+             XHCI_PIPE_MPS_LISTED, "HS bulk 512 with 12:11 set: bits not read");
 
     /* Table 9-14, HS interrupt: 12:11 = 0 -> 1-1024; 1 -> 513-1024;
-     * 2 -> 683-1024. */
-    CHECK_EQ(mps_status(0x03, 1, XHCI_PIPE_SPEED_HIGH), XHCI_PIPE_OK,
+     * 2 -> 683-1024. Under the range as declared, above 1024 1024. */
+    mps_case(0x03, 1, XHCI_PIPE_SPEED_HIGH, 1, XHCI_PIPE_MPS_LISTED,
              "HS interrupt 1, one transaction");
-    CHECK_EQ(mps_status(0x03, 0x0800 | 513, XHCI_PIPE_SPEED_HIGH),
-             XHCI_PIPE_OK, "HS interrupt 513, two transactions");
-    CHECK_EQ(mps_status(0x03, 0x0800 | 512, XHCI_PIPE_SPEED_HIGH),
-             XHCI_PIPE_MALFORMED, "HS interrupt 512, two transactions");
-    CHECK_EQ(mps_status(0x03, 0x0800 | 1024, XHCI_PIPE_SPEED_HIGH),
-             XHCI_PIPE_OK, "HS interrupt 1024, two transactions");
-    CHECK_EQ(mps_status(0x03, 0x0800 | 1025, XHCI_PIPE_SPEED_HIGH),
-             XHCI_PIPE_MALFORMED, "HS interrupt 1025, two transactions");
-    CHECK_EQ(mps_status(0x03, 0x1000 | 683, XHCI_PIPE_SPEED_HIGH),
-             XHCI_PIPE_OK, "HS interrupt 683, three transactions");
-    CHECK_EQ(mps_status(0x03, 0x1000 | 682, XHCI_PIPE_SPEED_HIGH),
-             XHCI_PIPE_MALFORMED, "HS interrupt 682, three transactions");
+    mps_case(0x03, 0x0800 | 513, XHCI_PIPE_SPEED_HIGH, 513,
+             XHCI_PIPE_MPS_LISTED, "HS interrupt 513, two transactions");
+    mps_case(0x03, 0x0800 | 512, XHCI_PIPE_SPEED_HIGH, 512,
+             XHCI_PIPE_MPS_UNLISTED, "HS interrupt 512, two transactions");
+    mps_case(0x03, 0x0800 | 1024, XHCI_PIPE_SPEED_HIGH, 1024,
+             XHCI_PIPE_MPS_LISTED, "HS interrupt 1024, two transactions");
+    mps_case(0x03, 0x0800 | 1025, XHCI_PIPE_SPEED_HIGH, 1024,
+             XHCI_PIPE_MPS_CLAMPED, "HS interrupt 1025, two transactions");
+    mps_case(0x03, 0x1000 | 683, XHCI_PIPE_SPEED_HIGH, 683,
+             XHCI_PIPE_MPS_LISTED, "HS interrupt 683, three transactions");
+    mps_case(0x03, 0x1000 | 682, XHCI_PIPE_SPEED_HIGH, 682,
+             XHCI_PIPE_MPS_UNLISTED, "HS interrupt 682, three transactions");
+    CHECK_EQ(ep_params(0x81, 0x03, 0x1000 | 682, 1, XHCI_PIPE_SPEED_HIGH,
+                       &ep),
+             XHCI_PIPE_OK, "HS interrupt 682 x 3 again");
+    CHECK_EQ(ep.MaxBurstSize, 2, "the transactions kept");
+    CHECK_EQ(ep.MaxEsitPayload, 682 * 3, "ESIT from the declared size");
     CHECK_EQ(mps_status(0x03, 0x1800 | 1024, XHCI_PIPE_SPEED_HIGH),
              XHCI_PIPE_MALFORMED, "HS interrupt 12:11 = 3");
 
     /* The same table for HS isochronous. */
-    CHECK_EQ(mps_status(0x05, 1024, XHCI_PIPE_SPEED_HIGH), XHCI_PIPE_OK,
+    mps_case(0x05, 1024, XHCI_PIPE_SPEED_HIGH, 1024, XHCI_PIPE_MPS_LISTED,
              "HS isoch 1024, one transaction");
-    CHECK_EQ(mps_status(0x05, 1, XHCI_PIPE_SPEED_HIGH), XHCI_PIPE_OK,
+    mps_case(0x05, 1, XHCI_PIPE_SPEED_HIGH, 1, XHCI_PIPE_MPS_LISTED,
              "HS isoch 1, one transaction");
-    CHECK_EQ(mps_status(0x05, 0x0800 | 513, XHCI_PIPE_SPEED_HIGH),
-             XHCI_PIPE_OK, "HS isoch 513, two transactions");
-    CHECK_EQ(mps_status(0x05, 0x0800 | 512, XHCI_PIPE_SPEED_HIGH),
-             XHCI_PIPE_MALFORMED, "HS isoch 512, two transactions");
-    CHECK_EQ(mps_status(0x05, 0x1000 | 683, XHCI_PIPE_SPEED_HIGH),
-             XHCI_PIPE_OK, "HS isoch 683, three transactions");
-    CHECK_EQ(mps_status(0x05, 0x1000 | 682, XHCI_PIPE_SPEED_HIGH),
-             XHCI_PIPE_MALFORMED, "HS isoch 682, three transactions");
+    mps_case(0x05, 1025, XHCI_PIPE_SPEED_HIGH, 1024, XHCI_PIPE_MPS_CLAMPED,
+             "HS isoch 1025: programmed 1024");
+    mps_case(0x05, 0x0800 | 513, XHCI_PIPE_SPEED_HIGH, 513,
+             XHCI_PIPE_MPS_LISTED, "HS isoch 513, two transactions");
+    mps_case(0x05, 0x0800 | 512, XHCI_PIPE_SPEED_HIGH, 512,
+             XHCI_PIPE_MPS_UNLISTED, "HS isoch 512, two transactions");
+    mps_case(0x05, 0x1000 | 683, XHCI_PIPE_SPEED_HIGH, 683,
+             XHCI_PIPE_MPS_LISTED, "HS isoch 683, three transactions");
+    mps_case(0x05, 0x1000 | 682, XHCI_PIPE_SPEED_HIGH, 682,
+             XHCI_PIPE_MPS_UNLISTED, "HS isoch 682, three transactions");
     CHECK_EQ(mps_status(0x05, 0x1800 | 1024, XHCI_PIPE_SPEED_HIGH),
              XHCI_PIPE_MALFORMED, "HS isoch 12:11 = 3");
 
-    /* A size refusal writes nothing either. */
+    /* A refusal still writes nothing. */
     ep.Dci = 0xEEEE;
-    CHECK_EQ(ep_params(0x02, 0x02, 64, 0, XHCI_PIPE_SPEED_HIGH, &ep),
-             XHCI_PIPE_MALFORMED, "HS bulk 64 again");
+    CHECK_EQ(ep_params(0x02, 0x02, 0, 0, XHCI_PIPE_SPEED_HIGH, &ep),
+             XHCI_PIPE_MALFORMED, "HS bulk 0");
     CHECK_EQ(ep.Dci, 0xEEEE, "nothing written on a size refusal");
 }
 
@@ -374,7 +429,8 @@ static void test_endpoint_refusals(void)
     CHECK_EQ(ep_params(0x81, 0x03, 0x1800, 1, XHCI_PIPE_SPEED_HIGH, &ep),
              XHCI_PIPE_MALFORMED, "MPS 0 with 12:11 = 11b");
     CHECK_EQ(ep_params(0x81, 0x03, 1025, 1, XHCI_PIPE_SPEED_HIGH, &ep),
-             XHCI_PIPE_MALFORMED, "MPS 1025");
+             XHCI_PIPE_OK, "MPS 1025: the speed's maximum (task 48.21)");
+    CHECK_EQ(ep.MaxPacketSize, 1024, "programmed 1024");
     CHECK_EQ(ep_params(0x81, 0x03, 1024, 1, XHCI_PIPE_SPEED_HIGH, &ep),
              XHCI_PIPE_OK, "MPS 1024");
 
@@ -2953,7 +3009,9 @@ static void test_walk_surplus(void)
     c[33] = 10;
     c[31] = 9;
     CHECK_EQ(XhciPipeEndpointParams(c + 27, XHCI_PIPE_SPEED_LOW, &ep),
-             XHCI_PIPE_MALFORMED, "LS interrupt MPS 9 still refused");
+             XHCI_PIPE_OK, "LS interrupt MPS 9: programmed 8 (task 48.21)");
+    CHECK_EQ(ep.MaxPacketSize, 8, "the LS maximum");
+    CHECK_EQ(ep.MpsOutside, XHCI_PIPE_MPS_CLAMPED, "and said so");
 
     /* hidusbf rewrites bInterval in the descriptor the class driver hands
      * the select (a whole device's select reads that copy): the walk of the
@@ -3250,6 +3308,172 @@ static ULONG sw_entry(UCHAR *at, ULONG length, ULONG number, ULONG alt)
     return length;
 }
 
+/*
+ * The header-length rule (hcd_urb.c, hcdSubmitUrb), count and serve only
+ * since 3.4.3.0 (owner, 2026-11-10): a URB whose UrbHeader.Length stops
+ * short of the fields read is counted and served, for every function, as
+ * usbport and 3.4.1.0 serve it. The leasts are hcdUrbMinLength's on x86.
+ * The select-interface rows are Windows 2000 SP4's usbaudio.sys as a guest
+ * sent it (GitHub issue 32: header 0, refused under 3.4.2.0, no playback).
+ * A header of 0 on each function family is served, counted short; no
+ * answer is a refusal.
+ */
+static void test_urb_length(void)
+{
+    static const struct {
+        ULONG least;
+        const char *what;
+    } family[] = {
+        { 0x18, "SELECT_CONFIGURATION" },
+        { 0x24, "SELECT_INTERFACE" },
+        { 0x14, "ABORT_PIPE / RESET_PIPE / SYNC_* (a pipe request)" },
+        { 0x54, "CONTROL_TRANSFER" },
+        { 0x28, "BULK_OR_INTERRUPT_TRANSFER" },
+        { 0x4E, "GET/SET_DESCRIPTOR_FROM_DEVICE/INTERFACE/ENDPOINT" },
+        { 0x4E, "SET/CLEAR_FEATURE_*" },
+        { 0x4E, "GET_STATUS_*" },
+        { 0x4E, "VENDOR_* / CLASS_*" },
+        { 0x28, "GET_CONFIGURATION" },
+        { 0x4E, "GET_INTERFACE" }
+    };
+    ULONG i;
+
+    for (i = 0; i < sizeof(family) / sizeof(family[0]); i++) {
+        CHECK_EQ(XhciPipeUrbHeaderCheck(0, family[i].least),
+                 XHCI_PIPE_URB_SERVE_SHORT, family[i].what);
+        CHECK_EQ(XhciPipeUrbHeaderCheck(0x10, family[i].least),
+                 XHCI_PIPE_URB_SERVE_SHORT, family[i].what);
+        CHECK_EQ(XhciPipeUrbHeaderCheck(family[i].least - 1,
+                                        family[i].least),
+                 XHCI_PIPE_URB_SERVE_SHORT, family[i].what);
+        CHECK_EQ(XhciPipeUrbHeaderCheck(family[i].least, family[i].least),
+                 XHCI_PIPE_URB_SERVE, family[i].what);
+        CHECK_EQ(XhciPipeUrbHeaderCheck(0xFFFF, family[i].least),
+                 XHCI_PIPE_URB_SERVE, family[i].what);
+    }
+    CHECK_EQ(XhciPipeUrbHeaderCheck(0, 0), XHCI_PIPE_URB_SERVE,
+             "a function with no entry (least 0), header 0, served");
+}
+
+/*
+ * A SELECT_CONFIGURATION's interface list bound (XhciPipeSelectListBytes),
+ * x86: the list at 0x18, an entry's fixed part 0x10, one pipe 0x14. The
+ * first entry is bounded by its own Length whatever the header says, as
+ * usbport reads it; later entries end at the header.
+ */
+static void test_select_list_bytes(void)
+{
+    CHECK_EQ(XhciPipeSelectListBytes(0, 0x18, 0x24, 0x10), 0x24,
+             "header 0: the first entry by its own Length");
+    CHECK_EQ(XhciPipeSelectListBytes(0x10, 0x18, 0x10, 0x10), 0x10,
+             "header short of the list: a pipeless first entry");
+    CHECK_EQ(XhciPipeSelectListBytes(0x20, 0x18, 0x24, 0x10), 0x24,
+             "header inside the first entry: its own Length");
+    CHECK_EQ(XhciPipeSelectListBytes(0x18 + 0x48, 0x18, 0x24, 0x10), 0x48,
+             "a header naming two entries: the header");
+    CHECK_EQ(XhciPipeSelectListBytes(0x18 + 0x24, 0x18, 0x24, 0x10), 0x24,
+             "a header stating one entry exactly");
+    CHECK_EQ(XhciPipeSelectListBytes(0, 0x18, 0x0F, 0x10), 0,
+             "header 0, first Length short of the fixed part: nothing");
+    CHECK_EQ(XhciPipeSelectListBytes(0x1C, 0x18, 0x02, 0x10), 4,
+             "a short first Length gives only the header's bytes");
+    CHECK_EQ(XhciPipeSelectListBytes(0x18, 0x18, 0, 0x10), 0,
+             "header at the list, Length 0: nothing");
+    CHECK_EQ(XhciPipeSelectListBytes(0xFFFF, 0x18, 0xFFFF, 0x10), 0xFFFF,
+             "largest header and Length: the first Length, no wrap");
+    CHECK_EQ(XhciPipeSelectListBytes(0xFFFF, 0x18, 0x24, 0x10), 0xFFE7,
+             "largest header, one small entry: the header's bytes");
+}
+
+/*
+ * A SELECT_INTERFACE's interface named (XhciPipeSelectIfaceName), the
+ * interface information placed at the very end of a committed page whose
+ * next page is reserved and never committed, so a read one byte past what
+ * the vector gives faults: header Length 0 is served
+ * (XhciPipeUrbHeaderCheck), so a client buffer that ends at its two-byte
+ * Length field must be refused having read only those two bytes (the
+ * 3.4.3.0 merge's follow-up to GitHub issue 32). 16 is the 32-bit
+ * FIELD_OFFSET(USBD_INTERFACE_INFORMATION, Pipes).
+ */
+static void test_select_iface_name(void)
+{
+    UCHAR *page;
+    UCHAR *p;
+    UCHAR u[16];
+    ULONG length;
+    ULONG number;
+    ULONG alternate;
+    ULONG i;
+
+    for (i = 0; i < sizeof(u); i++) {
+        u[i] = 0;
+    }
+    u[0] = 0x24;
+    u[2] = 1;
+    u[3] = 1;
+    length = number = alternate = 0xEEUL;
+    CHECK_EQ(XhciPipeSelectIfaceName(u, 16, &length, &number, &alternate),
+             XHCI_PIPE_OK, "2000 usbaudio's alternate-1 interface named");
+    CHECK_EQ(length, 0x24, "its Length");
+    CHECK_EQ(number, 1, "its interface");
+    CHECK_EQ(alternate, 1, "its alternate");
+    u[0] = 0x10;
+    CHECK_EQ(XhciPipeSelectIfaceName(u, 16, &length, &number, &alternate),
+             XHCI_PIPE_OK, "a Length of exactly the fixed part named");
+    u[0] = 0x0F;
+    number = alternate = 0xEEUL;
+    CHECK_EQ(XhciPipeSelectIfaceName(u, 16, &length, &number, &alternate),
+             XHCI_PIPE_REFUSED, "a Length one short of the fixed part refused");
+    CHECK_EQ(length, 0x0F, "the short Length reported");
+    CHECK_EQ(number, 0xEE, "no interface read for it");
+    CHECK_EQ(alternate, 0xEE, "no alternate read for it");
+    u[0] = 0;
+    u[1] = 1;
+    CHECK_EQ(XhciPipeSelectIfaceName(u, 16, &length, &number, &alternate),
+             XHCI_PIPE_OK, "the Length's high byte read");
+    CHECK_EQ(length, 0x100, "little-endian");
+    CHECK_EQ(XhciPipeSelectIfaceName(NULL, 16, &length, &number, &alternate),
+             XHCI_PIPE_BAD_PARAM, "NULL interface information");
+    CHECK_EQ(XhciPipeSelectIfaceName(u, 3, &length, &number, &alternate),
+             XHCI_PIPE_BAD_PARAM, "a fixed part short of the number");
+
+    /* Against the guard page. */
+    page = (UCHAR *)VirtualAlloc(NULL, 0x2000, TP_MEM_RESERVE,
+                                 TP_PAGE_NOACCESS);
+    CHECK(page != NULL, "two pages reserved");
+    if (page == NULL) {
+        return;
+    }
+    CHECK(VirtualAlloc(page, 0x1000, TP_MEM_COMMIT, TP_PAGE_READWRITE) ==
+              page,
+          "the first committed");
+    /* Only the Length field, value 2, against the boundary. */
+    p = page + 0x1000 - 2;
+    p[0] = 2;
+    p[1] = 0;
+    number = alternate = 0xEEUL;
+    CHECK_EQ(XhciPipeSelectIfaceName(p, 16, &length, &number, &alternate),
+             XHCI_PIPE_REFUSED, "a two-byte interface at the boundary refused");
+    CHECK_EQ(length, 2, "its Length reported");
+    CHECK_EQ(number, 0xEE, "nothing past the boundary read");
+    /* A Length of 0, as a header of 0 might come with. */
+    p[0] = 0;
+    CHECK_EQ(XhciPipeSelectIfaceName(p, 16, &length, &number, &alternate),
+             XHCI_PIPE_REFUSED, "a zero interface Length at the boundary");
+    /* Four bytes claiming the fixed part: the number and alternate are
+     * inside, and nothing further is read. */
+    p = page + 0x1000 - 4;
+    p[0] = 0x10;
+    p[1] = 0;
+    p[2] = 3;
+    p[3] = 2;
+    CHECK_EQ(XhciPipeSelectIfaceName(p, 16, &length, &number, &alternate),
+             XHCI_PIPE_OK, "four bytes at the boundary named");
+    CHECK_EQ(number, 3, "the interface before the boundary");
+    CHECK_EQ(alternate, 2, "the alternate before the boundary");
+    CHECK(VirtualFree(page, 0, TP_MEM_RELEASE) != 0, "the pages released");
+}
+
 static void test_select_walk(void)
 {
     /* Two HID interfaces, one interrupt endpoint each, and if1 alt 1 with
@@ -3379,6 +3603,9 @@ int main(void)
     test_play2_async();
     test_iso_page();
     test_select_walk();
+    test_urb_length();
+    test_select_list_bytes();
+    test_select_iface_name();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

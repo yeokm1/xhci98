@@ -1127,6 +1127,17 @@ static ULONG hcdCfgConfigureAdd(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                 ext->Tol.Stats.CapIntervals++;
                 hcdCfgQuirkCapped(hc, &add[dci]->Ep);
             }
+            /* Task 48.21: a Max Packet Size outside the speed's table,
+             * opened (XhciPipeEndpointParams): the declared size and the
+             * kind, the programmed size being the declared one or the
+             * speed's maximum. */
+            if (add[dci] != NULL && add[dci]->Ep.MpsOutside != 0 &&
+                code == XHCI_CC_SUCCESS && opening) {
+                XhciLogNote(ext, "cfg.ep.mps",
+                            (dev->SlotId << 24) | (dci << 16) |
+                                (add[dci]->Ep.MpsOutside << 12) |
+                                add[dci]->Ep.MpsDeclared);
+            }
             if (add[dci] == NULL || !add[dci]->Ep.FastPoll) {
                 continue;
             }
@@ -1379,8 +1390,9 @@ static VOID hcdCfgIsoPageRelease(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         } else {
             /* No record to retire it with: kept for good rather than
              * freed under a context that may name it, and counted as a
-             * kept block is (HcdDmaStreamFree). */
-            hc->CommonBuffersKept++;
+             * kept block is, its charge in the boot ledger turned kept
+             * (HcdDmaStreamKeep). */
+            HcdDmaStreamKeep(hc, pipe->IsoPageBytes);
         }
     }
     pipe->IsoPageVa = NULL;
@@ -1508,7 +1520,7 @@ static PHCD_PIPE hcdCfgPipeNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             goto refused;
         }
         if (pipe->IsoPageVa != NULL) {
-            return pipe;
+            goto staged;
         }
     }
 
@@ -1521,11 +1533,21 @@ static PHCD_PIPE hcdCfgPipeNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         *usbd = HCD_USBD_INTERNAL_HC_ERROR;
         goto refused;
     }
+
+staged:
+    /* Task 48.33 (design record 13 section 11.11.1): its staging - small
+     * buffers and its reserve, or an isochronous pipe's shares - before
+     * the pipe is exposed; a pipe that cannot get it does not open. */
+    *usbd = HcdStagePipeOpen(hc, pipe);
+    if (*usbd != XHCI_USBD_STATUS_SUCCESS) {
+        goto refused;
+    }
     return pipe;
 
 refused:
     /* Never installed in a context: the page, the count and the pool
-     * entry go back at once. */
+     * entry go back at once, and its staging if it had any. */
+    HcdStagePipeClose(hc, pipe);
     hcdCfgIsoCountReturn(hc, pipe);
     hcdCfgIsoPageRelease(hc, dev, pipe, 1);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
@@ -1552,6 +1574,7 @@ static VOID hcdCfgStreamsFree(PHCD_CONTROLLER hc, PHCD_STREAMS st)
     for (id = 1; id < XHCI_STREAM_MAX_ENTRIES; id++) {
         HcdPoolFree(st->Pipe[id]);
     }
+    HcdStageStreamsClose(hc, st);
     HcdDmaStreamFree(hc, st->Layout.TotalBytes, st->Pa, st->Va);
     HcdPoolFree(st);
 }
@@ -1615,6 +1638,8 @@ static VOID hcdCfgPipeFreeEx(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         dev->PoolRings--;
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
+    /* Task 48.33: every record free, so no TD names its staging. */
+    HcdStagePipeClose(hc, pipe);
     HcdPoolFree(pipe->Iso);
     HcdPoolFree(pipe);
 }
@@ -2025,23 +2050,30 @@ static LONG hcdCfgSelectOnce(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     sc = &urb->UrbSelectConfiguration;
     cd = sc->ConfigurationDescriptor;
     XHCI_DBG_VALUE("hcd: select, URB length", urb->UrbHeader.Length);
-    /* The fixed part was checked at the dispatch (hcd_urb.c,
-     * hcdUrbMinLength); a configuration needs one whole interface entry's
-     * fixed part as well, or the loop below would open nothing and still
-     * send SET_CONFIGURATION. Refused before the old configuration is
-     * taken down. The unconfigure (no descriptor) needs none. */
-    if (cd != NULL &&
-        (ULONG)urb->UrbHeader.Length <
-            (ULONG)FIELD_OFFSET(struct _URB_SELECT_CONFIGURATION, Interface) +
-                (ULONG)FIELD_OFFSET(USBD_INTERFACE_INFORMATION, Pipes)) {
+    /* A configuration's first interface entry is bounded by its own Length,
+     * the header only past it (XhciPipeSelectListBytes): the dispatch
+     * serves a short header, even 0 (hcd_urb.c, hcdSubmitUrb). An entry
+     * whose Length is short of its fixed part is refused here, before the
+     * old configuration is taken down, or the loop below would open
+     * nothing and still send SET_CONFIGURATION. The unconfigure (no
+     * descriptor) reads no entry. */
+    fixed = FIELD_OFFSET(USBD_INTERFACE_INFORMATION, Pipes);
+    if (cd != NULL && (ULONG)sc->Interface.Length < fixed) {
+        XHCI_DBG_VALUE("hcd: select refused, URB/first interface length",
+                       ((ULONG)urb->UrbHeader.Length << 16) |
+                           sc->Interface.Length);
         return HCD_USBD_INVALID_PARAMETER;
     }
     XHCI_DBG_VALUE("hcd: select, ConfigurationDescriptor",
                    (ULONG)(ULONG_PTR)cd);
-    XHCI_DBG_VALUE("hcd: select, first interface length/number/alternate",
-                   ((ULONG)sc->Interface.Length << 16) |
-                       ((ULONG)sc->Interface.InterfaceNumber << 8) |
-                       sc->Interface.AlternateSetting);
+    /* Only a configuration's: the unconfigure's URB need not reach its
+     * first entry. */
+    if (cd != NULL) {
+        XHCI_DBG_VALUE("hcd: select, first interface length/number/alternate",
+                       ((ULONG)sc->Interface.Length << 16) |
+                           ((ULONG)sc->Interface.InterfaceNumber << 8) |
+                           sc->Interface.AlternateSetting);
+    }
     if (!hcdCfgDeconfigure(hc, dev)) {
         return HCD_USBD_INTERNAL_HC_ERROR;
     }
@@ -2090,9 +2122,12 @@ static LONG hcdCfgSelectOnce(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     }
     mask = 0;
     usbd = XHCI_USBD_STATUS_SUCCESS;
-    fixed = FIELD_OFFSET(USBD_INTERFACE_INFORMATION, Pipes);
     p = (PUCHAR)&sc->Interface;
-    end = (PUCHAR)urb + urb->UrbHeader.Length;
+    end = p + XhciPipeSelectListBytes(
+                  (ULONG)urb->UrbHeader.Length,
+                  (ULONG)FIELD_OFFSET(struct _URB_SELECT_CONFIGURATION,
+                                      Interface),
+                  (ULONG)sc->Interface.Length, fixed);
     while (usbd == XHCI_USBD_STATUS_SUCCESS && p + fixed <= end) {
         ii = (PUSBD_INTERFACE_INFORMATION)p;
         /* An interface number past 31 is refused, not served: the
@@ -2829,12 +2864,18 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG event;
     ULONG answer;
     ULONG asked;
+    ULONG length;
+    ULONG number;
+    ULONG alternate;
     ULONG code;
     ULONG dci;
     ULONG e;
     LONG usbd;
 
     asked = 0;
+    length = 0;
+    number = 0;
+    alternate = 0;
     si = &urb->UrbSelectInterface;
     ii = &si->Interface;
     fixed = FIELD_OFFSET(USBD_INTERFACE_INFORMATION, Pipes);
@@ -2847,26 +2888,31 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                            ((dev->ConfigValue == 0) ? 1UL : 0UL));
         return HCD_USBD_INVALID_PARAMETER;
     }
-    if (ii->Length < fixed || ii->InterfaceNumber >= 32 ||
-        (pdo->Function &&
-         (pdo->InterfaceMask & (1UL << ii->InterfaceNumber)) == 0) ||
-        XhciPipeFindInterface(dev->Selected, dev->SelectedLength,
-                              ii->InterfaceNumber, ii->AlternateSetting,
-                              &iface) != XHCI_PIPE_OK) {
+    /* The interface Length first, and alone: with the header's Length
+     * not a bound (XhciPipeUrbHeaderCheck; GitHub issue 32), it is all that
+     * says how far the caller's buffer reaches, so a Length short of the
+     * fixed part is refused, and traced, with nothing past it read - not
+     * the number, not the alternate. */
+    if (XhciPipeSelectIfaceName((const UCHAR *)ii, fixed, &length, &number,
+                                &alternate) != XHCI_PIPE_OK) {
+        XHCI_DBG_VALUE("hcd: select interface refused, interface length",
+                       length);
+        return HCD_USBD_INVALID_PARAMETER;
+    }
+    if (number >= 32 ||
+        (pdo->Function && (pdo->InterfaceMask & (1UL << number)) == 0) ||
+        XhciPipeFindInterface(dev->Selected, dev->SelectedLength, number,
+                              alternate, &iface) != XHCI_PIPE_OK) {
         XHCI_DBG_VALUE("hcd: select interface refused, length/number/alt",
-                       ((ULONG)ii->Length << 16) |
-                           ((ULONG)ii->InterfaceNumber << 8) |
-                           ii->AlternateSetting);
+                       (length << 16) | (number << 8) | alternate);
         return HCD_USBD_INVALID_PARAMETER;
     }
     hcdCfgCountAsked(hc, &asked, iface.EndpointCount);
     hcdCfgNoteSurplus(hc, dev, &iface);
-    if (ii->Length < fixed + iface.EndpointCount *
-                                 sizeof(USBD_PIPE_INFORMATION)) {
+    if (length < fixed + iface.EndpointCount *
+                             sizeof(USBD_PIPE_INFORMATION)) {
         XHCI_DBG_VALUE("hcd: select interface too small, length/number/alt",
-                       ((ULONG)ii->Length << 16) |
-                           ((ULONG)ii->InterfaceNumber << 8) |
-                           ii->AlternateSetting);
+                       (length << 16) | (number << 8) | alternate);
         hcdCfgNeedLength(ii, &iface);
         return hcdCfgCountEnd(hc, asked, HCD_USBD_BUFFER_TOO_SMALL);
     }
@@ -3370,7 +3416,22 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 
     named = 0;
     fixed = FIELD_OFFSET(USBD_INTERFACE_INFORMATION, Pipes);
-    end = (PUCHAR)urb + urb->UrbHeader.Length;
+    /* A configuration's first entry bounded by its own Length, the header
+     * only past it (XhciPipeSelectListBytes; a short header is served,
+     * hcd_urb.c hcdSubmitUrb), and one short of its fixed part refused
+     * before anything of the function's is closed. */
+    end = (PUCHAR)&sc->Interface;
+    if (sc->ConfigurationDescriptor != NULL) {
+        if ((ULONG)sc->Interface.Length < fixed) {
+            XHCI_DBG_VALUE("hcd: function select refused, first length",
+                           sc->Interface.Length);
+            return hcdCfgCountEnd(hc, asked, HCD_USBD_INVALID_PARAMETER);
+        }
+        end += XhciPipeSelectListBytes(
+            (ULONG)urb->UrbHeader.Length,
+            (ULONG)FIELD_OFFSET(struct _URB_SELECT_CONFIGURATION, Interface),
+            (ULONG)sc->Interface.Length, fixed);
+    }
     for (p = (PUCHAR)&sc->Interface;
          sc->ConfigurationDescriptor != NULL && p + fixed <= end;
          p += ii->Length) {
@@ -4219,9 +4280,8 @@ static ULONG hcdCfgQuiesce(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
          * may refuse and left the two ends' sequences in doubt. With
          * streams the flag applies to the endpoint as it does without: the
          * sequence is the endpoint's, not a stream's, and 4.6.8 does not
-         * restrict TSP for a Primary Stream Array endpoint (to verify
-         * against the transcription, design record 13, not yet
-         * transcribed). */
+         * restrict TSP for a Primary Stream Array endpoint (p.115-118
+         * make no exception for one). */
         if (!hcdCfgResetEndpoint(hc, dev, pipe, 1)) {
             (VOID)hcdCfgFault(hc, dev);
             return XHCI_EP_STATE_RUNNING;
@@ -4388,9 +4448,9 @@ static ULONG hcdCfgRecycle(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 
 /*
  * After the thread had a streams endpoint stopped (31-A.1): a doorbell names
- * one stream, so every stream with TDs still on its ring is rung again -
- * the stopped endpoint restarts for the streams rung and no other (xHCI
- * 4.12.2, "to verify" in xhci-data-structures.md). Not a stream paused or
+ * one stream (xHCI Table 5-43, p.397) and work on each ring takes a write
+ * of its own (4.7, p.143), so every stream with TDs still on its ring is
+ * rung again. Not a stream paused or
  * closed: its own resume publishes and rings. Nothing for a Disabled
  * endpoint or one without streams. Thread only.
  */
@@ -5594,12 +5654,18 @@ static PHCD_STREAMS hcdCfgStreamsBuild(PHCD_CONTROLLER hc,
         p->BigRing = (st->RingTrbs == XHCI_STREAM_BIG_RING_TRBS) ? 1UL : 0UL;
         st->Ring[id] = &p->OwnRing;
     }
+    /* Task 48.33 (design record 13 section 11.11.1): every stream's small
+     * buffers and page reserve, before the streams are exposed. */
+    if (!HcdStageStreamsOpen(hc, st)) {
+        goto fail;
+    }
     return st;
 
 fail:
     for (id = 1; id < XHCI_STREAM_MAX_ENTRIES; id++) {
         HcdPoolFree(st->Pipe[id]);
     }
+    HcdStageStreamsClose(hc, st);
     HcdDmaStreamFree(hc, st->Layout.TotalBytes, st->Pa, st->Va);
     HcdPoolFree(st);
     return NULL;
@@ -6531,10 +6597,15 @@ VOID HcdCfgService(PHCD_CONTROLLER hc)
             rec = pdo->Function ? HcdCompRecordRef(hc, dev) : NULL;
             usbd = hcdCfgSelectInterface(hc, dev, pdo, urb, rec);
             HcdCompRecordRelease(rec);
-            number = urb->UrbSelectInterface.Interface.InterfaceNumber;
-            if (usbd == XHCI_USBD_STATUS_SUCCESS && number < 32) {
-                held &= ~(1UL << number);
-                hcdCfgReleaseSettled(dev, 1UL << number);
+            /* Read only on success, which proved the interface Length
+             * covers the number (hcdCfgSelectInterface): a refused one's
+             * buffer may end at its Length field. */
+            if (usbd == XHCI_USBD_STATUS_SUCCESS) {
+                number = urb->UrbSelectInterface.Interface.InterfaceNumber;
+                if (number < 32) {
+                    held &= ~(1UL << number);
+                    hcdCfgReleaseSettled(dev, 1UL << number);
+                }
             }
             usbd = hcdCfgSelectAnswer(hc, dev, usbd);
             break;

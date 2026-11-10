@@ -157,6 +157,57 @@ int inst_msz_has(const char *msz, size_t bytes, const char *id);
  * bytes, the final NUL pair included. */
 size_t inst_ids_split(char *buf, size_t cap);
 
+/* A configuration manager's id list answer on 98 SE and ME, longer than
+ * the record's array, held whole (record 23 section 5.3.1): it can hold
+ * several strings, each perhaps a comma list; every comma in its bytes
+ * becomes a NUL, and its length is kept (buf holds two NULs after the
+ * bytes). Returns bytes. */
+size_t inst_ids_commas(char *buf, size_t bytes);
+
+/* The type a configuration manager's id list answer, read again at its
+ * size (record 23 section 5.3.1), may carry: on NT a multi-string only;
+ * on 98 SE and ME a string or a multi-string. 1 when type is one. */
+int inst_cm_ids_type_ok(int nt, unsigned long type);
+
+/* A device record's id list (record 23 section 5.3.1, roadmap-usb4 task
+ * 48.19): its array, or, when the list was longer than the array, the
+ * overflow copy (whole, non-NULL); *bytes the chosen list's length. */
+const char *inst_ids_pick(const char *arr, size_t arrBytes, const char *whole,
+                          size_t wholeBytes, size_t *bytes);
+
+/* 98 SE and ME (record 23 sections 5.3 and 5.3.1): whether a devnode's
+ * hardware or compatible id list is read. reg is the registry's answer (1
+ * read, 0 absent, -1 unreadable), the authority; haveCm whether the
+ * configuration manager was asked, cr its final answer (CR_BUFFER_SMALL
+ * when a list too big for the array could not be read again at its
+ * size). Absent from the registry, that one answer is unreadable; any
+ * other is kept as before, read or no list (the 98 SE root devnode,
+ * HTREE\ROOT\0, has no registry list and its configuration manager
+ * answer is neither read nor absent: read 2026-11-09). 1 read, 0
+ * unreadable. */
+int inst_ids9x_ok(int reg, int haveCm, unsigned long cr);
+
+/* A devnode's Driver value names its driver key: a class key name and an
+ * instance key name of at most 255 characters each and the separator
+ * (record 23 section 5.3.1). The record's buffer holds that, the
+ * terminator, and the readers' spare bytes (enum_value and cm_prop read
+ * two bytes less than their buffer, reg9x_value three). */
+#define INST_DRIVER_CHARS       511
+#define INST_DRIVER_BYTES       515
+/* A driver key path: the longer class root (98 SE's and ME's
+ * System\CurrentControlSet\Services\Class, one character longer than
+ * NT's), the separator, the value, the terminator. */
+#define INST_CLASS_ROOT_NT      "SYSTEM\\CurrentControlSet\\Control\\Class"
+#define INST_CLASS_ROOT_9X      "System\\CurrentControlSet\\Services\\Class"
+#define INST_DRIVER_PATH_CHARS  (sizeof(INST_CLASS_ROOT_9X "\\") + \
+                                 INST_DRIVER_CHARS)
+
+/* The driver key of a devnode, relative to HKLM: the running family's
+ * class root (nt) and the Driver value. 1 built; 0, with out "", when
+ * driver is empty or longer than INST_DRIVER_CHARS or out cannot hold the
+ * path - a path that names no driver key, never to be opened. */
+int inst_driver_key_path(char *out, size_t cap, int nt, const char *driver);
+
 /* The first id of the hardware or compatible list that ids holds, or -1. */
 int inst_ids_match(const char *hw, size_t hwBytes, const char *compat,
                    size_t compatBytes, const INST_IDLIST *ids);
@@ -204,6 +255,41 @@ int inst_action(const INST_DEV *dev, const INST_U32 pkg[4]);
 int inst_action_runs(int action, int force);
 
 const char *inst_action_text(int action);
+
+/* Record 23 section 5.4.1: a file of this package installed at the
+ * package's version (state, its file_version answer, 1 read; cmp, its
+ * version against the package's) whose bytes differ from the package's
+ * (same, 1 equal, 0 different, -1 not read: taken as equal) is replaced
+ * as an older one is. 1 such a file. */
+int inst_same_ver_stale(int state, int cmp, int same);
+
+/* The row text of a device (section 5.4.1): action as inst_action, runs
+ * whether the run changes it, force /force, stale a file of its group
+ * replaced by inst_same_ver_stale. */
+const char *inst_action_row_text(int action, int runs, int force, int stale);
+
+/* 98 SE and ME (section 5.4.1): 1 when the run places xhci98.sys itself,
+ * the installed file at the package's version with other bytes (stale)
+ * and no xhci98 device installed by the helper in this run (helperJob),
+ * whose setup engine would write its own [rename] line for the file. */
+int inst_x98_place9x(int nt, int include, int stale, int helperJob);
+
+/* Section 5.4.1's NT file check: the INFs (a bit per INST_INF_*) that
+ * install a file - group's binary (0 xhci98, 1 xhciuas, 2 xhcicm, 3
+ * stor98, 4 xhcinet), or with hlpr xhcihlpr.sys - and whether a trap or a
+ * failed, refused or cancelled install of any of them (trap[], failed[],
+ * INST_INF_COUNT each) keeps the file: a file more than one INF installs
+ * (xhcicm.sys by xhcicm.inf and xhcicmf.inf, xhcihlpr.sys by xhci98.inf
+ * and xhcicm.inf) is held by either. */
+unsigned long inst_stale_infs(int group, int hlpr);
+int inst_stale_blocked(unsigned long infs, const int trap[],
+                       const int failed[]);
+
+/* xhcihlpr.sys (section 5.4.1): replaced only while neither group whose
+ * INF installs it (xhci98's, xhcicm's: v0ok, v2ok, each 1 unless its
+ * verdict refuses it; a group out of the run reads 1) is refused, and one
+ * of them is in the run (usbIn, cmIn). */
+int inst_hlpr_stale_ok(int v0ok, int v2ok, int usbIn, int cmIn);
 
 /* The verdict per service group (record 23 section 5.4): every devnode of a
  * service runs one binary. anyNewer / anyUnknown over the group's devnodes,
@@ -396,6 +482,7 @@ int inst_cm_start_action(int fix, int bootPath);
  * too small (CR_BUFFER_SMALL: read again with the size the call gave);
  * -1 anything else - an error, another type - which proves nothing. */
 #define INST_BP_GROW            2
+#define INST_CR_SUCCESS         0x00000000UL
 #define INST_CR_BUFFER_SMALL    0x1AUL
 #define INST_CR_NO_SUCH_VALUE   0x25UL
 #define INST_REG_MULTI_SZ_TYPE  7UL
@@ -496,7 +583,8 @@ const char *inst_hvci_text(int state, int cmInRun);
 #define INST_APPLY_NT5_CM   7   /* 2000, XP and XP x64 with the connection
                                    manager (record 33 section 9.1) */
 #define INST_APPLY_NT_CM    8   /* 2000 to 10 with the connection manager
-                                   (task 45.54: XhciCmRingInterrupt) */
+                                   (XhciCmAsm4242Reads; XhciCmRingInterrupt
+                                   until task 48.26) */
 
 /* Where a value lives (record 26 section 5.0): Services\USB machine-wide,
  * or the mark service's own Parameters key (its Restart). */
@@ -904,15 +992,12 @@ int inst_final(int changed, int list, int code, int *line);
 int inst_final_tools(int changed, int list, int code, int *line);
 const char *inst_final_text(int line);
 
-/* The same line where the run asks for a shutdown and a fresh start
- * instead of a restart (98 SE and ME after a Stor98 update, record 26
- * section 5.9); the exit codes are unchanged. */
-const char *inst_final_text_cold(int line, int shutdown);
-
 /* The window's Finish line: the unfinished one where no Steps page was
  * shown (stepsShown 0) points at the log; every other line as
- * inst_final_text_cold. */
-const char *inst_final_text_shown(int line, int shutdown, int stepsShown);
+ * inst_final_text. 98 SE and ME restart as every other system does, a
+ * Stor98 update or the storage drivers' copy included (owner,
+ * 2026-11-10; record 26 section 5.9, draft 78). */
+const char *inst_final_text_shown(int line, int stepsShown);
 
 /* ---- installing beside Windows' own installer (record 23 section 5.8) ------------ */
 
@@ -1191,6 +1276,19 @@ int inst_st_fresh(INST_U32 recUptimeS, INST_U32 recTimeLo, INST_U32 recTimeHi,
  * ask the tool wrote (a nonzero ask equal to the echo at offset 124). */
 int inst_st_confirmed(const unsigned char *b, INST_U32 ask);
 
+/* The watch after an NT eject (record 24 section 5.2): 1 when record b
+ * may stand as read just now - it echoes lateAsk, an ask written late in
+ * the watch (nonzero), read no more than INST_WATCH_ASK_MAX_MS after that
+ * ask was written (sinceAskMs: from a time taken before the write to one
+ * taken after the read), and its stage is
+ * active (CM_ST_STAGE_ACTIVE at offset 32). The record is a registry
+ * value rewritten only on a change, so an echo of the ask made before the
+ * call proves nothing about the time since, and an echo of the late one
+ * nothing about a read made long after it (the tool descheduled). */
+#define INST_WATCH_ASK_MAX_MS   6000UL
+int inst_watch_current(const unsigned char *b, INST_U32 lateAsk,
+                       INST_U32 sinceAskMs);
+
 /* A walked tree, nodes in walk order (a parent before its children),
  * parent[i] -1 for the root (record 24 section 4.3).
  * inst_tb_protect: prot[i] set for every NHI and its ancestors, and for a
@@ -1239,6 +1337,16 @@ int inst_eject_nt(INST_U32 cr, INST_U32 vetoType, const char **text,
  * rebuilt since, roadmap EJRB.1): Safely Remove Hardware does not list
  * it. */
 int inst_unit_not_marked(int capsKnown, INST_U32 caps);
+
+/* 98 SE and ME: the line a unit's devnode status gives (design record 24
+ * section 4.3, revision 9): whether Windows has DN_REMOVABLE (0x4000) on
+ * it, never who set it - 98 SE and ME set the bit on nearly every devnode
+ * of a dynamically loaded driver, the host bridge's and root devices'
+ * included, so the connection manager's own mark usually finds it set
+ * already (record 34 section 3.3.7, 2026-11-09). `sentence`: 1 for the USB
+ * Tree's sentence, 0 for the install tool's clause. */
+#define INST_DN_REMOVABLE_BIT   0x00004000UL
+const char *inst_removable_9x_text(INST_U32 status, int sentence);
 
 /* NT: an eject routine's answer as the outcome tables read it. Windows XP
  * answers a vetoed CM_Request_Device_EjectA with CR_SUCCESS and the veto
@@ -1409,6 +1517,52 @@ const char *inst_unplug_text(int kind, int tool);
  * status record (inst_st_check): CM_ST_TUN_*, 5 when the port is not an
  * active member or not exactly one router is behind it. */
 INST_U32 inst_port_usb3(const unsigned char *rec, INST_U32 portBdf);
+
+/* The PCIe tunnel to tunnel port portBdf as a status record shows it, for
+ * the watch after an NT eject (record 24 section 5.2): CLOSED when a
+ * router entry naming that bridge reads "torn down after an eject", NAMED
+ * when an entry names it and none reads so; otherwise UNMAPPED when
+ * portBdf is an active member of the set (CM_ST_O_PORTS, so not a chain
+ * port) and a router on a host USB4 port (CM_ST_KIND_USB4_PORT) with its
+ * PCIe tunnel up or kept from the start has no tunnel port known
+ * (CM_ST_UNKNOWN), UNNAMED otherwise; the deeper routers' entries (kids,
+ * links) are not read for UNMAPPED. A router entry
+ * names its tunnel port only once the connection manager knows which
+ * bridge the router's port reaches (record 22 section 7.6: router-named
+ * or learned); without that the eject's teardown has no port to close
+ * (u4.eject.unmapped), and the tunnel stays up until the unplug, which
+ * inst_pcie_unbound_text says. */
+#define INST_PCIE_UNNAMED   0
+#define INST_PCIE_NAMED     1
+#define INST_PCIE_CLOSED    2
+#define INST_PCIE_UNMAPPED  3
+int inst_port_pcie(const unsigned char *rec, INST_U32 portBdf);
+const char *inst_pcie_unbound_text(void);
+
+/* At the end of the watch, not seen closed: 1 when inst_pcie_unbound_text
+ * is the line, 0 for the plain one. `before` is inst_port_pcie of the
+ * record read immediately before the eject's call, with the unit present
+ * behind portBdf: its router was then on a host port and, no entry
+ * naming portBdf, it is the one whose tunnel port is not known - so
+ * UNMAPPED there is the unit's own port unbound. The line also needs no
+ * read of the watch naming the port (everNamed 0) and the last read,
+ * made at the watch's last step and shown current (lastFresh 1:
+ * inst_watch_current for XHCIINST's record, tr_query_watch_current for
+ * XHCITR's answer), UNMAPPED still. A watch whose reads stopped, whose
+ * last reading could not be shown current, or whose last record held no
+ * such router, keeps the plain line. */
+int inst_pcie_unbound(int before, int everNamed, int lastFresh, int last);
+
+/* XHCIINST's watch at its bound: inst_pcie_unbound with the last read's
+ * record `rec` (0 when that read failed or was not this run's) judged by
+ * inst_watch_current as of the decision. lateAt is the tick count taken
+ * before the late ask lateAsk was written, decideAt the one taken at the
+ * decision, after the read: a record read in time but decided on past
+ * INST_WATCH_ASK_MAX_MS (the tool descheduled between) is not current,
+ * as XHCITR measures its answer's age at the decision too. */
+int inst_watch_last(int before, int everNamed, const unsigned char *rec,
+                    int last, INST_U32 lateAsk, INST_U32 lateAt,
+                    INST_U32 decideAt);
 
 /* Before the eject (roadmap 43.8): 1 when the confirmation carries
  * inst_eject_remind_text, i.e. when the unit as it is now would not get
@@ -1605,9 +1759,10 @@ int inst_tray_run_data(const char *exe, char *out, size_t cap);
  * file absent, -1 unreadable); pkg the same for the package's copy. Copied
  * when the installed copy is absent, or when the package's version is read
  * and is newer than the installed copy's (an unreadable one counts as
- * older); otherwise left. */
+ * older), or equal with other bytes (same as inst_same_ver_stale, record
+ * 23 section 5.4.1); otherwise left. */
 int inst_tray_copy_needed(int installed, const INST_U32 instVer[4], int pkg,
-                          const INST_U32 pkgVer[4]);
+                          const INST_U32 pkgVer[4], int same);
 
 /* A .BAK left by an interrupted replacement on 98 SE or ME (record 25
  * section 8): with no tool beside it, it is the tool and is renamed back
@@ -1918,8 +2073,8 @@ const char *inst_window_refusal(const INST_OPTS *opts, int argc, char **argv);
 #define INST_PT_S98_T           28
 #define INST_PT_S98SET          29
 #define INST_PT_S98_UNUSED      30
-#define INST_PT_SHUT_NOW        31
-#define INST_PT_SHUT_LATER      32
+/* 31 and 32, the shut-down words of 98 SE and ME after a Stor98 update,
+ * retired (owner, 2026-11-10; record 26 draft 78). */
 /* Record 26 draft 8: the connection manager alone (record 23 section 4.5). */
 #define INST_PT_WELCOME_CM      33
 #define INST_PT_DRIVERS_T8      34  /* 8 and 8.1: not offered              */
@@ -2058,10 +2213,10 @@ INST_U32 inst_prog_pos(const INST_PROG *p, INST_U32 now);
 #define INST_HK_FINISH          13
 #define INST_HK_COUNT           14
 
-/* The Finish page's two buttons: the restart words, the shut-down words,
- * or none shown (the run changed nothing, whatever the reason). */
+/* The Finish page's two buttons: the restart words, or none shown (the
+ * run changed nothing, whatever the reason). 1 was the shut-down words,
+ * retired (owner, 2026-11-10). */
 #define INST_FV_RESTART         0
-#define INST_FV_SHUT            1
 #define INST_FV_NONE            2
 
 /* The Progress page's: the system, for the name its hardware wizard has
@@ -2087,11 +2242,10 @@ INST_U32 inst_prog_pos(const INST_PROG *p, INST_U32 now);
 #define INST_HELP_PROGRESS      13
 #define INST_HELP_STEPS         14
 #define INST_HELP_FINISH        15
-#define INST_HELP_FINISH_SHUT   16
-#define INST_HELP_FINISH_NONE   17
-#define INST_HELP_UFINISH       18
-#define INST_HELP_PROGRESS_9X   19
-#define INST_HELP_COUNT         20
+#define INST_HELP_FINISH_NONE   16
+#define INST_HELP_UFINISH       17
+#define INST_HELP_PROGRESS_9X   18
+#define INST_HELP_COUNT         19
 
 /* The help window's text control, in dialog units (xhciwiz.rc IDD_HELP):
  * every text is inst_page_cols wide; one longer than inst_page_rows
@@ -2123,7 +2277,7 @@ INST_U32 inst_page_rows(INST_U32 heightDlu);
  * (test\stor98-settings.txt, a copy make-release.ps1 compares with the
  * bundled readme), so a Stor98 release that renames or retypes a value
  * fails the build rather than the user. */
-#define INST_S98_TABLE_VERSION  "3.4.1.0"
+#define INST_S98_TABLE_VERSION  "3.4.3.0"
 
 #define INST_S98_WORDS      0   /* a word of a list (StorWriteThrough)       */
 #define INST_S98_NUMBER     1   /* a decimal number in a range               */
@@ -2138,7 +2292,8 @@ INST_U32 inst_page_rows(INST_U32 heightDlu);
 #define INST_S98_IDLE           7
 #define INST_S98_HOLD9X         8   /* 98 SE and ME only (3.3.0.0)          */
 #define INST_S98_INTWATCH       9   /* the missed-interrupt watchdog (3.4.1.0) */
-#define INST_S98_COUNT          10
+#define INST_S98_TAKEFW         10  /* 98 SE and ME only (3.4.3.0)         */
+#define INST_S98_COUNT          11
 
 #define INST_S98_WORDS_MAX      4
 
@@ -2176,6 +2331,17 @@ int inst_s98_greyed(int i, int nt);
 /* What such a row says it is for, or NULL for a row of every system. */
 const char *inst_s98_only(int i);
 
+/* Task 48.28 (owner, 2026-11-09): a row Stor98 ignores on Windows ME
+ * (StorTakeFirmware: taking a controller the BIOS set up hung ME's start).
+ * Not settable there, shown greyed with why. The _os forms are
+ * inst_s98_applies, inst_s98_greyed and inst_s98_only for this system;
+ * me: Windows ME. */
+#define INST_S98_ME_WHY "Windows 98 SE only: on ME it can hang Windows' start"
+int inst_s98_me_refused(int i);
+int inst_s98_applies_os(int i, int nt, int me);
+int inst_s98_greyed_os(int i, int nt, int me);
+const char *inst_s98_only_os(int i, int me);
+
 /* The built-in default as text ("auto", "512"), and its one-line sense
  * for the system ("cacheoff on ME, off elsewhere"); me: Windows ME. */
 const char *inst_s98_default(int i, int nt);
@@ -2188,6 +2354,10 @@ INST_U32 inst_s98_hi(int i, int nt);
  * hi: "<lo> to <hi>[ <unit>]", then ", in steps of <n>" or ", or 0:
  * <what>"; no space where the value has no unit. */
 void inst_s98_range(int i, INST_U32 hi, char *out, size_t cap);
+/* What each value of a number row with meanings does, "0: <meaning>.
+ * 1: <meaning>." (the Advanced dialog; StorIntWatchdog, StorTakeFirmware
+ * with its warning); "" for any other row. */
+void inst_s98_meanings(int i, char *out, size_t cap);
 
 /* A driver image 98 SE and ME keep resident for the boot (xhciuas.sys and
  * xhcicm.sys register no DriverUnload there): putting the package's file
@@ -2276,13 +2446,6 @@ int inst_s98_service_removable(int devnodesLeft, int preExisting);
 int inst_s98_version_owed(int include, int baseline, int list,
                           int installed, int nt, int copy9x, int fileUpd);
 
-/* An update's precautions (Stor98's readme, "Updating"): on 98 SE and ME
- * nothing may be using the drive's volume and the machine is shut down,
- * not restarted; on 2000 to 7 an update of a drive behind a tunnel under
- * this package's connection manager is "updated, awaiting reconnection"
- * whatever the first read-back says (record 24 section 5.2). */
-int inst_s98_cold_start(int nt);
-
 /* SHA-256 of len bytes, as 64 upper-case hex digits and a NUL. */
 void inst_sha256(const unsigned char *data, size_t len, char *hex65);
 
@@ -2364,9 +2527,10 @@ int inst_s98_known_tunnel(int nt, int present, int place, int recorded);
  * replaces stor98.mpd at the next start: Stor98 in the run, the shared
  * file free to change (inst_s98_share), and the installed file there
  * (installed 1; 0 absent, -1 unreadable) at an older release (cmp, the
- * installed version against the bundled one, < 0). */
+ * installed version against the bundled one, < 0), or at the same release
+ * with other bytes (same as inst_same_ver_stale, record 23 section 5.4.1). */
 int inst_s98_file_update(int nt, int include, int share, int installed,
-                         int cmp);
+                         int cmp, int same);
 
 /* The text of the 98 SE and ME confirmation the file update needs (the
  * Summary's box and the console's question, owner 2026-10-19). */
@@ -2508,16 +2672,21 @@ int inst_vsd_next(const INST_VSDFACTS *f);
 #define INST_PFW_SYS_SEEN   3   /* XP, Vista and 7 (x86): XHCIPFW.SYS;
                                    the installer reads the problem for
                                    its note                              */
-#define INST_PFW_SYS_GONE   4   /* 10 (x86): not offered; an XHCIPFW.SYS
-                                   this installer placed is removed
-                                   (record 32 sections 11.3 and 11.5.2) */
-#define INST_PFW_SYS_FILTER 5   /* 8 and 8.1 (x86): XHCIPFW.SYS as an upper
-                                   filter of every PCI root bus (record
-                                   32 section 11.5.2), offered as on
+#define INST_PFW_SYS_GONE   4   /* 10 (x86) before version 2004: not
+                                   offered; an XHCIPFW.SYS this installer
+                                   placed is removed (record 32 sections
+                                   11.3, 11.5.2 and 11.5.7)              */
+#define INST_PFW_SYS_FILTER 5   /* 8, 8.1 and 10 from version 2004 (x86):
+                                   XHCIPFW.SYS as an upper filter of
+                                   every PCI root bus (record 32 sections
+                                   11.5.2 and 11.5.6), offered as on
                                    Vista and 7                           */
-/* nt 0: 98 SE or ME. major.minor: the version (RtlGetVersion's); x86: a
- * 32-bit system. */
-int inst_pfw_sys(int nt, unsigned long major, unsigned long minor, int x86);
+/* Windows 10 version 2004's build, the first offered the filter role. */
+#define INST_OS_BUILD_2004  19041UL
+/* nt 0: 98 SE or ME. major.minor and build: the version (RtlGetVersion's,
+ * the build's low word); x86: a 32-bit system. */
+int inst_pfw_sys(int nt, unsigned long major, unsigned long minor,
+                 unsigned long build, int x86);
 /* The box, the one place its default is decided (record 32 section 9 Q9
  * and section 11.3): shown where the system is offered it and the package
  * carries its file; open (*open) only while the Thunderbolt 3 / USB4
@@ -2622,7 +2791,22 @@ int inst_s98_place(int found, int changing, int whole, int cmAll,
 #define INST_S98_SKIP_UNKNOWN   2
 #define INST_S98_NEEDS_TB       3
 #define INST_S98_SKIP_SHARED    4
+/* Windows 8.1 (design record 31 section 4.10, task 48.29): Stor98's model
+ * there is the tunnel id alone, and a drive without the id is left.
+ * NOID_RUN: on Stor98, with the run changing the connection manager (the
+ * id may come after the restart): run Setup again then. NOID_MARK: on
+ * stornvme or with no driver, the same: the mark service takes it after
+ * the restart. NOID: the run does not change the connection manager, so
+ * the drive carries no id under the one that runs: no route on 8.1. */
+#define INST_S98_SKIP_NOID_RUN  5
+#define INST_S98_SKIP_NOID_MARK 6
+#define INST_S98_SKIP_NOID      7
 int inst_s98_eligible(int tbInRun, int place);
+/* The reason for an eligible device the plan runs, on NT: is81 Windows
+ * 8.1 (inst_s98_switch_os), hasTid its compatible ids carry
+ * INST_S98_TUNNEL_ID, onStor98 its service is stor98, cmChanges
+ * inst_tb_cm_changes for the run. INST_S98_ELIGIBLE or a NOID reason. */
+int inst_s98_noid_why(int is81, int hasTid, int onStor98, int cmChanges);
 /* The sentence for a reason (long: the console and the log; short: the
  * window's found page). NULL for INST_S98_ELIGIBLE. */
 const char *inst_s98_skip_text(int why, int brief);

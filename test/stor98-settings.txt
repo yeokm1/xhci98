@@ -35,3 +35,9 @@
                                                    is answered busy (2000
                                                    to 7 use each request's
                                                    own timeout); advanced
+  StorTakeFirmware        -     0                  0 = leave a controller
+  98 SE only, not ME                               the BIOS set up, 1 =
+                                                   take it anyway;
+                                                   advanced: can hang
+                                                   Windows' start or
+                                                   corrupt data (below)

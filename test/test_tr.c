@@ -907,6 +907,54 @@ static void test_query(void)
     q2.EpochHi = 1UL;
     CHECK(!tr_query_new_pass(&q, &q2), "another epoch high");
     CHECK(!tr_query_same_content(&q, &q2), "another epoch high, content");
+    q2.EpochHi = q.EpochHi;
+
+    /* The eject's watch (tr_query_watch_current, record 24 section 5.2):
+     * every answer below is a whole, successful read; only one published
+     * after the answer before the call, current and eject-ready stands
+     * as the watch's reading. */
+    CHECK(tr_query_watch_current(&q, &q2, 0UL),
+          "two passes on, current: stands");
+    q2.Pass = q.Pass;
+    CHECK(!tr_query_watch_current(&q, &q2, 0UL),
+          "a frozen snapshot, the pass before the call's: not current");
+    q2.Pass = q.Pass + 1UL;
+    CHECK(!tr_query_watch_current(&q, &q2, 0UL),
+          "one pass on: possibly built before the call");
+    q2.Pass = q.Pass + 2UL;
+    q2.AgeMs = CM_Q_CURRENT_MS;
+    CHECK(!tr_query_watch_current(&q, &q2, 0UL),
+          "new, but its publication stalled since: not current");
+    q2.AgeMs = CM_Q_UNKNOWN;
+    CHECK(!tr_query_watch_current(&q, &q2, 0UL), "no age: not current");
+    q2.AgeMs = 100UL;
+    CHECK(tr_query_watch_current(&q, &q2, CM_Q_CURRENT_MS - 101UL),
+          "young, held just under the limit: stands");
+    CHECK(!tr_query_watch_current(&q, &q2, CM_Q_CURRENT_MS - 100UL),
+          "young when sampled, then held by the tool (descheduled) to the "
+          "limit: not current");
+    CHECK(!tr_query_watch_current(&q, &q2, 0xFFFFFFF0UL),
+          "held for a wrapped tick count: not current");
+    CHECK(!tr_query_age_within(CM_Q_CURRENT_MS - 1UL, 1UL),
+          "age and hold together at the limit: not current");
+    CHECK(tr_query_age_within(0UL, CM_Q_CURRENT_MS - 1UL),
+          "age 0, held just under the limit: current");
+    q2.Flags = CM_Q_F_STOPPING;
+    CHECK(!tr_query_watch_current(&q, &q2, 0UL), "stopping: not current");
+    q2.Flags = CM_Q_F_INERT;
+    CHECK(!tr_query_watch_current(&q, &q2, 0UL), "inert: not current");
+    q2.Flags = 0UL;
+    q2.Live = 2UL;
+    CHECK(!tr_query_watch_current(&q, &q2, 0UL), "not answering: not current");
+    q2.Live = 1UL;
+    q2.EpochLo = 0x22222222UL;
+    CHECK(!tr_query_watch_current(&q, &q2, 0UL),
+          "another start's answer: not current");
+    q2.EpochLo = 0x11111111UL;
+    put32(qb, 96 + CM_ST_O_STAGE, CM_ST_STAGE_STOPPED);
+    CHECK(!tr_query_watch_current(&q, &q2, 0UL), "stage stopped: not current");
+    put32(qb, 96 + CM_ST_O_STAGE, CM_ST_STAGE_ACTIVE);
+    CHECK(tr_query_watch_current(&q, &q2, 0UL), "restored: stands");
 
     /* No routers. */
     n = qb_build(qa, 0UL, 0x11111111UL, 1UL);
@@ -3593,6 +3641,352 @@ static void test_bkind(void)
     CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: a tick changes nothing");
 }
 
+/* Record 25 section 7.8 (task 48.17): the USB drive notice's pure half. */
+static void stor_obs(TR_STOR_OBS *o, const char *ctrl, const char *path,
+                     TR_U32 slot, const char *name, int rank)
+{
+    memset(o, 0, sizeof(*o));
+    tr_stor_key(o->Key, sizeof(o->Key), ctrl, path, 0x46F4, 0x0001, slot);
+    tr_copy(o->Ctrl, ctrl, sizeof(o->Ctrl));
+    tr_copy(o->Path, path, sizeof(o->Path));
+    o->Vid = 0x46F4;
+    o->Pid = 0x0001;
+    o->Slot = slot;
+    tr_copy(o->Name, name, sizeof(o->Name));
+    o->Rank = rank;
+}
+
+static void test_stor(void)
+{
+    static TR_STOR_SET set;
+    static TR_STOR_Q q;
+    static TR_STOR_OBS o[TR_STOR_MAX + 2];
+    static char quiet[2][TR_FAST_KEY];
+    TR_STOR_GATE g;
+    char key[TR_FAST_KEY];
+    char name[TR_STOR_NAME];
+    char title[64];
+    char text[256];
+    int gone[TR_STOR_MAX + 2];
+    int i;
+    TR_U32 t0 = 0xFFFFF000UL;   /* GetTickCount wraps inside the vectors */
+
+    /* Item 1: only a DWORD 1 is on. */
+    CHECK_EQ(tr_stor_on(0, 1), 0, "stor: absent is off");
+    CHECK_EQ(tr_stor_on(1, 0), 0, "stor: 0 is off");
+    CHECK_EQ(tr_stor_on(1, 1), 1, "stor: 1 is on");
+    CHECK_EQ(tr_stor_on(1, 2), 0, "stor: 2 is off");
+
+    /* Item 4: the key. */
+    tr_stor_key(key, sizeof(key), "{36fc}\\0001", "3.1", 0x46F4, 0x0001, 5);
+    CHECK(strcmp(key, "{36fc}\\0001|3.1|46F4:0001|s5") == 0, "stor: key");
+    tr_stor_key(key, 16, "{36fc}\\0001", "3.1", 0x46F4, 0x0001, 5);
+    CHECK_EQ(strlen(key), 15, "stor: a key cut to its room");
+
+    /* Item 9: the names and their ranks. */
+    CHECK_EQ(tr_stor_name(name, sizeof(name), "SanDisk Ultra (F:)", "Ultra",
+                          1, 2), TR_SN_LETTER, "stor: label with a letter");
+    CHECK(strcmp(name, "SanDisk Ultra (F:)") == 0, "stor: the label");
+    CHECK_EQ(tr_stor_name(name, sizeof(name), "SanDisk Ultra", NULL, 1, 2),
+             TR_SN_LABEL, "stor: label");
+    CHECK_EQ(tr_stor_name(name, sizeof(name), "USB Mass Storage Device",
+                          "  Cruzer  ", 1, 2), TR_SN_PRODUCT,
+             "stor: a class name gives way to the product string");
+    CHECK(strcmp(name, "Cruzer") == 0, "stor: product trimmed");
+    CHECK_EQ(tr_stor_name(name, sizeof(name), "USB Mass Storage Device", "",
+                          1, 2), TR_SN_CLASS, "stor: the class name");
+    CHECK_EQ(tr_stor_name(name, sizeof(name), NULL, NULL, 0x46F4, 1),
+             TR_SN_VIDPID, "stor: VID:PID");
+    CHECK(strcmp(name, "USB drive 46F4:0001") == 0, "stor: VID:PID text");
+
+    /* Items 5 to 7: the first refresh is quiet. */
+    memset(&set, 0, sizeof(set));
+    memset(&q, 0, sizeof(q));
+    stor_obs(&o[0], "C1", "1", 1, "Stick A (E:)", TR_SN_LETTER);
+    CHECK_EQ(tr_stor_step(&set, NULL, o, 1, NULL, 0, 1, &q, t0), 0,
+             "stor: the first refresh is quiet");
+    CHECK_EQ(set.N, 1, "stor: kept quietly");
+    CHECK_EQ(q.Arr.N + q.Rm.N, 0, "stor: nothing queued");
+    /* An arrival. */
+    stor_obs(&o[1], "C1", "2", 2, "Cruzer", TR_SN_PRODUCT);
+    CHECK_EQ(tr_stor_step(&set, NULL, o, 2, NULL, 0, 0, &q, t0 + 10), 1,
+             "stor: an arrival");
+    CHECK_EQ(q.Arr.N, 1, "stor: the arrival queued");
+    CHECK_EQ(q.Arr.First, t0 + 10, "stor: its first event");
+    /* The quiet drive removed: a removal; the other unknown: kept. */
+    memset(gone, 0, sizeof(gone));
+    o[0] = o[1];
+    gone[0] = 1;
+    CHECK_EQ(tr_stor_step(&set, gone, o, 1, NULL, 0, 0, &q, t0 + 20), 1,
+             "stor: a quiet drive's removal is announced");
+    CHECK_EQ(q.Rm.N, 1, "stor: the removal queued");
+    CHECK(strcmp(q.Rm.Name[0], "Stick A (E:)") == 0, "stor: by its name");
+    CHECK_EQ(set.N, 1, "stor: the removed drive left the set");
+    /* Unknown: kept, no notice. */
+    memset(gone, 0, sizeof(gone));
+    CHECK_EQ(tr_stor_step(&set, gone, NULL, 0, NULL, 0, 0, &q, t0 + 30), 0,
+             "stor: unknown gives nothing");
+    CHECK_EQ(set.N, 1, "stor: unknown kept");
+    /* The arrival gone before it was sent: nothing either way. */
+    gone[0] = 1;
+    CHECK_EQ(tr_stor_step(&set, gone, NULL, 0, NULL, 0, 0, &q, t0 + 40), 0,
+             "stor: an unannounced arrival's removal is not queued");
+    CHECK_EQ(q.Arr.N, 0, "stor: its arrival dropped");
+    CHECK_EQ(q.Rm.N, 1, "stor: the earlier removal stays");
+    tr_stor_q_clear(&q);
+
+    /* A replug with another slot: one removal and one arrival. */
+    memset(&set, 0, sizeof(set));
+    stor_obs(&o[0], "C1", "1", 1, "Stick", TR_SN_PRODUCT);
+    (void)tr_stor_step(&set, NULL, o, 1, NULL, 0, 1, &q, t0);
+    stor_obs(&o[0], "C1", "1", 3, "Stick", TR_SN_PRODUCT);
+    gone[0] = 1;
+    CHECK_EQ(tr_stor_step(&set, gone, o, 1, NULL, 0, 0, &q, t0 + 5), 2,
+             "stor: a replug on another slot");
+    CHECK_EQ(q.Rm.N, 1, "stor: replug: removal");
+    CHECK_EQ(q.Arr.N, 1, "stor: replug: arrival");
+    tr_stor_q_clear(&q);
+    /* The same slot: unseen. A better name kept, a lower one not taken. */
+    stor_obs(&o[0], "C1", "1", 3, "Stick (G:)", TR_SN_LETTER);
+    CHECK_EQ(tr_stor_step(&set, gone, o, 1, NULL, 0, 0, &q, t0 + 6), 0,
+             "stor: the same slot is the same drive");
+    CHECK(strcmp(set.E[0].Name, "Stick (G:)") == 0, "stor: a better name taken");
+    stor_obs(&o[0], "C1", "1", 3, "USB drive 46F4:0001", TR_SN_VIDPID);
+    (void)tr_stor_step(&set, gone, o, 1, NULL, 0, 0, &q, t0 + 7);
+    CHECK(strcmp(set.E[0].Name, "Stick (G:)") == 0,
+          "stor: a lower name not taken");
+
+    /* A controller answering again: quiet for it alone; its queued drives
+     * dropped. */
+    memset(&set, 0, sizeof(set));
+    tr_stor_q_clear(&q);
+    stor_obs(&o[0], "C1", "1", 1, "A", TR_SN_PRODUCT);
+    stor_obs(&o[1], "C2", "1", 1, "B", TR_SN_PRODUCT);
+    (void)tr_stor_step(&set, NULL, o, 2, NULL, 0, 1, &q, t0);
+    stor_obs(&o[0], "C1", "1", 4, "A2", TR_SN_PRODUCT);
+    stor_obs(&o[1], "C2", "1", 4, "B2", TR_SN_PRODUCT);
+    gone[0] = gone[1] = 1;
+    tr_copy(quiet[0], "C2", TR_FAST_KEY);
+    CHECK_EQ(tr_stor_step(&set, gone, o, 2, (const char (*)[TR_FAST_KEY])quiet,
+                          1, 0, &q, t0 + 1), 2,
+             "stor: a quiet controller gives nothing");
+    CHECK_EQ(q.Rm.N, 1, "stor: C1's removal");
+    CHECK(strcmp(q.Rm.Ctrl[0], "C1") == 0, "stor: C1's");
+    tr_stor_q_drop_ctrl(&q, "C1");
+    CHECK_EQ(q.Rm.N + q.Arr.N, 0, "stor: a controller's queued drives dropped");
+
+    /* A hub gone with two drives: one group of two. */
+    memset(&set, 0, sizeof(set));
+    tr_stor_q_clear(&q);
+    stor_obs(&o[0], "C1", "1.1", 1, "Alpha (E:)", TR_SN_LETTER);
+    stor_obs(&o[1], "C1", "1.2", 2, "Beta (F:)", TR_SN_LETTER);
+    (void)tr_stor_step(&set, NULL, o, 2, NULL, 0, 1, &q, t0);
+    gone[0] = gone[1] = 1;
+    CHECK_EQ(tr_stor_step(&set, gone, NULL, 0, NULL, 0, 0, &q, t0 + 1), 2,
+             "stor: a hub's two drives");
+    tr_stor_text(title, sizeof(title), text, sizeof(text), &q.Rm, 1);
+    CHECK(strcmp(title, "USB drives removed") == 0, "stor: plural title");
+    CHECK(strcmp(text, "Alpha (E:) and Beta (F:) were removed.") == 0,
+          "stor: two names");
+
+    /* The cap. */
+    memset(&set, 0, sizeof(set));
+    tr_stor_q_clear(&q);
+    for (i = 0; i < TR_STOR_MAX + 1; i++) {
+        char p[8];
+        tr_sprintf(p, sizeof(p), "%d", i + 1);
+        stor_obs(&o[i], "C1", p, (TR_U32)i + 1, "D", TR_SN_PRODUCT);
+    }
+    CHECK_EQ(tr_stor_step(&set, NULL, o, TR_STOR_MAX + 1, NULL, 0, 0, &q, t0),
+             TR_STOR_MAX, "stor: 64 kept, the 65th not");
+    CHECK_EQ(set.N, TR_STOR_MAX, "stor: the set full");
+    tr_stor_text(title, sizeof(title), text, sizeof(text), &q.Arr, 0);
+    CHECK(strcmp(text, "D, D and 62 more are connected.") == 0,
+          "stor: and n more");
+    q.Arr.N = 70;
+    tr_stor_text(title, sizeof(title), text, sizeof(text), &q.Arr, 0);
+    CHECK(strcmp(text, "D, D and 68 more are connected.") == 0,
+          "stor: the count exact past the kept");
+
+    /* Texts: one, a long name cut. */
+    tr_stor_q_clear(&q);
+    memset(&set, 0, sizeof(set));
+    stor_obs(&o[0], "C1", "1", 1, "Stick (E:)", TR_SN_LETTER);
+    (void)tr_stor_step(&set, NULL, o, 1, NULL, 0, 0, &q, t0);
+    tr_stor_text(title, sizeof(title), text, sizeof(text), &q.Arr, 0);
+    CHECK(strcmp(title, "USB drive connected") == 0, "stor: title");
+    CHECK(strcmp(text, "Stick (E:) is connected.") == 0, "stor: text");
+    memset(q.Arr.Name[0], 'x', TR_STOR_NAME - 1);
+    q.Arr.Name[0][TR_STOR_NAME - 1] = '\0';
+    tr_stor_text(title, sizeof(title), text, 40, &q.Arr, 0);
+    CHECK(strlen(text) <= 39 && has(text, "... is connected."),
+          "stor: a long name cut to fit");
+
+    /* Item 8: the gates. */
+    memset(&g, 0, sizeof(g));
+    g.Ready = 1;
+    g.Now = t0 + TR_STOR_GATHER_MS - 1UL;
+    CHECK_EQ(tr_stor_due(&q, &g), TR_SQ_NONE, "stor: gathering");
+    g.Now = t0 + TR_STOR_GATHER_MS;
+    CHECK_EQ(tr_stor_due(&q, &g), TR_SQ_NONE, "stor: held for its devnode");
+    g.ArrNamed = 1;
+    CHECK_EQ(tr_stor_due(&q, &g), TR_SQ_NONE, "stor: settling");
+    g.Now = t0 + TR_STOR_SETTLE_MS;
+    CHECK_EQ(tr_stor_due(&q, &g), TR_SQ_ARR, "stor: a devnode and 3 s");
+    g.ArrNamed = 0;
+    g.Now = t0 + TR_STOR_HOLD_MS - 1UL;
+    CHECK_EQ(tr_stor_due(&q, &g), TR_SQ_NONE, "stor: held up to 10 s");
+    g.Now = t0 + TR_STOR_HOLD_MS;
+    CHECK_EQ(tr_stor_due(&q, &g), TR_SQ_ARR, "stor: 10 s whatever it has");
+    g.Ready = 0;
+    CHECK_EQ(tr_stor_due(&q, &g), TR_SQ_NONE, "stor: no icon or off");
+    g.Ready = 1;
+    g.Quiet = 1;
+    CHECK_EQ(tr_stor_due(&q, &g), TR_SQ_NONE, "stor: nothing while quiet");
+    g.Quiet = 0;
+    g.HaveOther = 1;
+    g.OtherAt = g.Now - TR_STOR_GAP_MS + 1UL;
+    CHECK_EQ(tr_stor_due(&q, &g), TR_SQ_NONE, "stor: the gap");
+    g.OtherAt = g.Now - TR_STOR_GAP_MS;
+    CHECK_EQ(tr_stor_due(&q, &g), TR_SQ_ARR, "stor: after the gap");
+    g.FastOwed = 1;
+    CHECK_EQ(tr_stor_due(&q, &g), TR_SQ_NONE, "stor: the faster notice owed");
+    g.FastOwed = 0;
+    g.FastWatch = 1;
+    g.FastAt = g.Now - TR_STOR_FAST_MS + 1UL;
+    CHECK_EQ(tr_stor_due(&q, &g), TR_SQ_NONE, "stor: its watch open");
+    g.FastAt = g.Now - TR_STOR_FAST_MS;
+    CHECK_EQ(tr_stor_due(&q, &g), TR_SQ_ARR,
+             "stor: its watch bounded (a shell that never answers)");
+    /* Removals first. */
+    g.FastWatch = 0;
+    stor_obs(&o[0], "C1", "1", 1, "Stick (E:)", TR_SN_LETTER);
+    gone[0] = 1;
+    (void)tr_stor_step(&set, gone, NULL, 0, NULL, 0, 0, &q, t0);
+    CHECK_EQ(q.Arr.N, 0, "stor: the queued arrival left with the drive");
+    stor_obs(&o[0], "C1", "2", 9, "Other", TR_SN_PRODUCT);
+    (void)tr_stor_step(&set, NULL, o, 1, NULL, 0, 0, &q, t0);
+    stor_obs(&o[1], "C1", "3", 9, "Third", TR_SN_PRODUCT);
+    memset(&set, 0, sizeof(set));
+    (void)tr_stor_step(&set, NULL, &o[1], 1, NULL, 0, 1, &q, t0);
+    gone[0] = 1;
+    (void)tr_stor_step(&set, gone, NULL, 0, NULL, 0, 0, &q, t0);
+    CHECK_EQ(q.Rm.N, 1, "stor: a removal queued");
+    CHECK_EQ(q.Arr.N, 1, "stor: beside an arrival");
+    g.Now = t0 + TR_STOR_HOLD_MS;
+    CHECK_EQ(tr_stor_due(&q, &g), TR_SQ_RM, "stor: removals first");
+    tr_stor_q_clear(&q);
+    CHECK_EQ(tr_stor_due(&q, &g), TR_SQ_NONE, "stor: cleared");
+}
+
+/* Item 3's poll baseline, and item 10's watch: the answering shells and
+ * the tick held while the Settings window holds the model. */
+static void test_stor_poll(void)
+{
+    static TR_STOR_POLL base;
+    static TR_STOR_POLL now;
+    TR_BSEND s;
+    TR_U32 t0 = 0xFFFF8000UL;
+
+    /* The case the first tick's refresh is for: the tray's refresh
+     * counted a stick on C1, which went before the first tick. */
+    memset(&base, 0, sizeof(base));
+    memset(&now, 0, sizeof(now));
+    strcpy(now.Key[0], "C1");
+    now.Bytes[0] = 0;
+    now.N = 1;
+    CHECK_EQ(tr_stor_poll_step(&base, &now), 1,
+             "stor poll: no baseline: a refresh owed");
+    CHECK_EQ(base.N, 1, "stor poll: now is the base");
+    CHECK_EQ(base.Bytes[0], 0, "stor poll: its reading kept");
+    CHECK_EQ(tr_stor_poll_step(&base, &now), 0, "stor poll: the same: none");
+    /* A stick plugged: one record more. */
+    now.Bytes[0] = 40;
+    CHECK_EQ(tr_stor_poll_step(&base, &now), 1, "stor poll: a size change");
+    /* Unplugged during the refresh that change asked for (its ports read
+     * before, its query after): the tick after it still sees the change,
+     * the baseline being the ticks' own and not the refresh's. */
+    now.Bytes[0] = 0;
+    CHECK_EQ(tr_stor_poll_step(&base, &now), 1,
+             "stor poll: gone during the refresh: the next tick sees it");
+    /* A second controller, new to the model: one refresh, then settled. */
+    strcpy(now.Key[1], "C2");
+    now.Bytes[1] = TR_STOR_POLL_NONE;
+    now.N = 2;
+    CHECK_EQ(tr_stor_poll_step(&base, &now), 1,
+             "stor poll: a controller new to the model");
+    CHECK_EQ(tr_stor_poll_step(&base, &now), 0,
+             "stor poll: its failed read kept as its baseline: no loop");
+    now.Bytes[1] = 80;
+    CHECK_EQ(tr_stor_poll_step(&base, &now), 1,
+             "stor poll: a failed read answering: a change");
+    strcpy(now.Key[0], "C2");
+    strcpy(now.Key[1], "C1");
+    now.Bytes[0] = 80;
+    now.Bytes[1] = 0;
+    CHECK_EQ(tr_stor_poll_step(&base, &now), 0,
+             "stor poll: matched by key, not position");
+    now.N = 1;
+    CHECK_EQ(tr_stor_poll_step(&base, &now), 0,
+             "stor poll: a controller gone: no change");
+    now.N = 0;
+    CHECK_EQ(tr_stor_poll_step(&base, &now), 0,
+             "stor poll: every controller gone: no change");
+    CHECK_EQ(base.N, 0, "stor poll: nothing kept");
+    CHECK_EQ(tr_stor_poll_step(NULL, &now), 0, "stor poll: NULL");
+
+    /* The answering shells: XP and later, or one that answered. */
+    CHECK_EQ(tr_stor_answers(0, 0, 4, 10), 0, "stor answers: 98 SE");
+    CHECK_EQ(tr_stor_answers(0, 0, 4, 90), 0, "stor answers: ME");
+    CHECK_EQ(tr_stor_answers(0, 1, 5, 0), 0, "stor answers: 2000");
+    CHECK_EQ(tr_stor_answers(0, 1, 5, 1), 1, "stor answers: XP");
+    CHECK_EQ(tr_stor_answers(0, 1, 5, 2), 1, "stor answers: XP x64");
+    CHECK_EQ(tr_stor_answers(0, 1, 6, 0), 1, "stor answers: Vista");
+    CHECK_EQ(tr_stor_answers(0, 1, 10, 0), 1, "stor answers: 10");
+    CHECK_EQ(tr_stor_answers(1, 1, 5, 0), 1, "stor answers: 2000 answered");
+    CHECK_EQ(tr_stor_answers(1, 0, 4, 90), 1, "stor answers: ME answered");
+
+    /* XP's first plug: no answer at all, re-sent once at 60 s. */
+    memset(&s, 0, sizeof(s));
+    (void)tr_stor_resend_due(&s, TR_BE_SENT, t0, 1, 0);
+    CHECK_EQ(tr_stor_resend_due(&s, TR_BE_TICK, t0 + TR_BS_NOSHOW_MS - 1UL,
+                                tr_stor_answers(0, 1, 5, 1), 0), 0,
+             "stor resend: XP, not before 60 s");
+    CHECK_EQ(tr_stor_resend_due(&s, TR_BE_TICK, t0 + TR_BS_NOSHOW_MS,
+                                tr_stor_answers(0, 1, 5, 1), 0), 1,
+             "stor resend: XP, unanswered: sent again across the wrap");
+    memset(&s, 0, sizeof(s));
+    (void)tr_stor_resend_due(&s, TR_BE_SENT, t0, 1, 0);
+    CHECK_EQ(tr_stor_resend_due(&s, TR_BE_TICK, t0 + 900000UL,
+                                tr_stor_answers(0, 1, 5, 0), 0), 0,
+             "stor resend: 2000, unanswered: never sent twice");
+
+    /* Lost while the Settings window is open: the ticks wait, the state
+     * kept; the first tick after the close re-sends. */
+    memset(&s, 0, sizeof(s));
+    (void)tr_stor_resend_due(&s, TR_BE_SENT, t0, 1, 1);
+    CHECK_EQ(s.State, TR_BS_SENT, "stor resend: sent while held");
+    (void)tr_stor_resend_due(&s, TR_BE_TIMEOUT, t0 + 1000UL, 1, 1);
+    CHECK_EQ(s.State, TR_BS_LOST, "stor resend: a timeout while held");
+    CHECK_EQ(tr_stor_resend_due(&s, TR_BE_TICK, t0 + 1000UL + TR_BS_WAIT_MS,
+                                1, 1), 0,
+             "stor resend: due, but held: waits");
+    CHECK_EQ(s.State, TR_BS_LOST, "stor resend: still lost");
+    CHECK_EQ(s.Resent, 0, "stor resend: not re-sent");
+    CHECK_EQ(tr_stor_resend_due(&s, TR_BE_TICK, t0 + 900000UL, 1, 1), 0,
+             "stor resend: held long: still waits");
+    CHECK_EQ(tr_stor_resend_due(&s, TR_BE_TICK, t0 + 900001UL, 1, 0), 1,
+             "stor resend: the tick after the close");
+    CHECK_EQ(s.Resent, 1, "stor resend: as the re-send");
+    /* Held, the shell's own answers still count. */
+    memset(&s, 0, sizeof(s));
+    (void)tr_stor_resend_due(&s, TR_BE_SENT, t0, 1, 1);
+    (void)tr_stor_resend_due(&s, TR_BE_SHOW, t0 + 500UL, 1, 1);
+    CHECK_EQ(s.State, TR_BS_SHOWN, "stor resend: shown while held");
+    CHECK_EQ(tr_stor_resend_due(&s, TR_BE_TICK, t0 + 900000UL, 1, 0), 0,
+             "stor resend: shown: nothing after the close");
+}
+
 static void test_bsend(void)
 {
     TR_BSEND s;
@@ -4417,6 +4811,24 @@ static void test_eject_watch(void)
                  "because the eject was not confirmed to the Thunderbolt "
                  "driver; an eject made as an administrator is confirmed by "
                  "this tool itself.") == 0, "unconfirmed text");
+    /* A port the driver cannot close (inst_pcie_unbound): its line
+     * whatever the kind, else the kind's (record 24 section 5.2). */
+    {
+        int k;
+        for (k = TR_EJW_PLAIN; k <= TR_EJW_UNCONFIRMED; k++) {
+            CHECK(strcmp(tr_eject_end_text(k, 0), tr_eject_open_text(k)) == 0,
+                  "not shown unbound: the kind's line");
+            CHECK(strcmp(tr_eject_end_text(k, 1), inst_pcie_unbound_text()) ==
+                      0,
+                  "unbound: the line for a port the driver does not know");
+            CHECK(strcmp(tr_eject_end_text(
+                             k, inst_pcie_unbound(INST_PCIE_UNMAPPED, 0, 0,
+                                                  INST_PCIE_UNMAPPED)),
+                         tr_eject_open_text(k)) == 0,
+                  "an unmapped last read that could not be shown current "
+                  "(a frozen answer): the kind's line");
+        }
+    }
 }
 
 /* Record 25 section 17 (task 44.9): what a router's link runs as. */
@@ -4766,6 +5178,28 @@ static void test_at_records(void)
     CHECK_EQ(tr_at_line("at=00000001", &v), 1, "the first unit is a time");
 }
 
+/* Record 24 section 4.3, revision 9: the 98 SE and ME line from a unit's
+ * devnode status says what Windows has, never who set it. */
+static void test_removable_9x(void)
+{
+    const char *a;
+    const char *b;
+
+    a = inst_removable_9x_text(0x4000UL, 1);
+    b = inst_removable_9x_text(0x4000UL, 0);
+    CHECK(strcmp(a, "Marked removable.") == 0, "the tree's sentence, bit set");
+    CHECK(strcmp(b, "marked removable") == 0, "the install tool's clause, bit set");
+    CHECK(strcmp(inst_removable_9x_text(0x18086ACEUL, 1), "Marked removable.") == 0,
+          "98 SE's status of a chained NVMe (18086ACE): marked");
+    CHECK(strcmp(inst_removable_9x_text(0x0000000AUL, 1), "Not marked removable.") == 0,
+          "bit clear: not marked");
+    CHECK(strcmp(inst_removable_9x_text(0x3FFFUL | 0x8000UL, 0), "not marked removable") == 0,
+          "only 0x4000 counts");
+    CHECK(strstr(a, "Thunderbolt") == NULL && strstr(b, "Thunderbolt") == NULL &&
+              strstr(a, "driver") == NULL && strstr(b, "driver") == NULL,
+          "no claim of who set it");
+}
+
 int main(void)
 {
     test_main_title();
@@ -4789,6 +5223,8 @@ int main(void)
     test_login();
     test_qual_cache();
     test_bsend();
+    test_stor();
+    test_stor_poll();
     test_bkind();
     test_hover();
     test_fast();
@@ -4800,6 +5236,7 @@ int main(void)
     test_mark_rerun();
     test_eject_watch();
     test_snap_saved();
+    test_removable_9x();
     {
         /* A UAS interface: bulk endpoints with companions and pipe usage. */
         static const unsigned char uas[] = {

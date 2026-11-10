@@ -86,6 +86,9 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 
     HcdDriverObject = DriverObject;
     HcdPoolInit();
+    /* Task 48.33: the boot ledger of the DMA memory controllers could
+     * name (hcd_dma.c), before any controller is added. */
+    HcdDmaLedgerInit(DriverObject);
     HcdUrbInit();
     HcdPdoRetireInit();
     HcdSuspDriverInit();

@@ -109,7 +109,7 @@ extern const int trsExtraCount;
 #define TRS_GREY            2
 int trs_state(const TRS_ROW *r, const TRS_ENV *e);
 /* A greyed row's "(... only)" text, or NULL. */
-const char *trs_only(const TRS_ROW *r);
+const char *trs_only(const TRS_ROW *r, const TRS_ENV *e);
 int trs_loc(const TRS_ROW *r);
 
 /* The values a list row offers here, in order, into vals (at most cap);

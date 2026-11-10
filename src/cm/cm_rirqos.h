@@ -12,8 +12,9 @@
  * alone. No spin lock of the driver's is taken at DIRQL, and WorkLock is
  * never taken inside a synchronize routine (record 21 section 4.5.3).
  *
- * Only NT connects (IoIsWdmVersionAvailable(1, 0x10)): 98 SE and ME poll
- * until their route is read (section 4.5.4), whatever the value says.
+ * Every system connects the line its start was given, 98 SE and ME
+ * through NTKERN's IoConnectInterrupt as on NT (section 4.5.4; task
+ * 48.26, after their route was read in task 45.22).
  */
 
 #ifndef CM_RIRQOS_H
@@ -46,7 +47,6 @@ typedef struct _CM_RIRQ_DRV {
     ULONG MaintLast;        /* the last maintenance pass, NowMs            */
     ULONG MaintOwed;        /* the maintenance due at once (an Up)         */
     ULONG RetryDue;         /* a retained one's next retirement attempt    */
-    ULONG Noted9x;          /* cm.irq.9x logged                            */
     CM_RIRQ_GEOM Geom;
     CM_RIRQ_WATCH Watch;
     PKINTERRUPT Object;
@@ -62,6 +62,8 @@ typedef struct _CM_RIRQ_DRV {
     LONG DpcSeq;
     LONG DpcsOwed;
     LONG Claims;
+    LONG Claims0;           /* of them with ring 0's cause set             */
+    LONG ClaimsData;        /* of them with the data ring's cause set      */
     LONG Ones;
     CM_RIRQ_BURST Burst;    /* the service routine's alone                 */
     /* The qemu flavour's dead line (XhciCmQemuIrqDead): after DeadAfter
@@ -70,6 +72,18 @@ typedef struct _CM_RIRQ_DRV {
     ULONG QemuDeadAfter;
     volatile LONG QemuDead;
     LONG QemuDropped;
+
+    /* The networking data ring's cause (record 35 section 5.5, task
+     * 48.38), the thread's but DataOpen, which the DPC reads: DataWant the
+     * ring whose cause the network service asks for (0 none), opened at
+     * once where armed and at every later arm; DataOpen its cause open and
+     * proven. The data bit stays in Geom while its mask is not proven, so
+     * the routine still claims and acknowledges it. */
+    ULONG DataWant;
+    volatile LONG DataOpen;
+    ULONG DataOpens;
+    ULONG DataUnproven;
+    ULONG DataStorms;
 
     /* Counters (cm.irq.*), the thread's. */
     ULONG Connects;
@@ -127,6 +141,23 @@ VOID CmRirqService(struct _CM_NHI *nhi, BOOLEAN polling, ULONG periodMs);
 VOID CmRirqDown(struct _CM_NHI *nhi, ULONG why);
 /* The counters as cm.irq.* lines, at the stop. */
 VOID CmRirqLogCounters(struct _CM_NHI *nhi);
+
+/*
+ * The networking data ring's cause (record 35 section 5.5), on the thread:
+ * CmRirqDataOpen asks for ring `ring`'s Receive Data Buffer cause, opened
+ * now where the interrupt is armed (ITR[0] CM_RIRQ_ITR_DATA, the mask read
+ * back) and at every later arm while asked for: CM_RIRQ_DATA_*.
+ * CmRirqDataClose withdraws the ask and masks the cause, ITR[0] back to 0:
+ * TRUE when it is proven masked or was never open (the host interface
+ * lost: nothing written, TRUE). CmRirqDataState for the query: 0 polled, 1
+ * open, 2 asked for and latched to polling (the activation fell back).
+ */
+#define CM_RIRQ_DATA_POLL        0UL    /* not armed: the poll alone       */
+#define CM_RIRQ_DATA_OPEN        1UL
+#define CM_RIRQ_DATA_UNPROVEN    2UL    /* the mask not read back: masked  */
+ULONG CmRirqDataOpen(struct _CM_NHI *nhi, ULONG ring, BOOLEAN lost);
+BOOLEAN CmRirqDataClose(struct _CM_NHI *nhi, BOOLEAN lost);
+ULONG CmRirqDataState(struct _CM_NHI *nhi);
 
 /*
  * cm_thr.c: the one configuration access the retirement adds (record 21

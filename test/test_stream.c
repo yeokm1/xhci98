@@ -8,9 +8,10 @@
  * MaxPStreams and LSA (Table 6-8), the Stream Context (6.2.4.1) and its SCT
  * (Table 6-13), the Set TR Dequeue Pointer command (6.4.3.9), the doorbell
  * register (5.6), Table 6-1's boundaries, and the SuperSpeed Endpoint
- * Companion descriptor (USB 3.2 9.6.7, Table 9-27). The spec PDF was not at
- * hand when these were written; the rows docs\usb-xhci-info\
- * xhci-data-structures.md marks "to verify" are the ones to check first.
+ * Companion descriptor (USB 3.2 9.6.7, Table 9-28). The spec PDF was not at
+ * hand when these were written; the rows of docs\usb-xhci-info\
+ * xhci-data-structures.md's "Streams" were read against USB 3.2 and xHCI
+ * 1.2c since (tasks 48.3 and 48.37).
  *
  * Policy rather than specification, and tested as policy: the 32-entry cap,
  * the array never under 4 entries, the page-rounded block with each ring at

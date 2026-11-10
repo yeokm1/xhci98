@@ -277,8 +277,19 @@ typedef struct _PLAT_FIND_INFO {
     ULONG Found, FoundBus, FoundSlot, Result;
     ULONG FwChecked, FwCmd, FwCc, FwCsts, FwState;
     ULONG FwReach, FwTurnedOn;                      // PCISCAN_REACH_*; decode turned on for the read
+    ULONG FwTake, FwTakeSrc;                        // set up but taken by the user's option; PCISCAN_TAKESRC_*
+    ULONG FwTakeMe;                                 // the option's take set aside: Windows Me (PciScanTakeMe)
 } PLAT_FIND_INFO;
+// The report is also written as "StorFind <bus>.<device>.<function>" when
+// a function was found, so each adapter's last find is kept (xhci98
+// 3.4.3.0); "StorFind" stays the last find of any.
 VOID PlatFindReport(IN const PLAT_FIND_INFO *Fi);
+// 9x only (PLAN "Taking a controller the BIOS set up"): StorTakeFirmware in
+// the same key, through PciScanTakeGlobal: PCISCAN_TAKE_TAKE only for a
+// REG_DWORD of 1 or a REG_SZ of exactly "1", else PCISCAN_TAKE_LEAVE.
+int PlatTakeFirmwareRaw(VOID);
+// 9x only: 1 on Windows Me (VMM 4.90 and later), 0 on 98 SE.
+int PlatIsMe(VOID);
 #endif
 VOID PlatIrqReport(IN struct _HW_DEVICE_EXTENSION *DevExt, IN PCHAR ArgumentString);
 // TRUE in a crash dump or hibernation instance (NT "dump=1"; 9x never).

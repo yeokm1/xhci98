@@ -85,9 +85,10 @@ rule named as the other gates name their families.
            (since task 45.56) XhciCmGen4LinkRecovery at
            src\cm\cm_vals.h's defaults and XhciCmTunnelBridge as the
            REG_SZ "auto" (flag 0x00000002), the driver's own finding; the
-           NT paths XhciCmRingInterrupt, and the NT 5.x paths (2000, XP,
-           XP x64) XhciCmBridgeReq, each at its cm_vals.h default and on no
-           other path. The values the driver reads on Windows 98 SE and ME alone
+           NT 5.x paths (2000, XP, XP x64) XhciCmBridgeReq, at its
+           cm_vals.h default and on no other path; every path
+           XhciCmRingInterrupt (task 48.26: read on 98 SE and ME too; the
+           NT paths alone before). The values the driver reads on Windows 98 SE and ME alone
            (XhciCmBridgeNumbering, XhciCmNoIrqStart; task 44.46) are
            written by the x86 INF's undecorated install alone, at their
            defaults in src\cm\cm_vals.h, and by no NT install path.
@@ -321,11 +322,13 @@ function Get-CmNineXTable {
 # Task 45.50 (owner, 2026-10-30: every value a released driver reads is
 # written by the install): the values outside the rule table, each with
 # the systems that read it. Every path writes XhciCmAsmediaPcie7Credits,
-# XhciCmUsb4V2 and (task 45.56) XhciCmGen4LinkRecovery at
+# XhciCmUsb4V2, (task 45.56) XhciCmGen4LinkRecovery and (task 48.35)
+# XhciCmSleepEntry at
 # src\cm\cm_vals.h's defaults, and XhciCmTunnelBridge
 # as the REG_SZ "auto", which the driver takes as its absence, its own
-# finding (cm_vals.c CmValuesTakeBridge); the NT paths (2000 to 10)
-# XhciCmRingInterrupt; the NT 5.x paths (2000, XP, XP x64) XhciCmBridgeReq,
+# finding (cm_vals.c CmValuesTakeBridge); since task 48.26 every path
+# XhciCmRingInterrupt (the NT paths alone before, when 98 SE and ME did not
+# connect the interrupt); the NT 5.x paths (2000, XP, XP x64) XhciCmBridgeReq,
 # which the driver reads there alone (CmBreqGate). Since task 46.12 on NT
 # (design record 32 sections 12.8.15.10 and 12.8.15.12) every path writes
 # XhciCmAsm4242Handover and the NT paths XhciCmAsm4242Reads; since the NT
@@ -334,11 +337,12 @@ $cmAllValues = [ordered]@{
     "XhciCmAsmediaPcie7Credits" = "CM_ASM_PCIE7_DEFAULT"
     "XhciCmUsb4V2"              = "CM_USB4_V2_DEFAULT"
     "XhciCmGen4LinkRecovery"    = "CM_GEN4_ELR_DEFAULT"
+    "XhciCmSleepEntry"          = "CM_SLEEP_ENTRY_DEFAULT"
     "XhciCmAsm4242Handover"     = "CM_PLAT_HANDOVER_DEFAULT"
     "XhciCmAsm4242Structural"   = "CM_HO_STRUCTURAL_DEFAULT"
+    "XhciCmRingInterrupt"       = "CM_RING_IRQ_DEFAULT"
 }
 $cmNtValues = [ordered]@{
-    "XhciCmRingInterrupt" = "CM_RING_IRQ_DEFAULT"
     "XhciCmAsm4242Reads"  = "CM_HO_READS_DEFAULT"
 }
 $cmNt5Values = [ordered]@{ "XhciCmBridgeReq" = "CM_BRIDGE_REQ_DEFAULT" }
@@ -1094,6 +1098,9 @@ if ($SelfTest) {
                     @{ Rule = "VAL-MISSING";    Text = $t.Replace("HKR,,XhciCmGen4LinkRecovery,0x00010003,1`r`n", "") },
                     @{ Rule = "VAL-DEFAULT";    Text = $t.Replace("HKR,,XhciCmGen4LinkRecovery,0x00010003,1", "HKR,,XhciCmGen4LinkRecovery,0x00010003,0") },
                     @{ Rule = "VAL-FLAG";       Text = $t.Replace("HKR,,XhciCmGen4LinkRecovery,0x00010003,1", "HKR,,XhciCmGen4LinkRecovery,0x00010001,1") },
+                    @{ Rule = "VAL-MISSING";    Text = $t.Replace("HKR,,XhciCmSleepEntry,0x00010003,1`r`n", "") },
+                    @{ Rule = "VAL-DEFAULT";    Text = $t.Replace("HKR,,XhciCmSleepEntry,0x00010003,1", "HKR,,XhciCmSleepEntry,0x00010003,0") },
+                    @{ Rule = "VAL-FLAG";       Text = $t.Replace("HKR,,XhciCmSleepEntry,0x00010003,1", "HKR,,XhciCmSleepEntry,0x00010001,1") },
                     @{ Rule = "VAL-MISSING";    Text = $t.Replace("[Cm.Dev.NTx86]`r`nAddReg=Cm.Values,Cm.ValuesNt,Cm.ValuesNt5", "[Cm.Dev.NTx86]`r`nAddReg=Cm.Values,Cm.ValuesNt") },
                     @{ Rule = "VAL-MISSING";    Text = $t.Replace("[Cm.Dev6.NTx86]`r`nAddReg=Cm.Values,Cm.ValuesNt", "[Cm.Dev6.NTx86]`r`nAddReg=Cm.Values") },
                     @{ Rule = "VAL-EXTRA";      Text = $t.Replace("[Cm.Dev6.NTx86]`r`nAddReg=Cm.Values,Cm.ValuesNt", "[Cm.Dev6.NTx86]`r`nAddReg=Cm.Values,Cm.ValuesNt,Cm.ValuesNt5") },

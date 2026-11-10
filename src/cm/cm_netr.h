@@ -28,6 +28,8 @@
  * while that generation is current; a token of an earlier generation still
  * releases the reservation it names and posts nothing.
  *
+ * THE GATE (record 35 section 6.6): the network PDO's way to its NHI, below.
+ *
  * C89, DDK-free, no allocation, no lock (the driver half holds its spin
  * lock around every call). IRQL: any.
  */
@@ -104,5 +106,27 @@ ULONG CmNetrReserve(const CM_NETR *tx, CM_NETR_RES *res, ULONG gen, ULONG count,
  * no reservation held. */
 ULONG CmNetrRelease(CM_NETR_RES *res, ULONG gen, ULONG tokGen, ULONG tokFirst,
                     ULONG tokCount);
+
+/*
+ * THE PDO'S GATE (record 35 section 6.6). The network PDO's one way to its
+ * NHI: an interface call enters (Nhi taken, Users raised) and leaves; a
+ * removal closes the gate (Nhi NULL, so no call enters from then) and
+ * waits until it is idle (no call inside). The driver half holds the PDO's
+ * spin lock around Enter, Leave and Close; Idle is read without it while
+ * waiting. Close with `own` also ends the closer's own call, in one step
+ * under the lock. Whichever removal unlinks the PDO from the NHI holds the
+ * NHI (CM_NET.PdoCalls) from before the unlink until the gate it closed is
+ * idle, so the NHI's removal never frees what a call inside still uses.
+ */
+typedef struct _CM_NETR_GATE {
+    PVOID Nhi;                  /* NULL once closed                        */
+    LONG Users;                 /* calls inside, Nhi taken                 */
+} CM_NETR_GATE;
+
+/* The NHI, Users raised; NULL, nothing raised, once closed. */
+PVOID CmNetrGateEnter(CM_NETR_GATE *g);
+VOID CmNetrGateLeave(CM_NETR_GATE *g);
+VOID CmNetrGateClose(CM_NETR_GATE *g, BOOLEAN own);
+BOOLEAN CmNetrGateIdle(const CM_NETR_GATE *g);
 
 #endif /* CM_NETR_H */

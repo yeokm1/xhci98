@@ -64,6 +64,9 @@
  * interlocked for the same reason. */
 static LONG hcdUrbSeen[HCD_URB_FUNCTIONS];
 
+/* The same for each function's first URB with a short header (hcdSubmitUrb). */
+static LONG hcdUrbShortSeen[HCD_URB_FUNCTIONS];
+
 /* The same for each internal IOCTL refused as unserved (hcdIoctlSlot). */
 #define HCD_IOCTL_SLOTS 0x40UL
 static LONG hcdIoctlSeen[HCD_IOCTL_SLOTS];
@@ -116,6 +119,8 @@ XHCI_C_ASSERT(ioctl_handle_value,
               IOCTL_INTERNAL_USB_GET_DEVICE_HANDLE == 0x220433UL);
 XHCI_C_ASSERT(ioctl_topology_value,
               IOCTL_INTERNAL_USB_GET_TOPOLOGY_ADDRESS == 0x22043FUL);
+XHCI_C_ASSERT(urb_select_interface_value,
+              XHCI_PIPE_URB_SELECT_INTERFACE == URB_FUNCTION_SELECT_INTERFACE);
 
 /* The URB functions XP onward adds that are refused here, by name in the
  * trace (WDK 7.1 inc\api\usb.h). */
@@ -644,10 +649,17 @@ static NTSTATUS hcdGhostSelect(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
         XHCI_PIPE_OK) {
         goto refused;
     }
-    /* Every entry first, in the pure walk (xhci_pipe.c): inside the URB,
-     * an interface and alternate the copy carries, each once, room for its
+    /* Every entry first, in the pure walk (xhci_pipe.c): inside the list
+     * (the first entry by its own Length, the header only past it,
+     * XhciPipeSelectListBytes, since a short header is served), an
+     * interface and alternate the copy carries, each once, room for its
      * pipes. */
-    end = (PUCHAR)urb + urb->UrbHeader.Length;
+    end = (PUCHAR)&sc->Interface +
+          XhciPipeSelectListBytes(
+              (ULONG)urb->UrbHeader.Length,
+              (ULONG)FIELD_OFFSET(struct _URB_SELECT_CONFIGURATION, Interface),
+              (ULONG)sc->Interface.Length,
+              (ULONG)FIELD_OFFSET(USBD_INTERFACE_INFORMATION, Pipes));
     answer = XhciPipeSelectWalk(
         (const UCHAR *)&sc->Interface,
         (ULONG)(end - (PUCHAR)&sc->Interface),
@@ -889,10 +901,14 @@ static NTSTATUS hcdStaticStreamsUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
  * the bus reads (hcdControlRequest, HcdUrbIoRequest, the pipe requests,
  * hcd_cfg.c's selects), never the whole structure, so a client that
  * states its structure's size - as every usbd.sys and DDK builder does -
- * always passes. 0 for a function with no rule here: the isochronous URB,
- * GET_CURRENT_FRAME_NUMBER and the static-streams URBs check their own,
- * and anything else is refused by function. A SELECT_CONFIGURATION's
- * interface entries are hcd_cfg.c's (hcdCfgSelectOnce). IRQL: any.
+ * always passes. A shorter header is counted and served (hcdSubmitUrb,
+ * XhciPipeUrbHeaderCheck). 0 for a function with no entry here: the
+ * isochronous URB, GET_CURRENT_FRAME_NUMBER and the static-streams URBs
+ * check their own, as 3.4.1.0 did, and anything else is refused by
+ * function. A SELECT_CONFIGURATION's interface entries are bounded where
+ * they are walked (XhciPipeSelectListBytes); Windows 2000's usbaudio.sys
+ * states 0 in its SELECT_INTERFACE's header.
+ * IRQL: any.
  */
 static ULONG hcdUrbMinLength(ULONG function)
 {
@@ -984,16 +1000,30 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
      * held request is measured against an abort by (hcd_io.c,
      * HcdIoStamp; reviewed and revised after 6dae92b). */
     HcdIoStamp(pdo, irp);
-    /* A URB too short for the fields its function is read by is refused
-     * before any of them is, the departed and abort shortcuts below
-     * included (hcdUrbMinLength). */
-    if ((ULONG)urb->UrbHeader.Length < hcdUrbMinLength(function)) {
-        XHCI_DBG_VALUE("hcd: URB refused, function/length",
-                       (function << 16) | urb->UrbHeader.Length);
+    /* A URB whose header stops short of the fields its function is read
+     * by (hcdUrbMinLength) is counted, its function's first one traced and
+     * noted, and served: usbport does not hold a URB to its header, nor
+     * did 3.4.1.0, and 3.4.2.0's refusal cost Windows 2000 its USB audio
+     * (GitHub issue 32; owner, 2026-11-10, for every function). The fixed
+     * fields are read as the structure lays them out; a select's interface
+     * information is bounded by its own lengths (hcd_cfg.c,
+     * XhciPipeSelectListBytes) and the isochronous packet table by its own
+     * check (hcdIsochRequest). */
+    if (XhciPipeUrbHeaderCheck((ULONG)urb->UrbHeader.Length,
+                               hcdUrbMinLength(function)) ==
+        XHCI_PIPE_URB_SERVE_SHORT) {
         if (hc != NULL) {
-            hcdCount(&hc->Counters.UrbsMalformed);
+            hcdCount(&hc->UrbsHeaderShort);
         }
-        return HcdIoRefuseLater(pdo, irp, urb, USBD_STATUS_INVALID_PARAMETER);
+        if (function < HCD_URB_FUNCTIONS &&
+            InterlockedIncrement(&hcdUrbShortSeen[function]) == 1) {
+            XHCI_DBG_VALUE("hcd: URB header short, served, function/length",
+                           (function << 16) | urb->UrbHeader.Length);
+            if (hc != NULL) {
+                XhciLogNote(&hc->Hc, "urb.header.short",
+                            (function << 16) | urb->UrbHeader.Length);
+            }
+        }
     }
     /* Design record 13 section 10.5.2: a ghost's own answers first, before
      * the contained controller's hold, since they touch no hardware. */
@@ -1025,8 +1055,7 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     }
     if (hc == NULL || !pdo->Listed) {
         /* Orphaned, or its device has left: nothing on the bus answers. A
-         * SELECT_CONFIGURATION, which only a valid length reaches here,
-         * first hands back the departed device's held isochronous
+         * SELECT_CONFIGURATION first hands back the departed device's held isochronous
          * requests on 98 SE and ME (HcdIoIsoRelease, design record 13
          * section 18.5); it is refused at the next tick as before. A
          * ghost's own select was answered above (hcdGhostUrb). */
@@ -3154,10 +3183,6 @@ static NTSTATUS hcdCompSelect(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
                               STATUS_NO_SUCH_DEVICE);
     }
     usbd = USBD_STATUS_INVALID_PARAMETER;
-    if ((ULONG)urb->UrbHeader.Length <
-        (ULONG)FIELD_OFFSET(struct _URB_SELECT_CONFIGURATION, Interface)) {
-        goto refused;
-    }
     if (sc->ConfigurationDescriptor == NULL) {
         /* The unconfigure (D9): the record forgotten, the device left
          * configured, no function touched. */
@@ -3177,10 +3202,16 @@ static NTSTATUS hcdCompSelect(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
         goto refused;
     }
 
-    /* Every entry first: inside the URB, an interface and alternate the
-     * device's configuration carries, each once, room for its pipes. */
+    /* Every entry first: inside the list (the first entry by its own
+     * Length, the header only past it, XhciPipeSelectListBytes, since a
+     * short header is served), an interface and alternate the device's
+     * configuration carries, each once, room for its pipes. */
     fixed = FIELD_OFFSET(USBD_INTERFACE_INFORMATION, Pipes);
-    end = (PUCHAR)urb + urb->UrbHeader.Length;
+    end = (PUCHAR)&sc->Interface +
+          XhciPipeSelectListBytes(
+              (ULONG)urb->UrbHeader.Length,
+              (ULONG)FIELD_OFFSET(struct _URB_SELECT_CONFIGURATION, Interface),
+              (ULONG)sc->Interface.Length, fixed);
     named = 0;
     entries = 0;
     for (p = (PUCHAR)&sc->Interface; p < end; p += ii->Length) {

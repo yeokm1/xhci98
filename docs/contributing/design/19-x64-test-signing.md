@@ -253,7 +253,7 @@ The files:
 |---|---|---|
 | `xhci98-test.pfx` | the private key and certificate | `scripts\local\testsign\` on the maintainer's disk, git-ignored. **Never tracked, never packaged, never printed, never copied into notes or memory.** |
 | `xhci98-test.cer` | the public half | the same folder, and staged by the packager into every x64 package directory |
-| the .pfx password | - | supplied at each cut from the `XHCI98_TESTSIGN_PW` environment variable or typed at a prompt that does not echo; never stored |
+| the .pfx password | - | supplied at each cut from the `XHCI98_TESTSIGN_PW` environment variable or typed at a prompt that does not echo (the variable unset or empty means the prompt; an empty answer is refused); never stored |
 
 **The repository lives in a OneDrive folder on the maintainer's machine**,
 so a key in `scripts\local\testsign\` is synchronised to that OneDrive
@@ -309,6 +309,20 @@ password are not.
   source stamp (`Assert-TestSigned`), and the published `xhci98-test.cer`
   to the key's public half byte for byte. The x86 legs are held, as
   before, to staged bytes equal to the build's.
+- **The password at the prompt, and on SignTool's command line** (task
+  48.12; owner, 2026-11-09). The owner types the password by hand at the
+  prompt that does not echo. `XHCI98_TESTSIGN_PW` set but empty is read as
+  unset, so it means the prompt and never an empty password, and an empty
+  answer at the prompt is refused (`Get-TestSignPassword`); so
+  `make-release.ps1` never hands its `make-package.ps1` child an empty
+  value, which the child would take as "ask" again, and it checks that
+  before setting the variable. WDK 7.1's SignTool takes the password only
+  as `/p <password>` on its command line, so for the few seconds of each
+  signing run (each binary and each catalog of a cut) it is visible to
+  processes of the same user that can read command lines, as pvk2pfx's
+  `-po` is when the key is made (section 4). This is accepted (owner,
+  2026-11-09): the cut runs on the maintainer's own machine, and the
+  password is still never printed, logged or stored.
 - `-TestSignPfx` is refused with `-UploadSetOnly` (which re-assembles a
   published tree and stages nothing) and with an `-Arch` that has no x64.
 - `scripts\package\test-package.ps1` covers the checks with synthetic PE

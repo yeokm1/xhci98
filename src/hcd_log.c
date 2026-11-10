@@ -689,5 +689,6 @@ VOID HcdCountersPoll(PHCD_CONTROLLER hc)
     XHCI_DBG_VALUE_CHANGED("pdo ghost starts", hc->PdoGhostStarts);
     XHCI_DBG_VALUE_CHANGED("pdo ghost answers", hc->PdoGhostAnswers);
     XHCI_DBG_VALUE_CHANGED("pdo ghost held", hc->PdoGhostHeld);
+    XHCI_DBG_VALUE_CHANGED("URBs served - short header", hc->UrbsHeaderShort);
 #endif
 }

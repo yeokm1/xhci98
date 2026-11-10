@@ -977,6 +977,62 @@ size_t inst_ids_split(char *buf, size_t cap)
     }
     return n + 2 <= cap ? n + 2 : cap;
 }
+int inst_cm_ids_type_ok(int nt, unsigned long type)
+{
+    return type == INST_REG_MULTI_SZ_TYPE || (!nt && type == 1UL);
+}
+
+size_t inst_ids_commas(char *buf, size_t bytes)
+{
+    size_t i;
+
+    for (i = 0; i < bytes; i++) {
+        if (buf[i] == ',') {
+            buf[i] = '\0';
+        }
+    }
+    return bytes;
+}
+
+const char *inst_ids_pick(const char *arr, size_t arrBytes, const char *whole,
+                          size_t wholeBytes, size_t *bytes)
+{
+    if (whole != NULL) {
+        *bytes = wholeBytes;
+        return whole;
+    }
+    *bytes = arrBytes;
+    return arr;
+}
+
+int inst_ids9x_ok(int reg, int haveCm, unsigned long cr)
+{
+    if (reg != 0) {
+        return reg > 0;
+    }
+    return !haveCm || cr != INST_CR_BUFFER_SMALL;
+}
+
+int inst_driver_key_path(char *out, size_t cap, int nt, const char *driver)
+{
+    const char *root = nt ? INST_CLASS_ROOT_NT : INST_CLASS_ROOT_9X;
+    size_t nr = strlen(root);
+    size_t nd = strlen(driver);
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    /* join() would drop a part that does not fit, and the class key itself
+     * would be named: refused instead. */
+    if (nd == 0 || nd > INST_DRIVER_CHARS || nr + 1 + nd + 1 > cap) {
+        return 0;
+    }
+    memcpy(out, root, nr);
+    out[nr] = '\\';
+    memcpy(out + nr + 1, driver, nd + 1);
+    return 1;
+}
+
 int inst_ids_match(const char *hw, size_t hwBytes, const char *compat,
                    size_t compatBytes, const INST_IDLIST *ids)
 {
@@ -1206,7 +1262,7 @@ const char *inst_action_text(int action)
     switch (action) {
     case INST_ACT_INSTALL: return "Install";
     case INST_ACT_UPDATE:  return "Update";
-    case INST_ACT_CURRENT: return "Reinstall (same version)";
+    case INST_ACT_CURRENT: return "Keep (same version)";
     case INST_ACT_NEWER:   return "Skip (newer version installed; /force to downgrade)";
     case INST_ACT_FOREIGN: return "Skip (other driver)";
     case INST_ACT_FILTER:  return "Add tunnel-port filter";
@@ -1214,6 +1270,64 @@ const char *inst_action_text(int action)
     case INST_ACT_WINDOWS: return "Skip and use Windows UAS driver. (xhciuas will be staged)";
     default:               return "?";
     }
+}
+
+int inst_same_ver_stale(int state, int cmp, int same)
+{
+    return state > 0 && cmp == 0 && same == 0;
+}
+
+const char *inst_action_row_text(int action, int runs, int force, int stale)
+{
+    if (action == INST_ACT_CURRENT) {
+        if (runs && force) {
+            return "Reinstall (/force)";
+        }
+        return (runs || stale) ? "Replace files (same version)" :
+                                 "Keep (same version)";
+    }
+    if (action == INST_ACT_NEWER && runs) {
+        return "Reinstall (/force)";
+    }
+    return inst_action_text(action);
+}
+
+int inst_x98_place9x(int nt, int include, int stale, int helperJob)
+{
+    return !nt && include && stale && !helperJob;
+}
+
+unsigned long inst_stale_infs(int group, int hlpr)
+{
+    if (hlpr) {
+        return (1UL << INST_INF_XHCI) | (1UL << INST_INF_CM);
+    }
+    switch (group) {
+    case 0: return 1UL << INST_INF_XHCI;
+    case 1: return 1UL << INST_INF_UAS;
+    case 2: return (1UL << INST_INF_CM) | (1UL << INST_INF_CMF);
+    case 3: return 1UL << INST_INF_S98;
+    case 4: return 1UL << INST_INF_NET;
+    default: return 0;
+    }
+}
+
+int inst_hlpr_stale_ok(int v0ok, int v2ok, int usbIn, int cmIn)
+{
+    return v0ok && v2ok && (usbIn || cmIn);
+}
+
+int inst_stale_blocked(unsigned long infs, const int trap[],
+                       const int failed[])
+{
+    int i;
+
+    for (i = 0; i < INST_INF_COUNT; i++) {
+        if ((infs & (1UL << i)) != 0 && (trap[i] || failed[i])) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /* ======================================================================== */
@@ -1973,6 +2087,12 @@ const INST_VALUE instValues[] = {
       "keep a UAS drive's letter and open files when its SuperSpeed link "
       "drops and recovers, for drives with a serial number",
       NULL, 0, { "off", "on", NULL, NULL } },
+    /* Issue 29 (design record 13 section 21, F8; owner, 2026-11-09). */
+    { "XhciSsFlapFallback", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x3UL,
+      "move a USB 3 device whose SuperSpeed link keeps failing to the "
+      "USB 2.0 side of its connector or hub; off stops resetting the link "
+      "and leaves the device off until it is plugged in again",
+      NULL, 0, { "off", "on", NULL, NULL } },
     { "XhciResumeKeep", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x3UL,
       "keep devices on root ports as they were after standby or "
       "hibernation resets the controller",
@@ -2075,9 +2195,10 @@ const INST_VALUE instValues[] = {
       "marks if installed.", 0x1UL,
       { "no", "yes", NULL, NULL } },
     /* Task 45.54 (the owner, 2026-10-31; record 26 section 5.4.1): the
-     * Thunderbolt page's first Advanced row, read on 2000 to 10 alone and
-     * written there by the x86 INF's NT paths; never asked. */
-    { "XhciCmRingInterrupt", INST_INF_CM, INST_APPLY_NT_CM, 0x0UL, 0x3UL,
+     * Thunderbolt page's first Advanced row; never asked. Read on every
+     * system and written by every path of the x86 INF since task 48.26
+     * (on 2000 to 10 alone before). */
+    { "XhciCmRingInterrupt", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x3UL,
       "use the controller's interrupt to detect plugging and unplugging at "
       "once",
       "1 applies only if Windows gives the controller an interrupt and the "
@@ -3167,31 +3288,13 @@ const char *inst_final_text(int line)
 
 /* Owner, 2026-11-04: the window's Finish where no Steps page was shown
  * says where the steps are. */
-const char *inst_final_text_shown(int line, int shutdown, int stepsShown)
+const char *inst_final_text_shown(int line, int stepsShown)
 {
     if (line != INST_FINAL_UNFINISHED || stepsShown) {
-        return inst_final_text_cold(line, shutdown);
-    }
-    return shutdown ? "Not everything is done: see the steps in the log, then "
-                      "shut down and\nstart Windows again." :
-                      "Not everything is done: see the steps in the log, then "
-                      "restart Windows.";
-}
-
-const char *inst_final_text_cold(int line, int shutdown)
-{
-    if (!shutdown) {
         return inst_final_text(line);
     }
-    switch (line) {
-    case INST_FINAL_RESTART:
-        return "Done. Please shut down and start Windows again.";
-    case INST_FINAL_UNFINISHED:
-        return "Not everything is done: follow the steps above first, then "
-               "shut down and\nstart Windows again.";
-    default:
-        return inst_final_text(line);
-    }
+    return "Not everything is done: see the steps in the log, then "
+           "restart Windows.";
 }
 
 /* ======================================================================== */
@@ -4014,6 +4117,14 @@ int inst_st_confirmed(const unsigned char *b, INST_U32 ask)
     return ask != 0 && inst_get32(b, 124) == ask;
 }
 
+int inst_watch_current(const unsigned char *b, INST_U32 lateAsk,
+                       INST_U32 sinceAskMs)
+{
+    return inst_st_confirmed(b, lateAsk) &&
+           sinceAskMs <= INST_WATCH_ASK_MAX_MS &&
+           inst_get32(b, 32) == 2UL;            /* CM_ST_STAGE_ACTIVE */
+}
+
 static int inst_grand(const int *parent, int n, int i)
 {
     int p;
@@ -4151,6 +4262,14 @@ int inst_unit_not_marked(int capsKnown, INST_U32 caps)
      * fallback routine is for devices with neither (Microsoft's
      * reference). */
     return capsKnown && (caps & 0x84UL) == 0;
+}
+
+const char *inst_removable_9x_text(INST_U32 status, int sentence)
+{
+    if ((status & INST_DN_REMOVABLE_BIT) != 0) {
+        return sentence ? "Marked removable." : "marked removable";
+    }
+    return sentence ? "Not marked removable." : "not marked removable";
 }
 
 INST_U32 inst_eject_cr(INST_U32 cr, INST_U32 vetoType)
@@ -4337,6 +4456,71 @@ INST_U32 inst_port_usb3(const unsigned char *rec, INST_U32 portBdf)
         }
     }
     return routers == 1 ? usb3 : 5UL;
+}
+
+int inst_port_pcie(const unsigned char *rec, INST_U32 portBdf)
+{
+    INST_U32 n = inst_get32(rec, 72);           /* CM_ST_O_ROUTER_COUNT */
+    INST_U32 count = inst_get32(rec, 48);       /* CM_ST_O_PORT_COUNT   */
+    INST_U32 active = inst_get32(rec, 52);      /* CM_ST_O_PORT_ACTIVE  */
+    INST_U32 j;
+    INST_U32 bridge;
+    int named = 0;
+    int unknown = 0;
+    int member = 0;
+
+    for (j = 0; j < count && j < 4UL; j++) {    /* CM_ST_MAX_PORTS      */
+        if ((active & (1UL << j)) != 0 &&
+            inst_get32(rec, 56 + 4 * j) == portBdf) {   /* CM_ST_O_PORTS */
+            member = 1;
+        }
+    }
+    for (j = 0; j < n && j < INST_ST_MAX_ROUTERS; j++) {
+        const unsigned char *e = rec + INST_ST_HDR + j * INST_ST_ENTRY;
+        bridge = inst_get32(e, 40);             /* CM_ST_E_BRIDGE       */
+        if (bridge == portBdf) {
+            if ((inst_get32(e, 36) & 0xFUL) == 4UL) {   /* CM_ST_TUN_EJECTED */
+                return INST_PCIE_CLOSED;
+            }
+            named = 1;
+        } else if (bridge == 0xFFFFFFFFUL &&    /* CM_ST_UNKNOWN        */
+                   inst_get32(e, 0) == 2UL &&   /* CM_ST_KIND_USB4_PORT */
+                   ((inst_get32(e, 36) & 0xFUL) == 1UL ||       /* UP */
+                    (inst_get32(e, 36) & 0xFUL) == 2UL)) {  /* PRESERVED */
+            unknown = 1;
+        }
+    }
+    if (named) {
+        return INST_PCIE_NAMED;
+    }
+    return (unknown && member) ? INST_PCIE_UNMAPPED : INST_PCIE_UNNAMED;
+}
+
+int inst_pcie_unbound(int before, int everNamed, int lastFresh, int last)
+{
+    return before == INST_PCIE_UNMAPPED && !everNamed && lastFresh &&
+           last == INST_PCIE_UNMAPPED;
+}
+
+int inst_watch_last(int before, int everNamed, const unsigned char *rec,
+                    int last, INST_U32 lateAsk, INST_U32 lateAt,
+                    INST_U32 decideAt)
+{
+    /* Masked: the tick count wraps at 32 bits. */
+    return rec != 0 &&
+           inst_pcie_unbound(before, everNamed,
+                             inst_watch_current(rec, lateAsk,
+                                                (decideAt - lateAt) &
+                                                    0xFFFFFFFFUL),
+                             last);
+}
+
+const char *inst_pcie_unbound_text(void)
+{
+    return "The PCIe tunnel stays up until the device is unplugged: the "
+           "Thunderbolt\ndriver does not know which of its ports the device "
+           "is on. It learns that\nwhen a device is plugged in while Windows "
+           "runs.";
 }
 
 int inst_eject_remind(int singleFunction, INST_U32 usb3)
@@ -5027,15 +5211,21 @@ int inst_tray_run_data(const char *exe, char *out, size_t cap)
 }
 
 int inst_tray_copy_needed(int installed, const INST_U32 instVer[4], int pkg,
-                          const INST_U32 pkgVer[4])
+                          const INST_U32 pkgVer[4], int same)
 {
+    int c;
+
     if (installed == 0) {
         return 1;
     }
     if (pkg != 1) {
         return 0;
     }
-    return installed != 1 || inst_ver_cmp(instVer, pkgVer) < 0;
+    if (installed != 1) {
+        return 1;
+    }
+    c = inst_ver_cmp(instVer, pkgVer);
+    return c < 0 || inst_same_ver_stale(installed, c, same);
 }
 
 int inst_tray_leftover(int bakExists, int exeExists)
@@ -6714,8 +6904,6 @@ const INST_PAGE_TEXT instPageTexts[] = {
       "Stor98 settings. Only the settings you change are saved.",
       284, 18 },
     { INST_PT_S98_UNUSED, instS98DisconnectText, 284, 10 },
-    { INST_PT_SHUT_NOW, "Shut down now", 284, 10 },
-    { INST_PT_SHUT_LATER, "Shut down later", 284, 10 },
     { INST_PT_WELCOME_CM,
       "Setup will install/update xHCI98 drivers and tools. You may be "
       "asked to restart Windows at the end.",
@@ -6894,7 +7082,14 @@ const INST_S98_VALUE instS98Values[INST_S98_COUNT] = {
       "1", "1", 0UL, 1UL, 1UL, 0, NULL,
       { NULL, NULL, NULL, NULL },
       { "keep waiting for interrupts", "poll once interrupts stop", NULL, NULL },
-      "polling when interrupts stop arriving" }
+      "polling when interrupts stop arriving" },
+    { "StorTakeFirmware", NULL, INST_S98_NUMBER, 0, "",
+      "0", "", 0UL, 1UL, 1UL, 0, NULL,
+      { NULL, NULL, NULL, NULL },
+      { "leave it to the BIOS",
+        "take it; can hang Windows' start or corrupt data if the BIOS still uses the drive",
+        NULL, NULL },
+      "an NVMe controller the BIOS set up" }
 };
 
 int inst_s98_applies(int i, int nt)
@@ -6920,6 +7115,35 @@ const char *inst_s98_only(int i)
         return "Windows 2000 to 7 only";
     }
     return instS98Values[i].KeyNt == NULL ? "Windows 98 SE and ME only" : NULL;
+}
+
+int inst_s98_me_refused(int i)
+{
+    return i == INST_S98_TAKEFW;
+}
+
+int inst_s98_applies_os(int i, int nt, int me)
+{
+    if (!nt && me && inst_s98_me_refused(i)) {
+        return 0;
+    }
+    return inst_s98_applies(i, nt);
+}
+
+int inst_s98_greyed_os(int i, int nt, int me)
+{
+    if (!nt && me && inst_s98_me_refused(i)) {
+        return inst_s98_applies(i, 0);
+    }
+    return inst_s98_greyed(i, nt);
+}
+
+const char *inst_s98_only_os(int i, int me)
+{
+    if (me && inst_s98_me_refused(i)) {
+        return INST_S98_ME_WHY;
+    }
+    return inst_s98_only(i);
 }
 
 const char *inst_s98_default(int i, int nt)
@@ -7018,6 +7242,27 @@ void inst_s98_range(int i, INST_U32 hi, char *out, size_t cap)
         inst_cat(out, cap, ", or 0: ");
         inst_cat(out, cap, v->Zero);
     }
+}
+
+void inst_s98_meanings(int i, char *out, size_t cap)
+{
+    const INST_S98_VALUE *v;
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    if (i < 0 || i >= INST_S98_COUNT) {
+        return;
+    }
+    v = &instS98Values[i];
+    if (v->Kind != INST_S98_NUMBER || v->Means[0] == NULL || v->Means[1] == NULL) {
+        return;
+    }
+    inst_cat(out, cap, "0: ");
+    inst_cat(out, cap, v->Means[0]);
+    inst_cat(out, cap, ". 1: ");
+    inst_cat(out, cap, v->Means[1]);
+    inst_cat(out, cap, ".");
 }
 
 int inst_resident_restart(int nt, int exists, int same)
@@ -7546,11 +7791,6 @@ int inst_s98_version_owed(int include, int baseline, int list,
     return installed || (!nt && copy9x && !fileUpd);
 }
 
-int inst_s98_cold_start(int nt)
-{
-    return !nt;
-}
-
 int inst_s98_decide(int haveS98, int tb, int yes, int stor98Switch,
                     int noStor98, int list, int tableDef, int *asked,
                     int *def)
@@ -7660,10 +7900,11 @@ int inst_s98_known_tunnel(int nt, int present, int place, int recorded)
 }
 
 int inst_s98_file_update(int nt, int include, int share, int installed,
-                         int cmp)
+                         int cmp, int same)
 {
     return !nt && include && share == INST_S98_SHARE_FREE &&
-           installed > 0 && cmp < 0;
+           installed > 0 &&
+           (cmp < 0 || inst_same_ver_stale(installed, cmp, same));
 }
 
 const char instS98DisconnectText[] =
@@ -7735,7 +7976,8 @@ int inst_vsd_mode(int sys9x, int uninstall, int haveVsd, int s98Ticked,
 
 /* ---- XHCIPFW.VXD (design record 32 section 8) --------------------------- */
 
-int inst_pfw_sys(int nt, unsigned long major, unsigned long minor, int x86)
+int inst_pfw_sys(int nt, unsigned long major, unsigned long minor,
+                 unsigned long build, int x86)
 {
     if (!nt) {
         return INST_PFW_SYS_9X;
@@ -7751,15 +7993,20 @@ int inst_pfw_sys(int nt, unsigned long major, unsigned long minor, int x86)
                minor == 1 ? INST_PFW_SYS_SEEN : INST_PFW_SYS_NONE;
     }
     /* From 8 on the boot drivers of System Reserved and the PCI driver's
-     * read of the root bus are not ordered (run-44 "44.72"); on 8 and 8.1
-     * a filter of the root bus runs first at every start read, on 10 such
-     * a filter is never initialised (run-45 "45.9"; the owner,
-     * 2026-10-29: the filter role on 8 and 8.1). */
+     * read of the root bus are not ordered (run-44 "44.72"); a filter of
+     * the root bus runs first at every start read on 8 and 8.1 (run-45
+     * "45.9") and on 10 (run-47 "47.14"; the owner, 2026-10-29 and, for
+     * 10 from version 2004, the builds read, 2026-11-09: record 32
+     * section 11.5.7). */
     if (major == 6) {
         return minor <= 1 ? INST_PFW_SYS_SEEN :
                minor <= 3 ? INST_PFW_SYS_FILTER : INST_PFW_SYS_NONE;
     }
-    return major == 10 ? INST_PFW_SYS_GONE : INST_PFW_SYS_NONE;
+    if (major == 10 && minor == 0) {
+        return build >= INST_OS_BUILD_2004 ? INST_PFW_SYS_FILTER :
+                                             INST_PFW_SYS_GONE;
+    }
+    return INST_PFW_SYS_NONE;
 }
 
 int inst_pfw_box(int sysKind, int havePfw, int tbTicked, int noSwitch,
@@ -8433,6 +8680,9 @@ int inst_s98_mpd_place(int nt, int carried, int share, int fileState,
 
 int inst_s98_later_said(int why, int devLater, int held, int holdLater)
 {
+    if (why == INST_S98_SKIP_NOID_RUN) {
+        return 1;
+    }
     if (why == INST_S98_SKIP_UNKNOWN) {
         return devLater && (!held || holdLater);
     }
@@ -8472,9 +8722,31 @@ int inst_s98_eligible(int tbInRun, int place)
            INST_S98_SKIP_UNKNOWN;
 }
 
+int inst_s98_noid_why(int is81, int hasTid, int onStor98, int cmChanges)
+{
+    if (!is81 || hasTid) {
+        return INST_S98_ELIGIBLE;
+    }
+    if (!cmChanges) {
+        return INST_S98_SKIP_NOID;
+    }
+    return onStor98 ? INST_S98_SKIP_NOID_RUN : INST_S98_SKIP_NOID_MARK;
+}
+
 const char *inst_s98_skip_text(int why, int brief)
 {
     switch (why) {
+    case INST_S98_SKIP_NOID_RUN:
+        return brief ? "skipped: run Setup after the restart" :
+               "no tunnel id yet (needed on 8.1): run Setup again after "
+               "the restart";
+    case INST_S98_SKIP_NOID_MARK:
+        return brief ? "skipped: added after the restart" :
+               "no tunnel id yet (needed on 8.1): the mark service adds "
+               "Stor98 after the restart";
+    case INST_S98_SKIP_NOID:
+        return brief ? "skipped: no tunnel id" :
+               "no tunnel id (needed on 8.1): left unchanged";
     case INST_S98_SKIP_INTERNAL:
         return brief ? "skipped: an internal drive (Stor98 is for Thunderbolt / "
                        "USB4 drives)" :

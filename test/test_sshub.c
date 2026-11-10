@@ -1043,8 +1043,84 @@ static void test_parent_rank(void)
              "no hub slot: nothing");
 }
 
+/* Issue 29 (record 13 section 21.5): a pending send to the USB 2.0 half,
+ * judged by a fresh GET_STATUS at the retry: owed while the link is still
+ * failed; done when the hub applied an earlier request whose completion
+ * failed (SS.Disabled: the caller schedules the re-arm); ended by a
+ * departure or a replacement device before the tick. */
+static void test_send_state(void)
+{
+    ULONG l;
+    ULONG want;
+
+    for (l = 0; l <= 0xFUL; l++) {
+        want = XHCI_SSHUB_SEND_ENDED;
+        if (l == XHCI_SSHUB_LINK_INACTIVE || l == XHCI_SSHUB_LINK_COMPLIANCE) {
+            want = XHCI_SSHUB_SEND_OWED;
+        } else if (l == XHCI_SSHUB_LINK_DISABLED) {
+            want = XHCI_SSHUB_SEND_DONE;
+        }
+        CHECK_EQ(XhciSsHubSendState(l << XHCI_SSHUB_PORT_LINK_SHIFT), want,
+                 "each link state");
+    }
+    CHECK_EQ(XhciSsHubSendState((XHCI_SSHUB_LINK_DISABLED <<
+                                 XHCI_SSHUB_PORT_LINK_SHIFT) |
+                                XHCI_SSHUB_PORT_POWER),
+             XHCI_SSHUB_SEND_DONE,
+             "the request applied, its completion failed: a send");
+    CHECK_EQ(XhciSsHubSendState(XHCI_SSHUB_LINK_RX_DETECT <<
+                                XHCI_SSHUB_PORT_LINK_SHIFT),
+             XHCI_SSHUB_SEND_ENDED, "the device left between attempts");
+    CHECK_EQ(XhciSsHubSendState((XHCI_SSHUB_LINK_U0 <<
+                                 XHCI_SSHUB_PORT_LINK_SHIFT) |
+                                XHCI_SSHUB_PORT_CONNECTION),
+             XHCI_SSHUB_SEND_ENDED, "a replacement trained before the tick");
+    CHECK_EQ(XhciSsHubSendState((XHCI_SSHUB_LINK_INACTIVE <<
+                                 XHCI_SSHUB_PORT_LINK_SHIFT) |
+                                XHCI_SSHUB_PORT_POWER),
+             XHCI_SSHUB_SEND_OWED, "still failed: owed");
+
+    /* The third request applied, its completion failed: the give-up still
+     * re-arms the Disabled port; an unanswered read re-arms too; a port
+     * still failed is left as F4 leaves it. */
+    CHECK_EQ(XhciSsHubGiveUpRearm(1, XHCI_SSHUB_LINK_DISABLED <<
+                                         XHCI_SSHUB_PORT_LINK_SHIFT),
+             1, "applied despite the failure: re-armed");
+    CHECK_EQ(XhciSsHubGiveUpRearm(0, 0), 1, "unanswered: re-armed");
+    CHECK_EQ(XhciSsHubGiveUpRearm(1, XHCI_SSHUB_LINK_INACTIVE <<
+                                         XHCI_SSHUB_PORT_LINK_SHIFT),
+             0, "still SS.Inactive: given up, no re-arm");
+
+    /* A pending send's retry reads the port empty: the departure clears the
+     * budgets there, so a replacement before the next look starts afresh. */
+    CHECK_EQ(XhciSsHubPortEmpty(XHCI_SSHUB_LINK_RX_DETECT <<
+                                XHCI_SSHUB_PORT_LINK_SHIFT),
+             1, "no connection, RxDetect: empty");
+    CHECK_EQ(XhciSsHubPortEmpty((XHCI_SSHUB_LINK_RX_DETECT <<
+                                 XHCI_SSHUB_PORT_LINK_SHIFT) |
+                                XHCI_SSHUB_PORT_CONNECTION),
+             0, "a connection: not empty");
+    CHECK_EQ(XhciSsHubPortEmpty(XHCI_SSHUB_LINK_INACTIVE <<
+                                XHCI_SSHUB_PORT_LINK_SHIFT),
+             0, "SS.Inactive: not empty");
+    /* The final failed attempt's read finds the port empty: the departure
+     * is honoured (budgets cleared, no stop), and no re-arm is owed. */
+    CHECK(XhciSsHubPortEmpty(XHCI_SSHUB_LINK_RX_DETECT <<
+                             XHCI_SSHUB_PORT_LINK_SHIFT) &&
+              !XhciSsHubGiveUpRearm(1, XHCI_SSHUB_LINK_RX_DETECT <<
+                                           XHCI_SSHUB_PORT_LINK_SHIFT),
+          "the final read empty: cleared, not stopped, not re-armed");
+    CHECK_EQ(XhciSsHubSendState((XHCI_SSHUB_LINK_U0 <<
+                                 XHCI_SSHUB_PORT_LINK_SHIFT) |
+                                XHCI_SSHUB_PORT_CONNECTION),
+             XHCI_SSHUB_SEND_ENDED,
+             "a replacement trained during the last request: ended, not "
+             "stopped");
+}
+
 int main(void)
 {
+    test_send_state();
     test_descriptor();
     test_link_field();
     test_decide();

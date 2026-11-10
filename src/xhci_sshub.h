@@ -199,6 +199,29 @@ ULONG XhciSsHubParseDescriptor(const UCHAR *data, ULONG length,
 /* The PORT_LINK_STATE field of a wPortStatus. */
 ULONG XhciSsHubLinkState(ULONG status);
 
+/* Issue 29 (design record 13 section 21.5): what a fresh GET_STATUS says
+ * of a hub port's pending send to the USB 2.0 half: OWED while its link is
+ * still in SS.Inactive or Compliance Mode; DONE in SS.Disabled - the hub
+ * applied an earlier request whose completion failed - which the caller
+ * finishes as a send (the re-arm scheduled); ENDED in any other state,
+ * RxDetect (the device left) or a link training or trained (a new
+ * connection). Pure. */
+#define XHCI_SSHUB_SEND_OWED        0UL
+#define XHCI_SSHUB_SEND_DONE        1UL
+#define XHCI_SSHUB_SEND_ENDED       2UL
+ULONG XhciSsHubSendState(ULONG status);
+
+/* After the last failed send: whether the port is scheduled for its
+ * re-arm anyway - when GET_STATUS reads SS.Disabled (the last request
+ * applied, its completion failed) or goes unanswered, since a re-arm acts
+ * on a Disabled port alone and a port left Disabled would detect nothing
+ * again. No further disable is sent. Pure. */
+ULONG XhciSsHubGiveUpRearm(ULONG answered, ULONG status);
+
+/* Nothing on the port: no connection and the link in RxDetect - the
+ * reading after which the next device starts with full budgets. Pure. */
+ULONG XhciSsHubPortEmpty(ULONG status);
+
 /*
  * One port's GET_STATUS answer, decided, into xhci_hub.h's decision shape
  * (Clear holding XHCI_SSHUB_C_* bits here) plus what is SuperSpeed's own:

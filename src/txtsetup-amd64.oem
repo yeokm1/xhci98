@@ -24,7 +24,8 @@
 # scripts\inf-gate\check-txtsetup-oem.ps1 gates both and holds them equal
 # outside their two description strings and what only the 32-bit file
 # carries: the helper's dll line (dll = d1, xhcihlpr.sys), for which this
-# package has no file, and the Windows 2000 option XHCI98W2K with its files,
+# package has no file, and the "files from CD" option XHCI98W2K (Windows
+# 2000 and 32-bit XP) with its files,
 # its hardware ids, its disk d2 and the three [Config.*] sections, which
 # XP x64 and Server 2003 x64 do not need.
 #

@@ -51,7 +51,10 @@
  *
  * Every other IRP goes down unchanged (a device-usage notification with
  * the power flags mimicked, as a filter must). Each filter detaches and
- * deletes itself on removal.
+ * deletes itself on removal, but on Windows 8.1 a child the BusRelations
+ * attached (the kept child, design record 31 section 4.10): it stays on
+ * its PDO across a removal of the device's stack and is destroyed when
+ * the object below it is deleted (FastIoDetachDevice).
  *
  * IRQL: PASSIVE_LEVEL (PnP IRPs), or the lower device's power context: the
  * filter copies DO_POWER_PAGABLE and DO_POWER_INRUSH from the device it
@@ -80,6 +83,7 @@ NTSTATUS CmFilterAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo,
     CmZero(filter, sizeof(CM_FILTER));
     filter->Common.Kind = CM_KIND_FILTER;
     filter->Common.Self = self;
+    CmCommonInit(&filter->Common);
     filter->Common.Pdo = pdo;
     filter->Outstanding = 1;
     filter->PortId = portId;
@@ -130,6 +134,7 @@ NTSTATUS CmChildAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
     CmZero(child, sizeof(CM_FILTER));
     child->Common.Kind = CM_KIND_CHILD;
     child->Common.Self = self;
+    CmCommonInit(&child->Common);
     child->Common.Pdo = pdo;
     child->Outstanding = 1;
     child->AddDev = 1;
@@ -189,10 +194,18 @@ static NTSTATUS cmFilterAcquire(PCM_FILTER filter)
     return status;
 }
 
-/* IRQL: <= DISPATCH_LEVEL (the completion below calls it). */
+static VOID cmKeptLast(PCM_FILTER filter);
+
+/* IRQL: <= DISPATCH_LEVEL (the completion below calls it). A kept
+ * child's last reference is its destruction's (design record 31 section
+ * 4.10, K3): it never waits on Drained. */
 static VOID cmFilterRelease(PCM_FILTER filter)
 {
     if (InterlockedDecrement(&filter->Outstanding) == 0) {
+        if (filter->Kept) {
+            cmKeptLast(filter);
+            return;
+        }
         KeSetEvent(&filter->Drained, IO_NO_INCREMENT, FALSE);
     }
 }
@@ -209,11 +222,28 @@ static VOID cmFilterRelease(PCM_FILTER filter)
  */
 BOOLEAN CmFilterTryHold(PCM_FILTER filter)
 {
-    return (BOOLEAN)NT_SUCCESS(cmFilterAcquire(filter));
+    KIRQL irql;
+    BOOLEAN held;
+
+    /* cmFilterAcquire's rule, with the PDO the chain action uses outside
+     * the list's lock referenced in the same critical section, since a
+     * kept child's callback can detach meanwhile (design record 31 section
+     * 4.10, K3): admitted, the callback has not claimed Detached under
+     * this lock, so the PDO is not yet freed. */
+    held = FALSE;
+    KeAcquireSpinLock(&filter->Lock, &irql);
+    if (!filter->Removing) {
+        (VOID)InterlockedIncrement(&filter->Outstanding);
+        ObReferenceObject(filter->Common.Pdo);
+        held = TRUE;
+    }
+    KeReleaseSpinLock(&filter->Lock, irql);
+    return held;
 }
 
 VOID CmFilterUnhold(PCM_FILTER filter)
 {
+    ObDereferenceObject(filter->Common.Pdo);
     cmFilterRelease(filter);
 }
 
@@ -230,6 +260,11 @@ static NTSTATUS cmFilterUsageDone(PDEVICE_OBJECT device, PIRP irp,
     }
     if ((filter->Common.Lower->Flags & DO_POWER_PAGABLE) == 0) {
         device->Flags &= ~DO_POWER_PAGABLE;
+    }
+    if (filter->Kept) {
+        /* The lower object's reference its dispatch took for this read
+         * (design record 31 section 4.10, K3). */
+        ObDereferenceObject(filter->Common.Lower);
     }
     /* The last access: removal may free the filter after this. */
     cmFilterRelease(filter);
@@ -275,22 +310,20 @@ static NTSTATUS cmChildCapabilities(PCM_FILTER child, PIRP irp)
 }
 
 /*
- * Whether this system takes the tunnel id: Windows 2000 to 8 alone (NT
- * 6.2 and below). 8.1 and later choose a driver again when a device
- * restarts with ids that changed since its enumeration (read on 8.1,
- * design record 31 section 4.8), and there Stor98's INF keeps 3.2.0.0's
- * class model, so the id would only undo the safe-removal mark service's
- * install. The version is the kernel's shared data page's
- * (NtMajorVersion, NtMinorVersion: 6.3 on 8.1, 10.0 on 10), since
- * IoIsWdmVersionAvailable does not tell 8 from 8.1 and no import is
- * added. PASSIVE_LEVEL.
+ * Whether this system takes the tunnel id (CmPortsTagOs): Windows 2000 to
+ * 8.1. 8.1 chooses a driver again when a device restarts with ids that
+ * changed since its enumeration (read on 8.1, design record 31 section
+ * 4.8), so there the id is given with the kept child, which stays on the
+ * PDO across every restart of the stack and gives it again (section
+ * 4.10); 10 keeps the class model and gets no id. The version is the
+ * kernel's shared data page's (NtMajorVersion, NtMinorVersion: 6.3 on 8.1,
+ * 10.0 on 10), since IoIsWdmVersionAvailable does not tell 8 from 8.1 and
+ * no import is added. PASSIVE_LEVEL.
  */
 static BOOLEAN cmChildTagOs(VOID)
 {
-    ULONG major = SharedUserData->NtMajorVersion;
-    ULONG minor = SharedUserData->NtMinorVersion;
-
-    return (BOOLEAN)(major < 6 || (major == 6 && minor < 3));
+    return (BOOLEAN)CmPortsTagOs(SharedUserData->NtMajorVersion,
+                                 SharedUserData->NtMinorVersion);
 }
 
 /*
@@ -384,11 +417,15 @@ static ULONG cmChainKindOf(PCM_FILTER child)
 static NTSTATUS cmChainRelations(PCM_FILTER child, PIRP irp)
 {
     NTSTATUS status;
+    ULONG seq;
 
+    /* Before the request goes down: its answer's PDOs are stamped with
+     * when the query began (design record 34 section 3.12 item 5). */
+    seq = CmRegChainBegin(child);
     status = CmForwardSync(&child->Common, irp);
     if (NT_SUCCESS(status) && child->Started) {
         CmRegChainRelations(
-            child, (const DEVICE_RELATIONS *)irp->IoStatus.Information);
+            child, (const DEVICE_RELATIONS *)irp->IoStatus.Information, seq);
     }
     return CmCompleteIrp(irp, status, irp->IoStatus.Information);
 }
@@ -856,6 +893,214 @@ static NTSTATUS cmIsoQuery(PCM_FILTER filter, PIRP irp)
     return CmCompleteIrp(irp, STATUS_SUCCESS, irp->IoStatus.Information);
 }
 
+/* ---- the kept child (design record 31 section 4.10, task 48.29) ---- */
+
+/*
+ * On 8.1 alone (CmKeptOn) a child the bridge's BusRelations attached does
+ * a logical removal at IRP_MN_REMOVE_DEVICE while the object below it
+ * stays: it stays attached, so the PnP manager's IRP_MN_QUERY_ID at the
+ * next start of the stack reaches it and the tunnel id is given again. It
+ * is destroyed once the object below it is deleted: the I/O manager's
+ * FastIoDetachDevice (cm_entry.c) claims Detached, detaches and drops the
+ * attach's reference, and the last reference, the callback's own or a
+ * dispatch's still in flight, destroys it (K3, K5).
+ */
+
+/* The destruction, the child detached and no reference left. The
+ * departure is recorded here only if no removal recorded it
+ * (CmRegAttRemoved reads KeptDeparted). PASSIVE_LEVEL. */
+static VOID cmKeptDestroy(PCM_FILTER filter)
+{
+    CmRegAttRemoved(filter, (BOOLEAN)(filter->QueryRemoved &&
+                                      !filter->SurpriseRemoved));
+    CmRegKeptNote(filter, "cm.kept.final", filter->KeptRemoves & 0xFUL);
+    IoDeleteDevice(filter->Common.Self);
+}
+
+/* The work item's routine: the destruction a release above PASSIVE_LEVEL
+ * handed over (K5). Nothing of the child is touched after it. The image
+ * stays loaded on 8.1 (DriverEntry clears DriverUnload). PASSIVE_LEVEL. */
+static VOID cmKeptWork(PVOID context)
+{
+    cmKeptDestroy((PCM_FILTER)context);
+}
+
+/* The release that left no reference (cmFilterRelease). IRQL: <=
+ * DISPATCH_LEVEL. */
+static VOID cmKeptLast(PCM_FILTER filter)
+{
+    ULONG last;
+
+    last = CmPortsKeptLast(0, filter->KeptState,
+                           (ULONG)(KeGetCurrentIrql() > PASSIVE_LEVEL));
+    if (last == CM_KEPT_L_DESTROY) {
+        cmKeptDestroy(filter);
+    } else if (last == CM_KEPT_L_QUEUE) {
+        ExQueueWorkItem(&filter->KeptWork, DelayedWorkQueue);
+    } else {
+        /* Not expected: the attach's reference goes only at Detached. */
+        CmRegKeptNote(filter, "cm.kept.zero", filter->KeptState);
+    }
+}
+
+/* A child cmChildCreate is making, before its attach (cm_reenum.c). */
+VOID CmKeptInit(PCM_FILTER child)
+{
+    child->Kept = 1;
+    child->KeptState = CM_KEPT_ATTACHED;
+    ExInitializeWorkItem(&child->KeptWork, cmKeptWork, child);
+}
+
+/* One step of the state (CmPortsKeptStep) under the child's lock, and the
+ * marks' part of its action. PASSIVE_LEVEL. */
+static ULONG cmKeptStep(PCM_FILTER filter, ULONG event)
+{
+    KIRQL irql;
+    ULONG action;
+
+    KeAcquireSpinLock(&filter->Lock, &irql);
+    filter->KeptState = CmPortsKeptStep(filter->KeptState, event, &action);
+    KeReleaseSpinLock(&filter->Lock, irql);
+    if ((action & (CM_KEPT_A_PRESENT | CM_KEPT_A_END_DEPART)) != 0) {
+        CmRegKeptAttached(filter);
+        CmRegKeptNote(filter, "cm.kept.rearm", filter->KeptRemoves & 0xFUL);
+    }
+    return action;
+}
+
+/* IRP_MN_REMOVE_DEVICE on a kept child (K4). PASSIVE_LEVEL. */
+static NTSTATUS cmKeptRemove(PCM_FILTER filter, PIRP irp)
+{
+    NTSTATUS status;
+    BOOLEAN afterQr;
+    ULONG action;
+
+    CmRegIsoGone(filter);
+    status = CmForwardSync(&filter->Common, irp);
+    CmRegChainNote(filter, CM_CHAIN_EV_REMOVE);
+    afterQr = (BOOLEAN)(filter->QueryRemoved && !filter->SurpriseRemoved);
+    filter->KeptRemoves++;
+    action = cmKeptStep(filter, CM_KEPT_E_REMOVED);
+    if ((action & CM_KEPT_A_DEPART) != 0) {
+        CmRegAttDepart(filter, afterQr);
+    }
+    filter->QueryRemoved = 0;
+    filter->SurpriseRemoved = 0;
+    CmRegKeptNote(filter,
+                  filter->KeptState == CM_KEPT_DETACHED ? "cm.kept.gone"
+                                                        : "cm.kept.logical",
+                  filter->KeptRemoves & 0xFUL);
+    /* The dispatch's reference (CmKeptDispatch) is released after this:
+     * where the object below was deleted inside the forwarded removal,
+     * that release destroys the child. */
+    return CmCompleteIrp(irp, status, irp->IoStatus.Information);
+}
+
+/*
+ * The I/O manager's FastIoDetachDevice for a filter or child of this
+ * driver (cm_entry.c, K6): `target`, the object below, is being deleted,
+ * and the callback's contract is that the object above detaches here. A
+ * bridge filter or a registered child only detaches (its removal in
+ * progress deletes it), waiting for a detach that removal claimed first,
+ * so it never returns with the object attached. A kept child claims
+ * Detached under its lock,
+ * which closes admission, detaches, and drops the attach's reference
+ * without waiting, so it never waits on the dispatch that caused it.
+ * Every call is recorded: event bits 0-1 the kind (1 child, 2 filter),
+ * bit 2 kept, bit 3 the state was Logical. PASSIVE_LEVEL (IoDeleteDevice).
+ */
+VOID CmFilterDetachCb(PCM_FILTER filter, PDEVICE_OBJECT target)
+{
+    ULONG ev;
+    ULONG action;
+    KIRQL irql;
+
+    ev = (filter->Common.Kind == CM_KIND_CHILD ? 1UL : 2UL) |
+         (filter->Kept ? 4UL : 0UL) |
+         (filter->KeptState == CM_KEPT_LOGICAL ? 8UL : 0UL);
+    CmRegKeptNote(filter, "cm.kept.cb", ev);
+    if (filter->Common.Lower != target) {
+        CmRegKeptNote(filter, "cm.kept.cb.notlower", ev);
+        return;
+    }
+    if (!filter->Kept) {
+        /* Waits for a removal that claimed the detach first: the object
+         * is detached when this returns (K6). */
+        (VOID)CmDetachOnce(&filter->Common, TRUE);
+        return;
+    }
+    KeAcquireSpinLock(&filter->Lock, &irql);
+    filter->KeptState = CmPortsKeptStep(filter->KeptState, CM_KEPT_E_CALLBACK,
+                                        &action);
+    if ((action & CM_KEPT_A_DETACH) != 0) {
+        /* Closes cmFilterAcquire too (the chain's holds, a usage
+         * notification), with the dispatch's admission. */
+        filter->Removing = 1;
+    }
+    KeReleaseSpinLock(&filter->Lock, irql);
+    if ((action & CM_KEPT_A_ABSENT) != 0) {
+        CmRegKeptAbsent(filter);
+    }
+    if ((action & CM_KEPT_A_DETACH) != 0) {
+        (VOID)CmDetachOnce(&filter->Common, TRUE);
+    }
+    if ((action & CM_KEPT_A_DROP_ATTACH) != 0) {
+        cmFilterRelease(filter);
+    }
+}
+
+/*
+ * Every request to a kept child, of every major function (cm_entry.c's
+ * dispatch, K3 and K7): admitted, while the state is not Detached, with a
+ * reference on the child and an object reference on the object below it
+ * for the dispatch; refused otherwise, completed with
+ * STATUS_NO_SUCH_DEVICE (a power request started on first), never
+ * forwarded. Admission is under the child's lock, where the callback
+ * claims Detached. IRQL: the request's.
+ */
+NTSTATUS CmKeptDispatch(PCM_FILTER filter, PIRP irp)
+{
+    PIO_STACK_LOCATION stack;
+    PDEVICE_OBJECT lower;
+    NTSTATUS status;
+    KIRQL irql;
+    BOOLEAN in;
+
+    stack = IoGetCurrentIrpStackLocation(irp);
+    in = FALSE;
+    lower = NULL;
+    KeAcquireSpinLock(&filter->Lock, &irql);
+    if (CmPortsKeptAdmits(filter->KeptState) && !filter->Removing) {
+        (VOID)InterlockedIncrement(&filter->Outstanding);
+        /* Under the lock the callback claims Detached under: the object
+         * below is still attached here, so not yet freed. */
+        lower = filter->Common.Lower;
+        ObReferenceObject(lower);
+        in = TRUE;
+    }
+    KeReleaseSpinLock(&filter->Lock, irql);
+    if (!in) {
+        CmRegKeptNote(filter, "cm.kept.late",
+                      ((ULONG)stack->MajorFunction << 8) |
+                          (ULONG)stack->MinorFunction);
+        if (stack->MajorFunction == IRP_MJ_POWER) {
+            PoStartNextPowerIrp(irp);
+        }
+        return CmCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
+    }
+    if (stack->MajorFunction == IRP_MJ_PNP) {
+        status = CmFilterPnp(filter, irp);
+    } else if (stack->MajorFunction == IRP_MJ_POWER) {
+        status = CmFilterPower(filter, irp);
+    } else {
+        IoSkipCurrentIrpStackLocation(irp);
+        status = IoCallDriver(lower, irp);
+    }
+    ObDereferenceObject(lower);
+    cmFilterRelease(filter);
+    return status;
+}
+
 static NTSTATUS cmFilterPnpBody(PCM_FILTER filter, PIRP irp, BOOLEAN sync);
 
 /*
@@ -920,6 +1165,10 @@ static NTSTATUS cmFilterPnpBody(PCM_FILTER filter, PIRP irp, BOOLEAN sync)
             (self->AttachedDevice->Flags & DO_POWER_PAGABLE) != 0) {
             self->Flags |= DO_POWER_PAGABLE;
         }
+        if (filter->Kept) {
+            /* For the completion's read of the lower object's Flags. */
+            ObReferenceObject(filter->Common.Lower);
+        }
         IoCopyCurrentIrpStackLocationToNext(irp);
         CM_SET_COMPLETION_ALWAYS(irp, cmFilterUsageDone, NULL);
         return IoCallDriver(filter->Common.Lower, irp);
@@ -931,6 +1180,10 @@ static NTSTATUS cmFilterPnpBody(PCM_FILTER filter, PIRP irp, BOOLEAN sync)
             CmRegAttEvent(filter, CM_MK_START_FAILED);
             return CmCompleteIrp(irp, STATUS_DEVICE_NOT_READY, 0);
         }
+        if (filter->Kept) {
+            /* A logically removed kept child: Starting (K3). */
+            (VOID)cmKeptStep(filter, CM_KEPT_E_START);
+        }
         irqAct = CM_IRQ_ACT_PASS;
         if (child && CmIrqGate) {
             /* Design record 21 section 6.2.1: the added interrupt kept
@@ -938,6 +1191,9 @@ static NTSTATUS cmFilterPnpBody(PCM_FILTER filter, PIRP irp, BOOLEAN sync)
             irqAct = cmChildStartIrq(filter, irp, &status);
         }
         if (irqAct == CM_IRQ_ACT_FAIL) {
+            if (filter->Kept) {
+                (VOID)cmKeptStep(filter, CM_KEPT_E_START_FAIL);
+            }
             CmRegAttEvent(filter, CM_MK_START_FAILED);
             return CmCompleteIrp(irp, STATUS_INSUFFICIENT_RESOURCES, 0);
         }
@@ -945,6 +1201,12 @@ static NTSTATUS cmFilterPnpBody(PCM_FILTER filter, PIRP irp, BOOLEAN sync)
             status = CmForwardSync(&filter->Common, irp);
         }
         CmRegAttLocate(filter);
+        if (filter->Kept) {
+            /* Attached, presence and the departure's end, only once the
+             * start completed with success below the child (K3, K8). */
+            (VOID)cmKeptStep(filter, NT_SUCCESS(status) ? CM_KEPT_E_START_OK
+                                                        : CM_KEPT_E_START_FAIL);
+        }
         if (child && filter->BreqStart) {
             /* The start after a rewrite (record 33 section 9.2). */
             filter->BreqStart = 0;
@@ -1062,6 +1324,10 @@ static NTSTATUS cmFilterPnpBody(PCM_FILTER filter, PIRP irp, BOOLEAN sync)
         if (!child) {
             CmRegWithdraw(filter);
         }
+        if (filter->Kept) {
+            /* Design record 31 section 4.10: a logical removal. */
+            return cmKeptRemove(filter, irp);
+        }
         /* Close acquisition, forward the removal, then drop the attach's
          * reference and wait for every notification in flight to finish
          * with the filter before it is detached and deleted. */
@@ -1077,7 +1343,8 @@ static NTSTATUS cmFilterPnpBody(PCM_FILTER filter, PIRP irp, BOOLEAN sync)
             CmRegChainNote(filter, CM_CHAIN_EV_REMOVE);
             cmFilterRelease(filter);
             (VOID)CmWaitEvent(&filter->Drained, 0);
-            IoDetachDevice(filter->Common.Lower);
+            /* The one detach owner (design record 31 section 4.10, K6). */
+            (VOID)CmDetachOnce(&filter->Common, TRUE);
             CmRegAttRemoved(filter,
                             (BOOLEAN)(filter->QueryRemoved &&
                                       !filter->SurpriseRemoved));
@@ -1089,7 +1356,7 @@ static NTSTATUS cmFilterPnpBody(PCM_FILTER filter, PIRP irp, BOOLEAN sync)
         status = IoCallDriver(filter->Common.Lower, irp);
         cmFilterRelease(filter);
         (VOID)CmWaitEvent(&filter->Drained, 0);
-        IoDetachDevice(filter->Common.Lower);
+        (VOID)CmDetachOnce(&filter->Common, TRUE);
         CmRegAttRemoved(filter, (BOOLEAN)(filter->QueryRemoved &&
                                           !filter->SurpriseRemoved));
         IoDeleteDevice(filter->Common.Self);

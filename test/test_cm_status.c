@@ -430,6 +430,27 @@ static void test_u4(void)
     CHECK_EQ(get32(entry(rec, 0), CM_ST_E_BRIDGE), CM_ST_UNKNOWN,
              "no binds");
 
+    /* Record 22 section 7.6.2: an inferred eject's confirmed closure names
+     * the member for the ejected tunnel alone. */
+    in.InferPort = 1;
+    in.InferBdf = 0x0208UL;
+    (void)CmStatusBuild(rec, &in, NULL, &u4, NULL);
+    CHECK_EQ(get32(entry(rec, 0), CM_ST_E_BRIDGE), 0x0208UL,
+             "an inferred closure confirmed names its member");
+    CHECK_EQ(get32(entry(rec, 0), CM_ST_E_TUNNELS) & 0xF, CM_ST_TUN_EJECTED,
+             "the tunnel torn down after the eject");
+    u4.Ports[0].Ejected = FALSE;
+    (void)CmStatusBuild(rec, &in, NULL, &u4, NULL);
+    CHECK_EQ(get32(entry(rec, 0), CM_ST_E_BRIDGE), CM_ST_UNKNOWN,
+             "not for a tunnel not ejected");
+    u4.Ports[0].Ejected = TRUE;
+    in.InferPort = 2;
+    (void)CmStatusBuild(rec, &in, NULL, &u4, NULL);
+    CHECK_EQ(get32(entry(rec, 0), CM_ST_E_BRIDGE), CM_ST_UNKNOWN,
+             "not for another port");
+    in.InferPort = 0;
+    in.InferBdf = 0;
+
     /* Stopped: no routers whatever the tables hold. */
     in.Stage = CM_ST_STAGE_STOPPED;
     in.Cm = CM_ST_CM_NONE;

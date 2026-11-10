@@ -120,8 +120,11 @@ reg|Windows 98|Xhci.AddReg|HKR||XhciAcpiTables|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciUsb2Bos|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciResumeKeep|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciLinkKeep|0x00010003|1|keep
+reg|Windows 98|Xhci.AddReg|HKR||XhciSsFlapFallback|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciEventRingTrbs|0x00010003|1024|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciBulkOnlyOwnId|0x00010003|1|keep
+reg|Windows 98|Xhci.AddReg|HKR||XhciStagePoolKiB|0x00010003|2048|keep
+reg|Windows 98|Xhci.AddReg|HKR||XhciDmaStaging|0x00010003|0|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciMsiAvoid|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciStreamsOff|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciResumeReinit|0x00010003|1|keep
@@ -169,8 +172,11 @@ reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciAcpiTables|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciUsb2Bos|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciResumeKeep|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciLinkKeep|0x00010003|1|keep
+reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciSsFlapFallback|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciEventRingTrbs|0x00010003|1024|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciBulkOnlyOwnId|0x00010003|1|keep
+reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciStagePoolKiB|0x00010003|2048|keep
+reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciDmaStaging|0x00010003|0|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciMsiAvoid|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciStreamsOff|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciResumeReinit|0x00010003|1|keep
@@ -282,8 +288,11 @@ reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciAcpiTables|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciUsb2Bos|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciResumeKeep|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciLinkKeep|0x00010003|1|keep
+reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciSsFlapFallback|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciEventRingTrbs|0x00010003|1024|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciBulkOnlyOwnId|0x00010003|1|keep
+reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciStagePoolKiB|0x00010003|2048|keep
+reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciDmaStaging|0x00010003|0|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciMsiAvoid|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciStreamsOff|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciResumeReinit|0x00010003|1|keep

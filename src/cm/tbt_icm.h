@@ -508,6 +508,15 @@ typedef BOOLEAN (*TBT_ICM_APPROVE_HOOK)(PVOID context,
 #define TBT_ICM_XD_GAP_US           20UL
 #define TBT_ICM_MAX_XD              2UL     /* links with a peer record */
 #define TBT_ICM_XD_QUEUE            8UL     /* inter-domain packets held */
+/* Record 35 section 3.13: a request on a direct link with no record asks
+ * the firmware to announce again, at most once in this many ms. */
+#define TBT_ICM_XD_NOPEER_ASK_MS    10000UL
+#define TBT_ICM_XD_NOPEER_ASK_MAX   6UL     /* a route's, then left until it
+                                               is announced                */
+#define TBT_ICM_XD_ADOPT_MAX        3UL     /* adoptions at a kept place until
+                                               it is announced again (record
+                                               35 section 3.15)            */
+#define TBT_ICM_XD_NOPEER_ROUTES    64UL    /* a route level's adapters    */
 /* The maxhopid this host publishes and the Max Output HopID it assumes:
  * the firmware's lane adapter is not read (record 35 section 3.10). */
 #define TBT_ICM_XD_MAXHOP           15UL
@@ -543,8 +552,14 @@ typedef struct _TBT_ICM_XD {
     BOOLEAN Approved;       /* the approve answered: the paths stand      */
     BOOLEAN ApproveUnknown; /* sent and never answered: they may          */
     BOOLEAN EndPending;     /* a disconnect decoded: ended at the next run */
+    BOOLEAN EndGrace;       /* that end is an orderly one, not the link
+                               gone: the Logout goes (record 35 3.15)    */
     BOOLEAN Stale;          /* not announced again since a rediscovery's
                                driver ready                               */
+    BOOLEAN Adopted;        /* made from the peer's Properties Read Request
+                               with no announcement (record 35 section
+                               3.15): no service offered or brought up
+                               until it is announced (section 3.16)       */
     BOOLEAN RingsUp;
     BOOLEAN LinkUp;
     struct _TBT_ICM *Icm;
@@ -574,6 +589,16 @@ typedef struct _TBT_ICM_XD_COUNTERS {
     ULONG PacketOverflows;
     ULONG NoPeer;           /* no record at the packet's route */
     ULONG NotReady;         /* a discovery request answered Not Ready */
+    ULONG NoPeerAsks;       /* rediscoveries asked for a request with no
+                               record (record 35 section 3.13)           */
+    ULONG NoPeerUuid;       /* UUID Requests with no record answered here
+                               (record 35 section 3.14)                  */
+    ULONG Adopted;          /* records made from a Properties Read Request
+                               with no record (record 35 section 3.15)   */
+    ULONG AdoptOther;       /* adopted records ended by a Changed
+                               Notification of another domain            */
+    ULONG Unannounced;      /* adopted records whose discovery ended, the
+                               service withheld (record 35 section 3.16) */
     ULONG Approves;
     ULONG ApprovesOk;
     ULONG ApprovesFailed;   /* the error flag */
@@ -583,6 +608,8 @@ typedef struct _TBT_ICM_XD_COUNTERS {
     ULONG TeardownsFailed;  /* not answered, or not sent */
     ULONG TeardownsRefused; /* the error flag: nothing of it held */
     ULONG TeardownsOwed;    /* left to the next approve */
+    ULONG TeardownsGone;    /* sent at an end the firmware announced
+                               (record 35 section 3.17)                  */
     ULONG OwedRetired;      /* an owed one the firmware's events settled */
 } TBT_ICM_XD_COUNTERS;
 
@@ -728,6 +755,25 @@ typedef struct _TBT_ICM {
      * a later one's: no approve is sent until the rings restart. */
     BOOLEAN XdFenced;
     ULONG XdFenceMs;            /* when, for the log */
+    ULONG XdNoPeerAskMs;        /* the last rediscovery asked for no record */
+    TBT_UUID XdLocal;           /* this domain's UUID, the last connected
+                                   event's local_uuid                    */
+    BOOLEAN XdLocalValid;
+    /* Record 35 section 3.15: the last connected event at each direct
+     * route since the bind (its place and UUIDs), and a Properties Read
+     * Request with no record kept for the record made after the packet
+     * loop. */
+    TBT_ICM_XD_EVENT XdKnown[TBT_ICM_MAX_XD];
+    BOOLEAN XdKnownValid[TBT_ICM_MAX_XD];
+    ULONG XdKnownNext;          /* the entry a new place replaces */
+    UCHAR XdKnownAdopts[TBT_ICM_MAX_XD]; /* records adopted there since */
+    BOOLEAN XdAdoptPending;
+    ULONG XdAdoptKnown;         /* its XdKnown entry */
+    TBT_FRAME XdAdopt;
+    BOOLEAN XdNoPeerAsked;      /* XdNoPeerAskMs holds one */
+    UCHAR XdNoPeerAskRun[TBT_ICM_XD_NOPEER_ROUTES]; /* asked, per direct
+                                   route (its adapter), since it was last
+                                   announced                             */
     ULONG XdNextSerial;
     TBT_FRAME XdQ[TBT_ICM_XD_QUEUE];
     ULONG XdHead;

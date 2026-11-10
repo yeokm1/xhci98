@@ -68,6 +68,8 @@
 #define HCD_SSHUB_POLL_STEP_MS      10UL
 #define HCD_SSHUB_RESET_RECOVERY_MS 10UL
 
+static PHCD_HUB hcdSsHubPartner(PHCD_CONTROLLER hc, PHCD_HUB hub);
+
 static VOID hcdSsHubDelay(ULONG milliseconds)
 {
     LARGE_INTEGER due;
@@ -293,6 +295,8 @@ ULONG HcdSsHubConfigure(PHCD_CONTROLLER hc, PHCD_HUB hub)
     for (n = 1; n <= hub->Ports; n++) {
         q = HcdHubPort(hc, hub, n);
         XhciLinkInit(&q->Link);
+        XhciLinkFlapInit(&q->Flap);
+        XhciLinkDisableInit(&q->HubSsDisable);
         q->HubSsRecover = 0;
         b = (PUCHAR)&q->HubSsLink;
         for (i = 0; i < sizeof(q->HubSsLink); i++) {
@@ -538,8 +542,7 @@ ULONG HcdSsHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     if ((status & XHCI_SSHUB_PORT_CONNECTION) != 0) {
         q->HubSsSeen = 1;
     }
-    if ((status & XHCI_SSHUB_PORT_CONNECTION) == 0 &&
-        XhciSsHubLinkState(status) == XHCI_SSHUB_LINK_RX_DETECT) {
+    if (XhciSsHubPortEmpty(status)) {
         /* Nothing on the port: the next device starts with a full warm
          * budget. The re-arm waits restart only when a device was seen
          * since the last re-arm and has gone - not on the empty read that
@@ -547,6 +550,11 @@ ULONG HcdSsHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
          * detected (the Phase 28-31 integration). */
         q->Link.WarmResets = 0;
         q->Link.GaveUp = 0;
+        /* Issue 29 (record 13 section 21.5): and its failures counted
+         * afresh, a send still pending for the device that left ended. */
+        XhciLinkFlapInit(&q->Flap);
+        hub->DisablePorts &= ~(1UL << n);
+        XhciLinkDisableInit(&q->HubSsDisable);
         if (q->HubSsSeen) {
             q->HubSsRearms = 0;
             q->HubSsSeen = 0;
@@ -609,6 +617,7 @@ ULONG HcdSsHubPortRecover(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
     ULONG change;
     ULONG warmSeen;
     ULONG progress;
+    ULONG verdict;
     ULONG stale;
 
     q = HcdHubPort(hc, hub, n);
@@ -635,6 +644,33 @@ ULONG HcdSsHubPortRecover(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
     if (stale != 0 && hcdSsHubClear(hc, hub, n, stale) != stale) {
         return 0;
     }
+    /* Issue 29 (design record 13 section 21.5): 29-A.2's budget refills at
+     * every enabled reset, so a link that trains and fails again is
+     * counted here; past the limit it is sent to the hub's USB 2.0 half
+     * (SS.Disabled, re-armed later by HcdHubPortDisable's own schedule)
+     * or given up until the port reads empty. */
+    verdict = XhciLinkFlapDecide(XhciLinkFlapFailure(&q->Flap, HcdTolNow(hc)),
+                                 hc->SsFlapFallback,
+                                 hcdSsHubPartner(hc, hub) != NULL);
+    if (verdict == XHCI_FLAP_SEND) {
+        /* Sent, or pending on the hub's re-arm tick if the request failed,
+         * or given up after the last try (HcdHubFlapSend). */
+        HcdHubFlapSend(hc, hub, n);
+        return 0;
+    }
+    if (verdict == XHCI_FLAP_STOPPED) {
+        if (XhciLinkFlapStop(&q->Flap)) {
+            hc->Counters.SsHubLinksGivenUp++;
+            XhciLogNote(&hc->Hc, "link.flap.hub",
+                        ((hub->Index & 0xFFUL) << 24) |
+                            ((n & 0xFFUL) << 16) | (3UL << 8) |
+                            (q->Flap.Count & 0xFFUL));
+        }
+        return 0;
+    }
+    XhciLogNote(&hc->Hc, "link.flap.hub",
+                ((hub->Index & 0xFFUL) << 24) | ((n & 0xFFUL) << 16) |
+                    (1UL << 8) | (q->Flap.Count & 0xFFUL));
     if (!hcdSsHubWarmAllowed(hc, hub, n) ||
         !hcdSsHubFeature(hc, hub, n, 1, XHCI_SSHUB_FEAT_BH_PORT_RESET)) {
         return 0;
@@ -693,11 +729,10 @@ ULONG HcdSsHubPsiv(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG rootPort,
 }
 
 /*
- * A hub just started: if it and another live hub look like the two halves
- * of one unit (XhciSsHubLooksPaired), count it once. Nothing else follows
- * from it: the halves stay independent hubs (30-A.1).
+ * The live hub that looks like the other half of `hub`'s unit
+ * (XhciSsHubLooksPaired), or NULL. Thread only.
  */
-VOID HcdSsHubCountPair(PHCD_CONTROLLER hc, PHCD_HUB hub)
+static PHCD_HUB hcdSsHubPartner(PHCD_CONTROLLER hc, PHCD_HUB hub)
 {
     PHCD_HUB other;
     PHCD_HUB ss;
@@ -706,7 +741,7 @@ VOID HcdSsHubCountPair(PHCD_CONTROLLER hc, PHCD_HUB hub)
     ULONG i;
 
     if (hub->Device == NULL) {
-        return;
+        return NULL;
     }
     for (i = 0; i < HCD_MAX_HUBS; i++) {
         other = &hc->Hubs[i];
@@ -729,11 +764,28 @@ VOID HcdSsHubCountPair(PHCD_CONTROLLER hc, PHCD_HUB hub)
                 (ULONG)hs->Device->DeviceDesc[8] |
                     ((ULONG)hs->Device->DeviceDesc[9] << 8),
                 hs->Device->Port, hs->Tier, hs->Device->Route, companion)) {
-            hc->Counters.SsHubPairs++;
-            XHCI_DBG_VALUE("hcd: hub halves look paired, SS slot/HS slot",
-                           (ss->SlotId << 8) | hs->SlotId);
-            return;
+            return other;
         }
+    }
+    return NULL;
+}
+
+/*
+ * A hub just started: if it and another live hub look like the two halves
+ * of one unit (XhciSsHubLooksPaired), count it once. Nothing else follows
+ * from it but issue 29's send (HcdSsHubPortRecover): the halves stay
+ * independent hubs (30-A.1).
+ */
+VOID HcdSsHubCountPair(PHCD_CONTROLLER hc, PHCD_HUB hub)
+{
+    PHCD_HUB other;
+
+    other = hcdSsHubPartner(hc, hub);
+    if (other != NULL) {
+        hc->Counters.SsHubPairs++;
+        XHCI_DBG_VALUE("hcd: hub halves look paired, SS slot/HS slot",
+                       hub->Usb3 ? ((hub->SlotId << 8) | other->SlotId)
+                                 : ((other->SlotId << 8) | hub->SlotId));
     }
 }
 

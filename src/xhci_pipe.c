@@ -362,23 +362,36 @@ static ULONG xhciPipeExponent(ULONG bInterval, PULONG clamped)
 }
 
 /*
- * The Max Packet Size a USB 2.0 endpoint may declare at its speed (USB 2.0
- * 5.6.3 isochronous, 5.7.3 interrupt, 5.8.3 bulk, Table 9-14 for the HS
- * high-bandwidth ranges). `mps` is already 0..1024, and 0 only for an
- * isochronous endpoint (XhciPipeZeroBandwidth), which passes here unless
- * HS additional transactions demand 513 or 683 and up; `transactions` (HS
- * periodic only) is 0..2. A device outside these limits declares a packet size
- * its speed does not have, and is refused rather than programmed as declared.
- * HS control (64, 5.5.3) has no row: control endpoints are refused earlier.
+ * The largest Max Packet Size a USB 2.0 endpoint's speed and type carry on
+ * the wire (USB 2.0 5.6.3 isochronous, 5.7.3 interrupt, 5.8.3 bulk): LS
+ * interrupt 8; FS interrupt and bulk 64, FS isochronous 1023; HS bulk 512,
+ * HS interrupt and isochronous 1024. HS control (64, 5.5.3) has no row:
+ * control endpoints are refused earlier.
  */
-static ULONG xhciPipeMpsLegal(ULONG speed, ULONG type, ULONG mps,
-                              ULONG transactions)
+static ULONG xhciPipeMpsMax(ULONG speed, ULONG type)
+{
+    if (speed == XHCI_PIPE_SPEED_HIGH) {
+        return type == XHCI_PIPE_XFER_BULK ? 512UL : 1024UL;
+    }
+    if (speed == XHCI_PIPE_SPEED_LOW) {
+        return 8UL;
+    }
+    return type == XHCI_PIPE_XFER_ISOCH ? 1023UL : 64UL;
+}
+
+/*
+ * Whether a size at or under xhciPipeMpsMax is one the speed's table lists
+ * (USB 2.0 5.8.3: FS bulk 8, 16, 32 or 64, HS bulk 512; Table 9-14: one
+ * additional HS transaction needs 513-1024, two need 683-1024).
+ * `transactions` (HS periodic only) is 0..2.
+ */
+static ULONG xhciPipeMpsListed(ULONG speed, ULONG type, ULONG mps,
+                               ULONG transactions)
 {
     if (speed == XHCI_PIPE_SPEED_HIGH) {
         if (type == XHCI_PIPE_XFER_BULK) {
             return mps == 512UL;
         }
-        /* Table 9-14: 1 extra transaction needs 513-1024, 2 need 683-1024. */
         if (transactions == 1UL) {
             return mps >= 513UL;
         }
@@ -387,17 +400,10 @@ static ULONG xhciPipeMpsLegal(ULONG speed, ULONG type, ULONG mps,
         }
         return 1;
     }
-    if (speed == XHCI_PIPE_SPEED_LOW) {
-        return mps <= 8UL;
-    }
-    switch (type) {
-    case XHCI_PIPE_XFER_BULK:
+    if (speed == XHCI_PIPE_SPEED_FULL && type == XHCI_PIPE_XFER_BULK) {
         return mps == 8UL || mps == 16UL || mps == 32UL || mps == 64UL;
-    case XHCI_PIPE_XFER_INTERRUPT:
-        return mps <= 64UL;
-    default:
-        return mps <= 1023UL;
     }
+    return 1;
 }
 
 ULONG XhciPipeEndpointParams(const UCHAR *endpoint, ULONG speed,
@@ -424,7 +430,9 @@ ULONG XhciPipeEndpointParams(const UCHAR *endpoint, ULONG speed,
     out.CompanionMissing = 0;
     out.MaxStreams = 0;
     out.SspIso = 0;
+    out.MpsOutside = XHCI_PIPE_MPS_LISTED;
     wMaxPacketSize = xhciPipeWord(endpoint + 4);
+    out.MpsDeclared = wMaxPacketSize & 0x07FFUL;
 
     out.Dci = XhciPipeDci(out.Address);
     if (out.Dci == 0) {
@@ -447,14 +455,13 @@ ULONG XhciPipeEndpointParams(const UCHAR *endpoint, ULONG speed,
         return XHCI_PIPE_UNSUPPORTED;
     }
 
-    /* 6.2.3.5: "bits 10:0 of the USB Endpoint Descriptor wMaxPacketSize",
-     * and USB 2.0 allows no endpoint more than 1024. A size of 0 is a
-     * zero-bandwidth isochronous endpoint, accepted (XhciPipeZeroBandwidth
-     * says why and how); on any other type it is refused. */
-    out.MaxPacketSize = wMaxPacketSize & 0x07FFUL;
-    if (out.MaxPacketSize > XHCI_PIPE_MAX_PACKET ||
-        (out.MaxPacketSize == 0 &&
-         out.TransferType != XHCI_PIPE_XFER_ISOCH)) {
+    /* 6.2.3.5: "bits 10:0 of the USB Endpoint Descriptor wMaxPacketSize".
+     * A size of 0 is a zero-bandwidth isochronous endpoint, accepted
+     * (XhciPipeZeroBandwidth says why and how); on any other type it is
+     * refused. A size outside the speed's table is taken below. */
+    out.MaxPacketSize = out.MpsDeclared;
+    if (out.MaxPacketSize == 0 &&
+        out.TransferType != XHCI_PIPE_XFER_ISOCH) {
         return XHCI_PIPE_MALFORMED;
     }
 
@@ -473,9 +480,28 @@ ULONG XhciPipeEndpointParams(const UCHAR *endpoint, ULONG speed,
         }
         out.MaxBurstSize = transactions;
     }
-    if (!xhciPipeMpsLegal(speed, out.TransferType, out.MaxPacketSize,
-                          out.MaxBurstSize)) {
+    /*
+     * A size outside the speed's table (task 48.21). A zero-bandwidth
+     * endpoint asking for additional transactions has nothing to repeat and
+     * is refused. Otherwise the device is driven, not refused: a size above
+     * what the speed and type carry on the wire is programmed as that
+     * maximum, since no packet of the endpoint can be larger, and the client
+     * is given that size in the pipe information; a size under it that the
+     * table does not list (an FS bulk 48, an HS bulk 64, an HS high-bandwidth
+     * endpoint under 513 or 683) is programmed as declared, because the
+     * Endpoint Context's parameters "shall correlate" with the device's
+     * (4.6.6 p.63) and the device packetises by what it declared. Either is
+     * said in MpsOutside for the caller's note.
+     */
+    if (out.MaxPacketSize == 0 && out.MaxBurstSize != 0) {
         return XHCI_PIPE_MALFORMED;
+    }
+    if (out.MaxPacketSize > xhciPipeMpsMax(speed, out.TransferType)) {
+        out.MaxPacketSize = xhciPipeMpsMax(speed, out.TransferType);
+        out.MpsOutside = XHCI_PIPE_MPS_CLAMPED;
+    } else if (!xhciPipeMpsListed(speed, out.TransferType, out.MaxPacketSize,
+                                  out.MaxBurstSize)) {
+        out.MpsOutside = XHCI_PIPE_MPS_UNLISTED;
     }
     /* Table 6-8: Mult is 0 for everything but SS / eUSB2 isochronous. */
     out.Mult = 0;
@@ -597,6 +623,10 @@ static ULONG xhciPipeSuperSpeed(const UCHAR *config, ULONG total,
     out.MaxStreams = 0;
     out.SspIso = 0;
     wMaxPacketSize = xhciPipeWord(endpoint + 4);
+    /* The USB 2.0 table's tolerance (XhciPipeEndpointParams) is not taken
+     * at SuperSpeed: its sizes are USB 3.2 Table 9-26's, refused below. */
+    out.MpsDeclared = wMaxPacketSize & 0x07FFUL;
+    out.MpsOutside = XHCI_PIPE_MPS_LISTED;
     out.Dci = XhciPipeDci(out.Address);
     if (out.Dci == 0) {
         return XHCI_PIPE_MALFORMED;
@@ -1907,6 +1937,40 @@ ULONG XhciPipeBusInformation(ULONG level, ULONG totalBandwidth,
     xhciPipePut32(buffer, totalBandwidth);
     xhciPipePut32(buffer + 4, consumedBandwidth);
     *length = need;
+    return XHCI_PIPE_OK;
+}
+
+ULONG XhciPipeUrbHeaderCheck(ULONG headerLength, ULONG least)
+{
+    return (headerLength >= least) ? XHCI_PIPE_URB_SERVE
+                                   : XHCI_PIPE_URB_SERVE_SHORT;
+}
+
+ULONG XhciPipeSelectListBytes(ULONG headerLength, ULONG listOffset,
+                              ULONG firstLength, ULONG fixed)
+{
+    ULONG bytes;
+
+    bytes = (headerLength > listOffset) ? headerLength - listOffset : 0UL;
+    if (firstLength >= fixed && firstLength > bytes) {
+        bytes = firstLength;
+    }
+    return bytes;
+}
+
+ULONG XhciPipeSelectIfaceName(const UCHAR *info, ULONG fixed, PULONG length,
+                              PULONG number, PULONG alternate)
+{
+    if (info == NULL || length == NULL || number == NULL ||
+        alternate == NULL || fixed < 4UL) {
+        return XHCI_PIPE_BAD_PARAM;
+    }
+    *length = xhciPipeWord(info);
+    if (*length < fixed) {
+        return XHCI_PIPE_REFUSED;
+    }
+    *number = (ULONG)info[2];
+    *alternate = (ULONG)info[3];
     return XHCI_PIPE_OK;
 }
 

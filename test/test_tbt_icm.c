@@ -3020,6 +3020,7 @@ typedef struct XFW {
     unsigned long Stages[8];
     unsigned long LastTeardown[8];
     int GoneInApprove;          /* a disconnect inside the approve's wait */
+    int GoneInTeardown;         /* a disconnect inside stage 1's wait */
     int Tr;                     /* the Titan Ridge layouts */
 } XFW;
 static XFW g_xfw;
@@ -3078,12 +3079,21 @@ static const TBT_ICM_NET g_xdNet = { NULL, xdRingsUp, xdRingsDown, xdLink };
 
 /* ---- the far engine ---------------------------------------------------- */
 
+/* The far host as Windows 11 was after its replug (record 35 section
+ * 3.15): no UUID Request of its own. */
+static int g_xpNoUuidReq;
+
 static LONG xpSend(PVOID c, ULONG pdf, const ULONG *dw, ULONG words)
 {
     unsigned long w[64];
     ULONG i;
 
     (void)c;
+    if (g_xpNoUuidReq && pdf == TBT_PDF_XDOMAIN_REQ && words > TBT_XDP_W_TYPE &&
+        (dw[TBT_XDP_W_TYPE] == TBT_XDP_UUID_REQ ||
+         dw[TBT_XDP_W_TYPE] == TBT_XDP_UUID_REQ_TBT3)) {
+        return TBT_OK;
+    }
     for (i = 0; i < words && i < 64; i++) {
         w[i] = dw[i];
     }
@@ -3230,6 +3240,10 @@ static void xdOnTx(FAKE *fk, unsigned long pdf, const unsigned long *dw,
         }
         g_xfw.Teardowns++;
         memcpy(g_xfw.LastTeardown, dw, 4 * (words < 8 ? words : 8));
+        if (g_xfw.GoneInTeardown) {
+            g_xfw.GoneInTeardown = 0;
+            xdDisconnectedEv(1, XD_OUR_ROUTE, &kXdFar, 500);
+        }
         if (g_xfw.TeardownMode == MODE_NEVER) {
             return;
         }
@@ -3393,6 +3407,330 @@ static void test_xd_frames(void)
     CHECK(TbtIcmProfileIceLake.EncodeXdTeardown != NULL, "Ice Lake: the command");
 }
 
+/* Record 35 section 3.13 (the owner's bench of 2026-11-09, plug order
+ * 3): a request from a direct link with no record (the firmware did not
+ * announce the far host after the cable came back) asks for another
+ * driver ready, at most once each TBT_ICM_XD_NOPEER_ASK_MS and at most
+ * TBT_ICM_XD_NOPEER_ASK_MAX times before a connected event. */
+static void test_xd_nopeer_ask(void)
+{
+    ULONG buf[TBT_XDP_MAX_WORDS];
+    TBT_ROUTE r;
+    ULONG n;
+    ULONG before;
+    int i;
+
+    xdSetup(GEN_AR);
+    xdBind();
+    idle(500);
+    r.Hi = 0;
+    r.Lo = 1;
+    n = TbtXdpBuildUuidRequest(buf, &r, 1, TBT_XDP_UUID_REQ);
+    before = g_icm.Counters.Rediscoveries;
+    fakeQueue(TBT_PDF_XDOMAIN_REQ, (unsigned long *)buf, n, 2000, 0);
+    idle(1000);
+    CHECK_EQ(g_icm.XdCounters.NoPeerAsks, 1, "asked once");
+    CHECK(g_icm.XdCounters.NotReady >= 1, "answered Not Ready");
+    CHECK(g_icm.Counters.Rediscoveries > before, "a driver ready sent");
+    fakeQueue(TBT_PDF_XDOMAIN_REQ, (unsigned long *)buf, n, 2000, 0);
+    idle(1000);
+    CHECK_EQ(g_icm.XdCounters.NoPeerAsks, 1, "not again within 10 s");
+    for (i = 0; i < 10; i++) {
+        idle(10000);
+        fakeQueue(TBT_PDF_XDOMAIN_REQ, (unsigned long *)buf, n, 2000, 0);
+        idle(100);
+    }
+    CHECK_EQ(g_icm.XdCounters.NoPeerAsks, TBT_ICM_XD_NOPEER_ASK_MAX, "bounded");
+    /* Another link's announcement leaves the budget spent. */
+    xdConnectedEv(3, 0, 0, 3, &kXdFar, 1000);
+    idle(500);
+    CHECK_EQ(g_icm.XdNoPeerAskRun[1], TBT_ICM_XD_NOPEER_ASK_MAX, "another route: not reset");
+    /* Route 1 spent leaves route 3 its own budget. */
+    xdDisconnectedEv(3, 3, &kXdFar, 1000);
+    idle(11000);
+    r.Lo = 3;
+    n = TbtXdpBuildUuidRequest(buf, &r, 3, TBT_XDP_UUID_REQ);
+    before = g_icm.XdCounters.NoPeerAsks;
+    fakeQueue(TBT_PDF_XDOMAIN_REQ, (unsigned long *)buf, n, 2000, 0);
+    idle(500);
+    CHECK_EQ(g_icm.XdCounters.NoPeerAsks, before + 1, "route 3 still asks");
+    /* A route two levels deep is no direct link: no ask. */
+    xdConnectedEv(1, 0, 0, XD_OUR_ROUTE, &kXdFar, 1000);
+    idle(500);
+    CHECK_EQ(g_icm.XdNoPeerAskRun[1], 0, "its route's connected event resets it");
+    r.Lo = 0x0301;
+    n = TbtXdpBuildUuidRequest(buf, &r, 2, TBT_XDP_UUID_REQ);
+    before = g_icm.XdCounters.NoPeerAsks;
+    idle(11000);
+    fakeQueue(TBT_PDF_XDOMAIN_REQ, (unsigned long *)buf, n, 2000, 0);
+    idle(500);
+    CHECK_EQ(g_icm.XdCounters.NoPeerAsks, before, "a deeper route asks nothing");
+}
+
+/* Record 35 section 3.14 (the owner's bench, plug order 3): once a
+ * connected event has named this domain's UUID, a UUID Request with no
+ * record is answered with it; before one, Not Ready. */
+static void test_xd_nopeer_uuid(void)
+{
+    ULONG buf[TBT_XDP_MAX_WORDS];
+    TBT_ROUTE r;
+    ULONG n;
+    ULONG nr;
+
+    xdSetup(GEN_AR);
+    xdBind();
+    idle(500);
+    r.Hi = 0;
+    r.Lo = 1;
+    n = TbtXdpBuildUuidRequest(buf, &r, 2, TBT_XDP_UUID_REQ);
+    nr = g_icm.XdCounters.NotReady;
+    fakeQueue(TBT_PDF_XDOMAIN_REQ, (unsigned long *)buf, n, 2000, 0);
+    idle(500);
+    CHECK_EQ(g_icm.XdCounters.NotReady, nr + 1, "no UUID known yet: Not Ready");
+    CHECK_EQ(g_icm.XdCounters.NoPeerUuid, 0, "nothing answered");
+    xdConnectedEv(1, 0, 0, XD_OUR_ROUTE, &kXdFar, 1000);
+    idle(500);
+    xdDisconnectedEv(1, XD_OUR_ROUTE, &kXdFar, 1000);
+    idle(2000);
+    CHECK(TbtIcmPeer(&g_icm, 0) == NULL, "the record ended");
+    fakeQueue(TBT_PDF_XDOMAIN_REQ, (unsigned long *)buf, n, 2000, 0);
+    idle(500);
+    CHECK_EQ(g_icm.XdCounters.NoPeerUuid, 1, "answered with this domain's UUID");
+    CHECK(TbtUuidEqual(&g_icm.XdLocal, &kXdLocal), "the event's local UUID");
+}
+
+/* Record 35 section 3.15 (the owner's bench, round 3, plug order 3): the
+ * service up, the cable pulled at the far end (the disconnected event),
+ * then the far host - which keeps this domain's UUID - reads this
+ * domain's properties straight away with no announcement from the
+ * firmware. A record is adopted from its Properties Read Request: the
+ * request answered, no Not Ready and no driver ready; then (section
+ * 3.16, rounds 4 to 6) no service: no networking offered, no Login, no
+ * approve, no rings, no link. A driver ready with no announcement ends
+ * it and the next request adopts again; a connected event at its place
+ * promotes it and the service comes up with one approve; a disconnected
+ * event ends it; a Changed Notification from another domain ends it.
+ * Refused: another Destination UUID, another computer's Source UUID, a
+ * route never announced, a route of two levels. */
+static void xpStartKnown(const TBT_UUID *self, const TBT_UUID *peer)
+{
+    TBT_XDP_OPS ops;
+    TBT_XDP_LOCAL props;
+    TBT_ROUTE r;
+    static const UCHAR mac[6] = { 0x02, 0x11, 0x22, 0x33, 0x44, 0x55 };
+
+    memset(&ops, 0, sizeof(ops));
+    ops.Send = xpSend;
+    ops.NowMs = xpNow;
+    ops.Log = xpLog;
+    ops.ServiceUp = xpUp;
+    ops.ServiceDown = xpDown;
+    memset(&props, 0, sizeof(props));
+    props.VendorId = 0x045e;
+    props.VendorText = "far";
+    props.DeviceId = 0x083f;
+    props.DeviceText = "far";
+    props.MaxHopId = 15;
+    props.Network = TRUE;
+    props.Prtcstns = TBT_NET_STNS_FRAME_ID;
+    r.Hi = 0;
+    r.Lo = XD_FAR_ROUTE;
+    /* The UUIDs known: discovery starts at PROPS, as Windows 11 did. */
+    TbtXdpPeerInit(&g_xp.E, &ops, &r, self, peer, TRUE, FALSE, &props, mac, 15, NULL);
+    g_xp.Live = 1;
+    TbtXdpPeerStart(&g_xp.E);
+}
+
+static void test_xd_adopt_props(void)
+{
+    ULONG buf[TBT_XDP_MAX_WORDS];
+    TBT_ROUTE r;
+    ULONG n;
+    ULONG nr;
+    ULONG asks;
+    ULONG approves;
+    ULONG redisc;
+    unsigned long downs;
+    unsigned long mboxes;
+    unsigned long rings;
+    const TBT_XDP_PEER *p;
+    int i;
+
+    xdSetup(GEN_AR);
+    xdBind();
+    xdIdle(500);
+    xdPlug();
+    for (i = 0; i < 1200 && !xdUp(); i++) {
+        xdIdle(50);
+    }
+    CHECK(xdUp(), "the service up before the pull");
+    /* The pull at the far end. */
+    g_xp.Live = 0;
+    xdDisconnectedEv(1, XD_OUR_ROUTE, &kXdFar, 1000);
+    xdIdle(2000);
+    CHECK(TbtIcmPeer(&g_icm, 0) == NULL, "the record ended");
+    nr = g_icm.XdCounters.NotReady;
+    asks = g_icm.XdCounters.NoPeerAsks;
+    approves = g_xfw.Approves;
+    redisc = g_icm.Counters.Rediscoveries;
+    /* The replug: the far host reads this domain's properties at once. */
+    g_xpNoUuidReq = 1;
+    rings = g_ringsUps;
+    xpStartKnown(&kXdFar, &kXdLocal);
+    xdIdle(60000);
+    CHECK_EQ(g_icm.XdCounters.Adopted, 1, "a record adopted");
+    CHECK(TbtIcmPeer(&g_icm, 0) != NULL && g_icm.Xd[0].Adopted, "slot 0, adopted");
+    CHECK(TbtUuidEqual(&g_icm.Xd[0].Addr.Remote, &kXdFar), "the announced UUID");
+    CHECK_EQ(g_icm.Xd[0].Addr.Link, 1, "the kept link");
+    CHECK_EQ(g_icm.XdCounters.NotReady, nr, "no Not Ready");
+    CHECK_EQ(g_icm.XdCounters.NoPeerAsks, asks, "no driver ready asked");
+    CHECK_EQ(g_icm.Counters.Rediscoveries, redisc, "no driver ready sent");
+    /* Section 3.16: found, and stopped short of the service. */
+    p = TbtIcmPeer(&g_icm, 0);
+    CHECK(p != NULL && p->State == TBT_XDP_S_READY, "its discovery done");
+    CHECK(p != NULL && !p->LocalProps.Network && !p->NetWanted, "no networking offered");
+    CHECK(g_xp.E.State == TBT_XDP_S_READY && g_xp.E.RemoteValid &&
+          !g_xp.E.RemoteInfo.Network, "the far host read a block without USB4NET");
+    CHECK(p != NULL && p->Counters.LoginsSent == 0, "no Login sent");
+    CHECK(g_xp.E.Counters.LoginsSent == 0, "the far host sent none");
+    CHECK(!xdUp(), "no service");
+    CHECK_EQ(g_xfw.Approves, approves, "no approve");
+    CHECK_EQ(g_ringsUps, rings, "no rings");
+    CHECK(!g_icm.Xd[0].RingsUp && !g_icm.Xd[0].LinkUp, "no link");
+    CHECK_EQ(g_icm.XdCounters.Unannounced, 1, "counted once");
+    /* A rediscovery's driver ready: no announcement comes, so the
+     * reconciliation ends it; the far host's next request adopts again. */
+    g_icm.RediscoverPending = TRUE;
+    xdIdle(15000);
+    CHECK(g_icm.Counters.Rediscoveries > redisc, "a driver ready went");
+    CHECK(TbtIcmPeer(&g_icm, 0) == NULL, "ended by the reconciliation");
+    xpStartKnown(&kXdFar, &kXdLocal);
+    xdIdle(5000);
+    CHECK_EQ(g_icm.XdCounters.Adopted, 2, "adopted again");
+    CHECK(TbtIcmPeer(&g_icm, 0) != NULL && g_icm.Xd[0].Adopted && !xdUp(),
+          "adopted, no service");
+    /* Announced after all: an ordinary record, its block rebuilt with the
+     * service, the far host told, and the service up with one approve. */
+    xdConnectedEv(1, 0, 0, XD_OUR_ROUTE, &kXdFar, 1000);
+    for (i = 0; i < 1200 && !xdUp(); i++) {
+        xdIdle(50);
+    }
+    CHECK(TbtIcmPeer(&g_icm, 0) != NULL && !g_icm.Xd[0].Adopted, "promoted");
+    CHECK(xdUp(), "the service up after the announcement");
+    CHECK_EQ(g_xfw.Approves, approves + 1, "one approve");
+    CHECK_EQ(g_xfw.LastApprove[1] >> 16, 1, "at the kept link info");
+    CHECK_EQ(g_xfw.LastApprove[2], kXdFar.Dw[0], "for the far UUID");
+    /* Its disconnected event ends it. */
+    g_xp.Live = 0;
+    xdDisconnectedEv(1, XD_OUR_ROUTE, &kXdFar, 1000);
+    xdIdle(2000);
+    CHECK(TbtIcmPeer(&g_icm, 0) == NULL, "ended by the disconnect");
+
+    /* A Changed Notification from another domain on an adopted record's
+     * link ends it - no service, so no Logout and no teardown - and does
+     * not move its engine to that domain (the identity a disconnect and a
+     * promotion are keyed by). */
+    xpStartKnown(&kXdFar, &kXdLocal);
+    xdIdle(5000);
+    p = TbtIcmPeer(&g_icm, 0);
+    CHECK(p != NULL && g_icm.Xd[0].Adopted && p->State == TBT_XDP_S_READY,
+          "adopted for the identity check");
+    downs = g_xp.Downs;
+    mboxes = g_fake.MboxCount;
+    r.Hi = 0;
+    r.Lo = XD_OUR_ROUTE;
+    n = TbtXdpBuildChanged(buf, &r, 1, &kXdFar2);
+    fakeQueue(TBT_PDF_XDOMAIN_REQ, (unsigned long *)buf, n, 2000, 0);
+    xdIdle(4000);
+    CHECK_EQ(g_icm.XdCounters.AdoptOther, 1, "ended by another domain's Changed");
+    CHECK_EQ(g_xp.Downs, downs, "no service to log out of");
+    CHECK_EQ(g_fake.MboxCount, mboxes, "no teardown: nothing approved");
+    CHECK(TbtIcmPeer(&g_icm, 0) == NULL, "the record gone");
+    g_xp.Live = 0;
+    /* That domain adopts nothing: the firmware never named it. */
+    n = TbtXdpBuildPropsRequest(buf, &r, 1, &kXdFar2, &kXdLocal, 0);
+    fakeQueue(TBT_PDF_XDOMAIN_REQ, (unsigned long *)buf, n, 2000, 0);
+    xdIdle(500);
+    CHECK_EQ(g_icm.XdCounters.Adopted, 3, "the new domain adopts nothing");
+
+    /* Refusals keep sections 3.13 and 3.14's handling. */
+    n = TbtXdpBuildPropsRequest(buf, &r, 1, &kXdFar, &kXdFar2, 0);
+    nr = g_icm.XdCounters.NotReady;
+    fakeQueue(TBT_PDF_XDOMAIN_REQ, (unsigned long *)buf, n, 2000, 0);
+    xdIdle(500);
+    CHECK_EQ(g_icm.XdCounters.Adopted, 3, "another Destination UUID: none");
+    CHECK_EQ(g_icm.XdCounters.NotReady, nr + 1, "answered Not Ready");
+    r.Lo = 2;
+    n = TbtXdpBuildPropsRequest(buf, &r, 2, &kXdFar, &kXdLocal, 0);
+    fakeQueue(TBT_PDF_XDOMAIN_REQ, (unsigned long *)buf, n, 2000, 0);
+    xdIdle(500);
+    CHECK_EQ(g_icm.XdCounters.Adopted, 3, "a route never announced: none");
+    r.Lo = 0x0301;
+    n = TbtXdpBuildPropsRequest(buf, &r, 3, &kXdFar, &kXdLocal, 0);
+    fakeQueue(TBT_PDF_XDOMAIN_REQ, (unsigned long *)buf, n, 2000, 0);
+    xdIdle(500);
+    CHECK_EQ(g_icm.XdCounters.Adopted, 3, "a route of two levels: none");
+    /* A session boundary forgets the place. */
+    TbtIcmSuspend(&g_icm);
+    CHECK(!g_icm.XdKnownValid[0] && !g_icm.XdKnownValid[1], "forgotten at a suspend");
+    g_xpNoUuidReq = 0;
+}
+
+/* Record 35 section 3.18: an adopted record whose far host notifies
+ * during every read. The reads made afresh are bounded, the engine ends at
+ * ERROR, and the failed record's cleanup ends it instead of its engine
+ * reading for ever. */
+static void test_xd_adopt_spin(void)
+{
+    ULONG buf[TBT_XDP_MAX_WORDS];
+    TBT_ROUTE r;
+    ULONG n;
+    ULONG adopted;
+    const TBT_XDP_PEER *p;
+    int i;
+    int reads = 0;
+    int ended = 0;
+
+    xdSetup(GEN_AR);
+    xdBind();
+    xdIdle(500);
+    xdPlug();
+    for (i = 0; i < 1200 && !xdUp(); i++) {
+        xdIdle(50);
+    }
+    CHECK(xdUp(), "the service up before the pull");
+    g_xp.Live = 0;
+    xdDisconnectedEv(1, XD_OUR_ROUTE, &kXdFar, 1000);
+    xdIdle(2000);
+    g_xpNoUuidReq = 1;
+    xpStartKnown(&kXdFar, &kXdLocal);
+    xdIdle(60000);
+    p = TbtIcmPeer(&g_icm, 0);
+    CHECK(p != NULL && g_icm.Xd[0].Adopted && p->State == TBT_XDP_S_READY,
+          "adopted, its discovery done");
+    adopted = g_icm.XdCounters.Adopted;
+    r.Hi = 0;
+    r.Lo = XD_OUR_ROUTE;
+    n = TbtXdpBuildChanged(buf, &r, 1, &kXdFar);
+    for (i = 0; i < 6000; i++) {
+        p = TbtIcmPeer(&g_icm, 0);
+        if (p == NULL || g_icm.XdCounters.Adopted != adopted) {
+            ended = 1;
+            break;
+        }
+        if (p->State == TBT_XDP_S_PROPS) {
+            reads++;
+        }
+        fakeQueue(TBT_PDF_XDOMAIN_REQ, (unsigned long *)buf, n, 100, 0);
+        xdIdle(50);
+    }
+    CHECK(reads > (int)TBT_XDP_RESENDS, "it read, notified each time");
+    CHECK(ended, "the record ended, not held reading");
+    CHECK(!xdUp(), "no service");
+    g_xp.Live = 0;
+    g_xpNoUuidReq = 0;
+}
+
 /* XhciCmNet 0: the events logged and ignored, every packet dropped. */
 static void test_xd_off(void)
 {
@@ -3505,7 +3843,10 @@ static void test_xd_ar_port_b(void)
     CHECK_EQ(g_fake.MboxDataLog[mb + 1], 2, "data 2");
 }
 
-/* The disconnect: no Logout, no teardown; the rings down. */
+/* The disconnect: no Logout into the dead link; the teardown (record 35
+ * section 3.17: mailbox 0x10, data 1 then 2, as Linux's thunderbolt-net
+ * disables the paths at the end of a logged-in peer), never owed; the
+ * rings down. */
 static void test_xd_unplug(void)
 {
     unsigned long mb;
@@ -3522,7 +3863,12 @@ static void test_xd_unplug(void)
     tx = g_fake.TxCount;
     xdIdle(500);
     CHECK(TbtIcmPeer(&g_icm, 0) == NULL, "the record ended");
-    CHECK_EQ(g_fake.MboxCount, mb, "no teardown: the firmware dropped the paths");
+    CHECK_EQ(g_fake.MboxCount - mb, 2, "the teardown at the disconnect");
+    CHECK_EQ(g_fake.MboxLog[mb], 0x10, "port A");
+    CHECK_EQ(g_fake.MboxDataLog[mb], 1, "data 1");
+    CHECK_EQ(g_fake.MboxDataLog[mb + 1], 2, "then data 2");
+    CHECK_EQ(g_icm.XdCounters.TeardownsGone, 1, "counted");
+    CHECK(!g_icm.XdOwed, "never owed");
     CHECK_EQ(g_fake.TxCount, tx, "no Logout");
     CHECK_EQ(g_linkDowns2, 1, "the link down");
     CHECK_EQ(g_ringsDowns, 1, "the rings down");
@@ -3560,6 +3906,53 @@ static void test_xd_tr(void)
     xdIdle(3000);
     CHECK_EQ(g_xfw.Teardowns, 1, "no stage 2 after a refused stage 1");
     CHECK(g_icm.XdOwed, "a refused teardown stays owed: nothing proves the paths gone");
+}
+
+/* Titan Ridge's disconnect: the staged teardown by route (record 35
+ * section 3.17), never owed even when refused. */
+static void test_xd_tr_gone(void)
+{
+    xdSetup(GEN_TR);
+    xdBind();
+    xdPlug();
+    xdIdle(6000);
+    CHECK(xdUp(), "up on Titan Ridge");
+    g_xfw.Teardowns = 0;
+    g_xp.Live = 0;
+    xdDisconnectedEv(1, XD_OUR_ROUTE, &kXdFar, 1000);
+    xdIdle(2000);
+    CHECK(TbtIcmPeer(&g_icm, 0) == NULL, "the record ended");
+    CHECK_EQ(g_xfw.Teardowns, 2, "two stages");
+    CHECK_EQ(g_xfw.LastTeardown[3], XD_OUR_ROUTE, "its route");
+    CHECK(!g_icm.XdOwed, "nothing owed");
+
+    g_xfw.TeardownMode = MODE_ERROR;
+    g_xp.Live = 1;
+    xdPlug();
+    xdIdle(6000);
+    CHECK(xdUp(), "up again");
+    g_xfw.Teardowns = 0;
+    g_xp.Live = 0;
+    xdDisconnectedEv(1, XD_OUR_ROUTE, &kXdFar, 1000);
+    xdIdle(2000);
+    CHECK_EQ(g_xfw.Teardowns, 1, "refused at stage 1");
+    CHECK(!g_icm.XdOwed, "not owed: the firmware ended the link");
+
+    /* The disconnect inside an orderly teardown's stage 1: the wait runs
+     * on and stage 2 still goes. */
+    g_xfw.TeardownMode = MODE_ANSWER;
+    xdPlug();
+    xdIdle(6000);
+    CHECK(xdUp(), "up a third time");
+    g_xfw.Teardowns = 0;
+    g_xfw.GoneInTeardown = 1;
+    TbtIcmNetWanted(&g_icm, FALSE, 0);
+    xdIdle(3000);
+    CHECK_EQ(g_xfw.Teardowns, 2, "both stages despite the disconnect");
+    CHECK(!g_icm.XdOwed, "nothing owed");
+    /* The far host, still sending, may have its request adopted (3.15). */
+    CHECK(TbtIcmPeer(&g_icm, 0) == NULL || g_icm.Xd[0].Adopted,
+          "the announced record ended by the disconnect");
 }
 
 /* Ice Lake: no device approve, but the host-to-host one. */
@@ -3631,7 +4024,8 @@ static void test_xd_approve_fails(void)
     xdIdle(6000);
     CHECK_EQ(g_xfw.Approves, 1, "one approve");
     CHECK(TbtIcmPeer(&g_icm, 0) == NULL, "the record ended");
-    CHECK_EQ(g_fake.MboxCount, mb, "no teardown");
+    CHECK_EQ(g_fake.MboxCount - mb, 2, "the paths it may hold torn down (3.17)");
+    CHECK(!g_icm.XdOwed, "never owed");
     CHECK_EQ(g_ringsUps, g_ringsDowns, "the rings down");
     CHECK(g_fake.NowUs < 9000000UL, "not the approve's 10 s");
 }
@@ -4201,10 +4595,15 @@ int main(void)
     RUN_VEC(test_chain_queued_and_unconfirmed);
     RUN_VEC(test_xd_frames);
     RUN_VEC(test_xd_off);
+    RUN_VEC(test_xd_nopeer_ask);
+    RUN_VEC(test_xd_nopeer_uuid);
+    RUN_VEC(test_xd_adopt_props);
+    RUN_VEC(test_xd_adopt_spin);
     RUN_VEC(test_xd_ar_up_down);
     RUN_VEC(test_xd_ar_port_b);
     RUN_VEC(test_xd_unplug);
     RUN_VEC(test_xd_tr);
+    RUN_VEC(test_xd_tr_gone);
     RUN_VEC(test_xd_icl);
     RUN_VEC(test_xd_fr);
     RUN_VEC(test_xd_approve_fails);

@@ -254,6 +254,7 @@ NTSTATUS CmNhiAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo,
     CmZero(nhi, sizeof(CM_NHI));
     nhi->Common.Kind = CM_KIND_NHI;
     nhi->Common.Self = self;
+    CmCommonInit(&nhi->Common);
     nhi->Common.Pdo = pdo;
     nhi->Ids = *ids;
     nhi->Profile = CmProfileFor(ids);
@@ -323,7 +324,7 @@ static const char *const cmNhiCounterNames[] = {
     "u4.recover.probes", "u4.recover.refused", "u4.recover.ok",
     "u4.recover.final", "u4.recover.retire-requests",
     "u4.recover.retirement-owed", "u4.recover.rearm", "cm.iso.asked",
-    "cm.iso.yes", "cm.iso.no"
+    "cm.iso.yes", "cm.iso.no", "cm.lc.go2sx"
 };
 
 XHCI_C_ASSERT(cm_icm_counter_names,
@@ -383,6 +384,8 @@ static VOID cmU4BindRest(PCM_NHI nhi);
 static VOID cmU4Drain(PCM_NHI nhi);
 static VOID cmU4LearnPending(PCM_NHI nhi);
 static BOOLEAN cmU4Contained(PCM_NHI nhi);
+static VOID cmChainPass(PCM_NHI nhi);
+static VOID cmChainPush(PCM_NHI nhi);
 
 /* The package version, XHCI_VER_STR's four dot-separated parts, one byte
  * each (the properties block's devicerv, design record 35 section 3.7). */
@@ -533,6 +536,8 @@ VOID CmNhiPollPass(PCM_NHI nhi)
         CmNetPass(nhi);
         TbtU4Poll(&nhi->U4);
         CmNhiDrainActions(nhi);
+        /* Record 34 section 3.12: the chained tunnels' bindings. */
+        cmChainPass(nhi);
         cmU4LearnPending(nhi);
         if (nhi->U4.Failed && nhi->Stage == CM_STAGE_ACTIVE) {
             /* A failure after activation inside the tick (record 22
@@ -630,7 +635,10 @@ static const char *const cmU4CounterNames[] = {
     "u4.elr.enabled", "u4.elr.refused", "u4.elr.own-cleared",
     "u4.elr.clear-failed", "u4.elr.checks", "u4.elr.kept",
     "u4.elr.pcie-lost", "u4.elr.usb3-lost", "u4.elr.usb3-down",
-    "u4.elr.unread"
+    "u4.elr.unread",
+    "u4.sleep.entries", "u4.sleep.routers", "u4.sleep.ready", "u4.sleep.late",
+    "u4.sleep.refused", "u4.sleep.clx", "u4.sleep.preflight",
+    "u4.sleep.unrestorable", "u4.sleep.cancelled", "u4.resume.preserved-rebuilt"
 };
 
 XHCI_C_ASSERT(cm_u4_counter_names,
@@ -817,6 +825,8 @@ VOID CmNhiU4Contain(PCM_NHI nhi)
     CmNhiU4ContainEx(nhi, TRUE);
 }
 
+static VOID cmU4InferPass(PCM_NHI nhi, BOOLEAN contained);
+
 VOID CmNhiU4ContainEx(PCM_NHI nhi, BOOLEAN reconcile)
 {
     TBT_ICM_ACTION a;
@@ -831,6 +841,13 @@ VOID CmNhiU4ContainEx(PCM_NHI nhi, BOOLEAN reconcile)
     /* 1: the core contained - requests refused, waits ended, actions and
      * deferred tails retired, anchors invalidated - with no access. */
     TbtU4Contain(&nhi->U4);
+    /* Record 22 section 7.6.2: an inference rests on nothing after the
+     * loss, and a read-back it interrupted confirms nothing: the port is
+     * conflicted for the inference. No access. */
+    cmU4InferPass(nhi, TRUE);
+    /* Record 34 section 3.12 item 8: no chained binding outlives a loss. */
+    XhciChainWithdrawAll(&nhi->Chain);
+    cmChainPush(nhi);
     /* The gate closed for good too, whatever made the call. A loss the
      * monitor did not record (a resume or a bind that found the host
      * interface gone while it was off) is recorded here as its episode,
@@ -1095,6 +1112,345 @@ static BOOLEAN cmTopoUsable(PCM_NHI nhi)
 {
     return (BOOLEAN)(nhi->ReenumOn && nhi->Reenum.Cfg.Read != NULL &&
                      nhi->Reenum.Topo.Tunnels != 0);
+}
+
+/* ---------------------------------------------------------------------- */
+/* The chained tunnels' bindings (design record 34 section 3.12, task     */
+/* 48.30): the kid gate, the attribution, the withdrawals, the kid eject  */
+/* ---------------------------------------------------------------------- */
+
+/* The bindings are read and learnt only under the USB4 profile on the NT
+ * filter route, the host interface present and the set readable (item 11:
+ * 98 SE and ME learn none). */
+static BOOLEAN cmChainOn(PCM_NHI nhi)
+{
+    return (BOOLEAN)(nhi->U4On && nhi->Reenum.Route == CM_ROUTE_FILTER &&
+                     !nhi->U4.Failed && !cmU4Contained(nhi) &&
+                     CmLiveTransport(&nhi->Live) && cmTopoUsable(nhi));
+}
+
+/* Item 3's blockers besides kid `kid` itself: another kid slot in use
+ * without an occupancy, or any watched link. */
+static BOOLEAN cmChainBlocked(PCM_NHI nhi, ULONG kid)
+{
+    const TBT_U4_KID *k;
+    ULONG i;
+
+    for (i = 1; i <= TBT_U4_MAX_KIDS; i++) {
+        k = TbtU4Kid(&nhi->U4, i);
+        if (i != kid && k != NULL && k->Used &&
+            XhciChainOfKid(&nhi->Chain, i, k->Generation) ==
+                XHCI_CHAIN_BINDS) {
+            return TRUE;
+        }
+    }
+    for (i = 0; i < TBT_U4_MAX_LINKS; i++) {
+        if (nhi->U4.Links[i].Used) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/* What the core knows of kid `kid` of port `port` at generation `gen`. */
+static BOOLEAN cmChainKidOf(PCM_NHI nhi, ULONG port, ULONG kid, ULONG gen,
+                            PXHCI_CHAIN_KID out)
+{
+    const TBT_U4_PORT *p;
+    const TBT_U4_KID *k;
+    ULONG member;
+
+    p = TbtU4Port(&nhi->U4, port);
+    k = TbtU4Kid(&nhi->U4, kid);
+    if (p == NULL || k == NULL || !k->Used || k->Port != port) {
+        return FALSE;
+    }
+    CmZero(out, sizeof(*out));
+    out->Port = port;
+    out->Kid = kid;
+    out->KidGen = gen;
+    out->ParentGen = p->Generation;
+    out->ParentUuid[0] = p->Dev.Uuid[0];
+    out->ParentUuid[1] = p->Dev.Uuid[1];
+    out->ParentPcieDown = k->ParentPcieDown;
+    out->KidRoute[0] = k->Dev.Route.Lo;
+    out->KidRoute[1] = k->Dev.Route.Hi;
+    out->KidUuid[0] = k->Dev.Uuid[0];
+    out->KidUuid[1] = k->Dev.Uuid[1];
+    member = XhciTbtPortMember(&nhi->Reenum.Topo, &nhi->Binds, port);
+    out->Member = member;
+    out->MemberBdf = (member != XHCI_TBT_NO_MEMBER &&
+                      member < nhi->Reenum.Topo.Tunnels)
+                         ? nhi->Reenum.Topo.Set[member]
+                         : XHCI_TBT_NO_BDF;
+    if (out->MemberBdf == XHCI_TBT_NO_BDF) {
+        out->Member = XHCI_TBT_NO_MEMBER;
+    }
+    return TRUE;
+}
+
+/* Items 2 and 3: the core's gate. MAY_CONNECT refused while a transaction
+ * is open or a kid unsettled, for at most 10 s each; ARM reads the
+ * baseline before the kid's first Path Enable. */
+static BOOLEAN cmU4KidGate(PVOID context, ULONG op, ULONG port, ULONG kid,
+                           ULONG gen)
+{
+    PCM_NHI nhi;
+    XHCI_CHAIN_KID k;
+    ULONG rc;
+    ULONG why;
+
+    nhi = (PCM_NHI)context;
+    if (!cmChainOn(nhi)) {
+        return TRUE;
+    }
+    if (op == TBT_U4_KIDGATE_MAY_CONNECT) {
+        if (XhciChainMayConnect(&nhi->Chain, nhi->Host.NowMs(nhi))) {
+            nhi->ChainHeldLogged = 0;
+            return TRUE;
+        }
+        if (!nhi->ChainHeldLogged) {
+            nhi->ChainHeldLogged = 1;
+            CmLogNote(nhi, "u4.kid.connect.held", port);
+        }
+        return FALSE;
+    }
+    if (op == TBT_U4_KIDGATE_ARM && cmChainKidOf(nhi, port, kid, gen, &k)) {
+        why = 0;
+        rc = XhciChainArm(&nhi->Chain, &nhi->Reenum.Cfg, &k,
+                          cmChainBlocked(nhi, kid), nhi->Host.NowMs(nhi), 0,
+                          &why);
+        if (rc == XHCI_CHAIN_ARM_OPEN) {
+            /* The arm's stamp after the baseline read the ports empty,
+             * still before the Path Enable: a query begun before it is
+             * never taken for this kid's (item 5). */
+            nhi->Chain.Txn.ArmSeq = CmReenumChainStamp(nhi);
+        }
+        CmLogNote(nhi, "cm.chain.arm",
+                  ((kid & 0xFFUL) << 24) | ((rc & 0xFFUL) << 8) |
+                      (why & 0xFFUL));
+    }
+    return TRUE;
+}
+
+/* Each binding as the registration side last saw it pushed again where it
+ * changed: the chain port, and the token (the three words, the arm and
+ * the learning) while an occupancy stands. */
+static VOID cmChainPush(PCM_NHI nhi)
+{
+    const XHCI_CHAIN_BIND *b;
+    ULONG want[CM_CHAIN_PUSH_WORDS];
+    ULONG i;
+    ULONG w;
+    BOOLEAN same;
+
+    for (i = 0; i < XHCI_CHAIN_BINDS; i++) {
+        b = &nhi->Chain.Bind[i];
+        CmZero(want, sizeof(want));
+        if (b->Used) {
+            want[0] = 1;
+            want[1] = b->MemberBdf;
+            want[2] = b->Bdf;
+            want[3] = b->Buses & 0xFFUL;
+            if (b->Occupied && b->LearnSeq != 0) {
+                XhciChainToken(&nhi->Chain, i, &want[4]);
+                want[4] |= CM_MK_TOK_VALID;
+                want[7] = b->ArmSeq;
+                want[8] = b->LearnSeq;
+            }
+        }
+        same = TRUE;
+        for (w = 0; w < CM_CHAIN_PUSH_WORDS; w++) {
+            if (nhi->ChainPushed[i][w] != want[w]) {
+                same = FALSE;
+            }
+        }
+        if (same) {
+            continue;
+        }
+        for (w = 0; w < CM_CHAIN_PUSH_WORDS; w++) {
+            nhi->ChainPushed[i][w] = want[w];
+        }
+        if (!b->Used) {
+            CmReenumChainClear(nhi, i);
+        } else {
+            CmReenumChainSet(nhi, i, want[1], want[2], want[3],
+                             (want[4] & CM_MK_TOK_VALID) != 0 ? &want[4]
+                                                              : NULL);
+        }
+    }
+}
+
+/* Item 4's try of the open transaction, and on LEARNED the binding pushed
+ * and its chain port invalidated once (item 5). */
+static VOID cmChainTry(PCM_NHI nhi)
+{
+    const TBT_U4_PORT *p;
+    const TBT_U4_KID *k;
+    PXHCI_CHAIN_TXN t;
+    PXHCI_CHAIN_BIND b;
+    ULONG rc;
+    ULONG i;
+    ULONG kid;
+    BOOLEAN live;
+
+    t = &nhi->Chain.Txn;
+    if (!t->Open) {
+        return;
+    }
+    kid = t->K.Kid;
+    k = TbtU4Kid(&nhi->U4, kid);
+    p = TbtU4Port(&nhi->U4, t->K.Port);
+    live = (BOOLEAN)(cmChainOn(nhi) && k != NULL && k->Used &&
+                     k->Port == t->K.Port && k->Generation == t->K.KidGen &&
+                     k->Pcie.Up && !k->Ejected && p != NULL &&
+                     p->Dev.Present && p->State == TBT_U4_UP &&
+                     p->Generation == t->K.ParentGen);
+    rc = XhciChainTry(&nhi->Chain, &nhi->Reenum.Cfg, live,
+                      cmChainBlocked(nhi, kid), nhi->Host.NowMs(nhi), &i);
+    if (rc == XHCI_CHAIN_TRY_WAIT || rc == XHCI_CHAIN_TRY_NONE) {
+        return;
+    }
+    CmLogNote(nhi, "cm.chain.txn", ((kid & 0xFFUL) << 24) | rc);
+    if (rc != XHCI_CHAIN_TRY_LEARNED || i >= XHCI_CHAIN_BINDS) {
+        return;
+    }
+    b = &nhi->Chain.Bind[i];
+    b->LearnSeq = CmReenumChainStamp(nhi);
+    CmLogNote(nhi, "cm.chain.bind",
+              ((kid & 0xFFUL) << 24) | ((b->Epoch & 0xFFUL) << 16) |
+                  (b->Bdf & 0xFFFFUL));
+    cmChainPush(nhi);
+    CmReenumChainKick(nhi, b->Bdf);
+}
+
+/*
+ * Each pass (and at a kid's TUNNEL_UP, before the seam): the withdrawals
+ * of item 8 read from the core's tables and the registration side, then
+ * the open transaction tried, then the bindings pushed where they changed.
+ */
+static VOID cmChainPass(PCM_NHI nhi)
+{
+    const TBT_U4_PORT *p;
+    const TBT_U4_KID *k;
+    ULONG i;
+    ULONG port;
+    ULONG before;
+
+    if (!nhi->U4On) {
+        return;
+    }
+    before = nhi->Chain.Withdrawn;
+    if (!cmChainOn(nhi)) {
+        XhciChainWithdrawAll(&nhi->Chain);
+    } else {
+        for (i = 1; i <= TBT_U4_MAX_KIDS; i++) {
+            k = TbtU4Kid(&nhi->U4, i);
+            if (k == NULL) {
+                continue;
+            }
+            (VOID)XhciChainKidCheck(&nhi->Chain, i, k->Used, k->Generation);
+            if (k->Used && (!k->Pcie.Up || k->Ejected || k->PcieFailed)) {
+                /* Its tunnel down (an eject, a failure): no occupancy
+                 * stands, whatever its generation. */
+                if (XhciChainOfKid(&nhi->Chain, i, k->Generation) !=
+                    XHCI_CHAIN_BINDS) {
+                    (VOID)XhciChainKidGone(&nhi->Chain, i, k->Generation);
+                }
+            }
+        }
+        for (port = 1; port <= nhi->U4.PortCount && port <= TBT_U4_MAX_PORTS;
+             port++) {
+            p = TbtU4Port(&nhi->U4, port);
+            if (p != NULL) {
+                (VOID)XhciChainPortCheck(
+                    &nhi->Chain, port,
+                    (BOOLEAN)(p->State == TBT_U4_UP && p->Dev.Present),
+                    p->Generation);
+            }
+        }
+        for (i = 0; i < XHCI_CHAIN_BINDS; i++) {
+            if (nhi->Chain.Bind[i].Used && CmReenumChainWrong(nhi, i)) {
+                CmLogNote(nhi, "cm.chain.unbind",
+                          (1UL << 24) | (nhi->Chain.Bind[i].Bdf & 0xFFFFUL));
+                XhciChainWithdraw(&nhi->Chain, i);
+            }
+        }
+        cmChainTry(nhi);
+    }
+    if (nhi->Chain.Withdrawn != before) {
+        CmLogNote(nhi, "cm.chain.unbind", nhi->Chain.Withdrawn - before);
+    }
+    cmChainPush(nhi);
+}
+
+/*
+ * Items 4 to 8 of the kid eject's checklist and the teardown, called by the
+ * hand-off (cm_reenum.c, cmKidEjects) with item 3's holds taken. Which
+ * tunnel is torn down is the occupancy's, read here with no core work
+ * between it and the call.
+ */
+static BOOLEAN cmU4KidEject(PCM_NHI nhi, const CM_KID_EJECT *post)
+{
+    const XHCI_CHAIN_BIND *b;
+    const TBT_U4_PORT *p;
+    const TBT_U4_KID *k;
+    ULONG kid;
+    ULONG port;
+    ULONG i;
+    ULONG sec;
+    ULONG why;
+    LONG rc;
+
+    kid = XHCI_CHAIN_TOK_KID(post->Tok);
+    port = XHCI_CHAIN_TOK_PORT(post->Tok);
+    why = 0;
+    b = NULL;
+    if (!cmChainOn(nhi) || nhi->Reenum.SafeEject == 0) {
+        why = 4;
+    }
+    if (why == 0) {
+        i = XhciChainOfKid(&nhi->Chain, kid, post->Tok[1]);
+        b = i < XHCI_CHAIN_BINDS ? &nhi->Chain.Bind[i] : NULL;
+        p = TbtU4Port(&nhi->U4, port);
+        if (b == NULL || !XhciChainTokenLive(&nhi->Chain, i, post->Tok) ||
+            b->ArmSeq != post->Tok[3] || b->LearnSeq != post->Tok[4] ||
+            b->Port != port || b->MemberBdf != post->MemberBdf ||
+            ((b->Bdf & 0xFFFFUL) | CM_MK_LANDING_VALID) != post->Landing ||
+            p == NULL || !p->Dev.Present || p->Generation != b->ParentGen ||
+            p->Dev.Uuid[0] != b->ParentUuid[0] ||
+            p->Dev.Uuid[1] != b->ParentUuid[1]) {
+            why = 5;
+        }
+    }
+    if (why == 0 &&
+        (XhciTbtChainPortTest(&nhi->Reenum.Cfg, b->Bdf, b->MemberBdf, &sec) !=
+             XHCI_TBT_CPT_YES ||
+         sec != (b->Buses & 0xFFUL))) {
+        why = 6;
+    }
+    if (why == 0) {
+        k = TbtU4Kid(&nhi->U4, kid);
+        if (k == NULL || !k->Used || k->Port != port ||
+            k->Generation != post->Tok[1] || !k->Pcie.Up || k->Ejected ||
+            k->State == TBT_U4_TEARDOWN || k->SweepOwed) {
+            why = 7;
+        }
+    }
+    if (why == 0 && !CmReenumKidRecheck(nhi, post)) {
+        why = 8;
+    }
+    if (why != 0) {
+        CmLogNote(nhi, "cm.chain.eject.refused", (why << 16) | kid);
+        return FALSE;
+    }
+    rc = TbtU4EjectKid(&nhi->U4, port, kid);
+    CmLogNote(nhi, "u4.eject.kid",
+              (kid << 16) | (port << 8) | ((ULONG)(-rc) & 0xFFUL));
+    if (rc != TBT_OK) {
+        nhi->Counters.U4EjectsFailed++;
+    }
+    return (BOOLEAN)(rc == TBT_OK);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -2021,6 +2377,16 @@ ULONG CmNhiActionMember(PCM_NHI nhi, const TBT_ICM_ACTION *action)
     return XhciTbtPortMember(&nhi->Reenum.Topo, &nhi->Binds, action->Link);
 }
 
+/* The index in Reenum.Topo.Set of USB4 port `port`'s member by
+ * correspondence, or XHCI_TBT_NO_MEMBER (record 34 section 3.3.7 item 1). */
+ULONG CmNhiPortMember(PCM_NHI nhi, ULONG port)
+{
+    if (!nhi->U4On || !cmTopoUsable(nhi)) {
+        return XHCI_TBT_NO_MEMBER;
+    }
+    return XhciTbtPortMember(&nhi->Reenum.Topo, &nhi->Binds, port);
+}
+
 /* A USB4 action in the re-enumeration seam's form: Link the USB4 port,
  * Serial its connection generation, Slot the port again (CmNhiActionLive
  * reads the port, never the ICM's table). A router removed below depth 1
@@ -2101,6 +2467,174 @@ static VOID cmU4Learn(PCM_NHI nhi, ULONG port)
 }
 
 /*
+ * Record 22 section 7.6.2 (task 48.43): the port of a tunnel found up at
+ * start inferred for its eject alone, under XhciCmInferAtStart. The
+ * router's side of XhciTbtInfer's conditions, read now: the host router's
+ * kind, the ports with a PCIe tunnel up, each port's PCIe Down adapter
+ * read once (TbtU4PcieLinkClass), the members' active marks, the ports
+ * conflicted for the inference.
+ */
+static VOID cmU4InferIn(PCM_NHI nhi, PXHCI_TBT_INFER_IN in, PULONG active)
+{
+    const TBT_U4_PORT *p;
+    ULONG i;
+
+    CmZero(in, sizeof(*in));
+    in->Usb4Host = nhi->U4.HostRouter.Tbt3 ? 0UL : 1UL;
+    in->Ports = nhi->U4.PortCount;
+    if (in->Ports > XHCI_TBT_MAX_PORTS) {
+        in->Ports = XHCI_TBT_MAX_PORTS;
+    }
+    for (i = 1; i <= in->Ports; i++) {
+        p = TbtU4Port(&nhi->U4, i);
+        if (p != NULL && p->Pcie.Up) {
+            in->UpMask |= 1UL << (i - 1);
+        }
+        in->RouterLink[i - 1] = TbtU4PcieLinkClass(&nhi->U4, i);
+    }
+    in->Conflict = nhi->U4Infer.Conflict;
+    for (i = 0; i < XHCI_TBT_MAX_TUNNELS; i++) {
+        active[i] = (i < nhi->Reenum.Topo.Tunnels &&
+                     (nhi->Reenum.Port[i].Flags & CM_PORT_ACTIVE) != 0)
+                        ? 1UL
+                        : 0UL;
+    }
+    in->Active = active;
+}
+
+/* XhciTbtInfer over the domain as it is now. */
+static ULONG cmU4InferRead(PCM_NHI nhi, PXHCI_TBT_INFER_OUT out)
+{
+    XHCI_TBT_INFER_IN in;
+    ULONG active[XHCI_TBT_MAX_TUNNELS];
+
+    cmU4InferIn(nhi, &in, active);
+    return XhciTbtInfer(&nhi->Reenum.Cfg, &nhi->Reenum.Topo, &nhi->Binds,
+                        &in, out);
+}
+
+/* The inferred record forgotten (`why` for the log, 0 for no line). */
+static VOID cmU4InferDrop(PCM_NHI nhi, ULONG why)
+{
+    if (nhi->U4Infer.Valid && why != 0) {
+        CmLogNote(nhi, "u4.infer.dropped", (nhi->U4Infer.Port << 8) | why);
+    }
+    nhi->U4Infer.Valid = 0;
+}
+
+/*
+ * One inference attempt for at-start port `port`, at its learning attempt
+ * (cmU4LearnTry, after XhciTbtLearn left it pending). A refusal is logged
+ * when its reason differs from the last one logged.
+ */
+static VOID cmU4InferTry(PCM_NHI nhi, ULONG port)
+{
+    XHCI_TBT_INFER_OUT out;
+    const TBT_U4_PORT *p;
+    ULONG rc;
+    ULONG v;
+
+    if (nhi->Values.Value[CM_VAL_INFER_AT_START] == 0 ||
+        nhi->U4Infer.Valid || nhi->U4Infer.Checking ||
+        (nhi->Binds.AtStart & (1UL << (port - 1))) == 0 ||
+        !cmTopoUsable(nhi)) {
+        return;
+    }
+    rc = cmU4InferRead(nhi, &out);
+    p = TbtU4Port(&nhi->U4, out.Port);
+    if (rc == XHCI_TBT_INFER_MADE && p != NULL) {
+        nhi->U4Infer.Valid = 1;
+        nhi->U4Infer.Port = out.Port;
+        nhi->U4Infer.Member = out.Member;
+        nhi->U4Infer.Bdf = out.Bdf;
+        nhi->U4Infer.Buses = out.Buses;
+        nhi->U4Infer.Gen = p->Generation;
+        nhi->U4Infer.Logged = 0;
+        CmLogNote(nhi, "u4.infer", (out.Port << 8) | (out.Member & 0xFFUL));
+        CmLogNote(nhi, "u4.infer.bdf", out.Bdf);
+        return;
+    }
+    v = (port << 8) | (rc & 0xFFUL);
+    if (nhi->U4Infer.Logged != v + 1) {
+        nhi->U4Infer.Logged = v + 1;
+        CmLogNote(nhi, "u4.infer.refused", v);
+    }
+}
+
+/*
+ * At an idle pass: the inferred record dropped where what it rests on
+ * changed (a binding in the table, the port not pending, its tunnel down
+ * or another connection, its member gone from the set); and the
+ * read-back after an inferred teardown stepped (record 22 section 7.6.2):
+ * closed once seen within 2 s, else the port conflicted for the
+ * inference. `contained`: the instance lost its host interface, so
+ * nothing is read and the read-back ends unconfirmed.
+ */
+static VOID cmU4InferPass(PCM_NHI nhi, BOOLEAN contained)
+{
+    const TBT_U4_PORT *p;
+    ULONG bit;
+    ULONG rb;
+    ULONG i;
+    BOOLEAN member;
+
+    if (nhi->U4Infer.Valid) {
+        p = TbtU4Port(&nhi->U4, nhi->U4Infer.Port);
+        bit = 1UL << (nhi->U4Infer.Port - 1);
+        member = FALSE;
+        if (cmTopoUsable(nhi)) {
+            for (i = 0; i < nhi->Reenum.Topo.Tunnels &&
+                        i < XHCI_TBT_MAX_TUNNELS;
+                 i++) {
+                if (nhi->Reenum.Topo.Set[i] == nhi->U4Infer.Bdf) {
+                    member = TRUE;
+                }
+            }
+        }
+        if (contained) {
+            cmU4InferDrop(nhi, 1);
+        } else if (nhi->Binds.Count != 0 || nhi->Binds.Overflow) {
+            cmU4InferDrop(nhi, 2);
+        } else if ((nhi->Binds.Pending & bit) == 0) {
+            cmU4InferDrop(nhi, 3);
+        } else if (p == NULL || !p->Pcie.Up ||
+                   p->Generation != nhi->U4Infer.Gen) {
+            cmU4InferDrop(nhi, 4);
+        } else if (!member) {
+            cmU4InferDrop(nhi, 5);
+        }
+    }
+    if (!nhi->U4Infer.Checking) {
+        return;
+    }
+    /* The bound first: a sample read after it confirms nothing. */
+    rb = XHCI_TBT_RB_UNREAD;
+    if (!contained && nhi->Host.NowMs(nhi) - nhi->U4Infer.CheckSince <
+                          XHCI_TBT_POLL_BUDGET_MS) {
+        rb = XhciTbtInferReadBack(&nhi->Reenum.Cfg, nhi->U4Infer.CheckBdf,
+                                  nhi->U4Infer.CheckBuses);
+        if (rb == XHCI_TBT_RB_CLOSED) {
+            nhi->U4Infer.Checking = 0;
+            nhi->U4Infer.ClosedPort = nhi->U4Infer.CheckPort;
+            nhi->U4Infer.ClosedBdf = nhi->U4Infer.CheckBdf;
+            nhi->U4Infer.ClosedGen = nhi->U4Infer.CheckGen;
+            CmLogNote(nhi, "u4.infer.closed",
+                      (nhi->U4Infer.CheckPort << 16) |
+                          (nhi->U4Infer.CheckBdf & 0xFFFFUL));
+            return;
+        }
+        if (nhi->Host.NowMs(nhi) - nhi->U4Infer.CheckSince <
+            XHCI_TBT_POLL_BUDGET_MS) {
+            return;
+        }
+    }
+    nhi->U4Infer.Checking = 0;
+    nhi->U4Infer.Conflict |= 1UL << (nhi->U4Infer.CheckPort - 1);
+    CmLogNote(nhi, "u4.infer.conflict",
+              (nhi->U4Infer.CheckPort << 8) | (rb & 0xFFUL));
+}
+
+/*
  * One try of `port`'s learning where one is due (record 22 section 7.6's
  * attempt, task 44.57), for the idle passes and the deliveries alike: the
  * window's state read just before it, so a window whose 60 s ran out
@@ -2129,6 +2663,7 @@ static VOID cmU4LearnTry(PCM_NHI nhi, ULONG port)
     }
     cmU4Learn(nhi, port);
     if ((nhi->Binds.Pending & (1UL << (port - 1))) != 0) {
+        cmU4InferTry(nhi, port);
         XhciTbtLearnMissed(&nhi->U4LearnClock, port, now,
                            nhi->Values.Value[CM_VAL_POLL_IDLE_MS]);
     } else {
@@ -2218,12 +2753,14 @@ static VOID cmU4LearnPending(PCM_NHI nhi)
     ULONG gen;
 
     if (cmU4Contained(nhi)) {
+        cmU4InferPass(nhi, TRUE);
         return;     /* nothing is attributed after the loss */
     }
     cmU4Reconcile(nhi);
     if (nhi->ArmOwed) {
         cmU4Arm(nhi);
     }
+    cmU4InferPass(nhi, FALSE);
     for (port = 1; port <= nhi->U4.PortCount && port <= XHCI_TBT_MAX_PORTS;
          port++) {
         bit = 1UL << (port - 1);
@@ -2350,6 +2887,13 @@ VOID CmNhiU4Take(PCM_NHI nhi)
      * it. A TUNNEL_DOWN alone is never closure. */
     for (i = 0; i < n; i++) {
         u = &nhi->U4Batch[i];
+        /* Every TUNNEL_UP of the port ends its at-start mark (record 22
+         * section 7.6.3): a tunnel brought up again may bring a function
+         * anew. */
+        if (u->Kind == TBT_U4_ACT_TUNNEL_UP && u->Kid == 0 && u->Port >= 1 &&
+            u->Port <= XHCI_TBT_MAX_PORTS) {
+            XhciTbtLearnNotAtStart(&nhi->Binds, u->Port);
+        }
         /* A chained tunnel's (record 34 Part 3) is not its port's: no
          * learning, and no stor98 statement before task 45.18. */
         if (u->Kind == TBT_U4_ACT_TUNNEL_UP && u->Kid == 0 && u->Port >= 1 &&
@@ -2435,6 +2979,11 @@ static VOID cmU4Deliver(PCM_NHI nhi)
             cmU4LogRouter(nhi, u->Port);
         }
         cmU4ToIcm(u, &a);
+        if (u->Kid != 0 && u->Kind == TBT_U4_ACT_TUNNEL_UP) {
+            /* Record 34 section 3.12 item 4: the attribution before the
+             * chain action's invalidations may let Windows enumerate. */
+            cmChainPass(nhi);
+        }
         /* Every action reaches the seam, XhciCmReenum 0 included (it then
          * re-enumerates nothing but still voids the pending ejects: the
          * port's connection changed). */
@@ -2488,6 +3037,9 @@ static VOID cmU4Drain(PCM_NHI nhi)
 VOID CmNhiSetChanged(PCM_NHI nhi)
 {
     if (nhi->U4On && !cmU4Contained(nhi)) {
+        /* Record 22 section 7.6.2: an inference rests on the set as it
+         * was. */
+        cmU4InferDrop(nhi, 6);
         cmU4Arm(nhi);
         cmU4SetRecord(nhi);
     }
@@ -2520,6 +3072,10 @@ static ULONG cmU4LinkDown(PVOID context, const TBT_U4_LINKDOWN *info)
                   ((info->Port & 0xFFUL) << 24) | ((info->Kid & 0xFFUL) << 16) |
                       ((info->Generation & 0xFFUL) << 8) |
                       (info->PathClosed ? 0x01UL : 0));
+        if (info->PathClosed) {
+            /* Record 34 section 3.12 item 3: the kid resolved. */
+            (VOID)XhciChainKidGone(&nhi->Chain, info->Kid, info->Generation);
+        }
         return TBT_U4_STMT_WITHHELD;
     }
     CmLogNote(nhi, "u4.linkdown",
@@ -2628,8 +3184,12 @@ static BOOLEAN cmU4EjectBridge(PCM_NHI nhi, ULONG bdf)
     ULONG port;
     ULONG i;
     LONG rc;
+    XHCI_TBT_INFER_OUT out;
+    ULONG why;
+    BOOLEAN inferred;
 
     nhi->Counters.U4Ejects++;
+    inferred = FALSE;
     CmLogNote(nhi, "u4.eject.bridge", bdf);
     if (cmU4Contained(nhi)) {
         /* Record 22 section 7.7: no request after the loss. */
@@ -2662,6 +3222,27 @@ static BOOLEAN cmU4EjectBridge(PCM_NHI nhi, ULONG bdf)
             }
         }
     }
+    if (port == 0 && member != XHCI_TBT_NO_MEMBER && nhi->U4Infer.Valid &&
+        nhi->U4Infer.Bdf == bdf) {
+        /* Record 22 section 7.6.2: the inferred port, every condition read
+         * again now, the same answer required. */
+        why = cmU4InferRead(nhi, &out);
+        p = TbtU4Port(&nhi->U4, nhi->U4Infer.Port);
+        if (why == XHCI_TBT_INFER_MADE &&
+            (out.Port != nhi->U4Infer.Port || out.Bdf != bdf ||
+             out.Buses != nhi->U4Infer.Buses || p == NULL ||
+             p->Generation != nhi->U4Infer.Gen)) {
+            why = 0xFFUL;
+        }
+        if (why == XHCI_TBT_INFER_MADE) {
+            port = nhi->U4Infer.Port;
+            inferred = TRUE;
+        } else {
+            CmLogNote(nhi, "u4.infer.recheck",
+                      (nhi->U4Infer.Port << 8) | (why & 0xFFUL));
+            cmU4InferDrop(nhi, 0);
+        }
+    }
     if (port == 0) {
         nhi->Counters.U4EjectsUnmapped++;
         CmLogNote(nhi, "u4.eject.unmapped", bdf);
@@ -2685,6 +3266,21 @@ static BOOLEAN cmU4EjectBridge(PCM_NHI nhi, ULONG bdf)
     CmLogNote(nhi, "u4.eject", (port << 8) | ((ULONG)(-rc) & 0xFFUL));
     if (rc != TBT_OK) {
         nhi->Counters.U4EjectsFailed++;
+    }
+    if (inferred) {
+        /* The record is spent; the read-back confirms the closure or
+         * marks the port conflicted for the inference (cmU4InferPass). */
+        CmLogNote(nhi, "u4.eject.inferred", (port << 16) | (bdf & 0xFFFFUL));
+        nhi->U4Infer.Valid = 0;
+        if (rc == TBT_OK) {
+            nhi->U4Infer.Checking = 1;
+            nhi->U4Infer.CheckPort = port;
+            nhi->U4Infer.CheckBdf = bdf;
+            nhi->U4Infer.CheckBuses = nhi->U4Infer.Buses;
+            nhi->U4Infer.CheckGen = p->Generation;
+            nhi->U4Infer.CheckSince = nhi->Host.NowMs(nhi);
+            cmU4InferPass(nhi, FALSE);
+        }
     }
     return (BOOLEAN)(rc == TBT_OK);
 }
@@ -2785,6 +3381,7 @@ static VOID cmU4Activate(PCM_NHI nhi)
     nhi->U4Cfg.AsmPcie7Credits = (BOOLEAN)(nhi->Values.AsmPcie7 != 0);
     nhi->U4Cfg.Usb4V2 = (BOOLEAN)(nhi->Values.Usb4V2 != 0);
     nhi->U4Cfg.Gen4LinkRecovery = (BOOLEAN)(nhi->Values.Gen4Elr != 0);
+    nhi->U4Cfg.SleepEntry = (BOOLEAN)(nhi->Values.SleepEntry != 0);
     nhi->U4Cfg.RingFlags = TbtHwRingFlags(nhi->Hw);
     nhi->U4Cfg.HostInterfaceCaps = nhi->Sel.Caps;
     /* Record 22 section 19: a Mac's Thunderbolt host, its router's id. */
@@ -2804,10 +3401,18 @@ static VOID cmU4Activate(PCM_NHI nhi)
     TbtU4SetCarry(&nhi->U4, &nhi->U4Carry);
     CmLogNote(nhi, "u4.carry.in", nhi->U4Carry.Valid ? 1UL : 0UL);
     TbtU4SetLinkDown(&nhi->U4, cmU4LinkDown, nhi);
+    /* Record 34 section 3.12: the kid gate, and no binding yet. */
+    TbtU4SetKidGate(&nhi->U4, cmU4KidGate, nhi);
+    XhciChainInit(&nhi->Chain, TRUE);
+    CmZero(nhi->ChainPushed, sizeof(nhi->ChainPushed));
+    nhi->ChainHeldLogged = 0;
     /* The stor98 channel's two moments (task 40-A.7, cm_nvlink.h). */
     CmNhiSetU4Hooks(nhi, CmNvlinkU4Up, CmNvlinkU4Down, nhi);
     XhciTbtBindsInit(&nhi->Binds);
     CmZero(&nhi->U4LearnClock, sizeof(nhi->U4LearnClock));
+    /* Record 22 section 7.6.2: an inference, its read-back, its closure
+     * and its conflicted ports are the instance's alone. */
+    CmZero(&nhi->U4Infer, sizeof(nhi->U4Infer));
     nhi->ArmOwed = 0;
     nhi->U4On = 1;
     /* The liveness monitor's USB4 rule (record 22 section 7.7): a loss
@@ -2914,6 +3519,7 @@ static VOID cmU4BindRest(PCM_NHI nhi)
     nhi->ReenumOn = 1;
     cmU4SetRecord(nhi);
     CmReenumSetEject(nhi, cmU4Eject, nhi);
+    CmReenumSetKidEject(nhi, cmU4KidEject);
     cmU4Arm(nhi);
     /* A tunnel found up at start (preserved) queues no TUNNEL_UP, and its
      * endpoint may start answering only after the baseline: unless its
@@ -2938,6 +3544,15 @@ static VOID cmU4BindRest(PCM_NHI nhi)
             nhi->U4SeamGen[i - 1] = p->Generation;
             nhi->U4SeamValid |= 1UL << (i - 1);
         }
+        if (p->Pcie.Up && p->Pcie.Preserved) {
+            /* Record 22 section 7.6.3: found up, not built; the mark ends
+             * at its first TUNNEL_UP taken (CmNhiU4Take). */
+            XhciTbtLearnAtStart(&nhi->Binds, i);
+        }
+    }
+    if (nhi->Binds.AtStart != 0) {
+        /* The start reading, over the pending marks just set. */
+        cmU4Arm(nhi);
     }
     CmNhiPollPass(nhi);
 }
@@ -2948,6 +3563,17 @@ static VOID cmU4LogCounters(PCM_NHI nhi)
     cmLogBlock(nhi, cmU4CounterNames, (const ULONG *)&nhi->U4.Counters,
                sizeof(TBT_U4_COUNTERS) / sizeof(ULONG));
     cmU4LogPorts(nhi);
+    CmLogNote(nhi, "cm.chain.armed",
+              (nhi->Chain.Armed << 16) | (nhi->Chain.NotArmed & 0xFFFFUL));
+    CmLogNote(nhi, "cm.chain.learned",
+              (nhi->Chain.Learned << 16) | (nhi->Chain.Spoiled & 0xFFFFUL));
+    CmLogNote(nhi, "cm.chain.expired",
+              (nhi->Chain.Expired << 16) | (nhi->Chain.Conflicts & 0xFFFFUL));
+    CmLogNote(nhi, "cm.chain.withdrawn",
+              (nhi->Chain.Withdrawn << 16) | (nhi->Chain.Held & 0xFFFFUL));
+    CmLogNote(nhi, "cm.chain.kid-ejects",
+              (nhi->Reenum.KidEjects << 16) |
+                  (nhi->Reenum.KidEjectsStale & 0xFFFFUL));
 }
 
 /* The blocks cmLogCounters writes at stop, as the query device's log
@@ -3511,6 +4137,14 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
     if (nhi->Values.Gen4ElrRefused) {
         CmLogNote(nhi, "cm.usb4.elr.raw", nhi->Values.Gen4ElrRaw);
     }
+    /* XhciCmSleepEntry as run with (record 22 section 11.1.10); bit 8
+     * found, bit 9 refused. */
+    CmLogNote(nhi, "cm.usb4.sleep",
+              nhi->Values.SleepEntry | (nhi->Values.SleepEntryFound << 8) |
+                  (nhi->Values.SleepEntryRefused << 9));
+    if (nhi->Values.SleepEntryRefused) {
+        CmLogNote(nhi, "cm.usb4.sleep.raw", nhi->Values.SleepEntryRaw);
+    }
 
     cmFindBar(nhi, irp);
     CmLogNote(nhi, "cm.bar.length", nhi->BarLength);
@@ -3528,6 +4162,7 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
     CmZero(&nhi->U4, sizeof(nhi->U4));
     CmZero(&nhi->Binds, sizeof(nhi->Binds));
     CmZero(&nhi->U4LearnClock, sizeof(nhi->U4LearnClock));
+    CmZero(&nhi->U4Infer, sizeof(nhi->U4Infer));
     nhi->U4On = 0;
     nhi->ArmOwed = 0;
     nhi->U4ClosedValid = 0;
@@ -3687,7 +4322,8 @@ NTSTATUS CmNhiPnp(PCM_NHI nhi, PIRP irp)
         irp->IoStatus.Status = STATUS_SUCCESS;
         IoSkipCurrentIrpStackLocation(irp);
         status = IoCallDriver(nhi->Common.Lower, irp);
-        IoDetachDevice(nhi->Common.Lower);
+        /* The one detach owner (design record 31 section 4.10, K6). */
+        (VOID)CmDetachOnce(&nhi->Common, TRUE);
         IoDeleteDevice(nhi->Common.Self);
         return status;
 

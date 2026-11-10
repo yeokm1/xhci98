@@ -52,6 +52,9 @@ typedef struct _MK_ENTRY {
     INST_U32 Flags;         /* CM_QM_EF_*                                */
     INST_U32 Pending;
     INST_U32 PendingGen;
+    INST_U32 Landing;       /* with MK_EF_CHAINED: the chain port's
+                               location (bus 15:8, device 7:3, function
+                               2:0; design record 34 section 3.10)       */
 } MK_ENTRY;
 
 /* The bridge inventory's section of one member (cm_query.h CM_QB_*;
@@ -90,6 +93,9 @@ int mk_marks_parse(const unsigned char *b, size_t n, MK_MARKS *m,
 #define MK_EF_ADD_ATT       0x08UL
 #define MK_EF_REMOVABLE     0x10UL
 #define MK_EF_SAFE_OFF      0x20UL
+#define MK_EF_CHAINED       0x40UL  /* a chained unit: confirmed, never
+                                       written (record 34 section 3.12
+                                       item 13)                          */
 #define MK_F_INCOMPLETE     0x01UL
 #define MK_F_STOPPING       0x02UL
 #define MK_F_SAFE_OFF       0x04UL
@@ -104,6 +110,13 @@ int mk_verifiable(int devOk, const MK_QUERY *q, const MK_MARKS *m);
 
 /* Whether member location `bdf` is an active member of q's set. */
 int mk_member_active(const MK_QUERY *q, INST_U32 bdf);
+
+/* Design record 34 section 3.12 item 13: 1 when node `node` lies below
+ * `ancestor` within `hops` levels, by parent[] (-1 at a root), `count`
+ * nodes; the chain port of a chained entry must lie below its member's
+ * devnode. */
+int mk_descends(const int *parent, int count, int node, int ancestor,
+                int hops);
 
 /* The write's checks, in order (section 7.4's three, the first failing
  * one returned; MK_W_OK when all hold). */
@@ -350,6 +363,7 @@ typedef struct _MK_S98_IN {
     int Problem;            /* DN_HAS_PROBLEM                           */
     INST_U32 ProblemCode;   /* its problem number                       */
     int Below;              /* below an active member, domain verifiable */
+    int TunnelId;           /* its compatible ids carry MK_S98_TUNNEL_ID */
     int Protected;          /* mk_protect's node                        */
     int InstallPending;     /* a Windows installation pending or unknown */
     int Record;             /* MK_S98_*                                 */
@@ -372,6 +386,10 @@ typedef struct _MK_S98_IN {
 #define MK_S98_W_UNIT       101
 #define MK_S98_W_AFTER      102
 #define MK_S98_W_OS         10
+/* Record 31 section 4.10 (task 48.29): on 8.1 the INF's model is the
+ * tunnel id alone, so a drive without it is not taken (the earlier
+ * connection manager of an update gives none until the restart). */
+#define MK_S98_W_NOID       11
 /* Record 31 section 6.2: on 2000 to 8.1 a devnode with no driver (Service
  * empty), not started and not disabled; on 8.1 also one started on
  * stornvme (the 8.1 arm). Never one on Stor98 or another driver, never on
@@ -480,6 +498,19 @@ typedef struct _MK_CTL_IN {
 #define MK_CTL_TRIED        11
 int mk_ctl_ready_why(const MK_CTL_IN *in);
 const char *mk_ctl_why_text(int why);
+
+/* ---- the flush at the suspend notice (record 22 section 11.1.11 Q2) ------ */
+
+/* The power events the service flushes at: PBT_APMQUERYSUSPEND (2000 and
+ * XP) and PBT_APMSUSPEND. */
+#define MK_PBT_APMQUERYSUSPEND  0x0000UL
+#define MK_PBT_APMSUSPEND       0x0004UL
+#define MK_FLUSH_BOUND_MS       1500UL  /* every flush, in parallel */
+int mk_flush_wants(INST_U32 event);
+/* 1 when a devnode whose ancestors' PCI locations (bus 15:8, dev 7:3, fn
+ * 2:0) are chain[0..n) lies behind a member of a tunnel-port set
+ * (members[0..m)); 0 otherwise. */
+int mk_flush_behind(const INST_U32 *chain, int n, const INST_U32 *members, int m);
 
 /* ---- the self-test -------------------------------------------------------- */
 

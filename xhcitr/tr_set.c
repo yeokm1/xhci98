@@ -72,6 +72,8 @@ static const TRS_ROW trsRows[] = {
       TRS_EFF_ONE, 0, 0UL, 0UL, -1, NULL },
     { "XhciLinkKeep", TRS_TAB_USB, A, TRS_AP_CTRL, 0,
       TRS_EFF_NONZERO, 0, 1UL, 1UL, -1, NULL },
+    { "XhciSsFlapFallback", TRS_TAB_USB, A, TRS_AP_CTRL, 0,
+      TRS_EFF_NONZERO, 0, 1UL, 1UL, -1, NULL },
     { "XhciResumeKeep", TRS_TAB_USB, A, TRS_AP_CTRL, 0,
       TRS_EFF_NONZERO, 0, 1UL, 1UL, -1, NULL },
     { "XhciUsb2Bos", TRS_TAB_USB, A, TRS_AP_CTRL, 0,
@@ -172,7 +174,9 @@ static const TRS_ROW trsRows[] = {
     { "StorWriteIdleMs", TRS_TAB_S98, A, TRS_AP_BOOT, 0, TRS_EFF_LIST,
       0, 0UL, 0UL, INST_S98_IDLE, NULL },
     { "StorHold9xMs", TRS_TAB_S98, A, TRS_AP_BOOT, 0, TRS_EFF_LIST,
-      0, 0UL, 0UL, INST_S98_HOLD9X, NULL }
+      0, 0UL, 0UL, INST_S98_HOLD9X, NULL },
+    { "StorTakeFirmware", TRS_TAB_S98, A, TRS_AP_BOOT, 0, TRS_EFF_LIST,
+      0, 0UL, 0UL, INST_S98_TAKEFW, NULL }
 };
 
 #undef C
@@ -255,6 +259,11 @@ static int trs_nt5(const TRS_ENV *e)
     return e->Inst.Nt && e->Inst.Major == 5UL;
 }
 
+static int trs_me(const TRS_ENV *e)
+{
+    return !e->Inst.Nt && e->Inst.Minor == 90UL;
+}
+
 int trs_state(const TRS_ROW *r, const TRS_ENV *e)
 {
     const INST_VALUE *v;
@@ -264,10 +273,11 @@ int trs_state(const TRS_ROW *r, const TRS_ENV *e)
         return TRS_HIDE;
     }
     if (r->S98 >= 0) {
-        if (inst_s98_applies(r->S98, e->Inst.Nt)) {
+        if (inst_s98_applies_os(r->S98, e->Inst.Nt, trs_me(e))) {
             return TRS_SHOW;
         }
-        return inst_s98_greyed(r->S98, e->Inst.Nt) ? TRS_GREY : TRS_HIDE;
+        return inst_s98_greyed_os(r->S98, e->Inst.Nt, trs_me(e)) ? TRS_GREY
+                                                                  : TRS_HIDE;
     }
     v = trs_value(r);
     if (v == NULL) {
@@ -310,7 +320,7 @@ int trs_state(const TRS_ROW *r, const TRS_ENV *e)
     return TRS_SHOW;
 }
 
-const char *trs_only(const TRS_ROW *r)
+const char *trs_only(const TRS_ROW *r, const TRS_ENV *e)
 {
     const INST_VALUE *v;
 
@@ -318,7 +328,7 @@ const char *trs_only(const TRS_ROW *r)
         return NULL;
     }
     if (r->S98 >= 0) {
-        return inst_s98_only(r->S98);
+        return inst_s98_only_os(r->S98, e != NULL && trs_me(e));
     }
     v = trs_value(r);
     if (v != NULL && v->Apply == TRS_APPLY_NOROUTE) {
