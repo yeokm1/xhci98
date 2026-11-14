@@ -1,0 +1,171 @@
+;
+; xhcinet.inf - Thunderbolt networking (design record 35 sections 7.8, 7.9
+; and 8.2, roadmap-usb4.md task 45.59 steps S6 and S7), on the network PDO
+; XHCICM\TBNET that xhcicm.sys reports while XhciCmNet is 1 (record 35
+; section 6). The 32-bit file: the undecorated models and install section
+; for 98 SE and ME and .NTx86 for 2000, XP, Vista and 7, both installing
+; xhcinet.sys, the NDIS 5 miniport; and the NTx86.6.2 models for 8, 8.1
+; and 10, installing xhcinet6.sys, the NDIS 6.20 miniport, since those
+; systems load no NDIS 5 miniport. Both images run as the one service
+; xhcinet, never both on one system.
+; scripts\inf-gate\check-net-inf.ps1 holds this file and its 64-bit twin
+; on every build.
+;
+; The 98 SE and ME keys follow the Windows 98 DDK's network layout
+; ("Windows 2000 Driver Layout": DevLoader *ndis, DeviceVxDs,
+; EnumPropPages netdi.dll) and the Windows 2000 DDK network guide's
+; Ndi keys (1.2.7, its list of the keys 95/98 read and 2000 does not);
+; the NT keys its "Installation Requirements" for a physical adapter.
+; Facts only; no DDK sample INF is copied.
+;
+; The 98 SE and ME sections copy nothing (record 35 section 9.5, revision
+; 17): the adapter installs from the INF's copy in INF\OTHER after Setup's
+; restart, and there any copy asked for the disk at Windows' own source
+; path. Setup places xhcinet.sys in SYSTEM, where DeviceVxDs finds it; an
+; install by hand needs it copied there first.
+;
+[Version]
+Signature="$CHICAGO$"
+Compatible=1
+Class=Net
+ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
+Provider=%Provider%
+DriverVer=11/14/2026,3.5.0.0
+
+; NTx86 for XP, Vista and 7 beside NTx86.6.2: Vista's and 7's driver store
+; stages only the files of the decorated models sections once the line
+; has a decoration, so without an NTx86 one it staged xhcinet6.sys alone
+; and 7's NDIS 5 install failed its copy (record 35 section 8.2). 2000
+; reads no decoration and takes the undecorated models, as 98 SE and ME.
+[Manufacturer]
+%Mfg%=NetModels,NTx86,NTx86.6.2
+
+[NetModels]
+%NetDesc%=Net.Dev,XHCICM\TBNET
+
+; XP, Vista and 7: the same model and install as the undecorated line.
+[NetModels.NTx86]
+%NetDesc%=Net.Dev,XHCICM\TBNET
+
+; 8, 8.1 and 10: xhcinet6.sys.
+[NetModels.NTx86.6.2]
+%NetDesc%=Net6.Dev,XHCICM\TBNET
+
+[ControlFlags]
+ExcludeFromSelect=*
+
+[SourceDisksNames]
+1=%DiskName%,xhcinet.sys,,
+
+[SourceDisksFiles]
+xhcinet.sys=1
+xhcinet6.sys=1
+
+[DestinationDirs]
+DefaultDestDir=12
+Net.CopyFiles=12
+Net6.CopyFiles=12
+
+; ---- 98 SE and ME: NDIS.VXD loads the WDM miniport ----
+[Net.Dev]
+AddReg=Net.Reg9x,Net.Values,Net.Params
+
+[Net.Reg9x]
+HKR,,DevLoader,,*ndis
+HKR,,DeviceVxDs,,xhcinet.sys
+HKR,,EnumPropPages,,"netdi.dll,EnumPropPages"
+HKR,NDIS,LogDriverName,,XHCINET
+HKR,NDIS,MajorNdisVersion,1,05
+HKR,NDIS,MinorNdisVersion,1,00
+HKR,Ndi,DeviceID,,"XHCICM\TBNET"
+HKR,Ndi\Interfaces,DefUpper,,ndis3
+HKR,Ndi\Interfaces,UpperRange,,"ndis3,ndis4,ndis5"
+HKR,Ndi\Interfaces,DefLower,,ethernet
+HKR,Ndi\Interfaces,LowerRange,,ethernet
+HKR,Ndi\Install,ndis3,,Net.Ndis
+HKR,Ndi\Install,ndis4,,Net.Ndis
+HKR,Ndi\Install,ndis5,,Net.Ndis
+
+[Net.Ndis]
+
+; ---- Windows 2000, XP, Vista and 7: the NDIS 5.0 image ----
+; NCF_PHYSICAL | NCF_HAS_UI; BusType 15 (PNPBus), the adapter being a child
+; of the connection manager's bus role (record 35 section 6.1).
+[Net.Dev.NTx86]
+Characteristics=0x84
+BusType=15
+AddReg=Net.RegNt,Net.Values,Net.Params
+CopyFiles=Net.CopyFiles
+
+[Net.Dev.NTx86.Services]
+AddService=xhcinet,0x00000002,Net.Service
+
+[Net.RegNt]
+HKR,Ndi,Service,,xhcinet
+HKR,Ndi\Interfaces,UpperRange,,"ndis5"
+HKR,Ndi\Interfaces,LowerRange,,"ethernet"
+
+[Net.Service]
+DisplayName=%SvcDesc%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%12%\xhcinet.sys
+LoadOrderGroup=NDIS
+
+[Net.CopyFiles]
+xhcinet.sys
+
+; ---- Windows 8, 8.1 and 10: the NDIS 6.20 image (record 35 section 7.9) ----
+; As the NT install above, the image xhcinet6.sys, and the three NDIS 6
+; media keywords, which Setup writes to the driver key and NDIS itself
+; reads: *IfType 6 (ethernetCsmacd), *MediaType 0 (NdisMedium802_3),
+; *PhysicalMediaType 0 (NdisPhysicalMediumUnspecified).
+[Net6.Dev.NTx86]
+Characteristics=0x84
+BusType=15
+*IfType=6
+*MediaType=0
+*PhysicalMediaType=0
+AddReg=Net.RegNt,Net.Values,Net.Params
+CopyFiles=Net6.CopyFiles
+
+[Net6.Dev.NTx86.Services]
+AddService=xhcinet,0x00000002,Net6.Service
+
+[Net6.Service]
+DisplayName=%SvcDesc%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%12%\xhcinet6.sys
+LoadOrderGroup=NDIS
+
+[Net6.CopyFiles]
+xhcinet6.sys
+
+; ---- The driver's values (record 35 section 8.3), each written at its
+; default with no-overwrite (FLG_ADDREG_NOCLOBBER, a string, the form the
+; Advanced page writes), so a user's value survives an update. The
+; Ndi\params entry shows it in the Advanced page with its range; its
+; default is the same value, since the 98 SE network setup writes the
+; params' defaults over the driver key's.
+[Net.Values]
+HKR,,XhciNetMtu,0x00000002,"1500"
+
+[Net.Params]
+HKR,Ndi\params\XhciNetMtu,ParamDesc,,%MtuDesc%
+HKR,Ndi\params\XhciNetMtu,type,,dword
+HKR,Ndi\params\XhciNetMtu,default,,"1500"
+HKR,Ndi\params\XhciNetMtu,min,,"1500"
+HKR,Ndi\params\XhciNetMtu,max,,"65522"
+HKR,Ndi\params\XhciNetMtu,step,,"1"
+HKR,Ndi\params\XhciNetMtu,base,,"10"
+
+[Strings]
+Provider="Yeo Kheng Meng"
+Mfg="xHCI98 Project"
+DiskName="xhci98 xHCI Host Controller Disk"
+NetDesc="xHCI98 Thunderbolt Networking"
+SvcDesc="xHCI98 Thunderbolt Networking (xhcinet)"
+MtuDesc="MTU"

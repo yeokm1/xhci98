@@ -152,6 +152,11 @@ typedef struct _UAS_SLOT {
      * and the seconds its final IU has waited for its data cancel. */
     ULONG StartedAt;
     ULONG CancelWait;
+    /* Task 49.39: the second its final IU came (fdo->Seconds), and
+     * whether its timeout asked for event 8's reset (record 13 sections
+     * 16.15 and 16.17), until the recovery worker takes it up. */
+    ULONG FinalAt;
+    BOOLEAN FinalReset;
     PKEVENT TmfDone;
     UCHAR Iu[UAS_IU_COMMAND_LENGTH];
     UCHAR Stat[UAS_STATUS_BUFFER];  /* streamed: this slot's status buffer */
@@ -193,6 +198,10 @@ typedef struct _UAS_PDO {
     UCHAR CloseStatus;
     KEVENT CloseDone;
     UCHAR Inquiry[UAS_INQUIRY_LENGTH];
+    /* Task 49.39 (design record 13 section 16.16): UAS_ATA_REFUSED_* for
+     * each ATA PASS-THROUGH the drive refused 5/20/00 since this PDO's
+     * start; answered here with that refusal from then on. FDO lock. */
+    ULONG AtaRefused;
     /* Task 45.23 (design record 20 section 4.3.3): the LUN's identity as
      * the last sleep hold read it, or the last wake check that passed
      * (uas_xport.c); the power lock's. */
@@ -275,6 +284,11 @@ typedef struct _UAS_FDO {
     BOOLEAN FastProgress;
     ULONG FastAt;
     ULONG Seconds;
+    /* Task 49.39 (design record 13 section 16.17), under the lock: the
+     * device resets taken for event 8, per direction of the commands they
+     * were taken for ([0] data-in, [1] data-out), since data was last
+     * delivered in that direction; a start or a resume clears both. */
+    ULONG FinalResets[UAS_FINAL_DIRS];
     /* Starts whose question fell back to 64 KiB, by why, since load. */
     ULONG PolicyUnsupported;
     ULONG PolicyMalformed;
@@ -308,7 +322,11 @@ typedef struct _UAS_FDO {
     BOOLEAN TeleFails;
     BOOLEAN FailTurn;
     ULONG Fail[XHCI98_FAIL_RECORDS][XHCI98_FAIL_WORDS];
-    XHCI98_FAILURES FailRecord;
+    /* Task 49.39: each entry's second (fdo->Seconds), and FailV1 once a bus
+     * refused version 2 (then version 1 is sent). */
+    ULONG FailAt[XHCI98_FAIL_RECORDS];
+    BOOLEAN FailV1;
+    XHCI98_FAILURES2 FailRecord;
 
     KTIMER Timer;
     KDPC TimerDpc;
@@ -474,6 +492,8 @@ NTSTATUS UasEngineFlush(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
 VOID UasEngineUnlockQueue(PUAS_FDO fdo);
 /* Issue 26: a request the PDO answered itself (XhciUasNoAtaPassThrough)
  * entered in the failure ring. <= DISPATCH_LEVEL, no lock held. */
+VOID UasEngineNoteReplay(PUAS_FDO fdo, const UCHAR *cdb, ULONG origin,
+                         ULONG length);
 VOID UasEngineNoteLocal(PUAS_FDO fdo, const UCHAR *cdb, ULONG origin,
                         ULONG length);
 VOID UasEngineOpenLun(PUAS_FDO fdo, PUAS_PDO pdo);

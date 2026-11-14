@@ -41,13 +41,13 @@ is this project's two files and nothing else:
     xhcinet.sys    its NDIS 5 miniport, the same flavour
     xhcinet6.sys   its NDIS 6.20 miniport for 8, 8.1 and 10, the same flavour
 
-The Intel port switchover's scripts, src\portsw.vbs, portsw-on.bat and
-portsw-off.bat (roadmap-hcd tasks 36.42 and 36.56), are not staged here
-since task 37.5: make-release.ps1 publishes them once, in a tools\portsw\
+The Intel port switchover's scripts, portsw.vbs, portsw-on.bat and
+portsw-off.bat (roadmap-hcd tasks 36.42 and 36.56), were never staged here
+after task 37.5: make-release.ps1 published them once, in a tools\portsw\
 directory of the version (task 38.9; 2.3.1.0 has portsw\ at its root,
-2.3.0.0 the scripts in each flavour directory, earlier versions none), because they are the same for every architecture and flavour
-and the setup engine never reads them. A guest leg that needs them copies
-them from src\ or from a cut's tools\portsw\.
+2.3.0.0 the scripts in each flavour directory, earlier versions none),
+until 3.4.3.0. From 3.5.0.0 (roadmap-usb4 task 49.47) they are gone: the
+xHCI98 USB Tree's Settings window and XHCITR /set set the value.
 
 The Microsoft files the driver depends on, usbd.sys and usbhub.sys (both
 targets), usbport.sys (the NT targets; on Windows 98 the USB 2.0 stack
@@ -201,6 +201,26 @@ XHCIPFW.SYS, the same way: overriding
 S98VSD.VXD, the same way, beside stor98.mpd in an x86 package that carries
 Stor98: overriding `src\vsd\obj\S98VSD.VXD` (`src\vsd\obj\qemu\` for qemu).
 x86 only.
+
+A tree image of the three (not named) that is missing is a refusal naming
+it and its build.cmd, and one older than any of its sources (the lists of
+package-common.ps1's Get-VsdImageInputs, Get-PfwVxdImageInputs and
+Get-PfwSysImageInputs, which make-release.ps1 holds a cut to) is a refusal
+always: it is an earlier build's (roadmap-usb4 task 49.34, after gated
+builds with no Python on PATH went on without both VxDs). A named image is
+the caller's own and is held to its gate alone.
+
+.PARAMETER AllowUnbuilt
+Package without a tree image of the three above that is missing, saying so
+at the image and again at the end ("NOT BUILT: ..."), for a host that
+cannot build it (no Open Watcom, no Windows 98 SE DDK, no Python on PATH;
+build-driver.cmd's XHCI98_ALLOW_UNBUILT=1). An image older than its sources
+is refused all the same. make-release.ps1 refuses a cut without them.
+
+.PARAMETER ImageRoot
+For the packager's self-tests (with -SkipBinaryGates): the tree the three
+images above and their sources are read from in place of this repository,
+staged as a default package stages them, so the refusals above are tested.
 
 .PARAMETER TestSignPfx
 The project test certificate's .pfx (design record 19; owner, 2026-10-11):
@@ -418,6 +438,8 @@ param(
     [string]$PfwVxdPath = "",
     [string]$PfwSysPath = "",
     [string]$VsdPath = "",
+    [switch]$AllowUnbuilt,
+    [string]$ImageRoot = "",
     [string]$TestSignPfx = "",
     [switch]$SignOnly,
     [string]$GatedManifestPath = "",
@@ -479,9 +501,40 @@ $stor98ByDefault = ($DriverPath -eq "")
 $namedPfwVxd = ($PfwVxdPath -ne "")
 $namedPfwSys = ($PfwSysPath -ne "")
 $namedVsd = ($VsdPath -ne "")
-$stagePfwVxd = ($DriverPath -eq "") -or $namedPfwVxd
-$stagePfwSys = ($DriverPath -eq "") -or $namedPfwSys
-$stageVsd = ($DriverPath -eq "") -or $namedVsd
+# -ImageRoot (the packager's self-tests, with -SkipBinaryGates) stands in for
+# the tree these three images and their sources are read from, and stages
+# them as a default package does, so the missing and stale refusals below
+# are tested as they run.
+if ($ImageRoot -ne "" -and -not $SkipBinaryGates) {
+    throw "-ImageRoot replaces the tree S98VSD.VXD, XHCIPFW.VXD and XHCIPFW.SYS are read from, so it is for the packager's self-tests only (with -SkipBinaryGates)."
+}
+$imageRepo = if ($ImageRoot -ne "") { [System.IO.Path]::GetFullPath($ImageRoot) } else { $repo }
+$stagePfwVxd = ($DriverPath -eq "") -or $namedPfwVxd -or ($ImageRoot -ne "")
+$stagePfwSys = ($DriverPath -eq "") -or $namedPfwSys -or ($ImageRoot -ne "")
+$stageVsd = ($DriverPath -eq "") -or $namedVsd -or ($ImageRoot -ne "")
+# The images of the x86 package this run goes without (-AllowUnbuilt), for
+# the last lines of the run.
+$unbuiltImages = @()
+function Test-TreeImage {
+    # A tree image (not one a caller named): $true to stage it. Missing: a
+    # refusal naming the image and its build, unless -AllowUnbuilt ($false,
+    # said loudly and listed at the end). Older than any of its inputs: a
+    # refusal always, since it is an earlier build's (task 49.34).
+    param([string]$Image, [string]$Name, [object[]]$Inputs, [string]$Build, [string]$Needs)
+    if (-not (Test-Path -LiteralPath $Image -PathType Leaf)) {
+        if (-not $AllowUnbuilt) {
+            throw ("no {0} at {1}: every x86 package carries it. Build it ({2}; it needs {3}), or run scripts\build-driver.cmd, which builds it on the x86 run. -AllowUnbuilt packages without it." -f $Name, $Image, $Build, $Needs)
+        }
+        Write-Warn ("NOT BUILT: no {0} at {1}; -AllowUnbuilt: this package goes without it ({2} builds it)." -f $Name, $Image, $Build)
+        $script:unbuiltImages += $Name
+        return $false
+    }
+    $newer = @(Get-ImageNewerInputs -Image $Image -Inputs $Inputs)
+    if ($newer.Count -gt 0) {
+        throw ("{0} at {1} is older than {2}: it is an earlier build's, not this tree's. Rebuild it ({3}, or scripts\build-driver.cmd)." -f $Name, $Image, ($newer -join ", "), $Build)
+    }
+    return $true
+}
 function Resolve-NamedImage {
     # A named image's full path, a relative one taken against PowerShell's
     # location (not the process's directory, which Set-Location does not move).
@@ -853,12 +906,16 @@ time; they land in different directories on purpose.
         # and ME IOS layer for Stor98's disks: this project's own image, staged
         # beside stor98.mpd in the x86 package that carries Stor98, the qemu
         # flavour's image in the qemu package; held to src\vsd\check-vsd.ps1
-        # again here. A package built where src\vsd\build.cmd could not build
-        # it goes without it (make-release.ps1 refuses that for a cut).
+        # again here. Missing or older than its sources, a refusal (task
+        # 49.34); -AllowUnbuilt goes without a missing one.
         if ($Arch -eq "x86" -and $stageVsd) {
             $vsdImage = if ($namedVsd) { Resolve-NamedImage $VsdPath } else {
-                Join-Path $repo ("src\vsd\obj\" + $(if ($Flavor -eq "qemu") { "qemu\" } else { "" }) + "S98VSD.VXD") }
-            if (Test-Path -LiteralPath $vsdImage -PathType Leaf) {
+                Join-Path $imageRepo ("src\vsd\obj\" + $(if ($Flavor -eq "qemu") { "qemu\" } else { "" }) + "S98VSD.VXD") }
+            if ($namedVsd -and -not (Test-Path -LiteralPath $vsdImage -PathType Leaf)) {
+                throw "-VsdPath: there is no file '$vsdImage'."
+            }
+            if ($namedVsd -or (Test-TreeImage -Image $vsdImage -Name "S98VSD.VXD" -Inputs (Get-VsdImageInputs -Repo $imageRepo) `
+                                   -Build "src\vsd\build.cmd" -Needs "Open Watcom 2.0, the Windows 98 SE DDK and Python on PATH")) {
                 if (-not $SkipBinaryGates) {
                     $vsdArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $repo "src\vsd\check-vsd.ps1"), $vsdImage)
                     if ($Flavor -eq "qemu") { $vsdArgs += "-Qemu" }
@@ -879,10 +936,6 @@ time; they land in different directories on purpose.
                 if ($dupNames.Count -ne 0) {
                     throw ("drivers staged for IOSUBSYS share a base name ({0}): Windows would load only one of them." -f ($dupNames -join ", "))
                 }
-            } elseif ($namedVsd) {
-                throw "-VsdPath: there is no file '$vsdImage'."
-            } else {
-                Write-Warn ("no S98VSD.VXD at {0}: this package goes without it (src\vsd\build.cmd builds it)" -f $vsdImage)
             }
         }
     }
@@ -891,14 +944,18 @@ time; they land in different directories on purpose.
     # above 4 GB before the configuration manager reads them: this project's
     # own image, in every x86 package whether or not it carries Stor98, the
     # qemu flavour's image in the qemu package; held to src\pfw\check-pfw.ps1
-    # again here, and staged under the hash it had then. A package built where
-    # src\pfw\build.cmd could not build it goes without it (make-release.ps1
-    # refuses that for a cut).
+    # again here, and staged under the hash it had then. Missing or older
+    # than its sources, a refusal (task 49.34); -AllowUnbuilt goes without a
+    # missing one.
     $pfwFile = $null
     if ($Arch -eq "x86" -and $stagePfwVxd) {
         $pfwImage = if ($namedPfwVxd) { Resolve-NamedImage $PfwVxdPath } else {
-            Join-Path $repo ("src\pfw\obj\" + $(if ($Flavor -eq "qemu") { "qemu\" } else { "" }) + "XHCIPFW.VXD") }
-        if (Test-Path -LiteralPath $pfwImage -PathType Leaf) {
+            Join-Path $imageRepo ("src\pfw\obj\" + $(if ($Flavor -eq "qemu") { "qemu\" } else { "" }) + "XHCIPFW.VXD") }
+        if ($namedPfwVxd -and -not (Test-Path -LiteralPath $pfwImage -PathType Leaf)) {
+            throw "-PfwVxdPath: there is no file '$pfwImage'."
+        }
+        if ($namedPfwVxd -or (Test-TreeImage -Image $pfwImage -Name "XHCIPFW.VXD" -Inputs (Get-PfwVxdImageInputs -Repo $imageRepo) `
+                                  -Build "src\pfw\build.cmd" -Needs "Open Watcom 2.0, the Windows 98 SE DDK and Python on PATH")) {
             if (-not $SkipBinaryGates) {
                 $pfwArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $repo "src\pfw\check-pfw.ps1"), $pfwImage)
                 if ($Flavor -eq "qemu") { $pfwArgs += "-Qemu" }
@@ -908,10 +965,6 @@ time; they land in different directories on purpose.
             $pfwFile = [pscustomobject]@{ FullPath = $pfwImage; Dest = "XHCIPFW.VXD"
                                           Sha256 = (Get-FileHash -LiteralPath $pfwImage -Algorithm SHA256).Hash }
             Write-Ok ("XHCIPFW.VXD from {0}" -f $pfwImage)
-        } elseif ($namedPfwVxd) {
-            throw "-PfwVxdPath: there is no file '$pfwImage'."
-        } else {
-            Write-Warn ("no XHCIPFW.VXD at {0}: this package goes without it (src\pfw\build.cmd builds it)" -f $pfwImage)
         }
     }
     # XHCIPFW.SYS (task 44.49, design record 32 section 11): the same step for
@@ -921,8 +974,12 @@ time; they land in different directories on purpose.
     $pfwSysFile = $null
     if ($Arch -eq "x86" -and $stagePfwSys) {
         $pfwSysImage = if ($namedPfwSys) { Resolve-NamedImage $PfwSysPath } else {
-            Join-Path $repo ("src\pfw\nt\" + $(if ($Flavor -eq "qemu") { "objfre_qemu" } else { "objfre" }) + "\i386\xhcipfw.sys") }
-        if (Test-Path -LiteralPath $pfwSysImage -PathType Leaf) {
+            Join-Path $imageRepo ("src\pfw\nt\" + $(if ($Flavor -eq "qemu") { "objfre_qemu" } else { "objfre" }) + "\i386\xhcipfw.sys") }
+        if ($namedPfwSys -and -not (Test-Path -LiteralPath $pfwSysImage -PathType Leaf)) {
+            throw "-PfwSysPath: there is no file '$pfwSysImage'."
+        }
+        if ($namedPfwSys -or (Test-TreeImage -Image $pfwSysImage -Name "XHCIPFW.SYS" -Inputs (Get-PfwSysImageInputs -Repo $imageRepo) `
+                                  -Build "src\pfw\nt\build.cmd" -Needs "the Windows 2000 DDK")) {
             if (-not $SkipBinaryGates) {
                 $pfwSysArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $repo "src\pfw\nt\check-pfwsys.ps1"), $pfwSysImage)
                 if ($Flavor -eq "qemu") { $pfwSysArgs += "-Qemu" }
@@ -932,10 +989,6 @@ time; they land in different directories on purpose.
             $pfwSysFile = [pscustomobject]@{ FullPath = $pfwSysImage; Dest = "XHCIPFW.SYS"
                                              Sha256 = (Get-FileHash -LiteralPath $pfwSysImage -Algorithm SHA256).Hash }
             Write-Ok ("XHCIPFW.SYS from {0}" -f $pfwSysImage)
-        } elseif ($namedPfwSys) {
-            throw "-PfwSysPath: there is no file '$pfwSysImage'."
-        } else {
-            Write-Warn ("no XHCIPFW.SYS at {0}: this package goes without it (src\pfw\nt\build.cmd builds it)" -f $pfwSysImage)
         }
     }
 
@@ -2016,6 +2069,9 @@ that does not exist, or clear that one yourself.
     }
 
     Write-Step "Done"
+    if ($unbuiltImages.Count -gt 0) {
+        Write-Warn ("NOT BUILT: this package lacks {0} (-AllowUnbuilt), which every x86 package carries." -f ($unbuiltImages -join ", "))
+    }
     if ($SignOnly) {
         Write-Host ("Sign-only: the host test suite and the import gates were those of the gated build of commit {0} ({1}); every other check ran here." -f $gated.Commit, $gated.Time)
     }

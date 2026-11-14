@@ -284,6 +284,26 @@ static ULONG xhciWaitSettled(ULONG value, ULONG mask, ULONG want,
     return 1;
 }
 
+/* One read of the waited register. In the qemu flavour a read of USBCMD or
+ * USBSTS goes through task 49.35's slow-reset answer (hcd_inj.c), so that a
+ * reset QEMU completes at once can be held, as a slow controller holds it.
+ * IRQL: any. */
+static ULONG xhciWaitRead(PXHCI_EXTENSION ext, ULONG barOffset)
+{
+    ULONG value;
+
+    value = XhciRead32(ext, barOffset);
+#if defined(XHCI_FLAVOUR_QEMU)
+    if (barOffset == ext->HcInfo.OperationalOffset + XHCI_OP_USBCMD ||
+        barOffset == ext->HcInfo.OperationalOffset + XHCI_OP_USBSTS) {
+        value = HcdInjResetAnswer(ext,
+                                  barOffset - ext->HcInfo.OperationalOffset,
+                                  value);
+    }
+#endif
+    return value;
+}
+
 /* IRQL: PASSIVE_LEVEL, or DISPATCH_LEVEL with `ext->InitBelowPassive` set
  * (task 13-R.1) - see the contract in xhci_hw.h and the branch below. */
 ULONG XhciWaitForBits(PXHCI_EXTENSION ext,
@@ -298,14 +318,14 @@ ULONG XhciWaitForBits(PXHCI_EXTENSION ext,
     ULONG stalledMs;
     ULONG sleeps;
 
-    value = XhciRead32(ext, barOffset);
+    value = xhciWaitRead(ext, barOffset);
     if (xhciWaitSettled(value, mask, want, lastValue)) {
         return value != 0xFFFFFFFFUL;
     }
 
     for (i = 0; i < XHCI_STALL_STEPS; i++) {
         KeStallExecutionProcessor(XHCI_STALL_STEP_US);
-        value = XhciRead32(ext, barOffset);
+        value = xhciWaitRead(ext, barOffset);
         if (xhciWaitSettled(value, mask, want, lastValue)) {
             return value != 0xFFFFFFFFUL;
         }
@@ -320,10 +340,15 @@ ULONG XhciWaitForBits(PXHCI_EXTENSION ext,
      * bugcheck on Win2000. What is *not* done here is extending the stall to
      * cover the timeout instead: that would busy-wait a DISPATCH-level DPC for
      * the better part of a second on hardware that has already failed. The
-     * stall phase is 10 ms, which covers every halt and every reset this
-     * project has measured, and a controller that needs longer than that gets
-     * its extra time from the recovery being retried at the next health poll
-     * rather than from a spin here.
+     * stall phase is 10 ms, which covers every halt this project has
+     * measured and the reset of every controller but one: an ASMedia
+     * ASM1042 whose HCRST was still running after 11 ms. The extra time
+     * did not come from "the recovery being retried at the next health
+     * poll", as this comment said until task 49.35 - the next attempt could
+     * begin on the very next thread pass and write a fresh HCRST. A reset
+     * still running here is now the controller thread's to wait out, at
+     * PASSIVE_LEVEL and for XHCI_RESET_TIMEOUT_MS (hcd_ctl.c, hcdRecover;
+     * design record 17 section 4.6.1), never a longer spin here.
      */
     if (timeoutMs <= stalledMs || ext->InitBelowPassive) {
         if (lastValue != NULL) {
@@ -343,7 +368,7 @@ ULONG XhciWaitForBits(PXHCI_EXTENSION ext,
              XHCI_SLEEP_STEP_MS;
     for (i = 0; i < sleeps; i++) {
         HcdSvcWaitMs(ext, XHCI_SLEEP_STEP_MS);
-        value = XhciRead32(ext, barOffset);
+        value = xhciWaitRead(ext, barOffset);
         if (xhciWaitSettled(value, mask, want, lastValue)) {
             return value != 0xFFFFFFFFUL;
         }

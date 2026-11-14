@@ -4148,7 +4148,10 @@ capability requests answered, client URBs outstanding (in `hcd_pool.c`),
 and frees refused (`hcdUsbdxForeignFrees`). Per controller, in
 `HCD_CONTROLLER` beside the URB counts: stream opens and closes served
 through the public URBs and refused. The snapshot's layout is unchanged;
-a debugger reads them. A refused open notes `usbdx.open` in the
+a debugger reads them. *(Since task 49.45 the stream counts, the V1 and
+capability answers per controller and two of the image-wide figures are
+in the counter block the snapshot carries, and the requests are noted in
+the log: 6.13.11.)* A refused open notes `usbdx.open` in the
 controller's log with the answer and the endpoint; debug builds trace the
 first of each new request, and every foreign free, as the dispatch traces
 an unserved request.
@@ -4219,6 +4222,107 @@ contract (6.12.10, 6.13). Where an earlier release already bound
 2. **`HIGH_SPEED_COMPATIBLE` at SuperSpeed** (6.13.3): answered true as
    the documentation and UCX have it; a `0x600` client keeps today's answer
    (false at SuperSpeed). Recommendation: as designed.
+
+#### 6.13.11 What a client asks, in the shipping log (task 49.45, 2026-11-13)
+
+**Why.** A user on Windows 7 x64 bound a later Windows' UAS class driver,
+backported by a third party, to a SuperSpeed UAS drive on this bus. Device
+Manager showed it started with four pipes open, but no disk appeared; this
+package's `xhciuas.sys` gave the same drive a disk. The report, at level 4,
+could not tell what that driver had asked: the counters of 6.13.7 lived
+outside the snapshot, and the log noted only a refused stream open
+(`usbdx.streams`). QEMU's `usb-uas` cannot stand in for the drive: that
+driver fails its start on it under Microsoft's own stacks (6.14.3) and
+under this bus alike. On a Windows 7 x86 guest, traced through the qemu
+flavour, its start sent `IRP_MN_QUERY_INTERFACE` for
+`GUID_BUS_INTERFACE_STANDARD` (`{496B8280-...}`, version 1, size 0x20),
+which no device PDO of this bus answers, then one `GET_DESCRIPTOR`, then
+failed; it sent no V1 query, no capability request and no select (runtime,
+this driver's trace). **The owner's decision (2026-11-13): log now, fix
+later.** This release adds the notes below and changes no request, no
+answer, no completion status and no timing; a fix follows on the evidence
+of a real drive.
+
+**The notes.** Each is one ring record (`label=value`, the value packed by
+`xhci_usbdx.c`'s pure `XhciUsbdxNote*`, a field wider than its place
+saturated to all ones). None holds an address.
+
+| Label | Written by | Value | Level | Bound |
+|---|---|---|---|---|
+| `pdo.qi`, `pdo.qi.vs` | `hcd_pdo.c`, a device PDO's `QUERY_INTERFACE` it does not answer | the GUID's Data1; location << 24, version << 12, size (8, 12, 12 bits) | 2 | once per GUID per PDO, its first 4 GUIDs |
+| `usbdx.v1` | `hcd_urb.c`, `HcdUrbQueryUsbdx` | answer << 24, version << 8, size (8, 16, 8 bits); answer 0 answered, 1 not this bus's size or version, 2 a NULL device object or tag, 3 no device, 4 the context table full | 2 | 4 per PDO |
+| `usbdx.cap`, `usbdx.cap.guid` | `hcd_urb.c`, `0x49104B` | capability (`XhciUsbdxCapabilityId`, 0 unknown) << 24, answer (`XHCI_USBDX_OK` 0, `_INVALID` 2, `_NOT_SUPPORTED` 3, 4 no device) << 16, the streams count; for an unknown GUID its Data1 follows | 2 | 8 per PDO |
+| `usbdx.open`, `usbdx.close` | `hcd_cfg.c` (the thread) and `hcd_urb.c` (a URB refused at dispatch) | endpoint address << 24, answer (`XHCI98_STREAMS_*`, 0xFE refused at dispatch) << 16, streams requested << 8, granted | 2 | 8 per PDO |
+| `pdo.ioctl`, `pdo.ioctl.st` | `hcd_urb.c`, an internal IOCTL other than `SUBMIT_URB` completed with a failure | the code; the `NTSTATUS` | 2 | once per code per PDO, its first 4 codes |
+| `xfer.short.err`, `xfer.short.len` | `hcd_io.c`, `HcdIoDeferred` | slot << 24, DCI << 16, stream << 8, the pipe's count of them; requested << 16, actual (16 bits each) | 2 | the first 8 per pipe (a stream is a pipe) |
+| `uas.urb`, `uas.urb.len`, `uas.urb.st` | `hcd_io.c`, `HcdIoDeferred` | slot, DCI, stream, `TransferFlags`' low byte; requested, actual; the USBD status | 3 | the first 16 per PDO |
+
+`xfer.short.err` is the leading suspect's note: a bulk or interrupt IN
+transfer that ended short is completed as
+`USBD_STATUS_ERROR_SHORT_TRANSFER` when its URB did not set
+`USBD_SHORT_TRANSFER_OK` (the transfer path's rule since the HCD began,
+Windows 2000 DDK `usbdi.h`), and that failure never reached the log: the
+controller's completion is Short Packet, a success, so no `xfer.error` is
+written. A UAS status IU is always shorter than the buffer posted for it.
+The note is written on every target for any device, so it is level 2;
+eight a pipe bound it, and every one is counted (`XferShortRefused`).
+
+`uas.urb` lines are written only for a PDO whose interface the bus runs as
+UAS (`Xport`, 31-A.3) and whose client has not used the bus's private
+interface (`IOCTL_XHCI98_OPEN_STREAMS`, `_CLOSE_STREAMS` or
+`_TRANSFER_POLICY`, sent by `xhciuas.sys` at its start before any data
+transfer): `OwnClient`. They are level 3 because on 8, 8.1 and 10 every UAS
+drive under this bus runs Windows' own driver (6.13.9), and 16 transfers of
+three records each, about 1 KB of the 16 KB ring, at every arrival of such a
+drive would spend the default level's ring on every machine.
+
+**The bounds.** Per PDO (`hcd.h`, `NoteQi` and the fields after it), zeroed
+at its `IRP_MN_REMOVE_DEVICE`, so a driver loaded on the device again (an
+update, another driver forced on) has its own; per pipe for the short note
+(`HCD_PIPE.ShortRefused`, a new pipe at each select). A table slot or a
+count is claimed by `InterlockedIncrement` before the note is written, so a
+race between two processors can at worst note one GUID or code twice and
+never writes more notes than the bound. Every request is counted whether
+it is noted or not.
+
+**IRQL and locks.** `pdo.qi` at `PASSIVE_LEVEL` (PnP), `usbdx.v1` likewise;
+`usbdx.cap`, `pdo.ioctl` and a dispatch refusal of a stream URB at the
+dispatch's IRQL, at most `DISPATCH_LEVEL`; `usbdx.open` and `.close` on the
+thread, after the open or close returned (the endpoint read under the
+controller lock before it, the note written after the lock is released);
+the transfer notes in `HcdIoDeferred` with the controller lock not held,
+before the URB's status is written and while the record keeps its pipe
+alive. A single note is `XhciLogNote`, which takes the controller lock
+itself; a note of two or three records (`pdo.qi`, `usbdx.cap`,
+`pdo.ioctl`, `xfer.short`, `uas.urb`) is written with `XhciLogNoteLocked`
+under one hold of that lock, so another completion's or request's notes
+never fall between its records. None is called with the lock already
+held, none from the ISR.
+`pdo.ioctl` reads only the code and the status after the IRP was completed.
+
+**The counters** (6.13.7's, now in the snapshot). Appended to
+`XHCIHC_COUNTERS` at words 308 to 319, so the USB Tree's counter list prints
+them by name when nonzero and the HCD region's own header gives their count
+(`XHCI_SNAPSHOT_HCD_COUNTER_WORDS` 320; no version changes, as for 49.39's
+six): `UsbdxV1Answered`, `UsbdxV1Refused`, `UsbdxCapAnswered`,
+`UsbdxCapRefused`, `UsbdxStreamOpens`, `UsbdxStreamCloses` and
+`UsbdxStreamRefused` (moved out of `HCD_CONTROLLER`, written as before),
+`UsbdxClientUrbs` and `UsbdxForeignFrees` (image-wide, so the door writes
+them at the read - words 315 and 316, `hcdDoorCounterWord`, beside issue
+18's word 166 - from `HcdPoolClientCount` and `HcdUrbUsbdxForeignFrees`),
+then `PdoQiUnanswered`, `PdoIoctlRefused` and `XferShortRefused`. The
+image-wide queries-answered and capability counts of 6.13.7 stay where
+they are, for a debugger.
+
+**What a real drive's report should show**, at level 3, with the
+backported driver bound: its `pdo.qi` GUIDs (at least
+`GUID_BUS_INTERFACE_STANDARD`), `usbdx.v1` answered, `usbdx.cap` for
+`STATIC_STREAMS` with the controller's count, three `usbdx.open` with the
+drive's stream count requested and granted, then the first 16 transfers -
+which pipe and stream each used, whether `USBD_SHORT_TRANSFER_OK` was set
+(bit 1 of the flags byte) and what each ended with - and any
+`xfer.short.err`. Pure half: `test\test_usbdx.c`, `test_notes`; counter
+places: `test\test_snap.c`.
 
 ### 6.14 Windows 10: what 22H2 asks of the bus, read again (task 43.33 (a) and (b), 2026-10-22; draft)
 
@@ -6087,12 +6191,36 @@ the USBUSER pass-through of section 8.8, which stays byte-compatible for
   does, and is not gated by the door's enable step (status 6 at level 0
   stays the pass-through's alone): `XHCIHC_COUNTERS` from level 1, as
   little-endian words, with `Usb2HubSpeedFallbackSlots` computed as the
-  HCD region computes it; the note ring as text, oldest byte first, at
-  levels 2 and 3 - a byte outside printable ASCII, CR and LF written `.`,
+  HCD region computes it; the note ring as text, oldest byte first, from
+  level 2 - a byte outside printable ASCII, CR and LF written `.`,
   the text starting after the first line feed when the wrap has
-  overwritten bytes or `XhciLogDebugView` drains the ring; withheld at
-  level 4, which records kernel addresses; and the controller's
-  configuration space 00h to FFh at every level.
+  overwritten bytes or `XhciLogDebugView` drains the ring - at level 4
+  too from `3.5.0.0`, kernel addresses included (below); and the
+  controller's configuration space 00h to FFh at every level.
+- **Level 4 from `3.5.0.0`** (the owner's decision of 2026-11-13, "Show it
+  as it is"; roadmap-usb4 decisions table). Up to `3.4.3.0` the answer
+  withheld the ring at level 4, which records kernel addresses
+  (`XHQ_F_WITHHELD`, no log bytes), and `XHCITR` said it did not show the
+  log; a user who chose level 4 to help sent a report with no log. From
+  `3.5.0.0` the ring is served at level 4 exactly as at 2 and 3 - the same
+  bounds, replacement, cut and size cap - with `XHQ_F_ADDRESSES`
+  (`0x100`) set beside `XHQ_F_WITHHELD`, which stays set at level 4 so
+  that an `XHCITR` before `3.5.0.0`, which tests `XHQ_F_WITHHELD` alone,
+  still says it shows no log rather than calling level 4 off. The
+  `3.5.0.0` `XHCITR` shows the log when `XHQ_F_ADDRESSES` is set, and for
+  `XHQ_F_WITHHELD` alone (an older driver) keeps the old message. The
+  layout and `XHQ_VERSION` do not change. `xhcicm.sys`'s log answer
+  follows the same rule: its address records' values are written
+  `--------` below level 4 only (`CM_QL_F_WITHHELD`), and served as
+  recorded at 4, the rule its DebugView emission already had.
+- **The cost of that decision, the owner's accepted trade-off:** from
+  `3.5.0.0` a level 4 log, with kernel addresses in it, is readable by
+  whoever can open the driver's query on that machine (any user: the
+  request is `FILE_ANY_ACCESS`, on both drivers) and appears in a saved
+  report and snapshot. Level 4 is off by default (the default is 2) and is
+  set only by an administrator, through the registry value or the USB
+  Tree's Logging level (on 2000 and later; 98 SE and ME have no
+  administrator, and any user there can set it).
 - **The configuration space** is read on demand, one DWORD per
   `IRP_MN_READ_CONFIG` through `HcdSvcConfigSpace` (the route of every
   configuration access here), at PASSIVE under the door gate - no start
@@ -12205,6 +12333,12 @@ High Speed simulator were not read, the emulator here having no
 
 ### 11.10 A larger event ring, and the isochronous stream's timing (task 47.30, 2026-11-06)
 
+**Amended 2026-11-13 (task 49.35, section 11.10.1):** from `3.5.0.0` a
+fresh install writes `XhciEventRingTrbs` 256 and an absent value is 256;
+an update keeps a 1024 written before, and a controller below xHCI 1.0
+always uses 256. What this section says of the larger ring stands
+wherever the value asks for it.
+
 **Why.** Section 11.8 point 9 left the next limit to a larger event ring,
 planned as ISORING.4 and deferred by the owner on 2026-10-22: the event
 ring touches every device and every leg, and a ring larger than one page
@@ -12575,6 +12709,138 @@ condition read for Ring Underruns against its 4-record reading, with the
 table. Then the owner's UAC 2 devices by passthrough under load. Real
 controllers, which no emulator stands for, read the 1,024-entry segment
 first on the owner's machines.
+
+#### 11.10.1 The smaller ring on a fresh install, and always below xHCI 1.0 (task 49.35, 2026-11-13)
+
+**Why.** A field report on `3.4.3.0` (an ASMedia ASM1042, `1B21:1042` revision 00, HCIVERSION 0.96, Windows
+XP x64): the controller was failed by an escalation right after its start (design record 17 section 4.6.1).
+With `XhciEventRingTrbs` 256 set by hand, which gives the ring of the releases before `3.4.2.0`, it ran: a
+device enumerated and 4,928 transfers completed, with no recovery noted. The machine's Intel controller (xHCI
+1.0) ran the 1,024-entry segment correctly beside it. One machine and one test do not separate the segment's
+size from its placement: the smaller ring also moves into the controller block.
+
+**The decisions** (the owner, 2026-11-13, in this order). First the smaller ring for every controller below
+xHCI 1.0, under a new value `XhciEventRing`; then the smaller ring by default on every controller; and then
+the shape built here, which replaces both: the value stays `XhciEventRingTrbs` as `3.4.2.0` and `3.4.3.0`
+read it, a fresh install writes 256, an update keeps what is there (a machine that ran `3.4.2.0` or `3.4.3.0`
+keeps its 1024: it worked for them), and a controller below xHCI 1.0 always uses 256. `XhciEventRing` was in
+no release and is gone.
+
+**The rule.** At each start, before `HcdDmaOpen`, `hcdReadEventRing` reads `XhciEventRingTrbs` (absent, a
+DWORD, or another type: `hcdReadDword`'s three answers), then the capability dword at BAR offset 0 through
+`hc->BarVa`, the mapping the start has just made, only when `BarLength` holds a whole dword (the resource
+checks come later, in `XhciInitController`; otherwise all ones, which counts as 1.0 - the start refuses it at
+the capability check anyway). In the `qemu` flavour it reads `XhciQemuHciVersion` here too and latches it
+into `ext->HciQemuVersion` once for the lifetime (start, resume and recovery use the same value). The pure
+`XhciEventRingPick` (`xhci_caps.c`) decides:
+
+| Read | Controller | Ring | `evt.ring` bits 31:24 / 23:16 |
+|---|---|---|---|
+| anything, or nothing | HCIVERSION below 1.0 | the smaller ring, always | 6 / 5 |
+| absent, or an empty `REG_NONE` | 1.0 or later, or unread | the smaller ring (`3.4.x`: the larger) | 5 / 6 |
+| a DWORD 256 | 1.0 or later | the smaller ring | 4 / 4 |
+| any other DWORD (1024, 0, 512, ...), or another type | 1.0 or later | the larger ring, which falls back to the smaller one when its memory is not there | 7 / 0 to 2 |
+
+An empty value with no type (`REG_NONE` of no data) counts as absent, as it does for every value this driver reads (`XhciRegCallSeen`, task 42-A.17: a query routine may be handed that shape for a value that is not there), so it gives the smaller ring on a 1.0 controller where `3.4.3.0` gave the larger, and a machine-wide one lets the controller's own value stand; no installer writes one. Every other value but absence reads as `3.4.2.0` and `3.4.3.0` read it (`v3.4.3.0`, `hcdReadEventRing`: exactly a
+DWORD 256 was the smaller ring, everything else the larger; nothing was clamped or rounded). The picks are
+numbered from 4 so that the note's top byte tells this rule from `3.4.x`'s (0) and from the interim
+`XhciEventRing` of a test build (1 to 3). There are two ring layouts and no others: 256 TRBs in the
+controller block, and 1,024 TRBs in a 16 KiB block of their own (the `qemu` flavour's `XhciQemuEventRing`
+places the larger one differently for tests).
+
+**What the INFs write.** `HKR,,XhciEventRingTrbs,0x00010003,256` under the don't-overwrite rule: a fresh
+install has 256; an update, by Setup or by Device Manager, keeps a 1024 that `3.4.2.0` or `3.4.3.0` wrote, or a
+user's choice. Setup no longer removes the value (worker sets, with its rows): it is the live value, in the
+controller's key or machine-wide, where a value in `Services\USB` wins over every controller's (`hcdReadDword`;
+`docs/using/tuning.md`, "One value for every controller").
+
+**Why 256 is safe with eight requests in flight.** What a controller can leave on the event ring unread is
+bounded by the transfer rings, not by how many requests a pipe has in flight:
+
+- an isochronous TD carries IOC and raises at most two events (a short packet or a Missed Service Error on its
+  first TRB, then the IOC), and a pipe's ring adds one underrun for each publication while nothing drains,
+  plus the stretch already running (section 11.8). So a pipe leaves at most its ring's TRBs plus its records
+  plus one: `XHCI_ISO_EVENTS_OVER_TRBS` 9 with eight records, 5 with four. A pool-ring pipe (62 TRBs) counts
+  71, against 67 in `3.4.1.0`.
+- the page a High Speed pipe with `bInterval` 1 to 3 gets is sized from the ring the start allocated
+  (`XhciPipeIsoGrant` over `ext->EventRing.Trbs`, `hcdCfgIsoPage`): `TRBs - 64 - counted - 2 x 71`, at most
+  192 more than the pool ring. At 256 entries with nothing else open the allowance is 112 (ring 114, counted
+  121); with any isochronous pipe already open no page is granted.
+- every other source is small: one command at a time (`XHCI_CMD_BUSY`), one event; a port change event per
+  port until its change bits are cleared; a bulk, interrupt or control record is one TD, at most two events
+  (ISP and IOC), four records a pipe and two on a stream's pipe; no MFINDEX wrap events. The 64-entry margin
+  is for these, and nothing enforces it, at either size.
+- the number of records stays eight on every ring. It is not tied to the ring: at 256 the page shrinks by
+  eight TDs instead.
+
+The counts at 256 entries:
+
+| Streams open | Counted now (8 records) | Counted in `3.4.1.0` (4 records) |
+|---|---|---|
+| one High Speed stream on a page | 121; 121 + 71 + 64 = 256 exactly, so it cannot fill the ring by itself | 125; 125 + 67 + 64 = 256 |
+| a page and a second stream on the pool ring | 192, inside the margin | 192, the same |
+| a page and two pool streams | 263 | 259 |
+| pool streams only (Full Speed audio): one, two, three | 71, 142, 213 | 67, 134, 201 |
+
+From three streams on, both versions count past the ring less the margin. Filling it then takes every ring
+full and no drain for the whole of a ring's time: about 14 ms on a High Speed page, 7.75 ms on a High Speed
+pool ring and 62 ms at Full Speed. That is a long stall or polled delivery (15 to 62 ms was read on the
+E7250). Eight records add 4 events to each pool pipe there, and nothing to one page with one pool pipe.
+
+**What 256 costs.** Headroom for isochronous streams, not safety:
+
+- a High Speed stream with `bInterval` 1 gets one page of 112 TRBs, about 14 ms of small packets, where 1,024
+  entries gave 254, about 21 to 31.75 ms;
+- a second High Speed stream gets no page: the 62-TRB pool ring, 7.75 ms;
+- 46.30's case (High Speed, `bInterval` 1, `uac2`'s eight 4 ms URBs), which 47.30 lifted, returns: three URBs
+  on the ring, 12 ms (47.30's legs read it on both rings: section 11.10 and `runs/run-47.md`, "47.30 (the
+  legs)"). `XhciEventRingTrbs` 1024 gives the larger ring back, and an update keeps it where an earlier
+  release wrote it.
+
+**Other systems** (why the smaller ring is the fresh install's). No other system gives a controller one
+segment of 1,024 entries:
+
+| System | Event ring | Where read |
+|---|---|---|
+| Linux | segments of 256 TRBs (`TRBS_PER_SEGMENT`), two for interrupter 0 (`ERST_DEFAULT_SEGS`), no more than ERST Max allows | `external/linux/xhci.h`; `xhci-mem.c`, `xhci_alloc_interrupter` |
+| FreeBSD | one segment of 232 (`XHCI_MAX_EVENTS`; `XHCI_MAX_RSEG` 1) | `external/freebsd/xhci.h`, `xhci.c` |
+| Haiku | one segment of 208 (`XHCI_MAX_EVENTS`, 16 x 13) | `external/haiku/xhci_hardware.h`, `xhci.cpp` |
+| NetBSD | one segment of 256 | the owner's decision; not mirrored here |
+| OpenBSD | one segment of 208 | the owner's decision; not mirrored here |
+| xHCI98 `3.4.2.0` and `3.4.3.0` | one segment of 1,024 where the memory was there | section 11.10 |
+
+**What is recorded.**
+
+- `evt.ring` carries the pick in bits 31:24, the route in 23:16 and the entries in 15:0. `evt.ring.value`
+  notes the value read (FFFFFFFF for none or another type), `evt.ring.read` how it read (0 absent, 1 a DWORD,
+  2 another type), `evt.ring.hciversion` the version read (0x0096 on the report's part), and `evt.ring.held`
+  the value when a controller below 1.0 was held at 256 although the value asked for the larger ring.
+- XHCITR's report gives, after the note ring's text, the ring in force and why:
+  - "256 entries, the smaller ring: the controller is xHCI 0.96, below 1.0, which always uses 256;
+    XhciEventRingTrbs 1024 asks for the larger ring";
+  - "256 entries, the smaller ring: no XhciEventRingTrbs, the default";
+  - "256 entries, the smaller ring: XhciEventRingTrbs 256 asks for it" (also a `3.4.x` driver's);
+  - "1024 entries, the larger ring: XhciEventRingTrbs 1024 asks for it" (or "XhciEventRingTrbs, of another
+    type,"), and "1024 entries, the larger ring" for a `3.4.x` driver;
+  - "... no memory for the larger one"; and the interim test build's picks, named as such.
+
+**Tests.** `test_caps`: `XhciEventRingPick` and `XhciEventRingHoldNoted` for every read (absent, a DWORD,
+another type), the values 0, 255, 256, 512, 1024, 2048, 4096 and all ones, at HCIVERSION 0.90, 0.95, 0.96,
+1.0, 1.1, 1.2 and unread; the update from `3.4.3.0` (1024 kept on 1.0, held on 0.96 and noted); the fresh
+install's 256; the `qemu` override. `test_pipe`'s grant rows already hold 256 and 1,024 entries. XHCITR's
+self-test decodes each pick and route. The INF gate checks the row at 256 with don't-overwrite.
+
+**Next phase, not built.** The event ring as several 256-entry segments: an Event Ring Segment Table of more
+than one entry, bounded by the controller's ERST Max (HCSPARAMS2 bits 7:4), each segment one page, which gives
+the larger ring's headroom back in the shape other systems use:
+
+- files: `xhci.h`, `xhci_ring.c` (the wrap across segments, CCS toggled only at the end of the ERST, ERDP's
+  DESI), `xhci_evt.c`, `xhci_init.c` (ERSTSZ N, checked against ERST Max), `hcd_dma.c` (N pages, no window
+  search), the snapshot and XHCITR's event-ring section;
+- host tests in `test_ring`;
+- legs: 47.30's isochronous legs again.
+
+QEMU's controller takes a one-entry ERST only (section 11.10, point 8), so no emulator leg can read it.
 
 ### 11.11 Every transfer through buffers the driver owns (task 48.33, design before code)
 
@@ -13231,9 +13497,132 @@ from the text above, and why:
   context its DPC finds, so only a system address is valid in every one;
   the first addresses of each kind, and the counts at each stop, printed on
   the 0xE9 channel). The per-URB sequence log and
-  the fault points that hold a record in a chosen state are not built.
+  the fault points that hold a record in a chosen state were not built
+  here; task 49.29 builds them (section 11.11.12).
 - **Owed:** the 98 SE leg reading `MmMapLockedPages`' failure; the
   measurement and the legs of section 11.11.9.
+
+#### 11.11.12 The instrumentation (task 49.29, design before code)
+
+**Why.** Section 11.11.9's fault points and its per-request log were
+designed and not built (section 11.11.11), and record 17 section 4.13.9's
+list 1 cannot be read without them; nor can the ledger be read once its
+controller is gone (list 1, item 4). Task 49.29 (the owner, 2026-11-11)
+builds them in the qemu flavour alone. This section says what section
+11.11.9 leaves open, or what no longer fits the code as built; the rest
+of section 11.11.9 stands. Reviewed and revised before code.
+
+**The switch.** `XhciQemuStageFault` gains three fields, read at each
+start as its others are: bit 2, the hold arms the containment (below);
+bit 3, the per-request log; bits 19:16, the state the hold keeps (0 none).
+No new value name.
+
+**The hold.** Section 11.11.9 asks for a record "held there long enough
+for the stop to meet it". The hold does that once per start: the first
+record to reach the chosen state is kept in it, by the hold, until
+staging's admission closes (`StageClosed`: the unproven stop's step 1,
+a containment's `HcdSvcDmaNotStopped`, or `HcdStageDrain`) or 500 polls
+of 20 ms (10 s) have passed, whichever comes first; then what it kept
+goes on as it would have. The polls are its own timer's, so the bound
+does not rest on the controller thread or the tolerance clock, which a
+stop has already ended by the time it joins staging. The hold is counted
+in `StageOwners` from the moment it begins to the end of its timer's
+DPC, after the work it carried on; its timer is set again only while
+that count stands, so `HcdStageDrain`'s wait for `StageOwners` joins the
+timer and its DPC as well, and a record it keeps is not free, so its
+pipe stays open (`HcdIoWaitPipe`). Its timer and DPC are made beside
+staging's own objects, once, when the controller is added. It begins
+only while admission is open, so a start that fails never has one. The
+reason it let go (admission closed, or the bound) is logged: a release
+by the bound has not shown the stop meeting the state. With bit 2 the
+hold, as it begins, arms the injection of all ones without the proof
+(record 17 section 5, `DEAD_NOPROOF` until CLEAR, through a helper that
+takes only `InjLock`, a leaf), so the health poll's next pass reads all
+ones and a containment of the started controller follows within about a
+second and the containment's interval; refused, and said so, when the
+controller has failed already (as the trigger refuses a fault aimed at
+a failed controller). With bit 2 clear the leg brings the stop (bit 0
+makes it unproven). The states:
+
+| Bits 19:16 | State held | How |
+| --- | --- | --- |
+| 1 | `WAITING` | from the first admission it meets, every take fails (`hcdStageTake`), small buffers included, so every record submitted waits on `StageQueue`, cancellable as ever; the closure's pass ends them, a release by the bound kicks a pass |
+| 2 | `FILLING` | the pass that admitted an OUT stops before its copy, keeping `StagePassBusy` and its count in `StageOwners`; the hold later makes the copy and the publication, then ends that pass as `hcdStagePass` ends one and runs a new one |
+| 3 | `READY` | the same, stopped after the copy (an IN: after its admission) and before `HcdIoMapped` |
+| 4 | `DRAINING` | an IN's copy-out stops before it copies; `HcdStageComplete` returns 0 as for a record that waits for a window, the record on no queue, and the hold later copies it out and puts it back on the done list once, as `hcdStageRetryCopies` does |
+| 5 | `COPY_PENDING` | from the first copy-out it meets, every copy-out fails as a window that will not map, the direct ones included; the records wait on `StageCopyQueue` as ever, and only the give-up (section 11.11.4) is suspended while the hold stands, so the closure's drain is what ends them |
+| 6 | the staging DPC | the DPC's work stops, the DPC still counted in `StageDpcsInFlight` until the hold has run that work |
+
+A held `FILLING` or `READY` record keeps every later admission of every
+pipe waiting behind the pass that holds it, which the order rule
+(section 11.11.3) allows. Not held by the switch, because a leg reaches
+them by its own setup or because they no longer exist: `PUBLISHED` and
+in flight (an interrupt-IN read a device does not answer); a wide
+record's refill (no promotion, section 11.11.11); the retry timer set
+(bits 15:8 already); a stream request, an isochronous pipe, a slow or
+door request, a suspended PDO, a departed device's held request and a
+PDO not stopped before the controller's removal (the legs' own setup).
+
+**The per-request log.** With bit 3, every URB IRP sent to a device PDO
+is logged on the 0xE9 channel as it arrives at the internal device
+control dispatch, before any branch (`urb: in`: a sequence number of the
+log's own, the IRP, the PDO, the function), and as it is completed, just
+before `IoCompleteRequest` at each site that can complete one
+(`HcdCompleteIrp`, the deferred work, the held requests' and the
+refusals' completions, the slow queue's), told apart there by its stack
+location: `IRP_MJ_INTERNAL_DEVICE_CONTROL`,
+`IOCTL_INTERNAL_USB_SUBMIT_URB` and a device PDO (`urb: out`: the next
+sequence number, the IRP, the NT status, the URB's status). A URB
+pointer of NULL is printed as none, never read. The log is the image's,
+not a controller's: on from the first start that reads bit 3 until
+Windows restarts, so a PDO left without its controller logs as before.
+Each line's sequence number is taken and the line printed under a lock
+of the log's own, so its lines are whole and in sequence; an address is
+printed at full width (two words on amd64). Other trace lines are not
+serialized against them, so on more than one processor a line can be
+damaged: the host reading counts the lines it cannot parse, and a leg
+that needs every pair runs one processor. The IRP is the pairing key: the
+reading passes when, for each IRP address, the lines alternate `in` then
+`out` and end with an `out`, but for one `out` with no `in` before it,
+which is a request already pending when the log came on (a line, `urb:
+log on`, marks the moment; a controller that started earlier may have
+requests pending then). The image's two totals are printed at each
+controller's stop. The per-PDO pending count is not logged: at 1 a child
+PDO's removal waits for it to reach 0 (`hcdPdoQuiesce`), so a removal
+that finishes shows it.
+
+**No copy into a detached request.** In place of a pattern found in a
+completed buffer, which needs a client that reads its buffers back, the
+qemu flavour counts every copy made for a record already detached from
+its request (its URB released by the deferred work, `x->Urb` NULL), at
+an OUT's fill and at the head of a copy-out, before an isochronous
+request's URB is read: `stage.copy.detached`, noted and printed at each
+stop, which must stay 0. That is stricter than "no copy after the
+request's completion", which comes after the detachment, and does not
+replace it: a copy that met a record already given to the next request
+would not be seen. That proper check (a generation per request) is not
+built.
+
+**The allocations and the ledger.** Each controller counts, in the qemu
+flavour, from its `HcdDmaOpen`, the allocations `hcdDmaAlloc` handed to
+a caller (its own refusal of a range above 4 GB is not one), those
+`hcdDmaFree` freed and those kept (`hcdDmaFree` while pinned,
+`HcdDmaStreamKeep`), in number and in whole pages, and prints them at
+the end of `HcdDmaClose` with those neither freed nor kept. At an
+unproven stop with staging on that last figure is 0, which is the check;
+at 0 a kept device's own blocks stay live and count there. The image's
+ledger, which outlives every controller, is printed on the 0xE9 channel,
+which outlives them too: its live and kept totals at each controller's
+`HcdDmaOpen` (so a controller added after the last was removed shows
+what was carried over), at the end of each `HcdDmaClose` beside the
+pages that stop kept, and at each refusal with the bytes refused.
+`dma.quarantine.first` and `dma.quarantine.cap` stay as they are.
+
+**Never in the release flavour.** Every line of it is under
+`XHCI_FLAVOUR_QEMU`, the controller structure's new fields included,
+and it adds no import. Shown at the gated build: the release images of
+both architectures searched for the new log strings, and their import
+tables compared with the base's.
 
 ## 12. What Phase 25 leaves open, and where each item binds
 
@@ -15196,6 +15585,266 @@ task for. Each is entered in the failure ring as
 `XHCI98_FAIL_E_FAST_RESET`. The trade is the reset's: every command in
 flight ended `SRB_STATUS_BUS_RESET`, and on removable media the volume
 verified again.
+
+### 16.15 A timeout with the status in ends in the device reset (issue 26 section 8, task 49.39, 2026-11-12)
+
+Issue 26 section 8: on `3.4.3.0` a drive answered every data-in command
+GOOD while the host's data-in transfer for it never came back, and each
+timeout ran to an ABORT TASK the drive answered, then to the next timeout.
+ABORT TASK asks the device to drop a task; a device that has sent its final
+IU holds no task for that tag (SAM-5, ABORT TASK; T10 08-282r3 has the data
+phase acknowledged before the status), so the request cannot cure what is
+outstanding, which is the host's own transfer.
+
+The rule, a timeout recovery policy and not a claim that data was lost
+(`uas_xport.c`, `uasTick`; the pure predicate `UasFinalTimeoutDue`,
+`uas_iu.c`):
+
+- It is decided only where the ordinary timeout runs out: the slot's
+  `TimeLeft` reaching 0 on the ordinary path. `XhciUasFastReset`'s branch
+  before it is unchanged (at 1 its own 5 s rule still takes a final IU whose
+  data cancel has not come back).
+- A command whose final IU is in (`UAS_SLOT_FINAL`: a SENSE IU of any
+  status, or a RESPONSE IU), and has been in for at least two ticks of the
+  one-second timer (`FinalAt`, the slot's second when `uasStatusIu` set
+  FINAL), and whose data transfer is still outstanding - busy, under this
+  driver's cancel, or holding a cancel reference - is marked `Failed` and
+  entered in the failure ring as `XHCI98_FAIL_E_FINAL_TIMEOUT` (8) beside the
+  timeout's own entry. `uasRecoveryNext` then returns `UAS_RECOVER_RESET`
+  and the worker calls `uasResetDevice`: no ABORT TASK for it.
+- A final IU in for less than two ticks at the deadline: the command waits
+  at `TimeLeft` 0 for up to two more ticks and is decided then. Status and
+  data are separate pipes whose completions can reach this driver in either
+  order, so a status read a few microseconds before its data at the deadline
+  must not reset a healthy drive; vectors hold both sides.
+- No final IU (a READ still streaming): ABORT TASK as before.
+- SRB timeouts shorter than 10 s take the same rule; the timer is the same.
+
+What follows the reset, as `uasResetDevice` has done since `2.0.0.0`:
+every command in flight - the timed-out one and every other - is ended
+`SRB_STATUS_BUS_RESET` (`SRB_STATUS_NO_DEVICE` when the device has gone),
+and once every transfer is back the bus gets `IOCTL_INTERNAL_USB_RESET_PORT`
+(`hcdCfgResetPort`: Reset Device, the configuration replayed, the streams
+reopened with every handle valid, `src/xhci98_streams.h`); the PDO and the
+volume stay. What the class driver above does with `SRB_STATUS_BUS_RESET`
+is its own and not promised here: task 49.39's legs read what a program
+in the middle of a read sees on the NT targets, and on 98 SE the IOS path
+is `usbstor`/USBNTMAP's [hyp]. After a reset the drive may
+answer its next command UNIT ATTENTION, which the class driver handles as
+for any reset; on removable media a verify of the volume can follow, and a
+verify that fails shows "Wrong Volume" - the same exposure as every reset
+this driver has made since `2.0.0.0`, and less than the unplug the user
+needed on `3.4.3.0`. A reset that fails leaves the device Dead and cycles
+it (45.41, L5), as before.
+
+The Bulk-Only resume keep (`hcd_bot.c`, record 20 section 4.3.4) is a
+Bulk-Only interface's and is not involved; the link keep (section 15) is
+not involved either, since no link drops. `XhciUasFastReset` keeps its
+own rules: its two cases (a second timeout after an answered abort with no
+progress, and a final IU's cancel not back after 5 s) still act sooner
+where it is set; the case issue 26 section 8 met, where GOOD no-data
+commands kept counting as progress, is this section's.
+
+Vectors (`test_uas`, `test_final_timeout`): final GOOD with data busy at
+the deadline (reset); final CHECK CONDITION with the data cancel
+outstanding (reset); final IU at the deadline and the data completing in
+the next tick (no reset); final IU for one tick only (held, then decided);
+no final IU (abort); data-out GOOD with the data transfer done (no reset);
+a 1 s SRB timeout; `XhciUasFastReset` 1 and 0 alike.
+
+### 16.16 A drive's refusal of ATA pass-through replayed (issue 26 section 8, the owner's choice, 2026-11-12)
+
+The owner's decision of 2026-11-12: after the drive's first refusal, until
+it is replugged, in memory only. Narrowed in review to what the drive has
+actually said: a refusal of ATA PASS-THROUGH (12) does not show that the
+drive refuses (16), nor that another LUN does, and a program's fallback
+from one to the other must still reach the drive.
+
+- Per LUN (the PDO) and per operation code. A SENSE IU for a command whose
+  CDB is A1h (12) or 85h (16), with status CHECK CONDITION and sense key 5,
+  ASC 20h, ASCQ 00h (INVALID COMMAND OPERATION CODE), fixed or descriptor
+  format, parsed in `uasStatusIu` from the IU itself before any cancel or
+  recovery can replace the SRB's outcome, sets that operation's bit in the
+  PDO's `AtaRefused` (`uas_iu.c`, `UasAtaRefusal`, the pure test).
+- A later request with that operation code for that LUN, from any origin -
+  the class driver's SRB, a program's SCSI or ATA pass-through
+  (`IOCTL_ATA_PASS_THROUGH` is 85h, 16.8), a SMART IOCTL sent as 85h
+  (16.9) - is answered here with the same CHECK CONDITION, ILLEGAL REQUEST,
+  INVALID COMMAND OPERATION CODE, written by 16.7's and 16.8's own writers
+  as 16.13 writes 5/24/00, and nothing reaches the drive.
+  `SMART_GET_VERSION` names no command and is answered as today. Each answer
+  enters the failure ring as `XHCI98_FAIL_E_REPLAYED` (9).
+- Cleared at the PDO's `IRP_MN_START_DEVICE` and with the PDO at removal:
+  unplug, disable and enable, a restart. A device reset (16.15) keeps it:
+  the drive's firmware has not changed. A pass-through that succeeds never
+  sets it.
+- `XhciUasNoAtaPassThrough` 1 is unchanged and comes first (5/24/00 for
+  both operations).
+- Windows 98 SE and ME: the IOS/USBNTMAP path delivers a program's SCSI
+  pass-through as an SRB with no "program" origin; the CDB alone decides,
+  so it is covered the same way.
+
+AGENTS.md's hardening rule asks what Windows' own stack does: XP's
+`usbstor.sys` sends these CDBs to a Bulk-Only stick every time and returns
+the drive's 5/20/00 (16.1's table) [obs]. This replay returns exactly that
+answer without the transfer, so the caller sees what Windows' stack would
+show it; it is a deliberate exception the owner chose, recorded here, not a
+refusal of a request Windows would pass. Linux refuses both operations only
+for listed devices (`US_FL_NO_ATA_1X`); it learns nothing at run time.
+
+Bulk-Only: not covered. A Bulk-Only drive's pass-through is Windows'
+`usbstor.sys`'s, which the bus never sees as SCSI; issue 26 section 8's
+second boot shows such refusals ending in a STALL that `usbstor` recovers.
+
+The record: each replay enters the failure ring as event 9, which XHCITR
+names "answered here: the drive refused it before"; the two bits per LUN
+come to the snapshot with record 17 section 4.12.9's block (task 49.39's
+(d)). Vectors (`test_uas`,
+`test_ata_replay`): the latch from fixed and descriptor sense; 5/24/00 and
+5/20/01 do not latch; GOOD does not latch; (12) latched leaves (16) sent;
+SMART_GET_VERSION unaffected; NoAta 1 wins; the start clears.
+
+### 16.17 A drive that a reset does not bring back is given up (issue 26 section 8, the owner's choice, task 49.39, 2026-11-12)
+
+16.15 resets a drive whose command is answered while its data never
+arrives. A drive, or a controller in front of it, that keeps doing that
+after every reset would be reset every 10 s for as long as it stays plugged
+in. Task 49.39's emulator variant shows it: qemu-xhci
+`x-stream-stop-stale-sticky` keeps the endpoint silent through every Reset
+Device. Each command still ends, with `SRB_STATUS_BUS_RESET` and the class
+driver's retry, but no read of the volume ever succeeds. The owner chose
+(2026-11-12) to give such a drive up until it is replugged.
+
+The rule (`uas_xport.c`; the pure predicate `UasFinalGiveUpDue`,
+`uas_iu.c`):
+
+- **The count**, kept per direction (`fdo->FinalResets[2]`, data-in and
+  data-out; `UasFinalCount`). A recovery pass whose reset was asked for by
+  commands marked event 8 adds one to the count of each direction those
+  commands have. Several commands marked in the same tick are one reset and
+  count once per direction. The merge review of 2026-11-13 found one shared
+  count, which a write's data cleared after read resets had been counted
+  beside a write's: a drive that cannot be read but takes writes stayed in
+  the reset cycle, the case the rule was narrowed for.
+- **What clears it.**
+  - A data transfer that completes successfully with at least one byte
+    delivered (`uasXferDone`, a `UAS_XFER_DATA` with a successful URB and
+    a nonzero `TransferBufferLength`), clears the count of its own
+    direction alone (`UasFinalClear`): the owner's rule is the drive's
+    data never arriving, and writes that land do not make a drive whose
+    reads never come back usable, nor reads one whose writes never land (2026-11-12, after
+    task 49.39's leg A3K2: the copy loop's writes cleared the count
+    before, and the drive was reset every 10 s for as long as it was
+    written to). In every reading so far the commands are data-in.
+  - A drive only written to in that window: no write reaches event 8
+    (its data goes out before its status), so the count is neither
+    incremented nor cleared - nothing changes for it.
+  - Mixed traffic where one read succeeds between the resets: that read
+    clears the count, as it should: the drive delivers data.
+  - A command with no data phase does NOT clear it, even when it ends GOOD:
+    in the reporter's failure, no-data commands kept completing GOOD while
+    the drive's data never arrived (issue 26 section 8, S10).
+  - A data transfer that ends short but successful counts: some data was
+    delivered.
+- **The limit**, the asking direction's own (`UasFinalDue`). When a
+  further command is due for 16.15's reset and the count of its
+  direction already stands at 3 (`UAS_FINAL_RESET_LIMIT`), there is no
+  fourth reset. The drive is given up:
+  - The timer marks the command (`slot->FinalReset`); the recovery worker
+    decides under the lock before it acts (`uasGiveUp`), so data a
+    completion delivers in between clears the count and the command takes
+    event 8's reset after all. The worker writes the ring: event 8 for
+    each command a reset is taken for, and for the command that decides a
+    give-up `XHCI98_FAIL_E_GIVEN_UP` (10). XHCITR names it,
+    in the owner's words: "given up: the drive's data never arrived after 3
+    resets; until it is replugged".
+  - `fdo->Dead` is set, as a failed reset sets it (45.41, L5), but with no
+    `CycleOwed`: the port is not cycled.
+  - Every command in flight is ended with `SRB_STATUS_NO_DEVICE`, writes
+    as well as reads
+    (`uasAbortAll`), and the worker waits for their transfers to come
+    back exactly as `uasResetDevice` waits before its reset
+    (`uasWaitAllFree`, bounded). If they do not come back - a cancel the
+    bus never honoured - the device is cycled after all (`CycleOwed`), as
+    L5 cycles a device whose reset could not be sent, so no request is
+    left pending on a device nothing will reset again. Every command
+    queued or sent after the give-up ends at once with the same status
+    (`uasPump`, `uasAdmit`).
+  - No reset, abort or command reaches the device again.
+- **Scope.** It is per drive: the count and `Dead` live on the UAS FDO.
+  - `UasEngineStart` clears both: at the drive's start, which a replug, a
+    disable and enable, or a restart brings.
+  - A resume from standby or hibernation clears the count. A hibernation
+    resume re-reads the drive through its wake check (45.23), and timeouts
+    the sleep itself caused are not evidence about the drive afterwards.
+  - A replug is a new device: enumerated afresh, in UAS as before (the
+    bus's transport choice, 16.1, is untouched).
+
+Why it cannot trip on a healthy drive:
+
+- The count moves only on 16.15's reset, which needs a command's final IU
+  in for at least two ticks while its data transfer is still outstanding
+  at the command's own deadline (10 s or the SRB's). A healthy drive under
+  load sends its data before its status (T10 08-282r3), so its commands do
+  not reach it.
+- Three such resets must come in a row, with not one byte of data
+  delivered between them by any command. A drive that delivers any data
+  after a reset clears the count.
+
+How it sits with the other rules:
+
+- **XhciUasFastReset (16.14).** Its resets (event 7) neither count nor
+  clear the count. Its case is a cancel that never comes back, which is
+  handled by the reset as before.
+- **L5 (45.41).** L5 is a reset that fails. It still marks the device Dead
+  and cycles it. This rule is a reset that succeeds but leaves the drive
+  unable to deliver data. It marks the device Dead and does not cycle,
+  because a cycle is a re-enumeration and in the failure that motivated it
+  a reset did not help.
+- Once `Dead` is set, by either rule, the recovery worker ends its pass and
+  neither rule runs again. Where the two meet - transfers that do not come
+  back when the commands are ended - this rule ends as L5 does, with the
+  cycle, so they do not disagree on a device that cannot be drained.
+
+What the user sees: every read and write of the drive fails at once.
+
+- With `SRB_STATUS_NO_DEVICE`, the class driver (`disk.sys`/classpnp)
+  returns `STATUS_NO_SUCH_DEVICE` without retrying [hyp; read on XP x64 by
+  task 49.39's leg].
+- Explorer reports the drive as not accessible.
+- A write still cached produces the system's "Delayed Write Failed"
+  balloon: read on XP x64 (task 49.39's leg A3K6, "Windows was unable to
+  save all the data for the file L:. The data has been lost."); 2000 and 7
+  [hyp].
+- The Device Manager entry stays, with no problem code: the PDO is not
+  removed. The drive letter stayed while only reads failed (leg A3K4) and
+  went once writes had been lost (A3K6) or the drive was given up before
+  its volume mounted (A3K5): the file system's own handling, not this
+  driver's.
+- On 98 SE the IOS path reports a drive error to the program [hyp].
+- A replug brings the drive back.
+
+No registry value: nothing found that a user would set differently. A user
+whose drive does this can set `XhciForceBulkOnly` for it, so that the drive
+runs as Bulk-Only and its streams are not used at all (issue 26, section
+8.2).
+
+Vectors (`test_uas`, `test_final_giveup`):
+
+- `UasFinalGiveUpDue` is false at 0, 1 and 2, true at 3 and above.
+- `UasDataDelivered`: a successful transfer with a byte clears the count;
+  no byte (a GOOD command with no data phase) or a failed transfer does not.
+- The per-direction counts (`UasFinalCount`, `UasFinalClear`,
+  `UasFinalDue`): two read resets, one write reset and a good write leave
+  the reads' count at 2, and the third read reset makes the next read's
+  the give-up whatever the writes do; the mirror for writes; data in one
+  direction never clears the other; a reset for both counts both; a start
+  clears both; the count saturates.
+- The one-step-per-reset counting is the worker's (`uasGiveUp`: the
+  commands a tick marked, `slot->FinalReset`, taken up together and the
+  reset counted once; a mark is the command's own, so a reset that ends it
+  leaves nothing owed), read in task 49.39's leg rather than in a host
+  vector.
 
 ## 17. A UAS drive in Safely Remove Hardware (task 45.61, 2026-10-31)
 

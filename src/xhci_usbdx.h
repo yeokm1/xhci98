@@ -269,4 +269,67 @@ ULONG XhciUsbdxStreamsUsbd(ULONG answer, ULONG gone);
  * as itself. */
 ULONG XhciUsbdxIoctlAlias(ULONG code);
 
+/*
+ * Task 49.45 (design record 13 section 6.13.11): the log notes a device
+ * PDO writes about what its client asks, with no change to any answer.
+ * Each value packs its fields as below; a field wider than its place is
+ * saturated (all ones), never wrapped. The bounds are per PDO and reset at
+ * its IRP_MN_REMOVE_DEVICE, so a driver loaded on the device again (an
+ * update, another driver forced on) has its own.
+ */
+
+/* Per PDO: distinct QUERY_INTERFACE GUIDs and internal IOCTL codes noted,
+ * the usbdx notes of each kind, and the per-URB lines of a UAS PDO; per
+ * pipe: the short IN transfers refused. */
+#define XHCI_USBDX_NOTE_QI_SLOTS        4UL
+#define XHCI_USBDX_NOTE_IOCTL_SLOTS     4UL
+#define XHCI_USBDX_NOTE_V1_MAX          4UL
+#define XHCI_USBDX_NOTE_CAP_MAX         8UL
+#define XHCI_USBDX_NOTE_STREAMS_MAX     8UL
+#define XHCI_USBDX_NOTE_URB_MAX         16UL
+#define XHCI_USBDX_NOTE_SHORT_MAX       8UL
+
+/* usbdx.v1's answer (top byte). */
+#define XHCI_USBDX_V1_ANSWERED          0UL
+#define XHCI_USBDX_V1_NOT_OURS          1UL /* size or version not ours  */
+#define XHCI_USBDX_V1_INVALID           2UL /* NULL device object or tag */
+#define XHCI_USBDX_V1_NO_DEVICE         3UL /* not listed, no controller */
+#define XHCI_USBDX_V1_NO_SLOT           4UL /* the context table is full */
+
+/* usbdx.cap's answer when the request never reached the table. */
+#define XHCI_USBDX_CAP_NO_DEVICE        4UL
+/* usbdx.open's answer for a URB refused at dispatch, before the thread. */
+#define XHCI_USBDX_STREAMS_AT_DISPATCH  0xFEUL
+
+/* 1 when `key` is among the first `used` (at most `slots`) of `table`. */
+ULONG XhciUsbdxNoteSeen(const ULONG *table, ULONG used, ULONG slots,
+                        ULONG key);
+
+/* Whether the `claimed`-th note of a kind (1-based, the count after its
+ * increment) is within `limit`. */
+ULONG XhciUsbdxNoteWanted(ULONG claimed, ULONG limit);
+
+/* pdo.qi.vs: location << 24 | version << 12 | size, 8, 12 and 12 bits. */
+ULONG XhciUsbdxNoteQiVs(ULONG location, ULONG version, ULONG size);
+
+/* usbdx.v1: answer << 24 | version << 8 | size, 8, 16 and 8 bits. */
+ULONG XhciUsbdxNoteV1(ULONG answer, ULONG version, ULONG size);
+
+/* usbdx.cap: capability << 24 | answer << 16 | count, 8, 8 and 16 bits;
+ * the capability is XhciUsbdxCapabilityId's (0 unknown). */
+ULONG XhciUsbdxNoteCap(ULONG capability, ULONG answer, ULONG count);
+
+/* usbdx.open and usbdx.close: endpoint << 24 | answer << 16 |
+ * requested << 8 | granted, 8 bits each. */
+ULONG XhciUsbdxNoteStreams(ULONG endpoint, ULONG answer, ULONG requested,
+                           ULONG granted);
+
+/* uas.urb and xfer.short.err: slot << 24 | dci << 16 | stream << 8 | low,
+ * 8 bits each (low: the TransferFlags' low byte, or the pipe's count of
+ * refused short transfers). */
+ULONG XhciUsbdxNoteXfer(ULONG slot, ULONG dci, ULONG stream, ULONG low);
+
+/* uas.urb.len and xfer.short.len: requested << 16 | actual, 16 bits each. */
+ULONG XhciUsbdxNoteLengths(ULONG requested, ULONG actual);
+
 #endif /* XHCI_USBDX_H */

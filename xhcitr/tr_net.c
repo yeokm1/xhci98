@@ -532,6 +532,7 @@ void tr_qnet_text(TR_TEXT *t, const TR_QNET *q, int link, const char *ip,
     const unsigned char *s = q->Svc;
     TR_U32 st = qn32(s, CM_QN_S_STATE);
     TR_U32 mbps;
+    TR_U32 kind;
     char buf[96];
     int i;
 
@@ -621,7 +622,16 @@ void tr_qnet_text(TR_TEXT *t, const TR_QNET *q, int link, const char *ip,
      * 48.38, and the kicks came with it. */
     switch (qn32(s, CM_QN_S_IRQ_STATE)) {
     case CM_QN_IRQ_OPEN:
-        tr_printf(t, "  Ring interrupt:       on (%lu wake-ups)\n",
+        /* Record 21 section 4.5.12 (task 49.27): word 100 is 0 from a
+         * driver before it. */
+        kind = q->SvcBytes >= CM_QN_S_IRQ_KIND + 4 ? qn32(s, CM_QN_S_IRQ_KIND)
+                                                    : CM_QN_KIND_UNKNOWN;
+        tr_printf(t, "  Ring interrupt:       on%s (%lu wake-ups)\n",
+                  kind == CM_QN_KIND_MESSAGE
+                      ? ", by message"
+                      : (kind == CM_QN_KIND_LINE_YIELD
+                             ? ", by the line (USB uses MSI)"
+                             : ""),
                   (unsigned long)(q->SvcBytes >= CM_QN_S_IRQ_KICKS + 4
                                       ? qn32(s, CM_QN_S_IRQ_KICKS)
                                       : 0));

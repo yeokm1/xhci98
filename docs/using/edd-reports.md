@@ -8,10 +8,10 @@ BIOSes describe a USB stick to MS-DOS. XHCIQUAL's `--edd` mode reads that
 description. It only reads: it writes nothing but the log file you name,
 and it stops before it touches a USB controller.
 
-We would like reports from as many BIOS makers as we can get (AMI,
+We would like reports from as many BIOS manufacturers as we can get (AMI,
 Insyde, Phoenix, Award and others), on laptops and desktops from different
-makers. Reports where the stick is **not** named, or where the tool stops,
-help as much as reports where everything works.
+manufacturers. Reports where the stick is **not** named, or where the tool
+stops, help as much as reports where everything works.
 
 ## What you need
 
@@ -49,9 +49,9 @@ it in place of the log.
 
 ## What to send
 
-- The computer's maker and model, and its BIOS version (shown at the top
-  of the log, or in the BIOS setup screen). The BIOS maker too (AMI,
-  Insyde, Phoenix, Award, ...) if you know it.
+- The computer's manufacturer and model, and its BIOS version (shown at the
+  top of the log, or in the BIOS setup screen). The BIOS manufacturer too
+  (AMI, Insyde, Phoenix, Award, ...) if you know it.
 - Both files, `C:\EDD.LOG` (stick in) and `C:\EDD0.LOG` (stick out), or a photo
   if the tool stopped.
 - Whether the BIOS setup has a setting for USB storage or "legacy USB",
@@ -68,4 +68,4 @@ computer's model, BIOS version, processor and memory size; remove
 anything you do not want to share.
 
 Please attach everything to a [new issue](https://github.com/yeokm1/xhci98/issues/new/choose)
-titled "EDD report: <maker> <model>".
+titled "EDD report: <manufacturer> <model>".

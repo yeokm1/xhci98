@@ -23,4 +23,9 @@ int tr_pop_ready(HWND tray);
 void tr_pop_show(HWND tray, UINT msg, UINT id, const char *title,
                  const char *text, int icon);
 
+/* 1 when no notice is showing and none waits (task 49.43: a held port's
+ * notice is handed over only then, so it is shown at once, never after a
+ * wait in which its hold may have ended). */
+int tr_pop_idle(void);
+
 #endif

@@ -122,6 +122,8 @@
 #define XHCI_TOL_TERMINAL_DMA_UNPROVEN 5UL  /* contained: a readable
                                              * controller not proven to
                                              * have stopped mastering     */
+#define XHCI_TOL_TERMINAL_MSG4      6UL     /* mode 4's message lost (design
+                                             * record 15 section 4.5.4)    */
 
 /* Why a controller is contained (XHCI_TOL_STATE.Unreadable, nonzero for
  * either): the one latch every submission path, the recovery and the
@@ -643,6 +645,56 @@ VOID XhciTolWindowInit(PXHCI_TOL_WINDOW win);
  * 0 it always returns 1 and records nothing. */
 ULONG XhciTolWindowAdmit(PXHCI_TOL_WINDOW win, ULONG tolerance, ULONG now);
 
+/*
+ * Task 49.35 (design record 17 section 4.6.1): a reset still running when the
+ * in-place recovery reaches it. The recovery runs at DISPATCH_LEVEL, where
+ * every wait is a 10 ms stall; a controller whose HCRST takes longer (an
+ * ASMedia ASM1042 read at more than 11 ms) is waited for by the controller
+ * thread at PASSIVE_LEVEL instead, for the start's own bound, through
+ * XhciTolResetSettle: io->Read gives USBCMD and USBSTS, io->Sleep sleeps.
+ * It reads, then sleeps stepMs and reads again, until HCRST and CNR both
+ * read 0 (DONE), a read is all ones (DEAD: a window that stopped decoding
+ * proves nothing), or timeoutMs has been slept (TIMEOUT). *waited is the
+ * time slept, *usbcmd and *usbsts the last reading. IRQL: the callbacks'.
+ */
+#define XHCI_TOL_RESET_SETTLE_MS    1000UL  /* the start's HCRST bound       */
+#define XHCI_TOL_RESET_STEP_MS      10UL
+#define XHCI_TOL_SETTLE_DONE        0UL
+#define XHCI_TOL_SETTLE_TIMEOUT     1UL
+#define XHCI_TOL_SETTLE_DEAD        2UL
+
+typedef VOID (*XHCI_TOL_RESET_READ)(PVOID context, PULONG usbcmd,
+                                    PULONG usbsts);
+typedef VOID (*XHCI_TOL_RESET_SLEEP)(PVOID context, ULONG ms);
+
+typedef struct _XHCI_TOL_RESET_IO {
+    XHCI_TOL_RESET_READ Read;
+    XHCI_TOL_RESET_SLEEP Sleep;
+    PVOID Context;
+} XHCI_TOL_RESET_IO, *PXHCI_TOL_RESET_IO;
+
+ULONG XhciTolResetSettle(const XHCI_TOL_RESET_IO *io, ULONG timeoutMs,
+                         ULONG stepMs, PULONG waited, PULONG usbcmd,
+                         PULONG usbsts);
+
+/* 1 when USBCMD and USBSTS say a reset is in progress: HCRST or CNR set on
+ * a register that decodes. */
+ULONG XhciTolResetRunning(ULONG usbcmd, ULONG usbsts);
+
+/*
+ * Task 49.35: the pacing of recoveries after a failed one. A recovery may
+ * begin when none has failed since the last success (failures 0), or once
+ * XHCI_TOL_RECOVER_GAP_TICKS have passed since the last failure's stamp: at
+ * least 500 ms, about 1.2 s at the nominal tick. Until 49.35 the next began
+ * on the next controller-thread pass, which a wake makes immediate, so
+ * three failures could be spent inside one tick. At every XhciTolerance
+ * value: the clock runs at 0 too.
+ */
+#define XHCI_TOL_RECOVER_GAP_MS     500UL
+#define XHCI_TOL_RECOVER_GAP_TICKS  XHCI_TOL_TICKS(XHCI_TOL_RECOVER_GAP_MS)
+
+ULONG XhciTolRecoverPaced(ULONG failures, ULONG failStamp, ULONG now);
+
 /* The terminal reason a dump names (XHCI_TOL_TERMINAL_*): failed is
  * ControllerFailed; unreadable, Unreadable (XHCI_TOL_CONTAINED_*, the
  * unproven-DMA containment its own reason); windowRefused, the window's
@@ -652,6 +704,13 @@ ULONG XhciTolWindowAdmit(PXHCI_TOL_WINDOW win, ULONG tolerance, ULONG now);
  * controller at none of them still has a recovery owed. */
 ULONG XhciTolTerminal(ULONG failed, ULONG unreadable, ULONG windowRefused,
                       ULONG failures, ULONG maxFailures);
+
+/* The same with XhciInterruptMode 4's lost connection as an input (design
+ * record 15 section 4.5.4, task 49.24): `msg4Lost` set is MSG4, behind the
+ * two containments and ahead of the window - no recovery acts on it, and a
+ * containment still names its own. XhciTolTerminal is this with 0. */
+ULONG XhciTolTerminalEx(ULONG failed, ULONG unreadable, ULONG windowRefused,
+                        ULONG failures, ULONG maxFailures, ULONG msg4Lost);
 
 /* A terminal no recovery will act on - the window refused one, or the run
  * of failures is spent - still holds every transfer the halted controller
@@ -687,8 +746,9 @@ ULONG XhciTolSavePublish(ULONG initialized);
 ULONG XhciTolSaveCommit(ULONG published);
 
 /* 1 when a resume must not reinitialize the controller: terminal
- * (XhciTolTerminal's value) is a containment, the window's refusal or the
- * spent run of failures - each holds until a stop and start. A failed
+ * (XhciTolTerminal's value) is a containment, the window's refusal, the
+ * spent run of failures or mode 4's lost message - each holds until a stop
+ * and start. A failed
  * controller with a recovery still owed resumes as before. */
 ULONG XhciTolResumeRefused(ULONG terminal);
 
@@ -786,6 +846,28 @@ typedef struct _XHCI_TOL_STATS {
     ULONG WindowRefused;
     ULONG DeadEpisodes;     /* all-ones stamps                              */
     ULONG Contained;        /* XHCI_TOL_CONTAIN_*, 0 when not               */
+    /* Task 49.35 (design record 17 section 4.6.1), words 34 to 45: the
+     * recovery's resets waited for at PASSIVE_LEVEL, the longest wait in
+     * ms, the waits that ran out, the refusals for a reset still running
+     * (not charged), the passes the recovery's pacing deferred, the reruns
+     * of one recovery its continuations made; then the
+     * escalations a release build did not record until 49.35: Host
+     * Controller Events and the last one's completion code, interrupter
+     * re-arms that failed, command-ring divergences, fatal Command
+     * Completion codes, and interrupt masks or unmasks not proven. At
+     * every XhciTolerance value. */
+    ULONG ResetSettles;
+    ULONG ResetSettleMsMax;
+    ULONG ResetUnsettled;
+    ULONG ResetBusy;
+    ULONG RecoverPaced;
+    ULONG RecoverReruns;
+    ULONG HcEvents;
+    ULONG HcEventCode;
+    ULONG RearmFails;
+    ULONG CmdDiverged;
+    ULONG CmdFatal;
+    ULONG MaskFails;
     ULONG Codes[256];       /* Transfer Event completion codes, by count    */
 } XHCI_TOL_STATS, *PXHCI_TOL_STATS;
 

@@ -50,6 +50,7 @@
 #include "../src/cm/cm_status.h"
 #include "../src/cm/cm_query.h"
 #include "../src/cm/cm_ejask.h"
+#include "tr_cmsw.h"
 #include "../xhciinst/inst_ej9x.h"
 #include "tr_core.h"
 #include "tr_log.h"
@@ -69,6 +70,7 @@ static int report_snapshots(HANDLE f);
 static void save_snapshot_dialog(void);
 static void save_acpi_dialog(void);
 static void set_block(TR_TEXT *t);
+static const char *setBlockFind;    /* set_block's search (49.38), or NULL */
 static void settings_dialog(HWND owner, int tab, int dn);
 static void set_snapshot_file(const char *dir, char *box, size_t cap);
 static int setOpen;     /* the Settings window is open (one at a time) */
@@ -315,6 +317,15 @@ typedef struct _UCTRL {
     int XqState;
     unsigned char *Xq;
     TR_XHQ X;
+    /* Task 49.43: the tolerance's holds, read through the door (tr_log.h
+     * tr_tol_map): HoldState 1 read, -1 not (the door closed at level 0,
+     * or a read failed), 0 not asked; Hold[loc] each location's TR_HOLD_*,
+     * root port i + 1 at i, the hub locations after them. HoldSkip: the
+     * tick before which the tray does not ask again (a slow answer). */
+    int HoldState;
+    TR_TOLMAP HoldMap;
+    unsigned char Hold[2 * TR_TOL_MAX_LOCS];
+    DWORD HoldSkip;
 } UCTRL;
 
 typedef struct _UPORT {
@@ -462,6 +473,10 @@ static TR_REDHC redHc[TR_RED_HC_MAX];
 static char redHcKey[TR_RED_HC_MAX][TR_RED_KEY];
 static int redHcCount;
 static void red_hc_read(void);
+static void hold_read_all(void);
+static int hold_root(int c, TR_U32 port);
+static int hold_hub_kinds(int c);
+static void details_note(TR_TEXT *t, const char *s);
 static void tray_red(void);
 static void set_tool_fill(HWND dlg);
 static void set_tool_option(HWND dlg, int id);
@@ -679,8 +694,11 @@ typedef struct _LVDEV {
     TR_LEVEL L;
 } LVDEV;
 
-static LVDEV lvDev[TR_LV_DRIVERS][TR_MAX_CTRL];
-static int lvCount[TR_LV_DRIVERS];
+/* The two drivers' controllers, and since task 49.38 a third list, the
+ * present UAS drives (SET_UAS), for the Settings window's drive rows. */
+#define SET_UAS             TR_LV_DRIVERS
+static LVDEV lvDev[TR_LV_DRIVERS + 1][TR_MAX_CTRL];
+static int lvCount[TR_LV_DRIVERS + 1];
 
 static int lv_is_device(const DNODE *d, int driver)
 {
@@ -2104,25 +2122,31 @@ static void usb_add_ports(int parentT, int ctrl, int parentUp)
         char key[280];
         int dn = p->Dn;
         int t;
+        int held;
 
         if (p->Ctrl != ctrl || p->ParentUp != parentUp) {
             continue;
         }
         tr_key(key, sizeof(key), "U", uc[ctrl].DrvKey, p->Path);
+        /* Task 49.43: a held root port is shown even when empty. */
+        held = (parentUp < 0 && p->HaveConn)
+                   ? hold_root(ctrl, p->Conn.Port) > 0 : 0;
         if (!p->HaveConn || p->Conn.Status == TR_CS_NONE) {
-            if (viewFlags & TR_V_EMPTY) {
-                tr_sprintf(label, sizeof(label), "[Port %lu%s] (empty)",
+            if ((viewFlags & TR_V_EMPTY) || held) {
+                tr_sprintf(label, sizeof(label), "[Port %lu%s] (empty)%s",
                            (unsigned long)p->Conn.Port,
-                           tr_port_tag(p->HaveV2, p->V2Proto));
+                           tr_port_tag(p->HaveV2, p->V2Proto),
+                           held ? tr_hold_tag : "");
                 add_tnode(parentT, K_UPORT, k, 0, 0, -1, label, key);
             }
             continue;
         }
         if (p->Conn.Status != TR_CS_CONNECTED) {
-            tr_sprintf(label, sizeof(label), "[Port %lu%s] %s",
+            tr_sprintf(label, sizeof(label), "[Port %lu%s] %s%s",
                        (unsigned long)p->Conn.Port,
                        tr_port_tag(p->HaveV2, p->V2Proto),
-                       tr_conn_status_text(p->Conn.Status));
+                       tr_conn_status_text(p->Conn.Status),
+                       held ? tr_hold_tag : "");
         } else {
             char name[160];
             fast_name(k, name, sizeof(name));
@@ -3085,6 +3109,16 @@ static void refresh_model(int withUsb)
     usb_scan_all();
     usb_derive();
     ver_refresh();
+    /* The window's and the report's reading; the tray alone reads the
+     * holds on its job thread instead (hold_poll), so that its timer and
+     * menus never wait on a controller's door. */
+    if (hTray == NULL || hMain != NULL) {
+        hold_read_all();
+    } else {
+        for (s = 0; s < ucCount; s++) {
+            uc[s].HoldState = 0;
+        }
+    }
     if (envNt) {
         disk_letters_nt(&gw);
     }
@@ -3217,11 +3251,50 @@ static void details_resources(TR_TEXT *t, const DNODE *d)
     }
 }
 
-static void details_devnode(TR_TEXT *t, int dn)
+/* A note in the details pane's style: "  Note:          " and the text,
+ * broken at spaces to 62 columns, each further line under the first. */
+static void details_note(TR_TEXT *t, const char *s)
+{
+    char line[80];
+    size_t n;
+    size_t cut;
+    const char *lead = "  Note:          ";
+
+    while (*s != '\0') {
+        n = strlen(s);
+        cut = n;
+        if (n > 62) {
+            cut = 62;
+            while (cut > 0 && s[cut] != ' ') {
+                cut--;
+            }
+            if (cut == 0) {
+                cut = 62;
+            }
+        }
+        memcpy(line, s, cut);
+        line[cut] = '\0';
+        tr_printf(t, "%s%s\n", lead, line);
+        lead = "                 ";
+        s += cut;
+        while (*s == ' ') {
+            s++;
+        }
+    }
+}
+
+/* Device Manager's entry for devnode dn; haveRunning and running the
+ * version its driver said (tr_ver_state's form), for the mixed-install
+ * note (owner, 2026-11-13): haveRunning 0 where no running version is
+ * known (xhciuas, a device). */
+static void details_devnode(TR_TEXT *t, int dn, int haveRunning,
+                            TR_U32 running)
 {
     const DNODE *d;
     char path[300];
     char ver[64];
+    char note[200];
+    TR_U32 installed;
 
     if (dn < 0) {
         return;
@@ -3238,6 +3311,25 @@ static void details_devnode(TR_TEXT *t, int dn)
         if (reg_text(HKEY_LOCAL_MACHINE, path, "DriverVersion", ver,
                      sizeof(ver)) > 0) {
             tr_printf(t, "  Version:       %s\n", ver);
+            if (tr_ver_parse(ver, &installed) &&
+                tr_ver_mixed(installed, haveRunning, running, note,
+                             sizeof(note))) {
+                details_note(t, note);
+            }
+        }
+        /* Where the entry came from (owner, 2026-11-13): each line only
+         * where Windows recorded the value. */
+        if (reg_text(HKEY_LOCAL_MACHINE, path, "InfPath", ver,
+                     sizeof(ver)) > 0 && ver[0] != '\0') {
+            tr_printf(t, "  INF file:      %s\n", ver);
+        }
+        if (reg_text(HKEY_LOCAL_MACHINE, path, "MatchingDeviceId", note,
+                     sizeof(note)) > 0 && note[0] != '\0') {
+            tr_printf(t, "  Matching ID:   %s\n", note);
+        }
+        if (reg_text(HKEY_LOCAL_MACHINE, path, "ProviderName", note,
+                     sizeof(note)) > 0 && note[0] != '\0') {
+            tr_printf(t, "  Provider:      %s\n", note);
         }
     }
     tr_printf(t, "  Status:        0x%08lX (%s)\n", (unsigned long)d->Status,
@@ -3402,6 +3494,11 @@ static void details_nhi(TR_TEXT *t, int k)
             char rmText[160];
             tr_removal_text(&h->Q, rmText, sizeof(rmText));
             tr_printf(t, "  Unexpected removals: %s\n", rmText);
+            /* Record 21 section 4.5.17: networking or not. */
+            if (tr_ring_irq_text(h->Q.RmIrq, envNt, rmText,
+                                 sizeof(rmText))) {
+                tr_printf(t, "  Ring interrupt:      %s\n", rmText);
+            }
         }
         if (h->Q.Flags & CM_Q_F_STOPPING) {
             tr_put(t, "  The controller is stopping.\n");
@@ -3481,7 +3578,8 @@ static void details_nhi(TR_TEXT *t, int k)
                   (unsigned long)CM_ST_BDF_DEV(bdf), (unsigned long)CM_ST_BDF_FN(bdf),
                   (inst_get32(R, CM_ST_O_PORT_ACTIVE) & (1UL << j)) ? ", active" : "");
     }
-    details_devnode(t, h->Node);
+    details_devnode(t, h->Node, h->HaveQ && h->Q.Version != CM_Q_VERSION_1,
+                    h->Q.Version == CM_Q_VERSION_1 ? 0 : h->Q.RmDriver);
 }
 
 /* The upstream side of router r's link (record 25 section 17 item 2):
@@ -3647,6 +3745,18 @@ static void details_uport(TR_TEXT *t, int i, int fetch)
         return;
     }
     tr_printf(t, "  Connection:    %s\n", tr_conn_status_text(p->Conn.Status));
+    {
+        /* Task 49.43: a held root port's note; with no hold known (the
+         * door closed, or a hub's port, whose hub the driver numbers in a
+         * way the tool cannot match), the general advice at a port that
+         * failed enumeration. */
+        int hold = p->ParentUp < 0 ? hold_root(p->Ctrl, p->Conn.Port) : -1;
+        if (hold > 0 && tr_hold_note(hold) != NULL) {
+            details_note(t, tr_hold_note(hold));
+        } else if (hold < 0 && c->Ours && p->Conn.Status == TR_CS_FAILED) {
+            details_note(t, tr_hold_fallback);
+        }
+    }
     if (p->Conn.Status != TR_CS_CONNECTED) {
         return;
     }
@@ -3810,7 +3920,7 @@ static void details_uport(TR_TEXT *t, int i, int fetch)
         }
     }
     details_usb_eject(t, p->Dn);
-    details_devnode(t, p->Dn);
+    details_devnode(t, p->Dn, 0, 0);
     if ((viewFlags & TR_V_DESC) || reportMode) {
         int k;
         tr_put(t, "\n");
@@ -3873,6 +3983,157 @@ static int log_window(HANDLE h, unsigned char *b, TR_U32 region,
         got = 0;
     }
     return tr_snap_window(b, got, w);
+}
+
+/* Task 49.43: controller c's holds, read as the snapshot engine reads the
+ * tolerance (tr_snap.c print_tol): the HCD region's first window for the
+ * map, then the extension's windows holding the locations' hold bytes, at
+ * most five windows in all. The same requests, read only; the door copies
+ * memory and reads no register of a controller that is not in D0. Returns
+ * the milliseconds it took. */
+typedef struct _HOLDRES {
+    int State;                  /* UCTRL.HoldState's values                */
+    DWORD At;                   /* GetTickCount when the reading returned  */
+    TR_U32 Epoch;               /* holdEpoch when the reading began        */
+    TR_TOLMAP Map;
+    unsigned char Hold[2 * TR_TOL_MAX_LOCS];
+} HOLDRES;
+
+/* The reading itself, for the controller opened as `path`, into the
+ * caller's TR_SNAP_BUFFER_BYTES buffer b (NULL: nothing read). Any thread:
+ * it touches no global and makes no C runtime heap call, because the x86
+ * build's runtime is the single-threaded one, whose heap is not
+ * serialized. */
+static void hold_read_path(const char *path, unsigned char *b, HOLDRES *u)
+{
+    unsigned char hcd[128];
+    TR_U32 hcdN;
+    TR_SNAPW w;
+    TR_TOLMAP m;
+    TR_U32 locs;
+    TR_U32 i;
+    TR_U32 at;
+    DWORD err;
+    HANDLE h;
+    int windows = 0;
+    int got;
+
+    u->State = -1;
+    memset(u->Hold, 0xFF, sizeof(u->Hold));
+    h = b != NULL ? open_device(path) : INVALID_HANDLE_VALUE;
+    if (h == INVALID_HANDLE_VALUE) {
+        goto done;
+    }
+    if (log_window(h, b, TR_SNAP_REGION_HCD, 0, &w, &err) != TR_SW_OK ||
+        w.Region != TR_SNAP_REGION_HCD || w.Offset != 0 ||
+        (w.Status & (TR_SNAP_S_BAD_REQUEST | TR_SNAP_S_BAD_EXTENSION |
+                     TR_SNAP_S_BAD_REGION)) != 0) {
+        goto done;
+    }
+    hcdN = w.PayloadBytes < sizeof(hcd) ? w.PayloadBytes : sizeof(hcd);
+    memcpy(hcd, w.Payload, hcdN);
+    /* Where the block is, then checked against the extension's size. */
+    if (hcdN < 36) {
+        goto done;
+    }
+    at = inst_get32(hcd, 32);
+    if (log_window(h, b, TR_SNAP_REGION_EXT, at, &w, &err) != TR_SW_OK ||
+        !tr_tol_map(hcd, hcdN, w.RegionBytes, &m)) {
+        goto done;
+    }
+    windows = 1;
+    locs = m.RootLocs + m.HubLocs;
+    if (locs > sizeof(u->Hold)) {
+        locs = sizeof(u->Hold);
+    }
+    for (i = 0; i < locs; i++) {
+        got = tr_tol_hold(&m, &w, i);
+        if (got < 0 && windows < 4) {
+            windows++;
+            if (log_window(h, b, TR_SNAP_REGION_EXT,
+                           tr_tol_hold_offset(&m, i), &w, &err) != TR_SW_OK) {
+                goto done;
+            }
+            got = tr_tol_hold(&m, &w, i);
+        }
+        if (got < 0) {
+            goto done;
+        }
+        u->Hold[i] = (unsigned char)got;
+    }
+    u->Map = m;
+    u->State = 1;
+done:
+    if (u->State != 1) {
+        memset(u->Hold, 0xFF, sizeof(u->Hold));
+    }
+    if (h != INVALID_HANDLE_VALUE) {
+        CloseHandle(h);
+    }
+    u->At = GetTickCount();
+}
+
+static HOLDRES holdTmp;
+
+/* Controller c's holds into its record, on the calling thread (the
+ * window's refresh, as its other requests are). */
+static void hold_read(int c)
+{
+    UCTRL *u = &uc[c];
+    unsigned char *b;
+
+    u->HoldState = 0;
+    if (!u->Ours) {
+        return;
+    }
+    b = (unsigned char *)malloc(TR_SNAP_BUFFER_BYTES);
+    hold_read_path(u->Path, b, &holdTmp);
+    free(b);
+    u->HoldState = holdTmp.State;
+    u->HoldMap = holdTmp.Map;
+    memcpy(u->Hold, holdTmp.Hold, sizeof(u->Hold));
+}
+
+static void hold_read_all(void)
+{
+    int c;
+
+    for (c = 0; c < ucCount; c++) {
+        hold_read(c);
+    }
+}
+
+/* Root port `port`'s hold on controller c: TR_HOLD_*, or -1 not known. */
+static int hold_root(int c, TR_U32 port)
+{
+    const UCTRL *u = &uc[c];
+
+    if (u->HoldState != 1 || port == 0 || port > u->HoldMap.RootLocs) {
+        return -1;
+    }
+    return u->Hold[port - 1];
+}
+
+/* The kinds of hold among controller c's hub locations: bit 1 a powered
+ * one, bit 2 an unpowered one. */
+static int hold_hub_kinds(int c)
+{
+    const UCTRL *u = &uc[c];
+    TR_U32 i;
+    int k = 0;
+
+    if (u->HoldState != 1) {
+        return 0;
+    }
+    for (i = 0; i < u->HoldMap.HubLocs; i++) {
+        int h = u->Hold[u->HoldMap.RootLocs + i];
+        if (h == TR_HOLD_REENUMS) {
+            k |= 1;
+        } else if (h == TR_HOLD_REPOWERS || h == TR_HOLD_OC_WAIT) {
+            k |= 2;
+        }
+    }
+    return k;
 }
 
 /* xhci98's query request (record 13 section 8.12): the answer into a
@@ -3998,13 +4259,13 @@ static void log_hcd(TR_TEXT *t, int c)
         }
     }
     tr_hcd_counters_text(t, whole ? img : NULL, whole ? total : 0);
-    if (w.VerbosityApplied >= 2 && w.VerbosityApplied <= 3) {
+    if (w.VerbosityApplied >= 2 && w.VerbosityApplied <= 4) {
         r = log_window(h, b, TR_SNAP_REGION_EXT, ringAt, &x, &err);
         r = r == TR_SW_OK ? tr_hcd_ring_text(t, &x, ringAt) : TR_RING_BAD;
         if (r == TR_RING_BAD) {
             tr_put(t, "\n  The log could not be read whole: press F5 to "
                       "try again.\n");
-        } else if (r == TR_RING_WITHHELD || r == TR_RING_OFF) {
+        } else if (r == TR_RING_OFF) {
             tr_put(t, "\n  The log's level changed while it was read: "
                       "press F5.\n");
         }
@@ -4459,7 +4720,7 @@ static void details_of(TR_TEXT *t, int i, int fetch)
                       "before you unplug\n  its device.\n");
         }
         if (n->Dn >= 0) {
-            details_devnode(t, n->Dn);
+            details_devnode(t, n->Dn, 0, 0);
         } else {
             tr_put(t, "  Its PCI bridge was not found in the device tree.\n");
         }
@@ -4471,7 +4732,7 @@ static void details_of(TR_TEXT *t, int i, int fetch)
     case K_DEV:
         tr_printf(t, "%s\n", dn_name(&gw.N[n->Dn]));
         details_unit(t, n->Dn);
-        details_devnode(t, n->Dn);
+        details_devnode(t, n->Dn, 0, 0);
         break;
     case K_USBROOT:
         tr_printf(t, "%d USB host controller%s, %d USB device%s.\n", ucCount,
@@ -4499,11 +4760,35 @@ static void details_of(TR_TEXT *t, int i, int fetch)
             tr_printf(t, "  Location:      %s\n", c->Behind);
         }
         if (c->Ours) {
+            int kinds;
             lv_details(t, c->Dn, TR_LV_XHCI98);
             ver_details(t, c->VerHave, c->VerRunning,
                         verFileHcdOk ? verFileHcd : NULL);
+            /* Task 49.43: a hub's port on hold, said here, and only while a
+             * hub is connected to this controller: a hub's location keeps
+             * its hold after the hub is unplugged. */
+            kinds = hold_hub_kinds(n->A);
+            {
+                int k2;
+                for (k2 = 0; k2 < upCount; k2++) {
+                    if (up[k2].Ctrl == n->A && up[k2].HaveConn &&
+                        up[k2].Conn.IsHub &&
+                        up[k2].Conn.Status == TR_CS_CONNECTED) {
+                        break;
+                    }
+                }
+                if (k2 == upCount) {
+                    kinds = 0;
+                }
+            }
+            if (kinds & 1) {
+                details_note(t, tr_hold_hub_note(TR_HOLD_REENUMS));
+            }
+            if (kinds & 2) {
+                details_note(t, tr_hold_hub_note(TR_HOLD_REPOWERS));
+            }
         }
-        details_devnode(t, c->Dn);
+        details_devnode(t, c->Dn, c->Ours && c->VerHave, c->VerRunning);
         break;
     }
     case K_ROOTHUB:
@@ -4846,6 +5131,225 @@ static const char *ej_why_not(int u)
 }
 
 static int ej_single(const WALK *w, int u);
+
+/* ---- a drive the BIOS holds (98 SE and ME; DESIGN-BIOSHELD, record 24
+ * section 7.6) ------------------------------------------------------------ */
+
+#define EJ_SF_MEM           256
+#define EJ_SF_TEXT          400     /* PlatFindReport's text is at most 384 */
+
+/* The memory bases of devnode dn this boot: its allocated configuration,
+ * else its boot configuration (what the BIOS programmed). -1 when it could
+ * not be read (no call, a configuration or a memory descriptor that did
+ * not read), else how many. */
+static int ej_mem_bases(DWORD dn, INST_U32 *lo, INST_U32 *hi, int cap)
+{
+    ULONG kinds[2];
+    int kk;
+    int n = 0;
+    int bad = 0;
+    int any = 0;
+
+    kinds[0] = TR_LC_ALLOC;
+    kinds[1] = TR_LC_BOOT;
+    if (api.FirstLogConf == NULL || api.NextResDes == NULL ||
+        api.ResDesSize == NULL || api.ResDesData == NULL) {
+        return -1;
+    }
+    for (kk = 0; kk < 2 && n == 0 && !bad; kk++) {
+        TR_CMH lc = 0;
+        TR_CMH rd;
+        TR_CMH next;
+        ULONG rid = 0;
+        ULONG cr;
+        int guard = 0;
+        cr = api.FirstLogConf(&lc, dn, kinds[kk]);
+        if (cr == TR_CR_NO_MORE_LOG_CONF) {
+            continue;   /* none of this kind */
+        }
+        if (cr != TR_CR_SUCCESS) {
+            bad = 1;
+            break;
+        }
+        any = 1;
+        rd = lc;
+        for (;;) {
+            ULONG size = 0;
+            unsigned char buf[512];
+            cr = api.NextResDes(&next, rd, 0UL, &rid, 0);
+            if (cr == 0x0000000FUL) {
+                break;      /* CR_NO_MORE_RES_DES: read to the end */
+            }
+            if (cr != TR_CR_SUCCESS) {
+                bad = 1;    /* stopped short: the rest unread */
+                break;
+            }
+            if (rd != lc && api.FreeResDes != NULL) {
+                api.FreeResDes(rd);
+            }
+            rd = next;
+            if (++guard > 64 || n >= cap) {
+                bad = 1;    /* more than it holds */
+                break;
+            }
+            if (rid != TR_RES_MEM && rid != TR_RES_MEMLARGE) {
+                continue;
+            }
+            if (api.ResDesSize(&size, rd, 0) != TR_CR_SUCCESS || size < 24 ||
+                size > sizeof(buf) ||
+                api.ResDesData(rd, buf, size, 0) != TR_CR_SUCCESS) {
+                bad = 1;
+                break;
+            }
+            /* MEM_DES: count, type, then the 8-byte allocated base. */
+            lo[n] = inst_get32(buf, 8);
+            hi[n] = inst_get32(buf, 12);
+            n++;
+        }
+        if (rd != lc && api.FreeResDes != NULL) {
+            api.FreeResDes(rd);
+        }
+        if (api.FreeLogConf != NULL) {
+            api.FreeLogConf(lc);
+        }
+    }
+    (void)any;
+    return bad ? -1 : n;
+}
+
+/* On 98 SE or ME, whether the stop of unit u is refused (INST_BH_*): an
+ * NVMe function Stor98 left to the BIOS (inst_bios_held) in u or in any
+ * other unit behind the same tunnel port, whose stop can close that
+ * tunnel (INST_BH_HELD); or a check that could not be done to the end
+ * (INST_BH_UNSURE, it fails closed). */
+static int ej_bios_held(const WALK *w, int u)
+{
+    static INST_U32 lo[EJ_SF_MEM];
+    static INST_U32 hi[EJ_SF_MEM];
+    static int owner[EJ_SF_MEM];        /* the function each base is of */
+    static int covered[EJ_SF_MEM];      /* a function's report names it */
+    int nMem = 0;
+    int nRel = 0;
+    int memOk = 1;
+    int keyState = -1;
+    int enumOk = 1;
+    int nBad = 0;
+    int nMatch = 0;
+    int i;
+    HKEY k;
+    DWORD v;
+    LONG r;
+
+    if (envNt || u < 0 || w->N[u].Parent < 0) {
+        return INST_BH_GO;
+    }
+    /* The memory bases of the NVMe functions at Code 10 in every unit
+     * behind u's port. */
+    for (i = 0; i < w->Count; i++) {
+        const DNODE *d = &w->N[i];
+        int m;
+        if (d->UnitOf < 0 || w->N[d->UnitOf].Parent != w->N[u].Parent ||
+            d->Problem != 10UL ||
+            (!inst_msz_has_class(d->Hw, d->HwBytes, "010802") &&
+             !inst_msz_has_class(d->Compat, d->CompatBytes, "010802"))) {
+            continue;
+        }
+        nRel++;
+        m = memOk ? ej_mem_bases(d->Dn, lo + nMem, hi + nMem,
+                                 EJ_SF_MEM - nMem) : -1;
+        if (m <= 0) {
+            memOk = 0;  /* not read, overflowing, or no memory at all */
+        } else {
+            int q;
+            for (q = 0; q < m && nRel <= EJ_SF_MEM; q++) {
+                owner[nMem + q] = nRel - 1;
+            }
+            nMem += m;
+        }
+        if (nRel <= EJ_SF_MEM) {
+            covered[nRel - 1] = 0;
+        }
+    }
+    if (nRel == 0) {
+        return INST_BH_GO;
+    }
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_SF_KEY, 0, KEY_QUERY_VALUE,
+                      &k);
+    keyState = r == ERROR_SUCCESS ? 1 : r == ERROR_FILE_NOT_FOUND ? 0 : -1;
+    if (keyState == 1) {
+        /* Every report, to the end: Stor98 keeps one for each function it
+         * ever found, so old ones never hide a later match. */
+        for (v = 0;; v++) {
+            char name[64];
+            char text[EJ_SF_TEXT];
+            DWORD nl = sizeof(name);
+            DWORD tl = sizeof(text) - 1;
+            DWORD type = 0;
+            int c;
+            if (v >= 100000UL) {
+                enumOk = 0;     /* a list that does not end */
+                break;
+            }
+            r = RegEnumValueA(k, v, name, &nl, NULL, &type, (LPBYTE)text,
+                              &tl);
+            if (r == ERROR_NO_MORE_ITEMS) {
+                break;
+            }
+            if (r == ERROR_SUCCESS) {
+                text[tl < sizeof(text) ? tl : sizeof(text) - 1] = '\0';
+            }
+            c = inst_storfind_report(r == ERROR_SUCCESS ? INST_SFE_OK
+                                     : r == ERROR_MORE_DATA ? INST_SFE_MORE
+                                                            : INST_SFE_ERROR,
+                                     name, type == REG_SZ, text, lo, hi,
+                                     memOk ? nMem : 0);
+            nBad += c == INST_SFR_BAD;
+            nMatch += c == INST_SFR_MATCH;
+            if (r == ERROR_SUCCESS && type == REG_SZ && memOk) {
+                int b = inst_storfind_base(name, text, lo, hi, nMem);
+                if (b >= 0 && owner[b] < EJ_SF_MEM) {
+                    covered[owner[b]] = 1;
+                }
+            }
+        }
+        RegCloseKey(k);
+    }
+    {
+        int nUncovered = 0;
+        for (i = 0; i < nRel && i < EJ_SF_MEM; i++) {
+            nUncovered += !covered[i];
+        }
+        if (nRel > EJ_SF_MEM) {
+            nUncovered++;   /* more functions than it follows */
+        }
+        return inst_bios_verdict2(0, nRel, memOk, keyState, enumOk, nBad,
+                                  nMatch, nUncovered);
+    }
+}
+
+/* The first reason unit u cannot be stopped (tr_eject_first): the
+ * BIOS-held verdict (*bh, INST_BH_*) before ej_why_not's reason (*why), so
+ * a unit at Code 10 that Stor98 left to the BIOS is refused with the BIOS
+ * texts rather than "not started" (record 24 section 7.6). */
+static int ej_first(int u, int *bh, const char **why)
+{
+    int behind = u >= 0 && u < gw.Count && gw.N[u].Parent >= 0 &&
+                 gw.N[gw.N[u].Parent].PortNhi >= 0;
+
+    *bh = behind ? ej_bios_held(&gw, u) : INST_BH_GO;
+    *why = ej_why_not(u);
+    return tr_eject_first(behind, *bh != INST_BH_GO, *why == NULL);
+}
+
+/* Whether Safely Remove is offered for unit u: it can be stopped, or the
+ * BIOS-held check refuses it, so that choosing it shows why (section 7.6). */
+static int ej_offered(int u)
+{
+    int bh;
+    const char *why;
+
+    return ej_first(u, &bh, &why) != TR_EF_WHY;
+}
 
 /* Every devnode the request holds is listed; a list that does not fit is
  * refused, never shortened (nothing is stopped that was not shown). */
@@ -5314,8 +5818,9 @@ static DWORD ej_query_and_remove(DWORD dn, ULONG *veto, char *name, int cap)
     DWORD cr;
 
     for (;;) {
+        /* Zeroed whole, so an answer left unterminated ends at the zeros. */
         *veto = 0;
-        wide[0] = 0;
+        memset(wide, 0, sizeof(wide));
         cr = api.QueryAndRemove(dn, veto, wide, MAX_PATH, flags);
         if (!inst_removal_retry(cr, flags)) {
             break;
@@ -5323,7 +5828,7 @@ static DWORD ej_query_and_remove(DWORD dn, ULONG *veto, char *name, int cap)
         flags = INST_REMOVE_UI_NOT_OK;
     }
     wide[MAX_PATH - 1] = 0;
-    name[0] = '\0';
+    memset(name, 0, (size_t)cap);
     if (WideCharToMultiByte(CP_ACP, 0, wide, -1, name, cap, NULL, NULL) == 0) {
         name[0] = '\0';
     }
@@ -5652,6 +6157,14 @@ static int lv_driver_of_node(int i)
     return -1;
 }
 
+/* A tree node that is a UAS drive (its devnode bound to xhciuas): its
+ * right-click opens its two settings (task 49.38). */
+static int set_uas_node(int i)
+{
+    return i >= 0 && i < tnCount && tn[i].Kind == K_DEV && tn[i].Dn >= 0 &&
+           tr_eq(gw.N[tn[i].Dn].Service, "xhciuas");
+}
+
 static void refresh_window(void);
 
 static int lvFocus = -1;    /* the driver the dialog was opened for, or -1 */
@@ -5918,7 +6431,7 @@ unsigned long XhciPirqNoRouteListed(unsigned long xhciId,
 #define SET_S98_CLASS_9X    "System\\CurrentControlSet\\Services\\Class\\SCSIAdapter"
 #define SET_S98_REC         "Software\\xhci98\\Stor98"
 #define SET_PARAM_CHARS     2048
-#define SET_PEND_MAX        64
+#define SET_PEND_MAX        160     /* every row (task 49.38) */
 
 /* Stor98 as the window may treat it. */
 #define SET_S98_NONE        0   /* not installed: no tab                   */
@@ -5936,6 +6449,9 @@ static int setPendN;
 
 static int set_driver_of(const TRS_ROW *r)
 {
+    if (trs_loc(r) == TRS_LOC_DEVICE) {
+        return SET_UAS;
+    }
     return r->Tab == TRS_TAB_CM ? TR_LV_XHCICM : TR_LV_XHCI98;
 }
 
@@ -5974,12 +6490,15 @@ static void set_raw(const char *path, const char *name, TRS_RAW *v)
 {
     HKEY k;
     DWORD type = 0;
-    BYTE data[16];
-    DWORD n = sizeof(data);
+    BYTE data[INST_TEXT_CHARS + 2];
+    DWORD n = sizeof(data) - 1;
     LONG r;
 
     v->State = TRS_RAW_UNREAD;
     v->Value = 0;
+    v->IsText = 0;
+    v->Text[0] = '\0';
+    memset(data, 0, sizeof(data));
     r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_QUERY_VALUE, &k);
     if (r == ERROR_FILE_NOT_FOUND) {
         v->State = TRS_RAW_ABSENT;
@@ -5990,26 +6509,56 @@ static void set_raw(const char *path, const char *name, TRS_RAW *v)
     }
     r = RegQueryValueExA(k, name, NULL, &type, data, &n);
     RegCloseKey(k);
-    if (r == ERROR_FILE_NOT_FOUND) {
-        v->State = TRS_RAW_ABSENT;
-    } else if (r == ERROR_MORE_DATA) {
-        v->State = TRS_RAW_OTHER;
-    } else if (r == ERROR_SUCCESS) {
-        if (type == REG_DWORD && n == sizeof(DWORD)) {
-            DWORD x;
-            memcpy(&x, data, sizeof(x));
-            v->State = TRS_RAW_DWORD;
-            v->Value = (INST_U32)x;
-        } else {
-            v->State = TRS_RAW_OTHER;
-        }
-    }
+    /* The pure half (tr_set.c): a zero-length REG_NONE is absent. */
+    trs_raw_from_query(r == ERROR_SUCCESS ? TRS_Q_OK
+                       : r == ERROR_FILE_NOT_FOUND ? TRS_Q_NOT_FOUND
+                       : r == ERROR_MORE_DATA ? TRS_Q_MORE_DATA
+                                              : TRS_Q_ERROR,
+                       (unsigned long)type, (unsigned long)n, data, v);
 }
 
 /* The key a fixed-place row lives in. */
 static const char *set_fixed_key(const TRS_ROW *r)
 {
     return trs_loc(r) == TRS_LOC_PFW ? INST_PFW_VXD_KEY : INST_MK_PARAMS_KEY;
+}
+
+/* A row read and written per device: a controller's driver key, or since
+ * task 49.38 one UAS drive's own key. */
+static int set_drvlike(const TRS_ROW *r)
+{
+    return trs_loc(r) == TRS_LOC_DRIVER || trs_loc(r) == TRS_LOC_DEVICE;
+}
+
+static int set_is_text(const TRS_ROW *r)
+{
+    const INST_VALUE *v = trs_value(r);
+
+    return v != NULL && v->Kind == INST_VK_TEXT;
+}
+
+/* A UAS drive's own key, where xhciuas.sys reads its two values
+ * (IoOpenDeviceRegistryKey, PLUGPLAY_REGKEY_DEVICE). */
+static void set_dev_key_path(const DNODE *d, char *path, size_t cap)
+{
+    if (envNt) {
+        tr_sprintf(path, cap, "SYSTEM\\CurrentControlSet\\Enum\\%s\\"
+                   "Device Parameters", d->Id);
+    } else {
+        tr_sprintf(path, cap, "Enum\\%s", d->Id);
+    }
+}
+
+/* A reading that is the canonical value canon of row r already. */
+static int set_raw_is(const TRS_ROW *r, const TRS_RAW *m, const char *canon)
+{
+    if (set_is_text(r)) {
+        return m->State == TRS_RAW_OTHER && m->IsText &&
+               (tr_eq(m->Text, canon) ||
+                (inst_bdf_auto(m->Text) && inst_bdf_auto(canon)));
+    }
+    return m->State == TRS_RAW_DWORD &&
+           m->Value == (INST_U32)strtoul(canon, NULL, 10);
 }
 
 /* ---- Stor98 --------------------------------------------------------------- */
@@ -6271,6 +6820,17 @@ static void set_env(TRS_ENV *e)
     e->Inst.Arch = INST_ARCH_AMD64;
 #else
     e->Inst.Arch = INST_ARCH_X86;
+    if (envNt) {
+        /* The system's, not this image's (task 49.38): XHCITR.EXE on XP
+         * x64 sets the amd64 driver's values. */
+        typedef BOOL (WINAPI *PFN_ISW64)(HANDLE, PBOOL);
+        PFN_ISW64 isw = (PFN_ISW64)GetProcAddress(
+            GetModuleHandleA("kernel32.dll"), "IsWow64Process");
+        BOOL wow = FALSE;
+        if (isw != NULL && isw(GetCurrentProcess(), &wow) && wow) {
+            e->Inst.Arch = INST_ARCH_AMD64;
+        }
+    }
 #endif
     lv_collect();
     e->Inst.AnyXhci = lvCount[TR_LV_XHCI98] > 0;
@@ -6283,7 +6843,7 @@ static void set_env(TRS_ENV *e)
             }
             if (XhciPirqReviewed((unsigned long)vd)) {
                 TR_U32 ss;
-                e->PirqController = 1;
+                e->Inst.PirqController = 1;
                 if (trs_subsys(first_hw(&gw.N[lvDev[TR_LV_XHCI98][k].Dn]),
                                &ss) &&
                     XhciPirqNoRouteListed((unsigned long)vd,
@@ -6298,7 +6858,17 @@ static void set_env(TRS_ENV *e)
     e->WalkPartial = gw.Bad != 0 || gw.Count == 0;
     e->Pfw = !envNt && set_key_exists(INST_PFW_VXD_KEY);
     e->Mark = envNt && set_key_exists(INST_MK_PARAMS_KEY);
+    /* Task 49.38: the present UAS drives, for their two rows. */
+    lvCount[SET_UAS] = 0;
+    for (k = 0; k < gw.Count && lvCount[SET_UAS] < TR_MAX_CTRL; k++) {
+        if (tr_eq(gw.N[k].Service, "xhciuas")) {
+            memset(&lvDev[SET_UAS][lvCount[SET_UAS]], 0, sizeof(LVDEV));
+            lvDev[SET_UAS][lvCount[SET_UAS]++].Dn = k;
+        }
+    }
+    e->UasDrives = lvCount[SET_UAS];
     set_s98_state();
+    trs_set_system(&e->Inst);   /* XhciResumeKeepBot's default (M18) */
 }
 
 /* ---- Setup running (owner's choice K-2, 2026-11-07) ------------------------ */
@@ -6449,12 +7019,22 @@ static int set_read_driver(const TRS_ROW *r, int scope, TRS_RAW *m,
     int n = 0;
     char path[300];
 
-    set_raw(TR_LV_MACHINE_KEY, r->Name, m);
+    if (d == SET_UAS) {
+        /* A drive's value has no machine-wide form. */
+        memset(m, 0, sizeof(*m));
+        m->State = TRS_RAW_ABSENT;
+    } else {
+        set_raw(TR_LV_MACHINE_KEY, r->Name, m);
+    }
     for (k = 0; k < lvCount[d] && n < cap; k++) {
         if (scope >= 0 && k != scope) {
             continue;
         }
-        driver_key_path(&gw.N[lvDev[d][k].Dn], path, sizeof(path));
+        if (d == SET_UAS) {
+            set_dev_key_path(&gw.N[lvDev[d][k].Dn], path, sizeof(path));
+        } else {
+            driver_key_path(&gw.N[lvDev[d][k].Dn], path, sizeof(path));
+        }
         set_raw(path, r->Name, &own[n++]);
     }
     return n;
@@ -6488,7 +7068,7 @@ static void set_held(const TRS_ROW *r, int scope, int n, INST_U32 *held)
             all = trs_effective(h, 1, m.Value, TRS_NO_HOLD, &how);
             wide = 1;
         } else if (m.State == TRS_RAW_OTHER) {
-            all = h->AbsentDef;
+            all = trs_absent_def(h);
             wide = 1;
         }
     }
@@ -6500,7 +7080,7 @@ static void set_held(const TRS_ROW *r, int scope, int n, INST_U32 *held)
         } else if (k < hn && own[k].State == TRS_RAW_DWORD) {
             held[k] = trs_effective(h, 1, own[k].Value, TRS_NO_HOLD, &how);
         } else {
-            held[k] = h->AbsentDef;
+            held[k] = trs_absent_def(h);
         }
     }
 }
@@ -6526,7 +7106,7 @@ static void set_now(const TRS_ROW *r, int scope, char *out, size_t cap)
         inst_s98_now_text(i, envNt, !envNt && envMinor == 90, st, v, out, cap);
         return;
     }
-    if (trs_loc(r) != TRS_LOC_DRIVER) {
+    if (!set_drvlike(r)) {
         set_raw(set_fixed_key(r), r->Name, &m);
         trs_raw_text(r, &m, out, cap);
         return;
@@ -6542,7 +7122,7 @@ static void set_default_text(const TRS_ROW *r, char *out, size_t cap)
         tr_copy(out, inst_s98_default(trs_s98(r), envNt), cap);
         return;
     }
-    trs_value_text(r, r->InstallDef, out, cap);
+    trs_value_text(r, trs_install_def(r), out, cap);
 }
 
 /* A change's value as the window shows it. */
@@ -6553,7 +7133,8 @@ static void set_change_text(const TRS_ROW *r, const char *value, char *out,
     int i = trs_s98(r);
     const char *p;
 
-    if (i >= 0 && instS98Values[i].Kind == INST_S98_WORDS) {
+    if ((i >= 0 && instS98Values[i].Kind == INST_S98_WORDS) ||
+        set_is_text(r)) {
         tr_copy(out, value, cap);
         return;
     }
@@ -6580,10 +7161,11 @@ static void set_block(TR_TEXT *t)
     static TRS_RAW own[TR_MAX_CTRL];
     static INST_U32 held[TR_MAX_CTRL];
     char now[200];
-    char def[96];
+    char def[160];  /* the longest choice text fits */
     int tab;
     int i;
     int k;
+    int shown = 0;
 
     set_env(&setEnv);
     for (tab = 0; tab < TRS_TABS; tab++) {
@@ -6592,9 +7174,11 @@ static void set_block(TR_TEXT *t)
             const TRS_ROW *r = trs_row_at(i);
             int st;
             if (r->Tab != tab || (st = trs_state(r, &setEnv)) == TRS_HIDE ||
-                (tab == TRS_TAB_S98 && setS98 == SET_S98_NONE)) {
+                (tab == TRS_TAB_S98 && setS98 == SET_S98_NONE) ||
+                !trs_matches(r, setBlockFind)) {
                 continue;
             }
+            shown++;
             if (!head) {
                 tr_printf(t, "  %s%s\n", set_tab_name(tab),
                           tab == TRS_TAB_S98 && setS98 == SET_S98_RO
@@ -6605,7 +7189,7 @@ static void set_block(TR_TEXT *t)
             set_default_text(r, def, sizeof(def));
             tr_printf(t, "    %s%s: %s; default %s\n", r->Name,
                       r->View == TRS_VIEW_ADV ? " (advanced)" : "", now, def);
-            if (st == TRS_SHOW && trs_loc(r) == TRS_LOC_DRIVER &&
+            if (st == TRS_SHOW && set_drvlike(r) &&
                 trs_s98(r) < 0 && strstr(now, "not the same") != NULL) {
                 TRS_RAW m;
                 int d = set_driver_of(r);
@@ -6619,6 +7203,9 @@ static void set_block(TR_TEXT *t)
                 }
             }
         }
+    }
+    if (shown == 0 && !inst_has_text("", setBlockFind)) {
+        tr_printf(t, "  No setting matches \"%s\".\n", setBlockFind);
     }
     if (setPendN > 0) {
         tr_put(t, "  Changed by this xHCI98 USB Tree and waiting for a "
@@ -6657,8 +7244,240 @@ static int set_write_dword(const char *path, const char *name, DWORD v,
     return (back.State == TRS_RAW_DWORD && back.Value == (INST_U32)v) ? 0 : -1;
 }
 
+/* A string, as XhciCmTunnelBridge (task 49.38): 0 written and read back. */
+static int set_write_sz(const char *path, const char *name, const char *text,
+                        int create)
+{
+    HKEY k;
+    LONG r;
+    TRS_RAW back;
+
+    if (create) {
+        r = RegCreateKeyExA(HKEY_LOCAL_MACHINE, path, 0, NULL, 0, KEY_SET_VALUE,
+                            NULL, &k, NULL);
+    } else {
+        r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_SET_VALUE, &k);
+    }
+    if (r != ERROR_SUCCESS) {
+        return (int)r;
+    }
+    r = RegSetValueExA(k, name, 0, REG_SZ, (const BYTE *)text,
+                       (DWORD)strlen(text) + 1);
+    RegCloseKey(k);
+    if (r != ERROR_SUCCESS) {
+        return (int)r;
+    }
+    set_raw(path, name, &back);
+    return (back.IsText && tr_eq(back.Text, text)) ? 0 : -1;
+}
+
+/* The backup and restore privileges of this process's token, switched on
+ * for one write and given back (task 49.38: a drive's key that Windows
+ * lets only SYSTEM write). 1 on, with what to give back in prev; 0 not
+ * held, nothing changed. */
+typedef struct _SET_TP2 {
+    DWORD PrivilegeCount;
+    LUID_AND_ATTRIBUTES Privileges[2];
+} SET_TP2;
+
+static int set_priv_on(HANDLE *token, SET_TP2 *prev)
+{
+    HMODULE adv = GetModuleHandleA("advapi32.dll");
+    PFN_OPENTOKEN openToken = (PFN_OPENTOKEN)proc(adv, "OpenProcessToken");
+    PFN_LOOKUPPRIV lookup = (PFN_LOOKUPPRIV)proc(adv, "LookupPrivilegeValueA");
+    PFN_ADJUSTPRIV adjust = (PFN_ADJUSTPRIV)proc(adv, "AdjustTokenPrivileges");
+    SET_TP2 tp;
+    DWORD len = 0;
+
+    *token = NULL;
+    memset(prev, 0, sizeof(*prev));
+    if (openToken == NULL || lookup == NULL || adjust == NULL ||
+        !openToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+                   token)) {
+        return 0;
+    }
+    memset(&tp, 0, sizeof(tp));
+    tp.PrivilegeCount = 2;
+    tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+    tp.Privileges[1].Attributes = SE_PRIVILEGE_ENABLED;
+    if (!lookup(NULL, "SeBackupPrivilege", &tp.Privileges[0].Luid) ||
+        !lookup(NULL, "SeRestorePrivilege", &tp.Privileges[1].Luid) ||
+        !adjust(*token, FALSE, (PTOKEN_PRIVILEGES)&tp, sizeof(*prev),
+                (PTOKEN_PRIVILEGES)prev, &len)) {
+        CloseHandle(*token);
+        *token = NULL;
+        return 0;
+    }
+    if (GetLastError() == ERROR_NOT_ALL_ASSIGNED) {
+        adjust(*token, FALSE, (PTOKEN_PRIVILEGES)prev, 0, NULL, NULL);
+        CloseHandle(*token);
+        *token = NULL;
+        return 0;
+    }
+    return 1;
+}
+
+static void set_priv_off(HANDLE token, SET_TP2 *prev)
+{
+    HMODULE adv = GetModuleHandleA("advapi32.dll");
+    PFN_ADJUSTPRIV adjust = (PFN_ADJUSTPRIV)proc(adv, "AdjustTokenPrivileges");
+
+    if (token == NULL) {
+        return;
+    }
+    if (adjust != NULL && prev->PrivilegeCount > 0) {
+        adjust(token, FALSE, (PTOKEN_PRIVILEGES)prev, 0, NULL, NULL);
+    }
+    CloseHandle(token);
+}
+
+/* One UAS drive's value (task 49.38; the owner's decision of 2026-11-12):
+ * the drive's own key opened and written with the rights this process has;
+ * on 2000 and later, where Windows may let only SYSTEM write it, refused
+ * for access (or its Device Parameters not there), the drive's existing
+ * Enum key opened - never made - and its Device Parameters opened or made
+ * beneath it with the backup and restore privileges switched on for the
+ * write, written, read back, the privileges given back. The key's owner
+ * and its permissions are never changed. 0 done, else the error (-1 did
+ * not read back). */
+/* 1 when the drive is present now (the configuration manager finds its
+ * devnode) and still on xhciuas with the same driver key: a key Windows
+ * keeps for a drive unplugged is never written (task 49.38). */
+static int set_dev_present(const DNODE *dn)
+{
+    char id[INST_ID_CHARS];
+    char svc[64];
+    char drv[sizeof(dn->Driver)];
+    DWORD node = 0;
+
+    if (api.Locate == NULL) {
+        return 0;
+    }
+    tr_copy(id, dn->Id, sizeof(id));
+    if (api.Locate(&node, id, 0) != TR_CR_SUCCESS) {
+        return 0;
+    }
+    if (cm_prop(node, TR_CM_DRP_DRIVER, drv, sizeof(drv), NULL) !=
+            TR_CR_SUCCESS || !tr_eq(drv, dn->Driver)) {
+        return 0;
+    }
+    if (envNt) {
+        return cm_prop(node, TR_CM_DRP_SERVICE, svc, sizeof(svc), NULL) ==
+                   TR_CR_SUCCESS && tr_eq(svc, "xhciuas");
+    }
+    {
+        /* 98 SE and ME bind it by the driver key's NTMPDriver (dn_read). */
+        char path[400];
+        char *dot;
+        driver_key_path(dn, path, sizeof(path));
+        if (reg_text(HKEY_LOCAL_MACHINE, path, "NTMPDriver", svc,
+                     sizeof(svc)) <= 0) {
+            return 0;
+        }
+        dot = strchr(svc, '.');
+        if (dot != NULL) {
+            *dot = '\0';
+        }
+        return tr_eq(svc, "xhciuas");
+    }
+}
+
+/* ERROR_DEV_NOT_EXIST: set_write_dev's "the drive is not here now". */
+#define SET_DEV_GONE        55
+/* Written and read back, but the drive was gone when checked again. */
+#define SET_DEV_LEFT        (-55)
+/* ERROR_FILE_NOT_FOUND from the drive's key: its Device Parameters key is
+ * not there, and the Tree never makes it (task 49.38, record 25). */
+#define SET_DEV_NOKEY       2
+
+static int set_write_dev(const DNODE *dn, const char *name, DWORD v)
+{
+    char path[400];
+    char inst[400];
+    HKEY ik;
+    HKEY k;
+    HANDLE token;
+    SET_TP2 prev;
+    DWORD back = 0;
+    DWORD t = 0;
+    DWORD n = sizeof(back);
+    DWORD disp = 0;
+    LONG r;
+    int e;
+
+    if (!set_dev_present(dn)) {
+        return SET_DEV_GONE;
+    }
+    set_dev_key_path(dn, path, sizeof(path));
+    e = set_write_dword(path, name, v, 0);
+    if (!envNt || e != ERROR_ACCESS_DENIED) {
+        /* A key that is not there (ERROR_FILE_NOT_FOUND) is never made. */
+        if (e == 0 && !set_dev_present(dn)) {
+            return SET_DEV_LEFT;
+        }
+        return e;
+    }
+    tr_sprintf(inst, sizeof(inst), "SYSTEM\\CurrentControlSet\\Enum\\%s",
+               dn->Id);
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, inst, 0, KEY_QUERY_VALUE, &ik);
+    if (r != ERROR_SUCCESS) {
+        return (int)r;      /* the drive's entry is gone: nothing made */
+    }
+    /* Device Parameters must be there already: the backup-and-restore
+     * open below would make it otherwise. A key that cannot be read but
+     * is there (access denied) is there. */
+    r = RegOpenKeyExA(ik, "Device Parameters", 0, KEY_QUERY_VALUE, &k);
+    if (r == ERROR_SUCCESS) {
+        RegCloseKey(k);
+    } else if (r != ERROR_ACCESS_DENIED) {
+        RegCloseKey(ik);
+        return (int)r;
+    }
+    if (!set_priv_on(&token, &prev)) {
+        RegCloseKey(ik);
+        return e;
+    }
+    r = RegCreateKeyExA(ik, "Device Parameters", 0, NULL,
+                        REG_OPTION_BACKUP_RESTORE,
+                        KEY_SET_VALUE | KEY_QUERY_VALUE, NULL, &k, &disp);
+    if (r == ERROR_SUCCESS && disp == REG_CREATED_NEW_KEY) {
+        /* Deleted since it was found (the drive's uninstall, say): 2000
+         * and XP have no privileged open of an existing key alone, so the
+         * open made it again. Nothing is written into it, and it is left
+         * as made, empty: a delete by name could take another's key. */
+        RegCloseKey(k);
+        r = SET_DEV_NOKEY;
+    } else if (r == ERROR_SUCCESS) {
+        r = RegSetValueExA(k, name, 0, REG_DWORD, (const BYTE *)&v, sizeof(v));
+        if (r == ERROR_SUCCESS &&
+            (RegQueryValueExA(k, name, NULL, &t, (LPBYTE)&back, &n) !=
+                 ERROR_SUCCESS ||
+             t != REG_DWORD || back != v)) {
+            r = -1;
+        }
+        RegCloseKey(k);
+    }
+    set_priv_off(token, &prev);
+    RegCloseKey(ik);
+    if (r == ERROR_SUCCESS && !set_dev_present(dn)) {
+        return SET_DEV_LEFT;
+    }
+    return r == ERROR_SUCCESS ? 0 : (int)r;
+}
+
 static void set_say_error(TR_TEXT *t, const char *what, int err)
 {
+    if (err == SET_DEV_GONE) {
+        tr_printf(t, "%s was not written: the drive is not connected now. "
+                     "Close Settings and open it again.\n", what);
+        return;
+    }
+    if (err == SET_DEV_NOKEY) {
+        tr_printf(t, "%s was not written: the drive's Device Parameters key "
+                     "is not there, and the xHCI98 USB Tree does not make "
+                     "it.\n", what);
+        return;
+    }
     if (err < 0) {
         tr_printf(t, "%s did not read back as written.\n", what);
     } else {
@@ -6752,8 +7571,10 @@ static int set_s98_write(int i, const char *canon)
  * each device of the scope. *changed when anything was written; 0 done,
  * 1 failed (said in t). */
 static int set_write_driver(TR_TEXT *t, const TRS_ROW *r, int scope,
-                            DWORD v, int *changed)
+                            const char *canon, int *changed)
 {
+    DWORD v = (DWORD)strtoul(canon, NULL, 10);
+    int text = set_is_text(r);
     static TRS_RAW own[TR_MAX_CTRL];
     TRS_RAW m;
     char path[300];
@@ -6767,10 +7588,11 @@ static int set_write_driver(TR_TEXT *t, const TRS_ROW *r, int scope,
 
     n = set_read_driver(r, scope, &m, own, TR_MAX_CTRL);
     if (scope < 0 && (m.State == TRS_RAW_DWORD || m.State == TRS_RAW_OTHER)) {
-        if (m.State == TRS_RAW_DWORD && m.Value == (INST_U32)v) {
+        if (set_raw_is(r, &m, canon)) {
             return 0;
         }
-        e = set_write_dword(TR_LV_MACHINE_KEY, r->Name, v, 0);
+        e = text ? set_write_sz(TR_LV_MACHINE_KEY, r->Name, canon, 0)
+                 : set_write_dword(TR_LV_MACHINE_KEY, r->Name, v, 0);
         tr_sprintf(what, sizeof(what), "%s machine-wide (Services\\USB)",
                    r->Name);
         if (e == -1) {
@@ -6788,14 +7610,26 @@ static int set_write_driver(TR_TEXT *t, const TRS_ROW *r, int scope,
         if (scope >= 0 && k != scope) {
             continue;
         }
-        if (j < n && own[j].State == TRS_RAW_DWORD &&
-            own[j].Value == (INST_U32)v) {
+        if (j < n && set_raw_is(r, &own[j], canon)) {
             j++;
             continue;
         }
         j++;
-        driver_key_path(dn, path, sizeof(path));
-        e = set_write_dword(path, r->Name, v, 0);
+        if (d == SET_UAS) {
+            e = set_write_dev(dn, r->Name, v);
+            if (e == SET_DEV_LEFT) {
+                /* Written in the drive's own key; it left meanwhile. */
+                tr_printf(t, "%s for %s was written, but the drive left "
+                             "meanwhile: it takes effect when it is plugged "
+                             "in again.\n", r->Name, dn_name(dn));
+                *changed = 1;
+                continue;
+            }
+        } else {
+            driver_key_path(dn, path, sizeof(path));
+            e = text ? set_write_sz(path, r->Name, canon, 0)
+                     : set_write_dword(path, r->Name, v, 0);
+        }
         if (e == -1) {
             *changed = 1;
         }
@@ -6810,9 +7644,119 @@ static int set_write_driver(TR_TEXT *t, const TRS_ROW *r, int scope,
     return failed;
 }
 
-/* The changes checked as a whole, then written; the outcome into msg (LF
- * lines) and the sum of what they take. XHCIINST's exit code (record 23
- * section 7.4). gw is walked by the caller. */
+/* The changes checked as a whole, nothing written: 0, or INST_EXIT_REFUSED
+ * with the refusal in t. /set checks first, so that a refused change prints
+ * its refusal alone, with no value's note before it (TRSETWARN.1). rows,
+ * canon and scopes for set_apply's writes. gw is walked by the caller. */
+static int set_check(const TRS_CHANGE *c, int n, TR_TEXT *t,
+                     const TRS_ROW **rows, char (*canon)[TRS_VAL_CHARS],
+                     int *scopes)
+{
+    int i;
+    int j;
+    const char *why;
+
+    if (n <= 0 || n > TRS_MAX_CHANGES) {
+        tr_put(t, "No setting was given; nothing was changed.");
+        return INST_EXIT_REFUSED;
+    }
+    if (set_setup_running()) {
+        tr_put(t, "Setup is running: try again when it has finished. "
+                  "Nothing was changed.");
+        return INST_EXIT_REFUSED;
+    }
+    set_env(&setEnv);
+    for (i = 0; i < n; i++) {
+        const TRS_ROW *r = trs_row_find(c[i].Name);
+        rows[i] = r;
+        if (r == NULL) {
+            tr_printf(t, "%s is not a setting the xHCI98 USB Tree changes; "
+                         "see tuning.md. Nothing was changed.", c[i].Name);
+            return INST_EXIT_REFUSED;
+        }
+        if (!trs_parse(r, &setEnv, c[i].Value, canon[i], sizeof(canon[i]),
+                       &why)) {
+            tr_printf(t, "%s=%s: %s. Nothing was changed.", r->Name,
+                     c[i].Value, why);
+            return INST_EXIT_REFUSED;
+        }
+        scopes[i] = -1;
+        if (trs_s98(r) >= 0) {
+            if (setS98 != SET_S98_OK) {
+                tr_printf(t, "%s Nothing was changed.",
+                         setS98Why[0] != '\0' ? setS98Why
+                                              : "Stor98 is not installed.");
+                return INST_EXIT_REFUSED;
+            }
+        }
+        if (c[i].On[0] != '\0') {
+            TRS_RAW m;
+            if (!set_drvlike(r)) {
+                tr_printf(t, "%s is one value for the whole computer: it "
+                             "takes no /on. Nothing was changed.", r->Name);
+                return INST_EXIT_REFUSED;
+            }
+            scopes[i] = set_scope_of(set_driver_of(r), c[i].On);
+            if (scopes[i] < 0) {
+                tr_printf(t, "%s is not one of the %s %s sets. "
+                             "Nothing was changed.", c[i].On,
+                         set_driver_of(r) == SET_UAS ? "UAS drives"
+                                                     : "controllers",
+                         r->Name);
+                return INST_EXIT_REFUSED;
+            }
+            if (c[i].Drv[0] != '\0' &&
+                !tr_eq(gw.N[lvDev[set_driver_of(r)][scopes[i]].Dn].Driver,
+                       c[i].Drv)) {
+                /* Task 49.38: the window's drive, not another one Windows
+                 * has given that instance since. */
+                tr_printf(t, "%s is not the device the Settings window "
+                             "showed (its driver key changed). Close "
+                             "Settings and open it again. Nothing was "
+                             "changed.", c[i].On);
+                return INST_EXIT_REFUSED;
+            }
+            set_raw(TR_LV_MACHINE_KEY, r->Name, &m);
+            if (m.State == TRS_RAW_DWORD || m.State == TRS_RAW_OTHER) {
+                tr_printf(t, "%s is set machine-wide (Services\\USB), which "
+                             "every controller uses: to give one controller "
+                             "its own value, delete the machine-wide value "
+                             "first. Nothing was changed.", r->Name);
+                return INST_EXIT_REFUSED;
+            }
+        } else if (set_drvlike(r) && trs_s98(r) < 0) {
+            TRS_RAW m;
+            if (lvCount[set_driver_of(r)] == 0) {
+                tr_printf(t, "No %s here takes %s. Nothing was changed.",
+                         set_driver_of(r) == SET_UAS ? "UAS drive"
+                                                     : "controller",
+                         r->Name);
+                return INST_EXIT_REFUSED;
+            }
+            /* Every controller's own key: only from a whole reading. */
+            set_raw(TR_LV_MACHINE_KEY, r->Name, &m);
+            if (gw.Bad != 0 && m.State != TRS_RAW_DWORD &&
+                m.State != TRS_RAW_OTHER) {
+                tr_printf(t, "The device list could not be read whole, so "
+                             "%s cannot be set for every controller. "
+                             "Nothing was changed.", r->Name);
+                return INST_EXIT_REFUSED;
+            }
+        }
+        for (j = 0; j < i; j++) {
+            if (rows[j] == r && scopes[j] == scopes[i]) {
+                tr_printf(t, "%s is given twice. Nothing was changed.",
+                         r->Name);
+                return INST_EXIT_REFUSED;
+            }
+        }
+    }
+    return 0;
+}
+
+/* The changes checked as a whole (set_check), then written; the outcome
+ * into msg (LF lines) and the sum of what they take. XHCIINST's exit code
+ * (record 23 section 7.4). gw is walked by the caller. */
 static int set_apply(const TRS_CHANGE *c, int n, char *msg, size_t cap,
                      TRS_SUM *sum, int *ok)
 {
@@ -6821,10 +7765,8 @@ static int set_apply(const TRS_CHANGE *c, int n, char *msg, size_t cap,
     static int scopes[TRS_MAX_CHANGES];
     TR_TEXT t;
     int i;
-    int j;
     int failed = 0;
     int wrote = 0;
-    const char *why;
     char vt[160];
 
     tr_text_init(&t, msg, cap);
@@ -6832,84 +7774,8 @@ static int set_apply(const TRS_CHANGE *c, int n, char *msg, size_t cap,
     for (i = 0; ok != NULL && i < n && i < TRS_MAX_CHANGES; i++) {
         ok[i] = 0;
     }
-    if (n <= 0 || n > TRS_MAX_CHANGES) {
-        tr_put(&t, "No setting was given; nothing was changed.");
+    if (set_check(c, n, &t, rows, canon, scopes) != 0) {
         return INST_EXIT_REFUSED;
-    }
-    if (set_setup_running()) {
-        tr_put(&t, "Setup is running: try again when it has finished. "
-                   "Nothing was changed.");
-        return INST_EXIT_REFUSED;
-    }
-    set_env(&setEnv);
-    for (i = 0; i < n; i++) {
-        const TRS_ROW *r = trs_row_find(c[i].Name);
-        rows[i] = r;
-        if (r == NULL) {
-            tr_printf(&t, "%s is not a setting the xHCI98 USB Tree changes; "
-                          "see tuning.md. Nothing was changed.", c[i].Name);
-            return INST_EXIT_REFUSED;
-        }
-        if (!trs_parse(r, &setEnv, c[i].Value, canon[i], sizeof(canon[i]),
-                       &why)) {
-            tr_printf(&t, "%s=%s: %s. Nothing was changed.", r->Name,
-                      c[i].Value, why);
-            return INST_EXIT_REFUSED;
-        }
-        scopes[i] = -1;
-        if (trs_s98(r) >= 0) {
-            if (setS98 != SET_S98_OK) {
-                tr_printf(&t, "%s Nothing was changed.",
-                          setS98Why[0] != '\0' ? setS98Why
-                                               : "Stor98 is not installed.");
-                return INST_EXIT_REFUSED;
-            }
-        }
-        if (c[i].On[0] != '\0') {
-            TRS_RAW m;
-            if (trs_loc(r) != TRS_LOC_DRIVER) {
-                tr_printf(&t, "%s is one value for the whole computer: it "
-                              "takes no /on. Nothing was changed.", r->Name);
-                return INST_EXIT_REFUSED;
-            }
-            scopes[i] = set_scope_of(set_driver_of(r), c[i].On);
-            if (scopes[i] < 0) {
-                tr_printf(&t, "%s is not one of the controllers %s sets. "
-                              "Nothing was changed.", c[i].On, r->Name);
-                return INST_EXIT_REFUSED;
-            }
-            set_raw(TR_LV_MACHINE_KEY, r->Name, &m);
-            if (m.State == TRS_RAW_DWORD || m.State == TRS_RAW_OTHER) {
-                tr_printf(&t, "%s is set machine-wide (Services\\USB), which "
-                              "every controller uses: to give one controller "
-                              "its own value, delete the machine-wide value "
-                              "first. Nothing was changed.", r->Name);
-                return INST_EXIT_REFUSED;
-            }
-        } else if (trs_loc(r) == TRS_LOC_DRIVER && trs_s98(r) < 0) {
-            TRS_RAW m;
-            if (lvCount[set_driver_of(r)] == 0) {
-                tr_printf(&t, "No controller here takes %s. Nothing was "
-                              "changed.", r->Name);
-                return INST_EXIT_REFUSED;
-            }
-            /* Every controller's own key: only from a whole reading. */
-            set_raw(TR_LV_MACHINE_KEY, r->Name, &m);
-            if (gw.Bad != 0 && m.State != TRS_RAW_DWORD &&
-                m.State != TRS_RAW_OTHER) {
-                tr_printf(&t, "The device list could not be read whole, so "
-                              "%s cannot be set for every controller. "
-                              "Nothing was changed.", r->Name);
-                return INST_EXIT_REFUSED;
-            }
-        }
-        for (j = 0; j < i; j++) {
-            if (rows[j] == r && scopes[j] == scopes[i]) {
-                tr_printf(&t, "%s is given twice. Nothing was changed.",
-                          r->Name);
-                return INST_EXIT_REFUSED;
-            }
-        }
     }
     for (i = 0; i < n; i++) {
         const TRS_ROW *r = rows[i];
@@ -6951,7 +7817,7 @@ static int set_apply(const TRS_CHANGE *c, int n, char *msg, size_t cap,
                     changed = 1;
                 }
             }
-        } else if (trs_loc(r) != TRS_LOC_DRIVER) {
+        } else if (!set_drvlike(r)) {
             TRS_RAW m;
             DWORD v = (DWORD)strtoul(canon[i], NULL, 10);
             set_raw(set_fixed_key(r), r->Name, &m);
@@ -6988,7 +7854,7 @@ static int set_apply(const TRS_CHANGE *c, int n, char *msg, size_t cap,
                 }
             }
             if (!bad) {
-                bad = set_write_driver(&t, r, scopes[i], v, &changed);
+                bad = set_write_driver(&t, r, scopes[i], canon[i], &changed);
             }
         }
         if (bad) {
@@ -7049,7 +7915,34 @@ static int setStgN;
 static int setTab;
 static int setAdv;
 static int setScope = -1;
-static const TRS_ROW *setRows[64];
+static int setScopeUas = -1;        /* the drive rows' scope (task 49.38)  */
+static int setComboUas;             /* the combo lists the UAS drives      */
+static int setFocusUas = -1;        /* opened on a UAS drive: its index    */
+static char setFind[TR_SET_ARG_CHARS]; /* the Find box's text (task 49.38) */
+
+/* "Show advanced settings", or a search on: the advanced rows and their
+ * advanced choices are offered (task 49.38). */
+static int set_adv_now(void)
+{
+    return setAdv || !inst_has_text("", setFind);
+}
+
+/* The changes not applied on this tab that the search hides. */
+static int set_hidden_staged(void)
+{
+    int i;
+    int n = 0;
+
+    for (i = 0; i < setStgN; i++) {
+        if (setStg[i].R->Tab == setTab &&
+            !trs_listed(setStg[i].R, &setEnv, setAdv, setFind)) {
+            n++;
+        }
+    }
+    return n;
+}
+#define SET_ROWS_MAX        160     /* a tab's rows (task 49.38: about 80) */
+static const TRS_ROW *setRows[SET_ROWS_MAX];
 static int setRowN;
 static int setFocusTab = -1;
 static int setFocusScope = -1;
@@ -7098,6 +7991,9 @@ static int set_stg_find(const TRS_ROW *r, int scope)
 
 static int set_row_scope(const TRS_ROW *r)
 {
+    if (trs_loc(r) == TRS_LOC_DEVICE) {
+        return setScopeUas;
+    }
     return (trs_loc(r) == TRS_LOC_DRIVER && r->Tab != TRS_TAB_S98) ? setScope
                                                                    : -1;
 }
@@ -7128,12 +8024,23 @@ static void set_head(HWND dlg)
     tr_text_init(&t, text, sizeof(text));
     if (setTab == TRS_TAB_S98 && setS98 == SET_S98_RO) {
         tr_printf(&t, "%s ", setS98Why);
+    } else if (set_hidden_staged() > 0) {
+        int h = set_hidden_staged();
+        if (h == 1) {
+            tr_put(&t, "1 change not applied is hidden by Find; Apply "
+                       "applies it too.");
+        } else {
+            tr_printf(&t, "%d changes not applied are hidden by Find; "
+                          "Apply applies them too.", h);
+        }
     } else if (setPendN > 0) {
         tr_put(&t, "Changed, waiting for a restart:");
         for (i = 0; i < setPendN; i++) {
             tr_printf(&t, "%s %s", i == 0 ? "" : ",", setPend[i]->Name);
         }
         tr_put(&t, ".");
+    } else if (!inst_has_text("", setFind)) {
+        tr_put(&t, "Showing every setting that matches, advanced ones too.");
     } else if (lv_need_elev()) {
         tr_put(&t, "A change needs administrator rights: Apply asks for them.");
     } else {
@@ -7152,6 +8059,21 @@ static void set_fill_scope(HWND dlg)
     char text[300];
 
     SendMessageA(cb, CB_RESETCONTENT, 0, 0);
+    if (setComboUas && setTab == TRS_TAB_USB) {
+        /* A drive row selected (task 49.38): the drives. */
+        SendMessageA(cb, CB_ADDSTRING, 0, (LPARAM)"Every UAS drive here");
+        for (k = 0; k < lvCount[SET_UAS]; k++) {
+            const DNODE *n = &gw.N[lvDev[SET_UAS][k].Dn];
+            tr_sprintf(text, sizeof(text), "%s  %s", dn_name(n), n->Id);
+            SendMessageA(cb, CB_ADDSTRING, 0, (LPARAM)text);
+        }
+        if (setScopeUas >= lvCount[SET_UAS]) {
+            setScopeUas = -1;
+        }
+        SendMessageA(cb, CB_SETCURSEL, (WPARAM)(setScopeUas + 1), 0);
+        EnableWindow(cb, lvCount[SET_UAS] > 1 || setScopeUas >= 0);
+        return;
+    }
     if (setTab == TRS_TAB_S98) {
         SendMessageA(cb, CB_ADDSTRING, 0, (LPARAM)"this computer (every Stor98 drive)");
         SendMessageA(cb, CB_SETCURSEL, 0, 0);
@@ -7185,37 +8107,51 @@ static void set_fill_scope(HWND dlg)
     EnableWindow(cb, lvCount[d] > 1 || setScope >= 0);
 }
 
+static const TRS_ROW *set_selected(HWND dlg);
+
 static void set_fill_list(HWND dlg)
 {
     HWND lv = GetDlgItem(dlg, IDC_S_LIST);
     LVITEMA it;
     char now[200];
     char shown[300];
-    char def[96];
+    char def[160];
     char nv[160];
     int i;
     int row = 0;
-    int sep = 0;
+    const char *sep = NULL;
     int sel = (int)SendMessageA(lv, LVM_GETNEXTITEM, (WPARAM)-1, LVNI_SELECTED);
+    const TRS_ROW *was = set_selected(dlg);
+    int selRow = -1;
+    int firstItem = -1;     /* the first setting listed, not a header */
 
     setFilling = 1;
     SendMessageA(lv, LVM_DELETEALLITEMS, 0, 0);
     setRowN = 0;
-    for (i = 0; i < trs_row_count() && setRowN < 63; i++) {
+    for (i = 0; i < trs_row_count() && setRowN < SET_ROWS_MAX; i++) {
         const TRS_ROW *r = trs_row_at(i);
         int s;
-        if (r->Tab != setTab || trs_state(r, &setEnv) == TRS_HIDE ||
-            (r->View == TRS_VIEW_ADV && !setAdv)) {
+        /* Task 49.38: the rows the Find box lists (all of them when it is
+         * empty); a staged change of a row it hides stays staged. */
+        if (r->Tab != setTab || !trs_listed(r, &setEnv, setAdv, setFind)) {
             continue;
         }
-        if (r->View == TRS_VIEW_ADV && !sep) {
-            sep = 1;
-            memset(&it, 0, sizeof(it));
-            it.mask = LVIF_TEXT | LVIF_PARAM;
-            it.iItem = row++;
-            it.pszText = "Advanced settings";
-            it.lParam = -1;
-            SendMessageA(lv, LVM_INSERTITEMA, 0, (LPARAM)&it);
+
+        /* A header above each advanced group (task 49.38): "Advanced
+         * settings", then each group's own (instValues[]'s Group). */
+        if (r->View == TRS_VIEW_ADV) {
+            const INST_VALUE *gv = trs_value(r);
+            const char *g = gv != NULL && gv->Group != NULL
+                                ? gv->Group : "Advanced settings";
+            if (sep == NULL || strcmp(sep, g) != 0) {
+                sep = g;
+                memset(&it, 0, sizeof(it));
+                it.mask = LVIF_TEXT | LVIF_PARAM;
+                it.iItem = row++;
+                it.pszText = (LPSTR)sep;
+                it.lParam = -1;
+                SendMessageA(lv, LVM_INSERTITEMA, 0, (LPARAM)&it);
+            }
         }
         set_now(r, set_row_scope(r), now, sizeof(now));
         s = set_stg_find(r, set_row_scope(r));
@@ -7236,6 +8172,12 @@ static void set_fill_list(HWND dlg)
                 *dm = '\0';
             }
         }
+        if (r == was) {
+            selRow = row;
+        }
+        if (firstItem < 0) {
+            firstItem = row;
+        }
         setRows[setRowN] = r;
         memset(&it, 0, sizeof(it));
         it.mask = LVIF_TEXT | LVIF_PARAM;
@@ -7253,10 +8195,24 @@ static void set_fill_list(HWND dlg)
         SendMessageA(lv, LVM_SETITEMTEXTA, (WPARAM)row, (LPARAM)&it);
         row++;
     }
-    if (sel < 0 || sel >= row) {
-        sel = 0;
+    if (row == 0 && !inst_has_text("", setFind)) {
+        char none[TR_SET_ARG_CHARS + 40];
+        tr_sprintf(none, sizeof(none), "No setting matches \"%s\".", setFind);
+        memset(&it, 0, sizeof(it));
+        it.mask = LVIF_TEXT | LVIF_PARAM;
+        it.iItem = row++;
+        it.pszText = none;
+        it.lParam = -1;
+        SendMessageA(lv, LVM_INSERTITEMA, 0, (LPARAM)&it);
     }
-    if (row > 0) {
+    if (was != NULL) {
+        /* The same row selected again where it is still listed. */
+        sel = selRow;
+    }
+    if (sel < 0 || sel >= row) {
+        sel = firstItem;    /* -1: only the no-match line, none selected */
+    }
+    if (row > 0 && sel >= 0) {
         LVITEMA si;
         memset(&si, 0, sizeof(si));
         si.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
@@ -7305,8 +8261,12 @@ static void set_fill_choice(HWND dlg)
     int editable;
     int range;
     const INST_VALUE *v;
-    char caution[400];
+    char caution[1024];
 
+    if (r != NULL && (trs_loc(r) == TRS_LOC_DEVICE) != setComboUas) {
+        setComboUas = trs_loc(r) == TRS_LOC_DEVICE;
+        set_fill_scope(dlg);
+    }
     setFilling = 1;
     setNumRow = NULL;
     setNumDirty = 0;
@@ -7326,7 +8286,7 @@ static void set_fill_choice(HWND dlg)
     }
     editable = trs_state(r, &setEnv) == TRS_SHOW &&
                !(r->Tab == TRS_TAB_S98 && setS98 != SET_S98_OK);
-    if (trs_loc(r) == TRS_LOC_DRIVER && r->Tab != TRS_TAB_S98 && setScope >= 0) {
+    if (set_drvlike(r) && r->Tab != TRS_TAB_S98 && set_row_scope(r) >= 0) {
         TRS_RAW m;
         set_raw(TR_LV_MACHINE_KEY, r->Name, &m);
         if (m.State == TRS_RAW_DWORD || m.State == TRS_RAW_OTHER) {
@@ -7340,7 +8300,9 @@ static void set_fill_choice(HWND dlg)
     {
         INST_U32 cv[32];
         INST_U32 cm = 0;
-        int cn = trs_choices(r, &setEnv, 1, cv, 32);
+        /* The choices offered now: mode 4's caution with "Show advanced
+         * settings" alone (the owner, 2026-11-12). */
+        int cn = trs_choices(r, &setEnv, set_adv_now(), cv, 32);
         while (cn > 0) {
             cn--;
             if (cv[cn] < 32UL) {
@@ -7355,7 +8317,7 @@ static void set_fill_choice(HWND dlg)
     }
     if (trs_state(r, &setEnv) == TRS_GREY) {
         tr_printf(&t, " (%s.)", trs_only(r, &setEnv) != NULL ? trs_only(r, &setEnv) : "");
-    } else if (trs_loc(r) != TRS_LOC_DRIVER || r->Tab == TRS_TAB_S98) {
+    } else if (!set_drvlike(r) || r->Tab == TRS_TAB_S98) {
         tr_put(&t, " It is one value for the whole computer.");
     } else if (!editable && setScope >= 0) {
         tr_put(&t, " It is set machine-wide, which every controller uses: to "
@@ -7380,6 +8342,14 @@ static void set_fill_choice(HWND dlg)
         ShowWindow(cb, SW_HIDE);
         ShowWindow(num, SW_SHOW);
         ShowWindow(GetDlgItem(dlg, IDC_S_RANGE), SW_SHOW);
+        {
+            /* XhciCmTunnelBridge's text (task 49.38); digits otherwise. */
+            LONG st = GetWindowLongA(num, GWL_STYLE);
+            SetWindowLongA(num, GWL_STYLE, set_is_text(r)
+                                               ? (st & ~(LONG)ES_NUMBER)
+                                               : (st | (LONG)ES_NUMBER));
+            SendMessageA(num, EM_LIMITTEXT, (WPARAM)(TRS_VAL_CHARS - 1), 0);
+        }
         setNumRow = r;
         trs_range_text(r, &setEnv, rt, sizeof(rt));
         SetDlgItemTextA(dlg, IDC_S_RANGE, rt);
@@ -7390,19 +8360,25 @@ static void set_fill_choice(HWND dlg)
         } else if (s < 0) {
             TRS_RAW m;
             static TRS_RAW own[TR_MAX_CTRL];
-            int cnt = trs_loc(r) == TRS_LOC_DRIVER
+            int cnt = set_drvlike(r)
                           ? set_read_driver(r, set_row_scope(r), &m, own,
                                             TR_MAX_CTRL)
                           : 0;
-            if (trs_loc(r) != TRS_LOC_DRIVER) {
+            if (!set_drvlike(r)) {
                 set_raw(set_fixed_key(r), r->Name, &m);
             }
-            if (m.State == TRS_RAW_DWORD) {
+            if (set_is_text(r)) {
+                /* Task 49.38: the string in force, machine-wide first. */
+                tr_copy(now, m.IsText ? m.Text
+                             : cnt > 0 && own[0].IsText ? own[0].Text
+                                                        : "auto",
+                        sizeof(now));
+            } else if (m.State == TRS_RAW_DWORD) {
                 tr_sprintf(now, sizeof(now), "%lu", (unsigned long)m.Value);
             } else if (cnt > 0 && own[0].State == TRS_RAW_DWORD) {
                 tr_sprintf(now, sizeof(now), "%lu", (unsigned long)own[0].Value);
             } else {
-                tr_sprintf(now, sizeof(now), "%lu", (unsigned long)r->AbsentDef);
+                tr_sprintf(now, sizeof(now), "%lu", (unsigned long)trs_absent_def(r));
             }
             SetDlgItemTextA(dlg, IDC_S_NUM, now);
         } else {
@@ -7416,7 +8392,7 @@ static void set_fill_choice(HWND dlg)
         /* The static lies over the list box's right end: hidden, it never
          * paints over the arrow. */
         ShowWindow(GetDlgItem(dlg, IDC_S_RANGE), SW_HIDE);
-        n = trs_choices(r, &setEnv, setAdv, vals, 32);
+        n = trs_choices(r, &setEnv, set_adv_now(), vals, 32);
         for (k = 0; k < n; k++) {
             int idx;
             int isDef;
@@ -7428,7 +8404,7 @@ static void set_fill_choice(HWND dlg)
                             : (INST_U32)strtoul(inst_s98_default(s, envNt),
                                                 NULL, 10) == vals[k];
             } else {
-                isDef = vals[k] == r->InstallDef;
+                isDef = vals[k] == trs_install_def(r);
             }
             /* Stor98's auto already says "(default)" in its meaning. */
             if (isDef && strstr(text, "(default)") == NULL) {
@@ -7458,7 +8434,7 @@ static void set_fill_choice(HWND dlg)
                 int cnt = 0;
                 int same = 1;
                 int q;
-                if (trs_loc(r) == TRS_LOC_DRIVER) {
+                if (set_drvlike(r)) {
                     cnt = set_read_driver(r, set_row_scope(r), &m, own2,
                                           TR_MAX_CTRL);
                 } else {
@@ -7524,18 +8500,17 @@ static int set_stage(HWND dlg, const TRS_ROW *r, const char *value)
         TRS_RAW m;
         static TRS_RAW own[TR_MAX_CTRL];
         int cnt = 0;
-        INST_U32 v = (INST_U32)strtoul(canon, NULL, 10);
-        if (trs_loc(r) == TRS_LOC_DRIVER) {
+        if (set_drvlike(r)) {
             cnt = set_read_driver(r, scope, &m, own, TR_MAX_CTRL);
         } else {
             set_raw(set_fixed_key(r), r->Name, &m);
         }
-        if (m.State == TRS_RAW_DWORD) {
-            same = m.Value == v;
-        } else if (m.State != TRS_RAW_OTHER && cnt > 0) {
+        if (m.State == TRS_RAW_DWORD || m.State == TRS_RAW_OTHER) {
+            same = set_raw_is(r, &m, canon);
+        } else if (cnt > 0) {
             same = 1;
             for (k = 0; k < cnt; k++) {
-                if (!(own[k].State == TRS_RAW_DWORD && own[k].Value == v)) {
+                if (!set_raw_is(r, &own[k], canon)) {
                     same = 0;
                 }
             }
@@ -7621,39 +8596,46 @@ static void set_ehci_text(char *out, size_t cap, int *noDriver)
     }
 }
 
-/* 1 when the xhci98 controllers or the NHIs a fresh walk finds are not the
- * ones the window's model holds (by instance id), or it cannot tell. The
- * model itself is left alone: the main window's tree and the tray's lists
- * hang off it. */
+/* 1 when the xhci98 controllers, the NHIs or the UAS drives (task 49.38:
+ * a drive replugged since the window opened) a fresh walk finds are not
+ * the ones the window's model holds (by instance id and driver key), or
+ * it cannot tell. The model itself is left alone: the main window's tree
+ * and the tray's lists hang off it. */
 static int set_model_stale(void)
 {
     static WALK sw;
+    static const char *ida[TR_MAX_CTRL];
+    static const char *drva[TR_MAX_CTRL];
+    static const char *idb[TR_MAX_CTRL];
+    static const char *drvb[TR_MAX_CTRL];
     int d;
     int k;
-    int n;
+    int m;
     int i;
 
     if (!walk(&sw) || sw.Bad != 0) {
         return 1;
     }
-    for (d = 0; d < TR_LV_DRIVERS; d++) {
-        n = 0;
+    for (d = 0; d <= SET_UAS; d++) {
+        for (k = 0; k < lvCount[d]; k++) {
+            ida[k] = gw.N[lvDev[d][k].Dn].Id;
+            drva[k] = gw.N[lvDev[d][k].Dn].Driver;
+        }
+        m = 0;
         for (i = 0; i < sw.Count; i++) {
-            if (!lv_is_device(&sw.N[i], d)) {
+            int is = d == SET_UAS ? tr_eq(sw.N[i].Service, "xhciuas")
+                                  : lv_is_device(&sw.N[i], d);
+            if (!is) {
                 continue;
             }
-            n++;
-            for (k = 0; k < lvCount[d]; k++) {
-                if (tr_eq(gw.N[lvDev[d][k].Dn].Id, sw.N[i].Id) &&
-                    tr_eq(gw.N[lvDev[d][k].Dn].Driver, sw.N[i].Driver)) {
-                    break;
-                }
-            }
-            if (k == lvCount[d]) {
+            if (m >= TR_MAX_CTRL) {
                 return 1;
             }
+            idb[m] = sw.N[i].Id;
+            drvb[m] = sw.N[i].Driver;
+            m++;
         }
-        if (n != lvCount[d]) {
+        if (!trs_same_devices(ida, drva, lvCount[d], idb, drvb, m)) {
             return 1;
         }
     }
@@ -7666,6 +8648,8 @@ static void set_apply_window(HWND dlg)
 {
     static ELEVRUN r;
     static TRS_CHANGE ch[TRS_MAX_CHANGES];
+    static TRS_CHANGE che[TRS_MAX_CHANGES];
+    int nche = 0;
     static char req[TR_RES_BYTES];
     static int okRow[TRS_MAX_CHANGES];
     char msg[TR_RES_BYTES + 512];
@@ -7726,8 +8710,64 @@ static void set_apply_window(HWND dlg)
         tr_copy(ch[i].Value, setStg[i].Value, sizeof(ch[i].Value));
         tr_copy(ch[i].On, setStg[i].On, sizeof(ch[i].On));
     }
+    /* The elevated run walks afresh: the window's list is held to it
+     * first there too, so "every UAS drive" means the drives shown. */
+    if (lv_need_elev() && set_model_stale()) {
+        MessageBoxA(dlg, "The controllers or UAS drives have changed "
+                    "since this window opened. Close it and open it "
+                    "again; nothing was changed.", "xHCI98 Settings",
+                    MB_OK | MB_ICONINFORMATION);
+        return;
+    }
     if (lv_need_elev()) {
-        if (!trs_req_make(ch, setStgN, req, sizeof(req))) {
+        /* A drive row for every UAS drive goes as one change for each
+         * drive the window shows, by its instance id: the elevated run
+         * walks afresh and refuses one no longer there, and never writes
+         * a drive this window did not show (task 49.38). */
+        int over = 0;
+        for (i = 0; i < setStgN; i++) {
+            int k;
+            int all = set_driver_of(setStg[i].R) == SET_UAS &&
+                      ch[i].On[0] == '\0';
+            int cnt = all ? lvCount[SET_UAS] : 1;
+            for (k = 0; k < cnt; k++) {
+                TRS_CHANGE one = ch[i];
+                int q;
+                if (all) {
+                    tr_copy(one.On, gw.N[lvDev[SET_UAS][k].Dn].Id,
+                            sizeof(one.On));
+                }
+                if (set_driver_of(setStg[i].R) == SET_UAS) {
+                    /* The driver key the window saw, for the elevated
+                     * run to hold the drive to. */
+                    int u;
+                    for (u = 0; u < lvCount[SET_UAS]; u++) {
+                        if (tr_eq(gw.N[lvDev[SET_UAS][u].Dn].Id, one.On)) {
+                            tr_copy(one.Drv,
+                                    gw.N[lvDev[SET_UAS][u].Dn].Driver,
+                                    sizeof(one.Drv));
+                        }
+                    }
+                }
+                /* One change for each setting and device: a later staged
+                 * value replaces an earlier one, as the direct write's
+                 * order does. */
+                for (q = 0; q < nche; q++) {
+                    if (tr_eq(che[q].Name, one.Name) &&
+                        tr_eq(che[q].On, one.On)) {
+                        break;
+                    }
+                }
+                if (q < nche) {
+                    che[q] = one;
+                } else if (nche < TRS_MAX_CHANGES) {
+                    che[nche++] = one;
+                } else {
+                    over = 1;
+                }
+            }
+        }
+        if (over || !trs_req_make(che, nche, req, sizeof(req))) {
             MessageBoxA(dlg, "Too many changes at once: apply fewer.",
                         "xHCI98 Settings", MB_OK | MB_ICONWARNING);
             return;
@@ -7762,9 +8802,9 @@ static void set_apply_window(HWND dlg)
          * again apart from the window's model, and a change refuses. */
         if (set_model_stale()) {
             SetCursor(old);
-            MessageBoxA(dlg, "The controllers have changed since this window "
-                        "opened. Close it and open it again; nothing was "
-                        "changed.", "xHCI98 Settings",
+            MessageBoxA(dlg, "The controllers or UAS drives have changed "
+                        "since this window opened. Close it and open it "
+                        "again; nothing was changed.", "xHCI98 Settings",
                         MB_OK | MB_ICONINFORMATION);
             return;
         }
@@ -7880,7 +8920,8 @@ static int set_tab_at(HWND dlg, int idx)
 static void set_show_tab(HWND dlg)
 {
     static const int drv[] = { IDC_S_SCOPE_L, IDC_S_SCOPE, IDC_S_LIST,
-                               IDC_S_ADV, IDC_S_LEVEL, IDC_S_NOTE, IDC_S_DEF };
+                               IDC_S_ADV, IDC_S_LEVEL, IDC_S_NOTE, IDC_S_DEF,
+                               IDC_S_FIND_L, IDC_S_FIND };
     static const int tool[] = { IDC_S_LOGIN, IDC_S_WARN, IDC_S_FAST,
                                 IDC_S_FASTWIN, IDC_S_STOR, IDC_S_HK,
                                 IDC_S_HKKEY, IDC_S_HKNOTE, IDC_S_SND };
@@ -7939,7 +8980,13 @@ static BOOL CALLBACK settings_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         col.cx = w - w * 36 / 100 - w * 50 / 100;
         SendMessageA(lv, LVM_INSERTCOLUMNA, 2, (LPARAM)&col);
         setStgN = 0;
-        setAdv = 0;
+        setFind[0] = '\0';
+        SendDlgItemMessageA(dlg, IDC_S_FIND, EM_LIMITTEXT,
+                            (WPARAM)(sizeof(setFind) - 1), 0);
+        setAdv = setFocusUas >= 0;
+        setScopeUas = setFocusUas;
+        setComboUas = 0;
+        CheckDlgButton(dlg, IDC_S_ADV, setAdv ? BST_CHECKED : BST_UNCHECKED);
         set_env(&setEnv);
         if (setFocusTab >= 0 && set_tab_shown(setFocusTab)) {
             setTab = setFocusTab;
@@ -7972,6 +9019,32 @@ static BOOL CALLBACK settings_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             }
         }
         set_show_tab(dlg);
+        if (setFocusUas >= 0) {
+            /* The first drive row selected, the drive its scope. */
+            for (i = 0; i < setRowN; i++) {
+                if (trs_loc(setRows[i]) == TRS_LOC_DEVICE) {
+                    LVFINDINFOA fi;
+                    LVITEMA si;
+                    int item;
+                    memset(&fi, 0, sizeof(fi));
+                    fi.flags = LVFI_PARAM;
+                    fi.lParam = i;
+                    item = (int)SendMessageA(lv, LVM_FINDITEMA, (WPARAM)-1,
+                                             (LPARAM)&fi);
+                    if (item >= 0) {
+                        memset(&si, 0, sizeof(si));
+                        si.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
+                        si.state = LVIS_SELECTED | LVIS_FOCUSED;
+                        SendMessageA(lv, LVM_SETITEMSTATE, (WPARAM)item,
+                                     (LPARAM)&si);
+                        SendMessageA(lv, LVM_ENSUREVISIBLE, (WPARAM)item,
+                                     FALSE);
+                    }
+                    break;
+                }
+            }
+            set_fill_choice(dlg);
+        }
         hk_fill(dlg, hkKey == 0 ? -1 : hkRegistered);
         SetFocus(lv);
         return FALSE;
@@ -7982,6 +9055,8 @@ static BOOL CALLBACK settings_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             int idx = (int)SendMessageA(nh->hwndFrom, TCM_GETCURSEL, 0, 0);
             setTab = set_tab_at(dlg, idx);
             setScope = -1;
+            setScopeUas = -1;
+            setComboUas = 0;
             setScopeId[0] = '\0';
             set_show_tab(dlg);
             return TRUE;
@@ -7996,6 +9071,13 @@ static BOOL CALLBACK settings_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
     case WM_COMMAND:
         switch (LOWORD(wp)) {
         case IDC_S_SCOPE:
+            if (HIWORD(wp) == CBN_SELCHANGE && setComboUas) {
+                setScopeUas = (int)SendDlgItemMessageA(dlg, IDC_S_SCOPE,
+                                                       CB_GETCURSEL, 0, 0) - 1;
+                set_fill_list(dlg);
+                set_fill_choice(dlg);
+                return TRUE;
+            }
             if (HIWORD(wp) == CBN_SELCHANGE) {
                 setScope = (int)SendDlgItemMessageA(dlg, IDC_S_SCOPE,
                                                     CB_GETCURSEL, 0, 0) - 1;
@@ -8014,6 +9096,18 @@ static BOOL CALLBACK settings_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             setAdv = IsDlgButtonChecked(dlg, IDC_S_ADV) == BST_CHECKED;
             set_fill_list(dlg);
             set_fill_choice(dlg);
+            set_head(dlg);
+            return TRUE;
+        case IDC_S_FIND:
+            if (HIWORD(wp) == EN_CHANGE) {
+                /* Task 49.38: the list narrowed as the text is typed. */
+                setFind[0] = '\0';
+                SendDlgItemMessageA(dlg, IDC_S_FIND, WM_GETTEXT,
+                                    sizeof(setFind), (LPARAM)setFind);
+                set_fill_list(dlg);
+                set_fill_choice(dlg);
+                set_head(dlg);
+            }
             return TRUE;
         case IDC_S_CHOICE:
             if (HIWORD(wp) == CBN_SELCHANGE && !setFilling) {
@@ -8106,7 +9200,16 @@ static void settings_dialog(HWND owner, int tab, int dn)
     lv_collect();
     setFocusTab = tab;
     setFocusScope = -1;
-    if (tab >= 0 && dn >= 0) {
+    setFocusUas = -1;
+    set_env(&setEnv);
+    if (dn >= 0 && tr_eq(gw.N[dn].Service, "xhciuas")) {
+        setFocusTab = TRS_TAB_USB;
+        for (k = 0; k < lvCount[SET_UAS]; k++) {
+            if (lvDev[SET_UAS][k].Dn == dn) {
+                setFocusUas = k;
+            }
+        }
+    } else if (tab >= 0 && dn >= 0) {
         d = tab == TRS_TAB_CM ? TR_LV_XHCICM : TR_LV_XHCI98;
         for (k = 0; k < lvCount[d]; k++) {
             if (lvDev[d][k].Dn == dn && lvCount[d] > 1) {
@@ -8149,9 +9252,12 @@ static void settings_dialog(HWND owner, int tab, int dn)
 static int run_set(void)
 {
     static char msg[TR_RES_BYTES];
-    static char text[16384];
+    static char text[32768];
     static TRS_CHANGE ch[TRS_MAX_CHANGES];
     static char req[TR_RES_BYTES + 1];
+    static const TRS_ROW *rows[TRS_MAX_CHANGES];
+    static char canon[TRS_MAX_CHANGES][TRS_VAL_CHARS];
+    static int scopes[TRS_MAX_CHANGES];
     TRS_SUM sum;
     TR_TEXT t;
     int n = 0;
@@ -8165,7 +9271,9 @@ static int run_set(void)
     if (opts.SetShow) {
         tr_text_init(&t, text, sizeof(text));
         tr_put(&t, "Settings\n");
+        setBlockFind = opts.SetFind;    /* /set /show <text> (49.38) */
         set_block(&t);
+        setBlockFind = NULL;
         say(text, 0);
         return INST_EXIT_DONE;
     }
@@ -8208,10 +9316,21 @@ static int run_set(void)
                 "as an administrator. Nothing was changed.", 1);
             return INST_EXIT_REFUSED;
         }
-        set_env(&setEnv);
+        /* The changes checked before any value's note, so that a refused
+         * one prints its refusal alone (TRSETWARN.1); set_apply checks
+         * again as it writes. */
+        tr_text_init(&t, msg, opts.Result ? TR_RES_BYTES - 256 : sizeof(msg));
+        if (set_check(ch, n, &t, rows, canon, scopes) != 0) {
+            if (opts.Result && elev_child_answer(INST_EXIT_REFUSED, msg)) {
+                return INST_EXIT_REFUSED;
+            }
+            say(msg, 1);
+            return INST_EXIT_REFUSED;
+        }
         for (i = 0; i < n; i++) {
-            if (trs_a5_confirm(trs_row_find(ch[i].Name), &setEnv,
-                               ch[i].Value)) {
+            int note = trs_set_note(trs_row_find(ch[i].Name), &setEnv,
+                                    ch[i].Value);
+            if (note == TRS_NOTE_A5) {
                 char at[800];
                 trs_a5_text(at, sizeof(at));
                 say(at, 1);
@@ -8220,7 +9339,7 @@ static int run_set(void)
                     return INST_EXIT_REFUSED;
                 }
             }
-            if (inst_eq(ch[i].Name, "XhciIntelPortSwitch")) {
+            if (note == TRS_NOTE_PSW) {
                 char pt[800];
                 char eh[600];
                 int noDriver = 0;
@@ -8526,6 +9645,17 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
                    "stopped. Look at the tree again.");
         goto out;
     }
+    {
+        /* Again on this walk: a member may be left to the BIOS since. Read
+         * before "not started", as the first check (record 24 section
+         * 7.6). */
+        int bh = ej_bios_held(&w, u);
+        if (bh != INST_BH_GO) {
+            tr_put(&t, bh == INST_BH_HELD ? instBiosHeldConsole
+                                          : instBiosUnsureConsole);
+            goto out;
+        }
+    }
     if (!dn_started(&w.N[u])) {
         char tag[64];
         char sen[96];
@@ -8571,7 +9701,10 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
             /* The incarnation about to stop, for the confirmation. */
             ej_mark_pre(q, &w, u, &pre);
         }
-        vetoName[0] = '\0';
+        /* Zeroed whole, so a name the ANSI call leaves unterminated ends
+         * at the zeros (2026-11-14: a veto name printed with stale bytes
+         * after it). */
+        memset(vetoName, 0, sizeof(vetoName));
         cr = api.Eject(w.N[u].Dn, &veto, vetoName, MAX_PATH, 0);
         vetoName[MAX_PATH - 1] = '\0';
         cr = tr_eject_cr(cr, veto);
@@ -9245,7 +10378,7 @@ static int usb_run(const USBREQ *q, char *msg, size_t cap, int *rights)
     if (envNt) {
         ULONG veto = 0;
         char vetoName[MAX_PATH];
-        vetoName[0] = '\0';
+        memset(vetoName, 0, sizeof(vetoName));
         cr = api.Eject(w.N[d].Dn, &veto, vetoName, MAX_PATH, 0);
         vetoName[MAX_PATH - 1] = '\0';
         {
@@ -9445,9 +10578,22 @@ static void ej_unit(HWND owner, int u, int fromTray)
         return;
     }
     q = (EJREQ *)calloc(1, sizeof(EJREQ));
-    why = ej_why_not(u);
     if (q == NULL) {
         return;
+    }
+    {
+        /* 98 SE and ME: a drive behind it runs through the BIOS, or that
+         * could not be told - read before every other reason, "not
+         * started" included (record 24 section 7.6). */
+        int bh;
+        if (ej_first(u, &bh, &why) == TR_EF_BIOS) {
+            MessageBoxA(owner, bh == INST_BH_HELD ? instBiosHeldDialog
+                                                  : instBiosUnsureDialog,
+                        "Stop a Thunderbolt device",
+                        MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
+            free(q);
+            return;
+        }
     }
     if (why != NULL || !ej_prepare(u, q)) {
         tr_sprintf(msg, sizeof(msg), "%s cannot be stopped here: %s.",
@@ -11512,7 +12658,7 @@ static void init_menu(HMENU m)
     }
     EnableMenuItem(m, IDM_EJECT, MF_BYCOMMAND |
                                      (u >= 0 && (usb_listed(u) ? usb_why(u) == NULL
-                                                               : ej_why_not(u) == NULL)
+                                                               : ej_offered(u))
                                           ? MF_ENABLED : MF_GRAYED));
     if (GetMenuState(m, IDM_LOGIN, MF_BYCOMMAND) != (UINT)-1) {
         login_item(m, 0);
@@ -11572,6 +12718,10 @@ static int command(HWND w, UINT id)
     case IDM_SETTINGS: {
         int sel = tree_selected();
         int lvd = lv_driver_of_node(sel);
+        if (lvd < 0 && set_uas_node(sel)) {
+            settings_dialog(w, TRS_TAB_USB, tn[sel].Dn);
+            return 1;
+        }
         settings_dialog(w, lvd < 0 ? -1 : lvd == TR_LV_XHCICM ? TRS_TAB_CM
                                                              : TRS_TAB_USB,
                         lvd >= 0 && sel >= 0 ? tn[sel].Dn : -1);
@@ -11706,7 +12856,14 @@ static LRESULT CALLBACK main_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
                     /* A controller's or an NHI's menu also opens its
                      * driver's logging level (section 7.5). */
                     int lvd = lv_driver_of_node(tree_selected());
+                    int uas = set_uas_node(tree_selected());
                     init_menu(action);
+                    if (uas && lvd < 0) {
+                        /* A UAS drive's own two values (task 49.38). */
+                        AppendMenuA(action, MF_SEPARATOR, 0, NULL);
+                        AppendMenuA(action, MF_STRING, IDM_SETTINGS,
+                                    "Setti&ngs...");
+                    }
                     if (lvd >= 0) {
                         AppendMenuA(action, MF_SEPARATOR, 0, NULL);
                         AppendMenuA(action, MF_STRING, IDM_LEVEL,
@@ -11715,6 +12872,11 @@ static LRESULT CALLBACK main_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
                                     "Setti&ngs...");
                     }
                     TrackPopupMenu(action, TPM_RIGHTBUTTON, p.x, p.y, 0, w, NULL);
+                    if (uas && lvd < 0) {
+                        DeleteMenu(action, IDM_SETTINGS, MF_BYCOMMAND);
+                        DeleteMenu(action, GetMenuItemCount(action) - 1,
+                                   MF_BYPOSITION);
+                    }
                     if (lvd >= 0) {
                         DeleteMenu(action, IDM_SETTINGS, MF_BYCOMMAND);
                         DeleteMenu(action, IDM_LEVEL, MF_BYCOMMAND);
@@ -12033,6 +13195,11 @@ static void tray_remove(void)
 #define TRAY_POP_FAST   2
 #define TRAY_POP_DRIVE  3       /* the USB drive notice's (section 7.8)     */
 #define TRAY_POP_QS     16      /* 16 and on: the quick saves', by folder slot */
+/* Whether the last tray_balloon_send was taken: the icon there and the
+ * shell's call accepted, or on 98 SE the tool's own pop-up ready (task
+ * 49.43: a held port's announcement stays owed until it is). */
+static int balloonSentOk;
+
 /* The balloon itself; 1 when the shell's was asked for. */
 static int tray_balloon_send(const char *title, const char *text, int warn,
                              int kind)
@@ -12041,6 +13208,7 @@ static int tray_balloon_send(const char *title, const char *text, int warn,
     int fast = kind == TRAY_BK_FAST;
 
     tr_copy(lastEvent, text, sizeof(lastEvent));
+    balloonSentOk = 0;
     if (!iconAdded) {
         return 0;
     }
@@ -12054,6 +13222,7 @@ static int tray_balloon_send(const char *title, const char *text, int warn,
     }
     if (!shellV5) {
         tray_update();
+        balloonSentOk = tr_pop_ready(hTray);
         /* 98 SE: the tool's own pop-up in the balloon's place (record 25
          * section 16). */
         tr_pop_show(hTray, WM_TRAYICON,
@@ -12078,7 +13247,7 @@ static int tray_balloon_send(const char *title, const char *text, int warn,
     if (balloonNoSound) {
         n.dwInfoFlags |= 0x10UL;            /* NIIF_NOSOUND (shell 6.0) */
     }
-    Shell_NotifyIconA(NIM_MODIFY, (PNOTIFYICONDATAA)&n);
+    balloonSentOk = Shell_NotifyIconA(NIM_MODIFY, (PNOTIFYICONDATAA)&n) != 0;
     tr_bkind_step(&fastKind, fast ? TR_BE_SENT : TR_BE_OTHER);
     tr_bkind_step(&qsKind, qsSending && kind != TRAY_BK_DRIVE ? TR_BE_SENT
                                                              : TR_BE_OTHER);
@@ -12326,6 +13495,242 @@ static void tray_red(void)
     Shell_NotifyIconA(NIM_MODIFY, (PNOTIFYICONDATAA)&n);
 }
 
+/* Task 49.43: the tray's watch of held ports, every HOLD_POLL_EVERY polls
+ * (10 s). The reading runs on a thread of its own (a job, as the quick
+ * save's), one at a time: a controller whose door is held by a recovery
+ * can then keep that job waiting, never the tray. The job reads each
+ * xhci98 controller listed when it started and posts the results back
+ * (WM_TRHOLD); the tray feeds each location read to the announce-once
+ * queue and shows at most one announcement a watch, the oldest still true,
+ * as hold_notice_on says, and never within HOLD_GAP_MS of another balloon
+ * of the tool's (a removal warning keeps the screen). With the
+ * announcement off the queue is emptied unshown. The job and its buffer are
+ * allocated and freed on the tray's thread alone (hold_read_path): a job
+ * whose results cannot be posted is handed back through holdLost. */
+#define HOLD_POLL_EVERY 10
+#define HOLD_GAP_MS     10000
+#define WM_TRHOLD       (WM_APP + 9)
+
+typedef struct _HOLDJOB {
+    int Count;
+    char Path[TR_MAX_CTRL][TR_NAME_LEN];
+    TR_U32 Key[TR_MAX_CTRL];
+    char Name[TR_MAX_CTRL][96];
+    HOLDRES Res[TR_MAX_CTRL];
+    unsigned char *Buf;         /* TR_SNAP_BUFFER_BYTES, the door's      */
+    TR_U32 Start;               /* holdStart: where its reading began    */
+} HOLDJOB;
+
+static TR_HOLDQ holdQ;
+static int holdQInit;
+/* The job's hand-over. Plain aligned stores, ordered by volatile: the
+ * tray sets holdBusy before CreateThread and reads it only on its own
+ * thread; the job thread stores holdLost and then holdBusy 2 and nothing
+ * after (no InterlockedExchange: an import the x86 allowlist has no row
+ * for). */
+static LONG volatile holdBusy; /* 0 none, 1 a job out, 2 one lost      */
+static HOLDJOB *volatile holdLost; /* the lost job, while holdBusy is 2 */
+/* Counted on the tray's thread at every suspend, resume and device change;
+ * the job thread loads it (a plain aligned load) as each controller's read
+ * begins, and a reading across one is not used (tr_hold_reading_usable). */
+static TR_U32 volatile holdEpoch;
+/* Where the next job starts its reading (tr_hold_rot_index), on the tray's
+ * thread: one on from the last job's start, below the controllers' count. */
+static TR_U32 holdStart;
+
+static TR_U32 hold_key(int c)
+{
+    char key[280];
+
+    tr_key(key, sizeof(key), "C", uc[c].DrvKey, uc[c].Path);
+    return inst_fnv1a(INST_FNV_START, (const unsigned char *)key,
+                      strlen(key));
+}
+
+static DWORD WINAPI hold_thread(LPVOID arg)
+{
+    HOLDJOB *job = (HOLDJOB *)arg;
+    int i;
+
+    for (i = 0; i < job->Count; i++) {
+        job->Res[i].Epoch = holdEpoch;
+        hold_read_path(job->Path[i], job->Buf, &job->Res[i]);
+    }
+    if (hTray == NULL || !PostMessageA(hTray, WM_TRHOLD, 0, (LPARAM)job)) {
+        holdLost = job;
+        holdBusy = 2;
+    }
+    return 0;
+}
+
+static void hold_free(HOLDJOB *job)
+{
+    if (job != NULL) {
+        free(job->Buf);
+        free(job);
+    }
+}
+
+/* The watch's start, from the poll: a job for the controllers listed now,
+ * unless the last one has not come back. */
+static void hold_poll(void)
+{
+    HOLDJOB *job;
+    HANDLE th;
+    DWORD id;
+    int c;
+    int ours[TR_MAX_CTRL];
+    int nOurs = 0;
+    int i;
+
+    if (holdBusy == 2) {
+        job = holdLost;
+        holdLost = NULL;
+        hold_free(job);
+        holdBusy = 0;
+    }
+    if (holdBusy) {
+        return;
+    }
+    job = (HOLDJOB *)calloc(1, sizeof(HOLDJOB));
+    if (job == NULL) {
+        return;
+    }
+    job->Buf = (unsigned char *)malloc(TR_SNAP_BUFFER_BYTES);
+    if (job->Buf == NULL) {
+        free(job);
+        return;
+    }
+    job->Start = holdStart;
+    for (c = 0; c < ucCount && nOurs < TR_MAX_CTRL; c++) {
+        if (uc[c].Ours) {
+            ours[nOurs++] = c;
+        }
+    }
+    /* Kept below the count, so the counter never wraps and the turn of
+     * every controller comes within nOurs watches. */
+    holdStart = nOurs > 0 ? job->Start % (TR_U32)nOurs + 1 : 0;
+    /* Rotated, so a slow door elsewhere cannot age the same controller's
+     * reading past TR_HOLD_FRESH_MS at every watch. */
+    for (i = 0; i < nOurs; i++) {
+        c = ours[tr_hold_rot_index(job->Start, nOurs, i)];
+        tr_copy(job->Path[job->Count], uc[c].Path, sizeof(job->Path[0]));
+        job->Key[job->Count] = hold_key(c);
+        tr_copy(job->Name[job->Count],
+                uc[c].Dn >= 0 && uc[c].Dn < gw.Count
+                    ? dn_name(&gw.N[uc[c].Dn]) : "",
+                sizeof(job->Name[0]));
+        job->Count++;
+    }
+    if (job->Count == 0) {
+        hold_free(job);
+        return;
+    }
+    holdBusy = 1;
+    th = CreateThread(NULL, 0, hold_thread, job, 0, &id);
+    if (th == NULL) {
+        hold_free(job);
+        holdBusy = 0;
+        return;
+    }
+    CloseHandle(th);
+}
+
+/* Whether the announcement is shown (owner, 2026-11-14): on 2000 and
+ * later as the removal warning's option (warn_on), on 98 SE and ME, which
+ * do not offer it, always (tr_hold_notice_on). */
+static int hold_notice_on(void)
+{
+    return tr_hold_notice_on(envNt, envNt ? warn_on() : 0);
+}
+
+/* The job's results, on the tray's thread. */
+static void hold_done(HOLDJOB *job)
+{
+    TR_HQENT e;
+    TR_U32 i;
+    TR_U32 readOk[TR_MAX_CTRL];
+    TR_U32 now[TR_MAX_CTRL];
+    int nOk = 0;
+    int nNow = 0;
+    int k;
+    int c;
+    char text[256];
+    const HOLDRES *r;
+    DWORD tick;
+
+    if (!holdQInit) {
+        tr_holdq_init(&holdQ);
+        holdQInit = 1;
+    }
+    /* The controllers listed now, not when the job began: one removed
+     * meanwhile is forgotten with its announcements, and its reading is
+     * not taken. */
+    for (c = 0; c < ucCount && nNow < TR_MAX_CTRL; c++) {
+        if (uc[c].Ours) {
+            now[nNow++] = hold_key(c);
+        }
+    }
+    tr_holdq_keep_keys(&holdQ, now, nNow);
+    tick = GetTickCount();
+    for (k = 0; k < job->Count; k++) {
+        r = &job->Res[k];
+        for (c = 0; c < nNow && now[c] != job->Key[k]; c++) {
+        }
+        /* A reading older than TR_HOLD_FRESH_MS (another controller's door
+         * kept the job waiting after it), or one with a sleep or a device
+         * change since its own read began, may describe a hold since
+         * ended: not used, as one not read this time. */
+        if (r->State != 1 || c == nNow ||
+            !tr_hold_reading_usable((TR_U32)r->At, (TR_U32)tick,
+                                    TR_HOLD_FRESH_MS, r->Epoch,
+                                    holdEpoch)) {
+            continue;
+        }
+        readOk[nOk++] = job->Key[k];
+        /* Root ports alone: a hub's location keeps its hold after the hub
+         * is unplugged (the driver clears it only when it reuses the hub
+         * object or starts), so a hub's hold is not announced. */
+        for (i = 0; i < r->Map.RootLocs && i < sizeof(r->Hold); i++) {
+            (void)tr_holdq_observe(&holdQ, job->Key[k], i, r->Hold[i]);
+        }
+    }
+    if (!hold_notice_on()) {
+        while (tr_holdq_next(&holdQ, &e)) {
+        }
+        goto done;
+    }
+    if (storHaveOther && GetTickCount() - storOtherAt < HOLD_GAP_MS) {
+        goto done;      /* another balloon keeps the screen */
+    }
+    if (!shellV5 && !tr_pop_idle()) {
+        goto done;      /* 98 SE: shown at once or not yet, never queued */
+    }
+    /* Owed, as the faster notice is, until the icon is there (after an
+     * Explorer restart, or at login before it is added). */
+    if (!iconAdded) {
+        goto done;
+    }
+    /* Shown only from this reading of its controller; one not read this
+     * time keeps its announcement for a later watch. It leaves the queue
+     * only once the send is taken (tr_holdq_sent); one refused is tried
+     * at a later watch while its hold stays, TR_HQ_TRIES times at most. */
+    if (!tr_holdq_find(&holdQ, readOk, nOk, &e)) {
+        goto done;
+    }
+    for (k = 0; k < job->Count && job->Key[k] != e.Key; k++) {
+    }
+    if (k == job->Count) {
+        goto done;
+    }
+    r = &job->Res[k];
+    tr_hold_balloon(e.Hold, 0, e.Loc + 1, job->Name[k], text, sizeof(text));
+    tray_balloon(TR_HOLD_TITLE, text, 1);
+    (void)tr_holdq_sent(&holdQ, &e, balloonSentOk);
+done:
+    hold_free(job);
+    holdBusy = 0;
+}
 /* One second's poll: every NHI's query, the snapshot and its events
  * (record 25 section 7.2). */
 static void poll(void)
@@ -12426,6 +13831,9 @@ static void poll(void)
     if (changed || pollCount % 5 == 0) {
         red_hc_read();
     }
+    if (pollCount % HOLD_POLL_EVERY == 0) {
+        hold_poll();
+    }
     tray_red();
 }
 
@@ -12478,7 +13886,9 @@ static void tray_unit_menu(void)
                     gw.N[gw.N[i].Parent].PortNhi < 0) {
                     continue;
                 }
-                why = ej_why_not(i);
+                /* Offered when the BIOS-held check refuses it, so that
+                 * choosing it shows why (record 24 section 7.6). */
+                why = ej_offered(i) ? NULL : ej_why_not(i);
                 unit_label(i, name, sizeof(name));
             }
             if (!heading) {
@@ -12622,17 +14032,32 @@ static void quit_all(void)
 
 static int snap_child(const char *args, const char *dir, char *outPath,
                       DWORD waitMs);
+static void acpi_path(char *out, size_t cap, const char *dir,
+                      const char *name);
 static int snap_hcd_number(const UCTRL *c);
+static int snap_hcds(int *hcds, int cap);
+static int snap_all(const char *dir, const char *given, int sysinfo,
+                    const int *hcds, int nh, TR_SNAP_ONE *one, char *base,
+                    char *msg, size_t cap);
 
 /* What the tray's thread hands the worker and gets back: allocated and
  * freed by the tray's thread alone (XHCITR.EXE's CRT is the
- * single-threaded one, so the worker allocates nothing). */
+ * single-threaded one, so the worker allocates nothing). Task 49.35: every
+ * xhci98 controller's door number, read by the tray's thread, and the
+ * worker's room for their snapshots' records. */
 #define QS_TEXT_BYTES       2048
 typedef struct _QSJOB {
-    int Hcd;                    /* the xhci98 controller for /snapshot    */
+    int Hcds[TR_MAX_CTRL];      /* the xhci98 controllers for /snapshot   */
+    int HcdCount;
+    TR_SNAP_ONE Snap[TR_MAX_CTRL];
+    int OnOurs;                 /* task 49.39: its folder's drive is a disk
+                                   under an xhci98 controller (the tray's
+                                   model, read before the save starts)    */
     char Text[QS_TEXT_BYTES];   /* the outcome, for the balloon           */
     char Dir[MAX_PATH + 64];    /* the folder made, its click's            */
 } QSJOB;
+
+static int qs_flush(const char *dir, const char *name);
 
 /* ======================================================================== */
 /* Quick save and its hotkey (record 25 section 22; owner, 2026-11-07)      */
@@ -12709,6 +14134,7 @@ static DWORD WINAPI qs_thread(LPVOID param)
     char args[MAX_PATH + 128];
     char out[MAX_PATH];
     char snapHead[1024];
+    char snapMsg[TR_SNAP_MSG_BYTES];
     char snapName[16];
     char snapFiles[24];
     SYSTEMTIME st;
@@ -12722,6 +14148,7 @@ static DWORD WINAPI qs_thread(LPVOID param)
     int rcSnap;
     int rcSet;
     int setOk = 0;
+    int flushed;
 
     GetLocalTime(&st);
     tr_text_init(&t, text, QS_TEXT_BYTES);
@@ -12749,16 +14176,25 @@ static DWORD WINAPI qs_thread(LPVOID param)
     if (out[0] != '\0') {
         DeleteFileA(out);
     }
-    tr_sprintf(snapArgs, sizeof(snapArgs), "/snapshot /c %d", job->Hcd);
-    rcSnap = snap_child(snapArgs, dir, out, 180000);
-    /* The snapshot's files are named by the run that wrote them. */
+    /* Task 49.35: every controller's snapshot, one set each. */
     tr_copy(snapFiles, "(snapshot)", sizeof(snapFiles));
-    if (out[0] != '\0') {
-        snap_read_head(out, snapHead, sizeof(snapHead));
-        if (tr_snap_named(snapHead, snapName, sizeof(snapName))) {
+    snapMsg[0] = '\0';
+    if (job->HcdCount > 0) {
+        rcSnap = snap_all(dir, NULL, 1, job->Hcds, job->HcdCount, job->Snap,
+                          snapName, snapMsg, sizeof(snapMsg));
+        if (snapName[0] != '\0') {
             tr_sprintf(snapFiles, sizeof(snapFiles), "%s.*", snapName);
         }
-        DeleteFileA(out);
+    } else {
+        tr_sprintf(snapArgs, sizeof(snapArgs), "/snapshot /c 0");
+        rcSnap = snap_child(snapArgs, dir, out, 180000);
+        if (out[0] != '\0') {
+            snap_read_head(out, snapHead, sizeof(snapHead));
+            if (tr_snap_named(snapHead, snapName, sizeof(snapName))) {
+                tr_sprintf(snapFiles, sizeof(snapFiles), "%s.*", snapName);
+            }
+            DeleteFileA(out);
+        }
     }
     rcSet = snap_child("/set /show", dir, out, 120000);
     if (out[0] != '\0') {
@@ -12778,7 +14214,8 @@ static DWORD WINAPI qs_thread(LPVOID param)
                    "%02u:%02u:%02u\r\n\r\n"
                    "REPORT.TXT    the report, the drivers' logs and the "
                    "snapshot's text (%s)\r\n"
-                   "%-13s the driver's snapshot (%s)\r\n"
+                   "%-13s the driver's snapshots, a set for each "
+                   "controller (%s)\r\n"
                    "XHCISET.TXT   the settings (%s)\r\n",
                    XHCITR_VERSION, (unsigned)st.wYear, (unsigned)st.wMonth,
                    (unsigned)st.wDay, (unsigned)st.wHour, (unsigned)st.wMinute,
@@ -12787,10 +14224,92 @@ static DWORD WINAPI qs_thread(LPVOID param)
                    rcSnap == 0 ? "saved" : "NOT complete",
                    rcSet == 0 && setOk ? "saved" : "NOT saved");
         WriteFile(f, r, (DWORD)strlen(r), &w, NULL);
+        if (snapMsg[0] != '\0') {
+            /* Task 49.35: each controller's set, or why it is not whole;
+             * written a line at a time, each ending in CR LF. */
+            const char *s = snapMsg;
+
+            WriteFile(f, "\r\n", 2, &w, NULL);
+            while (*s != '\0') {
+                const char *e = strchr(s, '\n');
+                size_t len = e != NULL ? (size_t)(e - s) : strlen(s);
+
+                if (len > 0 && s[len - 1] == '\r') {
+                    len--;
+                }
+                WriteFile(f, s, (DWORD)len, &w, NULL);
+                WriteFile(f, "\r\n", 2, &w, NULL);
+                if (e == NULL) {
+                    break;
+                }
+                s = e + 1;
+            }
+        }
         CloseHandle(f);
     }
+    /* Task 49.39: what was written, on the disk before the balloon. */
+    flushed = qs_flush(dir, "REPORT.TXT") & qs_flush(dir, "XHCISET.TXT") &
+              qs_flush(dir, "README.TXT");
+    if (job->HcdCount > 0 && snapName[0] != '\0') {
+        /* Task 49.35's sets: BASE.D<k>, .T<k>, .B<k>, .P<k>, each the
+         * parent moved into the folder. */
+        static const char kinds[TR_SNAP_FILES] = { 'D', 'T', 'B', 'P' };
+        char one[24];
+        int k;
+        int e;
+
+        for (k = 0; k < job->HcdCount; k++) {
+            for (e = 0; e < TR_SNAP_FILES; e++) {
+                if (!job->Snap[k].Moved[e]) {
+                    continue;
+                }
+                tr_sprintf(one, sizeof(one), "%s.%c%c", snapName,
+                           kinds[e], tr_snap_kchar(job->Snap[k].Hcd));
+                if (!qs_flush(dir, one)) {
+                    flushed = 0;
+                }
+            }
+        }
+        /* Task 49.37's BASE.CT<n> and BASE.CB<n>, which the /cmonly child
+         * writes into the folder itself (n one hex digit): each one there
+         * flushed, none being no failure (a machine with no connection
+         * manager has none). Probed by name, so the image imports nothing
+         * xhcitr-imports.allow does not list. */
+        {
+            static const char hexd[] = "0123456789ABCDEF";
+            char cm[24];
+            char cmPath[MAX_PATH + 96];
+            int c;
+            int b;
+
+            for (c = 0; c < 16; c++) {
+                for (b = 0; b < 2; b++) {
+                    tr_sprintf(cm, sizeof(cm), "%s.C%c%c", snapName,
+                               b ? 'B' : 'T', hexd[c]);
+                    tr_sprintf(cmPath, sizeof(cmPath), "%s\\%s", dir, cm);
+                    if (GetFileAttributesA(cmPath) != 0xFFFFFFFFUL &&
+                        !qs_flush(dir, cm)) {
+                        flushed = 0;
+                    }
+                }
+            }
+        }
+    } else if (strcmp(snapFiles, "(snapshot)") != 0) {
+        static const char *const ext4[4] = { "DEV", "TXT", "BIN", "PSC" };
+        char one[24];
+        int e;
+
+        for (e = 0; e < 4; e++) {
+            tr_sprintf(one, sizeof(one), "%s.%s", snapName, ext4[e]);
+            if (!qs_flush(dir, one)) {
+                flushed = 0;
+            }
+        }
+    } else {
+        flushed = 0;
+    }
     tr_copy(job->Dir, dir, sizeof(job->Dir));
-    if (rcReport == 0 && rcSnap == 0 && rcSet == 0 && setOk) {
+    if (rcReport == 0 && rcSnap == 0 && rcSet == 0 && setOk && flushed) {
         /* Windows 2000 reports no click on a balloon (task 43.68). */
         tr_printf(&t, "Saved to %s.%s", dir,
                   tr_fast_click_balloon(envNt, envMajor, envMinor)
@@ -12802,6 +14321,19 @@ static DWORD WINAPI qs_thread(LPVOID param)
                   rcReport == 0 ? "saved" : "NOT complete",
                   rcSnap == 0 ? "saved" : "NOT complete",
                   rcSet == 0 && setOk ? "saved" : "NOT saved");
+        if (rcSnap != 0 && snapMsg[0] != '\0') {
+            /* Task 49.35: which controller, and where its files are; the
+             * README.TXT in the folder holds the whole of it. */
+            tr_put(&t, "\n");
+            tr_put(&t, snapMsg);
+        }
+        if (!flushed) {
+            tr_put(&t, " NOT all of it was written to the disk.");
+        }
+    }
+    if (job->OnOurs) {
+        tr_put(&t, "\nThis folder is on a USB drive xHCI98 drives: if that "
+                   "drive is the one in trouble, save to another disk.");
     }
     if (where == TRS_QS_DOCS) {
         tr_put(&t, "\n(Your documents folder: the xHCI98 folder could not "
@@ -12812,6 +14344,66 @@ post:
      * window gone, it is left (the program is ending). */
     if (hTray != NULL) {
         PostMessageA(hTray, WM_TRQS, where != TRS_QS_NONE, (LPARAM)job);
+    }
+    return 0;
+}
+
+/* Task 49.39 (record 25 section 22 item 14): a file the quick save wrote,
+ * opened again and flushed to the disk. 1 flushed, 0 not (absent, or the
+ * flush refused). */
+static int qs_flush(const char *dir, const char *name)
+{
+    char path[MAX_PATH + 96];
+    HANDLE f;
+    int ok;
+
+    tr_sprintf(path, sizeof(path), "%s\\%s", dir, name);
+    f = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    ok = FlushFileBuffers(f) != 0;
+    CloseHandle(f);
+    return ok;
+}
+
+/* Task 49.39: whether drive `letter` is a disk the tree shows under a
+ * controller xhci98.sys drives. The tray's thread: gw is its model. */
+static int qs_letter_ours(char letter)
+{
+    int i;
+    int p;
+    int hops;
+
+    if (letter >= 'a' && letter <= 'z') {
+        letter = (char)(letter - 'a' + 'A');
+    }
+    for (i = 0; i < gw.Count; i++) {
+        if (strchr(gw.N[i].Letters, letter) == NULL) {
+            continue;
+        }
+        for (p = i, hops = 0; p >= 0 && p < gw.Count && hops < 64;
+             p = gw.N[p].Parent, hops++) {
+            if (gw.N[p].IsUsbHc && lstrcmpiA(gw.N[p].Service, "xhci98") == 0) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/* The quick save's folder's drive, as qs_thread will choose it. */
+static int qs_target_ours(void)
+{
+    char base[MAX_PATH];
+
+    if (reg_text(HKEY_LOCAL_MACHINE, INST_DIR_KEY, INST_DIR_VALUE, base,
+                 sizeof(base)) > 0 && base[0] != '\0' && base[1] == ':') {
+        return qs_letter_ours(base[0]);
+    }
+    if (qs_docs(base, sizeof(base)) && base[0] != '\0' && base[1] == ':') {
+        return qs_letter_ours(base[0]);
     }
     return 0;
 }
@@ -12834,19 +14426,11 @@ static void quick_save(void)
     if (job == NULL) {
         return;
     }
-    /* The controller Save Snapshot would take: the first xhci98 one (on
-     * 98 SE and ME another stack can hold HCD0). */
-    if (ucCount == 0) {
-        usb_controllers();
-    }
-    for (i = 0; i < ucCount; i++) {
-        if (uc[i].Ours && (job->Hcd = snap_hcd_number(&uc[i])) >= 0) {
-            break;
-        }
-    }
-    if (i == ucCount) {
-        job->Hcd = 0;
-    }
+    /* Task 49.35: every xhci98 controller, as Save Snapshot takes them
+     * (on 98 SE and ME another stack can hold HCD0). */
+    job->HcdCount = snap_hcds(job->Hcds, TR_MAX_CTRL);
+    (void)i;
+    job->OnOurs = qs_target_ours();
     qsBusy = 1;
     th = CreateThread(NULL, 0, qs_thread, job, 0, &id);
     if (th == NULL) {
@@ -13086,6 +14670,9 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
     case WM_TRQS:
         quick_save_done((int)wp, (QSJOB *)lp);
         return 0;
+    case WM_TRHOLD:
+        hold_done((HOLDJOB *)lp);
+        return 0;
     case WM_TRAYICON:
         if (LOWORD(lp) == WM_MOUSEMOVE) {
             tr_hover_move(&trayHover, GetTickCount());
@@ -13206,12 +14793,14 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     case WM_DEVICECHANGE:
         if (wp == DBT_DEVNODES_CHANGED) {
+            holdEpoch++;
             SetTimer(w, TIMER_CHANGE, 500, NULL);
         }
         return TRUE;
     case WM_POWERBROADCAST:
         /* The USB drive notice is quiet across a sleep (record 25 section
          * 7.8 item 6): a resume may enumerate every drive again. */
+        holdEpoch++;
         if (wp == PBT_APMSUSPEND) {
             storSuspended = 1;
             stor_drop_all();
@@ -13405,10 +14994,155 @@ static int snap_args(int argc, char **argv, char **av, int cap)
         av[n++] = lstrcmpiA(a, "/c") == 0          ? "-c"
                 : lstrcmpiA(a, "/o") == 0          ? "-o"
                 : lstrcmpiA(a, "/nosysinfo") == 0  ? "-nosysinfo"
+                : lstrcmpiA(a, "/nonet") == 0      ? "-nonet"
+                : lstrcmpiA(a, "/nocm") == 0       ? "-nocm"
+                : lstrcmpiA(a, "/cmonly") == 0     ? "-cmonly"
                                                    : argv[i];
     }
     av[n] = NULL;
     return n;
+}
+
+/* Task 49.35: /snapshot takes every controller when no /c is given and
+ * none of its words is refused (a word beginning with '-', /?), which
+ * snap_args then answers as before. */
+static int snap_all_wanted(int argc, char **argv)
+{
+    int i;
+
+    for (i = 2; i < argc; i++) {
+        /* /cmonly (task 49.37): an all-controllers run's own child for the
+         * connection managers' state, the engine's run alone. */
+        if (lstrcmpiA(argv[i], "/c") == 0 || argv[i][0] == '-' ||
+            strcmp(argv[i], "/?") == 0 || lstrcmpiA(argv[i], "/cmonly") == 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* /snapshot [NAME] [/nosysinfo] with no /c: every controller into the
+ * current directory, the message to the redirected output, else in a box;
+ * with no xhci98 controller, the run for controller 0 as before, whose
+ * device report says so. */
+static int snap_all_cli(int argc, char **argv)
+{
+    static TR_SNAP_ONE cliSnap[TR_MAX_CTRL];
+    static char msg[TR_SNAP_MSG_BYTES];
+    int hcds[TR_MAX_CTRL];
+    char cwd[MAX_PATH];
+    char base[16];
+    const char *given = NULL;
+    int sysinfo = 1;
+    int nh;
+    int rc;
+    int i;
+
+    for (i = 2; i < argc; i++) {
+        const char *name = NULL;
+
+        if (lstrcmpiA(argv[i], "/nosysinfo") == 0) {
+            sysinfo = 0;
+            continue;
+        }
+        if (lstrcmpiA(argv[i], "/o") == 0) {
+            /* /o NAME, as the engine takes it (record 25 section 15). */
+            if (i + 1 >= argc) {
+                printf("/o takes a NAME.%sNothing was written.%s", "\n", "\n");
+                return 2;
+            }
+            name = argv[++i];
+        } else if (argv[i][0] == '/') {
+            printf("%s is not taken: /snapshot takes /c N, /o NAME and "
+                   "/nosysinfo (also a NAME).%sNothing was written.%s",
+                   argv[i], "\n", "\n");
+            return 2;
+        } else {
+            name = argv[i];
+        }
+        if (given != NULL) {
+            printf("/snapshot takes one NAME.%sNothing was written.%s", "\n",
+                   "\n");
+            return 2;
+        }
+        given = name;
+    }
+    if (given != NULL && !tr_snap_name_ok(given)) {
+        printf("%s is not a name /snapshot takes (1 to 8 letters, digits, _ "
+               "and -).%sNothing was written.%s", given, "\n", "\n");
+        return 2;
+    }
+    if (GetCurrentDirectoryA(sizeof(cwd), cwd) == 0) {
+        tr_copy(cwd, ".", sizeof(cwd));
+    }
+    /* This branch runs before WinMain has built the model: the tables and
+     * the device tree first, so the controllers' Ours is known. */
+    if (uc == NULL) {
+        load_routines();
+        uc = (UCTRL *)calloc(TR_MAX_CTRL, sizeof(UCTRL));
+        up = (UPORT *)calloc(TR_MAX_UPORTS, sizeof(UPORT));
+        tn = (TNODE *)calloc(TR_MAX_TNODES, sizeof(TNODE));
+        if (uc == NULL || up == NULL || tn == NULL) {
+            printf("Out of memory.%sNothing was written.%s", "\n", "\n");
+            return 2;
+        }
+    }
+    refresh_model(1);
+    nh = snap_hcds(hcds, TR_MAX_CTRL);
+    if (nh == 0) {
+        char out[MAX_PATH];
+        char args[96];
+        static char said[2048];
+        size_t j;
+
+        tr_sprintf(args, sizeof(args), "/snapshot%s%s /c 0%s",
+                   given != NULL ? " " : "", given != NULL ? given : "",
+                   sysinfo ? "" : " /nosysinfo");
+        rc = snap_child(args, cwd, out, 120000);
+        said[0] = '\0';
+        if (out[0] != '\0') {
+            /* The child's own words: what it saved, or why it saved
+             * nothing (a NAME already there, a directory not writable). */
+            snap_read_tail(out, said, sizeof(said));
+            DeleteFileA(out);
+            /* Its CR LF to LF, as the rest of msg; printf adds the CR. */
+            for (i = 0, j = 0; said[i] != '\0'; i++) {
+                if (said[i] != '\r') {
+                    said[j++] = said[i];
+                }
+            }
+            said[j] = '\0';
+        }
+        if (rc == 0) {
+            tr_sprintf(msg, sizeof(msg), "No controller here is driven by "
+                       "xhci98.sys: the device report alone was taken for "
+                       "controller 0.\n%s", said);
+        } else {
+            tr_sprintf(msg, sizeof(msg), "No controller here is driven by "
+                       "xhci98.sys, and the device report for controller 0 "
+                       "did not end well (exit %d).\n%s", rc,
+                       said[0] != '\0' ? said : "It said nothing.");
+        }
+    } else {
+        rc = snap_all(cwd, given, sysinfo, hcds, nh, cliSnap, base, msg,
+                      sizeof(msg));
+    }
+    /* To the output, which run_snap shows in a box when it captured it.
+     * The message's lines end in CR LF (tr_core.c's text); the output is
+     * a text stream, which adds the CR itself. */
+    {
+        size_t r;
+        size_t s = 0;
+
+        for (r = 0; msg[r] != '\0'; r++) {
+            if (msg[r] != '\r') {
+                msg[s++] = msg[r];
+            }
+        }
+        msg[s] = '\0';
+    }
+    printf("%s\n", msg);
+    return rc;
 }
 
 /* A snapshot mode: its text to the redirected output, else, captured, to
@@ -13434,6 +15168,24 @@ static int run_snap(int argc, char **argv)
         }
     }
     trSnapTest = strcmp(argv[1], "/snaptest") == 0;
+    /* Task 49.35 (record 25 section 15 item 12): /snapshot with no /c, every
+     * xhci98 controller, one set each, in the current directory. */
+    if (!trSnapTest && lstrcmpiA(argv[1], "/snapshot") == 0 &&
+        snap_all_wanted(argc, argv)) {
+        rc = snap_all_cli(argc, argv);
+        fflush(stdout);
+        if (capture) {
+            fclose(stdout);
+            snap_read_tail(tmp, text, sizeof(text));
+            DeleteFileA(tmp);
+            if (text[0] != '\0') {
+                MessageBoxA(NULL, text, "xHCI98 USB Tree - snapshot",
+                            MB_OK | (rc != 0 ? MB_ICONWARNING
+                                             : MB_ICONINFORMATION));
+            }
+        }
+        return rc;
+    }
     n = snap_args(argc, argv, av, sizeof(av) / sizeof(av[0]));
     rc = (n == 0) ? 2 : tr_snap_main(n, av);
     fflush(stdout);
@@ -13502,7 +15254,13 @@ static int snap_child(const char *args, const char *dir, char *outPath,
         /* Not ended in time: ended here, and waited for, so nothing it
          * writes can race the caller's reads and removals. */
         TerminateProcess(pi.hProcess, 2);
-        (void)WaitForSingleObject(pi.hProcess, INFINITE);
+        /* Task 49.35: at most ten seconds more, so a child that cannot be
+         * ended keeps no later controller waiting; -2 says it may still be
+         * writing, and the caller then touches none of its files. */
+        if (WaitForSingleObject(pi.hProcess, 10000) != WAIT_OBJECT_0) {
+            CloseHandle(pi.hProcess);
+            return -2;
+        }
         CloseHandle(pi.hProcess);
         return -1;
     }
@@ -13537,40 +15295,6 @@ static int snap_hcd_number(const UCTRL *c)
         n = n * 10 + (*q++ - '0');
     }
     return *q == '\0' ? n : -1;
-}
-
-/* The level a dump's .TXT says it was taken at: its "verbosity tier"
- * header line, "read N, APPLIED M", in the file's first 16 KiB, where the
- * header is written. -1 when no such line is there. */
-static int snap_txt_level(const char *path)
-{
-    static char head[16384];
-    static const char key[] = "verbosity tier     read ";
-    HANDLE f;
-    DWORD got = 0;
-    const char *p;
-    const char *q;
-
-    f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
-                    FILE_ATTRIBUTE_NORMAL, NULL);
-    if (f == INVALID_HANDLE_VALUE) {
-        return -1;
-    }
-    if (!ReadFile(f, head, sizeof(head) - 1, &got, NULL)) {
-        got = 0;
-    }
-    CloseHandle(f);
-    head[got] = '\0';
-    p = strstr(head, key);
-    if (p == NULL) {
-        return -1;
-    }
-    q = strstr(p, "APPLIED ");
-    if (q == NULL || q - p > 40 || q[8] < '0' || q[8] > '9' ||
-        (q[9] >= '0' && q[9] <= '9')) {
-        return -1;
-    }
-    return q[8] - '0';
 }
 
 static int snap_say(HANDLE f, const char *text);
@@ -13642,15 +15366,255 @@ static int snap_temp_dir(char *dir, size_t cap)
     return 0;
 }
 
+/* Task 49.35 (record 25 section 15 item 12): every xhci98 controller's
+ * door number, as Save Report lists them. */
+static int snap_hcds(int *hcds, int cap)
+{
+    int n = 0;
+    int i;
+    int h;
+
+    if (ucCount == 0) {
+        usb_controllers();
+    }
+    for (i = 0; i < ucCount && n < cap; i++) {
+        if (uc[i].Ours && (h = snap_hcd_number(&uc[i])) >= 0) {
+            hcds[n++] = h;
+        }
+    }
+    return n;
+}
+
+/* Only "no such file" is absence: a name that cannot be looked at for any
+ * other reason counts as taken, as the engine's own names do. */
+static int snap_exists_in(const char *name, void *context)
+{
+    char path[MAX_PATH + 32];
+    DWORD err;
+
+    /* acpi_path: a folder picked at a drive's root ends with its own
+     * backslash, which a second one after it doubled; on 98 SE every name
+     * then read as taken (task 49.37's window leg, C: picked). */
+    acpi_path(path, sizeof(path), (const char *)context, name);
+    if (GetFileAttributesA(path) != 0xFFFFFFFFUL) {
+        return 1;
+    }
+    err = GetLastError();
+    return (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND) ? 0
+                                                                        : 1;
+}
+
+/*
+ * The connection managers' state of an all-controllers run (task 49.37,
+ * record 25 section 23 item 11): taken once, after the controllers, by a
+ * child run of its own (/snapshot BASE /cmonly) started in dir - the same
+ * reason the controllers' runs are children: the engine's state is
+ * process-wide, and a quick save's worker allocates nothing and changes no
+ * directory. The message gains the line naming the images the child says
+ * it wrote (item 7), or why none was kept; the exit takes the child's
+ * clash (8) or a file not written in full (3), the run's 9 kept.
+ */
+static int snap_cms(const char *dir, const char *base, int sysinfo, int rc,
+                    char *msg, size_t cap)
+{
+    char text[8192];
+    char out[MAX_PATH];
+    char args[64];
+    char line[TR_CMS_SAVED_LINE_MAX];
+    char sfx[16];
+    int raw[16];
+    int child;
+    int n;
+
+    if (base == NULL || base[0] == '\0') {
+        return rc;
+    }
+    tr_sprintf(args, sizeof(args), "/snapshot %s /cmonly%s", base,
+               sysinfo ? "" : " /nosysinfo");
+    child = snap_child(args, dir, out, 120000);
+    text[0] = '\0';
+    if (out[0] != '\0') {
+        snap_read_head(out, text, sizeof(text));
+        if (child != -2) {
+            DeleteFileA(out);
+        }
+    }
+    n = tr_cms_saved_files(text, base, sfx, raw, 16);
+    tr_cms_saved_line(line, sizeof(line), base, sfx, raw, n);
+    if (child == 8) {
+        tr_sprintf(line, sizeof(line), "The Thunderbolt / USB4 state was "
+                   "not saved: a file of its name was made by something "
+                   "else meanwhile.");
+        if (rc != 9 && rc < 8) {
+            rc = 8;
+        }
+    } else if (child == -2) {
+        /* As a controller's run that would not end: it may still write. */
+        tr_sprintf(line, sizeof(line), "The Thunderbolt / USB4 state was "
+                   "not taken: its run did not end, and may still be "
+                   "writing.");
+        rc = 9;
+    } else if (child == -1) {
+        tr_sprintf(line, sizeof(line), "The Thunderbolt / USB4 state was "
+                   "not taken: its run did not start, or did not end within "
+                   "two minutes.");
+        if (rc != 9 && rc < 2) {
+            rc = 2;
+        }
+    } else if (child == 3) {
+        /* A .CT<n> or .CB<n> not written in full: said, beside the files
+         * that were. */
+        if (line[0] != '\0') {
+            if (strlen(line) + 40 < sizeof(line)) {
+                strcat(line, " Not every one was written in full.");
+            }
+        } else {
+            tr_sprintf(line, sizeof(line), "The Thunderbolt / USB4 state "
+                       "was not saved in full: a file of it could not be "
+                       "written.");
+        }
+        if (rc != 9 && rc < 3) {
+            rc = 3;
+        }
+    } else if (child != 0) {
+        tr_sprintf(line, sizeof(line), "The Thunderbolt / USB4 state was "
+                   "not taken: its run ended with %d.", child);
+        if (rc != 9 && rc < 2) {
+            rc = 2;
+        }
+    }
+    if (line[0] != '\0' && strlen(msg) + strlen(line) + 3 < cap) {
+        strcat(msg, "\n\n");
+        strcat(msg, line);
+    }
+    return rc;
+}
+
+/*
+ * Every controller's snapshot into dir: BASE chosen first over the whole
+ * set (tr_snap_pick_base); for each controller /snapshot BASE /c k run in a
+ * scratch directory of its own, its BASE.DEV, .TXT, .BIN and .PSC moved
+ * into dir as BASE.D<k>, .T<k>, .B<k> and .P<k>, never replacing a file;
+ * a scratch directory left only when a move failed. The message into msg,
+ * BASE into base (9 bytes, empty when none was chosen); returns the run's
+ * exit (tr_snap_saved_all; 6 or 7 when no BASE could be chosen).
+ */
+static int snap_all(const char *dir, const char *given, int sysinfo,
+                    const int *hcds, int nh, TR_SNAP_ONE *one, char *base,
+                    char *msg, size_t cap)
+{
+    static const char *const ext[TR_SNAP_FILES] = {
+        ".DEV", ".TXT", ".BIN", ".PSC"
+    };
+    static const char kinds[TR_SNAP_FILES] = { 'D', 'T', 'B', 'P' };
+    char sd[MAX_PATH];
+    char out[MAX_PATH];
+    char args[96];
+    char from[MAX_PATH + 32];
+    char to[MAX_PATH + 32];
+    SYSTEMTIME st;
+    int pick;
+    int moved;
+    int i;
+    int f;
+    char c;
+
+    GetLocalTime(&st);
+    pick = tr_snap_pick_base(given, st.wMonth, st.wDay, st.wHour,
+                             st.wMinute, snap_exists_in, (void *)dir, base);
+    if (pick != TR_PICK_OK) {
+        if (pick == TR_PICK_NAME) {
+            tr_sprintf(msg, cap, "No snapshot was saved: %s is not a name "
+                       "/snapshot takes (1 to 8 letters, digits, _ and -).",
+                       given);
+            return 2;
+        }
+        if (pick == TR_PICK_CLOCK) {
+            tr_sprintf(msg, cap, "No snapshot was saved in %s: the clock "
+                       "does not give a date and time to name it by.", dir);
+            return 7;
+        }
+        if (given != NULL) {
+            tr_sprintf(msg, cap, "No snapshot was saved in %s: files named "
+                       "%s are there already.", dir, given);
+        } else {
+            tr_sprintf(msg, cap, "No snapshot was saved in %s: all 26 "
+                       "names for this minute are taken.", dir);
+        }
+        return 6;
+    }
+    for (i = 0; i < nh; i++) {
+        memset(&one[i], 0, sizeof(one[i]));
+        one[i].Hcd = hcds[i];
+        tr_sprintf(one[i].Door, sizeof(one[i].Door), "%s%d",
+                   envNt ? "XHCI98HC" : "HCD", hcds[i]);
+        c = tr_snap_kchar(hcds[i]);
+        if (c == 0) {
+            one[i].Rc = 2;
+            continue;
+        }
+        if (!snap_temp_dir(sd, sizeof(sd))) {
+            one[i].Rc = -1;
+            continue;
+        }
+        /* The Thunderbolt networking section is the machine's: written
+         * once, in the first controller's device report (/nonet on the
+         * others). */
+        tr_sprintf(args, sizeof(args), "/snapshot %s /c %d%s%s /nocm", base,
+                   hcds[i], sysinfo ? "" : " /nosysinfo",
+                   i == 0 ? "" : " /nonet");
+        one[i].Rc = snap_child(args, sd, out, 120000);
+        if (one[i].Rc == -2) {
+            /* It may still be writing: its directory and output stay. */
+            tr_copy(one[i].Scratch, sd, sizeof(one[i].Scratch));
+            continue;
+        }
+        if (out[0] != '\0') {
+            DeleteFileA(out);
+        }
+        moved = 1;
+        for (f = 0; f < TR_SNAP_FILES; f++) {
+            tr_sprintf(from, sizeof(from), "%s\\%s%s", sd, base, ext[f]);
+            if (GetFileAttributesA(from) == 0xFFFFFFFFUL) {
+                continue;
+            }
+            one[i].Have[f] = 1;
+            tr_sprintf(from, sizeof(from), "%s.%c%c", base, kinds[f], c);
+            acpi_path(to, sizeof(to), dir, from);
+            tr_sprintf(from, sizeof(from), "%s\\%s%s", sd, base, ext[f]);
+            one[i].Moved[f] = MoveFileA(from, to) != 0;
+            if (!one[i].Moved[f]) {
+                moved = 0;
+            }
+        }
+        if (moved) {
+            for (f = 0; f < TR_SNAP_FILES; f++) {
+                tr_sprintf(from, sizeof(from), "%s\\%s%s.TMP", sd, base,
+                           ext[f]);
+                DeleteFileA(from);
+            }
+            RemoveDirectoryA(sd);
+        } else {
+            tr_copy(one[i].Scratch, sd, sizeof(one[i].Scratch));
+        }
+    }
+    /* After every controller, the machine-wide part taken once into dir:
+     * the connection managers' state (task 49.37, record 25 section 23
+     * item 11), by this process, the children having left it out. */
+    return snap_cms(dir, base, sysinfo,
+                    tr_snap_saved_all(dir, base, one, nh, msg, cap), msg,
+                    cap);
+}
+
 /* The report's snapshot part (section 15): one /snapshot run per xhci98
  * controller, each in a new directory under %TEMP%, as a child process of
  * this executable. The .DEV, the machine's device report, comes from the
  * first run - and with no xhci98 controller listed, from a run for
  * controller 0 that may take no dump, since the .DEV is written before
  * any controller is opened and reports exactly that case. Each dump's
- * .TXT follows, whole, unless its header says level 4 (it can hold kernel
- * addresses) or says no level at all; then it is withheld, as the Driver
- * log node withholds the ring (section 3.5). The files are removed after;
+ * .TXT follows, whole, at every level: from 3.5.0.0 a level 4 dump, with
+ * the kernel addresses its ring holds, is no longer left out (the owner,
+ * 2026-11-13; section 3.5). The files are removed after;
  * the raw .BIN and .PSC never reach the report. */
 static int report_snapshots(HANDLE f)
 {
@@ -13664,6 +15628,7 @@ static int report_snapshots(HANDLE f)
     int nh = 0;
     int ok;
     int devDone = 0;
+    int cmsDone = 0;
     int i;
     int k;
 
@@ -13678,7 +15643,6 @@ static int report_snapshots(HANDLE f)
     for (i = 0; i < (nh == 0 ? 1 : nh) && ok; i++) {
         int hcd = nh == 0 ? 0 : hcds[i];
         int rc;
-        int level;
 
         if (!snap_temp_dir(dir, sizeof(dir))) {
             tr_sprintf(line, sizeof(line), "Controller %d: no snapshot: no temporary "
@@ -13702,9 +15666,14 @@ static int report_snapshots(HANDLE f)
                    : rc == 4 ? "taken: the device report, no dump"
                    : rc == 5 ? "taken, but its device report is NOT complete"
                    : rc == -1 ? "not run, or not ended within two minutes"
+                   : rc == -2 ? "not ended, and still running when ended"
                               : "not complete",
                    rc);
         ok = snap_say(f, line);
+        if (rc == -2) {
+            /* Task 49.35: it may still be writing; its files stay. */
+            continue;
+        }
         if (rc != -1) {
             int got;
 
@@ -13720,7 +15689,6 @@ static int report_snapshots(HANDLE f)
                 }
             }
             tr_sprintf(file, sizeof(file), "%s\\XHCITR.TXT", dir);
-            level = snap_txt_level(file);
             if (GetFileAttributesA(file) == 0xFFFFFFFFUL) {
                 if (nh != 0) {
                     tr_sprintf(line, sizeof(line), "Controller %d: no dump (the "
@@ -13728,17 +15696,17 @@ static int report_snapshots(HANDLE f)
                                "why).\r\n\r\n", hcd, rc);
                     ok = ok && snap_say(f, line);
                 }
-            } else if (level < 0 || level >= 4) {
-                tr_sprintf(line, sizeof(line), "Controller %d: the dump is withheld: "
-                           "%s Use level 2.\r\n\r\n", hcd,
-                           level < 0 ? "its level could not be read."
-                                     : "at level 4 it can hold memory "
-                                       "addresses.");
-                ok = ok && snap_say(f, line);
             } else {
                 ok = ok && snap_append(f, file) == 1;
             }
+            /* The connection managers' state, once (record 25 section 23):
+             * every run takes it, the first run's is the report's. */
+            if (!cmsDone) {
+                cmsDone = 1;
+                ok = ok && tr_cms_append(f, dir, "XHCITR");
+            }
         }
+        tr_cms_remove(dir, "XHCITR");
         for (k = 0; k < 4; k++) {
             tr_sprintf(file, sizeof(file), "%s\\XHCITR%s", dir, ext[k]);
             DeleteFileA(file);
@@ -13756,9 +15724,12 @@ static int report_snapshots(HANDLE f)
  * message box was taller than a 640 by 480 screen). */
 static void save_snapshot_dialog(void)
 {
+    static TR_SNAP_ONE dlgSnap[TR_MAX_CTRL];
+    static char box[TR_SNAP_MSG_BYTES];
+    int hcds[TR_MAX_CTRL];
+    int nh;
     char head[1024];
     char name[16];
-    char box[MAX_PATH + 400];
     BROWSEINFOA bi;
     LPITEMIDLIST pidl;
     IMalloc *m;
@@ -13799,18 +15770,15 @@ static void save_snapshot_dialog(void)
     if (!i || dir[0] == '\0') {
         return;
     }
-    tr_sprintf(args, sizeof(args), "/snapshot /c %d", hcd);
+    /* Task 49.35 (record 25 section 15 item 12): every xhci98
+     * controller, one set each. */
+    nh = snap_hcds(hcds, TR_MAX_CTRL);
     old = SetCursor(LoadCursor(NULL, IDC_WAIT));
-    rc = snap_child(args, dir, out, 120000);
+    rc = snap_all(dir, NULL, 1, hcds, nh, dlgSnap, name, box, sizeof(box));
     SetCursor(old);
-    head[0] = '\0';
-    if (out[0] != '\0') {
-        snap_read_head(out, head, sizeof(head));
-        DeleteFileA(out);
-    }
-    tr_snap_saved(rc, dir, tr_snap_named(head, name, sizeof(name)) ? name :
-                                                                     NULL,
-                  head, box, sizeof(box));
+    (void)args;
+    (void)out;
+    (void)head;
     set_snapshot_file(dir, box, sizeof(box));
     MessageBoxA(hMain, box, "xHCI98 USB Tree - snapshot",
                 MB_OK | (rc != 0 ? MB_ICONWARNING : MB_ICONINFORMATION));
@@ -14520,7 +16488,18 @@ static int run_eject(void)
         code = INST_EXIT_REFUSED;
         goto answer;
     }
-    why = ej_why_not(u);
+    {
+        /* The BIOS-held verdict before every other reason, "not started"
+         * included (record 24 section 7.6), as Setup's console /eject. */
+        int bh;
+        if (ej_first(u, &bh, &why) == TR_EF_BIOS) {
+            tr_copy(msg, bh == INST_BH_HELD ? instBiosHeldConsole
+                                            : instBiosUnsureConsole,
+                    sizeof(msg));
+            code = INST_EXIT_REFUSED;
+            goto answer;
+        }
+    }
     if (why != NULL || !ej_prepare(u, q)) {
         tr_sprintf(msg, sizeof(msg), "%s cannot be stopped here: %s.",
                    dn_name(&gw.N[u]), why != NULL ? why : "it is not a unit");
@@ -14599,6 +16578,9 @@ static int run_selftest(void)
     ci[31] = 1;
     ST(tr_conn_parse(ci, sizeof(ci), 1, &c) && c.Speed == 3 && c.Port == 3);
     ST(tr_speed(2, 1, TR_V2_F_SS_NOW) == TR_SPEED_SUPER);
+    /* record 24 section 7.6: the BIOS-held verdict before "not started" */
+    ST(tr_eject_first(1, 1, 0) == TR_EF_BIOS &&
+       tr_eject_first(1, 0, 0) == TR_EF_WHY);
     argv1[0] = "x";
     argv1[1] = "/frob";
     argv1[2] = NULL;
@@ -14607,7 +16589,7 @@ static int run_selftest(void)
     ST(trs_row_find("XhciIntelPortSwitch") != NULL &&
        trs_value(trs_row_find("XhciIntelPortSwitch")) ==
            &instValues[inst_value_find("XhciIntelPortSwitch")]);
-    ST(trs_row_count() == instValueCount + INST_S98_COUNT + trsExtraCount);
+    ST(trs_row_count() == instValueCount + INST_S98_COUNT);
     argv1[1] = "/tray";
     ST(tr_parse_args(2, argv1, &o, err, sizeof(err)) == 0 && o.Tray);
     {
@@ -14622,6 +16604,59 @@ static int run_selftest(void)
         ST(tr_parse_args(3, argv2, &o, err, sizeof(err)) == 1);
     }
     ST(strcmp(tr_level_text(4), "adds memory addresses (for developers)") == 0);
+    {
+        /* Task 49.43: a controller's holds as the window reads them, on a
+         * record of the test's own: /selftest runs before WinMain
+         * allocates uc. */
+        int saved = ucCount;
+        UCTRL *savedUc = uc;
+        static UCTRL testUc[1];
+        TR_TEXT tt;
+        static char tb[1024];
+        uc = testUc;
+        memset(&uc[0], 0, sizeof(uc[0]));
+        ucCount = 1;
+        uc[0].Ours = 1;
+        uc[0].HoldState = 1;
+        uc[0].HoldMap.RootLocs = 4;
+        uc[0].HoldMap.HubLocs = 2;
+        uc[0].Hold[1] = TR_HOLD_REENUMS;
+        uc[0].Hold[3] = TR_HOLD_OC_WAIT;
+        uc[0].Hold[5] = TR_HOLD_REPOWERS;
+        ST(hold_root(0, 1) == 0 && hold_root(0, 2) == TR_HOLD_REENUMS &&
+           hold_root(0, 4) == TR_HOLD_OC_WAIT && hold_root(0, 5) == -1 &&
+           hold_root(0, 0) == -1);
+        ST(hold_hub_kinds(0) == 2);
+        uc[0].Hold[4] = TR_HOLD_REENUMS;
+        ST(hold_hub_kinds(0) == 3);
+        uc[0].HoldState = -1;
+        ST(hold_root(0, 2) == -1 && hold_hub_kinds(0) == 0);
+        tr_text_init(&tt, tb, sizeof(tb));
+        details_note(&tt, tr_hold_note(TR_HOLD_REENUMS));
+        ST(strncmp(tb, "  Note:          This port is on hold after repeated "
+                       "failures.", 62) == 0 &&
+           strstr(tb, "\n                 ") != NULL &&
+           strstr(tb, "controller restarts.") != NULL);
+        /* No buffer: nothing opened, nothing known. */
+        {
+            static HOLDRES hr;
+            hold_read_path("XHCI98-NONE", NULL, &hr);
+            ST(hr.State == -1 && hr.Hold[0] == 0xFF &&
+               hr.Hold[sizeof(hr.Hold) - 1] == 0xFF);
+        }
+        /* A job whose results could not be posted is freed by the next
+         * watch, on this thread, and the watch goes on. */
+        ucCount = 0;
+        holdLost = (HOLDJOB *)calloc(1, sizeof(HOLDJOB));
+        if (holdLost != NULL) {
+            holdLost->Buf = (unsigned char *)malloc(16);
+            holdBusy = 2;
+            hold_poll();
+            ST(holdBusy == 0 && holdLost == NULL);
+        }
+        uc = savedUc;
+        ucCount = saved;
+    }
     ST(sizeof(TR_USB_CONN_EX) == 35 && sizeof(TR_USB_CONN_V2) == 16);
 #ifndef _WIN64
     ST(sizeof(TR_NIDA) == TR_NIDA_V2_BYTES);
@@ -14832,6 +16867,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
     osv.dwOSVersionInfoSize = sizeof(osv);
     GetVersionExA(&osv);
     envNt = osv.dwPlatformId == VER_PLATFORM_WIN32_NT;
+    trs_set_nine(!envNt);
     envMajor = osv.dwMajorVersion;
     envMinor = osv.dwMinorVersion;
     /* XHCISNAP's reading (42-A.4): the whole command line is the mode's. */

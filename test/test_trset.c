@@ -86,13 +86,7 @@ static void test_coverage(void)
         }
         CHECK(r != NULL && trs_s98(r) == i, "every Stor98 row");
     }
-    for (i = 0; i < trsExtraCount; i++) {
-        const TRS_ROW *r = trs_row_find(trsExtra[i].Name);
-        CHECK(r != NULL && trs_value(r) == &trsExtra[i], "the Tree's own rows");
-        CHECK(inst_value_find(trsExtra[i].Name) < 0,
-              "the Tree's own rows are not Setup's");
-    }
-    CHECK_EQ(n, instValueCount + INST_S98_COUNT + trsExtraCount,
+    CHECK_EQ(n, instValueCount + INST_S98_COUNT,
              "no row besides them");
     for (i = 0; i < n; i++) {
         for (j = i + 1; j < n; j++) {
@@ -105,7 +99,9 @@ static void test_coverage(void)
     }
     CHECK(trs_row_find("storwritethrough") == trs_row_find("StorWriteThrough"),
           "Stor98 by its NT key");
-    CHECK(trs_row_find("XhciCommandCheck") == NULL, "a quirk is not a row");
+    CHECK(trs_row_find("XhciCommandCheck") != NULL &&
+              trs_row_find("XhciCommandCheck")->View == TRS_VIEW_ADV,
+          "task 49.38: the checker is an advanced row");
     CHECK(trs_row_find("XhciQemuNoInterrupt") == NULL, "nor a qemu value");
     CHECK_EQ(trs_row_find("XhciLogVerbosity")->View, TRS_VIEW_OUT,
              "the log level is the Logging level dialog's");
@@ -121,6 +117,7 @@ static void test_defaults(void)
     char *amd = load("..\\src\\xhci98-amd64.inf");
     char *cm = load("..\\src\\cm\\xhcicm.inf");
     char *cm64 = load("..\\src\\cm\\xhcicm-amd64.inf");
+    char *uas = load("..\\src\\uas\\xhciuas.inf");
     int i;
 
     CHECK(x86 != NULL && amd != NULL && cm != NULL && cm64 != NULL,
@@ -136,13 +133,71 @@ static void test_defaults(void)
         if (v == NULL) {
             continue;
         }
+        if (r->AbsentDef == TRS_DEF_SYSTEM) {
+            /* XhciResumeKeepBot (record 20 section 4.3.4, M18): written by
+             * neither INF, its default this Windows's. */
+            INST_ENV s;
+            CHECK(r->InstallDef == TRS_DEF_SYSTEM && v->NoInf &&
+                      !inst_inf_addreg_default(x86, r->Name, &d) &&
+                      !inst_inf_addreg_default(amd, r->Name, &d),
+                  "a row of this Windows's default: no INF writes it");
+            memset(&s, 0, sizeof(s));
+            s.Nt = 1;
+            s.Major = 5;
+            s.Minor = 0;
+            trs_set_system(&s);
+            CHECK(trs_absent_def(r) == 1 && trs_install_def(r) == 1,
+                  "2000: 1");
+            s.Minor = 1;
+            trs_set_system(&s);
+            CHECK(trs_absent_def(r) == 0 && trs_install_def(r) == 0,
+                  "XP: 0");
+            s.Nt = 0;
+            s.Major = 4;
+            s.Minor = 90;
+            trs_set_system(&s);
+            CHECK(trs_absent_def(r) == 0, "ME: 0");
+            {
+                int how;
+                CHECK(trs_effective(r, 1, 2, TRS_NO_HOLD, &how) == 2 &&
+                          how == TRS_HOW_AS_SET,
+                      "XhciResumeKeepBot 2 runs as set");
+                CHECK(trs_effective(r, 1, 5, TRS_NO_HOLD, &how) == 1 &&
+                          how == TRS_HOW_HELD,
+                      "XhciResumeKeepBot 5: its two low bits, 1");
+                CHECK(trs_effective(r, 0, 0, TRS_NO_HOLD, &how) == 0 &&
+                          how == TRS_HOW_DEFAULT,
+                      "XhciResumeKeepBot absent on ME: 0");
+            }
+            memset(&s, 0, sizeof(s));
+            trs_set_system(&s);
+            continue;
+        }
+        if (v->Kind == INST_VK_TEXT) {
+            char t[INST_TEXT_CHARS];
+            CHECK(inst_inf_addreg_text(cm, r->Name, t, sizeof(t)) &&
+                      strcmp(t, "auto") == 0,
+                  "the text row's default is the INF's auto");
+            continue;
+        }
+        if (v->Loc == INST_LOC_DRIVE) {
+            CHECK(uas != NULL && inst_inf_addreg_default(uas, r->Name, &d) &&
+                      d == r->InstallDef,
+                  "a drive row's default is the UAS INF's");
+            continue;
+        }
         if (r->Tab == TRS_TAB_USB) {
             found = inst_inf_addreg_default(x86, r->Name, &d);
             CHECK(found, r->Name);
             CHECK_EQ(d, r->InstallDef, r->Name);
             d = 0xFFFFFFFFUL;
             found = inst_inf_addreg_default(amd, r->Name, &d);
-            CHECK(found && d == r->InstallDef, "the amd64 INF too");
+            if (v->Apply == INST_APPLY_NT5X86_XHCI) {
+                /* Mode 4's input pool: the x86 image's alone. */
+                CHECK(!found, "not in the amd64 INF");
+            } else {
+                CHECK(found && d == r->InstallDef, "the amd64 INF too");
+            }
         } else if (v->NoInf || v->Loc != INST_LOC_MW) {
             CHECK_EQ(v->Def, r->InstallDef, r->Name);
         } else {
@@ -159,6 +214,685 @@ static void test_defaults(void)
     free(amd);
     free(cm);
     free(cm64);
+    free(uas);
+}
+
+/* ---- every registry value has a row (task 49.38) --------------------------- */
+
+/* The owner, 2026-11-13: the Tree's settings page covers every registry
+ * value a driver of the package reads. This gate holds three lists to one
+ * another: docs\using\tuning.md's value tables (each row "| `Name` | what
+ * | min | max | default when absent | written by the install |"), the
+ * values the code names (the INFs' HKR AddReg lines and the value
+ * definitions of the files below), and the Tree's rows (trs_row_find; an
+ * OUT row counts, it says why). A name in either list with no row, or a
+ * row in neither, fails here unless the list below exempts it with why.
+ * Each row's range and default are held to tuning.md's columns; the INFs'
+ * written values are test_defaults'. */
+
+/* Not a row of the page, with why. Remove an entry when its row comes. */
+static const char *const trsNoRow[] = {
+    /* The network adapter's own key, a string Windows' network Advanced
+     * page ("MTU") sets; and NDIS's own three. */
+    "XhciNetMtu",
+    "*IfType",
+    "*MediaType",
+    "*PhysicalMediaType",
+    /* Set by Setup's Thunderbolt networking box with the network driver it
+     * stages (/tbnet, /notbnet), not by /set (tuning.md). */
+    "XhciCmNet",
+    NULL
+};
+
+/* Named in the code, not a setting: written by the drivers for the tools,
+ * or the tools' requests to them. (qemu-flavour names, every one with
+ * "Qemu" in it, and XhciHlprInject and the two XhciMsi86 switches, are
+ * read inside XHCI_FLAVOUR_QEMU alone and skipped by the scan.) */
+static const char *const trsNotSetting[] = {
+    "XhciCmStatus", "XhciCmStatusAsk", "XhciCmEjectAsk", "XhciCmEjectConfirm",
+    "XhciCmEjectReply", "XhciCmEjectResult", "XhciCmOscPending",
+    "XhciCmQueryName", "XhciCmBridgeDiag", "XhciCmBridgeReqDiag",
+    "XhciCmNoIrqDiag", "XhciUasCommandBytes", "XhciUasCommandSource",
+    "XhciUasCommandStatus", "XhciUasDeviceLimit", "XhciUasDeviceLimitWhy",
+    "XhciHlprInject", "XhciMsi86NoStrip", "XhciMsi86InjNoLine",
+    NULL
+};
+
+/* A page row tuning.md does not carry, with why. */
+static const char *const trsNoTuning[] = {
+    /* Stor98's own settings, its README's "Settings" (StorTakeFirmware,
+     * which tuning.md carries, is checked). */
+    "StorWriteThrough", "StorPollMode", "StorMaxTransferKB", "StorPollBusyUs",
+    "StorPollIdleMs", "StorPollSpinUs", "StorIntWatchdog", "StorGoneMs",
+    "StorWriteIdleMs", "StorHold9xMs",
+    NULL
+};
+
+static int trs_in(const char *const *list, const char *name)
+{
+    int i;
+
+    for (i = 0; list[i] != NULL; i++) {
+        if (inst_eq(list[i], name)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+#define TUN_MAX     160
+#define TUN_CELL    48
+
+typedef struct _TUN_ROW {
+    char Name[TUN_CELL];
+    char Min[TUN_CELL];
+    char Max[TUN_CELL];
+    char Absent[TUN_CELL];
+    char Written[TUN_CELL];
+} TUN_ROW;
+
+static TUN_ROW tunRows[TUN_MAX];
+static int tunCount;
+
+/* One cell, trimmed, its first `...` taken when it starts with one. */
+static void tun_cell(const char *from, const char *to, char *out)
+{
+    size_t n;
+
+    while (from < to && *from == ' ') {
+        from++;
+    }
+    while (to > from && to[-1] == ' ') {
+        to--;
+    }
+    if (from < to && *from == '`') {
+        const char *e = from + 1;
+        while (e < to && *e != '`') {
+            e++;
+        }
+        from++;
+        to = e;
+    }
+    n = (size_t)(to - from);
+    if (n >= TUN_CELL) {
+        n = TUN_CELL - 1;
+    }
+    memcpy(out, from, n);
+    out[n] = '\0';
+}
+
+/* Every six-column value row of tuning.md ("| `Name` | ..." with seven
+ * bars). A name twice (the bridges' table repeats five) must agree. */
+static void tun_load(const char *text)
+{
+    const char *p = text;
+
+    tunCount = 0;
+    while (p != NULL && *p != '\0') {
+        const char *eol = strchr(p, '\n');
+        const char *bars[8];
+        const char *q;
+        int nb = 0;
+        if (eol == NULL) {
+            eol = p + strlen(p);
+        }
+        if (p[0] == '|' && p[1] == ' ' && p[2] == '`') {
+            for (q = p; q < eol && nb < 8; q++) {
+                if (*q == '|') {
+                    bars[nb++] = q;
+                }
+            }
+        }
+        if (nb == 7) {
+            TUN_ROW t;
+            int k;
+            int dup = 0;
+            tun_cell(bars[0] + 1, bars[1], t.Name);
+            tun_cell(bars[2] + 1, bars[3], t.Min);
+            tun_cell(bars[3] + 1, bars[4], t.Max);
+            tun_cell(bars[4] + 1, bars[5], t.Absent);
+            tun_cell(bars[5] + 1, bars[6], t.Written);
+            for (k = 0; k < tunCount; k++) {
+                if (strcmp(tunRows[k].Name, t.Name) == 0) {
+                    dup = 1;
+                    if (strcmp(tunRows[k].Min, t.Min) != 0 ||
+                        strcmp(tunRows[k].Max, t.Max) != 0 ||
+                        strcmp(tunRows[k].Absent, t.Absent) != 0) {
+                        printf("tuning.md: %s twice, unlike\n", t.Name);
+                    }
+                    CHECK(strcmp(tunRows[k].Min, t.Min) == 0 &&
+                              strcmp(tunRows[k].Max, t.Max) == 0 &&
+                              strcmp(tunRows[k].Absent, t.Absent) == 0,
+                          "a value tuning.md lists twice reads alike");
+                }
+            }
+            if (!dup && tunCount < TUN_MAX) {
+                tunRows[tunCount++] = t;
+            }
+        }
+        p = *eol != '\0' ? eol + 1 : eol;
+    }
+}
+
+static const TUN_ROW *tun_find(const char *name)
+{
+    int k;
+
+    for (k = 0; k < tunCount; k++) {
+        if (inst_eq(tunRows[k].Name, name)) {
+            return &tunRows[k];
+        }
+    }
+    return NULL;
+}
+
+/* A cell that is a decimal number: 1 with it. */
+static int tun_number(const char *s, INST_U32 *v)
+{
+    INST_U32 n = 0;
+
+    if (*s < '0' || *s > '9') {
+        return 0;
+    }
+    for (; *s >= '0' && *s <= '9'; s++) {
+        n = n * 10UL + (INST_U32)(*s - '0');
+    }
+    *v = n;
+    return *s == '\0';
+}
+
+#define CODE_MAX    256
+
+static char codeNames[CODE_MAX][TUN_CELL];
+static int codeCount;
+
+static void code_add(const char *from, size_t n)
+{
+    char name[TUN_CELL];
+    int k;
+
+    if (n == 0 || n >= TUN_CELL) {
+        return;
+    }
+    memcpy(name, from, n);
+    name[n] = '\0';
+    if (strstr(name, "Qemu") != NULL) {
+        return;
+    }
+    /* XHCIPFW's results, written at each start for the tools; its one
+     * setting is XhciPfwNhiLine. */
+    if (strncmp(name, "XhciPfw", 7) == 0 &&
+        strcmp(name, "XhciPfwNhiLine") != 0) {
+        return;
+    }
+    for (k = 0; k < codeCount; k++) {
+        if (strcmp(codeNames[k], name) == 0) {
+            return;
+        }
+    }
+    if (codeCount < CODE_MAX) {
+        strcpy(codeNames[codeCount++], name);
+    }
+}
+
+/* Every "Xhci..." in quotes: the value definitions (L"..." and NDIS's
+ * NDIS_STRING_CONST("...") alike). */
+static void code_scan_quoted(const char *text)
+{
+    const char *p = text;
+
+    while ((p = strstr(p, "\"Xhci")) != NULL) {
+        const char *e = p + 1;
+        while ((*e >= 'A' && *e <= 'Z') || (*e >= 'a' && *e <= 'z') ||
+               (*e >= '0' && *e <= '9')) {
+            e++;
+        }
+        if (*e == '"') {
+            code_add(p + 1, (size_t)(e - p - 1));
+        }
+        p = e;
+    }
+}
+
+/* The INFs' HKR,,Name, lines: every Xhci value they write. */
+static void code_scan_inf(const char *text)
+{
+    const char *p = text;
+
+    while ((p = strstr(p, "HKR,,Xhci")) != NULL) {
+        const char *e = p + 5;
+        while (*e != ',' && *e != '\0' && *e != '\r' && *e != '\n') {
+            e++;
+        }
+        if (*e == ',') {
+            code_add(p + 5, (size_t)(e - p - 5));
+        }
+        p = e;
+    }
+}
+
+/* The mark service's own Parameters values (mk_reg_dword with
+ * MK_PARAMS_KEY): Restart and LogBytes. */
+static void code_scan_mark(const char *text)
+{
+    const char *p = text;
+
+    while ((p = strstr(p, "MK_PARAMS_KEY,")) != NULL) {
+        const char *q = p + 14;
+        const char *e;
+        while (*q == ' ' || *q == '\r' || *q == '\n') {
+            q++;
+        }
+        p = q;
+        if (*q != '"') {
+            continue;
+        }
+        e = q + 1;
+        while (*e != '"' && *e != '\0') {
+            e++;
+        }
+        if (*e == '"') {
+            code_add(q + 1, (size_t)(e - q - 1));
+        }
+    }
+}
+
+static const char *const codeFiles[] = {
+    "..\\src\\hcd_ctl.c", "..\\src\\xhci_quirk.h", "..\\src\\hcd_msi86.c",
+    "..\\src\\hcd_msg4.c", "..\\src\\cm\\cm_reg.c", "..\\src\\cm\\cm_statos.c",
+    "..\\src\\uas\\uas_fdo.c", "..\\src\\net\\ndis5\\n5_main.c",
+    "..\\src\\net\\ndis6\\n6_main.c", "..\\src\\pfw\\pfw.c",
+    "..\\src\\pfw\\nt\\pfw_nt.c", "..\\src\\hlpr\\hlpr_entry.c", NULL
+};
+
+static const char *const codeInfs[] = {
+    "..\\src\\xhci98.inf", "..\\src\\xhci98-amd64.inf",
+    "..\\src\\cm\\xhcicm.inf", "..\\src\\cm\\xhcicm-amd64.inf",
+    "..\\src\\uas\\xhciuas.inf", "..\\src\\uas\\xhciuas-amd64.inf",
+    "..\\src\\net\\xhcinet.inf", "..\\src\\net\\xhcinet-amd64.inf", NULL
+};
+
+/* The extremes a row admits: a range's Lo and Hi, a list's lowest and
+ * highest value the driver takes. 0 for a Stor98 row. */
+static int trs_extremes(const TRS_ROW *r, INST_U32 *lo, INST_U32 *hi)
+{
+    const INST_VALUE *v = trs_value(r);
+    INST_U32 mask;
+    INST_U32 b;
+
+    if (v == NULL) {
+        return 0;
+    }
+    if (v->Hi != 0) {
+        *lo = v->Lo;
+        *hi = v->Hi;
+        return 1;
+    }
+    mask = r->Effect == TRS_EFF_LIST ? r->Accept : v->Settable;
+    *lo = 32;
+    *hi = 0;
+    for (b = 0; b < 32UL; b++) {
+        if (mask & (1UL << b)) {
+            if (*lo == 32UL) {
+                *lo = b;
+            }
+            *hi = b;
+        }
+    }
+    return *lo != 32UL;
+}
+
+static void test_every_value(void)
+{
+    char *tun = load("..\\docs\\using\\tuning.md");
+    int i;
+    int k;
+
+    CHECK(tun != NULL, "tuning.md");
+    if (tun == NULL) {
+        return;
+    }
+    tun_load(tun);
+    CHECK(tunCount > 90, "tuning.md's value rows read");
+    codeCount = 0;
+    for (i = 0; codeFiles[i] != NULL; i++) {
+        char *t = load(codeFiles[i]);
+        CHECK(t != NULL, codeFiles[i]);
+        if (t != NULL) {
+            code_scan_quoted(t);
+            free(t);
+        }
+    }
+    for (i = 0; codeInfs[i] != NULL; i++) {
+        char *t = load(codeInfs[i]);
+        CHECK(t != NULL, codeInfs[i]);
+        if (t != NULL) {
+            code_scan_inf(t);
+            free(t);
+        }
+    }
+    {
+        char *t = load("..\\xhcimark\\xhcimark.c");
+        CHECK(t != NULL, "xhcimark.c");
+        if (t != NULL) {
+            code_scan_mark(t);
+            free(t);
+        }
+    }
+    CHECK(codeCount > 90, "the code's value names read");
+
+    /* The code's names: a row, or exempt; and a tuning.md row. */
+    for (k = 0; k < codeCount; k++) {
+        const char *n = codeNames[k];
+        if (trs_in(trsNotSetting, n)) {
+            continue;
+        }
+        if (trs_row_find(n) == NULL && !trs_in(trsNoRow, n)) {
+            printf("a value the code reads has no row: %s\n", n);
+        }
+        CHECK(trs_row_find(n) != NULL || trs_in(trsNoRow, n),
+              "every value the code reads is a row of the page");
+        if (tun_find(n) == NULL) {
+            printf("a value the code reads is not in tuning.md: %s\n", n);
+        }
+        CHECK(tun_find(n) != NULL, "and a tuning.md row");
+    }
+    /* tuning.md's names: a row, or exempt. */
+    for (k = 0; k < tunCount; k++) {
+        if (trs_row_find(tunRows[k].Name) == NULL &&
+            !trs_in(trsNoRow, tunRows[k].Name)) {
+            printf("a tuning.md value has no row: %s\n", tunRows[k].Name);
+        }
+        CHECK(trs_row_find(tunRows[k].Name) != NULL ||
+                  trs_in(trsNoRow, tunRows[k].Name),
+              "every tuning.md value is a row of the page");
+    }
+    /* The rows: in tuning.md, unless exempt; their range and defaults as
+     * its columns say, where a column is a number. */
+    for (i = 0; i < trs_row_count(); i++) {
+        const TRS_ROW *r = trs_row_at(i);
+        const TUN_ROW *t = tun_find(r->Name);
+        INST_U32 lo;
+        INST_U32 hi;
+        INST_U32 n;
+        if (t == NULL) {
+            if (!trs_in(trsNoTuning, r->Name)) {
+                printf("a row tuning.md does not carry: %s\n", r->Name);
+            }
+            CHECK(trs_in(trsNoTuning, r->Name), "every row is in tuning.md");
+            continue;
+        }
+        CHECK(!trs_in(trsNoTuning, r->Name), "an exemption still needed");
+        CHECK(!trs_in(trsNoRow, r->Name), "a no-row entry with a row");
+        if (trs_s98(r) >= 0) {
+            continue;
+        }
+        if (trs_extremes(r, &lo, &hi)) {
+            if (tun_number(t->Min, &n) && n != lo) {
+                printf("%s: tuning.md's minimum %s, the row's %lu\n", r->Name,
+                       t->Min, (unsigned long)lo);
+            }
+            CHECK(!tun_number(t->Min, &n) || n == lo, "the minimum agrees");
+            if (tun_number(t->Max, &n) && n != hi) {
+                printf("%s: tuning.md's maximum %s, the row's %lu\n", r->Name,
+                       t->Max, (unsigned long)hi);
+            }
+            CHECK(!tun_number(t->Max, &n) || n == hi, "the maximum agrees");
+        }
+        if (r->AbsentDef == TRS_DEF_SYSTEM) {
+            /* XhciResumeKeepBot: this Windows's default, written by Setup
+             * and by no INF (test_defaults holds the INFs to that). */
+            /* The cell's first `...`: Windows 2000's, as the row's. */
+            INST_ENV w2k;
+            memset(&w2k, 0, sizeof(w2k));
+            w2k.Nt = 1;
+            w2k.Major = 5;
+            CHECK(tun_number(t->Absent, &n) && n == inst_keepbot_default(&w2k),
+                  "a default by Windows: tuning.md's Windows 2000 one");
+            CHECK(strncmp(t->Written, "by Setup", 8) == 0,
+                  "written by Setup, not by the INF");
+            continue;
+        }
+        if (tun_number(t->Absent, &n) && n != r->AbsentDef) {
+            printf("%s: tuning.md's default %s, the row's %lu\n", r->Name,
+                   t->Absent, (unsigned long)r->AbsentDef);
+        }
+        CHECK(!tun_number(t->Absent, &n) || n == r->AbsentDef,
+              "the default when absent agrees");
+        if (tun_number(t->Written, &n) && n != r->InstallDef) {
+            printf("%s: tuning.md's written %s, the row's %lu\n", r->Name,
+                   t->Written, (unsigned long)r->InstallDef);
+        }
+        CHECK(!tun_number(t->Written, &n) || n == r->InstallDef,
+              "the value the install writes agrees");
+    }
+    /* Each exemption still names something. */
+    for (i = 0; trsNoRow[i] != NULL; i++) {
+        int seen = tun_find(trsNoRow[i]) != NULL;
+        for (k = 0; k < codeCount && !seen; k++) {
+            seen = inst_eq(codeNames[k], trsNoRow[i]);
+        }
+        CHECK(seen && trs_row_find(trsNoRow[i]) == NULL,
+              "a no-row entry names a value without a row");
+    }
+    free(tun);
+}
+
+/* ---- task 49.38's rows ------------------------------------------------------ */
+
+static void test_new_rows(void)
+{
+    TRS_ENV e;
+    char out[96];
+    const char *why;
+    INST_U32 v[32];
+    int n;
+    int i;
+    int how;
+    const TRS_ROW *st = trs_row_find("XhciMsiStrategy");
+    const TRS_ROW *irq = trs_row_find("XhciMsiIsaIrq");
+    const TRS_ROW *pools = trs_row_find("XhciMsiPools");
+    const TRS_ROW *first = trs_row_find("XhciMsiInputFirst");
+    const TRS_ROW *acpi = trs_row_find("XhciAcpiTables");
+    const TRS_ROW *quirk = trs_row_find("XhciStreamsOff");
+    const TRS_ROW *amd = trs_row_find("XhciAmdSuspendBitClear");
+    const TRS_ROW *net = trs_row_find("XhciCmNetRxFrames");
+    const TRS_ROW *lb = trs_row_find("LogBytes");
+    const TRS_ROW *im = trs_row_find("XhciInterruptMode");
+
+    CHECK(st && irq && pools && first && acpi && quirk && amd && net && lb,
+          "the new rows");
+    if (!(st && irq && pools && first && acpi && quirk && amd && net && lb)) {
+        return;
+    }
+    for (i = 0; i < instValueCount; i++) {
+        const INST_VALUE *x = &instValues[i];
+        int b;
+        const TRS_ROW *r = trs_row_find(x->Name);
+        if (x->Group == NULL) {
+            continue;   /* task 49.38's rows are the grouped ones */
+        }
+        CHECK(r != NULL && r->View == TRS_VIEW_ADV, "each an advanced row");
+        CHECK(x->Asked == 0, "and never asked by Setup");
+        CHECK(strchr(x->Meaning, '(') == NULL && strchr(x->Meaning, '\n') == NULL,
+              "the meaning carries no choice list and no line break");
+        CHECK(x->Caution == NULL || strstr(x->Caution, "%s") == NULL,
+              "no %s caution (inst_caution_text is Setup's rows')");
+        for (b = 0; b < INST_CHOICES; b++) {
+            if (x->Hi == 0 && (x->Settable & (1UL << b)) == 0) {
+                CHECK(x->Choice[b] == NULL, "a choice only where allowed");
+            }
+        }
+    }
+
+    env_98(&e);
+    CHECK_EQ(trs_state(st, &e), TRS_GREY, "mode-4 values greyed on 98 SE");
+    CHECK(strcmp(trs_only(st, &e), "Windows 2000 and XP only") == 0, "its text");
+    CHECK(!trs_parse(st, &e, "1", out, sizeof(out), &why), "and refused");
+    CHECK_EQ(trs_state(acpi, &e), TRS_SHOW, "XhciAcpiTables on 98 SE");
+    CHECK_EQ(trs_state(quirk, &e), TRS_SHOW, "a quirk on 98 SE");
+    n = trs_choices(quirk, &e, 1, v, 32);
+    CHECK(n == 3 && v[2] == 2, "a quirk: 0, 1 and 2");
+    n = trs_choices(amd, &e, 1, v, 32);
+    CHECK_EQ(n, 2, "a vendor quirk: 0 and 1");
+    CHECK_EQ(trs_effective(amd, 1, 2, TRS_NO_HOLD, &how), 1, "2 read as 1");
+    CHECK_EQ(trs_state(lb, &e), TRS_HIDE, "no mark service on 98 SE");
+    trs_value_text(im, 4, out, sizeof(out));
+    CHECK(strncmp(out, "4 - MSI", 7) == 0, "mode 4's own text");
+    CHECK_EQ(trs_effective(im, 1, 4, TRS_NO_HOLD, &how), 4, "4 read as 4");
+    CHECK_EQ(how, TRS_HOW_AS_SET, "as set");
+    CHECK(!trs_parse(im, &e, "4", out, sizeof(out), &why),
+          "4 refused on 98 SE (it runs as 0 there)");
+
+    env_nt(&e, 5, 1);
+    e.Inst.Arch = INST_ARCH_X86;
+    CHECK_EQ(trs_state(st, &e), TRS_SHOW, "XP");
+    CHECK_EQ(trs_state(pools, &e), TRS_SHOW, "32-bit XP: the pool");
+    CHECK_EQ(trs_state(acpi, &e), TRS_GREY, "XhciAcpiTables greyed on NT");
+    CHECK(trs_parse(irq, &e, "10", out, sizeof(out), &why), "IRQ 10");
+    CHECK(!trs_parse(irq, &e, "9", out, sizeof(out), &why), "IRQ 9 refused");
+    CHECK(!trs_parse(irq, &e, "1", out, sizeof(out), &why), "IRQ 1 refused");
+    CHECK(trs_parse(irq, &e, "24", out, sizeof(out), &why) &&
+              trs_parse(irq, &e, "255", out, sizeof(out), &why), "24 to 255");
+    CHECK(!trs_parse(irq, &e, "256", out, sizeof(out), &why), "256 refused");
+    trs_range_text(irq, &e, out, sizeof(out));
+    CHECK(strcmp(out, "0, 3 to 7, 10, 11, 24 to 255") == 0, "its range text");
+    CHECK(!trs_parse(first, &e, "23", out, sizeof(out), &why), "first 23 refused");
+    CHECK(trs_parse(first, &e, "0", out, sizeof(out), &why) &&
+              trs_parse(first, &e, "24", out, sizeof(out), &why), "0 and 24");
+    trs_range_text(first, &e, out, sizeof(out));
+    CHECK(strcmp(out, "0, 24 to 255") == 0, "first's range text");
+    CHECK_EQ(trs_effective(st, 1, 0xFFFFFFFFUL, TRS_NO_HOLD, &how), 0,
+             "the reads' not-found number is the default");
+    CHECK_EQ(how, TRS_HOW_DEFAULT, "said so");
+    CHECK_EQ(trs_effective(st, 1, 5, TRS_NO_HOLD, &how), 5, "5 as set");
+    n = trs_choices(im, &e, 1, v, 32);
+    CHECK(n == 4 && v[3] == 4, "XP: mode 4 with advanced");
+    {
+        const TRS_ROW *sh = trs_row_find("XhciMsiShare");
+        CHECK_EQ(trs_effective(sh, 1, 1, TRS_NO_HOLD, &how), 1, "share 1 is 1");
+        CHECK_EQ(how, TRS_HOW_AS_SET, "as set");
+        CHECK_EQ(trs_effective(sh, 1, 0, TRS_NO_HOLD, &how), 1, "0 is 1");
+        CHECK_EQ(how, TRS_HOW_HELD, "read as 1");
+        CHECK_EQ(trs_effective(sh, 1, 2, TRS_NO_HOLD, &how), 2, "2 is 2");
+        CHECK_EQ(trs_effective(sh, 1, 16, TRS_NO_HOLD, &how), 16, "16 is 16");
+        CHECK_EQ(trs_effective(sh, 1, 17, TRS_NO_HOLD, &how), 16, "17 is 16");
+        CHECK(!trs_parse(sh, &e, "0", out, sizeof(out), &why) &&
+                  trs_parse(sh, &e, "1", out, sizeof(out), &why) &&
+                  trs_parse(sh, &e, "16", out, sizeof(out), &why) &&
+                  !trs_parse(sh, &e, "17", out, sizeof(out), &why),
+              "1 to 16 set, 0 and 17 refused");
+        trs_range_text(sh, &e, out, sizeof(out));
+        CHECK(strcmp(out, "1 to 16") == 0, "share's range text");
+        {
+            int si = inst_value_find("XhciMsiShare");
+            CHECK(!inst_value_allowed(si, &e.Inst, 0) &&
+                      inst_value_allowed(si, &e.Inst, 1) &&
+                      inst_value_allowed(si, &e.Inst, 8) &&
+                      inst_value_allowed(si, &e.Inst, 16) &&
+                      !inst_value_allowed(si, &e.Inst, 17),
+                  "Setup: 1 to 16, 0 refused");
+        }
+        CHECK_EQ(trs_effective(sh, 1, 0xFFFFFFFFUL, TRS_NO_HOLD, &how), 8,
+                 "not found is 8 (the owner, 2026-11-13)");
+        CHECK_EQ(trs_absent_def(sh), 8, "absent: 8");
+        CHECK_EQ(trs_install_def(sh), 8, "the INFs' 8");
+    }
+    e.Inst.Arch = INST_ARCH_AMD64;
+    e.Inst.Minor = 2;
+    CHECK(!trs_parse(irq, &e, "24", out, sizeof(out), &why) &&
+              trs_parse(irq, &e, "11", out, sizeof(out), &why),
+          "XP x64: no input above 23");
+    trs_range_text(irq, &e, out, sizeof(out));
+    CHECK(strcmp(out, "0, 3 to 7, 10, 11") == 0, "XP x64's range text");
+    CHECK_EQ(trs_state(st, &e), TRS_SHOW, "XP x64: the strategy");
+    CHECK_EQ(trs_state(pools, &e), TRS_GREY, "XP x64: no pool");
+    CHECK(strcmp(trs_only(pools, &e), "32-bit Windows 2000 and XP only") == 0,
+          "its text");
+    CHECK(trs_state(lb, &e) == TRS_HIDE, "no mark key: hidden");
+    e.Mark = 1;
+    CHECK_EQ(trs_state(lb, &e), TRS_SHOW, "the mark service's LogBytes");
+    CHECK_EQ(trs_loc(lb), TRS_LOC_MARK, "its own key");
+    CHECK_EQ(trs_effective(lb, 1, 100, TRS_NO_HOLD, &how), 4096,
+             "below 4096 is 4096");
+    CHECK(trs_parse(net, &e, "default", out, sizeof(out), &why) &&
+              strcmp(out, "128") == 0, "a networking default");
+    CHECK(!trs_parse(net, &e, "31", out, sizeof(out), &why), "below its range");
+    env_nt(&e, 6, 1);
+    CHECK_EQ(trs_state(st, &e), TRS_GREY, "7: mode 4 is not read");
+    e.Inst.CmNhi = 0;
+    CHECK_EQ(trs_state(net, &e), TRS_HIDE, "no NHI: no networking rows");
+    CHECK(trs_value(trs_row_find("XhciCmNetPollMs"))->Group != NULL &&
+              trs_value(trs_row_find("XhciLinkKeep"))->Group == NULL,
+          "the new rows in groups, the old under Advanced settings");
+    {
+        /* Task 49.38: the text row and the drive rows. */
+        const TRS_ROW *tb = trs_row_find("XhciCmTunnelBridge");
+        const TRS_ROW *na = trs_row_find("XhciUasNoAtaPassThrough");
+        const TRS_ROW *fr = trs_row_find("XhciUasFastReset");
+        TRS_RAW raw;
+        TRS_SUM sum;
+        char t[256];
+        env_nt(&e, 5, 1);
+        CHECK(tb != NULL && na != NULL && fr != NULL, "the rows");
+        if (tb != NULL && na != NULL && fr != NULL) {
+            CHECK(trs_is_range(tb), "the text row has a box");
+            CHECK(trs_parse(tb, &e, "04:00.0,05:1f.7", out, sizeof(out),
+                            &why) && strcmp(out, "04:00.0,05:1f.7") == 0,
+                  "a list");
+            CHECK(trs_parse(tb, &e, "default", out, sizeof(out), &why) &&
+                      strcmp(out, "auto") == 0, "Default is auto");
+            CHECK(trs_parse(tb, &e, "AUTO", out, sizeof(out), &why) &&
+                      strcmp(out, "auto") == 0, "auto in any case");
+            CHECK(!trs_parse(tb, &e, "04:00", out, sizeof(out), &why),
+                  "a list the driver cannot read");
+            memset(&raw, 0, sizeof(raw));
+            raw.State = TRS_RAW_OTHER;
+            raw.IsText = 1;
+            strcpy(raw.Text, "04:00.0");
+            trs_raw_text(tb, &raw, t, sizeof(t));
+            CHECK(strcmp(t, "04:00.0") == 0, "the string as it reads");
+            raw.State = TRS_RAW_ABSENT;
+            trs_raw_text(tb, &raw, t, sizeof(t));
+            CHECK(strstr(t, "auto") != NULL, "absent: auto");
+            raw.State = TRS_RAW_DWORD;
+            trs_raw_text(tb, &raw, t, sizeof(t));
+            CHECK(strstr(t, "not text") != NULL, "a number there");
+            CHECK_EQ(trs_loc(na), TRS_LOC_DEVICE, "a drive's own key");
+            CHECK_EQ(trs_state(na, &e), TRS_HIDE, "no UAS drive: hidden");
+            e.UasDrives = 1;
+            CHECK_EQ(trs_state(na, &e), TRS_SHOW, "a UAS drive");
+            env_98(&e);
+            e.UasDrives = 1;
+            CHECK_EQ(trs_state(na, &e), TRS_SHOW, "98 SE too");
+            CHECK_EQ(trs_apply(na, 1), TRS_AP_REPLUG, "the drive plugged again");
+            trs_sum_init(&sum);
+            trs_sum_add(&sum, na, 1);
+            trs_sum_add(&sum, fr, 1);
+            trs_sum_text(&sum, 1, t, sizeof(t));
+            CHECK(strstr(t, "XhciUasNoAtaPassThrough and XhciUasFastReset "
+                            "take effect when the drive is plugged in again") !=
+                      NULL &&
+                      strstr(t, "Restart") == NULL,
+                  "said for the drive values");
+            CHECK_EQ(trs_sum_exit(&sum, 0, 0), INST_EXIT_STEPS, "a step left");
+            trs_sum_init(&sum);
+            trs_sum_add(&sum, na, 1);
+            trs_sum_add(&sum, trs_row_find("XhciForceBulkOnly"), 1);
+            trs_sum_text(&sum, 1, t, sizeof(t));
+            CHECK(strstr(t, "XhciUasNoAtaPassThrough takes effect") != NULL &&
+                      strstr(t, "XhciForceBulkOnly takes effect") != NULL,
+                  "both replug lines");
+        }
+    }
+    {
+        const TRS_ROW *sp = trs_row_find("XhciStagePoolKiB");
+        CHECK_EQ(trs_effective(sp, 1, 319, TRS_NO_HOLD, &how), 256,
+                 "the pool in whole 64 KiB blocks");
+        CHECK(!trs_parse(sp, &e, "300", out, sizeof(out), &why) &&
+                  trs_parse(sp, &e, "320", out, sizeof(out), &why),
+              "and offered so");
+    }
 }
 
 /* ---- the system rules and the values offered --------------------------- */
@@ -187,7 +921,7 @@ static void test_rules(void)
     CHECK(n == 2 && v[0] == 0 && v[1] == 1, "0 and 1 only, 2 a hand edit");
     CHECK_EQ(trs_state(ir, &e), TRS_HIDE, "no reviewed Intel controller");
     CHECK_EQ(trs_state(nr, &e), TRS_HIDE, "no reviewed Intel controller 2");
-    e.PirqController = 1;
+    e.Inst.PirqController = 1;
     CHECK_EQ(trs_state(ir, &e), TRS_SHOW, "every system");
     CHECK_EQ(trs_state(nr, &e), TRS_GREY, "98 SE: 2000 and XP only");
     CHECK(strcmp(trs_only(nr, &e), "Windows 2000 and XP only") == 0, "its text");
@@ -214,13 +948,23 @@ static void test_rules(void)
     }
     e.Inst.Minor = 10;
     n = trs_choices(im, &e, 1, v, 32);
-    CHECK_EQ(n, 3, "no message-signalled interrupt on 98 SE");
+    CHECK(n == 3 && v[2] == 2, "98 SE: no 3 and no 4, even with advanced");
+    n = trs_choices(im, &e, 0, v, 32);
+    CHECK_EQ(n, 3, "and without it");
+    {
+        const TRS_ROW *ri = trs_row_find("XhciCmRingInterrupt");
+        e.Inst.CmNhi = 1;
+        n = trs_choices(ri, &e, 1, v, 32);
+        CHECK(n == 2 && v[0] == 0 && v[1] == 1,
+              "98 SE: the ring interrupt 0 and 1, no 2");
+        e.Inst.CmNhi = 0;
+    }
 
     env_nt(&e, 5, 2);
-    e.PirqController = 1;
+    e.Inst.PirqController = 1;
     CHECK_EQ(trs_state(nr, &e), TRS_SHOW, "XP x64");
     env_nt(&e, 5, 0);
-    e.PirqController = 1;
+    e.Inst.PirqController = 1;
     CHECK_EQ(trs_state(nr, &e), TRS_SHOW, "2000");
     CHECK_EQ(trs_state(si, &e), TRS_GREY, "silent install greyed on NT");
     CHECK_EQ(trs_state(h9, &e), TRS_GREY, "StorHold9xMs greyed on NT");
@@ -229,10 +973,10 @@ static void test_rules(void)
     CHECK_EQ(trs_state(mk, &e), TRS_SHOW, "the mark service");
     CHECK_EQ(trs_loc(mk), TRS_LOC_MARK, "its own key");
     env_nt(&e, 6, 1);
-    e.PirqController = 1;
+    e.Inst.PirqController = 1;
     CHECK_EQ(trs_state(nr, &e), TRS_GREY, "7: not read");
     n = trs_choices(im, &e, 1, v, 32);
-    CHECK_EQ(n, 4, "MSI only on 7");
+    CHECK(n == 4 && v[3] == 3, "MSI only on 7, no mode 4");
     n = trs_choices(cmm, &e, 0, v, 32);
     CHECK_EQ(n, 2, "XhciCmMode 0 and 1 without advanced");
     n = trs_choices(cmm, &e, 1, v, 32);
@@ -620,6 +1364,56 @@ static void test_quick(void)
     CHECK(!trs_hk_ok(0), "off is not a key");
 }
 
+/* TRSETWARN.1: /set prints a value's note only for a change it accepts; a
+ * refused one prints its refusal alone. */
+static void test_set_note(void)
+{
+    TRS_ENV e;
+    char t[800];
+    char out[32];
+    const char *why;
+    const TRS_ROW *psw = trs_row_find("XhciIntelPortSwitch");
+    const TRS_ROW *nr = trs_row_find("XhciIntelNoRouteIrq");
+
+    env_98(&e);
+    e.Inst.PswController = 0;
+    CHECK(!trs_parse(psw, &e, "1", out, sizeof(out), &why) &&
+              strcmp(why, "not a setting of this computer") == 0,
+          "no listed controller: XhciIntelPortSwitch=1 refused");
+    CHECK_EQ(trs_set_note(psw, &e, "1"), TRS_NOTE_NONE,
+             "no listed controller: no switch warning before the refusal");
+    CHECK_EQ(trs_set_note(psw, &e, "0"), TRS_NOTE_NONE,
+             "no listed controller: none for 0 either");
+    e.Inst.PswController = 1;
+    CHECK_EQ(trs_set_note(psw, &e, "1"), TRS_NOTE_PSW,
+             "a listed controller: the switch warning for 1, as before");
+    CHECK_EQ(trs_set_note(psw, &e, "0"), TRS_NOTE_PSW,
+             "a listed controller: and for 0");
+    CHECK_EQ(trs_set_note(psw, &e, "2"), TRS_NOTE_NONE,
+             "2 is refused: no warning");
+    trs_psw_text(1, 0, t, sizeof(t));
+    CHECK(strstr(t, "At Windows' next start the shared connectors (usually "
+                    "the blue ones) move from the USB 2.0 (EHCI) controller "
+                    "to xHCI98") == t,
+          "the accepted change's warning text is unchanged");
+    CHECK_EQ(trs_set_note(trs_row_find("XhciImodInterval250ns"), &e, "160"),
+             TRS_NOTE_NONE, "another value has no note");
+    CHECK_EQ(trs_set_note(NULL, &e, "1"), TRS_NOTE_NONE, "no row: none");
+
+    env_nt(&e, 5, 0);
+    e.NoRouteW2kListed = 1;
+    e.Inst.PirqController = 0;
+    CHECK(trs_a5_confirm(nr, &e, "0") &&
+              !trs_parse(nr, &e, "0", out, sizeof(out), &why),
+          "2000, a listed computer, the row not shown: 0 refused");
+    CHECK_EQ(trs_set_note(nr, &e, "0"), TRS_NOTE_NONE,
+             "refused: no STOP 0xA5 question before the refusal");
+    e.Inst.PirqController = 1;
+    CHECK_EQ(trs_set_note(nr, &e, "0"), TRS_NOTE_A5,
+             "accepted: the STOP 0xA5 question, as before");
+    CHECK_EQ(trs_set_note(nr, &e, "1"), TRS_NOTE_NONE, "1 asks nothing");
+}
+
 /* XhciIntelNoRouteIrq 0 on Windows 2000 with a listed controller asks
  * first (task 47.40's STOP 0xA5; tuning.md). */
 static void test_a5(void)
@@ -742,10 +1536,289 @@ static void test_qskind(void)
           "taken away while waiting: still in doubt, so the next clears again");
 }
 
+/* XhciEventRingTrbs (the owner's final decision of 2026-11-12): two
+ * picks, a list in the Tree, read as the driver reads it. */
+static void test_event_ring(void)
+{
+    TRS_ENV e;
+    char out[160];
+    const char *why;
+    INST_U32 v[32];
+    int how;
+    int n;
+    TRS_RAW raw;
+    const TRS_ROW *er = trs_row_find("XhciEventRingTrbs");
+
+    CHECK(er != NULL, "the event ring's row");
+    if (er == NULL) {
+        return;
+    }
+    env_nt(&e, 5, 1);
+    CHECK_EQ(trs_state(er, &e), TRS_SHOW, "shown on XP");
+    CHECK(!trs_is_range(er), "a list, not a number box");
+    n = trs_choices(er, &e, 1, v, 32);
+    CHECK(n == 2 && v[0] == 256 && v[1] == 1024, "256 and 1024");
+    trs_value_text(er, 256, out, sizeof(out));
+    CHECK(strcmp(out, "256 - the smaller ring, the size other systems use") ==
+              0, "256's text");
+    trs_value_text(er, 1024, out, sizeof(out));
+    CHECK(strcmp(out, "1024 - the larger ring") == 0, "1024's text");
+    CHECK(trs_parse(er, &e, "1024", out, sizeof(out), &why) &&
+              strcmp(out, "1024") == 0, "1024 taken");
+    CHECK(trs_parse(er, &e, "default", out, sizeof(out), &why) &&
+              strcmp(out, "256") == 0, "Default is 256, the INFs'");
+    CHECK(!trs_parse(er, &e, "512", out, sizeof(out), &why) &&
+              !trs_parse(er, &e, "0", out, sizeof(out), &why),
+          "512 and 0 refused");
+    CHECK_EQ(trs_effective(er, 1, 512, TRS_NO_HOLD, &how), 1024,
+             "512 read as 1024, as the driver reads it");
+    CHECK_EQ(how, TRS_HOW_HELD, "said so");
+    CHECK_EQ(trs_effective(er, 1, 0, TRS_NO_HOLD, &how), 1024, "0 is 1024");
+    CHECK_EQ(trs_effective(er, 1, 1024, TRS_NO_HOLD, &how), 1024, "1024 as set");
+    CHECK_EQ(how, TRS_HOW_AS_SET, "as set");
+    CHECK_EQ(trs_effective(er, 1, 256, TRS_NO_HOLD, &how), 256, "256 as set");
+    CHECK_EQ(trs_effective(er, 0, 0, TRS_NO_HOLD, &how), 256, "none set: 256");
+    memset(&raw, 0, sizeof(raw));
+    raw.State = TRS_RAW_OTHER;
+    trs_raw_text(er, &raw, out, sizeof(out));
+    CHECK(strstr(out, "not a number (the driver uses 1024") == out,
+          "another type: the larger ring");
+    CHECK(trs_matches(er, "event ring") && trs_matches(er, "smaller ring"),
+          "Find: its meaning and a pick's text");
+    env_98(&e);
+    CHECK_EQ(trs_state(er, &e), TRS_SHOW, "shown on 98 SE");
+}
+
+/* Mode 4 a hidden beta (the owner, 2026-11-12): its caution only with the
+ * choices "Show advanced settings" offers; and every choice's text fits
+ * the window's and the report's 160-byte buffers. */
+static void test_hidden_mode4(void)
+{
+    const TRS_ROW *im = trs_row_find("XhciInterruptMode");
+    char c[1024];
+    char t[160];
+    int i;
+    INST_U32 k;
+
+    trs_caution_text(im, 0xFUL, c, sizeof(c));
+    CHECK(strstr(c, "Code 10") != NULL && strstr(c, "Last Known") == NULL &&
+              strstr(c, "4 (") == NULL, "no mode 4 in the common caution");
+    trs_caution_text(im, 0x1FUL, c, sizeof(c));
+    CHECK(strstr(c, "4 (2000 and XP)") != NULL &&
+              strstr(c, "Last Known Good") != NULL && strstr(c, "98") == NULL &&
+              strstr(c, "msi4") == NULL,
+          "mode 4's caution with the advanced choices: 2000 and XP, no "
+          "component named");
+    for (i = 0; i < trs_row_count(); i++) {
+        const TRS_ROW *r = trs_row_at(i);
+        const INST_VALUE *x = trs_value(r);
+        if (x == NULL) {
+            continue;
+        }
+        for (k = 0; k < INST_CHOICES; k++) {
+            INST_U32 v = x->PickCount > 0 && (int)k < x->PickCount
+                             ? x->Picks[k] : k;
+            if (x->Choice[k] == NULL) {
+                continue;
+            }
+            trs_value_text(r, v, t, sizeof(t));
+            CHECK(strlen(t) + 1 < sizeof(t) - 20, r->Name);
+            CHECK(strstr(t, "msi4") == NULL, "no component named in a choice");
+        }
+        trs_caution_text(r, 0xFFFFFFFFUL, c, sizeof(c));
+        CHECK(strstr(c, "msi4") == NULL, "no component named in a caution");
+    }
+}
+
+/* What a stored value reads as on 98 SE and ME (the drivers run
+ * XhciInterruptMode 4 as 0 and poll for XhciCmRingInterrupt 2 there) and
+ * on NT, machine-wide and per controller. */
+static void test_nine_reads(void)
+{
+    const TRS_ROW *im = trs_row_find("XhciInterruptMode");
+    const TRS_ROW *ri = trs_row_find("XhciCmRingInterrupt");
+    TRS_RAW m;
+    TRS_RAW own[1];
+    char t[200];
+    int how;
+
+    memset(&m, 0, sizeof(m));
+    memset(own, 0, sizeof(own));
+    m.State = TRS_RAW_DWORD;
+    m.Value = 4;
+    own[0].State = TRS_RAW_ABSENT;
+
+    trs_set_nine(1);
+    CHECK_EQ(trs_effective(im, 1, 4, TRS_NO_HOLD, &how), 0, "98: 4 is 0");
+    CHECK_EQ(how, TRS_HOW_DEFAULT, "98: as the default");
+    CHECK_EQ(trs_effective(im, 1, 2, TRS_NO_HOLD, &how), 2, "98: 2 as set");
+    CHECK_EQ(trs_effective(ri, 1, 2, TRS_NO_HOLD, &how), 0, "98: ring 2 is 0");
+    CHECK_EQ(how, TRS_HOW_DEFAULT, "98: ring 2 as the default");
+    CHECK_EQ(trs_effective(ri, 1, 1, TRS_NO_HOLD, &how), 1, "98: ring 1 as set");
+    trs_raw_text(im, &m, t, sizeof(t));
+    CHECK(strcmp(t, "4 (the driver uses its default, 0 - automatic)") == 0,
+          "98: a machine-wide 4");
+    trs_now_text(im, &m, own, 1, t, sizeof(t));
+    CHECK(strstr(t, "4 (the driver uses its default, 0 - automatic)") != NULL,
+          "98: a machine-wide 4, no controller's own");
+    own[0] = m;
+    m.State = TRS_RAW_ABSENT;
+    trs_now_text(im, &m, own, 1, t, sizeof(t));
+    CHECK(strstr(t, "4 (the driver uses its default, 0 - automatic)") != NULL,
+          "98: a controller's own 4");
+    m.State = TRS_RAW_DWORD;
+    m.Value = 2;
+    trs_raw_text(ri, &m, t, sizeof(t));
+    CHECK(strncmp(t, "2 (the driver uses its default, 0 - ", 36) == 0,
+          "98: a stored ring 2");
+
+    trs_set_nine(0);
+    CHECK_EQ(trs_effective(im, 1, 4, TRS_NO_HOLD, &how), 4, "NT: 4 as set");
+    CHECK_EQ(how, TRS_HOW_AS_SET, "NT: as set");
+    CHECK_EQ(trs_effective(ri, 1, 2, TRS_NO_HOLD, &how), 2, "NT: ring 2");
+    m.Value = 4;
+    trs_raw_text(im, &m, t, sizeof(t));
+    CHECK(strcmp(t, "4 - MSI on 2000 / XP, no fallback") == 0,
+          "NT: a machine-wide 4 as set");
+    CHECK(strstr(t, "default") == NULL, "NT: not the default");
+}
+
+/* A zero-length REG_NONE is absent, as the drivers read it, in a
+ * controller's key and machine-wide, where it does not hide the
+ * controller's value (XhciEventRingTrbs: absent 256, another type 1024). */
+static void test_reg_none(void)
+{
+    static const unsigned char d256[4] = { 0x00, 0x01, 0x00, 0x00 };
+    static const unsigned char none[4] = { 0, 0, 0, 0 };
+    TRS_RAW mw;
+    TRS_RAW own[1];
+    char out[200];
+    const TRS_ROW *er = trs_row_find("XhciEventRingTrbs");
+
+    trs_raw_from_query(TRS_Q_OK, TRS_REG_NONE, 0, none, &mw);
+    CHECK_EQ(mw.State, TRS_RAW_ABSENT, "an empty REG_NONE is absent");
+    trs_raw_from_query(TRS_Q_OK, TRS_REG_NONE, 4, none, &mw);
+    CHECK_EQ(mw.State, TRS_RAW_OTHER, "a REG_NONE with data is another type");
+    trs_raw_from_query(TRS_Q_NOT_FOUND, 0, 0, none, &mw);
+    CHECK_EQ(mw.State, TRS_RAW_ABSENT, "not found");
+    trs_raw_from_query(TRS_Q_OK, TRS_REG_DWORD, 4, d256, &mw);
+    CHECK(mw.State == TRS_RAW_DWORD && mw.Value == 256, "a DWORD 256");
+    trs_raw_from_query(TRS_Q_ERROR, 0, 0, none, &mw);
+    CHECK_EQ(mw.State, TRS_RAW_UNREAD, "an error is unread");
+    /* A controller's own empty REG_NONE: not set, the driver's 256. */
+    trs_raw_from_query(TRS_Q_OK, TRS_REG_NONE, 0, none, &own[0]);
+    trs_raw_text(er, &own[0], out, sizeof(out));
+    CHECK(strncmp(out, "not set (the driver uses 256", 28) == 0,
+          "a controller's empty REG_NONE: 256");
+    /* Machine-wide empty REG_NONE over a controller's DWORD 256: the
+     * controller's value is the one in force. */
+    trs_raw_from_query(TRS_Q_OK, TRS_REG_NONE, 0, none, &mw);
+    trs_raw_from_query(TRS_Q_OK, TRS_REG_DWORD, 4, d256, &own[0]);
+    trs_now_text(er, &mw, own, 1, out, sizeof(out));
+    CHECK(strncmp(out, "256", 3) == 0 && strstr(out, "machine-wide") == NULL,
+          "the machine-wide empty REG_NONE falls through to the controller");
+    /* And a machine-wide REG_NONE with data is the larger ring. */
+    trs_raw_from_query(TRS_Q_OK, TRS_REG_NONE, 4, none, &mw);
+    trs_now_text(er, &mw, own, 1, out, sizeof(out));
+    CHECK(strstr(out, "1024") != NULL, "another type machine-wide: 1024");
+}
+
+/* The elevated request carries a drive's driver key (task 49.38). */
+static void test_req_drv(void)
+{
+    TRS_CHANGE c[2];
+    TRS_CHANGE b[2];
+    char req[512];
+    int n;
+
+    memset(c, 0, sizeof(c));
+    strcpy(c[0].Name, "XhciUasFastReset");
+    strcpy(c[0].Value, "1");
+    strcpy(c[0].On, "USB\\VID_1\\A");
+    strcpy(c[0].Drv, "{36FC9E60-C465-11CF-8056-444553540000}\\0007");
+    strcpy(c[1].Name, "XhciLinkKeep");
+    strcpy(c[1].Value, "0");
+    CHECK(trs_req_make(c, 2, req, sizeof(req)), "made");
+    CHECK(trs_req_parse(req, sizeof(req), b, 2, &n) && n == 2, "parsed");
+    CHECK(strcmp(b[0].Drv, c[0].Drv) == 0 && strcmp(b[0].On, c[0].On) == 0,
+          "the drive's id and driver key round trip");
+    CHECK(b[1].Drv[0] == '\0' && b[1].On[0] == '\0', "every device, no key");
+    c[1].Drv[0] = 'x';
+    c[1].Drv[1] = '\0';
+    CHECK(!trs_req_make(c, 2, req, sizeof(req)), "a key with no device refused");
+}
+
+/* The window's drives against a fresh reading: drive A unplugged and B
+ * plugged in since it opened is a change (the reviewer's case). */
+static void test_same_devices(void)
+{
+    const char *a[2] = { "USB\\VID_1\\A", "USB\\VID_1\\C" };
+    const char *ad[2] = { "{x}\\0001", "{x}\\0002" };
+    const char *b[2] = { "USB\\VID_1\\C", "usb\\vid_1\\a" };
+    const char *bd[2] = { "{x}\\0002", "{X}\\0001" };
+    const char *c[2] = { "USB\\VID_1\\B", "USB\\VID_1\\C" };
+    const char *cd[2] = { "{x}\\0003", "{x}\\0002" };
+
+    CHECK(trs_same_devices(a, ad, 2, b, bd, 2), "the same two, any order and case");
+    CHECK(!trs_same_devices(a, ad, 2, c, cd, 2), "A gone, B new: changed");
+    CHECK(!trs_same_devices(a, ad, 2, b, bd, 1), "one gone: changed");
+    CHECK(!trs_same_devices(a, ad, 1, b, bd, 2), "one new: changed");
+    bd[1] = "{x}\\0009";
+    CHECK(!trs_same_devices(a, ad, 2, b, bd, 2), "the same id, another driver key");
+    CHECK(trs_same_devices(a, ad, 0, b, bd, 0), "none then, none now");
+}
+
+/* Task 49.38's Find: the match and which rows the window lists. */
+static void test_find(void)
+{
+    TRS_ENV e;
+    const TRS_ROW *mw = trs_row_find("XhciMsiAvoid");
+    const TRS_ROW *im = trs_row_find("XhciInterruptMode");
+    const TRS_ROW *wt = trs_row_find("StorWriteThrough");
+    const TRS_ROW *lv = trs_row_find("XhciLogVerbosity");
+    int i;
+    int n = 0;
+
+    CHECK(trs_matches(mw, "") && trs_matches(mw, "   ") &&
+              trs_matches(mw, NULL), "an empty search matches every row");
+    CHECK(trs_matches(mw, "msiavoid") && trs_matches(mw, "XHCIMSIAVOID") &&
+              trs_matches(mw, " MsiAvoid "), "its name, any case, spaces trimmed");
+    CHECK(trs_matches(mw, "polling instead"), "its meaning");
+    CHECK(trs_matches(mw, "Linux lists"), "a choice text");
+    CHECK(!trs_matches(mw, "zzz-no-such"), "no match");
+    CHECK(trs_matches(wt, "storwritethrough") && trs_matches(wt, "fua"),
+          "a Stor98 row by its NT key and a word");
+    env_nt(&e, 5, 1);
+    CHECK(!trs_listed(mw, &e, 0, ""), "advanced, not ticked, no search: hidden");
+    CHECK(trs_listed(mw, &e, 0, "msiavoid"), "a search lists an advanced row");
+    CHECK(trs_listed(mw, &e, 1, ""), "ticked: listed");
+    CHECK(!trs_listed(mw, &e, 1, "nomatch-here"), "ticked, no match: hidden");
+    CHECK(trs_listed(im, &e, 0, ""), "a common row, no search: listed");
+    CHECK(!trs_listed(lv, &e, 1, "XhciLogVerbosity"),
+          "an out row is never listed (the Logging level dialog's)");
+    for (i = 0; i < trs_row_count(); i++) {
+        n += trs_listed(trs_row_at(i), &e, 0, "quirk") ||
+             trs_listed(trs_row_at(i), &e, 0, "linux");
+    }
+    CHECK(n >= 14, "the Linux quirk rows found by a word of their texts");
+    /* A staged change of a row the search hides is the window's to keep:
+     * the pure half says it is not listed (set_hidden_staged counts it). */
+    CHECK(!trs_listed(im, &e, 0, "msiavoid"), "a staged row hidden by Find");
+}
+
 int main(void)
 {
+    test_find();
+    test_same_devices();
+    test_reg_none();
+    test_req_drv();
+    test_event_ring();
+    test_hidden_mode4();
+    test_nine_reads();
     test_coverage();
     test_defaults();
+    test_every_value();
+    test_new_rows();
     test_rules();
     test_parse();
     test_effective();
@@ -755,6 +1828,7 @@ int main(void)
     test_args();
     test_quick();
     test_a5();
+    test_set_note();
     test_tray();
     test_qskind();
 

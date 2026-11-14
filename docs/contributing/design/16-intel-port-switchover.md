@@ -62,6 +62,35 @@ scripts' logic does not change for it. `2.3.1.0`, the
 one release published with `portsw\` at the version root, keeps it there.
 Its decision is section 11's fourteenth, its documents section 17.
 
+Revision 8, 2026-11-14, for roadmap-usb4 task 49.47 (Phase 49, release
+`3.5.0.0`): **the switchover is on by default again, and the scripts are
+gone.** Both INFs write `XhciIntelPortSwitch` 1, under the same
+don't-overwrite flag, so an install made from `2.3.0.0` to `3.4.3.0` keeps
+its 0 through an update; a value that is absent, of another type or
+unreadable stays off, on a listed controller too (`XHCI_PSW_ABSENT_ROUTES`,
+`xhci_psw.c`; the owner's second decision of 2026-11-14);
+an unlisted Intel controller still needs an exact 2 and another vendor's
+is never touched. The download's `tools\portsw\` is no longer published:
+the xHCI98 USB Tree's Settings window and `XHCITR /set` set the value
+(design record 25 section 22). The owner's decisions are section 11's
+fifteenth to eighteenth; section 18 has the history and what the default
+brings back.
+
+Revision 9, 2026-11-14 (the same day, the owner's final design for task
+49.47): **the INFs write 0 again, and Setup turns it on.** An integrated
+install (nLite, NTLite, DISM) would install the controller from the INF
+during Windows Setup and move the blue ports then, which can drop an
+install drive on one; so the driver's default is off, exactly as in
+`3.4.3.0` - both INFs write 0 and a missing value is off - and an install
+from the INF alone (by hand, F6, an integrated image) never moves the
+ports by itself. Setup proposes 1 at a first install on a listed board
+(`inst_psw_propose`, `xhciinst\inst_core.c`; `psw_proposed`, `psw_seed`,
+`xhciinst\inst_eng.c`): its console question and its Settings row offer
+1 as the choice, and with no other answer it writes 1 machine-wide, `/yes`
+included. An update keeps what is set. Revision 8's "on by default" is
+superseded; the removal of `tools\portsw\` stands. Its decisions are
+section 11's nineteenth to twenty-first, its story section 19.
+
 ## 1. What is asked, and what is not
 
 A tester reported Ivy Bridge machines on which `xhci98.sys` started cleanly
@@ -217,7 +246,7 @@ reversed 2026-10-09, revision 4):
 
 | Value | Effect |
 |---|---|
-| absent, not a DWORD, or unreadable | off: the default since revision 4 (on, on a listed controller, until then) |
+| absent, not a DWORD, or unreadable | off: the default since revision 4, kept by revision 8 for text-mode Setup (on, on a listed controller, before revision 4) |
 | 0 | off: this start reads PCI offset 0 and the value, and makes no switchover write, as every release to `2.1.0.0` made none |
 | 1, or any other number but 2 | on, on a listed controller |
 | 2 (revision 3) | on, on every Intel controller, listed or not: section 4a, at the user's own risk |
@@ -770,6 +799,30 @@ Revision 7 (owner, 2026-10-13, roadmap-hcd task 38.9):
     `2.4.0.0`. A published release is not rewritten: `2.3.1.0` keeps
     `portsw\` at its version root, and `2.3.0.0` its four copies.
 
+Revision 8 (owner, 2026-11-14, roadmap-usb4 task 49.47):
+
+15. The default is on for every Windows, on the listed controllers: both
+    INFs write 1. The owner was told first that `2.1.1.0` and `2.2.0.0`
+    shipped it on and why revision 4 turned it off, and reversed that.
+16. An existing install keeps what is set: the don't-overwrite flag stays.
+17. A value missing, of another type or unreadable is off, on a listed
+    controller too (owner, 2026-11-14, a second decision replacing the
+    same day's "on"): text-mode Setup, which writes no value, keeps the
+    ports where the firmware put them, as every release so far (one
+    constant in `xhci_psw.c`).
+18. The download's `tools\portsw\` is removed; Setup gets no new option.
+
+Revision 9 (owner, 2026-11-14, replacing decision 15):
+
+19. The INFs write 0 and a value missing, of another type or unreadable
+    is off, as in `3.4.3.0`: an integrated install must not move the blue
+    ports during Windows Setup, where an install drive may be on one.
+20. Setup proposes 1 at a first install on a computer where it finds a
+    listed controller: the console question's Enter and the window's row
+    give 1, and an unattended run (`/yes`) writes 1. An update keeps what
+    is set; 2 stays a hand edit or `/set`. No new page, option or switch.
+21. `tools\portsw\` stays removed (decision 18).
+
 ## 12. What changes in the documents (task 34.4)
 
 - `xhci-programming.md`: the `XUSB2PR` section, which says the driver leaves
@@ -877,3 +930,95 @@ row 7; `source-files.md`.
   `xhciqual/hardware-testing.md`'s and `xhci-programming.md`'s "in the
   package".
 - Run records keep the paths they read.
+
+## 18. Revision 8: the default on again, the scripts removed (task 49.47)
+
+**History** (each from the record named; no new reading):
+- Revision 1, `2.1.1.0`: on by default; read on the B490 under 98 SE with
+  NUSB (section 10; runtime, `runs/run-34.md`, 34.3-H2).
+- Revision 4, `2.3.0.0`: off by default, after a comment on GitHub issue 17
+  that a connector left unrouted stays on EHCI and works there (record).
+  No fault of the route or the release was reported then or since
+  (`docs/issues/`, `runs/`, `releases/history.md`; record).
+- Revision 5: at the E7250 bench (`9CB1`, 7 x64) a USB 3 stick copied at
+  USB 2.0 speed at the default 0 and at SuperSpeed at 1 (runtime,
+  `runs/run-36.md`).
+- Issue 27 (an HP with `1E31`, XP): the blue ports reached the xHCI only at
+  1; that firmware routes them for Windows 8 and later only (runtime).
+- Issue 29 (the same HP, XP x64, at 1): a device's SuperSpeed link failed on
+  the switched connectors; `XhciSsFlapFallback` sends such a device to USB
+  2.0 since `3.4.3.0` (runtime).
+
+**What changes:** new installs on the six listed controllers (Setup, Device
+Manager, the hardware wizard, an integrated image) route at every start;
+an update keeps its value; F6 text-mode Setup, which writes no value, does
+not route, and neither does a value deleted by hand (decision 17).
+
+**The risk it brings back** (from sections 6 and 10; unread where said):
+- On 98 SE and ME with NUSB's or SweetLow's USB 2.0 stack, and on 2000 and
+  later under Windows' own EHCI driver, a device on a blue connector moves
+  to this driver at every start and back at every disable, removal and
+  shutdown; a drive busy at a move loses its letter (section 6). On a stock
+  98 SE or ME the EHCI has no driver, so those connectors gain a working
+  driver.
+- Text-mode Setup from the F6 floppy does not route (decision 17); the
+  first start of the installed Windows, whose controller GUI-mode Setup
+  installed from the INF, does, so a USB keyboard or disk on a blue
+  connector moves then (unread).
+- Every return to D0 routes again; a drive the EHCI driver found during the
+  wake can be moved (unread: no standby has been read with the switchover
+  on, section 10).
+- More periodic devices land on the 7-series xHCI (`1E31`), whose periodic
+  limit the release notes name.
+- Unchanged: the shutdown hand-back (`XhciIntelShutdownToEhci`), the Sony
+  exemption, value 2's rule, the release at every stop.
+
+**The scripts.** From `3.5.0.0` no cut publishes `tools\portsw\`
+(`make-release.ps1`: `$pswRetiredVersion`, `Assert-PortSwitchLayout`);
+published releases keep theirs and the upload assembly reads them so. The
+Settings window offers 0 and 1, as the scripts did; it writes the
+machine-wide value where one is set and the scope is every controller,
+otherwise each present controller's own key (record 25 section 22).
+
+## 19. Revision 9: off in the INFs, on through Setup (task 49.47)
+
+**First install**, in Setup's terms: a present controller that
+`XhciPswGate` admits gets xhci98 in this run with no xhci98 driver now
+(action "install"; a controller taken from another manufacturer's driver,
+task 49.44, counts too), nothing is set machine-wide, and no xhci98
+controller's own key, present or not, holds a DWORD of the value
+(`inst_keepbot_seed_all`'s test, so a dock unplugged now keeps its 0).
+Anything else is an update and keeps what is set: a same-version
+reinstall or repair (the controller already runs xhci98, so its key
+holds the INF's 0), an install over a newer release with `/force`, and a
+computer whose machine-wide value is set. `/set XhciIntelPortSwitch=0`
+(or the window's 0, or a typed 0) is an answer and wins over the
+proposal; `/set ...=2` too. The written 1 is machine-wide, so the
+uninstall removes it with the other values. It takes effect at the next
+start: on 2000 and later the controller starts under the INF's 0 during
+the run, and the run asks for the restart.
+
+**Written only after the install.** The proposal stays apart from an
+answer to the end and is written after the run's results check
+(`psw_write_proposed`), only where no takeover of the run stopped at its
+failure and that check counted a listed
+controller whose install call in this run succeeded (`inst_psw_counts_nt`,
+`inst_psw_counts_9x`, `inst_psw_write_now`). On 2000 and later that is
+a controller whose service is xhci98 and which is started as the check
+wants it, its root hub found below it, or waits for the restart its install asked for (problem 14, a
+replaced controller's restart under task 49.44, 32-bit Vista and 7's
+helper restart, an update running the old file until then). On 98 SE
+and ME it is a controller the helper installed: started with this
+release, its file swapped at the next start, or "installed, restart
+pending". A refused, failed or cancelled install, a run that installs
+no listed controller, a run stopped part-way and a takeover stopped at
+its failure write nothing for it; a controller left to the steps page
+on 98 SE and ME is not counted either. What the console and the window
+showed stays as shown, and no "set to 1" line is printed then.
+
+Which real users it changes: a first install by `SETUP.EXE` on a board
+with one of the six listed controllers (the 7-, 8- and 9-series and
+C610/X99 PCH), on every Windows; on 98 SE and ME the console's question
+was already asked there. Nothing writes 1 without a listed controller:
+the proposal needs `XhciPswGate` to admit a present controller this run
+installs.

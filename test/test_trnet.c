@@ -350,6 +350,29 @@ static void test_irq(void)
     CHECK(lines_ok(textBuf, &count), "within 79 columns");
     CHECK(strstr(textBuf, "  Ring interrupt:       on (1234 wake-ups)") != NULL,
           "open, with its kicks");
+    /* Record 21 section 4.5.12: by message, word 100; 0 the line or a
+     * driver before. */
+    p32(s, CM_QN_S_IRQ_KIND, CM_QN_KIND_MESSAGE);
+    tr_text_init(&t, textBuf, sizeof(textBuf));
+    tr_qnet_text(&t, &q, -1, NULL, 0);
+    CHECK(lines_ok(textBuf, &count), "within 79 columns, by message");
+    CHECK(strstr(textBuf, "  Ring interrupt:       on, by message (1234 wake-ups)") !=
+              NULL,
+          "open, by message");
+    p32(s, CM_QN_S_IRQ_KIND, CM_QN_KIND_LINE);
+    tr_text_init(&t, textBuf, sizeof(textBuf));
+    tr_qnet_text(&t, &q, -1, NULL, 0);
+    CHECK(strstr(textBuf, "  Ring interrupt:       on (1234 wake-ups)") != NULL,
+          "open, by the line: as before");
+    /* Record 21 section 4.5.14: value 2 yielding to mode 4 on 2000/XP. */
+    p32(s, CM_QN_S_IRQ_KIND, CM_QN_KIND_LINE_YIELD);
+    tr_text_init(&t, textBuf, sizeof(textBuf));
+    tr_qnet_text(&t, &q, -1, NULL, 0);
+    CHECK(lines_ok(textBuf, &count), "within 79 columns, yielding");
+    CHECK(strstr(textBuf, "  Ring interrupt:       on, by the line (USB uses MSI) "
+                          "(1234 wake-ups)") != NULL,
+          "open, by the line, yielding to mode 4");
+    p32(s, CM_QN_S_IRQ_KIND, 0);
     p32(s, CM_QN_S_IRQ_STATE, CM_QN_IRQ_LATCHED);
     tr_text_init(&t, textBuf, sizeof(textBuf));
     tr_qnet_text(&t, &q, -1, NULL, 1);

@@ -327,6 +327,11 @@ void tr_pop_show(HWND tray, UINT msg, UINT id, const char *title,
     }
 }
 
+int tr_pop_idle(void)
+{
+    return !popShowing && popQ.Count == 0;
+}
+
 static int pop_in(const TR_POP_RECT *r, int x, int y)
 {
     return x >= r->Left && x < r->Right && y >= r->Top && y < r->Bottom;

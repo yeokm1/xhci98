@@ -768,14 +768,73 @@ ULONG XhciTolWindowAdmit(PXHCI_TOL_WINDOW win, ULONG tolerance, ULONG now)
     return 1;
 }
 
+ULONG XhciTolResetRunning(ULONG usbcmd, ULONG usbsts)
+{
+    return ((usbcmd != 0xFFFFFFFFUL && (usbcmd & XHCI_USBCMD_HCRST) != 0) ||
+            (usbsts != 0xFFFFFFFFUL && (usbsts & XHCI_USBSTS_CNR) != 0))
+               ? 1UL
+               : 0UL;
+}
+
+ULONG XhciTolResetSettle(const XHCI_TOL_RESET_IO *io, ULONG timeoutMs,
+                         ULONG stepMs, PULONG waited, PULONG usbcmd,
+                         PULONG usbsts)
+{
+    ULONG cmd;
+    ULONG sts;
+    ULONG slept;
+
+    if (stepMs == 0) {
+        stepMs = 1;
+    }
+    slept = 0;
+    for (;;) {
+        cmd = 0xFFFFFFFFUL;
+        sts = 0xFFFFFFFFUL;
+        io->Read(io->Context, &cmd, &sts);
+        *usbcmd = cmd;
+        *usbsts = sts;
+        *waited = slept;
+        if (cmd == 0xFFFFFFFFUL || sts == 0xFFFFFFFFUL) {
+            return XHCI_TOL_SETTLE_DEAD;
+        }
+        if (!XhciTolResetRunning(cmd, sts)) {
+            return XHCI_TOL_SETTLE_DONE;
+        }
+        if (slept >= timeoutMs) {
+            return XHCI_TOL_SETTLE_TIMEOUT;
+        }
+        io->Sleep(io->Context, stepMs);
+        slept += stepMs;
+    }
+}
+
+ULONG XhciTolRecoverPaced(ULONG failures, ULONG failStamp, ULONG now)
+{
+    if (failures == 0) {
+        return 1;
+    }
+    return XhciTolElapsed(now, failStamp, XHCI_TOL_RECOVER_GAP_TICKS);
+}
+
 ULONG XhciTolTerminal(ULONG failed, ULONG unreadable, ULONG windowRefused,
                       ULONG failures, ULONG maxFailures)
+{
+    return XhciTolTerminalEx(failed, unreadable, windowRefused, failures,
+                             maxFailures, 0);
+}
+
+ULONG XhciTolTerminalEx(ULONG failed, ULONG unreadable, ULONG windowRefused,
+                        ULONG failures, ULONG maxFailures, ULONG msg4Lost)
 {
     if (unreadable == XHCI_TOL_CONTAINED_DMA_UNPROVEN) {
         return XHCI_TOL_TERMINAL_DMA_UNPROVEN;
     }
     if (unreadable) {
         return XHCI_TOL_TERMINAL_UNREADABLE;
+    }
+    if (msg4Lost) {
+        return XHCI_TOL_TERMINAL_MSG4;
     }
     if (windowRefused) {
         return XHCI_TOL_TERMINAL_WINDOW;
@@ -793,7 +852,8 @@ ULONG XhciTolTerminalRelease(ULONG terminal, ULONG pending, ULONG raised,
                              ULONG devices)
 {
     if (terminal != XHCI_TOL_TERMINAL_WINDOW &&
-        terminal != XHCI_TOL_TERMINAL_FAILURES) {
+        terminal != XHCI_TOL_TERMINAL_FAILURES &&
+        terminal != XHCI_TOL_TERMINAL_MSG4) {
         return 0;
     }
     return (!pending && !raised && devices) ? 1UL : 0UL;
@@ -819,7 +879,8 @@ ULONG XhciTolResumeRefused(ULONG terminal)
     return (terminal == XHCI_TOL_TERMINAL_FAILURES ||
             terminal == XHCI_TOL_TERMINAL_WINDOW ||
             terminal == XHCI_TOL_TERMINAL_UNREADABLE ||
-            terminal == XHCI_TOL_TERMINAL_DMA_UNPROVEN)
+            terminal == XHCI_TOL_TERMINAL_DMA_UNPROVEN ||
+            terminal == XHCI_TOL_TERMINAL_MSG4)
                ? 1UL
                : 0UL;
 }

@@ -390,6 +390,17 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
 #define CM_SLEEP_ENTRY_DEFAULT 1UL
 
 /*
+ * XhciCmWakePowerUp, REG_DWORD (design record 21 section 6.3.1, task
+ * 49.46): 1 asks Windows once more, after a standby or hibernation, to
+ * power up the logical units of a drive Stor98 runs behind a tunnel whose
+ * own wake power-up failed before its tunnel was back; 0 asks nothing. The
+ * INFs write it at the default under the don't-overwrite flag; absent reads
+ * as the default, and any other value is refused and the default stands.
+ * Read once per start, machine-wide key first, as every value.
+ */
+#define CM_WAKE_POWER_UP_DEFAULT 1UL
+
+/*
  * XhciCmBridgeReq, REG_DWORD, Windows 2000, XP and XP x64 only (design
  * record 33 section 9.1, task 45.12): 1 rewrites the requirement list of
  * a hot-added bridge below an active tunnel port (record 33 section 6)
@@ -405,16 +416,16 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
  * XhciCmRingInterrupt, REG_DWORD (design record 21 section 4.5.4, task
  * 45.22): 1 lets the NHI's line interrupt end the connection-manager
  * thread's idle wait where the start grants one and it is proven
- * (cm_rirqos.c), on 2000 to 10; 0 polls as before. 98 SE and ME poll
- * whatever it says until their route is read. The NT install paths write
- * it at 0 since task 45.50 and the installer does not ask for it (owner,
- * 2026-10-29: off by default);
- * absent reads as 0, and any other value (2 and above are reserved for the
- * message step) is refused and 0 stands. Read once per start, machine-wide
- * key first, as every value.
+ * (cm_rirqos.c), on every system since task 48.26; 2 (section 4.5.14, task
+ * 49.27) on 2000, XP and XP x64 a message through msi4nt in its place,
+ * never the line, on Vista and later as 1, and on 98 SE and ME polling; 0
+ * polls as before. Every install path writes it at 0 (owner, 2026-10-29: off by
+ * default); absent reads as 0, and any other value (3 and above) is
+ * refused and 0 stands. Read once per start, machine-wide key first, as
+ * every value.
  */
 #define CM_RING_IRQ_DEFAULT 0UL
-#define CM_RING_IRQ_MAX     1UL
+#define CM_RING_IRQ_MAX     2UL
 
 #define CM_BRIDGE_REQ_DEFAULT 1UL
 #define CM_BRIDGE_REQ_OFF     0UL
@@ -466,11 +477,18 @@ typedef struct _CM_VALUES {
     ULONG SleepEntryFound;
     ULONG SleepEntryRaw;
     ULONG SleepEntryRefused;
+    ULONG WakePowerUp;          /* XhciCmWakePowerUp as run with            */
+    ULONG WakePowerUpFound;
+    ULONG WakePowerUpRaw;
+    ULONG WakePowerUpRefused;
     ULONG BridgeReq;            /* XhciCmBridgeReq as run with              */
     ULONG BridgeReqFound;
     ULONG BridgeReqRaw;
     ULONG BridgeReqRefused;
     ULONG RingIrq;              /* XhciCmRingInterrupt as run with          */
+    ULONG UsbInterruptMode;     /* xhci98.sys's machine-wide XhciInterrupt-
+                                   Mode as read (0 absent), for the yield
+                                   of record 21 section 4.5.14 (NT 5)     */
     ULONG RingIrqFound;
     ULONG RingIrqRaw;
     ULONG RingIrqRefused;
@@ -519,6 +537,10 @@ VOID CmValuesTakeGen4Elr(PCM_VALUES v, ULONG found, ULONG raw);
 
 /* Take XhciCmSleepEntry: 0 or 1, anything else refused (the default stands). */
 VOID CmValuesTakeSleepEntry(PCM_VALUES v, ULONG found, ULONG raw);
+
+/* Take XhciCmWakePowerUp: 0 or 1, anything else refused (the default
+ * stands). */
+VOID CmValuesTakeWakePowerUp(PCM_VALUES v, ULONG found, ULONG raw);
 
 /* Take XhciCmBridgeReq: 0, 1 or 2, anything else refused (1 stands). */
 VOID CmValuesTakeBridgeReq(PCM_VALUES v, ULONG found, ULONG raw);

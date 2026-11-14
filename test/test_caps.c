@@ -2475,9 +2475,97 @@ static void test_port_top(void)
     }
 }
 
+/*
+ * Task 49.35 (design record 13 section 11.10.1; the owner, 2026-11-13): the
+ * event ring a start allocates, from XhciEventRingTrbs as 3.4.2.0 and
+ * 3.4.3.0 read it. Below xHCI 1.0 always the smaller ring (held); absent the
+ * smaller ring (3.4.x: the larger); a DWORD 256 the smaller ring; any other
+ * DWORD and a value of another type the larger, as 3.4.x took them. The
+ * update cases: 3.4.2.0 and 3.4.3.0 wrote 1024 and an update keeps it, so a
+ * 1.0 controller keeps the larger ring and a 0.96 one is held, with the hold
+ * noted; a fresh install writes 256.
+ */
+static void test_event_ring_pick(void)
+{
+    static const ULONG vers[7] = { 0x0090UL, 0x0095UL, 0x0096UL, 0x0100UL,
+                                   0x0110UL, 0x0120UL, 0xFFFFUL };
+    static const ULONG vals[8] = { 0UL, 256UL, 1024UL, 512UL, 4096UL,
+                                   2048UL, 255UL, 0xFFFFFFFFUL };
+    ULONG v;
+    ULONG k;
+    ULONG r;
+    ULONG cap;
+    ULONG below;
+    ULONG want;
+    ULONG pick;
+    ULONG held;
+    char what[96];
+
+    for (v = 0; v < 7; v++) {
+        cap = (vers[v] == 0xFFFFUL) ? 0xFFFFFFFFUL : ((vers[v] << 16) | 0x20UL);
+        below = (vers[v] < 0x0100UL) ? 1UL : 0UL;
+        for (r = 0; r < 3; r++) {
+            for (k = 0; k < 8; k++) {
+                if (below) {
+                    want = XHCI_EVT_PICK_HELD;
+                } else if (r == XHCI_EVT_READ_ABSENT) {
+                    want = XHCI_EVT_PICK_DEFAULT;
+                } else if (r == XHCI_EVT_READ_DWORD && vals[k] == 256UL) {
+                    want = XHCI_EVT_PICK_SMALL;
+                } else {
+                    want = XHCI_EVT_PICK_LARGE;
+                }
+                sprintf(what, "HCIVERSION %04lX, read %lu, value %lu",
+                        vers[v], r, vals[k]);
+                pick = XhciEventRingPick(r, vals[k], cap);
+                CHECK_EQ(pick, want, what);
+                held = (below && r != XHCI_EVT_READ_ABSENT &&
+                        !(r == XHCI_EVT_READ_DWORD && vals[k] == 256UL))
+                           ? 1UL
+                           : 0UL;
+                CHECK_EQ(XhciEventRingHoldNoted(pick, r, vals[k]), held, what);
+            }
+        }
+    }
+    CHECK_EQ(XhciEventRingPick(XHCI_EVT_READ_DWORD, 1024UL, 0x01000020UL),
+             XHCI_EVT_PICK_LARGE, "update from 3.4.3.0 on 1.0: 1024 kept");
+    CHECK_EQ(XhciEventRingPick(XHCI_EVT_READ_DWORD, 1024UL, 0x00960020UL),
+             XHCI_EVT_PICK_HELD, "update from 3.4.3.0 on 0.96: held at 256");
+    CHECK_EQ(XhciEventRingHoldNoted(XHCI_EVT_PICK_HELD, XHCI_EVT_READ_DWORD,
+                                    1024UL),
+             1, "the hold of a 1024 is noted");
+    CHECK_EQ(XhciEventRingHoldNoted(XHCI_EVT_PICK_HELD, XHCI_EVT_READ_DWORD,
+                                    256UL),
+             0, "a 256 on 0.96 is no hold");
+    CHECK_EQ(XhciEventRingHoldNoted(XHCI_EVT_PICK_HELD, XHCI_EVT_READ_ABSENT,
+                                    0UL),
+             0, "absent on 0.96 is no hold");
+    CHECK_EQ(XhciEventRingPick(XHCI_EVT_READ_DWORD, 256UL, 0x01000020UL),
+             XHCI_EVT_PICK_SMALL, "fresh install: 256 written");
+    CHECK_EQ(XhciEventRingPick(XHCI_EVT_READ_ABSENT, 0, 0x01200020UL),
+             XHCI_EVT_PICK_DEFAULT, "absent: the smaller ring");
+    CHECK_EQ(XhciEventRingPick(XHCI_EVT_READ_OTHER, 0, 0x01200020UL),
+             XHCI_EVT_PICK_LARGE, "another type: the larger ring, as 3.4.x");
+    CHECK_EQ(XhciEventRingPick(XHCI_EVT_READ_DWORD, 0, 0x01200020UL),
+             XHCI_EVT_PICK_LARGE, "a DWORD 0: the larger ring, as 3.4.x");
+    CHECK_EQ(XhciEventRingPick(XHCI_EVT_READ_DWORD, 1024UL, 0xFFFFFFFFUL),
+             XHCI_EVT_PICK_LARGE, "an unreadable dword counts as 1.0");
+    CHECK_EQ(XhciEventRingPick(XHCI_EVT_READ_DWORD, 1024UL,
+                               XhciEffectiveCapDword0(0x01000020UL, 0x96UL)),
+             XHCI_EVT_PICK_HELD, "the qemu override presents 0.96: held");
+    CHECK_EQ(XhciEventRingPick(XHCI_EVT_READ_DWORD, 1024UL,
+                               XhciEffectiveCapDword0(0xFFFFFFFFUL, 0x96UL)),
+             XHCI_EVT_PICK_LARGE,
+             "the override keeps an all-ones dword all ones");
+    CHECK(XHCI_EVT_PICK_SMALL >= 4UL && XHCI_EVT_PICK_DEFAULT >= 4UL &&
+              XHCI_EVT_PICK_HELD >= 4UL && XHCI_EVT_PICK_LARGE >= 4UL,
+          "the picks are told from 3.4.x's 0 and the interim 1 to 3");
+}
+
 int main(void)
 {
     test_field_macros();
+    test_event_ring_pick();
     test_intel_shape();
     test_qemu_shape();
     test_usb2_only_shape();

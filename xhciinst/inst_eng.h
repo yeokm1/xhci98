@@ -120,7 +120,11 @@ void inst_eng_usage(void);
 
 /* A Line's text, as the front end showed it, into the log. */
 void inst_eng_log_text(const char *text);
+/* The log's path, the one taken (record 23 section 7.5.1): empty before
+ * inst_eng_begin chose it and when no log could be started;
+ * inst_eng_log_tried says which. */
 const char *inst_eng_log_path(void);
+int inst_eng_log_tried(void);
 
 /* The log, the header, the system and the /set values checked. Every
  * phase returns -1 to go on, or the exit code the run ends with (handed
@@ -133,6 +137,9 @@ int inst_eng_devices(void);
 /* INST_PH_READ: the package (an install), the routines, the rights, the
  * first reading of the devices and the store trap. */
 int inst_eng_read(void);
+/* The run's guard given back now (record 21 section 7.8.4): for a front
+ * end whose own state ended the run after the read. Idempotent. */
+void inst_eng_guard_release(void);
 
 /* The Thunderbolt question (record 23 section 8.5): the console asks it;
  * the window reads the default and gives the Components page's choice. */
@@ -281,12 +288,31 @@ typedef struct _INST_ROW {
     INST_U32 InForce;
     int CmNew;              /* a new install of the Thunderbolt driver    */
     int Greyed;             /* inst_value_greyed: shown, never written    */
+    /* A text row (INST_VK_TEXT, task 49.38): the value in force (the
+     * machine-wide string when MwState is 1, else the INF's) and the
+     * INF's default. */
+    char Text[INST_TEXT_CHARS];
+    char DefText[INST_TEXT_CHARS];
 } INST_ROW;
 int inst_eng_rows(INST_ROW *rows, int cap);
+/* A stored value the drivers read as their default on this system
+ * (inst_value_nine_text, 98 SE and ME): 1 and its reading in out. */
+int inst_eng_nine_text(int value, INST_U32 now, char *out, size_t cap);
 
 /* A value the window's page set (as /set does: written when it differs
  * from the value in force), or forgotten (keep). */
 void inst_eng_choose_value(int value, int set, INST_U32 v);
+/* A value the window may give value `value` on this system (task 49.38:
+ * inst_value_allowed against the run's own system), and its range's text
+ * for this system. */
+int inst_eng_value_allowed(int value, INST_U32 v);
+
+/* XHCIINST /set /show [text] (task 49.38): the listing, said; exit 0. */
+int inst_eng_set_show(void);
+void inst_eng_range_text(int value, char *out, size_t cap);
+
+/* The same for a text row (task 49.38): the text, checked by the page. */
+void inst_eng_choose_text(int value, int set, const char *text);
 
 /* The install directory: the default (and where the tools are now), and
  * a path checked as a typed answer is - NULL when it can be used, else
@@ -432,6 +458,13 @@ int inst_eng_s98_default(void);
  * "Replace the stored build" box shown; its choice is /restage's. */
 int inst_eng_restage_state(void);
 void inst_eng_restage_choose(int on);
+/* The takeover box (record 26 section 5.3.10, task 49.44): the candidates
+ * the last plan found (0 none, none the box can replace, or 98 SE and ME:
+ * the row not shown; inst_take_said), the one
+ * service they all run ("" when they differ), the box's first state
+ * (/takeover given), and the choice, used by the next plan. */
+int inst_eng_take_state(char *service, size_t cap, int *first);
+void inst_eng_take_choose(int on);
 
 /* 1 on Windows 8.1 (inst_s98_switch_os, task 43.59): Stor98 is ticked there
  * as on 98 SE to 7, for the tunnelled drives (owner, 2026-10-23). */

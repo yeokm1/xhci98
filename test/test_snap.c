@@ -29,8 +29,8 @@ static void test_header(void)
 {
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_VERSION_AT), 1,
              "version 1");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_BYTES), 3716,
-             "a 929-word header (issue 26 appended 69; 47.30 68; 45.40 163; "
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_BYTES), 3808,
+             "a 952-word header (49.39 appended 23; issue 26 69; 47.30 68; 45.40 163; "
              "35-T.8 "
              "twelve, 36.3 28, 36.21 154, 36.9 two, 36.24 and 36.25 33, "
              "36.38 69, 44.35 323)");
@@ -38,12 +38,12 @@ static void test_header(void)
              "the E460's eighteen root ports");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORT_BYTES), 80,
              "a twenty-word record (45.40 appended four)");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 3716,
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 3808,
              "records right after the header");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 264,
-             "the whole counter block (46.6's held line: 258 to 263)");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 320,
+             "the whole counter block (49.45's twelve: 308 to 319)");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS_AT),
-             3716 + 18 * 80, "counters after the last record");
+             3808 + 18 * 80, "counters after the last record");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_IDPLACE_RECORDS), 32,
              "45.40: 32 places behind hubs");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_IDPLACE_WORDS), 5,
@@ -86,8 +86,8 @@ static void test_header(void)
              "selective suspend's block at word 114");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SuspNotesSuppressed) / 4, 141,
              "selective suspend's last word at 141");
-    CHECK_EQ(XhciSnapHcdWords(18), 929 + 18 * 20 + 264, "the E460's image");
-    CHECK_EQ(XhciSnapHcdWords(0), 929 + 264,
+    CHECK_EQ(XhciSnapHcdWords(18), 952 + 18 * 20 + 320, "the E460's image");
+    CHECK_EQ(XhciSnapHcdWords(0), 952 + 320,
              "no ports: a header and the counters");
     CHECK_EQ(XhciSnapHcdWords(1000), XhciSnapHcdWords(XHCI_MAX_ROOT_PORTS),
              "ports held to the root port maximum");
@@ -211,11 +211,13 @@ static void test_tol_words(void)
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_STATE, Stats), 0, "counters first");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_STATS, Codes) + 256 * 4,
              sizeof(XHCI_TOL_STATS), "the histogram ends the counters");
-    /* XHCISNAP's names (xhcisnap.c, tol_counter_names) are these 34 words
-     * in field order; a counter added before the histogram fails here
-     * until the tool names it. */
-    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_STATS, Codes), 34 * 4,
-             "the thirty-four counters XHCISNAP names");
+    /* XHCITR's names (xhcitr\tr_snap.c, tol_counter_names) are these 46
+     * words in field order (34 until task 49.35); a counter added before
+     * the histogram fails here until the tool names it. */
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_STATS, Codes), 46 * 4,
+             "the forty-six counters XHCITR names");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_STATS, ResetSettles), 34 * 4,
+             "49.35's counters from word 34");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_STATS, Cycles), 17 * 4,
              "Cycles at word 17");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_STATS, Contained), 33 * 4,
@@ -443,8 +445,13 @@ static void test_delivery_words(void)
     CHECK_EQ(XHCI_POLL_R_FORCED_MESSAGE, 15, "reason codes");
     CHECK_EQ(XHCI_POLL_R_FORCED_MESSAGE_NOT_GRANTED, 16, "reason codes");
     CHECK_EQ(XHCI_POLL_R_FORCED_MESSAGE_NOT_CONNECTED, 17, "reason codes");
-    CHECK_EQ(XHCI_POLL_R_FORCED_MESSAGE_NO_SYSTEM, 18, "reason codes, last");
+    CHECK_EQ(XHCI_POLL_R_FORCED_MESSAGE_NO_SYSTEM, 18, "reason codes");
+    CHECK_EQ(XHCI_POLL_R_FORCED_MSG4, 21, "mode 4's first reason (task 49.24)");
+    CHECK_EQ(XHCI_POLL_R_MSG4_QUARANTINED, 27, "reason codes");
+    CHECK_EQ(XHCI_POLL_R_MSG4_VALUE_INVALID, 30, "reason codes");
+    CHECK_EQ(XHCI_POLL_R_MSG4_CLAIM_REFUSED, 34, "reason codes, last");
     CHECK_EQ(XHCI_POLL_MODE_MESSAGE, 3, "mode 3");
+    CHECK_EQ(XHCI_POLL_MODE_MSG4, 4, "mode 4");
     CHECK_EQ(XHCI_POLL_PIN_UNREADABLE, 2, "pin status, last");
     CHECK_EQ(XHCI_POLL_ROLE_SERVE, 2, "roles, last");
     CHECK_EQ(XHCI_POLL_BUS_WATCH, 4, "bus states, last");
@@ -911,7 +918,32 @@ static void test_counter_tail(void)
              "HeldScan at 258");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, HeldIrq), 263 * 4,
              "HeldIrq at 263");
-    CHECK_EQ(sizeof(XHCIHC_COUNTERS), 264 * 4, "264 words in all");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, Msg4Strategy), 264 * 4,
+             "Msg4Strategy at 264");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, Msg4Lost), 282 * 4,
+             "Msg4Lost at 282");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, Msg4HighFirstRefused),
+             301 * 4, "Msg4HighFirstRefused at 301");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, StreamDeqChecked), 302 * 4,
+             "StreamDeqChecked at 302");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, StreamDeqUnsettled),
+             307 * 4, "StreamDeqUnsettled at 307");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, UsbdxV1Answered), 308 * 4,
+             "UsbdxV1Answered at 308");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, UsbdxStreamOpens), 312 * 4,
+             "UsbdxStreamOpens at 312");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, UsbdxClientUrbs),
+             XHCI_SNAPSHOT_HCD_USBDX_CLIENT_URBS * 4,
+             "UsbdxClientUrbs at the door's word");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, UsbdxForeignFrees),
+             XHCI_SNAPSHOT_HCD_USBDX_FOREIGN_FREES * 4,
+             "UsbdxForeignFrees at the door's word");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_USBDX_CLIENT_URBS, 315, "the client URBs at 315");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_USBDX_FOREIGN_FREES, 316,
+             "the foreign frees at 316");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, XferShortRefused), 319 * 4,
+             "XferShortRefused at 319");
+    CHECK_EQ(sizeof(XHCIHC_COUNTERS), 320 * 4, "320 words in all");
 }
 
 /* 44.35: the transport records' header words (tr_snap.c's print_xport
@@ -943,8 +975,20 @@ static void test_xport_words(void)
              XHCI_SNAPSHOT_HCD_UFAIL_RECORDS,
              "47.30's records end at issue 26's block");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_UFAIL_RECORDS, 860, "issue 26's block at 860");
-    CHECK_EQ(XHCI_SNAPSHOT_HCD_UFAIL_AT + 2 * 33, XHCI_SNAPSHOT_HCD_HEAD_WORDS,
-             "issue 26's records end the header");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_UFAIL_AT + 2 * 33,
+             XHCI_SNAPSHOT_HCD_UTIME_RECORDS,
+             "issue 26's records end at 49.39's block");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_UTIME_RECORDS, 929, "49.39's block at 929");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_UTIME_AT + 2 * 10,
+             XHCI_SNAPSHOT_HCD_HEAD_WORDS, "49.39's records end the header");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_UTIME_RECORDS), 2,
+             "two times records");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_UTIME_WORDS), 10,
+             "of ten words");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_UTIME_FIRST), 932,
+             "the first at word 932");
+    CHECK_EQ(XHCI98_FAIL_TOTAL_WORDS2, XHCI98_FAIL_TOTAL_WORDS + 9,
+             "version 2: eight times and the ATA bits after the ring");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_UFAIL_RECORD_WORDS,
              1 + XHCI98_FAIL_RECORDS * XHCI98_FAIL_WORDS,
              "a count and the class driver's ring, word for word");

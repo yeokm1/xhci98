@@ -406,6 +406,273 @@ static void test_wanted(void)
     CHECK_EQ(CM_RIRQ_VALUE_DEFAULT, CM_RIRQ_VALUE_OFF, "off by default (owner, Q1, Q2)");
 }
 
+/* Record 21 section 4.5.12 (task 49.27): how the activation tries it. */
+/* Record 21 section 4.5.18: the routine's hardware gate. */
+static void test_gate(void)
+{
+    ULONG g;
+
+    /* The admission. */
+    CHECK(CmRirqIsrAdmits(TRUE, FALSE, FALSE, 0, TRUE, 1), "a line, open: reads");
+    CHECK(CmRirqIsrAdmits(TRUE, TRUE, TRUE, 0, TRUE, 1), "a message armed, open: reads");
+    CHECK(!CmRirqIsrAdmits(TRUE, TRUE, FALSE, 0, TRUE, 1), "a message, Reach clear: no read");
+    CHECK(!CmRirqIsrAdmits(FALSE, FALSE, FALSE, 0, TRUE, 1), "not connected: no read");
+    CHECK(!CmRirqIsrAdmits(TRUE, FALSE, FALSE, 0, FALSE, 1), "BAR0 unmapped: no read");
+    CHECK(!CmRirqIsrAdmits(TRUE, FALSE, FALSE, 0, TRUE, 0), "no geometry: no read");
+
+    /* A D3 with the mask not proven (a fall back) and both disconnects
+     * failed: held, Reach kept on 98 SE and ME; the gate closed at the
+     * order down's end; another client's message reads nothing. */
+    CHECK_EQ(CmRirqMsgEnd(CM_RIRQ_DOWN_FALLBACK, FALSE, FALSE), CM_RIRQ_MSG_HOLD,
+             "D3, mask unproven, both disconnects failed: held");
+    g = CmRirqGateClose(0, CM_RIRQ_GATE_POWER);
+    CHECK(!CmRirqIsrAdmits(TRUE, TRUE, TRUE, g, TRUE, 1),
+          "held through the D3, Reach kept, a foreign message: no read");
+    CHECK(!CmRirqIsrAdmits(TRUE, FALSE, FALSE, g, TRUE, 1),
+          "the same for a line");
+
+    /* The removal's stop: forced, the gate GONE. */
+    CHECK_EQ(CmRirqMsgEnd(CM_RIRQ_DOWN_STOP, FALSE, FALSE), CM_RIRQ_MSG_FORCE,
+             "a stop is forced, never held");
+    g = CmRirqGateClose(0, CM_RIRQ_GATE_GONE);
+    CHECK(!CmRirqIsrAdmits(TRUE, TRUE, TRUE, g, TRUE, 1), "removed: no read");
+    CHECK_EQ(CmRirqGateOpenPower(g), CM_RIRQ_GATE_GONE,
+             "an opening leaves GONE");
+
+    /* The opening rule. */
+    CHECK(CmRirqGateMayOpen(TRUE, TRUE, FALSE, TRUE, FALSE),
+          "D0, mapped, working: opens");
+    CHECK(!CmRirqGateMayOpen(TRUE, TRUE, FALSE, FALSE, FALSE),
+          "D0 still recorded, the system going to sleep: no opening");
+    CHECK(!CmRirqGateMayOpen(FALSE, TRUE, FALSE, TRUE, FALSE),
+          "D3 recorded: no opening");
+    CHECK(!CmRirqGateMayOpen(TRUE, FALSE, FALSE, TRUE, FALSE),
+          "BAR0 unmapped: no opening");
+    CHECK(!CmRirqGateMayOpen(TRUE, TRUE, TRUE, TRUE, FALSE),
+          "a client suspended: no opening");
+    CHECK(!CmRirqGateMayOpen(TRUE, TRUE, FALSE, TRUE, TRUE),
+          "revoked: no opening");
+
+    /* A revocation between an opening's check and its clear. */
+    g = CM_RIRQ_GATE_POWER;
+    CHECK(CmRirqGateMayOpen(TRUE, TRUE, FALSE, TRUE, FALSE), "the check passes");
+    g = CmRirqGateClose(g, CM_RIRQ_GATE_GONE);
+    g = CmRirqGateOpenPower(g);
+    CHECK(!CmRirqIsrAdmits(TRUE, TRUE, TRUE, g, TRUE, 1),
+          "revoked between the check and the clear: still closed");
+
+    /* The detached shutdown against an opening, as WorkLock orders them:
+     * the close after the opening's hold is not undone; one before it
+     * fails the check (the shutdown published). */
+    g = CmRirqGateOpenPower(CM_RIRQ_GATE_POWER);
+    g = CmRirqGateClose(g, CM_RIRQ_GATE_POWER);
+    CHECK(!CmRirqIsrAdmits(TRUE, TRUE, TRUE, g, TRUE, 1),
+          "the shutdown's close after an opening: closed");
+    CHECK(!CmRirqGateMayOpen(TRUE, TRUE, FALSE, FALSE, FALSE),
+          "the shutdown's close before: the check fails");
+
+    /* A direct transition's S0: the quiescence closed the gate in D0, the
+     * first pass in the working state opens it. */
+    g = CmRirqGateClose(0, CM_RIRQ_GATE_POWER);
+    CHECK(CmRirqGateMayOpen(TRUE, TRUE, FALSE, TRUE, FALSE), "direct S0: opens");
+    g = CmRirqGateOpenPower(g);
+    CHECK(CmRirqIsrAdmits(TRUE, TRUE, TRUE, g, TRUE, 1), "direct S0: reads again");
+
+    /* The start. */
+    CHECK_EQ(CmRirqGateAtStart(TRUE, TRUE), 0, "a start in D0, mapped: open");
+    CHECK_EQ(CmRirqGateAtStart(FALSE, TRUE), CM_RIRQ_GATE_POWER, "out of D0: POWER");
+    CHECK_EQ(CmRirqGateAtStart(TRUE, FALSE), CM_RIRQ_GATE_POWER, "unmapped: POWER");
+}
+
+/* Record 21 section 4.5.17: the USB Tree's word. */
+static void test_show(void)
+{
+    ULONG w;
+    ULONG s;
+
+
+    CHECK_EQ(CmRirqWhyOfStatus(1), CM_Q_IRQ_WHY_OLD, "VERSION");
+    CHECK_EQ(CmRirqWhyOfStatus(2), CM_Q_IRQ_WHY_NO_MSI, "NO_MSI_CAP");
+    CHECK_EQ(CmRirqWhyOfStatus(4), CM_Q_IRQ_WHY_NO_VECTOR, "NO_VECTORS");
+    CHECK_EQ(CmRirqWhyOfStatus(14), CM_Q_IRQ_WHY_NO_VECTOR, "NO_INPUTS");
+    CHECK_EQ(CmRirqWhyOfStatus(6), CM_Q_IRQ_WHY_IN_USE, "IN_USE");
+    CHECK_EQ(CmRirqWhyOfStatus(10), CM_Q_IRQ_WHY_CONNECT,
+             "CONFIG_ACCESS: could not be connected, not in use");
+    CHECK_EQ(CmRirqWhyOfStatus(12), CM_Q_IRQ_WHY_REFUSED, "CLAIM_KEPT");
+    CHECK_EQ(CmRirqWhyOfStatus(13), CM_Q_IRQ_WHY_BRAKED, "BRAKED");
+    for (s = 0; s <= 20; s++) {
+        if (s == 1 || s == 2 || s == 4 || s == 6 || s == 12 || s == 13 ||
+            s == 14) {
+            continue;
+        }
+        CHECK_EQ(CmRirqWhyOfStatus(s), CM_Q_IRQ_WHY_CONNECT, "any other");
+    }
+
+    w = CmRirqShowWord(2, FALSE, CM_RIRQ_SYS_NT5, FALSE, FALSE,
+                       CM_RIRQ_MODE_MESSAGE, 0, 0x45, FALSE);
+    CHECK_EQ(w, CM_Q_IRQ_PRESENT | 2UL | (0x45UL << 16), "a message, 45h");
+    w = CmRirqShowWord(2, FALSE, CM_RIRQ_SYS_NT5, FALSE, FALSE,
+                       CM_RIRQ_MODE_MESSAGE, 0, 10, TRUE);
+    CHECK_EQ(w, CM_Q_IRQ_PRESENT | 2UL | (10UL << 16) | CM_Q_IRQ_IS_IRQ,
+             "a message on NT: the IRQ");
+    w = CmRirqShowWord(1, FALSE, CM_RIRQ_SYS_9X, FALSE, TRUE,
+                       CM_RIRQ_MODE_LINE, CM_Q_IRQ_WHY_LOST, 0, FALSE);
+    CHECK_EQ(w, CM_Q_IRQ_PRESENT | 1UL, "the line; a stale cause not shown");
+    w = CmRirqShowWord(2, FALSE, CM_RIRQ_SYS_NT5, TRUE, TRUE,
+                       CM_RIRQ_MODE_LINE, 0, 0, FALSE);
+    CHECK_EQ(w, CM_Q_IRQ_PRESENT | 3UL, "the line, yielding");
+    w = CmRirqShowWord(0, FALSE, CM_RIRQ_SYS_9X, FALSE, TRUE,
+                       CM_RIRQ_MODE_POLL, 0, 0, FALSE);
+    CHECK_EQ(w, CM_Q_IRQ_PRESENT | (CM_Q_IRQ_WHY_OFF << 8), "0");
+    w = CmRirqShowWord(0, TRUE, CM_RIRQ_SYS_9X, FALSE, TRUE,
+                       CM_RIRQ_MODE_POLL, 0, 0, FALSE);
+    CHECK_EQ(w, CM_Q_IRQ_PRESENT | (CM_Q_IRQ_WHY_VALUE << 8), "refused");
+    w = CmRirqShowWord(1, FALSE, CM_RIRQ_SYS_9X, FALSE, FALSE,
+                       CM_RIRQ_MODE_POLL, 0, 0, FALSE);
+    CHECK_EQ(w, CM_Q_IRQ_PRESENT | (CM_Q_IRQ_WHY_NO_LINE_9X << 8),
+             "1 on 98 SE, no line");
+    w = CmRirqShowWord(1, FALSE, CM_RIRQ_SYS_NT5, FALSE, FALSE,
+                       CM_RIRQ_MODE_POLL, 0, 0, FALSE);
+    CHECK_EQ(w, CM_Q_IRQ_PRESENT | (CM_Q_IRQ_WHY_NO_LINE << 8),
+             "1 on XP, no line");
+    w = CmRirqShowWord(2, FALSE, CM_RIRQ_SYS_NT6, FALSE, FALSE,
+                       CM_RIRQ_MODE_POLL, 0, 0, FALSE);
+    CHECK_EQ(w, CM_Q_IRQ_PRESENT | (CM_Q_IRQ_WHY_NO_LINE << 8),
+             "2 on Vista, no line");
+    w = CmRirqShowWord(2, FALSE, CM_RIRQ_SYS_NT5, TRUE, FALSE,
+                       CM_RIRQ_MODE_POLL, 0, 0, FALSE);
+    CHECK_EQ(w, CM_Q_IRQ_PRESENT | (CM_Q_IRQ_WHY_NO_LINE << 8),
+             "2 yielding on XP, no line");
+    w = CmRirqShowWord(2, FALSE, CM_RIRQ_SYS_9X, FALSE, FALSE,
+                       CM_RIRQ_MODE_POLL, 0, 0, FALSE);
+    CHECK_EQ(w, CM_Q_IRQ_PRESENT | (CM_Q_IRQ_WHY_NOT_9X << 8),
+             "2 on 98 SE: not available there");
+    w = CmRirqShowWord(2, FALSE, CM_RIRQ_SYS_9X, FALSE, TRUE,
+                       CM_RIRQ_MODE_POLL, 0, 0, FALSE);
+    CHECK_EQ(w, CM_Q_IRQ_PRESENT | (CM_Q_IRQ_WHY_NOT_9X << 8),
+             "2 on 98 SE with a line: not available there, not the line");
+    w = CmRirqShowWord(2, FALSE, CM_RIRQ_SYS_NT5, FALSE, FALSE,
+                       CM_RIRQ_MODE_POLL, 0, 0, FALSE);
+    CHECK_EQ(w, CM_Q_IRQ_PRESENT | (CM_Q_IRQ_WHY_WAIT << 8),
+             "2 on XP, nothing yet");
+    w = CmRirqShowWord(2, FALSE, CM_RIRQ_SYS_NT5, FALSE, FALSE,
+                       CM_RIRQ_MODE_POLL, CM_Q_IRQ_WHY_CONNECT, 0x45, FALSE);
+    CHECK_EQ(w, CM_Q_IRQ_PRESENT | (CM_Q_IRQ_WHY_CONNECT << 8),
+             "a cause recorded; no number while polled");
+    w = CmRirqShowWord(2, FALSE, CM_RIRQ_SYS_NT5, FALSE, FALSE,
+                       CM_RIRQ_MODE_POLL, CM_Q_IRQ_WHY_BRAKED, 0, FALSE);
+    CHECK_EQ(CM_Q_IRQ_WHY(w), CM_Q_IRQ_WHY_BRAKED, "braked");
+    CHECK_EQ(CM_Q_IRQ_KIND(w), 0, "polled");
+}
+
+static void test_how(void)
+{
+    ULONG v;
+    ULONG sys;
+    int yield;
+    int line;
+    int failed;
+    ULONG how;
+    ULONG want;
+
+    CHECK_EQ(CM_RIRQ_VALUE_MAX, 2, "0 to 2");
+    CHECK_EQ(CmRirqHow(2, CM_RIRQ_SYS_9X, FALSE, FALSE, FALSE), CM_RIRQ_HOW_NONE,
+             "2 on 98 SE and ME, no line: polling");
+    CHECK_EQ(CmRirqHow(2, CM_RIRQ_SYS_9X, FALSE, TRUE, FALSE), CM_RIRQ_HOW_NONE,
+             "2 on 98 SE and ME with a line: polling, never the line");
+    CHECK_EQ(CmRirqHow(2, CM_RIRQ_SYS_NT5, FALSE, TRUE, FALSE), CM_RIRQ_HOW_MESSAGE,
+             "2 on 2000 and XP: the message through msi4nt (section 4.5.14)");
+    CHECK_EQ(CmRirqHow(2, CM_RIRQ_SYS_NT5, FALSE, FALSE, FALSE), CM_RIRQ_HOW_MESSAGE,
+             "2 on 2000 and XP with no line: the message all the same");
+    CHECK_EQ(CmRirqHow(2, CM_RIRQ_SYS_NT5, TRUE, TRUE, FALSE), CM_RIRQ_HOW_LINE,
+             "yielding to a machine-wide mode 4: as 1");
+    CHECK_EQ(CmRirqHow(2, CM_RIRQ_SYS_9X, TRUE, TRUE, FALSE), CM_RIRQ_HOW_NONE,
+             "2 on 98 SE and ME, whatever the yield: polling");
+    CHECK_EQ(CmRirqHow(2, CM_RIRQ_SYS_NT6, FALSE, TRUE, FALSE), CM_RIRQ_HOW_LINE,
+             "2 on Vista and later: as 1");
+    CHECK_EQ(CmRirqHow(2, CM_RIRQ_SYS_NT6, FALSE, FALSE, FALSE), CM_RIRQ_HOW_NONE,
+             "2 on Vista and later with no line: polling");
+    CHECK_EQ(CmRirqHow(1, CM_RIRQ_SYS_9X, FALSE, TRUE, FALSE), CM_RIRQ_HOW_LINE,
+             "1 on 98 SE: the line, as before");
+    CHECK_EQ(CmRirqHow(1, CM_RIRQ_SYS_NT5, FALSE, FALSE, FALSE), CM_RIRQ_HOW_NONE,
+             "1 on XP, no line: polling");
+    CHECK_EQ(CmRirqHow(2, CM_RIRQ_SYS_NT5, FALSE, FALSE, TRUE), CM_RIRQ_HOW_NONE, "the latch: polling");
+    CHECK_EQ(CmRirqHow(3, CM_RIRQ_SYS_9X, FALSE, TRUE, FALSE), CM_RIRQ_HOW_NONE,
+             "3: nothing (refused before)");
+    for (v = 0; v <= 3; v++) {
+        for (sys = 0; sys <= 2; sys++) {
+            for (yield = 0; yield <= 1; yield++) {
+                for (line = 0; line <= 1; line++) {
+                    for (failed = 0; failed <= 1; failed++) {
+                        how = CmRirqHow(v, sys, (BOOLEAN)yield, (BOOLEAN)line,
+                                        (BOOLEAN)failed);
+                        if (failed || v == 0 || v > 2 ||
+                            (v == 2 && sys == CM_RIRQ_SYS_9X)) {
+                            want = CM_RIRQ_HOW_NONE;
+                        } else if (v == 2 && sys == CM_RIRQ_SYS_NT5 && !yield) {
+                            want = CM_RIRQ_HOW_MESSAGE;
+                        } else {
+                            want = line ? CM_RIRQ_HOW_LINE : CM_RIRQ_HOW_NONE;
+                        }
+                        CHECK_EQ(how, want, "every combination");
+                        if (how == CM_RIRQ_HOW_LINE) {
+                            CHECK(CmRirqWanted(v == 2 ? 1UL : v, (BOOLEAN)line,
+                                               (BOOLEAN)failed),
+                                  "the line where CmRirqWanted has it");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* Record 21 section 4.5.12, "The lifetime": the message's order down. */
+static void test_msg_down(void)
+{
+    CHECK_EQ(CmRirqMsgEnd(CM_RIRQ_DOWN_D3, FALSE, FALSE), CM_RIRQ_MSG_KEEP,
+             "a sleep: kept for the re-arm, no disconnect tried");
+    CHECK_EQ(CmRirqMsgEnd(CM_RIRQ_DOWN_D3, FALSE, TRUE), CM_RIRQ_MSG_KEEP,
+             "a sleep: kept whatever");
+    CHECK_EQ(CmRirqMsgEnd(CM_RIRQ_DOWN_D3, TRUE, TRUE), CM_RIRQ_MSG_GONE,
+             "a shutdown: disconnected");
+    CHECK_EQ(CmRirqMsgEnd(CM_RIRQ_DOWN_D3, TRUE, FALSE), CM_RIRQ_MSG_FORCE,
+             "a shutdown whose disconnect failed: the flag form");
+    CHECK(!CmRirqMsgRefuse(CM_RIRQ_MSG_FORCE, TRUE), "a shutdown's flag form: no table entry");
+    CHECK_EQ(CmRirqMsgEnd(CM_RIRQ_DOWN_STOP, FALSE, TRUE), CM_RIRQ_MSG_GONE, "a stop");
+    CHECK_EQ(CmRirqMsgEnd(CM_RIRQ_DOWN_STOP, FALSE, FALSE), CM_RIRQ_MSG_FORCE,
+             "a stop or removal that could not disconnect: the flag form");
+    CHECK(CmRirqMsgRefuse(CM_RIRQ_MSG_FORCE, FALSE), "and the table");
+    CHECK(!CmRirqMsgRefuse(CM_RIRQ_MSG_GONE, FALSE), "a clean end: no table entry");
+    CHECK_EQ(CmRirqMsgEnd(CM_RIRQ_DOWN_FALLBACK, FALSE, TRUE), CM_RIRQ_MSG_GONE,
+             "a fall back: disconnected, never retained");
+    CHECK_EQ(CmRirqMsgEnd(CM_RIRQ_DOWN_FALLBACK, FALSE, FALSE), CM_RIRQ_MSG_HOLD,
+             "a fall back that could not disconnect: kept masked");
+    CHECK_EQ(CmRirqMsgEnd(CM_RIRQ_DOWN_CONTAIN, FALSE, FALSE), CM_RIRQ_MSG_HOLD, "a containment");
+    CHECK(CmRirqMsgFails(CM_RIRQ_DOWN_FALLBACK, CM_RIRQ_MSG_GONE), "a fall back latches");
+    CHECK(CmRirqMsgFails(CM_RIRQ_DOWN_CONTAIN, CM_RIRQ_MSG_HOLD), "a kept connection latches");
+    CHECK(!CmRirqMsgFails(CM_RIRQ_DOWN_CONTAIN, CM_RIRQ_MSG_GONE),
+          "a containment disconnected: the recovery connects again");
+    CHECK(!CmRirqMsgFails(CM_RIRQ_DOWN_D3, CM_RIRQ_MSG_KEEP), "a sleep: re-armed at D0");
+    CHECK(CmRirqMsgFails(CM_RIRQ_DOWN_STOP, CM_RIRQ_MSG_FORCE),
+          "a forced end latches (the next start decides by the table)");
+    CHECK(CmRirqMsgFails(CM_RIRQ_DOWN_CONTAIN, CM_RIRQ_MSG_FORCE),
+          "a containment's forced end latches: no reconnect if the table was full");
+    CHECK(!CmRirqMsgFails(CM_RIRQ_DOWN_STOP, CM_RIRQ_MSG_GONE), "a clean stop does not");
+}
+
+/* Record 21 section 4.5.12 step 3: the location. */
+static void test_msg_where(void)
+{
+    CHECK_EQ(CmRirqMsgWhere(1, 0x0500, FALSE, 0), 0x0500, "one match, no bus known");
+    CHECK_EQ(CmRirqMsgWhere(1, 0x0500, TRUE, 5), 0x0500, "one match, the bus agreeing");
+    CHECK_EQ(CmRirqMsgWhere(1, 0x0500, TRUE, 4), CM_RIRQ_NO_BDF, "a bus that disagrees");
+    CHECK_EQ(CmRirqMsgWhere(0, 0, FALSE, 0), CM_RIRQ_NO_BDF, "none");
+    CHECK_EQ(CmRirqMsgWhere(2, 0x0600, FALSE, 0), CM_RIRQ_NO_BDF, "two: the wrong one could be armed");
+    CHECK_EQ(CmRirqMsgWhere(1, 0x10000, FALSE, 0), CM_RIRQ_NO_BDF, "out of range");
+    CHECK_EQ(CmRirqMsgWhere(1, 0xFF3F, TRUE, 0xFF), 0xFF3F, "bus 255, device 7, function 7");
+}
+
 static void test_waits(void)
 {
     CHECK_EQ(CmRirqLeftMs(1000, 1200, 200), 200, "a whole period left");
@@ -432,6 +699,11 @@ int main(void)
     test_watch();
     test_down();
     test_wanted();
+    test_how();
+    test_show();
+    test_gate();
+    test_msg_down();
+    test_msg_where();
     test_waits();
     printf("test_cm_rirq: %d checks, %d failures\n", checks, failures);
     return failures != 0;

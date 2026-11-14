@@ -387,6 +387,36 @@ ULONG XhciVersionFloor(ULONG found, ULONG value);
 ULONG XhciEffectiveCapDword0(ULONG raw, ULONG override);
 
 /*
+ * Task 49.35 (design record 13 section 11.10.1; the owner, 2026-11-13):
+ * which event ring a start allocates, from XhciEventRingTrbs as 3.4.2.0 and
+ * 3.4.3.0 read it. `read` is how the value read (XHCI_EVT_READ_*), `value`
+ * the DWORD when it is one; `capDword0` the capability dword 0 the start's
+ * capability check will decode (XhciEffectiveCapDword0's answer, all ones
+ * when it could not be read, which counts as 1.0 - the start refuses it at
+ * the capability check anyway).
+ *   - below xHCI 1.0: the smaller ring whatever the value says
+ *     (XHCI_EVT_PICK_HELD);
+ *   - absent: the smaller ring, the default from 3.5.0.0
+ *     (XHCI_EVT_PICK_DEFAULT; 3.4.x took the larger);
+ *   - a DWORD 256: the smaller ring (XHCI_EVT_PICK_SMALL);
+ *   - any other DWORD, or a value of another type: the larger ring
+ *     (XHCI_EVT_PICK_LARGE), exactly as 3.4.2.0 and 3.4.3.0 read them.
+ * The picks are numbered from 4 so that the evt.ring note's bits 31:24 tell
+ * this rule from 3.4.x's (0) and from the interim XhciEventRing of a test
+ * build before 3.5.0.0 (1 to 3, in no release). XhciEventRingHoldNoted: 1 when a held pick overrode a
+ * value that asked for the larger ring. IRQL: any (pure).
+ */
+#define XHCI_EVT_READ_ABSENT    0UL     /* no value                       */
+#define XHCI_EVT_READ_DWORD     1UL     /* a REG_DWORD                    */
+#define XHCI_EVT_READ_OTHER     2UL     /* a value of another type        */
+#define XHCI_EVT_PICK_SMALL     4UL     /* a DWORD 256: the smaller ring  */
+#define XHCI_EVT_PICK_DEFAULT   5UL     /* absent: the smaller ring       */
+#define XHCI_EVT_PICK_HELD      6UL     /* below xHCI 1.0: the smaller    */
+#define XHCI_EVT_PICK_LARGE     7UL     /* anything else: the larger ring */
+ULONG XhciEventRingPick(ULONG read, ULONG value, ULONG capDword0);
+ULONG XhciEventRingHoldNoted(ULONG pick, ULONG read, ULONG value);
+
+/*
  * The TD Size form a controller of HCIVERSION `hciVersion` is written in
  * (record 17 section 4.14.5): packets from 1.0, KiB below it. The KiB form is
  * also what selects the other departures below 1.0 in the transfer builders
@@ -5432,6 +5462,17 @@ typedef struct _XHCI_EXTENSION {
      */
     XHCI_HC_INFO HcInfo;
     ULONG HcInfoStatus;
+    /* Mode 4's quiet step decoded HcInfo for this start's
+     * XhciInitController to keep (design record 15 section 4.5.3). */
+    ULONG QuietDecoded;
+    /* Mode 4's message stands without the interrupt resource: msi4nt's
+     * on a claimed IRQ (record 15 section 4.5.2). */
+    ULONG Msg4NoLine;
+    /* Mode 4's removal bar (record 15 section 4.5.4): set under the
+     * controller lock when Windows reported the controller removed, and
+     * read under it by XhciEnableInterrupts, which then unmasks nothing;
+     * cleared by the next start's reset. */
+    ULONG IntrBarred;
 
     /* PCI identity and the interrupt-delivery gate (config 0x00 and 0x3D).
      * InterruptPin 0 means the controller is MSI/MSI-X-only, which neither
@@ -8948,6 +8989,28 @@ typedef struct _XHCI_EXTENSION {
      */
     XHCI_QUIRK_STATE Quirk;
 
+    /*
+     * Task 49.35 (design record 17 section 4.6.1): the recovery's reset split
+     * around its wait. RecoverResetOwed is set by xhciReset on the recovery
+     * path when the HCRST it wrote had not completed when its 10 ms stall
+     * ended, and kept until that reset is seen complete or a start clears
+     * it. RecoverResetProven is set by the controller thread (hcdRecover)
+     * once it has read HCRST and CNR both 0 at PASSIVE_LEVEL with a reset
+     * owed, for the one call of XhciRecoverController that follows: that
+     * call's xhciReset adopts the completed reset rather than writing a
+     * second one, which on the same slow controller would only run out
+     * again. XhciRecoverController clears it on every exit. RecoveryFailTick
+     * is the tolerance clock at the last attempt that did not recover,
+     * which hcdRecover's pacing measures from; RecoverResetsAdopted counts
+     * the resets xhciReset adopted. Appended last, so no offset the harness
+     * reads moves; four ULONGs, so the parity TrailingPad keeps is
+     * unchanged.
+     */
+    ULONG RecoverResetOwed;
+    ULONG RecoverResetProven;
+    ULONG RecoveryFailTick;
+    ULONG RecoverResetsAdopted;
+
     ULONG TrailingPad;
 
     ULONG TrailingSignature;
@@ -9163,6 +9226,70 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
  * (hcd_door.c).
  */
 #define XHCI_SNAPSHOT_REGION_HCD        3UL
+/*
+ * Task 49.39 (design record 17 section 4.12.9): two new regions, so the
+ * schema stays 5 by the slots region's rule - an older driver answers each
+ * with XHCI_SNAPSHOT_S_BAD_REGION, an older tool never asks. Both are
+ * pointer-free ULONGs, offset and size in bytes, multiples of 4.
+ *
+ * CONTEXTS: one record per endpoint with streams open, Slot ID then DCI
+ * order: its size in words, Slot ID << 8 | DCI, the Output Endpoint
+ * Context's five dwords, the stream count, then per stream its Stream
+ * Context's dwords 0 and 1, its ring's base address and TRB count, the
+ * driver's software dequeue (address | cycle), its enqueue (address |
+ * cycle) and the TDs queued. Read while the controller is STARTED; one
+ * window can catch the controller mid-move.
+ *
+ * TRACE: a header of XHCI_SNAPSHOT_TRACE_HEAD_WORDS, then the live ring and
+ * the last capture, XHCI_SNAPSHOT_TRACE_ENTRIES entries of
+ * XHCI_SNAPSHOT_TRACE_ENTRY_WORDS each, oldest at (head % entries).
+ */
+#define XHCI_SNAPSHOT_REGION_CONTEXTS   4UL
+#define XHCI_SNAPSHOT_REGION_TRACE      5UL
+
+#define XHCI_SNAPSHOT_CTX_WORDS         0   /* the record's size in words */
+#define XHCI_SNAPSHOT_CTX_SLOT_DCI      1
+#define XHCI_SNAPSHOT_CTX_EP            2   /* five dwords                */
+#define XHCI_SNAPSHOT_CTX_STREAMS       7
+#define XHCI_SNAPSHOT_CTX_FIRST         8   /* the first stream's words   */
+#define XHCI_SNAPSHOT_CTX_S_CTX0        0
+#define XHCI_SNAPSHOT_CTX_S_CTX1        1
+#define XHCI_SNAPSHOT_CTX_S_BASE        2
+#define XHCI_SNAPSHOT_CTX_S_TRBS        3
+#define XHCI_SNAPSHOT_CTX_S_DEQ         4
+#define XHCI_SNAPSHOT_CTX_S_ENQ         5
+#define XHCI_SNAPSHOT_CTX_S_QUEUED      6
+#define XHCI_SNAPSHOT_CTX_S_WORDS       7UL
+#define XHCI_SNAPSHOT_CTX_MAX_STREAMS   32UL
+
+#define XHCI_SNAPSHOT_TRACE_VERSION     1UL
+#define XHCI_SNAPSHOT_TRACE_ENTRIES     256UL
+#define XHCI_SNAPSHOT_TRACE_ENTRY_WORDS 4UL
+#define XHCI_SNAPSHOT_TRACE_HEAD_WORDS  8UL
+#define XHCI_SNAPSHOT_TRACE_H_VERSION   0
+#define XHCI_SNAPSHOT_TRACE_H_ENTRIES   1
+#define XHCI_SNAPSHOT_TRACE_H_WORDS     2
+#define XHCI_SNAPSHOT_TRACE_H_HEAD      3   /* entries written since start */
+#define XHCI_SNAPSHOT_TRACE_H_CAP_SEQ   4   /* captures taken, 0 none      */
+#define XHCI_SNAPSHOT_TRACE_H_CAP_WHY   5   /* XHCI_TRACE_CAP_*            */
+#define XHCI_SNAPSHOT_TRACE_H_CAP_AT    6   /* its time                    */
+#define XHCI_SNAPSHOT_TRACE_H_CAP_HEAD  7   /* the live head at it         */
+/* An entry: the time (the `at` note's units), kind << 24 | Slot ID << 16 |
+ * DCI << 8 | stream (low byte), and two values. */
+#define XHCI_TRACE_K_COMMAND    1UL  /* a: TRB type, b: completion code   */
+#define XHCI_TRACE_K_SETDEQ     3UL  /* a: the pointer | SCT | DCS sent,
+                                      * b: completion code                */
+#define XHCI_TRACE_K_READBACK   4UL  /* a: Stream Context dword 0, b: the
+                                      * pointer | DCS sent (c1), or the
+                                      * endpoint state << 28 | verdict    */
+#define XHCI_TRACE_K_CANCEL     5UL  /* a: the head TD's first TRB, b: TDs
+                                      * taken off | moved << 16           */
+#define XHCI_TRACE_K_DOORBELL   6UL  /* a: the doorbell value             */
+#define XHCI_TRACE_K_EVENT      7UL  /* a: TRB pointer, b: code << 24 |
+                                      * length                            */
+#define XHCI_TRACE_K_PLACE      8UL  /* c2: a: dword 0, b: verdict        */
+#define XHCI_TRACE_CAP_RESET    1UL  /* a stream device's RESET_PORT      */
+#define XHCI_TRACE_CAP_GIVEUP   2UL  /* record 17 4.12.8 gave a device up */
 #define XHCI_SNAPSHOT_HCD_VERSION       1UL
 
 /* The header's words. */
@@ -9386,7 +9513,25 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_UF_COUNT      0  /* failures since its start    */
 #define XHCI_SNAPSHOT_HCD_UF_RING       1  /* the ring, 8 entries of 4    */
 #define XHCI_SNAPSHOT_HCD_UFAIL_RECORD_WORDS 33UL
-#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    929UL /* the records end the header */
+/*
+ * Appended by task 49.39 (design record 17 section 4.12.9), version
+ * unchanged, after issue 26's failure records: one record per class driver
+ * record, in the same order - the failure count the times belong to (0:
+ * none sent; a reader names a time only when it equals the failure
+ * record's count), the eight entries' times (the class driver's seconds,
+ * entry i's at word 1 + i), and the LUNs' ATA refusal bits. The record
+ * count, the words of one and the first record's word index come first.
+ * A header that ends at word 929 is an earlier driver's.
+ */
+#define XHCI_SNAPSHOT_HCD_UTIME_RECORDS 929 /* records                    */
+#define XHCI_SNAPSHOT_HCD_UTIME_WORDS   930 /* one record, in words       */
+#define XHCI_SNAPSHOT_HCD_UTIME_FIRST   931 /* the first record's word    */
+#define XHCI_SNAPSHOT_HCD_UTIME_AT      932
+#define XHCI_SNAPSHOT_HCD_UT_COUNT      0  /* the failures' count         */
+#define XHCI_SNAPSHOT_HCD_UT_TIMES      1  /* 8 times                     */
+#define XHCI_SNAPSHOT_HCD_UT_ATA        9  /* the LUNs' ATA refusal bits  */
+#define XHCI_SNAPSHOT_HCD_UTIME_RECORD_WORDS 10UL
+#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    952UL /* the records end the header */
 #define XHCI_SNAPSHOT_HCD_NOT_READ      0xFFFFFFFFUL
 
 /* A device record's link word: the link state (XHCI_SUSP_*) in 3:0, Ss in
@@ -9436,9 +9581,13 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_F_UNREADABLE  0x00000004UL /* PORTSC read all ones */
 
 /* XHCIHC_COUNTERS in ULONGs (xhci_counters.h; asserted in xhci_snap.c). */
-#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 264UL
+#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 320UL
 /* Usb2HubSpeedFallbackSlots' word, which the door computes (issue 18). */
 #define XHCI_SNAPSHOT_HCD_HUB_SPEED_SLOTS 166UL
+/* Task 49.45: UsbdxClientUrbs and UsbdxForeignFrees, image-wide figures the
+ * door writes at the read (design record 13 section 6.13.11). */
+#define XHCI_SNAPSHOT_HCD_USBDX_CLIENT_URBS 315UL
+#define XHCI_SNAPSHOT_HCD_USBDX_FOREIGN_FREES 316UL
 
 /* Where a word of the image lies (XhciSnapHcdLocate). */
 #define XHCI_SNAPSHOT_HCD_IN_HEAD       0UL

@@ -65,9 +65,14 @@ ULONG XhciQryAnswer(UCHAR *out, ULONG room, const XHCI_QRY_IN *in,
             flags |= XHQ_F_EMITTED;
         }
     }
+    /* Level 4's ring holds kernel addresses and is served as it is (the
+     * owner, 2026-11-13). XHQ_F_WITHHELD stays set beside XHQ_F_ADDRESSES
+     * so a reader before 3.5.0.0 says it shows no log, as it always did,
+     * rather than calling level 4 off. */
     if (in->Verbosity >= 4) {
-        flags |= XHQ_F_WITHHELD;
-    } else if (in->Verbosity >= 2 && in->Ring != NULL && in->RingBytes != 0 &&
+        flags |= XHQ_F_WITHHELD | XHQ_F_ADDRESSES;
+    }
+    if (in->Verbosity >= 2 && in->Ring != NULL && in->RingBytes != 0 &&
                in->RingBytes <= XHQ_LOG_MAX &&
                (in->RingBytes & (in->RingBytes - 1)) == 0 &&
                in->Used <= in->RingBytes) {

@@ -79,7 +79,12 @@
 #define CM_EJ_WHY_NO_CHANNEL    9UL     /* an NVMe function no Stor98
                                            channel entry names (no Stor98
                                            running it, or none has read the
-                                           channel): it cannot be asked to
+                                           channel, or on 98 SE and ME a
+                                           USB4 tunnel the pre-boot
+                                           connection manager left up, with
+                                           no entry until a later exposure
+                                           reaches its member): it cannot
+                                           be asked to
                                            stop, and a removal alone is no
                                            isolation (stor98cm.h R2)       */
 

@@ -12,8 +12,8 @@
 /* ------------------------------------------------------------------ */
 
 /*
- * The effective mode is 0 for 0 and every value above 3, else the value
- * (3 read as 0 until record 15 revision 7); a period of 0 is its default, the idle period is held to 5000 and
+ * The effective mode is 0 for 0 and every value above 4, else the value
+ * (3 read as 0 until record 15 revision 7, 4 until task 49.24); a period of 0 is its default, the idle period is held to 5000 and
  * the active one to the idle one in effect. A value not found is the
  * default and is recorded as XHCI_POLL_NOT_FOUND.
  */
@@ -27,7 +27,8 @@ VOID XhciPollValues(PXHCI_POLL_VALUES v, ULONG modeFound, ULONG mode,
     v->ModeRead = modeFound ? mode : XHCI_POLL_NOT_FOUND;
     v->Mode = (modeFound &&
                (mode == XHCI_POLL_MODE_LINE || mode == XHCI_POLL_MODE_POLL ||
-                mode == XHCI_POLL_MODE_MESSAGE))
+                mode == XHCI_POLL_MODE_MESSAGE ||
+                mode == XHCI_POLL_MODE_MSG4))
                   ? mode
                   : XHCI_POLL_MODE_AUTO;
 
@@ -80,6 +81,12 @@ ULONG XhciPollDecideEx(ULONG mode, ULONG haveInterrupt, ULONG message,
     if (mode == XHCI_POLL_MODE_POLL) {
         *reason = XHCI_POLL_R_FORCED_POLL;
         return XHCI_POLL_DELIVERY_POLL;
+    }
+    if (mode == XHCI_POLL_MODE_MSG4) {
+        /* Mode 4 is XhciMsg4Decide's (xhci_msg4.c): never a line or a
+         * poll here. */
+        *reason = XHCI_POLL_R_MSG4_NO_SYSTEM;
+        return XHCI_POLL_DELIVERY_NONE;
     }
     if (mode == XHCI_POLL_MODE_MESSAGE) {
         if (!messageSystem) {
@@ -839,7 +846,10 @@ static ULONG xhciPollHolder(const XHCI_POLL_HELD_IN *in, const UCHAR *cfg)
     ULONG type;
 
     type = (ULONG)cfg[0x0E] & 0x7FUL;
-    if (type != 0 && type != 1) {
+    /* A CardBus bridge (type 2) has its pin and line where the others do:
+     * the veto counts it, the held line's walk keeps its own rule. */
+    if (type != 0 && type != 1 &&
+        (in->Kind != XHCI_POLL_WALK_SHARING || type != 2)) {
         return 0;
     }
     if (xhciPollLe32(cfg, 0x00) == in->Own[0] &&
@@ -851,7 +861,30 @@ static ULONG xhciPollHolder(const XHCI_POLL_HELD_IN *in, const UCHAR *cfg)
     if (cfg[0x3D] < 1 || cfg[0x3D] > 4) {
         return 0;
     }
+    if (in->Kind == XHCI_POLL_WALK_SHARING) {
+        if ((((ULONG)cfg[0x04] | ((ULONG)cfg[0x05] << 8)) & 0x0400UL) != 0) {
+            return 0;
+        }
+        return ((ULONG)cfg[0x3C] == in->Irq ||
+                (in->Irq2 != 0 && (ULONG)cfg[0x3C] == in->Irq2))
+                   ? 1UL
+                   : 0UL;
+    }
     return XhciPollHeldStill(cfg, in->Irq);
+}
+
+/* Whether a function read whole is this controller (the MATCH walk). */
+static ULONG xhciPollSelf(const XHCI_POLL_HELD_IN *in, const UCHAR *cfg)
+{
+    return (((ULONG)cfg[0x0E] & 0x7FUL) == 0 &&
+            xhciPollLe32(cfg, 0x00) == in->Own[0] &&
+            xhciPollLe32(cfg, 0x10) == in->Own[1] &&
+            xhciPollLe32(cfg, 0x14) == in->Own[2] &&
+            xhciPollLe32(cfg, 0x2C) == in->Own[3] &&
+            (xhciPollLe32(cfg, 0x08) & 0xFFFFFF00UL) ==
+                (in->OwnClass & 0xFFFFFF00UL))
+               ? 1UL
+               : 0UL;
 }
 
 /*
@@ -876,6 +909,7 @@ VOID XhciPollHeldScan(const XHCI_POLL_HELD_IN *in, PXHCI_POLL_HELD_OUT out)
     out->Functions = 0;
     out->Bdf = 0;
     out->Id = 0;
+    out->Matches = 0;
     first = (in->From >> 8) & 0xFFUL;
     for (bus = first; bus < XHCI_POLL_HELD_BUSES; bus++) {
         device = (bus == first) ? ((in->From >> 3) & 0x1FUL) : 0UL;
@@ -887,6 +921,16 @@ VOID XhciPollHeldScan(const XHCI_POLL_HELD_IN *in, PXHCI_POLL_HELD_OUT out)
                 vendor = (bytes < XHCI_POLL_HELD_BYTES)
                              ? 0xFFFFUL
                              : ((ULONG)cfg[0] | ((ULONG)cfg[1] << 8));
+                /* Mode 4's walks prove an absence; a function that answered
+                 * with a vendor but not its whole header is a walk that
+                 * cannot conclude. */
+                if (in->Kind != XHCI_POLL_WALK_HELD && bytes >= 2 &&
+                    bytes < XHCI_POLL_HELD_BYTES &&
+                    ((ULONG)cfg[0] | ((ULONG)cfg[1] << 8)) != 0xFFFFUL &&
+                    ((ULONG)cfg[0] | ((ULONG)cfg[1] << 8)) != 0) {
+                    out->Result = XHCI_POLL_HELD_FAILED;
+                    return;
+                }
                 if (vendor == 0xFFFFUL || vendor == 0) {
                     if (bus == 0 && device == 0 && function == 0) {
                         out->Result = XHCI_POLL_HELD_FAILED;
@@ -902,6 +946,16 @@ VOID XhciPollHeldScan(const XHCI_POLL_HELD_IN *in, PXHCI_POLL_HELD_OUT out)
                 }
                 out->Functions++;
                 bdf = (bus << 8) | (device << 3) | function;
+                if (in->Kind == XHCI_POLL_WALK_MATCH) {
+                    if (bdf >= in->From && xhciPollSelf(in, cfg)) {
+                        if (out->Matches == 0) {
+                            out->Bdf = bdf;
+                            out->Id = xhciPollLe32(cfg, 0x00);
+                        }
+                        out->Matches++;
+                    }
+                    continue;
+                }
                 if (bdf >= in->From && xhciPollHolder(in, cfg)) {
                     out->Result = XHCI_POLL_HELD_FOUND;
                     out->Bdf = bdf;
@@ -910,5 +964,8 @@ VOID XhciPollHeldScan(const XHCI_POLL_HELD_IN *in, PXHCI_POLL_HELD_OUT out)
                 }
             }
         }
+    }
+    if (in->Kind == XHCI_POLL_WALK_MATCH && out->Matches == 1) {
+        out->Result = XHCI_POLL_HELD_FOUND;
     }
 }

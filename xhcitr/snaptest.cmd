@@ -190,6 +190,14 @@ for %%S in ("port 13 look:  machine Empty, fed connect, link none; PORTSC CCS PE
         set FAILED=1
     )
 )
+rem Task 49.35: the event ring's choice in words, each route.
+for %%S in ("256 entries, the smaller ring: the controller is xHCI 0.96, below 1.0, which always uses 256; XhciEventRingTrbs 1024 asks for the larger ring" "256 entries, the smaller ring: the controller is xHCI 0.95, below 1.0, which always uses 256; XhciEventRingTrbs, of another type, asks for the larger ring" "1024 entries, the larger ring" "1024 entries, the larger ring: XhciEventRingTrbs 1024 asks for it" "1024 entries, the larger ring: XhciEventRingTrbs, of another type, asks for it" "which always uses 256; XhciEventRingTrbs 4294967295 asks for the larger ring" "1024 entries, the larger ring: XhciEventRing 1024 asks for it (a test build)" "256 entries, the smaller ring: XhciEventRingTrbs 256 asks for it" "256 entries, the smaller ring: XhciEventRing 256 asks for it" "256 entries, the smaller ring: no XhciEventRingTrbs, the default" "256 entries, the smaller ring: automatic below xHCI 1.0 (a test build)" "256 entries, the smaller ring: no memory for the larger one" "(route 9, which this build does not name)") do (
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.notes.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the event ring line does not say %%S
+        set FAILED=1
+    )
+)
 %SystemRoot%\System32\findstr.exe /C:"tol.mode" "%BASE%.notes.log" > nul
 if not errorlevel 1 (
     echo FAIL: the note decode printed a record not its own

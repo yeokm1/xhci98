@@ -228,6 +228,50 @@ ULONG XhciStreamSetDequeueTrb(XHCI_TRB *trb, ULONG slotId, ULONG dci,
  * Target 7:0 the DCI, DB Stream ID 31:16. */
 ULONG XhciStreamDoorbell(ULONG dci, ULONG streamId);
 
+/*
+ * Task 49.39 (design record 17 section 4.12.8, c1): a Stream Context read
+ * back, on a Stopped endpoint, after a Set TR Dequeue that completed
+ * Success, against what that command sent (`sentPA`, 16-byte aligned, and
+ * `sentDcs`). ctx0 and ctx1 are the context's first two words.
+ *   XHCI_STREAM_RB_EQUAL    the TR Dequeue Pointer (63:4) and DCS are
+ *                           what was sent, SCT 1 (Primary TR);
+ *   XHCI_STREAM_RB_DIFFER   the pointer or the DCS is not;
+ *   XHCI_STREAM_RB_BAD_SCT  the pointer and DCS are, the SCT is not 1.
+ */
+#define XHCI_STREAM_RB_EQUAL        0UL
+#define XHCI_STREAM_RB_DIFFER       1UL
+#define XHCI_STREAM_RB_BAD_SCT      2UL
+
+/*
+ * Task 49.39 (design record 17 section 4.12.8, a restart inside c1's
+ * repair): what follows a resend, by its completion code and - for a
+ * Context State Error - the endpoint's state read after it.
+ *   XHCI_STREAM_RS_AGAIN      Success: read the stream back again;
+ *   XHCI_STREAM_RS_RESTARTED  Context State Error with the endpoint Running:
+ *                             it restarted, c1's Running branch (the bounded
+ *                             stop, then the stream placed), never a resend;
+ *   XHCI_STREAM_RS_GIVEUP     anything else (Context State Error read
+ *                             Stopped, Halted or Error; another code; none).
+ * XhciStreamAfterRestop: 1 when the bounded stop left the endpoint exactly
+ * Stopped, the only state whose Stream Context the branch may place.
+ */
+#define XHCI_STREAM_RS_AGAIN        0UL
+#define XHCI_STREAM_RS_RESTARTED    1UL
+#define XHCI_STREAM_RS_GIVEUP       2UL
+
+ULONG XhciStreamResendAfter(ULONG code, ULONG state);
+ULONG XhciStreamAfterRestop(ULONG state);
+
+/* Whether c1 may resend at all: the endpoint read Stopped just before, and
+ * the stream holds no TD of the driver's (`queuedTds` 0), so no run of the
+ * endpoint in the window before the command lands can have moved a
+ * transfer the driver still owns. A stream with a TD queued is given up
+ * instead (record 17 4.12.8). 1 may resend, 0 not. */
+ULONG XhciStreamMayResend(ULONG queuedTds, ULONG state);
+
+ULONG XhciStreamReadBack(ULONG ctx0, ULONG ctx1, ULONG sentPA,
+                         ULONG sentDcs);
+
 /* ------------------------------------------------------------------ */
 /* Events                                                               */
 /* ------------------------------------------------------------------ */

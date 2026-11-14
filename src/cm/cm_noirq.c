@@ -1142,6 +1142,32 @@ ULONG CmNiNext(PCM_NI_MEMBER m, const CM_NI_CTX *ctx, PCM_NI_OP op)
     return 0;
 }
 
+ULONG CmNiAgain(PCM_NI_MEMBER m, const CM_NI_CTX *ctx, PCM_NI_OP op)
+{
+    CM_NI_DEV *d;
+    CM_NI_RES res;
+
+    if (m->Out.Id == 0) {
+        return 0;
+    }
+    m->OutAt = ctx->Now;
+    d = m->Out.Dev < CM_NOIRQ_DEVICES ? &m->Dev[m->Out.Dev] : NULL;
+    if (d == NULL || !d->Used || d->Txn != m->Out.Txn ||
+        d->Dn != m->Out.Dn || d->Hash != m->Out.Hash ||
+        (d->State != CM_NI_S_PENDING && d->State != CM_NI_S_ACTIVE &&
+         d->State != CM_NI_S_ATTEMPTED) ||
+        ((d->State == CM_NI_S_ACTIVE || d->State == CM_NI_S_ATTEMPTED) &&
+         niPast(ctx->Now, d->Deadline))) {
+        niZero(&res, sizeof(res));
+        res.Id = m->Out.Id;
+        res.Cr = CM_NI_CR_FAILURE;
+        CmNiTake(m, ctx, &res);
+        return 0;
+    }
+    *op = m->Out;
+    return 1;
+}
+
 /* ---- the results ------------------------------------------------------ */
 
 /* A result whose attempt has ended: accounted, never acted on. */

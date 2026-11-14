@@ -109,6 +109,7 @@ ULONG CmNetQueryBuild(UCHAR *out, ULONG room, const CM_QN_IN *in)
     cmQnPut(e, CM_QN_S_RINGS_FAILED, in->RingsFailed);
     cmQnPut(e, CM_QN_S_IRQ_STATE, in->IrqState);
     cmQnPut(e, CM_QN_S_IRQ_KICKS, in->IrqKicks);
+    cmQnPut(e, CM_QN_S_IRQ_KIND, in->IrqKind);
     at += CM_QN_SVC_BYTES;
 
     /* The links. */

@@ -68,9 +68,15 @@ it.
 ## Using it
 
 ```text
+XHCITR /snapshot [NAME] [/nosysinfo]
+                         from 3.5.0.0: every controller xhci98.sys drives,
+                         a set each - NAME.D<k> (its device report),
+                         NAME.T<k>, NAME.B<k>, NAME.P<k>, k its door number
+                         (0-9, then A-Z) - in the current directory; NAME as
+                         below, refused when any file of the set exists
 XHCITR /snapshot [NAME] [/c N] [/nosysinfo]
                          the field report: NAME.DEV, then the dump of
-                         controller N (default 0) into NAME.TXT/.BIN/.PSC,
+                         controller N into NAME.TXT/.BIN/.PSC,
                          in the current directory. NAME is an 8.3 base,
                          else made from the clock (mDDhhmmS; see "The field
                          report"); refused (exit 6) rather than overwritten
@@ -87,8 +93,13 @@ XHCITR /snapshot /?      the long help
 With the output redirected these write their text there; otherwise a
 message box shows it, with the current directory. A word beginning with `-`
 after `/snapshot`, `/dump` or `/probe` is refused before anything is read.
-In the window, File > Save Snapshot... runs `/snapshot` in a folder the user
-picks, for the first xhci98 controller. Save Report and `XHCITR /report`
+In the window, File > Save Snapshot... (and the tray's quick save) takes
+every xhci98 controller into a folder, one set each, as `/snapshot` without
+`/c` does; until `3.5.0.0` it took the first xhci98 controller only (record 25
+section 15 item 12). A set's own `.TXT` and `.DEV` texts still name the files
+`BASE.TXT`, `.DEV`, `.BIN` and `.PSC`, the engine's names: read `.T<k>` as the
+`.TXT`, `.D<k>` as the `.DEV`, `.B<k>` as the `.BIN` and `.P<k>` as the `.PSC`
+of controller k. Save Report and `XHCITR /report`
 end with a "Snapshot" part: the `.DEV` once (from the run for the first
 xhci98 controller, or for controller 0 when none is listed) and each
 xhci98 controller's dump `.TXT`, whole, withheld when its level is 4 or
@@ -124,6 +135,14 @@ is this driver's own counters, notes, PORTSC and its extension (raw in the
 `.BIN` at any level from 1 up), with kernel addresses in the note ring and
 the `.TXT` only at level 4; no user data and no other process's memory.
 
+From `3.5.0.0` (roadmap-usb4 task 49.37) `/snapshot` also writes, for each
+Thunderbolt or USB4 controller `xhcicm.sys` runs, its connection manager's
+state: `BASE.CT<n>`, the decoded text, and `BASE.CB<n>`, the raw image, `n`
+the query device's number (0-9, then A-F), and Save Report carries each
+`.CT<n>` after the dumps. They come through `xhcicm.sys`'s query device, not
+this route; design record 25 section 23 and record 21 section 8.4 are their
+reference.
+
 ### Three files, and only one of them is the report
 
 - `.TXT` is the plain-text companion. It is built entirely out of what the
@@ -132,7 +151,9 @@ the `.TXT` only at level 4; no user data and no other process's memory.
   header block always, the note ring's text at 2 and above, the PORTSC table at
   3 and above, and kernel addresses at 4, which the driver refuses below that
   rung. So a level-4 `.TXT` is a maintainer's artifact: read it before
-  publishing it, or take the report at 2.
+  publishing it, or take the report at 2. From `3.5.0.0` Save Report
+  carries a level-4 `.TXT` whole too (the owner's decision of 2026-11-13;
+  design record 25 section 3.5), where up to `3.4.3.0` it left it out.
 - `.BIN` is the raw extension image, the attachment rather than the report.
   What the tool names from it, it names from the regions' own headers
   (below), with no offset table; anything else in it decodes only against a

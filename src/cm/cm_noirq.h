@@ -549,6 +549,16 @@ ULONG CmNiNext(PCM_NI_MEMBER m, const CM_NI_CTX *ctx, PCM_NI_OP op);
  * is dropped and counted. */
 VOID CmNiTake(PCM_NI_MEMBER m, const CM_NI_CTX *ctx, const CM_NI_RES *res);
 
+/* The operation outstanding handed out again (record 21 section 6.1.3: a
+ * caller that held it at its admission, for a suspend, makes it after the
+ * wait): 1 with *op filled (the same id), its clock restarted at ctx->Now
+ * so CmNiTake credits only the call. 0 when none is outstanding, or when
+ * its attempt ended meanwhile (the entry no longer the one it named, or an
+ * ACTIVE or ATTEMPTED attempt past its deadline): it is then taken here as
+ * not made (a failure result, through CmNiTake's own rules), so nothing
+ * of it is made after its attempt stopped. */
+ULONG CmNiAgain(PCM_NI_MEMBER m, const CM_NI_CTX *ctx, PCM_NI_OP op);
+
 /* The pure readings the caller's operations need. */
 /* DevLoader and PortDriver as read (found nonzero with its text, `n`
  * bytes at most): CM_NI_BIND_* (case not significant). */

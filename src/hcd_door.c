@@ -857,6 +857,182 @@ static ULONG hcdDoorPorts(PHCD_CONTROLLER hc)
 }
 
 /*
+ * Task 49.39 (design record 17 section 4.12.9): the contexts region's word
+ * `index`, or with index (ULONG)-1 the region's size in words, built by a
+ * walk of the slots and DCIs so no image is kept. The Output Contexts are
+ * read only while the controller is STARTED. Controller lock held.
+ */
+static ULONG hcdDoorContextsWord(PHCD_CONTROLLER hc, ULONG index)
+{
+    PHCD_USB_DEVICE dev;
+    PHCD_PIPE ep;
+    PHCD_PIPE p;
+    volatile ULONG *ctx;
+    ULONG at;
+    ULONG slot;
+    ULONG dci;
+    ULONG n;
+    ULONG words;
+    ULONG w;
+    ULONG s;
+    ULONG k;
+    ULONG offset;
+    ULONG started;
+
+    started = (hc->Hc.Flags & XHCI_EXT_FLAG_STARTED) != 0;
+    at = 0;
+    for (slot = 1; slot <= XHCI_MAX_SLOTS; slot++) {
+        dev = hc->SlotDevice[slot];
+        if (dev == NULL) {
+            continue;
+        }
+        for (dci = 2; dci < 32; dci++) {
+            ep = dev->Pipes[dci];
+            if (ep == NULL || ep->Streams == NULL) {
+                continue;
+            }
+            n = ep->Streams->Count;
+            if (n > XHCI_SNAPSHOT_CTX_MAX_STREAMS) {
+                n = XHCI_SNAPSHOT_CTX_MAX_STREAMS;
+            }
+            words = XHCI_SNAPSHOT_CTX_FIRST + n * XHCI_SNAPSHOT_CTX_S_WORDS;
+            if (index == (ULONG)-1 || index >= at + words) {
+                at += words;
+                continue;
+            }
+            w = index - at;
+            if (w == XHCI_SNAPSHOT_CTX_WORDS) {
+                return words;
+            }
+            if (w == XHCI_SNAPSHOT_CTX_SLOT_DCI) {
+                return (slot << 8) | dci;
+            }
+            if (w == XHCI_SNAPSHOT_CTX_STREAMS) {
+                return n;
+            }
+            if (w < XHCI_SNAPSHOT_CTX_STREAMS) {
+                if (!started ||
+                    XhciEndpointContextOffset(&hc->Hc.Layout, slot, dci,
+                                              &offset) != XHCI_LAYOUT_OK) {
+                    return XHCI_SNAPSHOT_HCD_NOT_READ;
+                }
+                return XhciCommonAt(&hc->Hc, offset)[w - XHCI_SNAPSHOT_CTX_EP];
+            }
+            s = 1 + (w - XHCI_SNAPSHOT_CTX_FIRST) / XHCI_SNAPSHOT_CTX_S_WORDS;
+            k = (w - XHCI_SNAPSHOT_CTX_FIRST) % XHCI_SNAPSHOT_CTX_S_WORDS;
+            p = ep->Streams->Pipe[s];
+            if (p == NULL) {
+                return 0;
+            }
+            switch (k) {
+            case XHCI_SNAPSHOT_CTX_S_CTX0:
+            case XHCI_SNAPSHOT_CTX_S_CTX1:
+                if (!started) {
+                    return XHCI_SNAPSHOT_HCD_NOT_READ;
+                }
+                ctx = (volatile ULONG *)((PUCHAR)ep->Streams->Va +
+                                         s * XHCI_STREAM_CONTEXT_BYTES);
+                return ctx[k];
+            case XHCI_SNAPSHOT_CTX_S_BASE:
+                return p->Ring->BasePA;
+            case XHCI_SNAPSHOT_CTX_S_TRBS:
+                return p->Ring->Trbs;
+            case XHCI_SNAPSHOT_CTX_S_DEQ:
+                return XhciRingDequeuePA(p->Ring) |
+                       XhciRingDequeueCycle(p->Ring);
+            case XHCI_SNAPSHOT_CTX_S_ENQ:
+                return XhciRingTrbPA(p->Ring, p->Ring->Enqueue) |
+                       (p->Ring->Cycle & 1UL);
+            default:
+                return p->Queue->Count;
+            }
+        }
+    }
+    return (index == (ULONG)-1) ? at : 0UL;
+}
+
+/* Task 49.39: the trace region's word `index`, or with (ULONG)-1 its size
+ * in words. Controller lock held. */
+static ULONG hcdDoorTraceWord(PHCD_CONTROLLER hc, ULONG index)
+{
+    ULONG ring;
+    ULONG e;
+
+    ring = XHCI_SNAPSHOT_TRACE_ENTRIES * XHCI_SNAPSHOT_TRACE_ENTRY_WORDS;
+    if (index == (ULONG)-1) {
+        return XHCI_SNAPSHOT_TRACE_HEAD_WORDS + 2 * ring;
+    }
+    switch (index) {
+    case XHCI_SNAPSHOT_TRACE_H_VERSION:
+        return XHCI_SNAPSHOT_TRACE_VERSION;
+    case XHCI_SNAPSHOT_TRACE_H_ENTRIES:
+        return XHCI_SNAPSHOT_TRACE_ENTRIES;
+    case XHCI_SNAPSHOT_TRACE_H_WORDS:
+        return XHCI_SNAPSHOT_TRACE_ENTRY_WORDS;
+    case XHCI_SNAPSHOT_TRACE_H_HEAD:
+        return hc->TraceHead;
+    case XHCI_SNAPSHOT_TRACE_H_CAP_SEQ:
+        return hc->TraceCapSeq;
+    case XHCI_SNAPSHOT_TRACE_H_CAP_WHY:
+        return hc->TraceCapWhy;
+    case XHCI_SNAPSHOT_TRACE_H_CAP_AT:
+        return hc->TraceCapAt;
+    case XHCI_SNAPSHOT_TRACE_H_CAP_HEAD:
+        return hc->TraceCapHead;
+    default:
+        break;
+    }
+    e = index - XHCI_SNAPSHOT_TRACE_HEAD_WORDS;
+    if (e < ring) {
+        return hc->Trace[e / XHCI_SNAPSHOT_TRACE_ENTRY_WORDS]
+                        [e % XHCI_SNAPSHOT_TRACE_ENTRY_WORDS];
+    }
+    e -= ring;
+    if (e < ring) {
+        return hc->TraceCap[e / XHCI_SNAPSHOT_TRACE_ENTRY_WORDS]
+                           [e % XHCI_SNAPSHOT_TRACE_ENTRY_WORDS];
+    }
+    return 0;
+}
+
+/* Task 49.39: a word-built region cut into the caller's window, as the HCD
+ * region is: its size first, then the words from the offset. Controller
+ * lock held. */
+static VOID hcdDoorRegionWords(PHCD_CONTROLLER hc,
+                               XHCI_SNAPSHOT_HEADER *header, PUCHAR payload,
+                               ULONG capacity, ULONG offset,
+                               ULONG (*word)(PHCD_CONTROLLER, ULONG))
+{
+    ULONG total;
+    ULONG first;
+    ULONG count;
+    ULONG i;
+
+    total = word(hc, (ULONG)-1);
+    header->RegionBytes = total * (ULONG)sizeof(ULONG);
+    if ((offset & 3UL) != 0) {
+        header->Status |= XHCI_SNAPSHOT_S_BAD_REQUEST;
+        return;
+    }
+    if (offset >= header->RegionBytes) {
+        if (total != 0 || offset != 0) {
+            header->Status |= XHCI_SNAPSHOT_S_PAST_END;
+        }
+        return;
+    }
+    first = offset / (ULONG)sizeof(ULONG);
+    count = total - first;
+    if (count > capacity / (ULONG)sizeof(ULONG)) {
+        count = capacity / (ULONG)sizeof(ULONG);
+        header->Status |= XHCI_SNAPSHOT_S_TRUNCATED;
+    }
+    for (i = 0; i < count; i++) {
+        hcdPut32(payload, i * 4, word(hc, first + i));
+    }
+    header->PayloadBytes = count * (ULONG)sizeof(ULONG);
+}
+
+/*
  * The slots region (xhci.h, XHCI_SNAPSHOT_REGION_SLOTS): one record per
  * device in SlotDevice[], the Output Slot Context's state and Speed read
  * only while the controller is STARTED (the stop clears that flag under
@@ -1341,6 +1517,38 @@ static ULONG hcdDoorFallbackSlots(PHCD_CONTROLLER hc)
     return bits;
 }
 
+/* Counter word `word` as the door publishes it: the block's own, but for the
+ * words it computes - Usb2HubSpeedFallbackSlots (issue 18) and, since task
+ * 49.45 (design record 13 section 6.13.11), the image-wide client URBs the
+ * bus's allocators hold (HcdPoolClientCount) and the frees refused as not
+ * the bus's (HcdUrbUsbdxForeignFrees), plain reads of two interlocked
+ * counts. Controller lock held. IRQL: DISPATCH_LEVEL. */
+static ULONG hcdDoorCounterWord(PHCD_CONTROLLER hc, const ULONG *counters,
+                                ULONG word)
+{
+    switch (word) {
+    case XHCI_SNAPSHOT_HCD_HUB_SPEED_SLOTS:
+        return hcdDoorFallbackSlots(hc);
+    case XHCI_SNAPSHOT_HCD_USBDX_CLIENT_URBS:
+        return HcdPoolClientCount();
+    case XHCI_SNAPSHOT_HCD_USBDX_FOREIGN_FREES:
+        return HcdUrbUsbdxForeignFrees();
+    default:
+        return counters[word];
+    }
+}
+
+/* The query's copy of the counter block (XhciQryAnswer, a whole answer):
+ * computed word `word` written over the block's own, when the answer's block
+ * reaches it. Controller lock held. IRQL: DISPATCH_LEVEL. */
+static VOID hcdDoorQryWord(PHCD_CONTROLLER hc, PUCHAR buf, ULONG word)
+{
+    if (hcdGet32(buf, XHQ_O_CTR_BYTES) > word * 4) {
+        hcdPut32(buf, hcdGet32(buf, XHQ_O_CTR_OFFSET) + word * 4,
+                 hcdDoorCounterWord(hc, (const ULONG *)&hc->Counters, word));
+    }
+}
+
 /*
  * The HCD region (xhci.h, XHCI_SNAPSHOT_REGION_HCD; task 35.3): built word
  * by word into the caller's window from where XhciSnapHcdLocate puts each
@@ -1370,6 +1578,7 @@ static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
     ULONG total;
     ULONG first;
     ULONG count;
+    ULONG k;
     ULONG record;
     ULONG word;
     ULONG value;
@@ -1408,9 +1617,27 @@ static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
     for (i = 0; i < count; i++) {
         switch (XhciSnapHcdLocate(ports, first + i, &record, &word)) {
         case XHCI_SNAPSHOT_HCD_IN_HEAD:
-            /* Issue 26's failure records end the header, after 47.30's
-             * records; the class drivers write them under this lock
-             * (hcd_urb.c). */
+            /* Task 49.39's times end the header now, after issue 26's
+             * failure records; the class drivers write both under this
+             * lock (hcd_urb.c). */
+            if (word >= XHCI_SNAPSHOT_HCD_UTIME_AT) {
+                record = (word - XHCI_SNAPSHOT_HCD_UTIME_AT) /
+                         XHCI_SNAPSHOT_HCD_UTIME_RECORD_WORDS;
+                k = (word - XHCI_SNAPSHOT_HCD_UTIME_AT) %
+                    XHCI_SNAPSHOT_HCD_UTIME_RECORD_WORDS;
+                value = (k == XHCI_SNAPSHOT_HCD_UT_COUNT)
+                            ? hc->UasTele[record].FailTimeCount
+                        : (k == XHCI_SNAPSHOT_HCD_UT_ATA)
+                            ? hc->UasTele[record].FailAta
+                            : hc->UasTele[record]
+                                  .FailTimes[k - XHCI_SNAPSHOT_HCD_UT_TIMES];
+                break;
+            }
+            if (word >= XHCI_SNAPSHOT_HCD_UTIME_RECORDS) {
+                value = XhciSnapHcdHead(ports, word);
+                break;
+            }
+            /* Issue 26's failure records, after 47.30's records. */
             if (word >= XHCI_SNAPSHOT_HCD_UFAIL_AT) {
                 record = (word - XHCI_SNAPSHOT_HCD_UFAIL_AT) /
                          XHCI_SNAPSHOT_HCD_UFAIL_RECORD_WORDS;
@@ -1504,20 +1731,19 @@ static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
                 break;
             }
             value = (word == XHCI_SNAPSHOT_HCD_TERMINAL)
-                        ? XhciTolTerminal(hc->Hc.ControllerFailed,
-                                          hc->Hc.Tol.Unreadable,
-                                          hc->Hc.Tol.Window.Refused,
-                                          hc->Hc.RecoveryFailuresConsecutive,
-                                          XHCI_RECOVERY_MAX_ATTEMPTS)
+                        ? XhciTolTerminalEx(hc->Hc.ControllerFailed,
+                                            hc->Hc.Tol.Unreadable,
+                                            hc->Hc.Tol.Window.Refused,
+                                            hc->Hc.RecoveryFailuresConsecutive,
+                                            XHCI_RECOVERY_MAX_ATTEMPTS,
+                                            (hc->Msg4Lost != 0) ? 1UL : 0UL)
                         : XhciSnapHcdHead(ports, word);
             break;
         case XHCI_SNAPSHOT_HCD_IN_PORT:
             value = hcdDoorHcdPortWord(hc, &hc->Ports[record], word);
             break;
         case XHCI_SNAPSHOT_HCD_IN_COUNTERS:
-            value = (word == XHCI_SNAPSHOT_HCD_HUB_SPEED_SLOTS)
-                        ? hcdDoorFallbackSlots(hc)
-                        : counters[word];
+            value = hcdDoorCounterWord(hc, counters, word);
             break;
         default:
             value = 0;
@@ -1535,7 +1761,18 @@ typedef char hcdSnapshotCounters[sizeof(XHCIHC_COUNTERS) ==
                                      ? 1
                                      : -1];
 
-/* ... and the word the door computes is Usb2HubSpeedFallbackSlots. */
+/* ... and the words the door computes are Usb2HubSpeedFallbackSlots and,
+ * since task 49.45, UsbdxClientUrbs and UsbdxForeignFrees. */
+typedef char hcdSnapshotUsbdxWords[FIELD_OFFSET(XHCIHC_COUNTERS,
+                                               UsbdxClientUrbs) ==
+                                          XHCI_SNAPSHOT_HCD_USBDX_CLIENT_URBS *
+                                              sizeof(ULONG) &&
+                                      FIELD_OFFSET(XHCIHC_COUNTERS,
+                                                   UsbdxForeignFrees) ==
+                                          XHCI_SNAPSHOT_HCD_USBDX_FOREIGN_FREES *
+                                              sizeof(ULONG)
+                                      ? 1
+                                      : -1];
 typedef char hcdSnapshotFallbackSlots[FIELD_OFFSET(XHCIHC_COUNTERS,
                                                    Usb2HubSpeedFallbackSlots) ==
                                               XHCI_SNAPSHOT_HCD_HUB_SPEED_SLOTS *
@@ -1714,6 +1951,12 @@ static ULONG hcdDoorSnapshot(PHCD_CONTROLLER hc, const UCHAR *guid,
         hcdDoorSlots(hc, header, payload, capacity, requestOffset);
     } else if (requestRegion == XHCI_SNAPSHOT_REGION_HCD) {
         hcdDoorHcd(hc, header, payload, capacity, requestOffset, mmio);
+    } else if (requestRegion == XHCI_SNAPSHOT_REGION_CONTEXTS) {
+        hcdDoorRegionWords(hc, header, payload, capacity, requestOffset,
+                           hcdDoorContextsWord);
+    } else if (requestRegion == XHCI_SNAPSHOT_REGION_TRACE) {
+        hcdDoorRegionWords(hc, header, payload, capacity, requestOffset,
+                           hcdDoorTraceWord);
     } else {
         header->Status |= XHCI_SNAPSHOT_S_BAD_REGION;
     }
@@ -1817,19 +2060,19 @@ static NTSTATUS hcdDoorQuery(PHCD_CONTROLLER hc, PUCHAR buf, ULONG outLen,
         in.Dropped = ext->Log.BytesDropped;
         in.Appends = ext->Log.Appends;
         /* As the HCD region's terminal word, under the same lock. */
-        in.Terminal = XhciTolTerminal(ext->ControllerFailed,
-                                      ext->Tol.Unreadable,
-                                      ext->Tol.Window.Refused,
-                                      ext->RecoveryFailuresConsecutive,
-                                      XHCI_RECOVERY_MAX_ATTEMPTS);
+        in.Terminal = XhciTolTerminalEx(ext->ControllerFailed,
+                                        ext->Tol.Unreadable,
+                                        ext->Tol.Window.Refused,
+                                        ext->RecoveryFailuresConsecutive,
+                                        XHCI_RECOVERY_MAX_ATTEMPTS,
+                                        (hc->Msg4Lost != 0) ? 1UL : 0UL);
     }
     rc = XhciQryAnswer(buf, outLen, &in, &written);
-    /* The one counter word the door computes, as the HCD region does. */
-    if (rc == XHQ_ANS_WHOLE &&
-        hcdGet32(buf, XHQ_O_CTR_BYTES) > XHCI_SNAPSHOT_HCD_HUB_SPEED_SLOTS * 4) {
-        at = hcdGet32(buf, XHQ_O_CTR_OFFSET) +
-             XHCI_SNAPSHOT_HCD_HUB_SPEED_SLOTS * 4;
-        hcdPut32(buf, at, hcdDoorFallbackSlots(hc));
+    /* The counter words the door computes, as the HCD region does. */
+    if (rc == XHQ_ANS_WHOLE) {
+        hcdDoorQryWord(hc, buf, XHCI_SNAPSHOT_HCD_HUB_SPEED_SLOTS);
+        hcdDoorQryWord(hc, buf, XHCI_SNAPSHOT_HCD_USBDX_CLIENT_URBS);
+        hcdDoorQryWord(hc, buf, XHCI_SNAPSHOT_HCD_USBDX_FOREIGN_FREES);
     }
     /* 44.35's records, counted and filled under the one hold. */
     if (rc == XHQ_ANS_WHOLE) {

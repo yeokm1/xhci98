@@ -200,6 +200,37 @@ typedef struct _CM_WK_PORT {
     ULONG FreshValid;
     ULONG NumEmpty;         /* this operation's numbering read it empty   */
     ULONG FreshNext;        /* the call in flight is a fresh publication  */
+    /* Record 21 section 6.1.4: the bridge's header read at the suspend,
+     * whether it is a copy worth writing back, and whether this resume
+     * has written it (under the worker's lock). */
+    ULONG RwHdr[CM_PORTS_HDR_DWORDS];
+    ULONG RwHdrValid;
+    ULONG RwHdrDone;
+    ULONG RwHdrKeep;        /* the copy is pending: kept from its reading
+                               until the wait ends restored or a coherent
+                               bridge gives a fresh one                  */
+    ULONG RwHdrPartial;     /* a write-back stopped or failed (perhaps
+                               part-written): the copy is never replaced
+                               until this driver restores it whole       */
+    /* Record 21 section 6.1.4 item 6: the functions behind the bridge,
+     * copied with the bridge's header (RwEpCount of them, each at device
+     * RwEpDev[] of the secondary bus), written back after it. */
+    ULONG RwEpCount;
+    ULONG RwEpDev[CM_PORTS_EP_MAX];
+    ULONG RwEp[CM_PORTS_EP_MAX][CM_PORTS_EP_DWORDS];
+    /* Record 21 section 6.1.5 (under the worker's lock): the bridges
+     * behind the member noted configured at a suspend (pending until a
+     * resume settles them), and this resume's recovery - RwHow the wait's
+     * own outcome latched (restored by Windows or here; 0 none yet),
+     * RwLost a recovery owed (the first lost verdict; cleared with the
+     * mark), RwLostPost its re-enumeration posted from the check that had
+     * no operation, RwLostTried and RwLostAt the last attempt. */
+    CM_PORTS_SUB RwSub;
+    ULONG RwHow;
+    ULONG RwLost;
+    ULONG RwLostPost;
+    ULONG RwLostTried;
+    ULONG RwLostAt;
 } CM_WK_PORT;
 
 /* The no-IRQ walk's stack (cmWkNiWalk). */
@@ -260,6 +291,8 @@ typedef struct _CM_CFGWK {
                                member (CM_WK_NO_OP: none, the baseline)  */
     ULONG OpGen;            /* ... and the generation it was taken at     */
     ULONG OpChain;          /* ... a chain operation (cmWkChainCurrent)   */
+    ULONG OpChainBdf;       /* ... and the chain port it is on (0: none);
+                               record 21 section 6.1.5 item 7            */
     ULONG ChainWrote;       /* a chain port's numbering attempt has written
                                (its reads then never refused: rollback) */
     ULONG ReqReenum;        /* members to re-enumerate                    */
@@ -295,6 +328,26 @@ typedef struct _CM_CFGWK {
                                dropped when the hold ends: a released
                                member's tunnel is rebuilt, and the
                                rebuild's own post re-enumerates it       */
+    ULONG RwStop;           /* record 21 section 6.1.4: a suspend taking
+                               its copy (no write-back begins) ...       */
+    ULONG RwBusy;           /* ... and a write-back under way (the
+                               suspend waits for it); the worker's lock  */
+    ULONG RecOn;            /* record 21 section 6.1.5: the removal step
+                               under way is a recovery's (the thread's
+                               own): its query is admitted by cmWkRecGo
+                               at the marks' epoch RecEpoch              */
+    ULONG RecEpoch;
+    CM_PORTS_RWS Rw;        /* record 21 section 6.1.3: Wait the members
+                               whose next operation waits for Windows'
+                               restore of the bridge's bus numbers
+                               (CmCfgwkSuspend), Asleep between the
+                               suspend and the resume (their operations
+                               parked, nothing read), From the tick count
+                               of the resume, Epoch each suspend and
+                               resume (cm_ports.h)                       */
+    ULONG ResumePark;       /* members whose operation the wait parked,
+                               taken again at the next pass ...          */
+    ULONG ResumeParkVanish; /* ... with their vanished-child scan         */
     ULONG EnumBusy;         /* members with a CmCfgmgReenumerate or a
                                no-IRQ operation admitted and not yet
                                returned (cmWkEnumAdmit, cmWkNiAdmit): the
@@ -517,6 +570,7 @@ static VOID cmWkLogAddress(PCM_CFGWK w, const char *label, ULONG value)
  * domain still owns the member: a newer post or a lost claim makes the
  * operation in progress stale. */
 static BOOLEAN cmWkCurrent(PCM_CFGWK w, ULONG i, ULONG gen);
+static BOOLEAN cmWkResumeMarked(PCM_CFGWK w, ULONG i);
 
 /* The member's generation now. */
 static ULONG cmWkGenOf(PCM_CFGWK w, ULONG i)
@@ -536,6 +590,7 @@ static VOID cmWkOp(PCM_CFGWK w, ULONG i, ULONG gen)
     w->OpMember = i;
     w->OpGen = gen;
     w->OpChain = 0;
+    w->OpChainBdf = 0;
 }
 
 static BOOLEAN cmWkChainCurrent(PCM_CFGWK w, ULONG i, ULONG gen);
@@ -1253,8 +1308,12 @@ static BOOLEAN cmWkEnumAdmitEx(PCM_CFGWK w, ULONG i, BOOLEAN chain,
      * retired (a sweep, a record or a claim on it), read under the same
      * lock, so a sweep begun after this finds the call in EnumBusy and
      * waits for it. */
+    /* Record 21 section 6.1.3: nor while a resume mark stands (a suspend
+     * during the operation): refused, owed, then parked until Windows has
+     * restored the bridge. */
     ok = (BOOLEAN)((w->Hold & (1UL << i)) == 0 &&
                    (w->PruneOwed & (1UL << i)) == 0 &&
+                   (w->Rw.Wait & (1UL << i)) == 0 &&
                    !CmEjectVanishHeld(w->Port[i].Bdf));
     if (ok && chain) {
         /* Record 34 section 3.3.7 item 1: a chain port's re-enumeration
@@ -1662,6 +1721,232 @@ static ULONG cmWkStill(PCM_CFGWK w, ULONG devnode, const char *id)
     return CMG_CR_SUCCESS;
 }
 
+static BOOLEAN cmWkIdAnswers(ULONG id);
+
+/* Record 21 section 6.1.5 item 7 (cmWkResetUnder's): what the child
+ * devnodes of `parentDn` say about the type 1 function at `fbdf` that
+ * reads secondary bus 0 (`id` its vendor and device, `leaf` its device and
+ * function byte): CM_PORTS_RCL_FOUND (one is its), _NONE (the complete
+ * list read, every child's id read, none its), _UNKNOWN (the list not read
+ * to its end or a child's id not read); CM_WK_RU_STALE when the
+ * operation went stale while it read. Every immediate child is walked, up
+ * to one per function a bus can hold. */
+#define CM_WK_RESET_CHILDREN    256UL
+#define CM_WK_RU_STALE          3UL
+
+static ULONG cmWkResetChild(PCM_CFGWK w, ULONG parentDn, ULONG id,
+                            ULONG fbdf, ULONG leaf, BOOLEAN always)
+{
+    ULONG node;
+    ULONG acc;
+    ULONG c;
+    ULONG cr;
+    char text[CMG_MAX_DEVICE_ID_LEN + 1];
+
+    if (!always && !cmWkGo(w)) {
+        return CM_WK_RU_STALE;
+    }
+    acc = CM_PORTS_RCL_NONE;
+    node = 0;
+    cr = CmCfgmgChild(&w->Cfgmg, parentDn, &node);
+    for (c = 0; cr == CMG_CR_SUCCESS && node != 0; c++) {
+        if (c == CM_WK_RESET_CHILDREN) {
+            return CmPortsResetChildEnd(acc, FALSE);
+        }
+        if (!always && !cmWkGo(w)) {
+            return CM_WK_RU_STALE;
+        }
+        if (CmCfgmgDeviceId(&w->Cfgmg, node, text, sizeof(text)) ==
+            CMG_CR_SUCCESS) {
+            text[CMG_MAX_DEVICE_ID_LEN] = '\0';
+            acc = CmPortsResetChildAdd(acc,
+                                       CmPortsResetChildOf(text,
+                                                           CMG_MAX_DEVICE_ID_LEN,
+                                                           id, fbdf, leaf));
+        } else {
+            acc = CmPortsResetChildAdd(acc,
+                                       CmPortsResetChildOf(NULL, 0, id, fbdf,
+                                                           leaf));
+        }
+        if (acc == CM_PORTS_RCL_FOUND) {
+            return acc;
+        }
+        if (!always && !cmWkGo(w)) {
+            return CM_WK_RU_STALE;
+        }
+        cr = CmCfgmgSibling(&w->Cfgmg, node, &node);
+    }
+    /* The end of the list: no child, or no sibling (either form). */
+    return CmPortsResetChildEnd(acc, (BOOLEAN)(cr == CMG_CR_NO_SUCH_DEVNODE ||
+                                               (cr == CMG_CR_SUCCESS &&
+                                                node == 0)));
+}
+
+/* Record 21 section 6.1.5 item 7 (cmWkResetUnder's): a bridge whose
+ * secondary bus is not read - member i in its no-configuration mode, or
+ * the bridge's own secondary bus reading 0 - is safe only when its
+ * complete list of child devnodes is empty; else unknown (*devfn FEh).
+ * CM_WK_RU_STALE when the operation went stale while it read. */
+static ULONG cmWkResetBare(PCM_CFGWK w, ULONG parentDn, BOOLEAN always,
+                           PULONG devfn)
+{
+    ULONG one[1];
+    ULONG n;
+    BOOLEAN complete;
+    ULONG ru;
+
+    n = cmWkChildren(w, parentDn, one, 1, &complete);
+    if (!always && !cmWkGo(w)) {
+        return CM_WK_RU_STALE;
+    }
+    ru = CmPortsResetBare(complete, n);
+    if (ru != CM_PORTS_RU_SAFE) {
+        *devfn = 0xFEUL;
+    }
+    return ru;
+}
+
+/*
+ * Record 21 section 6.1.5 item 7: whether the bridge at `parentBdf`
+ * (member i's own, or a chain port below it), whose devnode is `parentDn`,
+ * may be re-enumerated. CM_PORTS_RU_RESET: a function on its secondary bus
+ * is a type 1 header reading secondary bus 0 and one of the parent's child
+ * devnodes is that function's (the same vendor and device, an instance id
+ * naming its place: the BUS_&DEV_&FUNC_ form by location; the path form by
+ * its leaf element, the parent being the same for every child) - PCI.VXD,
+ * re-enumerating the parent, would walk that bridge's started devnode and
+ * take bus 0's own functions for new hardware below it. CM_PORTS_RU_UNKNOWN:
+ * not proven either way (the parent's bus numbers, a function's reads or
+ * the children of a bus 0 bridge not read). Both hold the call; *devfn the
+ * function (its device in 7:3, function in 2:0) - the reset one, else the
+ * first not proven, FFh for the parent's own bus numbers, FEh for a child
+ * devnode left (or its list not read) under a parent whose secondary bus
+ * is not read (member i in its no-configuration mode, or the parent's
+ * secondary bus 0: cmWkResetBare). CM_PORTS_RU_SAFE: every function read
+ * and none reset under its devnode, or such a parent with no child
+ * devnode on a complete list. CM_WK_RU_STALE: the operation went stale
+ * while it read (the caller's own currency check ends it). `always` for
+ * the rescan a completed removal owes after its operation went stale: read
+ * whatever the operation's state. Read-only. The worker thread;
+ * PASSIVE_LEVEL.
+ */
+static ULONG cmWkResetUnder(PCM_CFGWK w, ULONG i, ULONG parentBdf,
+                            ULONG parentDn, BOOLEAN always, PULONG devfn)
+{
+    ULONG buses;
+    ULONG sec;
+    ULONG dev;
+    ULONG fn;
+    ULONG fbdf;
+    ULONG id;
+    ULONG type;
+    ULONG sub;
+    ULONG reads;
+    ULONG rf;
+    ULONG rc;
+    ULONG verdict;
+    ULONG before;
+
+    *devfn = 0;
+    if (parentBdf == 0 || parentDn == 0) {
+        return CM_PORTS_RU_SAFE;
+    }
+    if (!always && !cmWkGo(w)) {
+        return CM_WK_RU_STALE;
+    }
+    if (cmWkNoCfg(w, i)) {
+        return cmWkResetBare(w, parentDn, always, devfn);
+    }
+    buses = 0xFFFFFFFFUL;
+    if (!cmWkCfgRead(parentBdf, XHCI_TBT_CFG_BUSES, &buses) ||
+        buses == 0xFFFFFFFFUL) {
+        *devfn = 0xFFUL;
+        return CM_PORTS_RU_UNKNOWN;
+    }
+    sec = (buses >> 8) & 0xFFUL;
+    if (sec == 0) {
+        return cmWkResetBare(w, parentDn, always, devfn);
+    }
+    verdict = CM_PORTS_RU_SAFE;
+    for (dev = 0; dev < 32; dev++) {
+        for (fn = 0; fn < 8; fn++) {
+            fbdf = XHCI_TBT_BDF(sec, dev, fn);
+            id = 0xFFFFFFFFUL;
+            type = 0xFFFFFFFFUL;
+            sub = 0xFFFFFFFFUL;
+            reads = 0;
+            if (!always && !cmWkGo(w)) {
+                return CM_WK_RU_STALE;
+            }
+            if (cmWkCfgRead(fbdf, XHCI_TBT_CFG_ID, &id)) {
+                reads |= CM_PORTS_SUB_R_ID;
+                if (cmWkCfgRead(fbdf, 0x0CUL, &type)) {
+                    reads |= CM_PORTS_SUB_R_TYPE;
+                }
+                if (cmWkCfgRead(fbdf, XHCI_TBT_CFG_BUSES, &sub)) {
+                    reads |= CM_PORTS_SUB_R_BUSES;
+                }
+            }
+            rf = CmPortsResetFn(reads, id, type, sub);
+            rc = CM_PORTS_RCL_NONE;
+            if (rf == CM_PORTS_RF_BUS0) {
+                rc = cmWkResetChild(w, parentDn, id, fbdf, (dev << 3) | fn,
+                                    always);
+                if (rc == CM_WK_RU_STALE) {
+                    return CM_WK_RU_STALE;
+                }
+            }
+            before = verdict;
+            verdict = CmPortsResetJoin(verdict, rf, rc);
+            if (verdict == CM_PORTS_RU_RESET) {
+                /* A bridge at secondary bus 0 under a devnode of its own. */
+                *devfn = (dev << 3) | fn;
+                return CM_PORTS_RU_RESET;
+            }
+            if (verdict == CM_PORTS_RU_UNKNOWN &&
+                before != CM_PORTS_RU_UNKNOWN) {
+                *devfn = (dev << 3) | fn;
+            }
+            /* Function 0 absent, or its header not read, or not
+             * multi-function: the device's other functions are not
+             * looked for. */
+            if (fn == 0 && (rf == CM_PORTS_RF_ABSENT ||
+                            (reads & CM_PORTS_SUB_R_TYPE) == 0 ||
+                            type == 0xFFFFFFFFUL ||
+                            ((type >> 16) & XHCI_TBT_HDR_MF) == 0)) {
+                break;
+            }
+        }
+    }
+    return verdict;
+}
+
+/*
+ * Record 21 section 6.1.5 item 5: whether a recovery's removal step
+ * (RecOn) may make its query now, read under one lock immediately before
+ * it: the worker not leaving, the member active and at the operation's
+ * generation, no removal or no-scan re-enumeration owed and no retirement
+ * barrier or prune owed on it, no suspend having stopped write-backs, the
+ * marks' epoch the attempt's, the worker awake and the member's mark
+ * standing. <= DISPATCH_LEVEL.
+ */
+static BOOLEAN cmWkRecGo(PCM_CFGWK w, ULONG i, ULONG gen)
+{
+    KIRQL irql;
+    ULONG bit;
+    BOOLEAN go;
+
+    bit = 1UL << i;
+    KeAcquireSpinLock(&w->Lock, &irql);
+    go = (BOOLEAN)(!w->Exit && w->Gen[i] == gen && (w->Active & bit) != 0 &&
+                   ((w->ReqGone | w->NoScan | w->Hold | w->PruneOwed) &
+                    bit) == 0 &&
+                   w->RwStop == 0 && w->Rw.Epoch == w->RecEpoch &&
+                   w->Rw.Asleep == 0 && (w->Rw.Wait & bit) != 0);
+    KeReleaseSpinLock(&w->Lock, irql);
+    return go;
+}
+
 /*
  * The single removal step of a vanished child of member i, on the worker:
  * Query_Remove_SubTree, and Remove_SubTree only when that was accepted (a
@@ -1715,6 +2000,7 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
     ULONG answer;
     ULONG start;
     ULONG k;
+    ULONG ru;
     ULONG n;
     ULONG cbus;
     ULONG cslot;
@@ -1837,8 +2123,29 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
         }
         return FALSE;
     }
+    if (cr == CMG_CR_SUCCESS && w->RecOn && !cmWkRecGo(w, i, gen)) {
+        /* Record 21 section 6.1.5 item 5: a recovery's query is not made
+         * once a suspend has begun, the marks moved, the member's gates
+         * rose or its operation went stale: the claim ended as for an id
+         * not read, the attempt stopped. */
+        if (CmEjectClaimEnd(claim, CM_EJ_NO_CR, CM_EJ_NO_CR, 0, 0, 0,
+                            CM_EJ_NONE, 0, 0, vanished, takeover)) {
+            cmWkLog(w, "cm.vanish.takeover", (w->Port[i].Bdf << 8) | 4UL);
+        }
+        cmWkLog(w, "cm.reenum.9x.resume-lost.stopped", w->Port[i].Bdf);
+        return FALSE;
+    }
     if (cr == CMG_CR_SUCCESS) {
         cr = CmCfgmgQueryRemove(&w->Cfgmg, devnode);
+        if (cr == CMG_CR_SUCCESS && w->RecOn) {
+            /* Item 5: the query accepted, the member's one child and so
+             * its whole subtree is going away: its no-IRQ state ended as
+             * a lost claim ends it, before the removal, so no attempt
+             * (outstanding or between two operations) and no journal
+             * entry is left to act through a removed devnode's handle. */
+            CmNiInit(&w->Port[i].Ni, w->Port[i].Bdf);
+            w->Port[i].NiDiagSeen = 0;
+        }
     } else if (cr != CMG_CR_NO_SUCH_DEVNODE) {
         if (CmEjectClaimEnd(claim, CM_EJ_NO_CR, CM_EJ_NO_CR, 0, 0, 0,
                             CM_EJ_NONE, 0, 0, vanished, takeover)) {
@@ -1956,6 +2263,21 @@ removal:
     }
     if (cmWkCurrent(w, i, gen)) {
         return TRUE;
+    }
+    ru = cmWkResetUnder(w, i, w->OpChain ? w->OpChainBdf : w->Port[i].Bdf,
+                        bridge, TRUE, &k);
+    if (ru == CM_PORTS_RU_RESET || ru == CM_PORTS_RU_UNKNOWN) {
+        /* Record 21 section 6.1.5 item 7: another child of `bridge` is a
+         * reset bridge under its started devnode, or that is not proven
+         * otherwise - no rescan through it; the member's re-enumeration
+         * is posted instead, and its own check reads the state again. */
+        cmWkLog(w, ru == CM_PORTS_RU_RESET ? "cm.reenum.9x.reenumerate.held"
+                                           : "cm.reenum.9x.reenumerate.unread",
+                (w->Port[i].Bdf << 8) | k);
+        KeAcquireSpinLock(&w->Lock, &irql);
+        w->ReqReenum |= 1UL << i;
+        KeReleaseSpinLock(&w->Lock, irql);
+        return FALSE;
     }
     if (w->OpChain ? !cmWkEnumAdmitEx(w, i, TRUE, NULL)
                    : !cmWkEnumAdmit(w, i)) {
@@ -2166,6 +2488,12 @@ static ULONG cmWkNumberGo(PVOID context)
     PCM_CFGWK w;
 
     w = (PCM_CFGWK)context;
+    if (cmWkResumeMarked(w, w->NumberMember)) {
+        /* Record 21 section 6.1.3: a suspend during the numbering stops
+         * its forward steps; the operation is refused at its admission,
+         * owed, and parked after the resume. */
+        return 0;
+    }
     if (w->OpChain) {
         /* A chain port's numbering (record 34 section 3.3.7 item 1). */
         return cmWkChainCurrent(w, w->NumberMember, w->NumberGen) ? 1UL
@@ -2219,6 +2547,7 @@ static ULONG cmWkLinkStatus(PCM_CFGWK w, ULONG bdf)
     return 0xFFFFUL;
 }
 
+#define CM_WK_RW_LOST        4UL    /* section 6.1.3: the controller lost  */
 #define CM_WK_NUMBER_TRIES   20UL   /* a chain not answering yet ...      */
 #define CM_WK_NUMBER_WAIT_MS 100UL  /* ... read again this much later     */
 
@@ -2510,6 +2839,819 @@ static VOID cmWkNumber(PCM_CFGWK w, ULONG i, ULONG gen, ULONG bridge)
  * outdated - the one exception being the Remove_SubTree, and its rescan,
  * that complete a query already accepted (cmWkRemoveChild).
  */
+/* Record 21 section 6.1.3: TRUE while member i holds a resume mark
+ * (its operations and chain requests then wait). <= DISPATCH_LEVEL. */
+static BOOLEAN cmWkResumeMarked(PCM_CFGWK w, ULONG i)
+{
+    KIRQL irql;
+    BOOLEAN marked;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    marked = (BOOLEAN)((w->Rw.Wait & (1UL << i)) != 0);
+    KeReleaseSpinLock(&w->Lock, irql);
+    return marked;
+}
+
+/*
+ * Record 21 section 6.1.4 (task 49.12): member i's bridge, still reading
+ * no secondary bus past the grace, has the header read at the suspend
+ * written back through PCI.VXD's configuration service, once per resume:
+ * only a valid copy whose id and header type the bridge still reads, and
+ * only when the bridge reads reset as a whole (no bus numbers, no decode
+ * enabled); the writes of CM_PORTS_HDR_ORDER each read back, then the
+ * command last and read back. RESTORED_HERE when every judged write took,
+ * RESTORE_FAILED when one did not (the wait then ends as at its bound),
+ * WAIT otherwise (nothing written: the wait goes on). RwBusy is set under
+ * the worker's lock, with the epoch and the sleep checked, for the whole
+ * of the writes, and a suspend waits for it before it reads its copy
+ * (CmCfgwkSuspend). The worker thread; PASSIVE_LEVEL; no spin lock held
+ * across a configuration access.
+ */
+/* Record 21 section 6.1.4: whether a write-back under way may make its
+ * next configuration access: no suspend has stopped write-backs, moved the
+ * epoch or put the worker asleep since it was admitted. Checked under the
+ * worker's lock before every access, so a suspend's stop is honoured at
+ * the next one. <= DISPATCH_LEVEL. */
+static BOOLEAN cmWkRestoreGo(PCM_CFGWK w, ULONG epoch)
+{
+    KIRQL irql;
+    BOOLEAN go;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    go = (BOOLEAN)(w->RwStop == 0 && w->Rw.Epoch == epoch &&
+                   w->Rw.Asleep == 0);
+    KeReleaseSpinLock(&w->Lock, irql);
+    return go;
+}
+
+/*
+ * Record 21 section 6.1.4 item 6: after the bridge's write-back, each
+ * function copied at the suspend that reads back from reset (the same id,
+ * header type 0, no decode enabled, no BAR address) has its BARs and
+ * interrupt line written back, each BAR read back, then its command. A
+ * function that reads otherwise (Windows or its driver already at it, or
+ * another device) is left alone. Logged per function:
+ * cm.reenum.9x.resume-restore.fn = (bdf << 8) | result (1 written, 2 a
+ * BAR or the interrupt line not taken, 3 not from reset or another id, 4 not
+ * read whole within
+ * CM_WK_EP_READY_MS, 8 stopped); 2, 4 and 8 are counted in the return,
+ * and the caller keeps every copy for the next sleep. Inside the
+ * caller's RwBusy section; cmWkRestoreGo before each write. The worker
+ * thread; PASSIVE_LEVEL.
+ */
+#define CM_WK_EP_READY_MS    2000UL /* item 6: a function not answering */
+#define CM_WK_EP_STEP_MS     50UL   /* ... read again this often         */
+
+/* Item 6: a function's id, header type dword, command and six BARs, TRUE
+ * only when every read answered, the id answers and none of the others
+ * reads all ones. PASSIVE_LEVEL. */
+static BOOLEAN cmWkReadFunction(ULONG fbdf, PULONG id, PULONG type,
+                                PULONG cmd, PULONG bars)
+{
+    ULONG k;
+    BOOLEAN whole;
+
+    *id = 0xFFFFFFFFUL;
+    *type = 0xFFFFFFFFUL;
+    *cmd = 0xFFFFFFFFUL;
+    whole = (BOOLEAN)(cmWkCfgRead(fbdf, 0x00UL, id) && cmWkIdAnswers(*id) &&
+                      cmWkCfgRead(fbdf, 0x0CUL, type) &&
+                      *type != 0xFFFFFFFFUL &&
+                      cmWkCfgRead(fbdf, 0x04UL, cmd) &&
+                      *cmd != 0xFFFFFFFFUL);
+    for (k = 0; k < 6; k++) {
+        bars[k] = 0xFFFFFFFFUL;
+        if (!cmWkCfgRead(fbdf, 0x10UL + k * 4UL, &bars[k]) ||
+            bars[k] == 0xFFFFFFFFUL) {
+            whole = FALSE;
+        }
+    }
+    return whole;
+}
+
+static ULONG cmWkRestoreFunctions(PCM_CFGWK w, ULONG i, ULONG epoch,
+                                  ULONG secondary)
+{
+    KIRQL irql;
+    ULONG n;
+    ULONG e;
+    ULONG k;
+    ULONG fbdf;
+    ULONG id;
+    ULONG type;
+    ULONG cmd;
+    ULONG back;
+    ULONG result;
+    ULONG bars[6];
+    ULONG devs[CM_PORTS_EP_MAX];
+    ULONG copy[CM_PORTS_EP_MAX][CM_PORTS_EP_DWORDS];
+    ULONG failed;
+    ULONG t;
+    LARGE_INTEGER pause;
+    BOOLEAN upper;
+    BOOLEAN read;
+
+    failed = 0;
+    KeAcquireSpinLock(&w->Lock, &irql);
+    n = w->Port[i].RwEpCount;
+    if (n > CM_PORTS_EP_MAX) {
+        n = CM_PORTS_EP_MAX;
+    }
+    for (e = 0; e < n; e++) {
+        devs[e] = w->Port[i].RwEpDev[e];
+        for (k = 0; k < CM_PORTS_EP_DWORDS; k++) {
+            copy[e][k] = w->Port[i].RwEp[e][k];
+        }
+    }
+    KeReleaseSpinLock(&w->Lock, irql);
+    for (e = 0; e < n; e++) {
+        fbdf = XHCI_TBT_BDF(secondary, devs[e], 0);
+        /* Not read whole yet (a failed read, an id not answering or in
+         * retry status, an all-ones command, header type or BAR): read
+         * again for up to CM_WK_EP_READY_MS, the suspend's stop checked
+         * at each step; still not: result 4, the copies kept. */
+        for (t = 0;; t += CM_WK_EP_STEP_MS) {
+            read = cmWkReadFunction(fbdf, &id, &type, &cmd, bars);
+            if (read || t >= CM_WK_EP_READY_MS || !cmWkRestoreGo(w, epoch)) {
+                break;
+            }
+            CmRelativeMs(&pause, CM_WK_EP_STEP_MS);
+            (VOID)KeDelayExecutionThread(KernelMode, FALSE, &pause);
+        }
+        result = 1;
+        if (!read) {
+            result = cmWkRestoreGo(w, epoch) ? 4UL : 8UL;
+        } else if (id != copy[e][0] || !CmPortsEpCopyValid(id, type) ||
+                   !CmPortsEpReset(cmd, bars)) {
+            result = 3;
+        }
+        /* The six BARs (dwords 3 to 8 of the copy), then 3Ch. */
+        upper = FALSE;
+        for (k = 3; result == 1 && k < CM_PORTS_EP_DWORDS; k++) {
+            if (!cmWkRestoreGo(w, epoch)) {
+                result = 8;
+                break;
+            }
+            back = 0xFFFFFFFFUL;
+            if (!CmCfgmgPciWrite(&w->Cfgmg, fbdf, CM_PORTS_EP_OFFSET[k],
+                                 copy[e][k]) ||
+                !cmWkCfgRead(fbdf, CM_PORTS_EP_OFFSET[k], &back) ||
+                back == 0xFFFFFFFFUL ||
+                (k < CM_PORTS_EP_DWORDS - 1
+                     ? (upper ? back != copy[e][k]
+                              : !CmPortsEpVerify(copy[e][k], back))
+                     : (back & 0xFFUL) != (copy[e][k] & 0xFFUL))) {
+                /* A BAR's address, or 3Ch's interrupt line byte. */
+                result = 2;
+            }
+            /* The dword after a 64-bit memory BAR is its upper half,
+             * judged whole. */
+            upper = (BOOLEAN)(!upper && k < CM_PORTS_EP_DWORDS - 1 &&
+                              (copy[e][k] & 0x7UL) == 0x4UL);
+        }
+        if (result == 1) {
+            back = 0xFFFFFFFFUL;
+            if (!cmWkRestoreGo(w, epoch)) {
+                result = 8;
+            } else if (!CmCfgmgPciWrite(&w->Cfgmg, fbdf, 0x04UL,
+                                        copy[e][1] & 0xFFFFUL) ||
+                       !cmWkCfgRead(fbdf, 0x04UL, &back) ||
+                       !CmPortsHdrVerify(0x04UL, copy[e][1], back)) {
+                result = 2;
+            }
+        }
+        cmWkLog(w, "cm.reenum.9x.resume-restore.fn", (fbdf << 8) | result);
+        if (result == 2 || result == 4 || result == 8) {
+            /* Not whole, or not read: the copies are kept for the next
+             * sleep. */
+            failed++;
+        }
+        if (result == 8) {
+            break;
+        }
+    }
+    return failed;
+}
+
+static ULONG cmWkResumeRestore(PCM_CFGWK w, ULONG i, ULONG waited,
+                               ULONG epoch)
+{
+    KIRQL irql;
+    ULONG bdf;
+    ULONG id;
+    ULONG type;
+    ULONG cmd;
+    ULONG buses;
+    ULONG now;
+    ULONG back;
+    ULONG k;
+    ULONG off;
+    ULONG result;
+    ULONG copy[CM_PORTS_HDR_DWORDS];
+    BOOLEAN valid;
+    BOOLEAN stopped;
+    BOOLEAN fnFailed;
+
+    bdf = w->Port[i].Bdf;
+    stopped = FALSE;
+    fnFailed = FALSE;
+    KeAcquireSpinLock(&w->Lock, &irql);
+    if (w->Rw.Epoch != epoch || w->Rw.Asleep != 0 || w->RwStop != 0 ||
+        !CmPortsRwRestoreDue(CM_PORTS_RW_WAIT, w->Port[i].RwHdrDone,
+                             waited)) {
+        KeReleaseSpinLock(&w->Lock, irql);
+        return CM_PORTS_RW_WAIT;
+    }
+    /* Reached once per resume, whatever it finds. */
+    w->Port[i].RwHdrDone = 1;
+    w->RwBusy = 1;
+    valid = (BOOLEAN)(w->Port[i].RwHdrValid != 0);
+    for (k = 0; k < CM_PORTS_HDR_DWORDS; k++) {
+        copy[k] = w->Port[i].RwHdr[k];
+    }
+    KeReleaseSpinLock(&w->Lock, irql);
+    id = 0xFFFFFFFFUL;
+    type = 0xFFFFFFFFUL;
+    cmd = 0xFFFFFFFFUL;
+    buses = 0xFFFFFFFFUL;
+    if (!cmWkCfgRead(bdf, XHCI_TBT_CFG_ID, &id) ||
+        !cmWkCfgRead(bdf, 0x0CUL, &type) ||
+        !cmWkCfgRead(bdf, CM_PORTS_HDR_CMD, &cmd) ||
+        !cmWkCfgRead(bdf, XHCI_TBT_CFG_BUSES, &buses)) {
+        id = 0xFFFFFFFFUL;
+    }
+    result = CM_PORTS_RW_WAIT;
+    if (!valid) {
+        cmWkLog(w, "cm.reenum.9x.resume-restore", (bdf << 8) | 5UL);
+    } else if (id != copy[0] || ((type >> 16) & 0x7FUL) != 1UL) {
+        cmWkLog(w, "cm.reenum.9x.resume-restore", (bdf << 8) | 4UL);
+    } else if (!CmPortsHdrEligible(cmd, buses)) {
+        cmWkLog(w, "cm.reenum.9x.resume-restore", (bdf << 8) | 7UL);
+    } else if (cmWkNoCfg(w, i) || !cmWkPciRoute(w, bdf)) {
+        cmWkLog(w, "cm.reenum.9x.resume-restore", (bdf << 8) | 3UL);
+    } else {
+        result = CM_PORTS_RW_RESTORED_HERE;
+        for (k = 0; k < CM_PORTS_HDR_WRITES; k++) {
+            off = CM_PORTS_HDR_ORDER[k];
+            now = 0;
+            back = 0xFFFFFFFFUL;
+            if (!cmWkCfgRead(bdf, off, &now) || !cmWkRestoreGo(w, epoch)) {
+                stopped = (BOOLEAN)!cmWkRestoreGo(w, epoch);
+                result = CM_PORTS_RW_RESTORE_FAILED;
+                break;
+            }
+            if (!CmCfgmgPciWrite(&w->Cfgmg, bdf, off,
+                                 CmPortsHdrRestoreValue(off, copy[off / 4],
+                                                        now)) ||
+                !cmWkCfgRead(bdf, off, &back) ||
+                !CmPortsHdrVerify(off, copy[off / 4], back)) {
+                cmWkLog(w, "cm.reenum.9x.resume-restore.at", (off << 24) |
+                                                             (back &
+                                                              0xFFFFFFUL));
+                result = CM_PORTS_RW_RESTORE_FAILED;
+                break;
+            }
+        }
+        if (result == CM_PORTS_RW_RESTORED_HERE && !cmWkRestoreGo(w, epoch)) {
+            stopped = TRUE;
+            result = CM_PORTS_RW_RESTORE_FAILED;
+        }
+        if (result == CM_PORTS_RW_RESTORED_HERE) {
+            back = 0xFFFFFFFFUL;
+            if (!CmCfgmgPciWrite(&w->Cfgmg, bdf, CM_PORTS_HDR_CMD,
+                                 CmPortsHdrRestoreValue(CM_PORTS_HDR_CMD,
+                                                        copy[1], cmd)) ||
+                !cmWkCfgRead(bdf, CM_PORTS_HDR_CMD, &back) ||
+                !CmPortsHdrVerify(CM_PORTS_HDR_CMD, copy[1], back)) {
+                cmWkLog(w, "cm.reenum.9x.resume-restore.at",
+                        (CM_PORTS_HDR_CMD << 24) | (back & 0xFFFFFFUL));
+                result = CM_PORTS_RW_RESTORE_FAILED;
+            }
+        }
+        cmWkLog(w, "cm.reenum.9x.resume-restore",
+                (bdf << 8) |
+                    (stopped ? 8UL
+                             : (result == CM_PORTS_RW_RESTORED_HERE ? 1UL
+                                                                    : 2UL)));
+        if (result == CM_PORTS_RW_RESTORED_HERE &&
+            cmWkRestoreFunctions(w, i, epoch,
+                                 (copy[0x18 / 4] >> 8) & 0xFFUL) != 0) {
+            fnFailed = TRUE;
+        }
+    }
+    KeAcquireSpinLock(&w->Lock, &irql);
+    if (result == CM_PORTS_RW_RESTORE_FAILED) {
+        /* Part-written, or not at all: the copy stays the one to write
+         * back, whatever the bridge reads at the next suspend. */
+        w->Port[i].RwHdrKeep = 1;
+        w->Port[i].RwHdrPartial = 1;
+    } else if (result == CM_PORTS_RW_RESTORED_HERE && fnFailed) {
+        /* The bridge whole, a function behind it not: the wait ends
+         * restored, and every copy stays the one to write back. */
+        w->Port[i].RwHdrKeep = 1;
+        w->Port[i].RwHdrPartial = 1;
+    } else if (result == CM_PORTS_RW_RESTORED_HERE) {
+        w->Port[i].RwHdrPartial = 0;
+    }
+    w->RwBusy = 0;
+    KeReleaseSpinLock(&w->Lock, irql);
+    return result;
+}
+
+/*
+ * Record 21 section 6.1.3 (task 48.35): TRUE when member i's operation is
+ * to be parked, before anything of it runs: it holds a resume mark and the
+ * worker is asleep (between the suspend and the resume), or its bridge
+ * still reads no secondary bus within CM_PORTS_RW_BOUND_MS of the resume.
+ * Otherwise the mark, if any, is cleared with its outcome logged (restored,
+ * unread, timeout, or the controller lost) and the operation goes on. One
+ * HalGetBusData read; never waits. The worker thread; PASSIVE_LEVEL.
+ */
+/*
+ * Record 21 section 6.1.5 item 2: the bridges noted behind a member read
+ * now at its secondary bus `sec` - id, header type, command, bus numbers
+ * of each, through the HAL - and the member's verdict
+ * (CM_PORTS_SUBV_*); the entries that read lost are returned in `lost`.
+ * Read-only. The worker thread; PASSIVE_LEVEL.
+ */
+static ULONG cmWkSubRead(const CM_PORTS_SUB *note, ULONG sec, ULONG waited,
+                         CM_PORTS_SUB *lost)
+{
+    ULONG e[CM_PORTS_SUB_MAX];
+    ULONG k;
+    ULONG n;
+    ULONG fbdf;
+    ULONG reads;
+    ULONG id;
+    ULONG type;
+    ULONG cmd;
+    ULONG buses;
+
+    lost->Count = 0;
+    n = note->Count < CM_PORTS_SUB_MAX ? note->Count : CM_PORTS_SUB_MAX;
+    for (k = 0; k < n; k++) {
+        fbdf = XHCI_TBT_BDF(sec, (note->DevFn[k] >> 3) & 0x1FUL,
+                            note->DevFn[k] & 0x7UL);
+        reads = 0;
+        id = 0xFFFFFFFFUL;
+        type = 0xFFFFFFFFUL;
+        cmd = 0xFFFFFFFFUL;
+        buses = 0xFFFFFFFFUL;
+        if (cmWkCfgRead(fbdf, XHCI_TBT_CFG_ID, &id)) {
+            reads |= CM_PORTS_SUB_R_ID;
+        }
+        if (cmWkCfgRead(fbdf, 0x0CUL, &type)) {
+            reads |= CM_PORTS_SUB_R_TYPE;
+        }
+        if (cmWkCfgRead(fbdf, CM_PORTS_HDR_CMD, &cmd)) {
+            reads |= CM_PORTS_SUB_R_CMD;
+        }
+        if (cmWkCfgRead(fbdf, XHCI_TBT_CFG_BUSES, &buses)) {
+            reads |= CM_PORTS_SUB_R_BUSES;
+        }
+        e[k] = CmPortsSubRead(note->Id[k], reads, id, type, cmd, buses,
+                              waited);
+        if (e[k] == CM_PORTS_SUB_LOST) {
+            lost->DevFn[lost->Count] = note->DevFn[k];
+            lost->Id[lost->Count] = note->Id[k];
+            lost->Count++;
+        }
+    }
+    return CmPortsSubVerdict(e, n);
+}
+
+/*
+ * Record 21 section 6.1.5 item 5: one recovery attempt on member i, inside
+ * its operation `gen`, at the marks' epoch `epoch`. Only a complete list
+ * of the member's immediate children that holds one child is recovered,
+ * and only when that child's instance id names the place (`sec`, the
+ * entry's device and function, either instance form) and spells the
+ * vendor and device of an entry of `lost`: that child goes through the
+ * worker's removal step by the loss's rule (a refusal settled, never
+ * forced; cmWkRecGo before its query; the member's no-IRQ state ended at
+ * an accepted query), with the vanished-child loop's bookkeeping.
+ * CM_WK_REC_EMPTY when a complete list then (or already) shows no child:
+ * the sets pruned to it, the no-IRQ state ended. CM_WK_REC_LEFT when a
+ * child is still there or nothing could be read (tried again);
+ * CM_WK_REC_NOT for an inventory this section does not recover (nothing
+ * asked); CM_WK_REC_STALE when the operation went stale or the attempt was
+ * stopped. The worker thread; PASSIVE_LEVEL.
+ */
+#define CM_WK_REC_EMPTY     0UL
+#define CM_WK_REC_LEFT      1UL
+#define CM_WK_REC_NOT       2UL
+#define CM_WK_REC_STALE     3UL
+
+/* A complete list has shown member i with no child, by a recovery's
+ * removal or another route: the retained, owed and known sets pruned to
+ * it as every complete walk prunes them, and the member's no-IRQ state
+ * ended before its work can resume over devnodes that are gone. */
+static VOID cmWkLostCleanup(PCM_CFGWK w, ULONG i)
+{
+    CM_WK_PORT *p;
+    ULONG none[1];
+
+    p = &w->Port[i];
+    none[0] = 0;
+    p->KnownCount = CmPortsKeepPresent(p->Known, p->KnownCount, none, 0);
+    cmWkIdsKeep(&p->Ret, cmWkIdsPresent(&p->Ret, none, 0));
+    cmWkIdsKeep(&p->Gone, cmWkIdsPresent(&p->Gone, none, 0));
+    CmNiInit(&p->Ni, p->Bdf);
+    p->NiDiagSeen = 0;
+}
+
+static ULONG cmWkLostRemove(PCM_CFGWK w, ULONG i, ULONG gen, ULONG epoch,
+                            ULONG sec, const CM_PORTS_SUB *lost)
+{
+    CM_WK_PORT *p;
+    ULONG bridge;
+    ULONG children[CM_WK_KNOWN];
+    ULONG want[CM_PORTS_PATH_MAX];
+    ULONG count;
+    ULONG id;
+    ULONG k;
+    ULONG n;
+    ULONG removed;
+    ULONG calls;
+    BOOLEAN complete;
+    BOOLEAN current;
+    BOOLEAN named;
+    CM_WK_RETIRED retired;
+    char text[CMG_MAX_DEVICE_ID_LEN + 1];
+
+    p = &w->Port[i];
+    cmWkOp(w, i, gen);
+    bridge = cmWkFindDevnode(w, i);
+    if (!cmWkCurrent(w, i, gen)) {
+        return CM_WK_REC_STALE;
+    }
+    if (bridge == 0) {
+        return CM_WK_REC_LEFT;
+    }
+    complete = FALSE;
+    count = cmWkChildren(w, bridge, children, CM_WK_KNOWN, &complete);
+    if (!cmWkCurrent(w, i, gen)) {
+        return CM_WK_REC_STALE;
+    }
+    if (!complete) {
+        return CM_WK_REC_LEFT;
+    }
+    if (count > 1) {
+        return CM_WK_REC_NOT;
+    }
+    if (count == 1) {
+        if (CmCfgmgDeviceId(&w->Cfgmg, children[0], text, sizeof(text)) !=
+            CMG_CR_SUCCESS) {
+            return cmWkCurrent(w, i, gen) ? CM_WK_REC_LEFT
+                                          : CM_WK_REC_STALE;
+        }
+        text[CMG_MAX_DEVICE_ID_LEN] = '\0';
+        if (!CmPortsIdVenDev(text, sizeof(text), &id)) {
+            return CM_WK_REC_NOT;
+        }
+        named = FALSE;
+        for (k = 0; k < lost->Count && k < CM_PORTS_SUB_MAX; k++) {
+            if (lost->Id[k] != id) {
+                continue;
+            }
+            /* The path form needs the member's path; the BUS_&DEV_&FUNC_
+             * form is matched by location alone (count 0). */
+            n = 0;
+            if (p->PathRead && p->PathCount != 0 &&
+                p->PathCount < CM_PORTS_PATH_MAX) {
+                want[0] = lost->DevFn[k] & 0xFFUL;
+                for (n = 0; n < p->PathCount; n++) {
+                    want[n + 1] = p->Path[n];
+                }
+                n = p->PathCount + 1;
+            }
+            if (cmWkIdNames(text,
+                            XHCI_TBT_BDF(sec, (lost->DevFn[k] >> 3) & 0x1FUL,
+                                         lost->DevFn[k] & 0x7UL),
+                            want, n)) {
+                named = TRUE;
+            }
+        }
+        if (!named) {
+            return CM_WK_REC_NOT;
+        }
+        if (!cmWkCurrent(w, i, gen)) {
+            return CM_WK_REC_STALE;
+        }
+        w->ClaimFull = 0;
+        cmWkRetire(p, children[0], &retired);
+        removed = w->C.Removed;
+        calls = w->C.Calls;
+        w->RecEpoch = epoch;
+        w->RecOn = 1;
+        current = cmWkRemoveChild(w, i, gen, bridge, children[0], FALSE);
+        w->RecOn = 0;
+        if (w->C.Calls != calls) {
+            /* The helper rescanned the bridge. */
+            p->PubGen++;
+        }
+        if (w->C.Removed == removed) {
+            cmWkRestore(p, children[0], &retired);
+        }
+        if (!current) {
+            return CM_WK_REC_STALE;
+        }
+        complete = FALSE;
+        count = cmWkChildren(w, bridge, children, CM_WK_KNOWN, &complete);
+        if (!cmWkCurrent(w, i, gen)) {
+            return CM_WK_REC_STALE;
+        }
+        if (!complete || count != 0) {
+            return CM_WK_REC_LEFT;
+        }
+    }
+    cmWkLostCleanup(w, i);
+    return CM_WK_REC_EMPTY;
+}
+
+/* Section 6.1.5 item 5, outside an attempt (an end of the second phase):
+ * member i's inventory read now - CM_WK_INV_EMPTY when a complete list
+ * shows no child (cleaned up as above), CM_WK_INV_CHILD when the list
+ * holds a child, CM_WK_INV_UNKNOWN when the member's devnode or its list
+ * could not be read (nothing proven). Read-only CONFIGMG calls, outside
+ * any operation (only a stop ends them). The worker thread;
+ * PASSIVE_LEVEL. */
+#define CM_WK_INV_EMPTY     0UL
+#define CM_WK_INV_CHILD     1UL
+#define CM_WK_INV_UNKNOWN   2UL
+/* An inventory that stays unread ends the wait this long after the
+ * resume all the same, the no-IRQ state ended with it. */
+#define CM_WK_INV_BOUND_MS  (2UL * CM_PORTS_RW_BOUND_MS)
+
+static ULONG cmWkLostInv(PCM_CFGWK w, ULONG i)
+{
+    ULONG bridge;
+    ULONG children[1];
+    ULONG count;
+    BOOLEAN complete;
+
+    cmWkOp(w, CM_WK_NO_OP, 0);
+    bridge = cmWkFindDevnode(w, i);
+    if (bridge == 0 || !cmWkGo(w)) {
+        return CM_WK_INV_UNKNOWN;
+    }
+    complete = FALSE;
+    count = cmWkChildren(w, bridge, children, 1, &complete);
+    if (!cmWkGo(w)) {
+        return CM_WK_INV_UNKNOWN;
+    }
+    if (count != 0) {
+        /* A child was read, whether or not the list went on. */
+        return CM_WK_INV_CHILD;
+    }
+    if (!complete) {
+        return CM_WK_INV_UNKNOWN;
+    }
+    cmWkLostCleanup(w, i);
+    return CM_WK_INV_EMPTY;
+}
+
+/* Record 21 section 6.1.5 item 4: TRUE while member i owes a recovery
+ * (its mark then stands). <= DISPATCH_LEVEL. */
+static BOOLEAN cmWkLostOwed(PCM_CFGWK w, ULONG i)
+{
+    KIRQL irql;
+    BOOLEAN owed;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    owed = (BOOLEAN)(w->Port[i].RwLost != 0 &&
+                     (w->Rw.Wait & (1UL << i)) != 0);
+    KeReleaseSpinLock(&w->Lock, irql);
+    return owed;
+}
+
+/* `op` TRUE on the member-operation path (`gen` its operation), where
+ * section 6.1.5's removal may be made; FALSE from the check that resolves
+ * a mark with no operation owed. */
+static BOOLEAN cmWkResumeParked(PCM_CFGWK w, ULONG i, BOOLEAN op, ULONG gen)
+{
+    KIRQL irql;
+    CM_WK_PORT *p;
+    CM_PORTS_SUB note;
+    CM_PORTS_SUB lost;
+    ULONG bit;
+    ULONG from;
+    ULONG buses;
+    ULONG waited;
+    ULONG outcome;
+    ULONG epoch;
+    ULONG verdict;
+    ULONG step;
+    ULONG sec;
+    ULONG rec;
+    ULONG lostAt;
+    ULONG code;
+    BOOLEAN said;
+    BOOLEAN marked;
+    BOOLEAN asleep;
+    BOOLEAN read;
+    BOOLEAN cleared;
+    BOOLEAN tried;
+    BOOLEAN retire;
+    BOOLEAN first;
+
+    p = &w->Port[i];
+    bit = 1UL << i;
+    KeAcquireSpinLock(&w->Lock, &irql);
+    marked = (BOOLEAN)((w->Rw.Wait & bit) != 0);
+    asleep = (BOOLEAN)(w->Rw.Asleep != 0);
+    from = w->Rw.From;
+    epoch = w->Rw.Epoch;
+    note = p->RwSub;
+    tried = (BOOLEAN)(p->RwLostTried != 0);
+    lostAt = p->RwLostAt;
+    KeReleaseSpinLock(&w->Lock, irql);
+    if (!marked) {
+        return FALSE;
+    }
+    if (asleep) {
+        return TRUE;
+    }
+    waited = cmWkSince(from);
+    retire = FALSE;
+    code = 0;
+    said = FALSE;
+    if (cmWkNoCfg(w, i)) {
+        outcome = CM_WK_RW_LOST;
+    } else {
+        buses = 0;
+        read = (BOOLEAN)(cmWkCfgRead(p->Bdf, XHCI_TBT_CFG_BUSES, &buses) !=
+                         0);
+        outcome = CmPortsResumeWait(read, buses, waited,
+                                    CM_PORTS_RW_BOUND_MS);
+        if (outcome == CM_PORTS_RW_WAIT) {
+            /* Record 21 section 6.1.4: past the grace, the suspend's copy
+             * written back once; restored by it (or failed part-way, as
+             * at the bound), the wait ends here. */
+            outcome = cmWkResumeRestore(w, i, waited, epoch);
+            if (outcome == CM_PORTS_RW_WAIT) {
+                return TRUE;
+            }
+            if (outcome == CM_PORTS_RW_RESTORED_HERE) {
+                /* The bus numbers as the write-back left them. */
+                buses = 0;
+                read = (BOOLEAN)(cmWkCfgRead(p->Bdf, XHCI_TBT_CFG_BUSES,
+                                             &buses) != 0);
+            }
+        }
+        if (outcome == CM_PORTS_RW_RESTORED ||
+            outcome == CM_PORTS_RW_RESTORED_HERE) {
+            /* Record 21 section 6.1.5: the wait's own outcome latched for
+             * this resume (a later check reads a configured member and
+             * cannot tell who restored it). */
+            KeAcquireSpinLock(&w->Lock, &irql);
+            if (w->RwStop == 0 && w->Rw.Epoch == epoch &&
+                w->Rw.Asleep == 0 && (w->Rw.Wait & bit) != 0) {
+                if (p->RwHow == 0) {
+                    p->RwHow = outcome;
+                } else {
+                    outcome = p->RwHow;
+                }
+            }
+            KeReleaseSpinLock(&w->Lock, irql);
+        }
+        if ((outcome == CM_PORTS_RW_RESTORED ||
+             outcome == CM_PORTS_RW_RESTORED_HERE) &&
+            note.Count != 0) {
+            /* Section 6.1.5: the second phase, the mark still standing. */
+            sec = (buses >> 8) & 0xFFUL;
+            lost.Count = 0;
+            verdict = CM_PORTS_SUBV_UNDECIDED;
+            if (read && buses != 0xFFFFFFFFUL && sec != 0) {
+                verdict = cmWkSubRead(&note, sec, waited, &lost);
+            }
+            step = CmPortsLostStep(outcome, verdict, waited, tried,
+                                   cmWkSince(lostAt));
+            if (step == CM_PORTS_LOST_WAIT) {
+                return TRUE;
+            }
+            if (step == CM_PORTS_LOST_REMOVE) {
+                first = FALSE;
+                KeAcquireSpinLock(&w->Lock, &irql);
+                if (w->RwStop == 0 && w->Rw.Epoch == epoch &&
+                    w->Rw.Asleep == 0 && (w->Rw.Wait & bit) != 0) {
+                    if (p->RwLost == 0) {
+                        p->RwLost = 1;
+                        first = TRUE;
+                    }
+                    if (!op && p->RwLostPost == 0) {
+                        /* Item 4: no operation is owed - the member's
+                         * re-enumeration posted (the request word alone;
+                         * taken at the worker's next tick). */
+                        p->RwLostPost = 1;
+                        w->ReqReenum |= bit;
+                    }
+                }
+                KeReleaseSpinLock(&w->Lock, irql);
+                if (first) {
+                    cmWkLog(w, "cm.reenum.9x.resume-lost",
+                            (p->Bdf << 8) | (lost.Count & 0xFFUL));
+                }
+                if (!op) {
+                    return TRUE;
+                }
+                rec = cmWkLostRemove(w, i, gen, epoch, sec, &lost);
+                cmWkOp(w, CM_WK_NO_OP, 0);
+                if (rec == CM_WK_REC_EMPTY) {
+                    outcome = CM_PORTS_RW_LOST_REMOVED;
+                    retire = TRUE;
+                } else if (rec == CM_WK_REC_NOT) {
+                    /* Not an inventory this section recovers: nothing
+                     * was asked. */
+                    outcome = CM_PORTS_RW_LOST_KEPT;
+                    code = 0xFDUL;
+                } else {
+                    if (rec == CM_WK_REC_LEFT) {
+                        KeAcquireSpinLock(&w->Lock, &irql);
+                        if (w->RwStop == 0 && w->Rw.Epoch == epoch &&
+                            w->Rw.Asleep == 0 && (w->Rw.Wait & bit) != 0) {
+                            p->RwLostTried = 1;
+                            p->RwLostAt = cmWkNowTicks();
+                        }
+                        KeReleaseSpinLock(&w->Lock, irql);
+                    }
+                    return TRUE;
+                }
+            } else {
+                /* Every other end of the second phase reads the inventory
+                 * first: one that another route (a vanished child's
+                 * transaction, an accepted query's, the user) has emptied
+                 * while the mark parked the member is cleaned up before
+                 * the mark lets its no-IRQ work go on. */
+                rec = cmWkLostInv(w, i);
+                if (rec == CM_WK_INV_UNKNOWN) {
+                    /* Nothing proves the devnodes the member's no-IRQ
+                     * state describes are still there: parked and read
+                     * again, and past its own bound that state is ended
+                     * before the mark lets its work go on. */
+                    if (waited < CM_WK_INV_BOUND_MS) {
+                        return TRUE;
+                    }
+                    CmNiInit(&p->Ni, p->Bdf);
+                    p->NiDiagSeen = 0;
+                    code = 0xFCUL;
+                }
+                if (step == CM_PORTS_LOST_KEPT) {
+                    /* The bound admits no new removal. */
+                    if (rec == CM_WK_INV_EMPTY) {
+                        outcome = CM_PORTS_RW_LOST_REMOVED;
+                        retire = TRUE;
+                    } else {
+                        outcome = CM_PORTS_RW_LOST_KEPT;
+                    }
+                } else if (step == CM_PORTS_LOST_END_KEEP) {
+                    if (code == 0) {
+                        code = 0xFEUL;
+                    }
+                } else {
+                    /* Settled: the note has done its work (logged with no
+                     * entry lost, unless the list's own code is). */
+                    retire = TRUE;
+                    said = TRUE;
+                }
+            }
+        }
+    }
+    /* The lock was dropped for the reads: a suspend or a resume since (a
+     * later standby) keeps the mark it set, and the member is checked
+     * again (still parked now). Section 6.1.5 item 6: nor while a suspend
+     * is taking its copies (RwStop), and only a mark that still stands is
+     * ended - one step, so nothing of a newer standby is consumed. */
+    KeAcquireSpinLock(&w->Lock, &irql);
+    cleared = (BOOLEAN)(w->RwStop == 0 && (w->Rw.Wait & bit) != 0 &&
+                        CmPortsRwClear(&w->Rw, bit, epoch));
+    if (cleared) {
+        p->RwLost = 0;
+        if (outcome == CM_PORTS_RW_RESTORED ||
+            outcome == CM_PORTS_RW_RESTORED_HERE ||
+            outcome == CM_PORTS_RW_LOST_REMOVED ||
+            outcome == CM_PORTS_RW_LOST_KEPT) {
+            /* Record 21 section 6.1.4: the member's bridge is back, so
+             * its copy is no longer pending; the next suspend reads a
+             * fresh one. */
+            p->RwHdrKeep = 0;
+        }
+        if (retire) {
+            p->RwSub.Count = 0;
+        }
+    }
+    KeReleaseSpinLock(&w->Lock, irql);
+    if (!cleared) {
+        return TRUE;
+    }
+    if (code != 0 || said) {
+        cmWkLog(w, "cm.reenum.9x.resume-lost", (p->Bdf << 8) | code);
+    }
+    cmWkLog(w, "cm.reenum.9x.resume-wait", (p->Bdf << 8) | outcome);
+    cmWkLog(w, "cm.reenum.9x.resume-wait.ms", waited);
+    return FALSE;
+}
+
 static VOID cmWkTagWindow(PCM_CFGWK w, ULONG members);
 
 static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
@@ -2523,6 +3665,7 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
     ULONG idCount;
     ULONG c;
     ULONG k;
+    ULONG ru;
     ULONG id;
     ULONG answers;
     ULONG cr;
@@ -2617,6 +3760,21 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
              * re-enumeration. */
             return TRUE;
         }
+    }
+    ru = cmWkResetUnder(w, i, p->Bdf, bridge, FALSE, &k);
+    if (ru == CM_PORTS_RU_RESET || ru == CM_PORTS_RU_UNKNOWN) {
+        /* Record 21 section 6.1.5 item 7: a reset bridge under a devnode
+         * that stayed (a recovery refused, or not this section's), or
+         * that is not proven otherwise: the member is not re-enumerated
+         * through it. Done, not failed: nothing retries it; a later
+         * request reads the state again. */
+        cmWkLog(w, ru == CM_PORTS_RU_RESET ? "cm.reenum.9x.reenumerate.held"
+                                           : "cm.reenum.9x.reenumerate.unread",
+                (p->Bdf << 8) | k);
+        return TRUE;
+    }
+    if (!cmWkCurrent(w, i, gen)) {
+        return TRUE;
     }
     if (!cmWkEnumAdmit(w, i)) {
         /* The retirement barrier rose while this operation ran (the
@@ -2894,6 +4052,7 @@ static BOOLEAN cmWkChainDown(PCM_CFGWK w, ULONG i, ULONG gen, ULONG dn,
     ULONG count;
     ULONG c;
     ULONG k;
+    ULONG ru;
     ULONG id;
     ULONG answers;
     ULONG cr;
@@ -2933,6 +4092,20 @@ static BOOLEAN cmWkChainDown(PCM_CFGWK w, ULONG i, ULONG gen, ULONG dn,
         }
     }
     if (!cmWkChainCurrent(w, i, gen) || w->ClaimFull) {
+        return FALSE;
+    }
+    ru = cmWkResetUnder(w, i, portBdf, dn, FALSE, &k);
+    if (ru == CM_PORTS_RU_RESET || ru == CM_PORTS_RU_UNKNOWN) {
+        /* Record 21 section 6.1.5 item 7: a child kept (its id still
+         * answers) whose bridge reads reset under its started devnode, or
+         * that is not proven otherwise: the chain port is not
+         * re-enumerated through it. Dealt with. */
+        cmWkLog(w, ru == CM_PORTS_RU_RESET ? "cm.chain.9x.reenumerate.held"
+                                           : "cm.chain.9x.reenumerate.unread",
+                (portBdf << 8) | k);
+        return TRUE;
+    }
+    if (!cmWkChainCurrent(w, i, gen)) {
         return FALSE;
     }
     if (!cmWkEnumAdmitEx(w, i, TRUE, &gen)) {
@@ -3044,6 +4217,11 @@ static BOOLEAN cmWkChainUp(PCM_CFGWK w, ULONG i, ULONG gen, ULONG dn,
     if (!cmWkChainCurrent(w, i, gen)) {
         return FALSE;
     }
+    if (cmWkResumeMarked(w, i)) {
+        /* Record 21 section 6.1.3: a suspend stopped the numbering (its
+         * go callback refused, its writes undone): owed, not refused. */
+        return FALSE;
+    }
     if (r.Outcome == XHCI_TBT_BRNUM_NONE && r.Functions == 0) {
         /* Nothing chained behind it yet. */
         return FALSE;
@@ -3150,6 +4328,7 @@ static BOOLEAN cmWkChainOp(PCM_CFGWK w, ULONG i, ULONG gen, BOOLEAN up,
             all = FALSE;
             continue;
         }
+        w->OpChainBdf = set.Port[k].Bdf;
         if (down && !cmWkChainDown(w, i, gen, dn, set.Port[k].Bdf)) {
             all = FALSE;
             continue;
@@ -3223,23 +4402,28 @@ static ULONG cmWkNiGate(PCM_CFGWK w, ULONG i)
  * in flight (EnumBusy) under one lock, so a retirement hold raised after
  * this either refused it or finds it busy and the removal-only request
  * follows its completion (record 22 section 7.7, CmCfgwkEnumBusy);
- * cmWkEnumDone ends it. */
-static BOOLEAN cmWkNiAdmit(PCM_CFGWK w, ULONG i)
+ * cmWkEnumDone ends it. The resume mark is read under the same lock
+ * (record 21 section 6.1.3): a suspend that marked the member since the
+ * pass's own check holds the operation (CM_PORTS_NI_HELD), which the
+ * caller keeps outstanding for after the wait. CM_PORTS_NI_*. */
+static ULONG cmWkNiAdmit(PCM_CFGWK w, ULONG i)
 {
     KIRQL irql;
-    BOOLEAN open;
+    ULONG admit;
 
     KeAcquireSpinLock(&w->Lock, &irql);
-    open = (BOOLEAN)(!w->Exit && (w->Active & (1UL << i)) != 0 &&
-                     ((w->ReqGone | w->NoScan | w->NiClaimLost | w->Hold |
-                       w->PruneOwed) &
-                      (1UL << i)) == 0 &&
-                     !CmEjectVanishHeld(w->Port[i].Bdf));
-    if (open) {
+    admit = CmPortsNiAdmit(
+        (BOOLEAN)(!w->Exit && (w->Active & (1UL << i)) != 0 &&
+                  ((w->ReqGone | w->NoScan | w->NiClaimLost | w->Hold |
+                    w->PruneOwed) &
+                   (1UL << i)) == 0 &&
+                  !CmEjectVanishHeld(w->Port[i].Bdf)),
+        w->Rw.Wait, 1UL << i);
+    if (admit == CM_PORTS_NI_GO) {
         w->EnumBusy |= 1UL << i;
     }
     KeReleaseSpinLock(&w->Lock, irql);
-    return open;
+    return admit;
 }
 
 /* ---- the tunnel id (design record 31 section 5, task 44.3) ------------ */
@@ -4120,6 +5304,54 @@ static VOID cmWkNiLogs(PCM_CFGWK w, PCM_NI_MEMBER m)
     }
 }
 
+/* One no-IRQ operation handed out (CmNiNext, CmNiAgain) made and its
+ * result taken, as admitted: CM_PORTS_NI_GO made; CM_PORTS_NI_CLOSED the
+ * gate closed since the pass sampled it (not made, taken as a failure);
+ * CM_PORTS_NI_HELD a resume mark stands (record 21 section 6.1.3): not
+ * made, not taken, left outstanding for CmNiAgain after the wait. The
+ * worker thread; PASSIVE_LEVEL. */
+static ULONG cmWkNiMake(PCM_CFGWK w, ULONG i, PCM_NI_MEMBER m,
+                        CM_NI_CTX *ctx, const CM_NI_OP *op)
+{
+    CM_NI_RES res;
+    ULONG state;
+    ULONG admit;
+
+    state = op->Dev < CM_NOIRQ_DEVICES ? m->Dev[op->Dev].State : 0;
+    admit = cmWkNiAdmit(w, i);
+    if (admit == CM_PORTS_NI_HELD) {
+        cmWkLog(w, "cm.reenum.9x.noirq.held",
+                (w->Port[i].Bdf << 8) | (op->Kind & 0xFFUL));
+        return admit;
+    }
+    if (admit == CM_PORTS_NI_GO) {
+        cmWkNiExec(w, i, op, &res);
+        cmWkEnumDone(w, i);
+    } else {
+        CmZero(&res, sizeof(res));
+        res.Id = op->Id;
+        res.Cr = CMG_CR_FAILURE;
+    }
+    ctx->Now = cmWkNiNow(w);
+    ctx->Gate = cmWkNiGate(w, i);
+    CmNiTake(m, ctx, &res);
+    cmWkNiLogs(w, m);
+    if (op->Dev < CM_NOIRQ_DEVICES && m->Dev[op->Dev].Used &&
+        m->Dev[op->Dev].State != state &&
+        (m->Dev[op->Dev].State == CM_NI_S_EXCLUDED ||
+         m->Dev[op->Dev].State == CM_NI_S_FAILED ||
+         m->Dev[op->Dev].State == CM_NI_S_DONE ||
+         m->Dev[op->Dev].State == CM_NI_S_ACTIVE)) {
+        cmWkLog(w, m->Dev[op->Dev].State == CM_NI_S_DONE ||
+                       m->Dev[op->Dev].State == CM_NI_S_ACTIVE
+                       ? "cm.reenum.9x.noirq.after"
+                       : "cm.reenum.9x.noirq.refused",
+                (m->Dev[op->Dev].Bdf << 16) |
+                    (m->Dev[op->Dev].State << 8) | m->Dev[op->Dev].Why);
+    }
+    return admit;
+}
+
 /* One tick of member i's no-IRQ work: the walk while its window is open,
  * then every operation the pass hands out. */
 static VOID cmWkNoIrq(PCM_CFGWK w, ULONG i)
@@ -4127,9 +5359,7 @@ static VOID cmWkNoIrq(PCM_CFGWK w, ULONG i)
     CM_NI_MEMBER *m;
     CM_NI_CTX ctx;
     CM_NI_OP op;
-    CM_NI_RES res;
     ULONG ops;
-    ULONG state;
     ULONG walkFrom;
 
     m = &w->Port[i].Ni;
@@ -4143,10 +5373,33 @@ static VOID cmWkNoIrq(PCM_CFGWK w, ULONG i)
         CmNiCredit(m, ctx.Now - w->Port[i].NiEnd - CM_WK_TICK_MS, ctx.Now);
         cmWkNiLogs(w, m);
     }
+    if (cmWkResumeMarked(w, i)) {
+        /* Record 21 section 6.1.3: parked whole until Windows has
+         * restored the bridge; nothing handed out, nothing consumed, and
+         * the time parked credited at the next pass as above. */
+        return;
+    }
     ctx.Switch = w->NoIrq;
     ctx.Gate = cmWkNiGate(w, i);
     ctx.Stor98 = CM_NI_STOR98_FAILED;
     ctx.WalkHold = 0;
+    /* Section 6.1.3: an operation a suspend held at its admission is made
+     * first, before the walk and the pass change the entries it names,
+     * its clock restarted (the time parked was credited above) - unless
+     * its attempt ended meanwhile (past its deadline), when CmNiAgain
+     * takes it as not made. */
+    if (m->Out.Id != 0 && ctx.Gate) {
+        ctx.Stor98 = cmWkNiStor98(w);
+    }
+    if (CmNiAgain(m, &ctx, &op)) {
+        if (cmWkNiMake(w, i, m, &ctx, &op) == CM_PORTS_NI_HELD) {
+            return;
+        }
+    }
+    cmWkNiLogs(w, m);
+    ctx.Now = cmWkNiNow(w);
+    ctx.Gate = cmWkNiGate(w, i);
+    ctx.Stor98 = CM_NI_STOR98_FAILED;
     if (ctx.Gate && CmNiWindow(m)) {
         walkFrom = ctx.Now;
         ctx.WalkHold = cmWkNiWalk(w, i);
@@ -4166,33 +5419,12 @@ static VOID cmWkNoIrq(PCM_CFGWK w, ULONG i)
         ctx.Stor98 = cmWkNiStor98(w);
     }
     ops = 0;
-    while (ops++ < CM_WK_NI_OPS && CmNiNext(m, &ctx, &op)) {
-        state = m->Dev[op.Dev].State;
-        if (cmWkNiAdmit(w, i)) {
-            cmWkNiExec(w, i, &op, &res);
-            cmWkEnumDone(w, i);
-        } else {
-            /* The gate closed since the pass sampled it: not made. */
-            CmZero(&res, sizeof(res));
-            res.Id = op.Id;
-            res.Cr = CMG_CR_FAILURE;
-        }
-        ctx.Now = cmWkNiNow(w);
-        ctx.Gate = cmWkNiGate(w, i);
-        CmNiTake(m, &ctx, &res);
-        cmWkNiLogs(w, m);
-        if (op.Dev < CM_NOIRQ_DEVICES && m->Dev[op.Dev].Used &&
-            m->Dev[op.Dev].State != state &&
-            (m->Dev[op.Dev].State == CM_NI_S_EXCLUDED ||
-             m->Dev[op.Dev].State == CM_NI_S_FAILED ||
-             m->Dev[op.Dev].State == CM_NI_S_DONE ||
-             m->Dev[op.Dev].State == CM_NI_S_ACTIVE)) {
-            cmWkLog(w, m->Dev[op.Dev].State == CM_NI_S_DONE ||
-                           m->Dev[op.Dev].State == CM_NI_S_ACTIVE
-                           ? "cm.reenum.9x.noirq.after"
-                           : "cm.reenum.9x.noirq.refused",
-                    (m->Dev[op.Dev].Bdf << 16) |
-                        (m->Dev[op.Dev].State << 8) | m->Dev[op.Dev].Why);
+    /* Section 6.1.3: a suspend marking the member during an operation
+     * stops the pass before the next one is taken (none is consumed). */
+    while (ops++ < CM_WK_NI_OPS && !cmWkResumeMarked(w, i) &&
+           CmNiNext(m, &ctx, &op)) {
+        if (cmWkNiMake(w, i, m, &ctx, &op) == CM_PORTS_NI_HELD) {
+            break;
         }
     }
     cmWkNiDiagCopy(w, i);
@@ -4546,6 +5778,8 @@ static VOID NTAPI cmWkThread(PVOID context)
     ULONG vanish;
     ULONG failed;
     ULONG failedVanish;
+    ULONG parked;
+    ULONG parkedVanish;
     ULONG gen[XHCI_TBT_MAX_TUNNELS];
     ULONG retried;
     ULONG done;
@@ -4608,6 +5842,13 @@ static VOID NTAPI cmWkThread(PVOID context)
         w->ReqReenum = 0;
         w->ReqVanish = 0;
         retried = 0;
+        /* Record 21 section 6.1.3: the operations the resume's wait
+         * parked, taken again at each pass (every CM_WK_TICK_MS while
+         * a mark stands, below); a newer post merges into them. */
+        reenum |= w->ResumePark;
+        vanish |= w->ResumeParkVanish;
+        w->ResumePark = 0;
+        w->ResumeParkVanish = 0;
         if (w->Retry != 0 && cmWkSince(w->RetryAt) >= CM_WK_RETRY_MS) {
             retried = w->Retry & ~reenum;
             reenum |= w->Retry;
@@ -4702,6 +5943,8 @@ static VOID NTAPI cmWkThread(PVOID context)
         }
         failed = 0;
         failedVanish = 0;
+        parked = 0;
+        parkedVanish = 0;
         done = 0;
         go = TRUE;
         if (w->OpenState == CM_CFGWK_OPEN_OK && prune != 0) {
@@ -4843,11 +6086,15 @@ static VOID NTAPI cmWkThread(PVOID context)
                     !cmWkCurrent(w, i, gen[i])) {
                     continue;
                 }
-                if (CmNiInTransaction(&w->Port[i].Ni)) {
+                if (CmNiInTransaction(&w->Port[i].Ni) &&
+                    !cmWkLostOwed(w, i)) {
                     /* Record 28: this driver's re-enumerations of the
                      * member queue behind its no-IRQ attempt (bounded by
                      * the attempt's budget); a loss aborts the attempt
-                     * through its gate instead. */
+                     * through its gate instead. Record 21 section 6.1.5
+                     * item 4: a member with a recovery owed goes on to
+                     * its check (a removal is no re-enumeration), and the
+                     * queueing is read again after it. */
                     failed |= 1UL << i;
                     failedVanish |= vanish & (1UL << i);
                     continue;
@@ -4871,6 +6118,22 @@ static VOID NTAPI cmWkThread(PVOID context)
                     /* Its prune walk is still owed (read now, a newer
                      * prune included): no re-enumeration before it,
                      * tried again later. */
+                    failed |= 1UL << i;
+                    failedVanish |= vanish & (1UL << i);
+                    continue;
+                }
+                if (cmWkResumeParked(w, i, TRUE, gen[i])) {
+                    /* Record 21 section 6.1.3: Windows has not restored
+                     * the bridge yet: parked, not failed. */
+                    parked |= 1UL << i;
+                    parkedVanish |= vanish & (1UL << i);
+                    continue;
+                }
+                if (CmNiInTransaction(&w->Port[i].Ni)) {
+                    /* Section 6.1.5 item 4: the wait ended with the member
+                     * still inside a no-IRQ attempt (its recovery let it
+                     * through above): queued behind the attempt as any
+                     * re-enumeration is. */
                     failed |= 1UL << i;
                     failedVanish |= vanish & (1UL << i);
                     continue;
@@ -4899,6 +6162,14 @@ static VOID NTAPI cmWkThread(PVOID context)
                 } else if (cmWkCurrent(w, i, gen[i])) {
                     /* Done, not merely gone stale. */
                     done |= 1UL << i;
+                }
+            }
+            /* Record 21 section 6.1.3: a mark with no operation to park
+             * is resolved on its own, so it never holds the member's chain
+             * requests or no-IRQ work for longer than the wait. */
+            for (i = 0; i < w->Members; i++) {
+                if ((parked & (1UL << i)) == 0 && cmWkResumeMarked(w, i)) {
+                    (VOID)cmWkResumeParked(w, i, FALSE, 0);
                 }
             }
             /* Record 34 section 3.3.7: the chain requests, after the
@@ -4955,6 +6226,7 @@ static VOID NTAPI cmWkThread(PVOID context)
                     !CmNiInTransaction(&w->Port[i].Ni) &&
                     !cmWkDeferOwed(w, i) && !cmWkGoneOwed(w, i) &&
                     !cmWkHeld(w, i) && !CmEjectVanishHeld(w->Port[i].Bdf) &&
+                    !cmWkResumeMarked(w, i) &&
                     cmWkPruneClear(w, i) && !cmWkNoCfg(w, i)) {
                     cmWkLeave(w);
                     if (!cmWkEnter(w)) {
@@ -5073,6 +6345,11 @@ static VOID NTAPI cmWkThread(PVOID context)
                 if (!CmNiBusy(&w->Port[i].Ni)) {
                     continue;
                 }
+                if (cmWkResumeMarked(w, i)) {
+                    /* Record 21 section 6.1.3: parked with the member
+                     * until Windows has restored its bridge. */
+                    continue;
+                }
                 cmWkLeave(w);
                 go = cmWkEnter(w);
                 if (go) {
@@ -5084,6 +6361,11 @@ static VOID NTAPI cmWkThread(PVOID context)
 
         KeAcquireSpinLock(&w->Lock, &irql);
         w->InCall = 0;
+        /* Record 21 section 6.1.3: parked operations kept owed, whatever
+         * their generation (a newer post merged into them is the one taken
+         * again). */
+        w->ResumePark |= parked;
+        w->ResumeParkVanish |= parkedVanish;
         for (i = 0; i < w->Members; i++) {
             /* A failure is owed only while its request is still the
              * member's latest: a newer post redoes it anyway. */
@@ -5105,6 +6387,7 @@ static VOID NTAPI cmWkThread(PVOID context)
             w->MarkFrom = cmWkNowTicks();
         }
         timed = (BOOLEAN)(w->MarkOpen || w->PruneOwed != 0 ||
+                          (w->Rw.Wait != 0 && w->Rw.Asleep == 0) ||
                           (w->ReqGone & ~w->Defer) != 0 || w->TagOpen != 0 ||
                           (w->ChainUp | w->ChainDown) != 0 ||
                           w->ChainMarkCount != 0);
@@ -5320,6 +6603,281 @@ VOID CmCfgwkTakeover(PCM_CFGWK w, ULONG members)
     KeAcquireSpinLock(&w->Lock, &irql);
     w->Takeover = members;
     KeReleaseSpinLock(&w->Lock, irql);
+}
+
+/*
+ * Record 21 section 6.1.3 (task 48.35): at a system sleep, each active
+ * member whose bridge reads a secondary bus marked, and the worker put
+ * asleep (a marked member's operation parked until CmCfgwkResumed); a
+ * member that does not read one is not marked, and earlier marks are
+ * replaced. PASSIVE_LEVEL (HalGetBusData), the NHI's thread.
+ */
+VOID CmCfgwkSuspend(PCM_CFGWK w)
+{
+    KIRQL irql;
+    ULONG active;
+    ULONG mask;
+    ULONG buses;
+    ULONG i;
+    ULONG k;
+    ULONG answered;
+    ULONG again;
+    ULONG buses2;
+    ULONG busy;
+    ULONG hdr[CM_PORTS_HDR_DWORDS];
+    LARGE_INTEGER pause;
+    BOOLEAN read;
+    BOOLEAN valid;
+    BOOLEAN keep;
+    BOOLEAN partial;
+    BOOLEAN ok;
+    ULONG epn;
+    ULONG sec;
+    ULONG dev;
+    ULONG fbdf;
+    ULONG v;
+    ULONG v2;
+    ULONG t;
+    ULONG j;
+    ULONG epDev[CM_PORTS_EP_MAX];
+    ULONG ep[CM_PORTS_EP_MAX][CM_PORTS_EP_DWORDS];
+    CM_PORTS_SUB fresh;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    active = w->Active;
+    /* Record 21 section 6.1.4: no write-back begins from here, one under
+     * way is waited for (its writes are bounded: two dozen configuration
+     * accesses), and every earlier copy is forgotten before a new one is
+     * read. */
+    w->RwStop = 1;
+    busy = w->RwBusy;
+    KeReleaseSpinLock(&w->Lock, irql);
+    /* The handoff is acknowledged, never timed out: a write-back admitted
+     * before the stop checks it before each write (cmWkRestoreGo) and
+     * clears RwBusy as it returns, so no write of it can follow this
+     * point; one configuration access is the longest it can take. */
+    for (k = 0; busy != 0; k++) {
+        CmRelativeMs(&pause, 10);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &pause);
+        KeAcquireSpinLock(&w->Lock, &irql);
+        busy = w->RwBusy;
+        KeReleaseSpinLock(&w->Lock, irql);
+    }
+    if (k != 0) {
+        cmWkLog(w, "cm.reenum.9x.resume-restore.handoff-ms", k * 10UL);
+    }
+    /* Record 21 section 6.1.4, after the handoff: a copy is kept from its
+     * reading until its member's wait ends restored (by Windows or by this
+     * driver) or a coherent bridge gives a fresh one (RwHdrKeep), so a
+     * suspend that comes before the copy was written back, or after a
+     * write-back that stopped or failed part-way, marks the member with
+     * it whatever its bridge reads now; the part-written or still reset
+     * header is never read as a new copy. A member no longer active
+     * forgets its copy. */
+    KeAcquireSpinLock(&w->Lock, &irql);
+    for (i = 0; i < XHCI_TBT_MAX_TUNNELS; i++) {
+        if ((active & (1UL << i)) == 0) {
+            w->Port[i].RwHdrValid = 0;
+            w->Port[i].RwHdrKeep = 0;
+            w->Port[i].RwHdrPartial = 0;
+            w->Port[i].RwEpCount = 0;
+            w->Port[i].RwSub.Count = 0;
+        }
+        w->Port[i].RwHdrDone = 1;
+        /* Record 21 section 6.1.5: a new standby, a new recovery. */
+        w->Port[i].RwHow = 0;
+        w->Port[i].RwLost = 0;
+        w->Port[i].RwLostPost = 0;
+        w->Port[i].RwLostTried = 0;
+        w->Port[i].RwLostAt = 0;
+    }
+    KeReleaseSpinLock(&w->Lock, irql);
+    mask = 0;
+    for (i = 0; i < w->Members && i < XHCI_TBT_MAX_TUNNELS; i++) {
+        if ((active & (1UL << i)) == 0) {
+            continue;
+        }
+        KeAcquireSpinLock(&w->Lock, &irql);
+        partial = (BOOLEAN)(w->Port[i].RwHdrPartial != 0 &&
+                            w->Port[i].RwHdrValid != 0);
+        if (partial) {
+            w->Port[i].RwHdrKeep = 1;
+            w->Port[i].RwHdrDone = 0;
+        }
+        KeReleaseSpinLock(&w->Lock, irql);
+        if (partial) {
+            /* This driver's write-back on it stopped or failed: its bus
+             * numbers may be this driver's own, so they prove nothing;
+             * marked with the copy it was writing. */
+            mask |= 1UL << i;
+            cmWkLog(w, "cm.reenum.9x.resume-restore.kept", w->Port[i].Bdf);
+            continue;
+        }
+        buses = 0;
+        read = (BOOLEAN)(cmWkCfgRead(w->Port[i].Bdf, XHCI_TBT_CFG_BUSES,
+                                     &buses) != 0);
+        if (CmPortsResumeWaitWanted(read, buses)) {
+            mask |= 1UL << i;
+            /* A coherent bridge: a fresh copy, for a bridge Windows does
+             * not restore, replacing any kept one. */
+            answered = 0;
+            for (k = 0; k < CM_PORTS_HDR_DWORDS; k++) {
+                hdr[k] = 0xFFFFFFFFUL;
+                if (cmWkCfgRead(w->Port[i].Bdf, k * 4UL, &hdr[k])) {
+                    answered++;
+                }
+            }
+            /* Bracketed: the id and bus numbers read again, unchanged. */
+            again = 0xFFFFFFFFUL;
+            buses2 = 0xFFFFFFFFUL;
+            if (!cmWkCfgRead(w->Port[i].Bdf, XHCI_TBT_CFG_ID, &again) ||
+                !cmWkCfgRead(w->Port[i].Bdf, XHCI_TBT_CFG_BUSES, &buses2) ||
+                again != hdr[0] || buses2 != hdr[0x18 / 4] ||
+                !cmWkIdAnswers(again)) {
+                answered = 0;
+            }
+            valid = CmPortsHdrCopyValid(hdr, answered);
+            /* Item 6: function 0 of each device number behind it. */
+            epn = 0;
+            if (valid) {
+                sec = (hdr[0x18 / 4] >> 8) & 0xFFUL;
+                for (dev = 0; dev < 32 && epn < CM_PORTS_EP_MAX; dev++) {
+                    fbdf = XHCI_TBT_BDF(sec, dev, 0);
+                    v = 0xFFFFFFFFUL;
+                    t = 0xFFFFFFFFUL;
+                    if (!cmWkCfgRead(fbdf, 0x00UL, &v) ||
+                        !cmWkCfgRead(fbdf, 0x0CUL, &t) ||
+                        !CmPortsEpCopyValid(v, t)) {
+                        continue;
+                    }
+                    ok = TRUE;
+                    for (j = 0; j < CM_PORTS_EP_DWORDS; j++) {
+                        ep[epn][j] = 0xFFFFFFFFUL;
+                        if (!cmWkCfgRead(fbdf, CM_PORTS_EP_OFFSET[j],
+                                         &ep[epn][j])) {
+                            ok = FALSE;
+                        }
+                    }
+                    /* Bracketed: the id read again after the copy. */
+                    v2 = 0xFFFFFFFFUL;
+                    if (ok && cmWkCfgRead(fbdf, 0x00UL, &v2) &&
+                        ep[epn][0] == v &&
+                        CmPortsEpSnapValid(ep[epn], v2)) {
+                        epDev[epn] = dev;
+                        epn++;
+                    }
+                }
+            }
+            /* Record 21 section 6.1.5 item 1: the bridges behind it that
+             * read configured now, noted (read-only; nothing is ever
+             * written from the note). */
+            fresh.Count = 0;
+            if (valid) {
+                sec = (hdr[0x18 / 4] >> 8) & 0xFFUL;
+                for (dev = 0; dev < 32; dev++) {
+                    for (j = 0; j < 8; j++) {
+                        fbdf = XHCI_TBT_BDF(sec, dev, j);
+                        v = 0xFFFFFFFFUL;
+                        t = 0xFFFFFFFFUL;
+                        v2 = 0xFFFFFFFFUL;
+                        if (!cmWkCfgRead(fbdf, 0x00UL, &v) ||
+                            !cmWkIdAnswers(v)) {
+                            if (j == 0) {
+                                break;
+                            }
+                            continue;
+                        }
+                        if (!cmWkCfgRead(fbdf, 0x0CUL, &t)) {
+                            t = 0xFFFFFFFFUL;
+                        }
+                        if (!cmWkCfgRead(fbdf, XHCI_TBT_CFG_BUSES, &v2)) {
+                            v2 = 0xFFFFFFFFUL;
+                        }
+                        if (CmPortsSubNoted(v, t, v2) &&
+                            fresh.Count < CM_PORTS_SUB_MAX) {
+                            fresh.DevFn[fresh.Count] = (dev << 3) | j;
+                            fresh.Id[fresh.Count] = v;
+                            fresh.Count++;
+                        }
+                        if (j == 0 &&
+                            (t == 0xFFFFFFFFUL ||
+                             ((t >> 16) & XHCI_TBT_HDR_MF) == 0)) {
+                            break;
+                        }
+                    }
+                }
+            }
+            KeAcquireSpinLock(&w->Lock, &irql);
+            if (valid) {
+                /* Pending entries stay; those read configured now are
+                 * added or refreshed. */
+                CmPortsSubMerge(&w->Port[i].RwSub, &fresh);
+            }
+            answered = w->Port[i].RwSub.Count;
+            w->Port[i].RwEpCount = epn;
+            for (j = 0; j < epn; j++) {
+                w->Port[i].RwEpDev[j] = epDev[j];
+                for (k = 0; k < CM_PORTS_EP_DWORDS; k++) {
+                    w->Port[i].RwEp[j][k] = ep[j][k];
+                }
+            }
+            for (k = 0; k < CM_PORTS_HDR_DWORDS; k++) {
+                w->Port[i].RwHdr[k] = hdr[k];
+            }
+            w->Port[i].RwHdrValid = valid ? 1UL : 0UL;
+            w->Port[i].RwHdrKeep = valid ? 1UL : 0UL;
+            w->Port[i].RwHdrDone = 0;
+            KeReleaseSpinLock(&w->Lock, irql);
+            if (answered != 0) {
+                /* Section 6.1.5 item 1: the entries noted, pending ones
+                 * included. */
+                cmWkLog(w, "cm.reenum.9x.resume-note",
+                        (w->Port[i].Bdf << 8) | (answered & 0xFFUL));
+            }
+            continue;
+        }
+        KeAcquireSpinLock(&w->Lock, &irql);
+        keep = (BOOLEAN)(w->Port[i].RwHdrKeep != 0 &&
+                         w->Port[i].RwHdrValid != 0);
+        if (keep) {
+            w->Port[i].RwHdrDone = 0;
+        } else {
+            w->Port[i].RwHdrValid = 0;
+            w->Port[i].RwHdrKeep = 0;
+        }
+        KeReleaseSpinLock(&w->Lock, irql);
+        if (keep) {
+            /* Still pending from an earlier sleep: marked with its copy. */
+            mask |= 1UL << i;
+            cmWkLog(w, "cm.reenum.9x.resume-restore.kept", w->Port[i].Bdf);
+        }
+    }
+    KeAcquireSpinLock(&w->Lock, &irql);
+    CmPortsRwSuspend(&w->Rw, mask);
+    w->RwStop = 0;
+    KeReleaseSpinLock(&w->Lock, irql);
+    cmWkLog(w, "cm.reenum.9x.resume-mark", mask);
+}
+
+/*
+ * Record 21 section 6.1.3: the resume, however it ended: the sleep over,
+ * the bound started for every marked member, the worker woken to take its
+ * parked operations. <= DISPATCH_LEVEL.
+ */
+VOID CmCfgwkResumed(PCM_CFGWK w)
+{
+    KIRQL irql;
+    BOOLEAN was;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    was = CmPortsRwResumed(&w->Rw, cmWkNowTicks());
+    if (was) {
+        KeSetEvent(&w->Wake, IO_NO_INCREMENT, FALSE);
+    }
+    KeReleaseSpinLock(&w->Lock, irql);
+    if (was) {
+        cmWkLog(w, "cm.reenum.9x.resume-armed", w->Rw.Wait);
+    }
 }
 
 VOID CmCfgwkHold(PCM_CFGWK w, ULONG members)

@@ -183,6 +183,19 @@ typedef struct _XHCI98_TELEMETRY {
                                          * after an answered ABORT TASK, or
                                          * a data cancel that never came
                                          * back (its transfers say which)   */
+#define XHCI98_FAIL_E_FINAL_TIMEOUT 8UL /* task 49.39: timed out with its
+                                         * final IU in and its data
+                                         * transfer outstanding - the
+                                         * device reset, no ABORT TASK      */
+#define XHCI98_FAIL_E_REPLAYED      9UL /* task 49.39: answered by the class
+                                         * driver with the drive's own
+                                         * earlier refusal (5/20/00) of
+                                         * that ATA PASS-THROUGH, never
+                                         * sent                             */
+#define XHCI98_FAIL_E_GIVEN_UP     10UL /* task 49.39: due for event 8's
+                                         * reset after 3 of them with no
+                                         * data delivered between: the
+                                         * drive given up until replugged */
 
 /* Origins. */
 #define XHCI98_FAIL_O_CLASS         0UL /* the storage class driver's SRB   */
@@ -200,6 +213,23 @@ typedef struct _XHCI98_TELEMETRY {
 typedef struct _XHCI98_FAILURES {
     ULONG Word[XHCI98_FAIL_TOTAL_WORDS];
 } XHCI98_FAILURES, *PXHCI98_FAILURES;
+
+/*
+ * Task 49.39 (design record 17 section 4.12.9): version 2, the same header
+ * and ring, then each entry's time - the class driver's own seconds since
+ * its start, entry i's at XHCI98_FAIL_TIMES_AT + i - and the LUNs' ATA
+ * refusal bits (design record 13 section 16.16; LUN n's two bits at 2n,
+ * bit 0 for (12), bit 1 for (16), LUNs 0 to 15). A bus before 3.5.0.0
+ * refuses it; the class driver then sends version 1.
+ */
+#define XHCI98_FAIL_VERSION2        2UL
+#define XHCI98_FAIL_TIMES_AT        XHCI98_FAIL_TOTAL_WORDS
+#define XHCI98_FAIL_ATA_AT          (XHCI98_FAIL_TIMES_AT + XHCI98_FAIL_RECORDS)
+#define XHCI98_FAIL_TOTAL_WORDS2    (XHCI98_FAIL_ATA_AT + 1)
+
+typedef struct _XHCI98_FAILURES2 {
+    ULONG Word[XHCI98_FAIL_TOTAL_WORDS2];
+} XHCI98_FAILURES2, *PXHCI98_FAILURES2;
 
 /* ---- the resume state (45.23) ---------------------------------------- */
 

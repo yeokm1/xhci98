@@ -510,7 +510,11 @@ Record 21 section 7.4 revision 3's service, on 2000, XP and XP x64 only:
   - **unknown**: the list is incomplete, the answer could not be read,
     the bridge's location could not be read, or the driver is one
     without the list (an older build). Unknown never asks for a
-    restart and never spends the budget; the poll looks again.
+    restart and never spends the budget; the poll looks again. That is
+    the attachment's reason alone: problem 12 asks for the restart
+    whatever the attachment says, and since task 49.26 a bridge whose
+    location is not known (one that never started) is judged that way
+    (record 21 section 7.8.3).
 - **The bridge marks first.** On 2000, XP and XP x64 the unit's other
   restarts (record 21 section 7.4 revision 3's and record 31 section
   6.2's) wait while a bridge below the unit has its install pending or

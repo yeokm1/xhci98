@@ -13,7 +13,8 @@
  * (the PCI answer below), CM_QM_IOCTL (the marks, below), CM_QA_IOCTL
  * (the firmware tables, below) and CM_QN_IOCTL (Thunderbolt networking,
  * cm_qnet.h: built by the thread with the marks, CmNetQueryFill, and
- * answered as the marks are), everything else is
+ * answered as the marks are) and CM_QS_IOCTL (the state snapshot,
+ * cm_snapos.c, record 21 section 8.4), everything else is
  * STATUS_INVALID_DEVICE_REQUEST.
  *
  * THE FIRMWARE TABLES (design record 25 section 21, record 32 section
@@ -99,6 +100,7 @@
 
 #include "cm.h"
 #include "cm_pwrr.h"
+#include "cm_snap.h"
 
 /* How long a 98 PCI request waits for the worker's walk: a walk of the
  * largest answer is a few thousand PCI.VXD reads, well inside it; a worker
@@ -507,6 +509,7 @@ static VOID cmQSeed(PCM_NHI nhi, PCM_QUERY_DEV q)
     qi.IdBytes = nhi->QueryIdBytes;
     CmReenumRemovals(nhi, rm);
     qi.Removal = rm;
+    qi.RingIrq = CmRirqQueryWord(nhi);
     q->Bytes = CmQueryBuild(q->Answer, &qi);
     (VOID)CmQueryContentGen(q->Answer, q->Bytes, NULL, 0);
 }
@@ -577,6 +580,8 @@ VOID CmQueryOpen(PCM_NHI nhi)
         nhi->QaBody = NULL;
         nhi->QaBodyBytes = 0;
         KeInitializeEvent(&q->PciGate, SynchronizationEvent, TRUE);
+        q->SnapNhi = nhi;
+        CmQuerySnapSalt(q, nhi);
         cmQPorts(nhi, q);
         cmQSeed(nhi, q);
         /* No thread, no pass: the counters as the start left them, once. */
@@ -662,6 +667,7 @@ VOID CmQueryClose(PCM_NHI nhi)
     self = (PDEVICE_OBJECT)nhi->QueryDev;
     q = (PCM_QUERY_DEV)self->DeviceExtension;
     CmQueryWorkerGone(nhi);
+    CmQuerySnapGone(nhi);
     KeAcquireSpinLock(&q->Lock, &irql);
     q->Connected = 0;
     q->Log = NULL;
@@ -725,6 +731,7 @@ VOID CmQueryPublish(PCM_NHI nhi, BOOLEAN inert)
     /* The removal block (design record 25 section 7.6). */
     CmReenumRemovals(nhi, rm);
     qi.Removal = rm;
+    qi.RingIrq = CmRirqQueryWord(nhi);
     bytes = CmQueryBuild(nhi->QueryBuf, &qi);
     /* The record as CmStatusBuild makes it: the registry write's stamp,
      * which cm_statos.c puts in Built when it writes, is cleared. */
@@ -1306,6 +1313,9 @@ NTSTATUS CmQueryDispatch(PDEVICE_OBJECT device, PIRP irp)
         }
         if (stack->Parameters.DeviceIoControl.IoControlCode == CM_QN_IOCTL) {
             return cmQNet(q, irp);
+        }
+        if (stack->Parameters.DeviceIoControl.IoControlCode == CM_QS_IOCTL) {
+            return CmQuerySnap(q, irp, cmQNt());
         }
         break;
     case IRP_MJ_POWER:

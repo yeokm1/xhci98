@@ -49,7 +49,7 @@ ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
 Provider=%Provider%
 LayoutFile=layout.inf
 ; Must equal src\xhci_version.h.
-DriverVer=11/10/2026,3.4.3.0
+DriverVer=11/14/2026,3.5.0.0
 
 [Manufacturer]
 %Mfg%=XhciModels,NTx86.6.0
@@ -268,6 +268,13 @@ HKR,,XhciIntervalCap,0x00010003,1
 HKR,,XhciAvgTrbEsit,0x00010003,0
 HKR,,XhciMaxTransferKB,0x00010003,1024
 HKR,,XhciInterruptMode,0x00010003,0
+HKR,,XhciMsiStrategy,0x00010003,0
+HKR,,XhciMsiIsaIrq,0x00010003,0
+HKR,,XhciMsiShare,0x00010003,8
+HKR,,XhciMsiPools,0x00010003,0
+HKR,,XhciMsiInputFirst,0x00010003,0
+HKR,,XhciMsiInputLast,0x00010003,0
+HKR,,XhciMsiInputBudget,0x00010003,0
 HKR,,XhciPollIdleMs,0x00010003,50
 HKR,,XhciPollActiveMs,0x00010003,1
 HKR,,XhciPollFineTimer,0x00010003,0
@@ -277,12 +284,19 @@ HKR,,XhciSilentInstall,0x00010003,0
 HKR,,XhciUsb2HubSpeedFallback,0x00010003,1
 HKR,,XhciAccept096,0x00010003,1
 HKR,,XhciCommandCheck,0x00010003,1
+HKR,,XhciStreamDequeueRepair,0x00010003,1
 HKR,,XhciAcpiTables,0x00010003,1
 ; The BOS read at High and Full Speed (design record 13 section 8.4.1), a
 ; device kept across a resume's re-initialization (task 45.23) and across
 ; its SuperSpeed link's recovery (task 45.41): on is each one's default
 ; (absent, or anything but a DWORD 0, is on; src\hcd_ctl.c), written since
 ; task 45.50 so that every value is in the key, ready to change.
+; XhciResumeKeepBot (task 49.34, design record 20 section 4.3.4, M18) is
+; the one value the driver reads that no section here writes: its default
+; is not the same on every Windows (a Bulk-Only drive kept after a
+; hibernation on 2000, on no other Windows), 2000 and XP install from the
+; same sections, and the driver gives that default when the value is
+; absent (src\xhci_bot.c, XhciBotKeepDefault; the gate's VAL-BOTABSENT).
 HKR,,XhciUsb2Bos,0x00010003,1
 HKR,,XhciResumeKeep,0x00010003,1
 HKR,,XhciLinkKeep,0x00010003,1
@@ -290,10 +304,11 @@ HKR,,XhciLinkKeep,0x00010003,1
 ; record 13 section 21): 1, the default, sends it; 0 gives it up after the
 ; same count. Absent, or anything but a DWORD 0, is 1 (src\hcd_ctl.c).
 HKR,,XhciSsFlapFallback,0x00010003,1
-; The event ring's size (task 47.30; design record 13 section 11.10): 1024
-; the larger ring, 256 the one-page ring of the releases before it.
-; Absent, or any other value, is 1024 (src\hcd_ctl.c).
-HKR,,XhciEventRingTrbs,0x00010003,1024
+; The event ring's size (task 47.30; design record 13 sections 11.10 and
+; 11.10.1): 256 the one-page ring, written by a fresh install from 3.5.0.0
+; (an update keeps a 1024 an earlier release wrote); any other value the
+; larger ring. Absent is 256; a controller below xHCI 1.0 always uses 256.
+HKR,,XhciEventRingTrbs,0x00010003,256
 ; The Bulk-Only form's own instance id (roadmap-usb4 UASBOT.1; design record
 ; 13 section 10.7): 1 gives a drive that offers UAS too a devnode of its own
 ; where the bus offers it as Bulk-Only; 0 the one devnode of the releases
@@ -410,6 +425,13 @@ HKR,,XhciIntervalCap,0x00010003,1
 HKR,,XhciAvgTrbEsit,0x00010003,0
 HKR,,XhciMaxTransferKB,0x00010003,1024
 HKR,,XhciInterruptMode,0x00010003,0
+HKR,,XhciMsiStrategy,0x00010003,0
+HKR,,XhciMsiIsaIrq,0x00010003,0
+HKR,,XhciMsiShare,0x00010003,8
+HKR,,XhciMsiPools,0x00010003,0
+HKR,,XhciMsiInputFirst,0x00010003,0
+HKR,,XhciMsiInputLast,0x00010003,0
+HKR,,XhciMsiInputBudget,0x00010003,0
 HKR,,XhciPollIdleMs,0x00010003,50
 HKR,,XhciPollActiveMs,0x00010003,1
 HKR,,XhciPollFineTimer,0x00010003,0
@@ -419,12 +441,19 @@ HKR,,XhciSilentInstall,0x00010003,0
 HKR,,XhciUsb2HubSpeedFallback,0x00010003,1
 HKR,,XhciAccept096,0x00010003,1
 HKR,,XhciCommandCheck,0x00010003,1
+HKR,,XhciStreamDequeueRepair,0x00010003,1
 HKR,,XhciAcpiTables,0x00010003,1
 ; The BOS read at High and Full Speed (design record 13 section 8.4.1), a
 ; device kept across a resume's re-initialization (task 45.23) and across
 ; its SuperSpeed link's recovery (task 45.41): on is each one's default
 ; (absent, or anything but a DWORD 0, is on; src\hcd_ctl.c), written since
 ; task 45.50 so that every value is in the key, ready to change.
+; XhciResumeKeepBot (task 49.34, design record 20 section 4.3.4, M18) is
+; the one value the driver reads that no section here writes: its default
+; is not the same on every Windows (a Bulk-Only drive kept after a
+; hibernation on 2000, on no other Windows), 2000 and XP install from the
+; same sections, and the driver gives that default when the value is
+; absent (src\xhci_bot.c, XhciBotKeepDefault; the gate's VAL-BOTABSENT).
 HKR,,XhciUsb2Bos,0x00010003,1
 HKR,,XhciResumeKeep,0x00010003,1
 HKR,,XhciLinkKeep,0x00010003,1
@@ -432,10 +461,11 @@ HKR,,XhciLinkKeep,0x00010003,1
 ; record 13 section 21): 1, the default, sends it; 0 gives it up after the
 ; same count. Absent, or anything but a DWORD 0, is 1 (src\hcd_ctl.c).
 HKR,,XhciSsFlapFallback,0x00010003,1
-; The event ring's size (task 47.30; design record 13 section 11.10): 1024
-; the larger ring, 256 the one-page ring of the releases before it.
-; Absent, or any other value, is 1024 (src\hcd_ctl.c).
-HKR,,XhciEventRingTrbs,0x00010003,1024
+; The event ring's size (task 47.30; design record 13 sections 11.10 and
+; 11.10.1): 256 the one-page ring, written by a fresh install from 3.5.0.0
+; (an update keeps a 1024 an earlier release wrote); any other value the
+; larger ring. Absent is 256; a controller below xHCI 1.0 always uses 256.
+HKR,,XhciEventRingTrbs,0x00010003,256
 ; The Bulk-Only form's own instance id (roadmap-usb4 UASBOT.1; design record
 ; 13 section 10.7): 1 gives a drive that offers UAS too a devnode of its own
 ; where the bus offers it as Bulk-Only; 0 the one devnode of the releases

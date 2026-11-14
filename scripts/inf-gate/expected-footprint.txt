@@ -107,6 +107,13 @@ reg|Windows 98|Xhci.AddReg|HKR||XhciIntervalCap|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciAvgTrbEsit|0x00010003|0|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciMaxTransferKB|0x00010003|1024|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciInterruptMode|0x00010003|0|keep
+reg|Windows 98|Xhci.AddReg|HKR||XhciMsiStrategy|0x00010003|0|keep
+reg|Windows 98|Xhci.AddReg|HKR||XhciMsiIsaIrq|0x00010003|0|keep
+reg|Windows 98|Xhci.AddReg|HKR||XhciMsiShare|0x00010003|8|keep
+reg|Windows 98|Xhci.AddReg|HKR||XhciMsiPools|0x00010003|0|keep
+reg|Windows 98|Xhci.AddReg|HKR||XhciMsiInputFirst|0x00010003|0|keep
+reg|Windows 98|Xhci.AddReg|HKR||XhciMsiInputLast|0x00010003|0|keep
+reg|Windows 98|Xhci.AddReg|HKR||XhciMsiInputBudget|0x00010003|0|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciPollIdleMs|0x00010003|50|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciPollActiveMs|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciPollFineTimer|0x00010003|0|keep
@@ -116,12 +123,13 @@ reg|Windows 98|Xhci.AddReg|HKR||XhciSilentInstall|0x00010003|0|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciUsb2HubSpeedFallback|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciAccept096|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciCommandCheck|0x00010003|1|keep
+reg|Windows 98|Xhci.AddReg|HKR||XhciStreamDequeueRepair|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciAcpiTables|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciUsb2Bos|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciResumeKeep|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciLinkKeep|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciSsFlapFallback|0x00010003|1|keep
-reg|Windows 98|Xhci.AddReg|HKR||XhciEventRingTrbs|0x00010003|1024|keep
+reg|Windows 98|Xhci.AddReg|HKR||XhciEventRingTrbs|0x00010003|256|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciBulkOnlyOwnId|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciStagePoolKiB|0x00010003|2048|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciDmaStaging|0x00010003|0|keep
@@ -159,6 +167,13 @@ reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciIntervalCap|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciAvgTrbEsit|0x00010003|0|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciMaxTransferKB|0x00010003|1024|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciInterruptMode|0x00010003|0|keep
+reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciMsiStrategy|0x00010003|0|keep
+reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciMsiIsaIrq|0x00010003|0|keep
+reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciMsiShare|0x00010003|8|keep
+reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciMsiPools|0x00010003|0|keep
+reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciMsiInputFirst|0x00010003|0|keep
+reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciMsiInputLast|0x00010003|0|keep
+reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciMsiInputBudget|0x00010003|0|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciPollIdleMs|0x00010003|50|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciPollActiveMs|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciPollFineTimer|0x00010003|0|keep
@@ -168,12 +183,13 @@ reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciSilentInstall|0x00010003|0|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciUsb2HubSpeedFallback|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciAccept096|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciCommandCheck|0x00010003|1|keep
+reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciStreamDequeueRepair|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciAcpiTables|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciUsb2Bos|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciResumeKeep|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciLinkKeep|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciSsFlapFallback|0x00010003|1|keep
-reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciEventRingTrbs|0x00010003|1024|keep
+reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciEventRingTrbs|0x00010003|256|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciBulkOnlyOwnId|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciStagePoolKiB|0x00010003|2048|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciDmaStaging|0x00010003|0|keep
@@ -275,6 +291,13 @@ reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciIntervalCap|0x00010003|1|kee
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciAvgTrbEsit|0x00010003|0|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciMaxTransferKB|0x00010003|1024|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciInterruptMode|0x00010003|0|keep
+reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciMsiStrategy|0x00010003|0|keep
+reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciMsiIsaIrq|0x00010003|0|keep
+reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciMsiShare|0x00010003|8|keep
+reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciMsiPools|0x00010003|0|keep
+reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciMsiInputFirst|0x00010003|0|keep
+reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciMsiInputLast|0x00010003|0|keep
+reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciMsiInputBudget|0x00010003|0|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciPollIdleMs|0x00010003|50|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciPollActiveMs|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciPollFineTimer|0x00010003|0|keep
@@ -284,12 +307,13 @@ reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciSilentInstall|0x00010003|0|k
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciUsb2HubSpeedFallback|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciAccept096|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciCommandCheck|0x00010003|1|keep
+reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciStreamDequeueRepair|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciAcpiTables|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciUsb2Bos|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciResumeKeep|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciLinkKeep|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciSsFlapFallback|0x00010003|1|keep
-reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciEventRingTrbs|0x00010003|1024|keep
+reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciEventRingTrbs|0x00010003|256|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciBulkOnlyOwnId|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciStagePoolKiB|0x00010003|2048|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciDmaStaging|0x00010003|0|keep

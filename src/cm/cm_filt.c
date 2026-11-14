@@ -42,6 +42,11 @@
  *       fixed requirement list the PCI driver gives a hot-added bridge
  *       found closed, so a dock's downstream ports share its upstream
  *       port's windows (design record 33; cmBridgeReqFilter).
+ *       Since task 49.46 (design record 21 section 6.3.1) a child on a
+ *       unit records the status of each device D0 it passes down
+ *       (cmChildD0Done), keeps the logical units of disk type its
+ *       BusRelations answer carries (cmUnitRelations), and closes, reopens
+ *       and drops them at its PnP requests, for the wake power-up.
  *
  * Every attachment, bridge or child, is on the registration list's
  * attachment list from its attach to its removal and reads its PDO's
@@ -142,6 +147,7 @@ NTSTATUS CmChildAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
     child->Depth = 1;
     KeInitializeSpinLock(&child->Lock);
     KeInitializeEvent(&child->Drained, NotificationEvent, FALSE);
+    CmWpuChildInit(child);
     CmRegFilterInit(child);
     lower = IoAttachDeviceToDeviceStack(self, pdo);
     if (lower == NULL) {
@@ -426,6 +432,22 @@ static NTSTATUS cmChainRelations(PCM_FILTER child, PIRP irp)
     if (NT_SUCCESS(status) && child->Started) {
         CmRegChainRelations(
             child, (const DEVICE_RELATIONS *)irp->IoStatus.Information, seq);
+    }
+    return CmCompleteIrp(irp, status, irp->IoStatus.Information);
+}
+
+/* A unit's BusRelations (design record 21 section 6.3.1, task 49.46): the
+ * list the function's driver put in before passing the request down, read
+ * on its way back for the wake power-up's logical units (route R1). The
+ * list is read and never changed. PASSIVE_LEVEL. */
+static NTSTATUS cmUnitRelations(PCM_FILTER child, PIRP irp)
+{
+    NTSTATUS status;
+
+    status = CmForwardSync(&child->Common, irp);
+    if (NT_SUCCESS(status) && child->Started) {
+        CmWpuRelations(child,
+                       (const DEVICE_RELATIONS *)irp->IoStatus.Information);
     }
     return CmCompleteIrp(irp, status, irp->IoStatus.Information);
 }
@@ -1227,6 +1249,9 @@ static NTSTATUS cmFilterPnpBody(PCM_FILTER filter, PIRP irp, BOOLEAN sync)
                 }
             } else {
                 CmRegChainNote(filter, CM_CHAIN_EV_START);
+                /* Record 21 section 6.3.1: reopened, its units read
+                 * afresh. */
+                CmWpuStarted(filter);
             }
         } else {
             CmRegAttEvent(filter, CM_MK_START_FAILED);
@@ -1251,6 +1276,9 @@ static NTSTATUS cmFilterPnpBody(PCM_FILTER filter, PIRP irp, BOOLEAN sync)
                 return cmChainRelations(filter, irp);
             }
             CmRegChainNote(filter, CM_CHAIN_EV_DEEP);
+        } else if (filter->Started &&
+                   cmChainKindOf(filter) != CM_CHAIN_BRIDGE) {
+            return cmUnitRelations(filter, irp);
         }
         break;
 
@@ -1292,14 +1320,28 @@ static NTSTATUS cmFilterPnpBody(PCM_FILTER filter, PIRP irp, BOOLEAN sync)
     case IRP_MN_QUERY_REMOVE_DEVICE:
         filter->QueryRemoved = 1;
         CmRegAttEvent(filter, CM_MK_QUERY_REMOVE);
+        if (child) {
+            /* Record 21 section 6.3.1: no wake power-up asked from here
+             * on, before the query goes down; its units are kept. */
+            CmWpuClose(filter, FALSE);
+        }
         break;
 
     case IRP_MN_CANCEL_REMOVE_DEVICE:
         filter->QueryRemoved = 0;
         CmRegAttEvent(filter, CM_MK_CANCEL_REMOVE);
+        if (child) {
+            /* Reopened once the drivers below have cancelled it. */
+            status = CmForwardSync(&filter->Common, irp);
+            CmWpuReopen(filter);
+            return CmCompleteIrp(irp, status, irp->IoStatus.Information);
+        }
         break;
 
     case IRP_MN_STOP_DEVICE:
+        if (child) {
+            CmWpuClose(filter, TRUE);
+        }
         filter->Started = 0;
         if (!child) {
             CmRegWithdraw(filter);
@@ -1307,6 +1349,9 @@ static NTSTATUS cmFilterPnpBody(PCM_FILTER filter, PIRP irp, BOOLEAN sync)
         break;
 
     case IRP_MN_SURPRISE_REMOVAL:
+        if (child) {
+            CmWpuClose(filter, TRUE);
+        }
         started = (BOOLEAN)(filter->Started != 0);
         filter->Started = 0;
         filter->SurpriseRemoved = 1;
@@ -1320,6 +1365,11 @@ static NTSTATUS cmFilterPnpBody(PCM_FILTER filter, PIRP irp, BOOLEAN sync)
         break;
 
     case IRP_MN_REMOVE_DEVICE:
+        if (child) {
+            /* Every unit reference dropped before the removal goes down
+             * (the kept child's logical removal too). */
+            CmWpuClose(filter, TRUE);
+        }
         filter->Started = 0;
         if (!child) {
             CmRegWithdraw(filter);
@@ -1383,11 +1433,46 @@ static NTSTATUS cmFilterPnpBody(PCM_FILTER filter, PIRP irp, BOOLEAN sync)
  * (CmRegPassD0); the NHI's resume releases the mark and invalidates the
  * bridge, and the devices behind it are enumerated again.
  */
+/* A child's device D0, on its way back (design record 21 section 6.3.1,
+ * task 49.46): its status recorded against the epoch it was dispatched
+ * in; the IRP is never retained. IRQL: <= DISPATCH_LEVEL. */
+static NTSTATUS cmChildD0Done(PDEVICE_OBJECT device, PIRP irp, PVOID context)
+{
+    PCM_FILTER child;
+
+    child = (PCM_FILTER)device->DeviceExtension;
+    if (irp->PendingReturned) {
+        IoMarkIrpPending(irp);
+    }
+    CmWpuD0Seen(child, (ULONG)(ULONG_PTR)context, irp->IoStatus.Status);
+    /* The last access: removal may free the child after this. */
+    cmFilterRelease(child);
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS CmFilterPower(PCM_FILTER filter, PIRP irp)
 {
     PIO_STACK_LOCATION stack;
 
     stack = IoGetCurrentIrpStackLocation(irp);
+    /* Record 21 section 6.3.1: a sleep, shutdown or power-down seen here
+     * closes the wake power-up's asks at once. */
+    CmWpuPowerSeen(stack->MinorFunction, (ULONG)stack->Parameters.Power.Type,
+                   (ULONG)stack->Parameters.Power.State.SystemState);
+    if (filter->Common.Kind == CM_KIND_CHILD &&
+        stack->MinorFunction == IRP_MN_SET_POWER &&
+        stack->Parameters.Power.Type == DevicePowerState &&
+        stack->Parameters.Power.State.DeviceState == PowerDeviceD0 &&
+        CmWpuOn() && NT_SUCCESS(cmFilterAcquire(filter))) {
+        /* Passed down at once, as every power IRP, with a completion
+         * routine that only records the outcome (record 21 section
+         * 6.3.1); the epoch and start count read now, so a D0 that
+         * completes after a later sleep or restart is known as stale. */
+        PoStartNextPowerIrp(irp);
+        IoCopyCurrentIrpStackLocationToNext(irp);
+        CM_SET_COMPLETION_ALWAYS(irp, cmChildD0Done, CmWpuD0Context(filter));
+        return PoCallDriver(filter->Common.Lower, irp);
+    }
     if (filter->Common.Kind == CM_KIND_FILTER &&
         stack->MinorFunction == IRP_MN_SET_POWER &&
         stack->Parameters.Power.Type == DevicePowerState &&

@@ -1,8 +1,8 @@
 @echo off
-rem XHSETUP.CMD - once per starting point, on Windows 2000 to 7
+rem XHSETUP.CMD - once per starting point, on Windows 2000 to 10
 rem (make-start.ps1 types it into Start, Run): the poller to C:\XHLEG, started
 rem at every logon - a Run value on 2000 and XP, an elevated logon task on
-rem Vista and 7 (an elevation prompt would stop an unattended install) - and
+rem Vista, 7 and 10 (an elevation prompt would stop an unattended install) - and
 rem AutoRun off for every drive, so a leg's CD opens no window. XP's
 rem unsigned-driver question is answered by the host (release-legs.psd1,
 rem PromptStep): its policy value written here was not honoured (2026-10-22).
@@ -21,6 +21,8 @@ if errorlevel 1 goto fail
 goto said
 :hasreg
 ver | find " 6." >NUL
+if not errorlevel 1 goto nt6
+ver | find " 10." >NUL
 if not errorlevel 1 goto nt6
 reg add "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v XHLEG /t REG_SZ /d "cmd.exe /c start /min C:\XHLEG\XHPOLL.CMD" /f >NUL
 if errorlevel 1 goto fail

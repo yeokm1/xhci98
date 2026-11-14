@@ -74,6 +74,7 @@ typedef struct _CM_QN_IN {
     ULONG RingsFailed;
     ULONG IrqState;         /* CM_QN_IRQ_*                                 */
     ULONG IrqKicks;
+    ULONG IrqKind;          /* CM_QN_KIND_* (task 49.27)                   */
 
     /* The links: Count entries of Links, more than CM_QN_MAX_LINKS cut. */
     const CM_QN_LINK_IN *Links;

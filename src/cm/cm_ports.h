@@ -14,6 +14,8 @@
  *   - the bridge filter's snapshot (section 7.4): which PDOs of a
  *     BusRelations answer were not in the previous one;
  *   - the resume's logged bounds (section 6.3; diagnostics since task 43.24h);
+ *   - the 9x resume's wait for Windows' restore of a tunnel port
+ *     (section 6.1.3, task 48.35);
  *   - design record 31's tunnel id: the compatible-id rewrite, the chain's
  *     depth and the Removable answer's gate.
  *
@@ -338,6 +340,284 @@ ULONG CmPortsHoldWatchdog(ULONG clientMs, BOOLEAN *over);
 ULONG CmPortsRelease(ULONG markedByThis, ULONG reenumOn);
 
 /*
+ * The settle wait before a successful NT resume is published (record 22
+ * section 11.1.14, task 49.11): whether to read again, given how many of
+ * the `waited` members show their function (`shown`), the ms since the
+ * first reading (`elapsedMs`, a difference of a free-running clock taken
+ * modulo 2^32) and the bound. TRUE while some member has not shown and
+ * the bound has not passed. CM_PORTS_SETTLE_MS is the bound the resume
+ * uses: the PCI Express Base Specification's 1.0 s (section 6.6.1) plus
+ * margin for an emulated or slow link and a coarse tick.
+ */
+#define CM_PORTS_SETTLE_MS          5000UL
+BOOLEAN CmPortsSettleAgain(ULONG shown, ULONG waited, ULONG elapsedMs,
+                           ULONG boundMs);
+
+/*
+ * A release held behind a member's stor98 gate, run once the gate falls
+ * (record 22 section 11.1.14 item 7): a successful resume's release on the
+ * filter route exposes first (EXPOSE) where the host interface is there;
+ * behind record 22 section 7.7's retirement barrier the exposure is owed
+ * (OWE: the member's missed call with its exposure, made once the barrier
+ * lifts); a failed resume's release, another route, or no transport:
+ * nothing (NONE), as before.
+ */
+#define CM_PORTS_DX_NONE            0UL
+#define CM_PORTS_DX_EXPOSE          1UL
+#define CM_PORTS_DX_OWE             2UL
+ULONG CmPortsDeferredExpose(ULONG failed, ULONG filterRoute,
+                            ULONG transport, ULONG barred);
+
+/*
+ * Record 21 section 6.1.3 (task 48.35): after a standby on Windows 98 SE
+ * and ME a member's operation waits until Windows has put the tunnel port
+ * bridge's bus numbers back. `buses` is the bridge's dword at 18h
+ * (primary, secondary, subordinate), `read` FALSE when it could not be
+ * read. At the suspend: TRUE when the member is to wait (it read, not all
+ * ones, with a secondary bus). At the operation: CM_PORTS_RW_RESTORED once
+ * it reads a secondary bus again, CM_PORTS_RW_UNREAD for a read refused or
+ * all ones (the bridge gone or silent: no wait), CM_PORTS_RW_TIMEOUT once
+ * `elapsedMs` reaches `boundMs`, else CM_PORTS_RW_WAIT.
+ */
+#define CM_PORTS_RW_WAIT            0UL
+#define CM_PORTS_RW_RESTORED        1UL
+#define CM_PORTS_RW_TIMEOUT         2UL
+#define CM_PORTS_RW_UNREAD          3UL
+#define CM_PORTS_RW_BOUND_MS        20000UL
+BOOLEAN CmPortsResumeWaitWanted(BOOLEAN read, ULONG buses);
+ULONG CmPortsResumeWait(BOOLEAN read, ULONG buses, ULONG elapsedMs,
+                        ULONG boundMs);
+
+/*
+ * ... the marks' state, kept under the caller's lock: Wait the members
+ * marked, Asleep nonzero between the suspend and the resume, From the
+ * resume's clock, Epoch advanced by every suspend and every resume that
+ * ended a sleep. A check that read the state, dropped the lock for its
+ * configuration read and comes back clears its member's mark only through
+ * CmPortsRwClear with the Epoch it read: a suspend or a resume in between
+ * (another standby) leaves the mark it set (the check is made again).
+ */
+typedef struct _CM_PORTS_RWS {
+    ULONG Wait;
+    ULONG Asleep;
+    ULONG From;
+    ULONG Epoch;
+} CM_PORTS_RWS;
+/* The suspend: `mask` marked (earlier marks replaced), asleep when any. */
+VOID CmPortsRwSuspend(CM_PORTS_RWS *s, ULONG mask);
+/* A resume end at `now`: TRUE when it ended a sleep (the bound starts). */
+BOOLEAN CmPortsRwResumed(CM_PORTS_RWS *s, ULONG now);
+/* Member `bit`'s mark cleared when the Epoch is still `epoch` and the
+ * state awake: TRUE when cleared (or not set), FALSE when kept. */
+BOOLEAN CmPortsRwClear(CM_PORTS_RWS *s, ULONG bit, ULONG epoch);
+
+/*
+ * Record 21 section 6.1.4 (task 49.12): the tunnel port bridge's type 1
+ * header put back from the suspend's copy, where Windows has not restored
+ * it. A selected-register restore, not a whole one: the bus numbers, the
+ * windows, the bridge's own BARs, cache line and latency, interrupt line
+ * and bridge control, and the command last; never the id, class,
+ * capability pointer, expansion ROM or anything above 3Ch.
+ *
+ * CmPortsHdrCopyValid: whether the sixteen dwords read at the suspend
+ * (`hdr`, 00h to 3Ch; `answered` how many read) make a copy worth writing
+ * back: all sixteen read, the id answering (vendor not 0000h, FFFFh or
+ * 0001h), header type (0Eh bits 6:0) 1, primary < secondary <= subordinate,
+ * and Secondary Bus Reset (3Ch bit 22) clear.
+ * CmPortsHdrEligible: whether the bridge as read now is reset as a whole -
+ * secondary and subordinate 0 and the command's I/O, memory and bus master
+ * enables (bits 2:0) clear - so nothing it decodes changes while the
+ * windows are written; anything else is Windows' work in progress, and
+ * nothing is written.
+ * CmPortsRwRestoreDue: whether a check whose reading still says
+ * CM_PORTS_RW_WAIT reaches the write-back now: once per resume (`done`
+ * 0), only past CM_PORTS_RW_GRACE_MS since the resume (Windows' own
+ * restore first).
+ * CM_PORTS_HDR_ORDER[] is the order of the writes before the command;
+ * CmPortsHdrRestoreValue the dword written at `offset` (CM_PORTS_HDR_CMD
+ * included) from the copy and the dword read now (`now`): status halves
+ * (04h, 1Ch) and Discard Timer Status (3Ch bit 26), all write-one-to-clear,
+ * written as zero; 0Ch's upper half (header type, BIST) as read now with
+ * BIST Start (bit 30) zero. CmPortsHdrVerify: whether the dword read back
+ * at `offset` shows the write took (the bus numbers' low 24 bits, 1Ch's
+ * lower half, the windows and BARs whole, the command's bits 2:0); 0Ch
+ * and 3Ch are not judged.
+ */
+#define CM_PORTS_RW_GRACE_MS        2000UL
+#define CM_PORTS_RW_RESTORED_HERE   5UL
+#define CM_PORTS_RW_RESTORE_FAILED  6UL
+#define CM_PORTS_HDR_DWORDS         16UL
+#define CM_PORTS_HDR_WRITES         11UL
+#define CM_PORTS_HDR_CMD            0x04UL
+extern const ULONG CM_PORTS_HDR_ORDER[CM_PORTS_HDR_WRITES];
+BOOLEAN CmPortsHdrCopyValid(const ULONG *hdr, ULONG answered);
+BOOLEAN CmPortsHdrEligible(ULONG commandNow, ULONG busesNow);
+BOOLEAN CmPortsRwRestoreDue(ULONG outcome, ULONG done, ULONG elapsedMs);
+ULONG CmPortsHdrRestoreValue(ULONG offset, ULONG copy, ULONG now);
+BOOLEAN CmPortsHdrVerify(ULONG offset, ULONG copy, ULONG readBack);
+
+/*
+ * Record 21 section 6.1.4 item 6: the functions behind the bridge. At the
+ * suspend, function 0 of each device number of the secondary bus that
+ * answers with a type 0 header, up to CM_PORTS_EP_MAX, has its id, command,
+ * six BARs and interrupt line copied (CM_PORTS_EP_DWORDS: 00h, 04h, 0Ch,
+ * 10h to 24h, 3Ch). After the bridge's write-back, each such function that
+ * reads back from reset - the same id, header type 0, its command's I/O,
+ * memory and bus master enables clear and every BAR's address bits 0 -
+ * has the BARs and interrupt line written back, each read back, then the
+ * command. CmPortsEpCopyValid: whether a function's copy is worth writing
+ * back (an answering id, header type 0). CmPortsEpReset: whether the
+ * function as read now (`cmd`, `bars` the six BAR dwords) is from reset
+ * (a 64-bit memory BAR's upper half, the next dword, read whole as 0).
+ * CmPortsEpVerify: whether a BAR read back shows the write took (its
+ * address bits, those above the type bits: 4 for memory, 2 for I/O).
+ */
+#define CM_PORTS_EP_MAX             4UL
+#define CM_PORTS_EP_DWORDS          10UL
+extern const ULONG CM_PORTS_EP_OFFSET[CM_PORTS_EP_DWORDS];
+BOOLEAN CmPortsEpCopyValid(ULONG id, ULONG typeDword);
+/* A function's whole copy (CM_PORTS_EP_DWORDS, in CM_PORTS_EP_OFFSET's
+ * order) worth keeping: CmPortsEpCopyValid on its id and 0Ch, no dword
+ * all ones, and its id read the same again after it (`idAgain`). */
+BOOLEAN CmPortsEpSnapValid(const ULONG *ep, ULONG idAgain);
+BOOLEAN CmPortsEpReset(ULONG cmd, const ULONG *bars);
+BOOLEAN CmPortsEpVerify(ULONG copy, ULONG readBack);
+
+/*
+ * Record 21 section 6.1.5 (task 49.30): a switch right behind the tunnel
+ * port that came back from a standby reset, under a devnode that stayed,
+ * is removed and found again. Nothing below the tunnel port is written.
+ *
+ * The note (CM_PORTS_SUB): the bridges on the member's secondary bus that
+ * read configured at a suspend, each its device and function number
+ * (device in 7:3, function in 2:0) and its id. CmPortsSubNoted: whether a
+ * function read at the suspend is noted (an answering id, a type 1
+ * header, a secondary bus other than 0, nothing all ones).
+ * CmPortsSubMerge: the note after a suspend that read `fresh` - fresh's
+ * entries, then the entries the note held (pending) at another device and
+ * function number, while there is room.
+ *
+ * The reading after the wake, per noted entry (CmPortsSubRead), from the
+ * function's id, header type dword (0Ch), command and bus numbers as read
+ * now (`reads`: CM_PORTS_SUB_R_*, which of the four answered) and the
+ * time since the resume: CONFIGURED (the noted id, type 1, a secondary
+ * bus), LOST (the noted id, type 1, reset as a whole:
+ * CmPortsHdrEligible), OTHER (another id, or the noted id with another
+ * header type), ABSENT (nothing answering, CM_PORTS_SUB_ABSENT_MS or more
+ * after the resume), UNDECIDED (anything else: a read refused, Retry
+ * Status, a field all ones, part-configured, nothing answering yet).
+ * CmPortsSubVerdict over the entries: LOST when any is, else UNDECIDED
+ * when any is, else SETTLED.
+ *
+ * CmPortsLostStep: what the member's check does with the verdict -
+ * `outcome` the wait's own (CM_PORTS_RW_RESTORED by Windows or
+ * CM_PORTS_RW_RESTORED_HERE), `elapsedMs` since the resume, `tried` and
+ * `sinceTryMs` the last recovery attempt:
+ *   CM_PORTS_LOST_END       the wait ends with its outcome, the note
+ *                           emptied (settled);
+ *   CM_PORTS_LOST_END_KEEP  undecided at CM_PORTS_RW_BOUND_MS: the wait
+ *                           ends with its outcome, the note kept;
+ *   CM_PORTS_LOST_WAIT      parked: undecided, or lost inside Windows'
+ *                           grace (CM_PORTS_RW_GRACE_MS, a member Windows
+ *                           restored), or lost with the last attempt less
+ *                           than CM_PORTS_SUB_RETRY_MS ago;
+ *   CM_PORTS_LOST_REMOVE    a recovery attempt now;
+ *   CM_PORTS_LOST_KEPT      lost at the bound: the wait ends
+ *                           CM_PORTS_RW_LOST_KEPT, the note kept.
+ */
+#define CM_PORTS_RW_LOST_REMOVED    7UL
+#define CM_PORTS_RW_LOST_KEPT       8UL
+#define CM_PORTS_SUB_MAX            8UL
+#define CM_PORTS_SUB_ABSENT_MS      5000UL
+#define CM_PORTS_SUB_RETRY_MS       2000UL
+typedef struct _CM_PORTS_SUB {
+    ULONG Count;
+    ULONG DevFn[CM_PORTS_SUB_MAX];
+    ULONG Id[CM_PORTS_SUB_MAX];
+} CM_PORTS_SUB;
+BOOLEAN CmPortsSubNoted(ULONG id, ULONG typeDword, ULONG buses);
+VOID CmPortsSubMerge(CM_PORTS_SUB *note, const CM_PORTS_SUB *fresh);
+
+#define CM_PORTS_SUB_R_ID           0x1UL
+#define CM_PORTS_SUB_R_TYPE         0x2UL
+#define CM_PORTS_SUB_R_CMD          0x4UL
+#define CM_PORTS_SUB_R_BUSES        0x8UL
+#define CM_PORTS_SUB_CONFIGURED     0UL
+#define CM_PORTS_SUB_LOST           1UL
+#define CM_PORTS_SUB_OTHER          2UL
+#define CM_PORTS_SUB_ABSENT         3UL
+#define CM_PORTS_SUB_UNDECIDED      4UL
+ULONG CmPortsSubRead(ULONG notedId, ULONG reads, ULONG id, ULONG typeDword,
+                     ULONG cmd, ULONG buses, ULONG elapsedMs);
+#define CM_PORTS_SUBV_SETTLED       0UL
+#define CM_PORTS_SUBV_LOST          1UL
+#define CM_PORTS_SUBV_UNDECIDED     2UL
+ULONG CmPortsSubVerdict(const ULONG *entries, ULONG count);
+
+#define CM_PORTS_LOST_END           0UL
+#define CM_PORTS_LOST_END_KEEP      1UL
+#define CM_PORTS_LOST_WAIT          2UL
+#define CM_PORTS_LOST_REMOVE        3UL
+#define CM_PORTS_LOST_KEPT          4UL
+ULONG CmPortsLostStep(ULONG outcome, ULONG verdict, ULONG elapsedMs,
+                      BOOLEAN tried, ULONG sinceTryMs);
+
+/*
+ * Record 21 section 6.1.5 item 7: whether a bridge may be re-enumerated,
+ * from what its secondary bus and its child devnodes read now.
+ * CmPortsResetFn, one function (`reads`: CM_PORTS_SUB_R_ID, _TYPE and
+ * _BUSES, which answered): ABSENT (its id all ones or vendor FFFFh), SAFE
+ * (not a type 1 header, or a secondary bus other than 0), BUS0 (type 1,
+ * secondary bus 0), UNKNOWN (a read needed not made or all ones, vendor
+ * 0000h or 0001h). CmPortsResetChildOf, one child devnode of the bridge
+ * against a BUS0 function (`id` its vendor and device, `fbdf` its place,
+ * `leaf` its device and function byte; `text` its instance id, NULL when
+ * not read): MATCH (that function's), NOMATCH, UNREAD (not read, or the
+ * function's vendor and device with no place that parses).
+ * CmPortsResetChildAdd / CmPortsResetChildEnd fold a walk of the
+ * children (`complete`: read to its end): FOUND, NONE (complete, no
+ * match), UNKNOWN. CmPortsResetJoin folds the functions into the bus's
+ * answer: RESET (a BUS0 function with its devnode found) over UNKNOWN (a
+ * function UNKNOWN, or BUS0 with its children UNKNOWN) over SAFE.
+ */
+#define CM_PORTS_RF_ABSENT          0UL
+#define CM_PORTS_RF_SAFE            1UL
+#define CM_PORTS_RF_BUS0            2UL
+#define CM_PORTS_RF_UNKNOWN         3UL
+ULONG CmPortsResetFn(ULONG reads, ULONG id, ULONG typeDword, ULONG buses);
+#define CM_PORTS_RC_NOMATCH         0UL
+#define CM_PORTS_RC_MATCH           1UL
+#define CM_PORTS_RC_UNREAD          2UL
+ULONG CmPortsResetChildOf(const char *text, ULONG chars, ULONG id,
+                          ULONG fbdf, ULONG leaf);
+#define CM_PORTS_RCL_NONE           0UL
+#define CM_PORTS_RCL_FOUND          1UL
+#define CM_PORTS_RCL_UNKNOWN        2UL
+ULONG CmPortsResetChildAdd(ULONG acc, ULONG child);
+ULONG CmPortsResetChildEnd(ULONG acc, BOOLEAN complete);
+#define CM_PORTS_RU_SAFE            0UL
+#define CM_PORTS_RU_RESET           1UL
+#define CM_PORTS_RU_UNKNOWN         2UL
+ULONG CmPortsResetJoin(ULONG verdict, ULONG fn, ULONG children);
+/* CmPortsResetBare: a bridge whose secondary bus is not read (its member in
+ * the no-configuration mode, or its own secondary bus 0) from its child
+ * devnodes' list (`complete`, `count`): SAFE only when complete and empty,
+ * else UNKNOWN. */
+ULONG CmPortsResetBare(BOOLEAN complete, ULONG count);
+
+/*
+ * ... a no-IRQ operation's admission (record 28; record 21 section 6.1.3):
+ * CM_PORTS_NI_CLOSED when the member's gate is shut (the operation not
+ * made, a failure as before), else CM_PORTS_NI_HELD while `bit` is in the
+ * marks `wait` (a suspension: not made, not failed, kept outstanding for
+ * after the wait), else CM_PORTS_NI_GO.
+ */
+#define CM_PORTS_NI_CLOSED          0UL
+#define CM_PORTS_NI_GO              1UL
+#define CM_PORTS_NI_HELD            2UL
+ULONG CmPortsNiAdmit(BOOLEAN open, ULONG wait, ULONG bit);
+
+/*
  * Windows 98 and ME: a member's known children (devnode handles) kept only
  * while present among `present`, in order; returns the new count.
  * CONFIGMG reuses a freed devnode's handle, so an identity must be
@@ -410,5 +690,125 @@ ULONG CmPortsKeptAdmits(ULONG state);
 #define CM_KEPT_L_DESTROY       1UL
 #define CM_KEPT_L_QUEUE         2UL
 ULONG CmPortsKeptLast(ULONG count, ULONG state, ULONG aboveP);
+
+/*
+ * The wake power-up (design record 21 section 6.3.1, task 49.46), its pure
+ * rules. An epoch is a count of system sleeps (one per sleep, whatever the
+ * number of domains), 0 never one. CmPortsWpuArm: 1 when a device D0 that
+ * the child filter dispatched in epoch `dispatchEpoch` and that completed
+ * `failed` (with STATUS_NO_SUCH_DEVICE, the one status observed; any other
+ * failure is counted, never armed on) arms its member in `epoch` (the
+ * current one) whose ConsumedEpoch is `consumed`. CmPortsWpuStep: the thread's verdict
+ * for one member, CM_WPU_V_*; for CM_WPU_V_SKIP the reason in *why
+ * (CM_WPU_WHY_*, the cm.wakepowerup.skip note's). CmPortsWpuDue: 1 when
+ * `elapsed` ms since the member's release is at least the delay.
+ */
+#define CM_WPU_DELAY_MS         5000UL
+#define CM_WPU_WINDOW_MS        65000UL
+#define CM_WPU_OVERDUE_MS       30000UL /* a request out longer: logged   */
+#define CM_WPU_UNITS            4UL     /* units kept per route per filter */
+#define CM_WPU_SLOTS            8UL     /* requests in flight, driver-wide */
+
+#define CM_WPU_OWN_UNKNOWN      0UL
+#define CM_WPU_OWN_STOR98       1UL
+#define CM_WPU_OWN_OTHER        2UL
+
+/* The owner from its two readings since the member's latest start, each
+ * CM_WPU_OWN_*: the driver key's install section and the driver at the top
+ * of the member's stack. Stor98's only when both say so; another's when
+ * either says another (a contradicting reading is never overturned by the
+ * other); else unknown, which fails closed. */
+ULONG CmPortsWpuOwner(ULONG infSection, ULONG top);
+
+/* The install-section reading: `text` (`chars` characters, not
+ * terminated) is the driver key's InfSection. CM_WPU_OWN_STOR98 for
+ * Stor98_Inst, Stor98_Inst.NTx86 or Stor98_Inst.NTamd64 (ASCII case
+ * aside: Windows 7 records the undecorated name, Windows 10 the decorated
+ * one), CM_WPU_OWN_OTHER for any other text. */
+ULONG CmPortsWpuInfSection(const WCHAR *text, ULONG chars);
+
+typedef struct _CM_WPU_IN {
+    ULONG Epoch;            /* the current epoch                          */
+    ULONG FailEpoch;        /* the member's last arm, 0 none              */
+    ULONG Consumed;         /* the epoch it was last asked or skipped in  */
+    ULONG Switch;           /* XhciCmWakePowerUp                          */
+    ULONG Closed;           /* a removal seen on one of its filters       */
+    ULONG Released;         /* its tunnel port released in this epoch,
+                               the domain open and not suspended          */
+    ULONG Elapsed;          /* ms since that release                      */
+    ULONG Owner;            /* CM_WPU_OWN_*                               */
+    ULONG Units;            /* units known and current                    */
+    ULONG Slots;            /* request slots free                         */
+    ULONG Outstanding;      /* a request for one of its units still out   */
+} CM_WPU_IN;
+
+#define CM_WPU_V_IDLE           0UL     /* not armed, or done this epoch   */
+#define CM_WPU_V_WAIT           1UL     /* armed, look again next pass     */
+#define CM_WPU_V_ASK            2UL
+#define CM_WPU_V_SKIP           3UL     /* consumed without a request      */
+#define CM_WPU_V_NONE           4UL     /* consumed: no unit known in time */
+
+#define CM_WPU_WHY_REMOVED      1UL
+#define CM_WPU_WHY_OFF          3UL
+#define CM_WPU_WHY_BUSY         4UL
+#define CM_WPU_WHY_NOT_STOR98   5UL
+#define CM_WPU_WHY_OUTSTANDING  6UL     /* never a second request at once */
+#define CM_WPU_WHY_CLOSED       7UL     /* closed between admission and send */
+
+ULONG CmPortsWpuArm(ULONG dispatchEpoch, ULONG epoch, ULONG consumed,
+                    ULONG failed);
+ULONG CmPortsWpuDue(ULONG elapsed);
+ULONG CmPortsWpuStep(const CM_WPU_IN *in, PULONG why);
+
+/*
+ * The wake power-up's gate (design record 21 section 6.3.1): when an ask
+ * may be admitted at all. CM_WPU_SYS is the system's (one for the driver),
+ * CM_WPU_DOM a domain's (one per NHI); both under the driver's gate lock.
+ * The system part: Epoch counts system sleeps (one per sleep, at the first
+ * SET below S0, Claim cleared by the SET to S0); Halt is set at every
+ * QUERY or SET below S0 and HaltSeq counts those events. The domain part:
+ * StopLatch is set at the NHI's query-stop, query-remove, stop, surprise
+ * removal and removal and cleared only by that NHI's own cancel or start;
+ * PowerDown at the NHI's own device power-down, cleared only by its own
+ * accepted release; ResumeEpoch and ResumeHaltSeq are taken when the NHI's
+ * resume work begins. A release is accepted (and stamps the epoch) only
+ * when no sleep and no halt event came since that resume began and the
+ * domain is not latched; an accepted release clears Halt and the domain's
+ * PowerDown, never another domain's latch. DownSeq counts the device
+ * power-downs any filter or NHI of the driver received (CmPortsWpuSysDown);
+ * a domain's release records it (RelDownSeq) and a later one closes every
+ * domain until that domain's own next release; HaltSeq likewise
+ * (RelHaltSeq), so a sleep query after a domain's release keeps it closed
+ * whatever another domain's later release does. CmPortsWpuDomOpen: 1 when
+ * an ask behind a port released in `relEpoch` may be admitted now.
+ */
+typedef struct _CM_WPU_SYS {
+    ULONG Epoch;
+    ULONG Claim;
+    ULONG Halt;
+    ULONG HaltSeq;
+    ULONG DownSeq;
+} CM_WPU_SYS;
+
+typedef struct _CM_WPU_DOM {
+    ULONG StopLatch;
+    ULONG PowerDown;
+    ULONG ResumeEpoch;
+    ULONG ResumeHaltSeq;
+    ULONG Resuming;         /* a resume began and its release is owed     */
+    ULONG RelDownSeq;       /* DownSeq at the accepted release            */
+    ULONG RelHaltSeq;       /* HaltSeq at the accepted release            */
+} CM_WPU_DOM;
+
+VOID CmPortsWpuSysPower(CM_WPU_SYS *s, ULONG isSet, ULONG toSleep);
+VOID CmPortsWpuSysDown(CM_WPU_SYS *s);
+VOID CmPortsWpuDomStop(CM_WPU_DOM *d);
+VOID CmPortsWpuDomCancel(CM_WPU_DOM *d);
+VOID CmPortsWpuDomStart(CM_WPU_DOM *d);
+VOID CmPortsWpuDomPowerDown(CM_WPU_DOM *d);
+VOID CmPortsWpuDomResumeBegin(const CM_WPU_SYS *s, CM_WPU_DOM *d);
+ULONG CmPortsWpuDomRelease(CM_WPU_SYS *s, CM_WPU_DOM *d);
+ULONG CmPortsWpuDomOpen(const CM_WPU_SYS *s, const CM_WPU_DOM *d,
+                        ULONG relEpoch);
 
 #endif /* CM_PORTS_H */

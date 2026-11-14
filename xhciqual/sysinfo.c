@@ -826,7 +826,7 @@ static void line_system(const SYSINFO *si, char *line)
     cat_word(line, si->sys_mfr);
     cat_word(line, si->sys_product);
     if (line[0] == '\0')
-        strcpy(line, "(maker and model not given)");
+        strcpy(line, "(manufacturer and model not given)");
     if (si->sys_version[0] != '\0') {
         strcat(line, ", version ");
         strcat(line, si->sys_version);

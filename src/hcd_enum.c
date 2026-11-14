@@ -5132,6 +5132,7 @@ static ULONG hcdRkeepFlags(PHCD_CONTROLLER hc, PHCD_PORT p,
     PHCD_PIPE pipe;
     KIRQL oldIrql;
     ULONG storage;
+    ULONG serial;
     ULONG flags;
     ULONG dci;
 
@@ -5187,9 +5188,19 @@ static ULONG hcdRkeepFlags(PHCD_CONTROLLER hc, PHCD_PORT p,
             flags |= XHCI_RKEEP_F_UAS;
         }
     }
-    if (dev->SerialState == HCD_SERIAL_OK && dev->SerialId[0] != 0) {
+    /* Task 49.34: a serial counts only with no twin of it present on this
+     * driver's controllers (record 20 section 4.3.4, M4). */
+    serial = XhciEnumKeepSerial(dev->SerialState == HCD_SERIAL_OK,
+                                dev->SerialId[0] != 0,
+                                (dev->SerialState == HCD_SERIAL_OK &&
+                                 dev->SerialId[0] != 0)
+                                    ? !HcdSerialUnique(dev)
+                                    : 0UL);
+    if (serial) {
         flags |= XHCI_RKEEP_F_SERIAL;
     }
+    /* Task 49.34: the Bulk-Only keep's inputs (hcd_bot.c). */
+    flags |= HcdBotFlags(hc, dev);
     /* Task 45.41: bNumInterfaces of the configuration the bus read. */
     if (dev->Config != NULL && dev->ConfigLength > 4 && dev->Config[4] == 1) {
         flags |= XHCI_RKEEP_F_ONE_IFACE;
@@ -5504,7 +5515,14 @@ static ULONG hcdRkeepRestore(PHCD_CONTROLLER hc, PHCD_PORT p)
     if (!HcdThreadSameIdentity(hc, dev)) {
         return 0;
     }
-    if (!HcdCfgResumeReplay(hc, dev)) {
+    /* Task 49.34: a storage device reopens only with no twin of its serial
+     * present (record 20 section 4.3.4, M4); a Bulk-Only drive after its
+     * medium check, in its own locked reopening (hcd_bot.c). */
+    if (dev->BotKeeping) {
+        if (!HcdBotRestore(hc, dev)) {
+            return 0;
+        }
+    } else if (!HcdCfgResumeReplay(hc, dev, hcdRkeepStorage(dev, &bytes))) {
         return 0;
     }
     /* Still the device that was identified: connected and enabled, with no
@@ -5517,6 +5535,11 @@ static ULONG hcdRkeepRestore(PHCD_CONTROLLER hc, PHCD_PORT p)
         (portsc & (XHCI_PORTSC_CSC | XHCI_PORTSC_PEC)) != 0) {
         XHCI_DBG_VALUE("hcd: resume keep, port changed meanwhile, PORTSC",
                        portsc);
+        return 0;
+    }
+    /* Task 49.34: the Bulk-Only drive's pipes reopen only now, after the
+     * port's last look (hcd_bot.c). */
+    if (dev->BotKeeping && !HcdBotReopen(hc, dev)) {
         return 0;
     }
     XHCI_DBG_VALUE("hcd: resume keep, restored, port/slot",
@@ -5556,6 +5579,12 @@ static VOID hcdResumeInvalidate(PHCD_CONTROLLER hc)
         }
         flags = hcdRkeepFlags(hc, &hc->Ports[i], dev);
         why = XhciEnumResumeKeep(hc->ResumeKeepOn, flags);
+        /* Task 49.34 (record 20 section 4.3.4, M4): a Bulk-Only drive's
+         * decision is committed with its latch, in one hold. */
+        if (why == XHCI_RKEEP_KEEP && (flags & XHCI_RKEEP_F_BOT) != 0 &&
+            !HcdBotLatch(hc, dev)) {
+            why = XHCI_RKEEP_WHY_BOT_STATE;
+        }
         XHCI_DBG_VALUE("hcd: resume keep, port/flags/why",
                        ((i + 1UL) << 24) | ((flags & 0xFFFFUL) << 8) |
                            (why & 0xFFUL));

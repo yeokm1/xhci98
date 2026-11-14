@@ -56,6 +56,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
 #include <setupapi.h>
+#include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -75,6 +76,9 @@
 /* The driver's own switchover gate (src\xhci_psw.c), declared here rather
  * than through xhci_psw.h, whose compatibility header is the driver's. */
 unsigned long XhciPswGate(unsigned long vendorDevice);
+/* And its interrupt routing gate (src\xhci_pirq.c; task 49.38: the
+ * routing rows XhciIntelIrqRoute and XhciIntelNoRouteIrq). */
+unsigned long XhciPirqReviewed(unsigned long xhciId);
 
 #define XHCIINST_VERSION XHCI_VER_STR
 
@@ -166,6 +170,7 @@ typedef DWORD (WINAPI *PFN_CM_ID)(DWORD, char *, ULONG, ULONG);
 typedef DWORD (WINAPI *PFN_CM_PROP)(DWORD, ULONG, ULONG *, void *, ULONG *,
                                     ULONG);
 typedef DWORD (WINAPI *PFN_CM_WAIT)(DWORD);
+typedef DWORD (WINAPI *PFN_CM_REENUM)(DWORD, ULONG);
 typedef BOOL (WINAPI *PFN_ISWOW64)(HANDLE, PBOOL);
 /* ntdll's RtlGetVersion (record 23 section 4.3, revision 13): the version
  * GetVersionEx gives a program with no compatibility manifest stops at
@@ -197,6 +202,7 @@ static struct {
     PFN_CM_ID DeviceId;
     PFN_CM_PROP Property;
     PFN_CM_WAIT WaitInstall;
+    PFN_CM_REENUM Reenum;   /* the takeover's give-back (record 23 5.4.2) */
 } api;
 
 /* ---- state -------------------------------------------------------------------- */
@@ -248,6 +254,9 @@ typedef struct _DEVREC {
     int S98Why;             /* Stor98: INST_S98_ELIGIBLE or the
                                reason it is left             */
     int S98Later;           /* Stor98: inst_s98_read_later    */
+    int TakeCand;           /* inst_take_candidate (record 23
+                               section 5.4.2)                 */
+    int Take;               /* its INST_TAKE_* in this plan    */
 } DEVREC;
 
 static int is_controller(const DEVREC *d);
@@ -446,6 +455,8 @@ static int dp_9x_max(void)
 static OSVERSIONINFOA osv;
 static FILE *logFile;
 static char logPath[INST_PATH_CHARS];
+static int logTried;        /* log_open ran: logPath is the place, or none */
+static char logWhy[80];     /* how the last place that failed did          */
 static char root[INST_PATH_CHARS];
 static char pkgDir[INST_PATH_CHARS];
 static char *infText[INST_INF_COUNT];
@@ -761,6 +772,41 @@ static int tbPortKnown;      /* a known host's switch or tunnel port, any
 static int tbPorts;          /* 98 SE, ME: a USB4 host's switch port, its
                                 router not listed (record 26 5.3.6)      */
 static int tbIntel;          /* Intel's Thunderbolt driver on a controller */
+/* The takeover (record 23 section 5.4.2, task 49.44): the choice (the
+ * window's box or /takeover), the candidates the last plan found, the one
+ * service they all run ("" when they differ), and whether a takeover of
+ * this run failed, which leaves the rest on their drivers. */
+static int takeChoice;
+static int takeCount;
+static int takeAble;         /* of those, the ones the choice would replace */
+static char takeService[64];
+static int takeStopped;
+#define TAKE_BOOT_CACHE 16
+static char takeBootId[TAKE_BOOT_CACHE][INST_ID_CHARS];
+static int takeBootAns[TAKE_BOOT_CACHE];
+static int takeBootCount;
+/* The controllers this run replaced: their ids and the services before. */
+#define TAKE_RUN_MAX 16
+static char takeRunId[TAKE_RUN_MAX][INST_ID_CHARS];
+static char takeRunOld[TAKE_RUN_MAX][64];
+static char takeRunInf[TAKE_RUN_MAX][64];
+static int takeRunCount;
+/* From the run's start on (takeLocked), the controllers the warning covered:
+ * a candidate a later reading finds is not taken over in this run. */
+static int takeLocked;
+static char takeWarnId[TAKE_RUN_MAX][INST_ID_CHARS];
+static int takeWarnCount;
+/* The device of the last takeover call, and its service before. */
+static char takeLastId[INST_ID_CHARS];
+static char takeLastOld[64];
+static int take_boot(const char *id);
+static void take_mark(int from, const char *state);
+/* The warnings' room: every one of inst_comp_warn_text's (under 2,500
+ * characters) and the takeover's unplaced-disk paragraph (under 900). */
+#define INST_TAKE_WARN_CAP  4096
+static void take_results(void);
+static int take_restart_ok(const DEVREC *d);
+static int take_listed(const char *id);
 static char tbIntelName[INST_ID_CHARS]; /* the first such controller's name */
 static const char *planRefusal; /* the plan's last refusal's text (44.25) */
 static int tbStaged;        /* NT: xhcicm.inf was staged by this run       */
@@ -800,6 +846,11 @@ static int trayDeferred;    /* the USB tree tool goes at the restart        */
 static int answerSet[INST_MAX_VALUES];
 static INST_U32 answerValue[INST_MAX_VALUES];
 static int answerChosen[INST_MAX_VALUES];
+/* A text row's answer (task 49.38, XhciCmTunnelBridge). */
+static char answerText[INST_MAX_VALUES][INST_TEXT_CHARS];
+/* Record 20 section 4.3.4, M19: XhciResumeKeepBot answered by Setup itself
+ * at this Windows's default (inst_keepbot_seed), not by the user. */
+static int answerSeeded[INST_MAX_VALUES];
 
 /* ======================================================================== */
 /* Output, the questions and the log (record 26 section 3.2)                */
@@ -911,33 +962,101 @@ const char *inst_eng_log_path(void)
     return logPath;
 }
 
-static void log_open(void)
+int inst_eng_log_tried(void)
+{
+    return logTried;
+}
+
+/* inst_log_pick's opening (record 23 section 7.5.1): a place is taken
+ * when its file opens for appending and the run's first line, ctx, went
+ * in whole - on a full drive a file opens and takes nothing. A place
+ * that fails is closed and left as it is: the file may not be this
+ * run's to remove. */
+static int log_try(void *ctx, const char *path)
+{
+    FILE *f;
+
+    errno = 0;
+    SetLastError(0);
+    f = fopen(path, "a");
+    if (f == NULL) {
+        _snprintf(logWhy, sizeof(logWhy) - 1, "open: errno %d, error %lu",
+                  errno, (unsigned long)GetLastError());
+        return 0;
+    }
+    logFile = f;
+    logAtLineStart = 1;
+    log_put((const char *)ctx);
+    if (ferror(f)) {
+        _snprintf(logWhy, sizeof(logWhy) - 1, "write: errno %d, error %lu",
+                  errno, (unsigned long)GetLastError());
+        logFile = NULL;
+        logAtLineStart = 1;
+        fclose(f);
+        return 0;
+    }
+    return 1;
+}
+
+/* nt: the run is on 2000 to 10, where the temp folder is never tried
+ * (section 7.5.1, revision 57). */
+static void log_open(int nt)
 {
     SYSTEMTIME t;
-    char drive[INST_PATH_CHARS];
+    char head[160];
+    char rootLog[INST_PATH_CHARS];
+    char tempLog[INST_PATH_CHARS];
+    char temp[INST_PATH_CHARS];
+    char say[INST_PATH_CHARS * 2 + 80];
+    const char *path;
+    DWORD n;
+    int place;
 
-    if (opts.Log[0] != '\0') {
-        inst_copy(logPath, opts.Log, sizeof(logPath));
-    } else {
-        if (GetWindowsDirectoryA(drive, sizeof(drive)) < 3) {
-            inst_copy(drive, "C:\\", sizeof(drive));
+    logTried = 1;
+    logWhy[0] = '\0';
+    logWhy[sizeof(logWhy) - 1] = '\0';
+    rootLog[0] = '\0';
+    tempLog[0] = '\0';
+    if (opts.Log[0] == '\0') {
+        if (GetWindowsDirectoryA(rootLog, sizeof(rootLog) - 16) < 3) {
+            inst_copy(rootLog, "C:\\", sizeof(rootLog));
         }
-        drive[3] = '\0';
-        inst_copy(logPath, drive, sizeof(logPath));
-        strcat(logPath, "XHCIINST.LOG");
+        rootLog[3] = '\0';
+        strcat(rootLog, INST_LOG_NAME);
+        n = nt ? 0 : GetTempPathA(sizeof(temp), temp);
+        if (n != 0 && n < sizeof(temp)) {
+            inst_log_temp_path(tempLog, sizeof(tempLog), temp, rootLog);
+        }
     }
-    logFile = fopen(logPath, "a");
     GetLocalTime(&t);
-    if (logFile == NULL) {
-        out("The log file %s could not be opened; continuing without it."
-            "\n\n",
-            logPath);
-        logPath[0] = '\0';
-        return;
+    _snprintf(head, sizeof(head) - 1,
+              "\n==== %s %s, %04u-%02u-%02u %02u:%02u:%02u ====\n",
+              instWindow ? "xhciwiz" : "xhciinst", XHCIINST_VERSION, t.wYear,
+              t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+    head[sizeof(head) - 1] = '\0';
+    place = inst_log_pick(nt, opts.Log, rootLog, tempLog, log_try, head,
+                          &path);
+    inst_copy(logPath, path != NULL ? path : "", sizeof(logPath));
+    if (place != INST_LOG_NONE && front.Log != NULL) {
+        front.Log(front.Ctx, head);
     }
-    logonly("\n==== %s %s, %04u-%02u-%02u %02u:%02u:%02u ====\n",
-            instWindow ? "xhciwiz" : "xhciinst", XHCIINST_VERSION, t.wYear,
-            t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+    /* On 98 SE and ME the two files name each other, for the log's
+     * reader (section 7.5.1): the temp folder's the root file that
+     * failed, the root file a temp folder's file found by its name. On
+     * NT tempLog stays empty and neither line is written. */
+    if (place == INST_LOG_TEMP) {
+        logonly("Cannot write the log to %s (%s). Another log may be "
+                "there.\n", rootLog, logWhy);
+    } else if (place == INST_LOG_ROOT && tempLog[0] != '\0') {
+        n = GetFileAttributesA(tempLog);
+        if (n != 0xFFFFFFFFUL && (n & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+            logonly("Another log may be at %s.\n", tempLog);
+        }
+    }
+    if (inst_log_fail_text(say, sizeof(say), place, opts.Log, rootLog,
+                           tempLog)) {
+        out("%s\n\n", say);
+    }
 }
 
 /* One question through the front end (inst_eng.h, INST_ASK): 1 with the
@@ -1389,6 +1508,7 @@ static void load_routines(void)
     api.Parent = (PFN_CM_REL)proc(api.CfgMgr, "cfgmgr32", "CM_Get_Parent");
     api.DeviceId = (PFN_CM_ID)proc(api.CfgMgr, "cfgmgr32", "CM_Get_Device_IDA");
     api.Property = (PFN_CM_PROP)proc(api.CfgMgr, "cfgmgr32", "CM_Get_DevNode_Registry_PropertyA");
+    api.Reenum = (PFN_CM_REENUM)proc(api.CfgMgr, "cfgmgr32", "CM_Reenumerate_DevNode");
     api.WaitInstall = (PFN_CM_WAIT)proc(api.CfgMgr, "cfgmgr32", "CMP_WaitNoPendingInstallEvents");
     if (api.WaitInstall == NULL) {
         /* Windows 2000 exports it from setupapi.dll. */
@@ -1561,6 +1681,29 @@ static int reg_dword(HKEY rootKey, const char *path, const char *name,
     r = RegQueryValueExA(k, name, NULL, &t, (LPBYTE)value, &n);
     RegCloseKey(k);
     return r == ERROR_SUCCESS && t == REG_DWORD && n == sizeof(DWORD);
+}
+
+/* A DWORD value: 1 read, 0 absent (the key opened, no such value), -1
+ * anything else (the key did not open, the query failed, or the value is
+ * there and not a DWORD). */
+static int reg_dword3(HKEY rootKey, const char *path, const char *name,
+                      DWORD *value)
+{
+    HKEY k;
+    DWORD t;
+    DWORD n = sizeof(DWORD);
+    LONG r;
+
+    if (RegOpenKeyExA(rootKey, path, 0, KEY_READ, &k) != ERROR_SUCCESS) {
+        return -1;
+    }
+    r = RegQueryValueExA(k, name, NULL, &t, (LPBYTE)value, &n);
+    RegCloseKey(k);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        return 0;
+    }
+    return r == ERROR_SUCCESS && t == REG_DWORD && n == sizeof(DWORD) ? 1
+                                                                       : -1;
 }
 
 /* A string value: 1 read, 0 absent (the key opened, no such value), -1
@@ -3702,6 +3845,121 @@ static void board_say(const char *lead)
     out("%s%s\n", lead, inst_board_line(c));
 }
 
+/* ---- the takeover (record 23 section 5.4.2; task 49.44) ------------------ */
+
+/* Whether the Windows disk is behind the controller: inst_boot_path_has's
+ * answer, read once a run for each controller (the disk does not move). */
+static int take_boot(const char *id)
+{
+    int i;
+    int r;
+
+    for (i = 0; i < takeBootCount; i++) {
+        if (inst_eq(takeBootId[i], id)) {
+            return takeBootAns[i];
+        }
+    }
+    r = envNow.Nt ? inst_boot_path_has(id) : -1;
+    logonly("takeover: the Windows disk behind %s: %d\n", id, r);
+    if (takeBootCount < TAKE_BOOT_CACHE) {
+        inst_copy(takeBootId[takeBootCount], id, INST_ID_CHARS);
+        takeBootAns[takeBootCount++] = r;
+    }
+    return r;
+}
+
+/* The devnode's UpperFilters and LowerFilters, joined by ", " ("" none or
+ * unreadable). */
+static void take_filters(const char *id, char *out, size_t cap)
+{
+    static const char *const which[2] = { "UpperFilters", "LowerFilters" };
+    char buf[INST_UPPER_BYTES];
+    const char *p;
+    int i;
+
+    out[0] = '\0';
+    for (i = 0; i < 2; i++) {
+        if (enum_value(id, which[i], REG_MULTI_SZ, buf, sizeof(buf), NULL) <=
+            0) {
+            continue;
+        }
+        for (p = buf; *p != '\0'; p += strlen(p) + 1) {
+            if (out[0] != '\0') {
+                strncat(out, ", ", cap - strlen(out) - 1);
+            }
+            strncat(out, p, cap - strlen(out) - 1);
+        }
+    }
+}
+
+static void take_log_filters(const DEVREC *d)
+{
+    char f[256];
+
+    take_filters(d->Id, f, sizeof(f));
+    logonly("takeover: %s runs %s, reason %d, filters: %s\n", d->Id,
+            d->Service, d->Take, f[0] ? f : "none");
+}
+
+/* The console's hint: the takeover off, a candidate it would replace, the
+ * USB drivers in the run; never in the window (record 23 section 5.4.2). */
+static int take_hint_due(void)
+{
+    return !opts.Takeover && !instWindow && envNow.Nt && usbInclude &&
+           inst_take_said(takeCount, takeAble) > 0;
+}
+
+/* The warning's condition: the choice on with the USB drivers, and a
+ * candidate it replaces (not one with the Windows disk behind it). */
+static int take_planned(int usb)
+{
+    return takeChoice && usb && envNow.Nt &&
+           inst_take_said(takeCount, takeAble) > 0;
+}
+
+static int take_warned(const char *id)
+{
+    int i;
+
+    for (i = 0; i < takeWarnCount; i++) {
+        if (inst_eq(takeWarnId[i], id)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* At the run's start, the plan being the one shown: the controllers the
+ * warning covered, none when it was not shown. A candidate a barrier's
+ * reading finds later stays "Skip (other driver)" for this run, so nothing
+ * is replaced without the warning (record 23 section 5.4.2, revision 64). */
+static void take_lock(void)
+{
+    int i;
+
+    takeWarnCount = 0;
+    if (take_planned(usbInclude)) {
+        for (i = 0; i < devCount && takeWarnCount < TAKE_RUN_MAX; i++) {
+            const DEVREC *d = &devs[i];
+            if (d->Present && d->TakeCand && inst_take_runs(d->Take)) {
+                inst_copy(takeWarnId[takeWarnCount++], d->Id, INST_ID_CHARS);
+            }
+        }
+    }
+    takeLocked = 1;
+    logonly("takeover: %d controller(s) covered by the warning\n",
+            takeWarnCount);
+}
+
+/* The plan's row for a device. */
+static const char *row_text(const DEVREC *d, int console)
+{
+    if (d->TakeCand && d->Inf == INST_INF_XHCI && d->Take != INST_TAKE_OFF) {
+        return inst_take_row_text(d->Take, console);
+    }
+    return inst_action_row_text(d->Action, d->Runs, opts.Force, row_stale(d));
+}
+
 static void plan(void)
 {
     int i;
@@ -3710,12 +3968,16 @@ static void plan(void)
 
     envNow.AnyXhci = 0;
     envNow.PswController = 0;
+    envNow.PirqController = 0;
     envNow.CmNhi = 0;
     envNow.AsmHandover = 0;
     boardCount = 0;
     boardHost = 0;
     tbPorts = 0;
     tbPortKnown = 0;
+    takeCount = 0;
+    takeAble = 0;
+    takeService[0] = '\0';
     if (infText[INST_INF_CM] != NULL) {
         /* Read again only while the connection manager's INF is in the
          * run; the name found stays for the unticked box's note. */
@@ -3727,8 +3989,27 @@ static void plan(void)
         DEVREC *d = &devs[i];
         d->Inf = -1;
         d->Runs = 0;
+        d->TakeCand = 0;
+        d->Take = INST_TAKE_OFF;
         if (!d->Present) {
             continue;
+        }
+        if (is_controller(d) && !d->RegOnly &&
+            inst_take_candidate(envNow.Nt, osKind, d->Service)) {
+            /* Counted whatever the boxes say: the window's row is the
+             * reading's (record 26 section 5.3.10). */
+            d->TakeCand = 1;
+            if (takeCount == 0) {
+                inst_copy(takeService, d->Service, sizeof(takeService));
+            } else if (!inst_eq(takeService, d->Service)) {
+                takeService[0] = '\0';
+            }
+            takeCount++;
+            /* Read whatever the choice: the hint and the box announce a
+             * replacement only where one can happen (owner, 2026-11-14). */
+            if (inst_take_able(take_boot(d->Id), takeStopped)) {
+                takeAble++;
+            }
         }
         if (envNow.Nt && (inst_board_nhi(d->Id) ||
                           inst_cm_xhci_target(dev_ids(d).Hw, dev_ids(d).HwBytes))) {
@@ -3744,6 +4025,9 @@ static void plan(void)
             envNow.AnyXhci = 1;
             if (inst_pci_vendev(first_hw(d), &vd) && XhciPswGate(vd)) {
                 envNow.PswController = 1;
+            }
+            if (inst_pci_vendev(first_hw(d), &vd) && XhciPirqReviewed(vd)) {
+                envNow.PirqController = 1;
             }
         }
         if (!envNow.Nt && !tbPorts && !d->RegOnly) {
@@ -3812,6 +4096,19 @@ static void plan(void)
          * revision 26 amends it, record 26 section 5.3.1 cases 3a and
          * 3b): Windows' own in-box USBXHCI on a controller, and stornvme
          * on a drive, are installed over; every other driver stays. */
+        /* Another manufacturer's driver on a controller, the takeover
+         * chosen (record 23 section 5.4.2, owner 2026-11-13): installed
+         * over as USBXHCI below, unless the Windows disk is behind it or
+         * an earlier takeover of this run failed. */
+        if (d->Inf == INST_INF_XHCI && d->TakeCand && dv.HasService) {
+            int chosen = inst_take_offered(takeChoice && usbInclude,
+                                           takeLocked, take_warned(d->Id));
+            d->Take = inst_take_reason(chosen, chosen ? take_boot(d->Id) : 0,
+                                       takeStopped);
+            if (inst_take_runs(d->Take)) {
+                dv.HasService = 0;
+            }
+        }
         if (osKind == INST_OS_CMONLY && dv.HasService &&
             ((d->Inf == INST_INF_XHCI && inst_eq(d->Service, "USBXHCI")) ||
              (d->Inf == INST_INF_S98 &&
@@ -3969,8 +4266,11 @@ static void print_plan(void)
         out("    INF %s; driver %s%s%s; %s%s\n", instInfFile[d->Inf],
             d->Service[0] ? d->Service : "none",
             d->VersionText[0] ? " " : "", d->VersionText,
-            inst_action_row_text(d->Action, d->Runs, opts.Force,
-                                 row_stale(d)), "");
+            row_text(d, 1), "");
+        if (d->TakeCand && d->Take != INST_TAKE_OFF) {
+            /* Record 23 section 5.4.2: what the takeover read, logged. */
+            take_log_filters(d);
+        }
         if (d->Inf == INST_INF_CM && inst_board_nhi(d->Id)) {
             /* Record 32 section 12.8.15.12: the classification in the
              * report, as in the log, never waited for. */
@@ -3997,6 +4297,13 @@ static void print_plan(void)
     }
     s98_share_note(1);
     s98Shown = 1;
+    if (take_hint_due()) {
+        /* Record 23 section 5.4.2: the one line of a run with the takeover
+         * off (owner, 2026-11-13: kept), never in the window. */
+        char hint[128];
+        inst_take_hint(takeCount, hint, sizeof(hint));
+        out("%s", hint);
+    }
     if (!any) {
         out("  none found. The drivers are still stored for devices "
             "plugged in later.\n");
@@ -4748,6 +5055,7 @@ static int value_targets(int v, INST_VNOW *vnow, int cap, int *nNow,
  * from the value in force. */
 static int chosenSet[INST_MAX_VALUES];
 static INST_U32 chosenValue[INST_MAX_VALUES];
+static char chosenText[INST_MAX_VALUES][INST_TEXT_CHARS];
 
 void inst_eng_choose_value(int value, int set, INST_U32 v)
 {
@@ -4757,6 +5065,108 @@ void inst_eng_choose_value(int value, int set, INST_U32 v)
     /* A greyed row's value is for another system: never written. */
     chosenSet[value] = set && !inst_value_greyed(value, &envNow) ? 1 : 0;
     chosenValue[value] = v;
+}
+
+static int mw_text(int v, char *out, size_t cap);
+
+static int set_show_read(int index, INST_U32 *v, char *text, size_t cap)
+{
+    DWORD d = 0;
+    int r;
+
+    if (instValues[index].Kind == INST_VK_TEXT) {
+        r = mw_text(index, text, cap);
+        return r == 1 ? 2 : r;
+    }
+    r = mw_value(index, &d);
+    *v = (INST_U32)d;
+    return r;
+}
+
+int inst_eng_set_show(void)
+{
+    static char text[65536];
+    char *p;
+    char *nl;
+
+    inst_settings_list(opts.SetFind, &envNow, set_show_read, text,
+                       sizeof(text));
+    /* A line at a time: out() formats into a bounded buffer. */
+    for (p = text; *p != '\0'; p = nl + 1) {
+        nl = strchr(p, '\n');
+        if (nl == NULL) {
+            out("%s\n", p);
+            break;
+        }
+        *nl = '\0';
+        out("%s\n", p);
+    }
+    return INST_EXIT_DONE;
+}
+
+int inst_eng_value_allowed(int value, INST_U32 v)
+{
+    return inst_value_allowed(value, &envNow, v);
+}
+
+int inst_eng_nine_text(int value, INST_U32 now, char *out, size_t cap)
+{
+    if (value < 0 || value >= instValueCount) {
+        return 0;
+    }
+    return inst_value_nine_text(&instValues[value], &envNow, now, out, cap);
+}
+
+void inst_eng_range_text(int value, char *out, size_t cap)
+{
+    inst_value_range_text_env(value, &envNow, out, cap);
+}
+
+void inst_eng_choose_text(int value, int set, const char *text)
+{
+    if (value < 0 || value >= instValueCount || value >= INST_MAX_VALUES ||
+        instValues[value].Kind != INST_VK_TEXT || text == NULL ||
+        !inst_bdf_list_ok(text)) {
+        return;
+    }
+    chosenSet[value] = set && !inst_value_greyed(value, &envNow) ? 1 : 0;
+    chosenValue[value] = 0;
+    inst_copy(chosenText[value], text, sizeof(chosenText[value]));
+}
+
+/* A text row's machine-wide value (task 49.38): 1 a string, into out; 0
+ * absent; -1 there and not a string, or unreadable. */
+static int mw_text(int v, char *out, size_t cap)
+{
+    HKEY k;
+    DWORD t = REG_NONE;
+    DWORD n;
+    char data[INST_TEXT_CHARS + 2];
+    LONG r;
+
+    out[0] = '\0';
+    if (stScreens) {
+        return 0;
+    }
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_MW_KEY, 0, KEY_QUERY_VALUE, &k);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        return 0;
+    }
+    if (r != ERROR_SUCCESS) {
+        return -1;
+    }
+    memset(data, 0, sizeof(data));
+    n = sizeof(data) - 1;
+    r = RegQueryValueExA(k, instValues[v].Name, NULL, &t, (LPBYTE)data, &n);
+    RegCloseKey(k);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        return 0;
+    }
+    if (r != ERROR_SUCCESS || t != REG_SZ) {   /* cm_reg.c: REG_SZ alone */
+        return -1;
+    }
+    inst_copy(out, data, cap);
+    return 1;
 }
 
 /* The caution of a value set without its question, when it is about the
@@ -4772,6 +5182,237 @@ static void set_caution(int v, INST_U32 value)
     }
     inst_caution_text(v, 1UL << value, text, sizeof(text));
     out("  NOTE: %s\n", text);
+}
+
+/* Every xhci98 controller's own key, present or not and past INST_MAX_NOW,
+ * read for value v (inst_keepbot_seed_all): 1 none holds a DWORD of it and
+ * every key and the device list were read, 0 not, -1 no memory. */
+static int keys_hold_none(int v)
+{
+    INST_VNOW *all;
+    int n = 0;
+    int ok;
+    int i;
+
+    if (stScreens) {
+        return 1;   /* the self-test's devices: no registry read */
+    }
+    all = (INST_VNOW *)malloc((devCount > 0 ? devCount : 1) *
+                              sizeof(INST_VNOW));
+    if (all == NULL) {
+        return -1;
+    }
+    for (i = 0; i < devCount; i++) {
+        DWORD now = 0;
+        int r = -1;
+        char path[INST_DRIVER_PATH_CHARS];
+        if (!is_controller(&devs[i]) || !inst_eq(devs[i].Service, "xhci98")) {
+            continue;
+        }
+        /* Read by its Driver path, not value_now: a controller not present
+         * has no planning Inf (-1). A key that cannot be read, or a value
+         * there that is not a DWORD, is -1: no seed. */
+        if (devs[i].Driver[0] != '\0' &&
+            driver_key_path(&devs[i], path, sizeof(path))) {
+            r = reg_dword3(HKEY_LOCAL_MACHINE, path, instValues[v].Name, &now);
+        }
+        all[n].State = r;
+        all[n].Value = r > 0 ? (INST_U32)now : 0;
+        all[n].Desc = devs[i].Id;
+        n++;
+    }
+    ok = inst_keepbot_seed_all(lastScanOk, all, n);
+    free(all);
+    return ok ? 1 : 0;
+}
+
+/* Task 49.47 (owner, 2026-11-14): 1 when Setup proposes XhciIntelPortSwitch 1
+ * on this run, a first install on a listed board (inst_psw_propose): a
+ * present controller XhciPswGate admits that this run installs xhci98 on
+ * with no xhci98 driver now, nothing set machine-wide, and no xhci98
+ * controller's key holding a DWORD of it. */
+static int psw_proposed(void)
+{
+    int v = inst_value_find("XhciIntelPortSwitch");
+    int listedNew = 0;
+    int i;
+    DWORD mwv = 0;
+    int mw;
+    int clear;
+
+    if (v < 0 || v >= INST_MAX_VALUES || value_inf(v) == NULL) {
+        return 0;
+    }
+    for (i = 0; i < devCount && !listedNew; i++) {
+        const DEVREC *d = &devs[i];
+        INST_U32 vd;
+        if (d->Present && !d->Refused && is_controller(d) &&
+            d->Inf == INST_INF_XHCI && d->Action == INST_ACT_INSTALL &&
+            inst_pci_vendev(first_hw(d), &vd) && XhciPswGate(vd)) {
+            listedNew = 1;
+        }
+    }
+    if (!listedNew) {
+        return 0;
+    }
+    mw = mw_value(v, &mwv);
+    clear = keys_hold_none(v);
+    return inst_psw_propose(listedNew, mw, clear > 0, NULL, 0);
+}
+
+/* The proposal (task 49.47) stays apart from an answer to the end: with no
+ * answer given (no question answered, /set, or the window's choice) it is
+ * noted here, and written by psw_write_proposed only once the results
+ * check has counted a listed controller this run installed xhci98 on. */
+static int pswProposedRun;
+static int pswInstalledOk;
+
+static void psw_seed(void)
+{
+    int v = inst_value_find("XhciIntelPortSwitch");
+
+    pswProposedRun = 0;
+    pswInstalledOk = 0;
+    if (v < 0 || v >= INST_MAX_VALUES || answerSet[v] || !psw_proposed()) {
+        return;
+    }
+    pswProposedRun = 1;
+    logonly("XhciIntelPortSwitch: 1 proposed at a first install on a listed "
+            "controller (task 49.47), written once one is installed\n");
+    if (opts.List) {
+        out("(/list) XhciIntelPortSwitch would be set to 1\n  for all "
+            "controllers (this computer's ports moved to xHCI98).\n\n");
+    }
+}
+
+/* 1 when d is a controller the switchover's gate admits. */
+static int psw_listed_id(const char *id)
+{
+    INST_U32 vd;
+
+    return id != NULL && inst_pci_vendev(id, &vd) && XhciPswGate(vd);
+}
+
+/* After the results check: the proposed 1, machine-wide, where the run
+ * installed a listed controller (inst_psw_write_now). */
+static void psw_write_proposed(void)
+{
+    int v = inst_value_find("XhciIntelPortSwitch");
+    HKEY k;
+    DWORD val = 1;
+    LONG w;
+
+    if (v < 0 || v >= INST_MAX_VALUES) {
+        return;
+    }
+    if (pswProposedRun && !pswInstalledOk) {
+        logonly("XhciIntelPortSwitch: proposed, not written (no listed "
+                "controller was installed)\n");
+    }
+    if (!inst_psw_write_now(pswProposedRun, pswInstalledOk, answerSet[v],
+                            opts.List, runCancelled, takeStopped)) {
+        return;
+    }
+    if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_MW_KEY, 0, NULL, 0,
+                        KEY_SET_VALUE, NULL, &k, NULL) != ERROR_SUCCESS) {
+        out("%s could not be written (the key HKLM\\%s did not open).\n",
+            instValues[v].Name, INST_MW_KEY);
+        flagFailed = 1;
+        return;
+    }
+    w = RegSetValueExA(k, instValues[v].Name, 0, REG_DWORD, (const BYTE *)&val,
+                       sizeof(val));
+    RegCloseKey(k);
+    if (w != ERROR_SUCCESS) {
+        out("%s could not be written (error %ld).\n", instValues[v].Name,
+            (long)w);
+        flagFailed = 1;
+        return;
+    }
+    flagChanged = 1;
+    flagRestart = 1;
+    step(INST_STEP_DONE, "%s set to %lu", instValues[v].Name,
+         (unsigned long)val);
+    out("%s set to %lu for all controllers.\n", instValues[v].Name,
+        (unsigned long)val);
+    out("  It takes effect when the driver next starts (restart "
+        "Windows, or disable\n  and enable the device).\n");
+    logonly("  wrote HKLM\\%s\\%s = 1 (absent; Setup's proposal, task 49.47)\n",
+            INST_MW_KEY, instValues[v].Name);
+}
+
+/* M19 (owner, 2026-11-13): every value present after an install. No INF
+ * writes XhciResumeKeepBot (its default differs by Windows), so Setup
+ * answers it itself, at this Windows's default, where nothing is set
+ * (inst_keepbot_seed); write_values then writes it machine-wide with the
+ * answers. A /list run is told what the install would write. */
+static void keepbot_seed(void)
+{
+    int v = inst_value_find("XhciResumeKeepBot");
+    INST_VNOW vnow[INST_MAX_NOW];
+    int nNow;
+    int cmNew;
+    int targets;
+    int installs = 0;
+    int mw;
+    int i;
+    DWORD mwv = 0;
+    INST_U32 def;
+
+    if (v < 0 || v >= INST_MAX_VALUES || value_inf(v) == NULL) {
+        return;
+    }
+    answerSeeded[v] = 0;
+    /* Only a run that installs or updates an xhci98 controller writes it:
+     * a run with every driver current, or of the tools alone, says it
+     * changes no driver setting, and leaves the value as it is. */
+    for (i = 0; i < devCount; i++) {
+        if (value_target(&devs[i], v) &&
+            (devs[i].Action == INST_ACT_INSTALL ||
+             devs[i].Action == INST_ACT_UPDATE)) {
+            installs = 1;
+        }
+    }
+    if (!installs) {
+        return;
+    }
+    targets = value_targets(v, vnow, INST_MAX_NOW, &nNow, &cmNew);
+    mw = mw_value(v, &mwv);
+    if (mw < 0) {
+        logonly("XhciResumeKeepBot: the machine-wide value could not be "
+                "read or is not a number: kept\n");
+    }
+    /* A user's number other than the default is written as every answer
+     * is; one equal to it would be "already in force" there, so it is
+     * written here too, the value being absent everywhere. */
+    def = inst_keepbot_default(&envNow);
+    if (!inst_keepbot_seed(envNow.Nt, targets, 0, mw, vnow, nNow) ||
+        (answerSet[v] && answerValue[v] != def)) {
+        return;
+    }
+    /* Every xhci98 controller's own key, present or not and past
+     * INST_MAX_NOW: the machine-wide write would override a value found
+     * in any of them (a dock unplugged now keeps its user's 0). */
+    i = keys_hold_none(v);
+    if (i < 0) {
+        logonly("XhciResumeKeepBot: not written (no memory to read the "
+                "controllers' keys)\n");
+        return;
+    }
+    if (i == 0) {
+        logonly("XhciResumeKeepBot: not written (a controller's own key "
+                "holds it, or a key or the device list could not be "
+                "read)\n");
+        return;
+    }
+    answerSet[v] = 1;
+    answerSeeded[v] = 1;
+    answerValue[v] = def;
+    if (opts.List) {
+        out("(/list) XhciResumeKeepBot would be set to %lu\n  for all "
+            "controllers (this Windows's default).\n\n",
+            (unsigned long)def);
+    }
 }
 
 /* Ask, or take /set, the window's choices and /defaults (record 23
@@ -4791,18 +5432,24 @@ static void ask_values(void)
     int same;
     int mw;
     DWORD mwv;
+    int pswV = inst_value_find("XhciIntelPortSwitch");
+    int pswProp = psw_proposed();
 
     memset(answerSet, 0, sizeof(answerSet));
     memset(answerChosen, 0, sizeof(answerChosen));
+    memset(answerSeeded, 0, sizeof(answerSeeded));
     for (k = 0; k < opts.SetCount; k++) {
         answerSet[opts.SetIndex[k]] = 1;
         answerValue[opts.SetIndex[k]] = opts.SetValue[k];
+        inst_copy(answerText[opts.SetIndex[k]], opts.SetText[k],
+                  sizeof(answerText[0]));
     }
     for (v = 0; v < instValueCount && v < INST_MAX_VALUES; v++) {
         if (chosenSet[v] && !answerSet[v]) {
             answerSet[v] = 1;
             answerChosen[v] = 1;
             answerValue[v] = chosenValue[v];
+            inst_copy(answerText[v], chosenText[v], sizeof(answerText[0]));
         }
     }
 
@@ -4814,8 +5461,20 @@ static void ask_values(void)
         if (value_inf(v) == NULL) {
             continue;
         }
-        haveDef = inst_value_default(v, value_inf(v), &def);
+        haveDef = inst_value_default_env(v, value_inf(v), &envNow, &def);
         targets = value_targets(v, vnow, INST_MAX_NOW, &nNow, &cmNew);
+        if (haveDef && v == pswV && pswProp) {
+            def = 1UL;  /* task 49.47: Setup's proposal on this board */
+        }
+        if (answerSet[v] && instValues[v].Kind == INST_VK_TEXT) {
+            out("%s: set to %s %s%s.\n", instValues[v].Name,
+                answerText[v][0] != '\0' ? answerText[v] : "auto",
+                answerChosen[v] ? "in Settings" : "by /set",
+                targets ? "" : " (for all controllers; no device uses it now)");
+            set_caution(v, 0);
+            out("\n");
+            continue;
+        }
         if (answerSet[v]) {
             out("%s: set to %lu %s%s.\n", instValues[v].Name,
                 (unsigned long)answerValue[v],
@@ -4881,6 +5540,8 @@ static void ask_values(void)
         }
         out("\n");
     }
+    keepbot_seed();
+    psw_seed();
 }
 
 /* The window's rows (record 26 sections 5.4 and 5.5): every value of the
@@ -4890,6 +5551,8 @@ int inst_eng_rows(INST_ROW *rows, int cap)
 {
     int v;
     int n = 0;
+    int pswV = inst_value_find("XhciIntelPortSwitch");
+    int pswProp = psw_proposed();
 
     for (v = 0; v < instValueCount && v < INST_MAX_VALUES && n < cap; v++) {
         INST_ROW *r = &rows[n];
@@ -4902,9 +5565,24 @@ int inst_eng_rows(INST_ROW *rows, int cap)
         int asked;
         int cmRow;
         int greyed;
-        if (value_inf(v) == NULL ||
-            !inst_value_default(v, value_inf(v), &r->Def)) {
+        if (value_inf(v) == NULL) {
             continue;
+        }
+        if (instValues[v].Loc == INST_LOC_DRIVE) {
+            continue;   /* a drive's own key: the USB Tree's (task 49.38) */
+        }
+        if (instValues[v].Kind == INST_VK_TEXT) {
+            r->Def = 0;
+            if (!inst_inf_addreg_text(value_inf(v), instValues[v].Name,
+                                      r->DefText, sizeof(r->DefText))) {
+                continue;
+            }
+        } else if (!inst_value_default_env(v, value_inf(v), &envNow,
+                                           &r->Def)) {
+            continue;
+        }
+        if (v == pswV && pswProp) {
+            r->Def = 1UL;   /* task 49.47: Setup's proposal */
         }
         /* A Thunderbolt value with no controller present is still shown
          * when the support is ticked, and written machine-wide for the
@@ -4967,6 +5645,18 @@ int inst_eng_rows(INST_ROW *rows, int cap)
                 r->Same = 0;
             }
         }
+        if (instValues[v].Kind == INST_VK_TEXT) {
+            /* Task 49.38: the string in force, machine-wide or the INF's;
+             * a controller's own string is not shown. */
+            r->MwState = mw_text(v, r->Text, sizeof(r->Text));
+            if (r->MwState != 1) {
+                inst_copy(r->Text, r->DefText, sizeof(r->Text));
+            }
+            r->MwValue = 0;
+            r->InForce = 0;
+            r->Same = r->MwState != -1;
+            r->NowCount = 0;
+        }
         n++;
     }
     return n;
@@ -5024,7 +5714,7 @@ static int value_needs_write(int v)
     DWORD mwv = 0;
     int mw;
 
-    if (!answerSet[v] ||
+    if (!answerSet[v] || instValues[v].Loc == INST_LOC_DRIVE ||
         (envNow.Nt && (instValues[v].Apply == INST_APPLY_9X_XHCI ||
                        instValues[v].Apply == INST_APPLY_9X_CM)) ||
         (instValues[v].Apply == INST_APPLY_NT5_CM &&
@@ -5034,7 +5724,17 @@ static int value_needs_write(int v)
         return 0;
     }
 
-    inst_value_default(v, value_inf(v), &def);
+    if (instValues[v].Kind == INST_VK_TEXT) {
+        /* Task 49.38: written unless the machine-wide string says it. */
+        char now[INST_TEXT_CHARS];
+        return mw_text(v, now, sizeof(now)) != 1 ||
+               !(inst_eq(now, answerText[v]) ||
+                 (inst_bdf_auto(now) && inst_bdf_auto(answerText[v])));
+    }
+    if (answerSeeded[v]) {
+        return 1;   /* M19: absent everywhere, written at the default */
+    }
+    inst_value_default_env(v, value_inf(v), &envNow, &def);
     value_targets(v, vnow, INST_MAX_NOW, &nNow, &cmNew);
     mw = mw_value(v, &mwv);
     if (mw < 0) {
@@ -5042,6 +5742,42 @@ static int value_needs_write(int v)
     }
     return inst_mw_write_needed(mw > 0 ? 1 : 0, (INST_U32)mwv, vnow, nNow,
                                 def, answerValue[v]);
+}
+
+/* A text row's write (task 49.38): REG_SZ, machine-wide, as every value
+ * Setup writes; "" is written as "auto", the INFs' word. */
+static void write_text_value(int v)
+{
+    HKEY k;
+    LONG w;
+    const char *t = answerText[v][0] != '\0' ? answerText[v] : "auto";
+
+    if (!value_needs_write(v)) {
+        out("%s stays %s.\n", instValues[v].Name, t);
+        return;
+    }
+    if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_MW_KEY, 0, NULL, 0,
+                        KEY_SET_VALUE, NULL, &k, NULL) != ERROR_SUCCESS) {
+        out("%s could not be written (the key HKLM\\%s did not open).\n",
+            instValues[v].Name, INST_MW_KEY);
+        flagFailed = 1;
+        return;
+    }
+    w = RegSetValueExA(k, instValues[v].Name, 0, REG_SZ, (const BYTE *)t,
+                       (DWORD)strlen(t) + 1);
+    RegCloseKey(k);
+    if (w != ERROR_SUCCESS) {
+        out("%s could not be written (error %ld).\n", instValues[v].Name,
+            (long)w);
+        flagFailed = 1;
+        return;
+    }
+    flagChanged = 1;
+    flagRestart = 1;
+    step(INST_STEP_DONE, "%s set to %s", instValues[v].Name, t);
+    out("%s set to %s for all controllers.\n", instValues[v].Name, t);
+    out("  It takes effect when the driver next starts (restart "
+        "Windows, or disable\n  and enable the device).\n");
 }
 
 static void write_values(void)
@@ -5097,6 +5833,16 @@ static void write_values(void)
         if (instValues[v].Apply == INST_APPLY_NT_CM && !envNow.Nt) {
             continue;
         }
+        if ((instValues[v].Apply == INST_APPLY_NT5_XHCI ||
+             instValues[v].Apply == INST_APPLY_NT5X86_XHCI ||
+             instValues[v].Apply == INST_APPLY_NOROUTE) &&
+            inst_def_greyed(&instValues[v], &envNow)) {
+            continue;   /* task 49.38: read on 2000 and XP alone */
+        }
+        if (instValues[v].Kind == INST_VK_TEXT) {
+            write_text_value(v);
+            continue;
+        }
         if (!value_needs_write(v)) {
             out("%s stays %lu: every device already uses it.\n",
                 instValues[v].Name, (unsigned long)answerValue[v]);
@@ -5123,6 +5869,15 @@ static void write_values(void)
         flagChanged = 1;
         step(INST_STEP_DONE, "%s set to %lu", instValues[v].Name,
              (unsigned long)val);
+        if (answerSeeded[v]) {
+            /* The value the driver runs with already: no restart owed. */
+            out("%s set to %lu for all controllers (this Windows's "
+                "default).\n", instValues[v].Name, (unsigned long)val);
+            logonly("  wrote HKLM\\%s\\%s = %lu (absent; Setup's own "
+                    "answer, M19)\n", INST_MW_KEY, instValues[v].Name,
+                    (unsigned long)val);
+            continue;
+        }
         if (had) {
             out("%s changed from %lu to %lu for all controllers.\n", instValues[v].Name, (unsigned long)old,
                 (unsigned long)val);
@@ -5299,6 +6054,10 @@ static SECURITY_ATTRIBUTES *shared_sd(SHARED_SD *s, DWORD worldAccess,
         goto cleanup;
     }
     for (i = 0; i < 3; i++) {
+        if (access[i] == 0) {
+            /* worldAccess 0: no entry for every user at all. */
+            continue;
+        }
         if (!addAce((PACL)s->Acl, ACL_REVISION, access[i], sids[i])) {
             goto cleanup;
         }
@@ -9248,6 +10007,130 @@ static void s98_install_one(DEVREC *d)
     infFailedRun[INST_INF_S98] = 1;
 }
 
+/* ---- the takeover's install (record 23 section 5.4.2) -------------------- */
+
+#define INST_TAKE_KEY       INST_DIR_KEY "\\" INST_TAKE_KEY_NAME
+
+/* 1 when the plan replaces another manufacturer's driver on the device. */
+static int take_dev(const DEVREC *d)
+{
+    return d->TakeCand && d->Inf == INST_INF_XHCI && inst_take_runs(d->Take);
+}
+
+static int take_rec_put(const char *id, const char *state, const char *old,
+                        const char *inf)
+{
+    char data[INST_PATH_CHARS];
+    HKEY k;
+    LONG w;
+
+    if (opts.List) {
+        return 1;
+    }
+    if (!inst_take_rec_text(state, old, inf, data, sizeof(data)) ||
+        RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_TAKE_KEY, 0, NULL, 0,
+                        KEY_SET_VALUE, NULL, &k, NULL) != ERROR_SUCCESS) {
+        return 0;
+    }
+    w = RegSetValueExA(k, id, 0, REG_SZ, (const BYTE *)data,
+                       (DWORD)strlen(data) + 1);
+    RegCloseKey(k);
+    return w == ERROR_SUCCESS;
+}
+
+static void take_rec_del(const char *id)
+{
+    HKEY k;
+
+    if (opts.List) {
+        return;
+    }
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_TAKE_KEY, 0, KEY_SET_VALUE,
+                      &k) == ERROR_SUCCESS) {
+        RegDeleteValueA(k, id);
+        RegCloseKey(k);
+    }
+}
+
+/* 1 when another present device the plan replaces carries d's first
+ * hardware id among its ids: one call would reach both. */
+static int take_shares_id(const DEVREC *d)
+{
+    int i;
+    const char *hw = first_hw(d);
+
+    if (hw == NULL || hw[0] == '\0') {
+        return 0;
+    }
+    for (i = 0; i < devCount; i++) {
+        const DEVREC *e = &devs[i];
+        if (e != d && e->Present && take_dev(e) && dev_has_id(e, hw)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Before a takeover's call: every device the call reaches that the plan
+ * replaces is noted with its service now and recorded "attempt"; 0 when a
+ * record cannot be written (the call is then not made, said). */
+static int take_note(const char *hwid)
+{
+    int i;
+    int takeBeforeNote = takeRunCount;
+
+    takeLastId[0] = '\0';
+
+    for (i = 0; i < devCount; i++) {
+        DEVREC *d = &devs[i];
+        if (!d->Present || !take_dev(d) || !dev_has_id(d, hwid)) {
+            continue;
+        }
+        if (takeRunCount >= TAKE_RUN_MAX ||
+            !take_rec_put(d->Id, INST_TAKE_ATTEMPT, d->Service,
+                          d->InfPathState > 0 ? d->InfPath : "")) {
+            out("Setup could not record that it replaces %s's driver: it is "
+                "not changed.\n", d->Desc[0] ? d->Desc : d->Id);
+            take_mark(takeRunCount, NULL);
+            takeStopped = 1;
+            return 0;
+        }
+        inst_copy(takeRunId[takeRunCount], d->Id, INST_ID_CHARS);
+        inst_copy(takeRunOld[takeRunCount], d->Service,
+                  sizeof(takeRunOld[0]));
+        inst_copy(takeRunInf[takeRunCount], d->InfPathState > 0 ? d->InfPath :
+                  "", sizeof(takeRunInf[0]));
+        if (takeLastId[0] == '\0' || takeRunCount == takeBeforeNote) {
+            inst_copy(takeLastId, d->Id, sizeof(takeLastId));
+            inst_copy(takeLastOld, d->Service, sizeof(takeLastOld));
+        }
+        takeRunCount++;
+        logonly("takeover: %s recorded (was %s)\n", d->Id, d->Service);
+    }
+    return 1;
+}
+
+/* After the call: the devices noted from index from on rewritten done, or
+ * (state NULL) their records deleted and the notes dropped. */
+static void take_mark(int from, const char *state)
+{
+    int k;
+
+    for (k = from; k < takeRunCount; k++) {
+        if (state != NULL) {
+            if (!take_rec_put(takeRunId[k], state, takeRunOld[k], takeRunInf[k])) {
+                logonly("takeover: %s's record not rewritten\n",
+                        takeRunId[k]);
+            }
+        } else {
+            take_rec_del(takeRunId[k]);
+        }
+    }
+    if (state == NULL && from < takeRunCount) {
+        takeRunCount = from;
+    }
+}
+
 /* 1 done, 0 a controller's call failed (the rest is not attempted), -1 a
  * settle inside it failed or was cancelled: the run stops (said). */
 static int install_inf(int inf, int controllers)
@@ -9266,6 +10149,7 @@ static int install_inf(int inf, int controllers)
     int mixed;
     int again;
     int retried;
+    int takeBefore = 0;
     int ok = 1;
 
     join(path, sizeof(path), srcDir, infRel[inf]);
@@ -9275,6 +10159,18 @@ static int install_inf(int inf, int controllers)
             continue;
         }
         if (controllers == 1 && !is_controller(d)) {
+            continue;
+        }
+        /* Record 23 section 5.4.2: another manufacturer's driver is
+         * replaced after the controllers, one call at a time (mode 2);
+         * a controller of this package sharing its id with one goes with
+         * it there, so that no call of the controllers' pass replaces a
+         * driver without the read-back. */
+        if (controllers == 1 && (take_dev(d) || take_shares_id(d))) {
+            continue;
+        }
+        if (controllers == 2 && (!is_controller(d) ||
+                                 !(take_dev(d) || take_shares_id(d)))) {
             continue;
         }
         if (controllers == 0 && is_controller(d)) {
@@ -9405,6 +10301,15 @@ static int install_inf(int inf, int controllers)
             }
             continue;
         }
+        takeBefore = takeRunCount;
+        if (controllers >= 1 && !take_note(hwid)) {
+            for (j = 0; j < n; j++) {
+                changedState[callIdx[j]] = 0;
+            }
+            flagFailed = 1;
+            infFailedRun[inf] = 1;
+            return 0;
+        }
         out("%s %s ... ", d->Action == INST_ACT_INSTALL ? "Installing" :
             d->Action == INST_ACT_FILTER ? "Adding the filter to" : "Updating",
             d->Desc[0] ? d->Desc : d->Id);
@@ -9438,10 +10343,18 @@ call:
                     uasQueued = 1;
                 }
             }
+            if (controllers >= 1) {
+                /* A call of the controllers' pass that reached a
+                 * controller sharing its id is recorded as well. */
+                take_mark(takeBefore, INST_TAKE_DONE);
+            }
+            if (controllers == 2) {
+                return 1;
+            }
             /* A root hub's or hub's update restarts it and takes the
              * devices below it away for seconds: the next call waits for
              * them (98 SE leg, 2026-10-19; record 23 section 5.8). */
-            if (controllers != 1 &&
+            if (controllers <= 0 &&
                 inst_settle_after_job(inst_parent_kind(d->Id, 0),
                                       INST_DI_OUT_OK,
                                       nt_more_after(i, inf, controllers))) {
@@ -9460,6 +10373,9 @@ call:
             if (!reappear_settle(d->Id)) {
                 for (j = 0; j < n; j++) {
                     changedState[callIdx[j]] = 0;
+                }
+                if (controllers >= 1) {
+                    take_mark(takeBefore, NULL);
                 }
                 return -1;
             }
@@ -9487,10 +10403,18 @@ call:
         for (j = 0; j < n; j++) {
             changedState[callIdx[j]] = again ? INST_CS_BUSY : 3;
         }
+        if (controllers >= 1) {
+            /* Not replaced by this call: its record goes, and a busy one is
+             * noted again at its next try. */
+            take_mark(takeBefore, NULL);
+        }
         if (again) {
             out("busy (error 0x%08lX).\n  Windows is installing it at the "
                 "same time. Setup waits for Windows to\n  finish, reads the "
                 "devices again and tries again if still needed.\n", (unsigned long)err);
+            if (controllers == 2) {
+                return 1;
+            }
             continue;
         }
         out("FAILED (error 0x%08lX).\n", (unsigned long)err);
@@ -9514,7 +10438,7 @@ call:
         infFailedRun[inf] = 1;
         flagFailed = 1;
         infFailedRun[inf] = 1;
-        if (controllers == 1) {
+        if (controllers >= 1) {
             ok = 0;
             break;
         }
@@ -10008,6 +10932,21 @@ static void check_results(void)
         }
         ctrl = changedInf[c] == INST_INF_XHCI && is_controller(d);
         ok = result_ok(d, changedInf[c]);
+        /* Task 49.47: only a controller whose install call succeeded in
+         * this run (state 2), not one Windows installed meanwhile. */
+        if (ctrl && changedState[c] == 2 && inst_psw_counts_nt(
+                psw_listed_id(first_hw(d)), inst_eq(d->Service, "xhci98"),
+                /* started: and its root hub there, as the check below
+                 * wants (a missing or unreadable one is a failure) */
+                ok && (changedReboot[c] || root_hub_below(d->Id) > 0),
+                d->Problem == INST_PROB_NEED_RESTART ||
+                    (take_listed(d->Id) && take_restart_ok(d)) ||
+                    (envNow.Major >= 6 && INST_MY_ARCH == INST_ARCH_X86 &&
+                     (d->Problem == 28UL || d->Problem == 1UL ||
+                      d->Problem == 0) && changedReboot[c]) ||
+                    (changedReboot[c] && d->Problem == 0))) {
+            pswInstalledOk = 1;  /* task 49.47 */
+        }
         if (ok) {
             if (ctrl && !changedReboot[c]) {
                 /* Section 5.8: a started controller shows its root hub. */
@@ -10025,6 +10964,10 @@ static void check_results(void)
             continue;
         }
         if (d->Problem == INST_PROB_NEED_RESTART) {
+            flagRestart = 1;
+        } else if (ctrl && take_listed(d->Id) && take_restart_ok(d)) {
+            /* A replaced controller waits for its restart (record 23
+             * section 5.4.2). */
             flagRestart = 1;
         } else if (envNow.Major >= 6 && INST_MY_ARCH == INST_ARCH_X86 && ctrl &&
                    (d->Problem == 28UL || d->Problem == 1UL || d->Problem == 0) &&
@@ -10068,6 +11011,7 @@ static void check_results(void)
     if (tunnelHint) {
         tunnel_restart_hint();
     }
+    take_results();
     /* The devices this run did not change are read too: a current device
      * already in trouble is not a success to report. */
     for (i = 0; i < devCount; i++) {
@@ -11942,6 +12886,474 @@ static void stale_files_nt(void)
     }
 }
 
+/* Record 23 section 5.4.2: whether a controller this takeover call reached
+ * now runs xHCI98, as section 5.9 reads it, the restarts and the x64
+ * signature steps counted as no failure. */
+static int take_ok(const DEVREC *d)
+{
+    int c = reached(d->Id);
+    int reboot = c >= 0 && changedReboot[c];
+
+    if (!d->Present || !inst_eq(d->Service, "xhci98")) {
+        return 0;
+    }
+    if (result_ok(d, INST_INF_XHCI)) {
+        /* Section 5.9's postconditions: at the package's version, started,
+         * no problem, and, with no restart pending, its root hub shown. */
+        return reboot || root_hub_below(d->Id) == 1;
+    }
+    if (d->Problem == INST_PROB_NEED_RESTART || take_restart_ok(d)) {
+        return 1;
+    }
+    if (envNow.Major >= 6 && INST_MY_ARCH == INST_ARCH_AMD64 &&
+        (d->Problem == 52UL || d->Problem == 39UL) && !testSigningConfirmed) {
+        return 1;
+    }
+    return 0;
+}
+
+/* Record 23 section 5.4.2: a replaced controller whose call asked for a
+ * restart, bound to xhci98 but not started yet, still shows the problem
+ * code the other driver left (read on 7 x86, 2026-11-14: Code 38, the
+ * other driver's image still in memory, kept until the restart). */
+static int take_restart_ok(const DEVREC *d)
+{
+    int c = reached(d->Id);
+
+    return c >= 0 && changedReboot[c] && d->Present &&
+           inst_eq(d->Service, "xhci98") &&
+           (d->Status & INST_DN_STARTED) == 0;
+}
+
+static int take_listed(const char *id)
+{
+    int k;
+
+    for (k = 0; k < takeRunCount; k++) {
+        if (inst_eq(takeRunId[k], id)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static const DEVREC *dev_by_id(const char *id)
+{
+    int i;
+
+    for (i = 0; i < devCount; i++) {
+        if (inst_eq(devs[i].Id, id)) {
+            return &devs[i];
+        }
+    }
+    return NULL;
+}
+
+/* The "Could not replace" line, wrapped at 78 columns. */
+static void take_fail_line(const char *id, const char *old)
+{
+    const DEVREC *d = dev_by_id(id);
+    char text[512];
+    char block[640];
+
+    inst_take_result_text(0, old, d != NULL && d->Desc[0] ? d->Desc : id,
+                          NULL, text, sizeof(text));
+    inst_wrap_lines("", text, INST_WARN_COLUMNS, block, sizeof(block));
+    out("%s", block);
+    logonly("takeover: stopped at %s\n", id);
+}
+
+static int take_pending(void)
+{
+    int i;
+
+    for (i = 0; i < devCount; i++) {
+        if (devs[i].Present && take_dev(&devs[i]) && devs[i].Runs &&
+            !devs[i].Done && !devs[i].Refused) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* The takeovers, one call at a time after the controllers this package
+ * already runs or that had no driver, each read back after the barrier;
+ * the first that fails leaves the rest on their drivers (owner,
+ * 2026-11-13). 1 go on, -1 the run stops (said). */
+/* The takeovers noted but not yet read back: from takeChecked to
+ * takeRunCount. 1 every one passed, 0 one failed (said; the rest stay). */
+static int takeChecked;
+
+static int take_check_new(void)
+{
+    int k;
+
+    for (k = takeChecked; k < takeRunCount; k++) {
+        const DEVREC *d = dev_by_id(takeRunId[k]);
+        if (d == NULL || !take_ok(d)) {
+            take_fail_line(takeRunId[k], takeRunOld[k]);
+            takeChecked = takeRunCount;
+            takeStopped = 1;
+            flagFailed = 1;
+            /* The rest are planned again as left. */
+            plan();
+            return 0;
+        }
+    }
+    takeChecked = takeRunCount;
+    return 1;
+}
+
+static int take_run(void)
+{
+    int tries;
+    int r;
+
+    /* A call of the controllers' pass that reached a controller sharing its
+     * id replaced it too: read back before any other takeover. */
+    if (takeChecked < takeRunCount) {
+        if (!barrier()) {
+            return -1;
+        }
+        if (!take_check_new()) {
+            return 1;
+        }
+    }
+    for (tries = 0; tries < TAKE_RUN_MAX * INST_BUSY_TRIES; tries++) {
+        if (takeStopped || !take_pending()) {
+            return 1;
+        }
+        if (!go_on()) {
+            return -1;
+        }
+        takeLastId[0] = '\0';
+        r = install_inf(INST_INF_XHCI, 2);
+        if (r < 0) {
+            return -1;
+        }
+        if (r == 0) {
+            if (takeLastId[0] != '\0') {
+                take_fail_line(takeLastId, takeLastOld);
+            }
+            takeChecked = takeRunCount;
+            takeStopped = 1;
+            return 1;
+        }
+        /* After every call, a busy one's too (it is planned again). */
+        if (!barrier()) {
+            return -1;
+        }
+        if (takeChecked == takeRunCount) {
+            continue;       /* no call made, or a busy one to try again */
+        }
+        if (!take_check_new()) {
+            return 1;
+        }
+    }
+    return 1;
+}
+
+/* Before the first change of an install run: a recorded controller back on
+ * another driver loses its value; an "attempt" read running xhci98 is
+ * "done" (record 23 section 5.4.2). */
+static void take_rec_tidy(void)
+{
+    char id[INST_ID_CHARS];
+    char data[INST_PATH_CHARS];
+    char state[16];
+    char svc[64];
+    char inf[64];
+    DWORD i;
+    DWORD n;
+    HKEY k;
+    const DEVREC *d;
+    static char tidyId[TAKE_RUN_MAX][INST_ID_CHARS];
+    int tidyCount = 0;
+
+    if (opts.List || !envNow.Nt ||
+        RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_TAKE_KEY, 0, KEY_READ, &k) !=
+        ERROR_SUCCESS) {
+        return;
+    }
+    for (i = 0; i < 256; i++) {
+        n = sizeof(id);
+        if (RegEnumValueA(k, i, id, &n, NULL, NULL, NULL, NULL) !=
+            ERROR_SUCCESS) {
+            break;
+        }
+        if (reg_text3(HKEY_LOCAL_MACHINE, INST_TAKE_KEY, id, data,
+                      sizeof(data)) <= 0 ||
+            !inst_take_rec_parse(data, state, sizeof(state), svc, sizeof(svc),
+                                 inf, sizeof(inf))) {
+            continue;
+        }
+        d = dev_by_id(id);
+        if (d == NULL || !d->Present) {
+            continue;
+        }
+        if (d->Service[0] != '\0' && !inst_eq(d->Service, "xhci98")) {
+            /* Deleted once the listing is closed: no value is read twice,
+             * and a deletion that fails is only logged. */
+            if (tidyCount < TAKE_RUN_MAX) {
+                inst_copy(tidyId[tidyCount++], id, INST_ID_CHARS);
+            }
+            logonly("takeover: %s runs %s again: its record goes\n", id,
+                    d->Service);
+            continue;
+        }
+        if (inst_eq(d->Service, "xhci98") && inst_eq(state, INST_TAKE_ATTEMPT)) {
+            (void)take_rec_put(id, INST_TAKE_DONE, svc, inf);
+        }
+    }
+    RegCloseKey(k);
+    for (i = 0; i < (DWORD)tidyCount; i++) {
+        take_rec_del(tidyId[i]);
+    }
+}
+
+/* After the results: the line of each controller this run replaced. */
+static void take_results(void)
+{
+    const DEVREC *d;
+    char f[256];
+    char text[768];
+    char block[1024];
+    int k;
+
+    for (k = 0; k < takeRunCount; k++) {
+        d = dev_by_id(takeRunId[k]);
+        if (d == NULL || !take_ok(d)) {
+            continue;
+        }
+        take_filters(d->Id, f, sizeof(f));
+        inst_take_result_text(1, takeRunOld[k], d->Desc[0] ? d->Desc : d->Id,
+                              f, text, sizeof(text));
+        if (take_boot(d->Id) < 0) {
+            char one[128];
+            inst_take_bootunk_text(d->Id, 1, one, sizeof(one));
+            strncat(text, one, sizeof(text) - strlen(text) - 1);
+        }
+        inst_wrap_lines("  ", text, INST_WARN_COLUMNS, block, sizeof(block));
+        out("%s", block);
+    }
+}
+
+/* ---- the takeover's give-back at the uninstall (record 23 section 5.4.2) */
+
+static char takeBackId[TAKE_RUN_MAX][INST_ID_CHARS];
+static char takeBackParent[TAKE_RUN_MAX][INST_ID_CHARS];
+static char takeBackName[TAKE_RUN_MAX][128];
+static int takeBackCount;
+
+/* The record goes with the uninstall that said its lines (its values with
+ * it); one that cannot be deleted is logged, and the rest of the
+ * uninstall's records go as before. */
+static void take_rec_drop(void)
+{
+    LONG r = RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_TAKE_KEY);
+
+    if (r != ERROR_SUCCESS && r != ERROR_FILE_NOT_FOUND) {
+        logonly("takeover: its record could not be deleted (error %ld)\n",
+                (long)r);
+    }
+}
+
+/* Before the removals: the recorded controllers, their names and parents. */
+static void take_back_read(void)
+{
+    char id[INST_ID_CHARS];
+    char data[INST_PATH_CHARS];
+    char state[16];
+    char svc[64];
+    char inf[64];
+    const DEVREC *d;
+    DWORD i;
+    DWORD n;
+    HKEY k;
+
+    takeBackCount = 0;
+    if (!envNow.Nt ||
+        RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_TAKE_KEY, 0, KEY_READ, &k) !=
+        ERROR_SUCCESS) {
+        return;
+    }
+    for (i = 0; i < 256 && takeBackCount < TAKE_RUN_MAX; i++) {
+        n = sizeof(id);
+        if (RegEnumValueA(k, i, id, &n, NULL, NULL, NULL, NULL) !=
+            ERROR_SUCCESS) {
+            break;
+        }
+        if (reg_text3(HKEY_LOCAL_MACHINE, INST_TAKE_KEY, id, data,
+                      sizeof(data)) <= 0 ||
+            !inst_take_rec_parse(data, state, sizeof(state), svc, sizeof(svc),
+                                 inf, sizeof(inf))) {
+            continue;
+        }
+        d = dev_by_id(id);
+        inst_copy(takeBackId[takeBackCount], id, INST_ID_CHARS);
+        inst_copy(takeBackName[takeBackCount],
+                  d != NULL && d->Desc[0] ? d->Desc : id,
+                  sizeof(takeBackName[0]));
+        parent_id(id, takeBackParent[takeBackCount], INST_ID_CHARS);
+        logonly("takeover: %s recorded (%s, was %s), parent %s\n", id, state,
+                svc, takeBackParent[takeBackCount][0] ?
+                takeBackParent[takeBackCount] : "unread");
+        takeBackCount++;
+    }
+    RegCloseKey(k);
+}
+
+/* Windows' installs of the recorded controllers, waited for as section
+ * 5.8's settle waits, over them alone (record 23 section 5.4.2): nothing
+ * pending, and their reading (present, started, problem, service) still
+ * for INST_SETTLE_QUIET_MS with none still to be set up (Code 1 or 18), 60
+ * seconds at most. The pending question alone answered before Windows had
+ * queued the installs its re-scan started (read on 7 x86: the controllers
+ * read with no driver, given back a quarter of a second later). 1
+ * settled; 0 not, or not askable. */
+#define TAKE_BACK_WAIT_MS 60000UL
+
+static int take_back_settle(void)
+{
+    INST_SETTLE s;
+    DWORD t0;
+    DWORD w;
+    DWORD dn;
+    ULONG status;
+    ULONG problem;
+    char svc[64];
+    INST_U32 h;
+    int whole;
+    int expect;
+    int r;
+    int i;
+
+    if (api.WaitInstall == NULL || api.Locate == NULL || api.Status == NULL) {
+        return 0;
+    }
+    inst_settle_init(&s, TAKE_BACK_WAIT_MS, TAKE_BACK_WAIT_MS + 1UL,
+                     TAKE_BACK_WAIT_MS);
+    t0 = GetTickCount();
+    for (;;) {
+        w = api.WaitInstall(0);
+        h = INST_FNV_START;
+        whole = 1;
+        expect = 0;
+        for (i = 0; i < takeBackCount; i++) {
+            h = sig_text(h, takeBackId[i]);
+            if (api.Locate(&dn, takeBackId[i], 0) != INST_CR_SUCCESS) {
+                h = sig_text(h, "gone");
+                continue;
+            }
+            if (api.Status(&status, &problem, dn, 0) != INST_CR_SUCCESS) {
+                whole = 0;
+                continue;
+            }
+            problem = (ULONG)inst_dn_problem((INST_U32)status,
+                                             (INST_U32)problem);
+            if (problem == INST_PROB_NOT_CONFIGURED ||
+                problem == INST_PROB_REINSTALL) {
+                expect = 1;
+            }
+            h = sig_number(h, status & (INST_DN_STARTED | INST_DN_HAS_PROBLEM));
+            h = sig_number(h, problem);
+            svc[0] = '\0';
+            if (enum_value(takeBackId[i], "Service", REG_SZ, svc, sizeof(svc),
+                           NULL) < 0) {
+                whole = 0;
+            }
+            h = sig_text(h, svc);
+        }
+        /* GetTickCount's wrap: as settle_run. */
+        r = inst_settle_step(&s, (INST_U32)(GetTickCount() - t0),
+                             w == WAIT_OBJECT_0 ? 0 :
+                             (w == WAIT_TIMEOUT ? 1 : -1), h, whole, expect);
+        /* ExpectMs is the limit, so a DONE with a controller still to be
+         * set up comes only at the limit: not settled. */
+        if (r == INST_SETTLE_DONE && !expect) {
+            logonly("takeover: Windows' installs settled after %lu ms\n",
+                    (unsigned long)(GetTickCount() - t0));
+            return 1;
+        }
+        if (r == INST_SETTLE_DONE || r == INST_SETTLE_TIMEOUT ||
+            r == INST_SETTLE_FAILED || r == INST_SETTLE_UNSTEADY) {
+            logonly("takeover: Windows' installs not settled (%d, wait "
+                    "0x%08lX)\n", r, (unsigned long)w);
+            return 0;
+        }
+        Sleep(INST_SETTLE_POLL_MS);
+    }
+}
+
+/* After the files: Windows asked to look at the recorded controllers'
+ * parents again, its installs waited for (take_back_settle), and one line
+ * for each recorded controller. None is a failure. */
+static void take_back_lines(void)
+{
+    char svc[64];
+    char text[512];
+    char block[640];
+    DWORD dn;
+    int i;
+    int j;
+    int kind;
+    int settled = 0;
+
+    if (opts.List || !envNow.Nt) {
+        return;
+    }
+    if (takeBackCount == 0) {
+        take_rec_drop();
+        return;
+    }
+    out("\n");
+    for (i = 0; i < takeBackCount; i++) {
+        int seen = 0;
+        if (takeBackParent[i][0] == '\0') {
+            continue;
+        }
+        for (j = 0; j < i; j++) {
+            if (inst_eq(takeBackParent[j], takeBackParent[i])) {
+                seen = 1;
+            }
+        }
+        if (!seen && api.Locate != NULL && api.Reenum != NULL &&
+            api.Locate(&dn, takeBackParent[i], 0) == INST_CR_SUCCESS) {
+            DWORD cr = api.Reenum(dn, 0x1UL /* CM_REENUMERATE_SYNCHRONOUS */);
+            logonly("takeover: %s looked at again: 0x%08lX\n",
+                    takeBackParent[i], (unsigned long)cr);
+        }
+    }
+    /* Only a settled wait lets a line say what the controller runs. */
+    settled = take_back_settle();
+    for (i = 0; i < takeBackCount; i++) {
+        ULONG status;
+        ULONG problem;
+        INST_U32 prob = INST_TAKE_PROB_UNREAD;
+        int present = 0;
+        int r = -1;
+        svc[0] = '\0';
+        /* Each controller read whatever the settle (one answer for all):
+         * one already back on its driver says so beside one Windows is
+         * still setting up. */
+        if (api.Locate != NULL &&
+            api.Locate(&dn, takeBackId[i], 0) == INST_CR_SUCCESS) {
+            present = 1;
+            r = enum_value(takeBackId[i], "Service", REG_SZ, svc,
+                           sizeof(svc), NULL);
+            if (api.Status != NULL &&
+                api.Status(&status, &problem, dn, 0) == INST_CR_SUCCESS) {
+                prob = inst_dn_problem((INST_U32)status, (INST_U32)problem);
+            }
+        }
+        kind = inst_take_back_kind(settled, present, r, svc, prob);
+        inst_take_back_text(kind, takeBackName[i], svc, text, sizeof(text));
+        inst_wrap_lines("", text, INST_WARN_COLUMNS, block, sizeof(block));
+        out("%s", block);
+    }
+    take_rec_drop();
+}
+
 /* INST_PH_RUN on NT, after the confirmation. */
 static int run_install_nt(void)
 {
@@ -11961,10 +13373,12 @@ static int run_install_nt(void)
             return inst_exit_code(0, flagFailed, flagRestart, flagSteps);
         }
     }
+    take_lock();
     if (!tools && !s98_baseline()) {
         return inst_exit_code(0, 1, flagRestart, flagSteps);
     }
     runChanging = 1;
+    take_rec_tidy();
     if (tools) {
         prog_copy_retire();
         logonly("tools only: no local copy, nothing staged, no device "
@@ -12002,6 +13416,11 @@ static int run_install_nt(void)
             out("A controller's update failed: the rest are skipped.\n");
             return inst_exit_code(0, 1, flagRestart, flagSteps);
         }
+    }
+    /* Record 23 section 5.4.2: then another manufacturer's driver, one
+     * controller at a time. */
+    if (take_run() < 0) {
+        goto stopped;
     }
     /* After a 2.3.x update the root hub and the hubs are new devnodes; an
      * installed root hub or hub shows the hubs behind it; a UAS disk or an
@@ -12071,6 +13490,7 @@ tail:
         cm_xhci_entries();
     }
     check_results();
+    psw_write_proposed();
     s98_record_devices();
     s98_final_unknown();
     s98_record_version();
@@ -13957,6 +15377,10 @@ static void check_results_9x(void)
         }
         if (d == NULL || !d->Present) {
             if (changedReboot[c]) {
+                if (changedInf[c] == INST_INF_XHCI &&
+                    inst_psw_counts_9x(psw_listed_id(changedId[c]), 0, 0, 1)) {
+                    pswInstalledOk = 1;  /* task 49.47 */
+                }
                 out("  %s: installed, restart pending.\n", changedId[c]);
                 continue;
             }
@@ -13976,6 +15400,11 @@ static void check_results_9x(void)
             if (!ok && wininit_pending(bin, inf_version(changedInf[c]))) {
                 swapped = 1;
             }
+        }
+        if (changedInf[c] == INST_INF_XHCI && is_controller(d) &&
+            inst_psw_counts_9x(psw_listed_id(first_hw(d)), ok, swapped,
+                               changedReboot[c])) {
+            pswInstalledOk = 1;  /* task 49.47 */
         }
         inst_state_text(state, sizeof(state), d->Service, d->VersionText,
                         (d->Status & INST_DN_STARTED) != 0, d->Problem);
@@ -14329,6 +15758,7 @@ static int run_install_9x(void)
     old_dir_cleanup();
     arp_write(0);
     check_results_9x();
+    psw_write_proposed();
     s98_record_devices();
     s98_final_unknown();
     s98_record_version();
@@ -16461,12 +17891,25 @@ static int mk_running(SC_HANDLE s)
  * package's copy put into system32 through a .TMP and compared byte for
  * byte, registered with its quoted full path (its own process, automatic
  * start, LocalSystem), the log's directory made, then started. */
-/* The service's Restart chosen (record 26 section 5.0): written to its
+/* The service's own values chosen (record 26 section 5.0; task 49.38:
+ * Restart and LogBytes, every INST_LOC_MARK row): each written to its
  * Parameters key after its registration and before its start, the value
  * it reads once there. Never under Services\USB. */
+static void mk_mark_value(int v);
+
 static void mk_restart_value(void)
 {
-    int v = inst_value_find("Restart");
+    int v;
+
+    for (v = 0; v < instValueCount && v < INST_MAX_VALUES; v++) {
+        if (instValues[v].Loc == INST_LOC_MARK) {
+            mk_mark_value(v);
+        }
+    }
+}
+
+static void mk_mark_value(int v)
+{
     HKEY k;
     DWORD val;
     LONG r;
@@ -16481,24 +17924,26 @@ static void mk_restart_value(void)
         DWORD cur = 0;
         int st = mw_value(v, &cur);
         if ((st == 1 && cur == val) || (st == 0 && val == instValues[v].Def)) {
-            logonly("mark service: Restart stays %lu\n", (unsigned long)val);
+            logonly("mark service: %s stays %lu\n", instValues[v].Name,
+                    (unsigned long)val);
             return;
         }
     }
     r = RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_MK_PARAMS_KEY, 0, NULL, 0,
                         KEY_SET_VALUE, NULL, &k, NULL);
     if (r == ERROR_SUCCESS) {
-        r = RegSetValueExA(k, "Restart", 0, REG_DWORD, (const BYTE *)&val,
-                           sizeof(val));
+        r = RegSetValueExA(k, instValues[v].Name, 0, REG_DWORD,
+                           (const BYTE *)&val, sizeof(val));
         RegCloseKey(k);
     }
     if (r != ERROR_SUCCESS) {
-        out("Restart could not be set: error %ld.\n", (long)r);
+        out("%s could not be set: error %ld.\n", instValues[v].Name, (long)r);
         flagFailed = 1;
         return;
     }
     flagChanged = 1;
-    out("The mark service's Restart set to %lu.\n", (unsigned long)val);
+    out("The mark service's %s set to %lu.\n", instValues[v].Name,
+        (unsigned long)val);
 }
 
 /* The package's copy (tmp, beside dst) moved over system32's (task 44.76).
@@ -17061,6 +18506,7 @@ static int run_uninstall_nt(void)
         out("The device-removal routines are missing.\n");
         return INST_EXIT_REFUSED;
     }
+    take_back_read();
     out("Windows usbd.sys and usbui.dll are kept together with other "
         "drivers: Windows\nsupplied them, and other USB drivers use "
         "them.\n\n");
@@ -17257,6 +18703,7 @@ static int run_uninstall_nt(void)
         return stop_uninstall("a controller's name this package gave it "
                               "could not be removed.");
     }
+    take_back_lines();
     finish_remove();
     if (!flagChanged) {
         out("No part of this package was found.\n");
@@ -18479,12 +19926,36 @@ static PFN_CM_QREMOVE tbQueryRemove;
 static PFN_CM_QREMOVE tbRemove;
 static PFN_CM_EJECT tbEject;
 static PFN_CM_QANDR_W tbQueryAndRemove;  /* NT */
+/* A drive the BIOS holds (98 SE and ME, DESIGN-BIOSHELD): the logical
+ * configurations read. */
+#ifdef _WIN64
+typedef unsigned __int64 TB_CMH;
+#else
+typedef unsigned long TB_CMH;
+#endif
+typedef DWORD (WINAPI *PFN_TB_FIRSTLC)(TB_CMH *, DWORD, ULONG);
+typedef DWORD (WINAPI *PFN_TB_NEXTRD)(TB_CMH *, TB_CMH, ULONG, ULONG *, ULONG);
+typedef DWORD (WINAPI *PFN_TB_RDSIZE)(ULONG *, TB_CMH, ULONG);
+typedef DWORD (WINAPI *PFN_TB_RDDATA)(TB_CMH, PVOID, ULONG, ULONG);
+typedef DWORD (WINAPI *PFN_TB_FREEH)(TB_CMH);
+static PFN_TB_FIRSTLC tbFirstLogConf;
+static PFN_TB_NEXTRD tbNextResDes;
+static PFN_TB_RDSIZE tbResDesSize;
+static PFN_TB_RDDATA tbResDesData;
+static PFN_TB_FREEH tbFreeLogConf;
+static PFN_TB_FREEH tbFreeResDes;
 
 static void tb_routines(void)
 {
     tbQueryRemove = (PFN_CM_QREMOVE)proc(api.CfgMgr, "cfgmgr32", "CM_Query_Remove_SubTree");
     tbRemove = (PFN_CM_QREMOVE)proc(api.CfgMgr, "cfgmgr32", "CM_Remove_SubTree");
     tbEject = (PFN_CM_EJECT)proc(api.CfgMgr, "cfgmgr32", "CM_Request_Device_EjectA");
+    tbFirstLogConf = (PFN_TB_FIRSTLC)proc(api.CfgMgr, "cfgmgr32", "CM_Get_First_Log_Conf");
+    tbNextResDes = (PFN_TB_NEXTRD)proc(api.CfgMgr, "cfgmgr32", "CM_Get_Next_Res_Des");
+    tbResDesSize = (PFN_TB_RDSIZE)proc(api.CfgMgr, "cfgmgr32", "CM_Get_Res_Des_Data_Size");
+    tbResDesData = (PFN_TB_RDDATA)proc(api.CfgMgr, "cfgmgr32", "CM_Get_Res_Des_Data");
+    tbFreeLogConf = (PFN_TB_FREEH)proc(api.CfgMgr, "cfgmgr32", "CM_Free_Log_Conf_Handle");
+    tbFreeResDes = (PFN_TB_FREEH)proc(api.CfgMgr, "cfgmgr32", "CM_Free_Res_Des_Handle");
     if (tbEject == NULL) {
         /* Windows 2000 exports it from setupapi.dll alone (record 24
          * section 7.2). */
@@ -18513,8 +19984,9 @@ static DWORD tb_query_and_remove(DWORD dn, ULONG *veto, char *name, int cap)
     DWORD cr;
 
     for (;;) {
+        /* Zeroed whole, so an answer left unterminated ends at the zeros. */
         *veto = 0;
-        wide[0] = 0;
+        memset(wide, 0, sizeof(wide));
         cr = tbQueryAndRemove(dn, veto, wide, MAX_PATH, flags);
         logonly("CM_Query_And_Remove_SubTreeW(flags 0x%lX) = 0x%08lX, veto "
                 "%lu\n", (unsigned long)flags, (unsigned long)cr,
@@ -18525,7 +19997,7 @@ static DWORD tb_query_and_remove(DWORD dn, ULONG *veto, char *name, int cap)
         flags = INST_REMOVE_UI_NOT_OK;
     }
     wide[MAX_PATH - 1] = 0;
-    name[0] = '\0';
+    memset(name, 0, (size_t)cap);
     if (WideCharToMultiByte(CP_ACP, 0, wide, -1, name, cap, NULL, NULL) == 0) {
         name[0] = '\0';
     }
@@ -19985,6 +21457,201 @@ static int tb_eject9x(int k, INST_U32 member, INST_U32 unit,
     return inst_ej_outcome(&r, text, notClean);
 }
 
+/* ---- a drive the BIOS holds (98 SE and ME; DESIGN-BIOSHELD, record 24
+ * section 7.6) ------------------------------------------------------------ */
+
+#define TB_SF_MEM           256
+#define TB_SF_TEXT          400     /* PlatFindReport's text is at most 384 */
+
+/* The memory bases of devnode dn this boot: allocated, else boot. -1
+ * when they could not be read, else how many. */
+static int tb_mem_bases(DWORD dn, INST_U32 *lo, INST_U32 *hi, int cap)
+{
+    ULONG kinds[2];
+    int kk;
+    int n = 0;
+    int bad = 0;
+
+    kinds[0] = 2UL;     /* ALLOC_LOG_CONF */
+    kinds[1] = 3UL;     /* BOOT_LOG_CONF  */
+    if (tbFirstLogConf == NULL || tbNextResDes == NULL ||
+        tbResDesSize == NULL || tbResDesData == NULL) {
+        return -1;
+    }
+    for (kk = 0; kk < 2 && n == 0 && !bad; kk++) {
+        TB_CMH lc = 0;
+        TB_CMH rd;
+        TB_CMH next;
+        ULONG rid = 0;
+        DWORD cr;
+        int guard = 0;
+        cr = tbFirstLogConf(&lc, dn, kinds[kk]);
+        if (cr == 0x0000000EUL) {
+            continue;   /* CR_NO_MORE_LOG_CONF: none of this kind */
+        }
+        if (cr != 0) {
+            bad = 1;
+            break;
+        }
+        rd = lc;
+        for (;;) {
+            ULONG size = 0;
+            unsigned char buf[512];
+            cr = tbNextResDes(&next, rd, 0UL, &rid, 0);
+            if (cr == 0x0000000FUL) {
+                break;      /* CR_NO_MORE_RES_DES: read to the end */
+            }
+            if (cr != 0) {
+                bad = 1;    /* stopped short: the rest unread */
+                break;
+            }
+            if (rd != lc && tbFreeResDes != NULL) {
+                tbFreeResDes(rd);
+            }
+            rd = next;
+            if (++guard > 64 || n >= cap) {
+                bad = 1;
+                break;
+            }
+            /* ResType_Mem 1, ResType_MemLarge 7: MEM_DES's 8-byte base at
+             * offset 8. */
+            if (rid != 1UL && rid != 7UL) {
+                continue;
+            }
+            if (tbResDesSize(&size, rd, 0) != 0 || size < 24 ||
+                size > sizeof(buf) || tbResDesData(rd, buf, size, 0) != 0) {
+                bad = 1;
+                break;
+            }
+            lo[n] = inst_get32(buf, 8);
+            hi[n] = inst_get32(buf, 12);
+            n++;
+        }
+        if (rd != lc && tbFreeResDes != NULL) {
+            tbFreeResDes(rd);
+        }
+        if (tbFreeLogConf != NULL) {
+            tbFreeLogConf(lc);
+        }
+    }
+    return bad ? -1 : n;
+}
+
+/* On 98 SE or ME, whether the stop of unit u is refused (INST_BH_*), as
+ * xhcitr.c's ej_bios_held: unit u and every other unit behind the same
+ * tunnel port; a check that could not be done to the end fails closed. */
+static int tb_bios_held(int u)
+{
+    static INST_U32 lo[TB_SF_MEM];
+    static INST_U32 hi[TB_SF_MEM];
+    static int owner[TB_SF_MEM];
+    static int covered[TB_SF_MEM];
+    int nUncovered = 0;
+    int nMem = 0;
+    int nRel = 0;
+    int memOk = 1;
+    int keyState;
+    int enumOk = 1;
+    int nBad = 0;
+    int nMatch = 0;
+    int verdict;
+    int i;
+    HKEY k;
+    DWORD v;
+    LONG r;
+
+    if (envNow.Nt || u < 0 || tbn[u].Parent < 0) {
+        return INST_BH_GO;
+    }
+    for (i = 0; i < tbnCount; i++) {
+        DEVIDS d;
+        int m;
+        if (tbn[i].UnitOf < 0 || tbn[tbn[i].UnitOf].Parent != tbn[u].Parent ||
+            tbn[i].R.Problem != 10UL) {
+            continue;
+        }
+        d = dev_ids(&tbn[i].R);
+        if (!inst_msz_has_class(d.Hw, d.HwBytes, "010802") &&
+            !inst_msz_has_class(d.Compat, d.CompatBytes, "010802")) {
+            continue;
+        }
+        nRel++;
+        m = memOk ? tb_mem_bases(tbn[i].Dn, lo + nMem, hi + nMem,
+                                 TB_SF_MEM - nMem) : -1;
+        if (m <= 0) {
+            memOk = 0;
+        } else {
+            int q;
+            for (q = 0; q < m && nRel <= TB_SF_MEM; q++) {
+                owner[nMem + q] = nRel - 1;
+            }
+            nMem += m;
+        }
+        if (nRel <= TB_SF_MEM) {
+            covered[nRel - 1] = 0;
+        }
+    }
+    if (nRel == 0) {
+        return INST_BH_GO;
+    }
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_SF_KEY, 0, KEY_QUERY_VALUE,
+                      &k);
+    keyState = r == ERROR_SUCCESS ? 1 : r == ERROR_FILE_NOT_FOUND ? 0 : -1;
+    if (keyState == 1) {
+        for (v = 0;; v++) {
+            char name[64];
+            char text[TB_SF_TEXT];
+            DWORD nl = sizeof(name);
+            DWORD tl = sizeof(text) - 1;
+            DWORD type = 0;
+            int c;
+            if (v >= 100000UL) {
+                enumOk = 0;
+                break;
+            }
+            r = RegEnumValueA(k, v, name, &nl, NULL, &type, (LPBYTE)text,
+                              &tl);
+            if (r == ERROR_NO_MORE_ITEMS) {
+                break;
+            }
+            if (r == ERROR_SUCCESS) {
+                text[tl < sizeof(text) ? tl : sizeof(text) - 1] = '\0';
+            }
+            c = inst_storfind_report(r == ERROR_SUCCESS ? INST_SFE_OK
+                                     : r == ERROR_MORE_DATA ? INST_SFE_MORE
+                                                            : INST_SFE_ERROR,
+                                     name, type == REG_SZ, text, lo, hi,
+                                     memOk ? nMem : 0);
+            nBad += c == INST_SFR_BAD;
+            nMatch += c == INST_SFR_MATCH;
+            if (r == ERROR_SUCCESS && type == REG_SZ && memOk) {
+                int b = inst_storfind_base(name, text, lo, hi, nMem);
+                if (b >= 0 && owner[b] < TB_SF_MEM) {
+                    covered[owner[b]] = 1;
+                }
+            }
+            if (c == INST_SFR_MATCH) {
+                logonly("eject: %s says Stor98 left it to the BIOS\n", name);
+            }
+        }
+        RegCloseKey(k);
+    }
+    for (i = 0; i < nRel && i < TB_SF_MEM; i++) {
+        nUncovered += !covered[i];
+    }
+    if (nRel > TB_SF_MEM) {
+        nUncovered++;
+    }
+    verdict = inst_bios_verdict2(0, nRel, memOk, keyState, enumOk, nBad,
+                                 nMatch, nUncovered);
+    if (verdict == INST_BH_UNSURE) {
+        logonly("eject: the BIOS check could not be done (memory %d, key %d, "
+                "list %d, unreadable reports %d, functions with no report "
+                "%d)\n", memOk, keyState, enumOk, nBad, nUncovered);
+    }
+    return verdict;
+}
+
 static int run_eject(void)
 {
     INST_EJ_TOKEN tok1;
@@ -20077,6 +21744,15 @@ static int run_eject(void)
     portIndex = tbn[tbn[u].Parent].VPort;
     portBdf = inst_get32(tbh[nhiK].Rec, CM_ST_O_PORTS + 4 * portIndex);
     out("\nDevice %d: %s\n  %s\n", tbn[u].Number, desc, id);
+    {
+        int bh = tb_bios_held(u);
+        if (bh != INST_BH_GO) {
+            out("%s\n", bh == INST_BH_HELD ? instBiosHeldConsole
+                                           : instBiosUnsureConsole);
+            tb_unask();
+            return INST_EXIT_REFUSED;
+        }
+    }
     if (!(opts.Yes && opts.EjectId[0] != '\0')) {
         if (inst_eject_remind(tb_single(u),
                               inst_port_usb3(tbh[nhiK].Rec, portBdf))) {
@@ -20107,6 +21783,16 @@ static int run_eject(void)
         tb_unask();
         return INST_EXIT_REFUSED;
     }
+    {
+        /* Again on the fresh reading, immediately before the call. */
+        int bh = tb_bios_held(u);
+        if (bh != INST_BH_GO) {
+            out("\n%s\n", bh == INST_BH_HELD ? instBiosHeldConsole
+                                              : instBiosUnsureConsole);
+            tb_unask();
+            return INST_EXIT_REFUSED;
+        }
+    }
     single = tb_single(u);
     out("\n");
     if (envNow.Nt) {
@@ -20116,7 +21802,10 @@ static int run_eject(void)
         int notRemovable = 0;
         int step;
         int pciePre;
-        vetoName[0] = '\0';
+        /* Zeroed whole, so a name the ANSI call leaves unterminated ends
+         * at the zeros (2026-11-14: a veto name printed with stale bytes
+         * after it). */
+        memset(vetoName, 0, sizeof(vetoName));
         pciePre = inst_port_pcie(tbh[nhiK].Rec, portBdf);
         cr = tbEject(tbn[u].Dn, &veto, vetoName, MAX_PATH, 0);
         vetoName[MAX_PATH - 1] = '\0';
@@ -35449,7 +37138,7 @@ void inst_eng_other_pkg_scope(int set, int i, const char *dir, char *out,
                 cap - strlen(out) - 1);
     }
     if (set == INST_SET_NONFREE) {
-        strncat(out, " Another maker's driver.",
+        strncat(out, " Another manufacturer's driver.",
                 cap - strlen(out) - 1);
     }
 }
@@ -35999,6 +37688,8 @@ void inst_eng_usage(void)
 "                on without asking\n"
 "  /notbnet      turn Thunderbolt networking off\n"
 "  /nouas        do not install the UAS disk driver (xhciuas.sys)\n"
+"  /takeover     replace another manufacturer's driver on USB 3 controllers\n"
+"                (not on 98 SE and ME; on 8, 8.1 and 10 with /usb)\n"
 "  /storage      Windows 98 SE: install the storage drivers (from NUSB 3.3);\n"
 "                elsewhere only copy their files to the install folder\n"
 "  /nostorage    do not install the storage drivers\n"
@@ -36018,7 +37709,7 @@ void inst_eng_usage(void)
 "  /uninstall    remove the drivers (asks you to type REMOVE)\n"
 "  /nopause      do not wait for Enter at the end\n"
 "  /log path     write the log file there (default XHCIINST.LOG on the\n"
-"                system drive)\n"
+"                system drive; on 98 SE and ME the temp folder if that fails)\n"
 "  /dir folder   with %s run directly: the package folder (98-me on\n"
 "                98 SE and ME, nt-x86 on 32-bit 2000 to 10, nt-x64 on x64\n"
 "                Windows; without /dir, this Windows' folder)\n"
@@ -36127,9 +37818,10 @@ static void st_screens_once(int longest)
      * revision 23, and the connection manager's questions follow a Y; the
      * interrupt mode and the forced Bulk-Only no longer asked (record 26
      * draft 35), so the bad answer 9 goes to the connection manager's
-     * mode. */
+     * mode; XhciResumeKeepBot (task 49.34, record 20 section 4.3.4 M18),
+     * asked on 2000 and later after the port switchover, takes Enter. */
     static const char *const nt1[] = {
-        "y", "", "9", "", "", "", "C:\\WINDOWS\\X", "", "n", NULL
+        "y", "", "", "9", "", "", "", "C:\\WINDOWS\\X", "", "n", NULL
     };
     /* 98: the Thunderbolt question, the storage row, the port switchover,
      * XhciSilentInstall and the connection manager's three (asked on 98
@@ -36385,6 +38077,27 @@ static void st_screens_once(int longest)
     tbnCount = 0;
     tbhCount = 0;
 
+    /* The log's place said (record 23 section 7.5.1). */
+    out("==== the log's place\n");
+    {
+        char say[INST_PATH_CHARS * 2 + 80];
+        const char *tmp = longest ? dir : "C:\\WINDOWS\\TEMP\\XHCIINST.LOG";
+
+        inst_log_fail_text(say, sizeof(say), INST_LOG_TEMP, "",
+                           "C:\\XHCIINST.LOG", tmp);
+        out("%s\n\n", say);
+        inst_log_fail_text(say, sizeof(say), INST_LOG_NONE, "",
+                           "C:\\XHCIINST.LOG", tmp);
+        out("%s\n\n", say);
+        /* 2000 to 10: no temp place (revision 57). */
+        inst_log_fail_text(say, sizeof(say), INST_LOG_NONE, "",
+                           "C:\\XHCIINST.LOG", "");
+        out("%s\n\n", say);
+        inst_log_fail_text(say, sizeof(say), INST_LOG_NONE,
+                           longest ? dir : "A:\\XHCI.LOG", "", "");
+        out("%s\n\n", say);
+    }
+
     /* The summary and the usage. */
     out("==== the summary\n");
     for (i = 0; i < 3; i++) {
@@ -36476,11 +38189,12 @@ static int selftest_screens(void)
 {
     static const int order[] = {
         /* NT /list: nothing asked; NT install: the Thunderbolt question,
-         * the port switchover, the connection manager's three (the
-         * interrupt mode and the forced Bulk-Only Advanced since record 26
-         * draft 35), the directory, the confirmation, the word. */
+         * the port switchover, XhciResumeKeepBot (task 49.34), the
+         * connection manager's three (the interrupt mode and the forced
+         * Bulk-Only Advanced since record 26 draft 35), the directory, the
+         * confirmation, the word. */
         INST_Q_TB, INST_Q_VALUE, INST_Q_VALUE, INST_Q_VALUE, INST_Q_VALUE,
-        INST_Q_DIR, INST_Q_CONFIRM, INST_Q_REMOVE
+        INST_Q_VALUE, INST_Q_DIR, INST_Q_CONFIRM, INST_Q_REMOVE
     };
     INST_ENV saved = envNow;
     INST_FRONT savedFront = front;
@@ -37238,22 +38952,26 @@ int inst_eng_begin(int argc, char **argv)
 {
     PFN_ISWOW64 isWow64;
     BOOL wow = FALSE;
+    int osRead;
     int i;
 
+    /* The version first: the log's place depends on the system (record 23
+     * section 7.5.1, revision 57); a reading that fails is said below. */
+    osRead = inst_eng_os_read(&osv);
     if ((!opts.List && !opts.Devices) || opts.Log[0] != '\0') {
-        log_open();
+        log_open(osv.dwPlatformId != VER_PLATFORM_WIN32_WINDOWS);
     }
     out("%s %s - %s\n", instWindow ? "xhciwiz" : "xhciinst", XHCIINST_VERSION,
         (opts.Devices || opts.Eject)
             ? "Thunderbolt and USB4 devices"
             : "install, update or uninstall the xhci98 package");
-    out("Log: %s\n", logPath[0] ? logPath : "none (/list and /devices write "
-        "none unless /log names one)");
+    out("Log: %s\n", logPath[0] ? logPath : logTried ? "none" :
+        "none (/list and /devices write none unless /log names one)");
     for (i = 0; i < argc; i++) {
         logonly("argv[%d] = %s\n", i, argv[i]);
     }
 
-    if (!inst_eng_os_read(&osv)) {
+    if (!osRead) {
         out("The Windows version could not be read%s.\n",
             osv.dwOSVersionInfoSize != 0 ? " exactly (ntdll.dll's "
             "RtlGetVersion is missing, and Windows answers 6.2 or later)"
@@ -37408,7 +39126,32 @@ int inst_eng_devices(void)
     return opts.Devices ? run_devices() : run_eject();
 }
 
+static int run_guard_take(void);
+static void run_guard_give(void);
+static int eng_read_body(void);
+
+/* The reading, and the run's guard given back when it ends the run (a
+ * refusal: the device scan, a driver set asked for and not there, ...):
+ * a run that can change nothing more holds no other run up. */
 int inst_eng_read(void)
+{
+    int r = eng_read_body();
+
+    if (!inst_run_guard_keep(r, -1, 0)) {
+        run_guard_give();
+    }
+    return r;
+}
+
+/* For a front end whose own state ended the run after the read (the
+ * wizard's first plan refused, its Welcome greyed): the guard given back
+ * now. Idempotent. */
+void inst_eng_guard_release(void)
+{
+    run_guard_give();
+}
+
+static int eng_read_body(void)
 {
     SC_HANDLE scm;
 
@@ -37418,6 +39161,12 @@ int inst_eng_read(void)
         return INST_EXIT_REFUSED;
     }
     if (!inst_ver_parse(XHCIINST_VERSION, pkgVersion)) {
+        return INST_EXIT_REFUSED;
+    }
+    /* The run's guard before the system is read (record 21 section 7.8.4):
+     * the plan, the recovery journal and every record it reads stay what
+     * this run read until its hold's end. */
+    if (inst_run_guard_needed(envNow.Nt, opts.List) && !run_guard_take()) {
         return INST_EXIT_REFUSED;
     }
     load_routines();
@@ -37532,6 +39281,16 @@ static int usb_decide(void)
             "an installed one\nis kept.\n\n");
     }
     usb_apply(r);
+    /* Record 23 section 5.4.2: /takeover's refusals by the system; the
+     * window takes it as the box's first state where the box is shown. */
+    takeChoice = opts.Takeover;
+    if (opts.Takeover && !instWindow) {
+        const char *tw = inst_take_switch(envNow.Nt, osKind, r == 1);
+        if (tw != NULL) {
+            out("Cannot continue: %s\n", tw);
+            return 0;
+        }
+    }
     logonly("usb drivers: kind %d, offered %d, include %d, uas %d\n", osKind,
             usbOffered, usbInclude, uasInclude);
     return 1;
@@ -37741,6 +39500,561 @@ static int s98_pause(void)
     return 1;
 }
 
+/* Record 21 section 7.8.4 (task 49.26): the mark service reads no device
+ * while a run changes drivers. The run keeps the hold event open from
+ * before its first change to its end and then waits once for the
+ * service's idle event, so a poll under way ends first and none starts
+ * after; a service that cannot be held so (an earlier release's, which has
+ * no idle event owned by SYSTEM, or a hold not made) is stopped for the run
+ * and started again at its end. Both objects are open to SYSTEM and the
+ * Administrators alone, and each is trusted only with the owner its maker
+ * has: the idle event SYSTEM (the service), the hold event SYSTEM or the
+ * Administrators
+ * (an elevated installer). The restart owed for a stop is kept in
+ * memory and, from before the stop until the restart is read back, in the
+ * service key's Parameters\SetupStopped, which the next run honours. */
+static HANDLE mkHold;
+static int mkHoldStopped;       /* the run owes the service its restart  */
+static void mk_hold_end(void);
+
+#define INST_MK_PARAMS_KEY  "SYSTEM\\CurrentControlSet\\Services\\xhcimark\\Parameters"
+#define INST_MK_STOP_MARK   "SetupStopped"
+
+typedef BOOL (WINAPI *PFN_GETKOBJSEC)(HANDLE, SECURITY_INFORMATION,
+                                      PSECURITY_DESCRIPTOR, DWORD, LPDWORD);
+typedef BOOL (WINAPI *PFN_GETSDOWNER)(PSECURITY_DESCRIPTOR, PSID *, LPBOOL);
+typedef BOOL (WINAPI *PFN_EQUALSID)(PSID, PSID);
+
+/* Who owns a named object (the handle opened with READ_CONTROL):
+ * INST_OWNER_SYSTEM, INST_OWNER_ADMINS, or INST_OWNER_OTHER (another, or
+ * one that could not be read). */
+static int obj_owner(HANDLE h)
+{
+    static SID_IDENTIFIER_AUTHORITY ntAuth = SECURITY_NT_AUTHORITY;
+    PFN_GETKOBJSEC getSec = (PFN_GETKOBJSEC)adv_proc("GetKernelObjectSecurity");
+    PFN_GETSDOWNER getOwner =
+        (PFN_GETSDOWNER)adv_proc("GetSecurityDescriptorOwner");
+    PFN_EQUALSID equalSid = (PFN_EQUALSID)adv_proc("EqualSid");
+    PFN_ALLOCSID allocSid = (PFN_ALLOCSID)adv_proc("AllocateAndInitializeSid");
+    PFN_FREESID freeSid = (PFN_FREESID)adv_proc("FreeSid");
+    union {
+        SECURITY_DESCRIPTOR Sd;
+        BYTE B[512];
+    } u;
+    DWORD need = 0;
+    PSID owner = NULL;
+    BOOL defaulted = FALSE;
+    PSID sys = NULL;
+    PSID adm = NULL;
+    int r = INST_OWNER_OTHER;
+
+    if (h == NULL || getSec == NULL || getOwner == NULL ||
+        equalSid == NULL || allocSid == NULL || freeSid == NULL ||
+        !getSec(h, OWNER_SECURITY_INFORMATION, &u.Sd, sizeof(u), &need) ||
+        !getOwner(&u.Sd, &owner, &defaulted) || owner == NULL) {
+        return INST_OWNER_OTHER;
+    }
+    if (allocSid(&ntAuth, 1, SECURITY_LOCAL_SYSTEM_RID, 0, 0, 0, 0, 0, 0, 0,
+                 &sys) && equalSid(owner, sys)) {
+        r = INST_OWNER_SYSTEM;
+    } else if (allocSid(&ntAuth, 2, SECURITY_BUILTIN_DOMAIN_RID,
+                        DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &adm) &&
+               equalSid(owner, adm)) {
+        r = INST_OWNER_ADMINS;
+    }
+    if (sys != NULL) {
+        freeSid(sys);
+    }
+    if (adm != NULL) {
+        freeSid(adm);
+    }
+    return r;
+}
+
+typedef BOOL (WINAPI *PFN_SETSDOWNER)(PSECURITY_DESCRIPTOR, PSID, BOOL);
+typedef BOOL (WINAPI *PFN_SETKOBJSEC)(HANDLE, SECURITY_INFORMATION,
+                                      PSECURITY_DESCRIPTOR);
+
+/* A named object this run made (the handle with WRITE_OWNER) given the
+ * Administrators as its owner, when the token's default owner is another
+ * (the user, by the security setting "Default owner for objects created
+ * by members of the Administrators group"): an elevated administrator's
+ * token may name that group its owner. Then read back as obj_owner. */
+static int obj_owner_admins(HANDLE h)
+{
+    static SID_IDENTIFIER_AUTHORITY ntAuth = SECURITY_NT_AUTHORITY;
+    PFN_ALLOCSID allocSid = (PFN_ALLOCSID)adv_proc("AllocateAndInitializeSid");
+    PFN_FREESID freeSid = (PFN_FREESID)adv_proc("FreeSid");
+    PFN_INITSD initSd = (PFN_INITSD)adv_proc("InitializeSecurityDescriptor");
+    PFN_SETSDOWNER setOwner =
+        (PFN_SETSDOWNER)adv_proc("SetSecurityDescriptorOwner");
+    PFN_SETKOBJSEC setSec =
+        (PFN_SETKOBJSEC)adv_proc("SetKernelObjectSecurity");
+    SECURITY_DESCRIPTOR sd;
+    PSID adm = NULL;
+    int r = obj_owner(h);
+
+    if (r != INST_OWNER_OTHER || allocSid == NULL || freeSid == NULL ||
+        initSd == NULL || setOwner == NULL || setSec == NULL) {
+        return r;
+    }
+    if (allocSid(&ntAuth, 2, SECURITY_BUILTIN_DOMAIN_RID,
+                 DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &adm)) {
+        if (initSd(&sd, SECURITY_DESCRIPTOR_REVISION) &&
+            setOwner(&sd, adm, FALSE) &&
+            setSec(h, OWNER_SECURITY_INFORMATION, &sd)) {
+            logonly("mark service: the hold event given the Administrators "
+                    "as its owner\n");
+        }
+        freeSid(adm);
+    }
+    return obj_owner(h);
+}
+
+/* A REG_DWORD of the service's Parameters key: 1 read into *v, 0 absent
+ * (the key or the value), -1 not readable (another error, or another type
+ * or size). */
+static int mk_param_get(const char *name, INST_U32 *v)
+{
+    HKEY k;
+    DWORD d = 0;
+    DWORD n = sizeof(d);
+    DWORD type = 0;
+    LONG e;
+    int r;
+
+    *v = 0;
+    e = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_MK_PARAMS_KEY, 0, KEY_READ, &k);
+    if (e != ERROR_SUCCESS) {
+        return e == ERROR_FILE_NOT_FOUND ? 0 : -1;
+    }
+    e = RegQueryValueExA(k, name, NULL, &type, (LPBYTE)&d, &n);
+    RegCloseKey(k);
+    if (e == ERROR_FILE_NOT_FOUND) {
+        r = 0;
+    } else if (e == ERROR_SUCCESS && type == REG_DWORD && n == sizeof(d)) {
+        *v = (INST_U32)d;
+        r = 1;
+    } else {
+        r = -1;
+    }
+    return r;
+}
+
+/* The run's number (record 21 section 7.8.4): the last one's plus one,
+ * written to HoldRun of a registered service's Parameters key and read
+ * back; 0 when it could not be. */
+static INST_U32 mk_hold_gen_set(void)
+{
+    HKEY k;
+    INST_U32 last;
+    INST_U32 ack;
+    INST_U32 now = 0;
+    DWORD v;
+    DWORD disp;
+    int lastRead = mk_param_get(INST_MK_HOLD_RUN, &last);
+    int ackRead = mk_param_get(INST_MK_HOLD_ACK, &ack);
+
+    v = (DWORD)inst_mk_hold_gen_pick(lastRead, last, ackRead, ack);
+    if (v == 0) {
+        return 0;
+    }
+    if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_MK_PARAMS_KEY, 0, NULL, 0,
+                        KEY_SET_VALUE, NULL, &k, &disp) == ERROR_SUCCESS) {
+        (void)RegSetValueExA(k, INST_MK_HOLD_RUN, 0, REG_DWORD,
+                             (const BYTE *)&v, sizeof(v));
+        RegCloseKey(k);
+    }
+    if (mk_param_get(INST_MK_HOLD_RUN, &now) != 1 || now != (INST_U32)v) {
+        return 0;
+    }
+    return now;
+}
+
+/* The owed restart's marker: 1 present, 0 absent or unreadable. */
+static int mk_stop_mark_get(void)
+{
+    HKEY k;
+    DWORD v = 0;
+    DWORD n = sizeof(v);
+    DWORD type = 0;
+    int r = 0;
+
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_MK_PARAMS_KEY, 0, KEY_READ,
+                      &k) == ERROR_SUCCESS) {
+        r = RegQueryValueExA(k, INST_MK_STOP_MARK, NULL, &type, (LPBYTE)&v,
+                             &n) == ERROR_SUCCESS;
+        RegCloseKey(k);
+    }
+    return r;
+}
+
+/* 1 when the marker reads as asked (on: present; off: absent). */
+static int mk_stop_mark_set(int on)
+{
+    HKEY k;
+    DWORD v = 1;
+    DWORD disp;
+    LONG e;
+
+    if (on) {
+        e = RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_MK_PARAMS_KEY, 0, NULL, 0,
+                            KEY_SET_VALUE, NULL, &k, &disp);
+        if (e == ERROR_SUCCESS) {
+            e = RegSetValueExA(k, INST_MK_STOP_MARK, 0, REG_DWORD,
+                               (const BYTE *)&v, sizeof(v));
+            RegCloseKey(k);
+        }
+    } else {
+        e = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_MK_PARAMS_KEY, 0,
+                          KEY_SET_VALUE, &k);
+        if (e == ERROR_SUCCESS) {
+            e = RegDeleteValueA(k, INST_MK_STOP_MARK);
+            RegCloseKey(k);
+        }
+        if (e == ERROR_FILE_NOT_FOUND) {
+            e = ERROR_SUCCESS;
+        }
+    }
+    logonly("mark service: %s the restart marker: %s (%ld)\n",
+            on ? "set" : "cleared", e == ERROR_SUCCESS ? "done" : "failed",
+            (long)e);
+    return e == ERROR_SUCCESS && mk_stop_mark_get() == on;
+}
+
+/* The mark service's state: 1 SERVICE_RUNNING, 2 its stop pending, 3
+ * another pending or a paused state, 0 stopped or not registered, -1
+ * unreadable. */
+static int mk_svc_running(void)
+{
+    SC_HANDLE scm;
+    SC_HANDLE s;
+    SERVICE_STATUS st;
+    DWORD e;
+    int r = -1;
+
+    scm = OpenSCManagerA(NULL, NULL, SC_MANAGER_CONNECT);
+    if (scm == NULL) {
+        return -1;
+    }
+    s = OpenServiceA(scm, INST_MK_SERVICE, SERVICE_QUERY_STATUS);
+    if (s == NULL) {
+        e = GetLastError();
+        if (e == ERROR_SERVICE_DOES_NOT_EXIST) {
+            r = 0;
+        }
+    } else {
+        if (QueryServiceStatus(s, &st)) {
+            r = st.dwCurrentState == SERVICE_STOPPED ? 0 :
+                st.dwCurrentState == SERVICE_RUNNING ? 1 :
+                st.dwCurrentState == SERVICE_STOP_PENDING ? 2 : 3;
+        }
+        CloseServiceHandle(s);
+    }
+    CloseServiceHandle(scm);
+    return r;
+}
+
+/* The run's guard (INST_RUN_GUARD): one installer run at a time on NT,
+ * made before the run reads the system (inst_eng_read) and kept to the
+ * hold's end, so no other run changes what the plan read, or reads or
+ * writes the recovery journal, the restart marker or HoldRun, or stops or
+ * starts the service, in between. An event whose existence is the guard,
+ * so the wizard's read thread and run thread share it. 1 taken (or already
+ * this run's); 0 refused, said, nothing changed. The uninstall's starter
+ * gives it back before it starts its temporary copy; the 32-bit wizard's
+ * x64 start is made before any read and only waited for; so a run never
+ * waits on its own child. */
+static HANDLE runGuard;
+
+static int run_guard_take(void)
+{
+    SHARED_SD s;
+    SECURITY_ATTRIBUTES *sa;
+    HANDLE h;
+    DWORD e;
+    int got = -1;
+    int owner = INST_OWNER_OTHER;
+    int how;
+
+    if (runGuard != NULL) {
+        return 1;
+    }
+    sa = shared_sd(&s, 0, EVENT_ALL_ACCESS);
+    h = sa != NULL ? CreateEventA(sa, TRUE, FALSE, INST_RUN_GUARD) : NULL;
+    e = sa != NULL ? GetLastError() : ERROR_INVALID_DATA;
+    if (h != NULL && e == ERROR_ALREADY_EXISTS) {
+        owner = obj_owner(h);
+        got = 0;
+    } else if (h != NULL) {
+        /* Given the Administrators, so another run knows it as a run's. */
+        owner = obj_owner_admins(h);
+        got = 1;
+    } else if (e == ERROR_ACCESS_DENIED) {
+        /* One whose access list leaves the Administrators out: no
+         * installer made it. */
+        got = 0;
+    }
+    how = inst_run_guard_how(got, owner);
+    logonly("run guard: %d (got %d, owner %d, error %lu)\n", how, got, owner,
+            (unsigned long)e);
+    if (how == INST_GUARD_TAKEN) {
+        runGuard = h;
+        return 1;
+    }
+    if (h != NULL) {
+        CloseHandle(h);
+    }
+    if (how == INST_GUARD_BUSY) {
+        out("Cannot continue: another Setup run is in progress:\nnothing is "
+            "changed. Run Setup again when it has finished.\n");
+    } else {
+        out("Cannot continue: Setup's lock %s could not be taken (error "
+            "%lu):\nnothing is changed. Restart Windows and run Setup "
+            "again.\n", INST_RUN_GUARD,
+            (unsigned long)(how == INST_GUARD_FOREIGN ? ERROR_ACCESS_DENIED :
+                            e));
+    }
+    return 0;
+}
+
+static void run_guard_give(void)
+{
+    if (runGuard != NULL) {
+        CloseHandle(runGuard);
+        runGuard = NULL;
+        logonly("run guard: given back\n");
+    }
+}
+
+/* 1 when the run may change drivers; 0 refused, nothing changed. */
+static int mk_hold_begin(void)
+{
+    SHARED_SD s;
+    SECURITY_ATTRIBUTES *sa;
+    SC_HANDLE scm;
+    HANDLE m;
+    DWORD w;
+    DWORD e;
+    int made = 0;
+    int opened = 0;
+    int barrier = 0;
+    int running;
+    int how;
+    int had = 0;
+    int stopped = 0;
+    int reg;
+    INST_U32 gen = 0;
+    INST_U32 ack = 0;
+    DWORD t0;
+
+    if (!envNow.Nt || opts.List || mkHold != NULL) {
+        return 1;
+    }
+    /* Before anything is read: the marker, HoldRun, the service's state. */
+    if (!run_guard_take()) {
+        return 0;
+    }
+    if (mk_stop_mark_get()) {
+        /* An earlier run stopped the service and ended before its restart
+         * was read back: this run owes it. */
+        logonly("mark service: an earlier run's restart is owed\n");
+        mkHoldStopped = 1;
+    }
+    /* The run's number first, then its hold event: a service that sees
+     * the event with a number other than the one it held for begins a new
+     * hold (the last run's may never have been seen ending). A registered
+     * service whose number cannot be written is not held. */
+    reg = svc_state(INST_MK_SERVICE);
+    if (reg == 1) {
+        gen = mk_hold_gen_set();
+    }
+    logonly("mark service: the run's number %lu (registered %d)\n",
+            (unsigned long)gen, reg);
+    sa = reg == 0 || gen != 0 ? shared_sd(&s, 0, EVENT_ALL_ACCESS) : NULL;
+    mkHold = sa != NULL ? CreateEventA(sa, TRUE, FALSE, INST_MK_HOLD_EVENT)
+                        : NULL;
+    e = sa != NULL ? GetLastError() : ERROR_INVALID_DATA;
+    /* Its owner read whether this run made it or found it: the service
+     * trusts only SYSTEM or the Administrators as the hold's owner, and a
+     * hold it would ignore holds nothing. One this run made is given the
+     * Administrators first if the token named another; one found is
+     * another process's and is not changed. */
+    if (mkHold != NULL && e == ERROR_ALREADY_EXISTS &&
+        !inst_mk_owner_ok(obj_owner(mkHold), 0)) {
+        logonly("mark service: a hold event no installer made exists\n");
+        CloseHandle(mkHold);
+        mkHold = NULL;
+    } else if (mkHold != NULL && e != ERROR_ALREADY_EXISTS &&
+               !inst_mk_owner_ok(obj_owner_admins(mkHold), 0)) {
+        logonly("mark service: the hold event made has an owner the service "
+                "does not trust\n");
+        CloseHandle(mkHold);
+        mkHold = NULL;
+    }
+    made = mkHold != NULL;
+    if (!made) {
+        logonly("mark service: the hold event was not made (error %lu)\n",
+                (unsigned long)e);
+    }
+    /* The barrier: the hold exists now, so a poll that starts from here
+     * sees it; the idle event set means none is under way (the service
+     * resets it before it tests the hold and sets it when the poll ends). */
+    m = made ? OpenEventA(SYNCHRONIZE | READ_CONTROL, FALSE,
+                          INST_MK_IDLE_EVENT) : NULL;
+    if (m != NULL && !inst_mk_owner_ok(obj_owner(m), 1)) {
+        logonly("mark service: an idle event not owned by SYSTEM: no "
+                "service's\n");
+        CloseHandle(m);
+        m = NULL;
+    }
+    if (m != NULL) {
+        /* Then the acknowledgement: HoldAck read back as this run's number,
+         * written by a poll that found this run's hold and skipped, so the
+         * hold is this run's and not one the service inherited; the idle
+         * event alone does not pass. Both within INST_MK_HOLD_WAIT_MS. */
+        opened = 1;
+        t0 = GetTickCount();
+        w = WaitForSingleObject(m, INST_MK_HOLD_WAIT_MS);
+        barrier = w == WAIT_OBJECT_0 && gen != 0;
+        CloseHandle(m);
+        while (barrier && (mk_param_get(INST_MK_HOLD_ACK, &ack) != 1 ||
+                           ack != gen)) {
+            if (GetTickCount() - t0 >= INST_MK_HOLD_WAIT_MS) {
+                barrier = 0;
+                break;
+            }
+            Sleep(100);
+        }
+        logonly("mark service: the hold acknowledged: %d (HoldAck %lu)\n",
+                barrier, (unsigned long)ack);
+    }
+    running = mk_svc_running();
+    if (running >= 2) {
+        running = 1;
+    }
+    how = inst_mk_hold_how(made, opened, barrier, running);
+    logonly("mark service: hold %d (event %d, idle event %d, barrier %d, "
+            "running %d)\n", how, made, opened, barrier, running);
+    if (how != INST_MK_HOLD_STOP) {
+        return 1;
+    }
+    if (running != 0) {
+        /* Recorded before the stop, and read back: a run that ends before
+         * its restart leaves the next run the obligation. A marker that
+         * cannot be recorded stops nothing: the run is refused. */
+        if (!mk_stop_mark_set(1)) {
+            out("Cannot continue: the safe-removal mark service could not be "
+                "paused or stopped:\nnothing is changed. Restart Windows and "
+                "run Setup again.\n");
+            mk_hold_end();
+            return 0;
+        }
+        mkHoldStopped = 1;
+    }
+    scm = OpenSCManagerA(NULL, NULL, SC_MANAGER_CONNECT);
+    if (scm != NULL) {
+        stopped = mk_stop(scm, &had);
+        CloseServiceHandle(scm);
+    }
+    if (stopped) {
+        return 1;
+    }
+    out("Cannot continue: the safe-removal mark service could not be paused "
+        "or stopped:\nnothing is changed. Restart Windows and run Setup "
+        "again.\n");
+    mk_hold_end();
+    return 0;
+}
+
+/* The run's end, or its refusal: the restart owed (this run's stop, or an
+ * earlier run's marker) made and read back - the service running again
+ * (mk_end_of_run's start of the copy it installs counts), or no longer
+ * registered - and only then the marker cleared; a stop still pending
+ * after INST_MK_HOLD_WAIT_MS, a start that fails or a state that cannot be
+ * read is said, joins the run's verdict as a step left, and keeps the
+ * marker. Then the hold ends. */
+static void mk_hold_end(void)
+{
+    PFN_STARTSVC startSvc = (PFN_STARTSVC)adv_proc("StartServiceA");
+    SC_HANDLE scm;
+    SC_HANDLE s;
+    DWORD t0;
+    DWORD err = 0;
+    int how;
+    int tries;
+
+    /* Only the run that holds the guard: a run that takes none (/list, the
+     * device modes, 98 SE and ME), and a second end after it was given
+     * back, which is another run's time. */
+    if (!inst_mk_end_may(runGuard != NULL)) {
+        return;
+    }
+    if (envNow.Nt && !opts.List && (mkHoldStopped || mk_stop_mark_get())) {
+        mkHoldStopped = 0;
+        t0 = GetTickCount();
+        while (mk_svc_running() >= 2 &&
+               GetTickCount() - t0 < INST_MK_HOLD_WAIT_MS) {
+            Sleep(250);
+        }
+        for (tries = 0; tries < 2; tries++) {
+            how = inst_mk_restore_how(1, svc_state(INST_MK_SERVICE),
+                                      mk_svc_running());
+            if (how != INST_MK_RESTORE_START || tries == 1) {
+                break;
+            }
+            scm = OpenSCManagerA(NULL, NULL, SC_MANAGER_CONNECT);
+            s = scm != NULL ? OpenServiceA(scm, INST_MK_SERVICE,
+                                           SERVICE_START |
+                                           SERVICE_QUERY_STATUS) : NULL;
+            if (s == NULL || startSvc == NULL || !startSvc(s, 0, NULL)) {
+                err = s == NULL || startSvc == NULL ? ERROR_PROC_NOT_FOUND :
+                      GetLastError();
+                how = INST_MK_RESTORE_FAIL;
+            } else if (!mk_running(s)) {
+                /* Not read SERVICE_RUNNING within mk_running's 30 s. */
+                err = ERROR_SERVICE_REQUEST_TIMEOUT;
+                how = INST_MK_RESTORE_FAIL;
+            }
+            if (s != NULL) {
+                CloseServiceHandle(s);
+            }
+            if (scm != NULL) {
+                CloseServiceHandle(scm);
+            }
+            if (how == INST_MK_RESTORE_FAIL) {
+                break;
+            }
+        }
+        if (how == INST_MK_RESTORE_START) {
+            /* Started, and still not read running. */
+            how = INST_MK_RESTORE_FAIL;
+            err = ERROR_SERVICE_REQUEST_TIMEOUT;
+        }
+        if (how == INST_MK_RESTORE_CLEAR) {
+            logonly("mark service: running again (or removed) after the run\n");
+            mk_stop_mark_set(0);
+        } else {
+            if (err == 0) {
+                err = ERROR_SERVICE_REQUEST_TIMEOUT;
+            }
+            logonly("mark service: not running again after the run (error "
+                    "%lu); the restart marker kept\n", (unsigned long)err);
+            out("The safe-removal mark service xhcimark could not be started "
+                "again (error %lu):\nit starts with Windows. Restart "
+                "Windows.\n", (unsigned long)err);
+            flagSteps = 1;
+        }
+    }
+    if (mkHold != NULL) {
+        CloseHandle(mkHold);
+        mkHold = NULL;
+        logonly("mark service: the hold ended\n");
+    }
+    /* Last: the restart made and read back, the hold closed. */
+    run_guard_give();
+}
+
 int inst_eng_plan(void)
 {
     planRefusal = NULL;
@@ -37775,12 +40089,47 @@ static INST_U32 comp_warnings_for(int usb, int stor, int s98, int tb)
 {
     return inst_comp_warnings(!envNow.Nt && envNow.Minor == 10, !envNow.Nt,
                               osKind == INST_OS_CMONLY, haveCm, usb, stor,
-                              s98, tb, tbIntel);
+                              s98, tb, tbIntel) |
+           (take_planned(usb) ? INST_CW_TAKEOVER : 0UL);
+}
+
+/* Record 23 section 5.4.2 (owner, 2026-11-13): after the warnings, one
+ * paragraph for each controller to be replaced whose Windows disk cannot
+ * be placed, each starting with a blank line. */
+static void take_bootunk_paras(int usb, char *text, size_t cap)
+{
+    const char *names[INST_TAKE_NAMES_SAID];
+    char one[1024];
+    int n = 0;
+    int i;
+
+    if (!take_planned(usb)) {
+        return;
+    }
+    for (i = 0; i < devCount; i++) {
+        const DEVREC *d = &devs[i];
+        if (d->Present && d->TakeCand && take_boot(d->Id) < 0) {
+            if (n < INST_TAKE_NAMES_SAID) {
+                names[n] = d->Desc[0] ? d->Desc : d->Id;
+            }
+            n++;
+        }
+    }
+    if (n == 0) {
+        return;
+    }
+    /* One paragraph, bounded (at most three names), within the callers'
+     * INST_TAKE_WARN_CAP beside every other warning. */
+    inst_take_bootunk_many(names, n, one, sizeof(one));
+    if (text[0] != '\0') {
+        strncat(text, "\n\n", cap - strlen(text) - 1);
+    }
+    strncat(text, one, cap - strlen(text) - 1);
 }
 
 static void comp_warnings_out(void)
 {
-    char text[2048];
+    char text[INST_TAKE_WARN_CAP];
     char *p;
     char *q;
     INST_U32 w = comp_warnings_for(usbInclude, storToolsInclude, s98Include,
@@ -37790,6 +40139,7 @@ static void comp_warnings_out(void)
         return;
     }
     inst_comp_warn_text(w, toolDir, text, sizeof(text));
+    take_bootunk_paras(usbInclude, text, sizeof(text));
     out("\nWARNING:\n");
     for (p = text; *p != '\0'; p = q) {
         q = strstr(p, "\n\n");
@@ -37818,6 +40168,7 @@ INST_U32 inst_eng_comp_warn(int usb, int stor, int s98, int tb,
     INST_U32 w = comp_warnings_for(usb, stor && storTools, s98, tb);
 
     inst_comp_warn_text(w, dir, text, cap);
+    take_bootunk_paras(usb, text, cap);
     if (w != 0) {
         logonly("components: warning %lu shown\n", (unsigned long)w);
     }
@@ -37888,7 +40239,17 @@ int inst_eng_run(void)
         out("%s", inst_cm_sb_refuse_text());
         return INST_EXIT_REFUSED;
     }
+    /* The run's guard first, on every NT run that can change anything (a
+     * run of the tools alone, or of an other USB driver set alone, copies,
+     * stages and writes records too); given back at mk_hold_end below. */
+    if (inst_run_guard_needed(envNow.Nt, opts.List) && !run_guard_take()) {
+        return INST_EXIT_REFUSED;
+    }
     if (!s98_pause()) {
+        run_guard_give();
+        return INST_EXIT_REFUSED;
+    }
+    if (!tools_only_run() && !mk_hold_begin()) {
         return INST_EXIT_REFUSED;
     }
     prog_start(0);
@@ -37929,6 +40290,7 @@ int inst_eng_run(void)
             flagFailed = 1;
         }
     }
+    mk_hold_end();
     /* The marks' flags join the run's verdict, which a failure returned
      * without flagFailed (a refused baseline) keeps. */
     if (code != INST_EXIT_REFUSED && code != INST_EXIT_FAILED &&
@@ -38027,6 +40389,9 @@ int inst_eng_un_route(void)
         return INST_EXIT_REFUSED;
     }
     logonly("relaunch: %s\n", cmd);
+    /* The copy takes the run's guard itself, when it reads the system
+     * again: this process changes nothing more. */
+    run_guard_give();
     memset(&si, 0, sizeof(si));
     si.cb = sizeof(si);
     memset(&pi, 0, sizeof(pi));
@@ -38051,7 +40416,14 @@ int inst_eng_uninstall(void)
     PFN_MOVEEX moveEx = move_ex();
     char path[INST_PATH_CHARS];
 
+    if (inst_run_guard_needed(envNow.Nt, opts.List) && !run_guard_take()) {
+        return INST_EXIT_REFUSED;
+    }
     if (!s98_pause()) {
+        run_guard_give();
+        return INST_EXIT_REFUSED;
+    }
+    if (!mk_hold_begin()) {
         return INST_EXIT_REFUSED;
     }
     prog_start(1);
@@ -38068,11 +40440,14 @@ int inst_eng_uninstall(void)
         int st = flagSteps;
 
         cm_start_end_of_run();
+        /* The owed restart's failure is a step left of this run too. */
+        mk_hold_end();
         if (((flagFailed && !f) || (flagSteps && !st)) &&
             code != INST_EXIT_FAILED) {
             code = inst_exit_code(0, flagFailed, flagRestart, flagSteps);
         }
     }
+    mk_hold_end();
     helper_files_gone();
     if (tempCopyDir[0] != '\0' && !opts.List) {
         /* This run is the temporary copy (record 26 section 9.2): on NT
@@ -38111,6 +40486,12 @@ static void inventories_release(void)
 int inst_eng_end(int code, int *line)
 {
     int last = INST_FINAL_NO_CHANGES;
+
+    /* Every path's end: one that bypassed the hold's end (a refusal at the
+     * questions or at the run's start, a plan refused, the wizard closed
+     * before Install) gives the run's guard back here; given back already,
+     * nothing. */
+    run_guard_give();
 
     /* Owner, 2026-10-15: a restart after every change, on every system,
      * whatever Windows itself says. The last line and the exit code agree
@@ -38154,6 +40535,22 @@ int inst_eng_end(int code, int *line)
 
 /* ---- the window's readings ------------------------------------------------ */
 
+int inst_eng_take_state(char *service, size_t cap, int *first)
+{
+    if (cap > 0) {
+        inst_copy(service, takeService, cap);
+    }
+    if (first != NULL) {
+        *first = opts.Takeover;
+    }
+    return envNow.Nt ? inst_take_said(takeCount, takeAble) : 0;
+}
+
+void inst_eng_take_choose(int on)
+{
+    takeChoice = on ? 1 : 0;
+}
+
 int inst_eng_found(int i, INST_FOUND *f)
 {
     int j;
@@ -38182,8 +40579,7 @@ int inst_eng_found(int i, INST_FOUND *f)
                      d->S98Why != INST_S98_ELIGIBLE) ?
                         inst_s98_left_text(d->S98Why, s98FallbackOs,
                                            s98_later_of(d), 1) :
-                    inst_action_row_text(d->Action, d->Runs, opts.Force,
-                                         row_stale(d));
+                    row_text(d, 0);
         f->Runs = d->Runs;
         f->Refused = d->Refused;
         f->Present = d->Present;

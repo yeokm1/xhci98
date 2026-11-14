@@ -138,8 +138,8 @@ End Function
 ' True for a DriverDesc this driver's controller carries or has carried:
 ' XHCI_DESC, XHCI_DESC_OLD, or XHCI_DESC followed by " (<maker product>)",
 ' the name 3.3.0.0's INF gives each controller it lists (task 44.55).
-' Case does not matter. scripts\check-text.ps1 holds this function, the
-' same in silent.vbs and portsw.vbs, to every name the INFs give.
+' Case does not matter. scripts\check-text.ps1 holds this function to
+' every name the INFs give.
 Function IsXhciDesc(desc)
     Dim d, p
     d = LCase(desc)

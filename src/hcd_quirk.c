@@ -202,6 +202,13 @@ ULONG HcdQuirkMsiAvoid(PHCD_CONTROLLER hc, ULONG interruptMode)
         XhciQuirkSetEffective(st, XHCI_QK_MSI_AVOID, matched, 0, avoid);
         return 0;
     }
+    if (interruptMode == XHCI_POLL_MODE_MSG4) {
+        /* Task 49.24 (design record 15 section 4.5.1, decision 6): mode 4
+         * obeys the quirk on every system it runs on, and with no fallback
+         * its start is refused. */
+        XhciQuirkSetEffective(st, XHCI_QK_MSI_AVOID, matched, avoid, 0);
+        return avoid;
+    }
     XhciQuirkSetEffective(st, XHCI_QK_MSI_AVOID, matched, avoid, 0);
     /* The requirements filter that ran before this start stripped the
      * messages at the quirk's asking: the quirk acted there, so the line

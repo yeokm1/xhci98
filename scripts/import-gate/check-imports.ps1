@@ -282,6 +282,81 @@ if ($Nt6Win7Dir -eq "") {
 $script:failures = @()
 $script:warnings = @()
 
+function Test-Msi4ntHostedInclude([string]$Text, [string]$Name) {
+    # Fails closed: '' when the text neither includes msi4nt.h nor #undefs
+    # one of its configuration names; or when it is hcd_msgnt.c and
+    # includes it once, with MSI4NT_HOSTED, MSI4NT_NO_NATIVE,
+    # MSI4NT_ISA_LINE and MSI4NT_IMPLEMENTATION each #defined before it,
+    # outside every conditional, with no conditional open at the include
+    # and no other include after the first of them. Else why not. Every
+    # name test is case-sensitive, as the preprocessor's.
+    # Splices joined and comments dropped first, as the compiler reads them
+    # (string literals kept: the include's name is one; dropping more text
+    # can only lose a define, which fails).
+    $Text = $Text -replace "(\\|\?\?/)\r?\n", ""
+    # One left-to-right pass as Join-CSplices reads lexemes: a string or
+    # character literal is kept whole, so a comment marker inside one
+    # opens nothing; a comment becomes a space.
+    $lexeme = '"(?:[^"\\\r\n]|\\.)*"|''(?:[^''\\\r\n]|\\.)*''|/\*.*?\*/|//[^\r\n]*'
+    $Text = [regex]::Replace($Text, $lexeme, { param($m) if ($m.Value.StartsWith('/')) { ' ' } else { $m.Value } }, [System.Text.RegularExpressions.RegexOptions]::Singleline)
+    $names = @('MSI4NT_HOSTED', 'MSI4NT_NO_NATIVE', 'MSI4NT_ISA_LINE', 'MSI4NT_IMPLEMENTATION')
+    foreach ($n in $names) {
+        if ($Text -cmatch ('(?m)^[ \t]*#[ \t]*undef[ \t]+' + $n + '\b')) { return "$n undefined" }
+    }
+    # An include through a macro could name msi4nt.h unseen: none is
+    # admitted in a scanned file (the tree has none).
+    if ($Text -cmatch '(?m)^[ \t]*#[ \t]*include[ \t]*[A-Za-z_]') { return 'an include through a macro (the scan cannot tell whether it names msi4nt.h)' }
+    $incs = [regex]::Matches($Text, '(?m)^[ \t]*#[ \t]*include[ \t]*[<"][^>"]*(?i:msi4nt\.h)[>"]')
+    if ($incs.Count -eq 0) { return '' }
+    if ($Name -cne 'hcd_msgnt.c' -and $Name -cne 'cm_rirqnt.c') { return 'msi4nt.h included by a file other than hcd_msgnt.c and cm_rirqnt.c' }
+    if ($incs.Count -gt 1) { return 'msi4nt.h included more than once' }
+    $depth = 0
+    $seen = @{}
+    $firstDef = $false
+    foreach ($line in ($Text.Substring(0, $incs[0].Index) -split "`n")) {
+        if ($line -cmatch '^[ \t]*#[ \t]*(if|ifdef|ifndef)\b') { $depth++; continue }
+        if ($line -cmatch '^[ \t]*#[ \t]*endif\b') { $depth--; continue }
+        if ($line -cmatch '^[ \t]*#[ \t]*(else|elif)\b') { continue }
+        if ($line -cmatch '^[ \t]*#[ \t]*include\b' -and $firstDef) { return 'another include stands between the configuration names and msi4nt.h' }
+        foreach ($n in $names) {
+            if ($line -cmatch ('^[ \t]*#[ \t]*define[ \t]+' + $n + '\b')) {
+                if ($depth -ne 0) { return "$n defined under a conditional" }
+                $seen[$n] = $true
+                $firstDef = $true
+            }
+        }
+    }
+    if ($depth -ne 0) { return 'msi4nt.h included under a conditional' }
+    foreach ($n in $names) {
+        if (-not $seen.ContainsKey($n)) { return "msi4nt.h included without $n defined before it" }
+    }
+    return ''
+}
+
+function Remove-Msi4ntDefaultBranches([string]$Text) {
+    # Drops the #else / #elif branches of each block whose whole condition
+    # is defined(MSI4NT_HOSTED) (comments already dropped by the caller's
+    # Join-CSplices), nesting followed; every other line is kept.
+    $out = New-Object System.Text.StringBuilder
+    $stack = New-Object System.Collections.Stack
+    $drop = $false
+    foreach ($line in ($Text -split "`n")) {
+        $t = $line.Trim()
+        if ($t -cmatch '^#\s*if') {
+            $stack.Push(@{ Hosted = ($t -cmatch '^#\s*if\s+defined\s*\(\s*MSI4NT_HOSTED\s*\)\s*$'); Drop = $drop })
+        } elseif ($t -cmatch '^#\s*(else|elif)') {
+            if ($stack.Count -gt 0) {
+                $top = $stack.Peek()
+                if ($top.Hosted) { $drop = $true; continue }
+            }
+        } elseif ($t -cmatch '^#\s*endif') {
+            if ($stack.Count -gt 0) { $top = $stack.Pop(); $drop = $top.Drop; continue }
+        }
+        if (-not $drop) { [void]$out.Append($line).Append("`n") }
+    }
+    return $out.ToString()
+}
+
 function Add-Failure {
     param([string]$Message)
     $script:failures += $Message
@@ -943,6 +1018,24 @@ function Test-ImportSitesFromSource {
     foreach ($h in @(Get-RepoIncludeClosure -Files $compiled -SearchDirs $includeDirs -Root $closureRoot)) { $headers[$h.ToLowerInvariant()] = $h }
     foreach ($headerPath in @($headers.Values | Sort-Object)) {
         $headerText = Join-CSplices ([System.IO.File]::ReadAllText($headerPath))
+        # The vendored msi4nt.h (task 49.24, design record 15 section 4.5.10)
+        # names the pool pair and MmGetSystemRoutineAddress only in the
+        # #else branches of its #if defined(MSI4NT_HOSTED) blocks, its
+        # default build's; this tree builds it hosted alone, which every
+        # compiled source that includes it must say first. Those branches
+        # are dropped from the scan, and a source that includes it without
+        # MSI4NT_HOSTED defined before the include fails instead.
+        if ([System.IO.Path]::GetFileName($headerPath) -ieq 'msi4nt.h') {
+            $headerText = Remove-Msi4ntDefaultBranches $headerText
+            foreach ($c in @($compiled + @($headers.Values))) {
+                if (-not (Test-Path -LiteralPath $c)) { continue }
+                if ([System.IO.Path]::GetFileName($c) -ieq 'msi4nt.h') { continue }
+                $why = Test-Msi4ntHostedInclude ([System.IO.File]::ReadAllText($c)) ([System.IO.Path]::GetFileName($c))
+                if ($why) {
+                    Add-Failure "${c}: ${why} (the vendored msi4nt.h is admitted only as built hosted, task 49.24)."
+                }
+            }
+        }
         foreach ($row in $SiteRows) {
             if ($headerText -cmatch ("\b" + [regex]::Escape($row.Symbol) + "\b")) {
                 Add-Failure "$($row.Module)!$($row.Symbol) is named in the header ${headerPath}: a macro there could reach any object, so a SITES-restricted name may not appear in a header (source scan, the objects being LTCG)."

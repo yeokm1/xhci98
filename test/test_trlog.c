@@ -5,7 +5,9 @@
  * the parse, its bounds, the text with recording on and off and the
  * advice; xhci98.sys's pass-through window - the request's bytes, the
  * header, the channel off, the ring decoded with its own window's header,
- * a full ring's cut, level 4 withheld; the HCD region's counters, and
+ * a full ring's cut, level 4 shown as at 2 and 3 (3.5.0.0); the address
+ * values of xhcicm's log withheld below level 4 and served at 4; the HCD
+ * region's counters, and
  * their names held to src\xhci_counters.h field by field.
  */
 
@@ -125,6 +127,28 @@ static void test_cm(void)
     CHECK(strstr(text, "cm.live.bar-changed=--------") != NULL, "withheld");
     CHECK(strstr(text, "E0000004") == NULL, "no address anywhere");
     CHECK(strstr(text, "are addresses, withheld") != NULL, "said so");
+
+    /* Level 4 (3.5.0.0, the owner's decision of 2026-11-13): the address
+     * value as recorded, nothing withheld and nothing more said. (A driver
+     * before 3.5.0.0 withheld it at 4 as at 2: its answer reads as the
+     * one above, with CM_QL_F_WITHHELD and the note.) */
+    n = cm_answer(CM_QL_F_RECORDING, "cm.passes=0000000A\r\n",
+                  "cm.start=00000001\r\ncm.live.bar-changed=E0000004\r\n", 4);
+    CHECK_EQ(tr_qlog_parse(ans, n, &l), 1, "level 4: whole");
+    CHECK(!(l.Flags & CM_QL_F_WITHHELD), "level 4: nothing withheld");
+    tr_text_init(&t, text, sizeof(text));
+    tr_qlog_text(&t, &l, key, 1);
+    CHECK(strstr(text, "Recording:  on (XhciCmLogVerbosity 4)\r\n") != NULL,
+          "level 4: on");
+    CHECK(strstr(text, "cm.live.bar-changed=E0000004\r\n") != NULL,
+          "level 4: the address as recorded");
+    CHECK(strstr(text, "withheld") == NULL, "level 4: no note");
+    CHECK(strstr(text, "To record") == NULL, "level 4: no advice");
+    /* Level 3: still withheld. */
+    n = cm_answer(CM_QL_F_RECORDING, "",
+                  "cm.live.bar-changed=E0000004\r\n", 3);
+    CHECK_EQ(tr_qlog_parse(ans, n, &l), 1, "level 3: whole");
+    CHECK(l.Flags & CM_QL_F_WITHHELD, "level 3: withheld");
 
     /* Recording off: the advice with the key. */
     n = cm_answer(0, "cm.passes=00000001\r\n", "", 0);
@@ -270,14 +294,22 @@ static void test_window(void)
     (VOID)tr_snap_window(buf, n, &w);
     CHECK_EQ(tr_hcd_ring_text(&t, &w, 0x500), TR_RING_BAD, "another region");
 
-    /* Level 4: withheld, the head says why; level 1: off and the advice. */
+    /* Level 4 (3.5.0.0): on, as at 2 and 3, and the ring as it is;
+     * level 1: off and the advice. */
     n = window(0, 0x500, 4, 0x500, 4096, len, len, pay, 4096);
     (VOID)tr_snap_window(buf, n, &w);
     tr_text_init(&t, text, sizeof(text));
     tr_hcd_head_text(&t, &w, 1);
-    CHECK_EQ(tr_hcd_ring_text(&t, &w, 0x500), TR_RING_WITHHELD, "level 4");
-    CHECK(strstr(text, "slot.addressed") == NULL, "no record shown");
-    CHECK(strstr(text, "does not show the log") != NULL, "said so");
+    CHECK_EQ(tr_hcd_ring_text(&t, &w, 0x500), TR_RING_SHOWN, "level 4");
+    CHECK(strstr(text, "Recording:  on (XhciLogVerbosity 4)\r\n") != NULL,
+          "on at 4");
+    CHECK(strstr(text, "slot.addressed=00010203\r\nenum.port=00000001\r\n") !=
+          NULL, "the records at 4");
+    CHECK(strstr(text, "does not show the log") == NULL, "no old message");
+    CHECK(strstr(text, "View > Logging level") == NULL, "no advice at 4");
+    n = window(0, 0x500, 5, 0x500, 4096, len, len, pay, 4096);
+    (VOID)tr_snap_window(buf, n, &w);
+    CHECK_EQ(tr_hcd_ring_text(&t, &w, 0x500), TR_RING_OFF, "above 4: none");
     n = window(0, 0x500, 1, 0x500, 4096, 0, 0, pay, 4096);
     (VOID)tr_snap_window(buf, n, &w);
     tr_text_init(&t, text, sizeof(text));
@@ -318,27 +350,27 @@ static void test_counters(void)
     put32(img, 8, 2);
     put32(img, 12, 64);
     put32(img, 16, 32);
-    put32(img, 20, 270);
+    put32(img, 20, 331);
     put32(img, 24, at);
     put32(img, at + 0, 5);              /* SlotsEnabled */
     put32(img, at + 4 * 3, 7);          /* PortSpeedFull */
-    put32(img, at + 4 * 269, 9);        /* past the table */
+    put32(img, at + 4 * 330, 9);        /* past the table */
     tr_text_init(&t, text, sizeof(text));
-    CHECK_EQ(tr_hcd_counters_text(&t, img, at + 270 * 4), 1, "decoded");
+    CHECK_EQ(tr_hcd_counters_text(&t, img, at + 331 * 4), 1, "decoded");
     CHECK(strstr(text, "SlotsEnabled                         5") != NULL,
           "named");
     CHECK(strstr(text, "PortSpeedFull") != NULL, "named 3");
     CHECK(strstr(text, "DevicesAddressed") == NULL, "zero not shown");
-    CHECK(strstr(text, "counter 269") != NULL, "past the table by number");
-    CHECK(strstr(text, "(3 of 270 nonzero.)") != NULL, "count");
-    put32(img, 20, 271);
+    CHECK(strstr(text, "counter 330") != NULL, "past the table by number");
+    CHECK(strstr(text, "(3 of 331 nonzero.)") != NULL, "count");
+    put32(img, 20, 332);
     tr_text_init(&t, text, sizeof(text));
-    CHECK_EQ(tr_hcd_counters_text(&t, img, at + 270 * 4), 0,
+    CHECK_EQ(tr_hcd_counters_text(&t, img, at + 331 * 4), 0,
              "counters past the image");
-    put32(img, 20, 270);
+    put32(img, 20, 331);
     put32(img, 0, 2);
     tr_text_init(&t, text, sizeof(text));
-    CHECK_EQ(tr_hcd_counters_text(&t, img, at + 270 * 4), 0, "version 2");
+    CHECK_EQ(tr_hcd_counters_text(&t, img, at + 331 * 4), 0, "version 2");
     CHECK(strstr(text, "does not read") != NULL, "said so");
     CHECK_EQ(tr_hcd_counters_text(&t, NULL, 0), 0, "none");
 }

@@ -50,9 +50,21 @@ static void test_values(void)
     CHECK_EQ(v.ActiveMs, 20, "active above idle held to it");
 
     XhciPollValues(&v, 1, 4, 1, 5000, 1, 1);
-    CHECK_EQ(v.Mode, 0, "4 runs as 0");
+    CHECK_EQ(v.Mode, XHCI_POLL_MODE_MSG4, "4 is mode 4");
     CHECK_EQ(v.ModeRead, 4, "4 recorded");
     CHECK_EQ(v.IdleMs, 5000, "5000 kept");
+    {
+        ULONG r;
+
+        CHECK_EQ(XhciPollDecideEx(XHCI_POLL_MODE_MSG4, 1, 0, 0,
+                                  XHCI_POLL_PIN_READ, 1, 0, 0, &r),
+                 XHCI_POLL_DELIVERY_NONE, "the general decision never runs 4");
+        CHECK_EQ(r, XHCI_POLL_R_MSG4_NO_SYSTEM, "as no system");
+    }
+
+    XhciPollValues(&v, 1, 5, 1, 50, 1, 1);
+    CHECK_EQ(v.Mode, 0, "5 runs as 0");
+    CHECK_EQ(v.ModeRead, 5, "5 recorded");
 
     XhciPollValues(&v, 1, 0xFFFFFFFFUL, 0, 0, 1, 1);
     CHECK_EQ(v.Found, XHCI_POLL_FOUND_MODE | XHCI_POLL_FOUND_ACTIVE,
@@ -1370,6 +1382,7 @@ typedef struct _HELD_BUSES {
     ULONG BusExists[XHCI_POLL_HELD_BUSES];
     ULONG Reads;
     ULONG ZeroForAbsent;    /* an absent slot answers no bytes at all */
+    ULONG ShortBus;         /* its 00.0 answers a vendor, 2 bytes only   */
 } HELD_BUSES;
 
 static void heldPut32(UCHAR *c, ULONG off, ULONG v)
@@ -1418,6 +1431,11 @@ static ULONG heldRead(PVOID context, ULONG bus, ULONG device,
     if (!h->BusExists[bus]) {
         return 0;
     }
+    if (bus == h->ShortBus && device == 0 && function == 0) {
+        buffer[0] = 0x86;
+        buffer[1] = 0x80;
+        return 2;
+    }
     for (i = 0; i < h->Count; i++) {
         if (h->Fn[i].Bus == bus && h->Fn[i].Device == device &&
             h->Fn[i].Function == function) {
@@ -1442,6 +1460,7 @@ static void heldInit(HELD_BUSES *h, XHCI_POLL_HELD_IN *in)
     h->Count = 0;
     h->Reads = 0;
     h->ZeroForAbsent = 0;
+    h->ShortBus = 0xFFFFUL;
     for (i = 0; i < XHCI_POLL_HELD_BUSES; i++) {
         h->BusExists[i] = 0;
     }
@@ -1456,8 +1475,136 @@ static void heldInit(HELD_BUSES *h, XHCI_POLL_HELD_IN *in)
     in->Own[3] = 0;
     in->Irq = 10;
     in->From = 0;
+    in->Kind = XHCI_POLL_WALK_HELD;
+    in->Irq2 = 0;
+    in->OwnClass = 0;
     h->BusExists[0] = 1;
     heldAdd(h, 0, 0, 0, 0x29C08086UL, 0, 0, 0, 0x0006, 0x0000);
+}
+
+/* Mode 4's walks (record 15 sections 4.5.3 and 4.5.7, task 49.24): the
+ * veto of strategy 1 names any function wired to the line with INTx free,
+ * asserting or not; the match of 98 SE and ME finds this controller once. */
+static void test_held_sharing(void)
+{
+    HELD_BUSES h;
+    XHCI_POLL_HELD_IN in;
+    XHCI_POLL_HELD_OUT out;
+    HELD_FN *f;
+
+    heldInit(&h, &in);
+    in.Kind = XHCI_POLL_WALK_SHARING;
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_NONE,
+             "sharing: this controller alone on the line");
+
+    heldInit(&h, &in);
+    in.Kind = XHCI_POLL_WALK_SHARING;
+    heldAdd(&h, 1, 0, 1, 0x00021B36UL, 0xC001UL, 10, 1, 0x0001, 0x0000);
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_FOUND,
+             "sharing: a function on the line, not asserting");
+    CHECK_EQ(out.Bdf, 0x0101UL, "sharing: 01:00.1");
+
+    heldInit(&h, &in);
+    in.Kind = XHCI_POLL_WALK_SHARING;
+    heldAdd(&h, 1, 0, 1, 0x00021B36UL, 0xC001UL, 10, 1, 0x0401, 0x0000);
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_NONE,
+             "sharing: Interrupt Disable set");
+
+    heldInit(&h, &in);
+    in.Kind = XHCI_POLL_WALK_SHARING;
+    heldAdd(&h, 1, 0, 1, 0x00021B36UL, 0xC001UL, 10, 0, 0x0001, 0x0000);
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_NONE, "sharing: pin 0");
+
+    heldInit(&h, &in);
+    in.Kind = XHCI_POLL_WALK_SHARING;
+    heldAdd(&h, 1, 0, 1, 0x00021B36UL, 0xC001UL, 19, 1, 0x0001, 0x0000);
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_NONE, "sharing: another line");
+    in.Irq2 = 19;
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_FOUND, "sharing: the second line");
+
+    heldInit(&h, &in);
+    heldAdd(&h, 1, 0, 1, 0x00021B36UL, 0xC001UL, 10, 1, 0x0001, 0x0000);
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_NONE,
+             "held walk: not asserting is not held");
+
+    /* A CardBus bridge on the line counts for the veto alone. */
+    heldInit(&h, &in);
+    f = heldAdd(&h, 2, 0, 0, 0x14768086UL, 0, 10, 1, 0x0001, 0x0008);
+    f->Cfg[0x0E] = 0x02;
+    in.Kind = XHCI_POLL_WALK_SHARING;
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_FOUND, "sharing: a CardBus bridge");
+    in.Kind = XHCI_POLL_WALK_HELD;
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_NONE,
+             "held walk: CardBus still excluded");
+
+    /* A function that answers its vendor and no more: the veto cannot
+     * conclude, the held walk passes over it as before. */
+    heldInit(&h, &in);
+    h.ShortBus = 3;
+    h.BusExists[3] = 1;
+    in.Kind = XHCI_POLL_WALK_SHARING;
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_FAILED, "sharing: a short read");
+    in.Kind = XHCI_POLL_WALK_MATCH;
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_FAILED, "match: a short read");
+    in.Kind = XHCI_POLL_WALK_HELD;
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_NONE, "held: a short read absent");
+}
+
+static void test_held_match(void)
+{
+    HELD_BUSES h;
+    XHCI_POLL_HELD_IN in;
+    XHCI_POLL_HELD_OUT out;
+    HELD_FN *f;
+
+    heldInit(&h, &in);
+    in.Kind = XHCI_POLL_WALK_MATCH;
+    heldPut32(h.Fn[0].Cfg, 0x08, 0x0C033001UL);
+    in.OwnClass = 0x0C033000UL;
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_FOUND, "match: this controller");
+    CHECK_EQ(out.Matches, 1, "match: once");
+    CHECK_EQ(out.Bdf, 0x0100UL, "match: 01:00.0");
+    CHECK_EQ(out.Id, 0x000D1B36UL, "match: its id");
+
+    /* A second function with the same identity: two, refused. */
+    f = heldAdd(&h, 2, 0, 0, 0x000D1B36UL, 0xFE800004UL, 11, 1, 0x0006, 0);
+    heldPut32(f->Cfg, 0x08, 0x0C033001UL);
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_NONE, "match: two, none named");
+    CHECK_EQ(out.Matches, 2, "match: two counted");
+
+    /* Another class code: not this controller. */
+    heldPut32(f->Cfg, 0x08, 0x0C032001UL);
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_FOUND, "match: the class tells");
+    CHECK_EQ(out.Matches, 1, "match: one again");
+
+    /* Another BAR0: not this controller. */
+    in.Own[1] = 0xFE900004UL;
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_NONE, "match: none");
+    CHECK_EQ(out.Matches, 0, "match: none counted");
+
+    /* Bus 0 not answering: the walk could not run. */
+    heldInit(&h, &in);
+    in.Kind = XHCI_POLL_WALK_MATCH;
+    h.Count = 0;
+    h.BusExists[0] = 0;
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_FAILED, "match: no bus 0");
 }
 
 static void test_held_scan(void)
@@ -1591,6 +1738,8 @@ int main(void)
 {
     test_decide_msi_avoid();
     test_held_scan();
+    test_held_sharing();
+    test_held_match();
     test_held_still();
     test_values();
     test_decide();

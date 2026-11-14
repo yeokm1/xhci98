@@ -13,6 +13,7 @@
 #define XHCI_PSW_VENDOR_SONY    0x104DUL
 #define XHCI_PSW_SONY_VAIO_T    0x90A8UL
 #define XHCI_PSW_UNREAD         0xFFFFFFFFUL
+#define XHCI_PSW_ABSENT_ROUTES  0UL
 
 /* Panther Point, Lynx Point, Lynx Point-LP, Wildcat Point, Wildcat
  * Point-LP: the 7-, 8- and 9-series PCH xHCI (Linux xhci-pci.c's
@@ -58,16 +59,19 @@ ULONG XhciPswIntel(ULONG vendorDevice)
 
 /* Only an exact 2 reaches unlisted silicon, so it has to be typed on
  * purpose; any other nonzero number keeps the gated meaning (record 16
- * section 5). Off unless found: an unrouted connector stays with EHCI and
- * works there (owner, 2026-10-09; task 36.42). */
+ * section 5). On a listed controller a value not found (absent, of another
+ * type or unreadable) is XHCI_PSW_ABSENT_ROUTES: off, so text-mode Setup,
+ * which writes no value, keeps the ports where the firmware put them
+ * (owner, 2026-11-14, task 49.47; off since task 36.42, on before it). */
 ULONG XhciPswMode(ULONG vendorDevice, ULONG found, ULONG value)
 {
     if (!XhciPswIntel(vendorDevice)) {
         return XHCI_PSW_MODE_OFF;
     }
     if (XhciPswGate(vendorDevice)) {
-        return (found && value != 0) ? XHCI_PSW_MODE_GATED
-                                     : XHCI_PSW_MODE_OFF;
+        return (found ? value != 0 : XHCI_PSW_ABSENT_ROUTES != 0)
+                   ? XHCI_PSW_MODE_GATED
+                   : XHCI_PSW_MODE_OFF;
     }
     return (found && value == 2) ? XHCI_PSW_MODE_BYPASS : XHCI_PSW_MODE_OFF;
 }

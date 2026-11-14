@@ -462,6 +462,16 @@ unchanged.
 | File in this tree | Source | Commit read | SHA-256 | Licence | Why | Task |
 |---|---|---|---|---|---|---|
 | `src/cm/stor98cm.h` | Stor98 `include/stor98cm.h` (the `nvme98` project's `include/nvme98cm.h` until its rename, 2026-10-16) | `56954657` of this repository (`src/stor98/include/stor98cm.h`, 2026-10-22: R11 O6's clause for a connection manager with no per-port teardown, contract text only, interface version 4 and the layout unchanged); before it `f9755aee7a27725e2a0edfb0d8c1e1231669f777` (contract text only, on Stor98's branch `audit-2026-10-18`, read 2026-10-18) and `6609c1c36701e50665daf0305fdc35fe06e258d6`, read 2026-10-16 | `8401af56d65fdf8a4617f3ac0d50ddc83a06ab750d9af1c7afafc9c824e6ab41` | BSD-3-Clause, `Copyright (c) 2026, Yeo Kheng Meng`, the notice kept in the file; the file's own text says it is licensed on its own, independently of the code on either side, and asks that no GPL-licensed code or text be put into it | the link-state table, callback object, 9x locator and current-boot proof Stor98 adopted as its connection-manager interface (decisions MD-5 and MD-6, gate G3, interface version 4); `src/cm/cm_nvlink.c` and `cm_nvlinkos.c` implement this side, on NT and on 98 SE and ME (the 9x half read on 2026-10-16, `runs/run-41.md`, "The Stor98 link-state channel on 98 SE and ME") | 39-A.7, 40-A.7, and the Stor98 rename of 2026-10-16 (`runs/run-41.md`, "Stor98 behind the Thunderbolt 3 controller") |
+| `src/msi4nt.h` | The MSI stability improvements' single header, the owner's own work, vendored (its own documents name vendoring as the way in) | version 1, before its publication (read 2026-11-13) | `b8bdded716cddd99f8750f5e84f60259a96164f7d0e895deae413acc2a812f73` (this tree's copy: the same text with CRLF line endings, this repository's rule; the LF original hashes `eaace8e6bda90cf0c62a95c0a3d10f48c90ba7ca387d94a6317b5c2b3e06be0c`); before it `d5b4f45d7dda00eea11e7d85af80b12292c6e87db31686e379b6a1de986a5ac0` (CRLF) and `dc24c5f84b2fddcc524d45ca9e4857e80e7574ca22a62c6b4bf4049d17ec3b13` (LF), read 2026-11-12 | MIT, `Copyright (c) 2026 Yeo Kheng Meng`, the SPDX line and notice kept in the file; every image that compiles its implementation carries its signature string `MSI4NT_SIGNATURE` | message-signalled interrupts on 2000, XP and XP x64 for `XhciInterruptMode` 4 (design record 15 sections 4.5.3 and 4.5.16): compiled in once, in `src/hcd_msgnt.c`, as a hosted build without its Vista path (`MSI4NT_HOSTED`, `MSI4NT_NO_NATIVE`, `MSI4NT_ISA_LINE`); and for `xhcicm.sys`'s ring interrupt, `XhciCmRingInterrupt` 2 on the same systems (design record 21 section 4.5.14): compiled in once into that image, in `src/cm/cm_rirqnt.c`, the same hosted build, from the same copy | 49.24, 49.27 |
+
+A second vendored header, the client header of a separate component for
+the 98 SE and ME message path (MIT, the owner's; version 0.1.0, read
+2026-11-12, SHA-256
+`7f8cb9f9d7e502d90c7a728bc585802c44e1f4187aa6cdd66aff69a2a36ca042`), was
+carried for tasks 49.24 and 49.27 until 2026-11-13, when that path left
+the tree with the two files that compiled it (the owner's decision of
+2026-11-13: the 98 SE and ME message path is not part of `3.5.0.0`); no
+image built since carries it.
 
 The file uses `//` comments, which AGENTS.md's C89 rule forbids in this
 project's own source: the recorded exception, a third-party header carried
@@ -1272,6 +1282,13 @@ written; they are part of this section.
 | What the disk class drivers send a disk's port for the SMART and pass-through IOCTLs (task 45.52, reading R1) | static | `disk.sys` and the class drivers of 2000 SP4, XP SP3, XP x64 SP2, Vista x86 SP2 and 7 x86 | record 13 section 16.11, R1; detail: record 13 appendix B, B.82 |
 | The NDIS.SYS imports of `xhcinet.sys` x86 on 98 SE and ME (task 45.59 step S6): each of its 27 pairs is a name in `NDIS.VXD` of 98 SE and ME | static (export names alone; owner's rule of 2026-10-31); runtime for the 9x legs | 98 SE `NDIS.VXD`, 166,029 bytes, and ME's (SHA-256s in the item and in `ndisvxd-baselines.expected`) | `scripts/import-gate/xhcinet-imports.allow`, `ndisvxd-baselines.expected` and `net98-runtime.list`; design record 35 section 7.8; detail: record 35 appendix A, A.1 |
 | The imports of `xhcinet6.sys` on 8, 8.1 and 10, x86 and x64 (task 45.59 step S7), are all in the export tables of the 8.1 and 10 `ntoskrnl.exe`, `hal.dll` and `ndis.sys` of its architecture, and on x86 also of Windows 7 SP1 x86's kernel and HAL | static | 8.1 and 10 `ntoskrnl.exe`, `hal.dll` and `ndis.sys` (in the four `net6-*-baselines.expected`) | `scripts/import-gate/net6-win81-x86-baselines.expected` and its three siblings, `xhcinet6-imports.allow`, `xhcinet6-imports-amd64.allow`; design record 35 section 7.9; detail: record 35 appendix A, A.2 |
+| On Windows 7 SP1 x86, after a standby or hibernation, the PCI driver completes the wake D0 of a function behind a tunnel not yet rebuilt with `STATUS_NO_SUCH_DEVICE` (`C000000E`), and a later D0 of the same function (the re-enumeration's) with success; on Windows 10 x86 the same function's wake D0 succeeded in one leg and failed with `C000000E` in another, which then hung as on 7 with nothing asked (task 49.46) | runtime (a test build's completion record in this driver's child filter) | Windows 7 SP1 x86 and Windows 10 x86 `pci.sys`, with Stor98 | `src/cm/cm_filt.c` (`cmChildD0Done`), `src/cm/cm_reenum.c` (`CmWpuD0Seen`); design record 21 section 6.3.1; `runs/run-49.md`, 49.46 |
+| On Windows 7 SP1 x86 a device D0 requested with `PoRequestPowerIrp` on the SCSIport logical unit of a drive left in D3 after such a wake ends the hang: the copy in flight returns, Plug and Play and the shutdown go on (task 49.46) | runtime (the leg's writer, Plug and Play and the shutdown; the unit's own state was read through private structures by a test build alone and is not used) | Windows 7 SP1 x86 SCSIport, disk class driver, with Stor98 | `src/cm/cm_reenum.c` (`cmWpuRequest`); design record 21 section 6.3.1 |
+| On Windows 7 SP1 x64 the hung state is the logical unit in D3 with its queue holding the rescan's INQUIRY, the adapter in D0, and the Plug and Play worker waiting on the adapter's `BusRelations` (task 49.46) | debugger (`kd` on the guest's NMI kernel dump, Microsoft public symbols) | Windows 7 SP1 x64 | design record 21 section 6.3.1; the run sheet of the 49.13 x64 legs |
+| On Windows 7 SP1 x86 and Windows 10 x86 the `BusRelations` answer of Stor98's SCSIport adapter passes up through a lower filter on its function carrying the disk's logical unit (task 49.46) | runtime (this driver's `cm.wakepowerup.rel` in the child filter) | Windows 7 SP1 x86 and Windows 10 x86 SCSIport, with Stor98 | `src/cm/cm_filt.c` (`cmUnitRelations`); design record 21 section 6.3.1 |
+| On Windows 7 SP1 x86 the device `IoGetAttachedDeviceReference` returns for the tunnelled NVMe function's PDO belongs to the driver object named `\Driver\stor98`; the name is `DRIVER_OBJECT`'s `DriverName`, a documented member, read only under the top device's reference (task 49.46) | runtime (this driver's `cm.wakepowerup.owner`); documentation (the `DRIVER_OBJECT` structure's reference page) and header (`wdm.h`) | Windows 7 SP1 x86, with Stor98 | `src/cm/cm_reenum.c` (`cmWpuTopOwner`); design record 21 section 6.3.1 |
+| For the same Stor98 INF, the driver key's `InfSection` of the tunnelled NVMe function is `Stor98_Inst` on Windows 7 SP1 x86 and `Stor98_Inst.NTx86` on Windows 10 x86 (task 49.46) | runtime (this driver's `cm.wakepowerup.owner`, and a qemu build's note of the value) | Windows 7 SP1 x86 and Windows 10 x86, with Stor98 | `src/cm/cm_ports.c` (`CmPortsWpuInfSection`), `src/cm/cm_reg.c` (`CmRegWpuOwner`); design record 21 section 6.3.1 |
+| On Windows 7 SP1 x86 `IoGetDevicePropertyData` answers `STATUS_OBJECT_NAME_NOT_FOUND` for `DEVPKEY_Device_Service` of that function's PDO, so the property is not used (task 49.46) | runtime (a qemu build's note) | Windows 7 SP1 x86 | design record 21 section 6.3.1 |
 | A common buffer of less than a page on Windows 2000 and XP can come back 8-byte aligned (task 45.59) | runtime | Windows 2000 SP4 x86's HAL `AllocateCommonBuffer`, under a scratch build of this driver | `src/cm/cm_pool.c` (`CmDmaCommonAlloc`, whole pages); `runs/run-45.md` "45.59 (legs, continued)"; detail: `runs/run-45.md` appendix A, A.2 |
 | Windows' own USB stacks answer `IRP_MN_QUERY_BUS_INFORMATION` with `GUID_BUS_TYPE_USB` `{9D7DEBBC-C85D-11D1-9EB4-006008C3A19A}`, `PNPBus` (15) and bus number 0 on every root hub, hub and device PDO and on a composite device's function PDO from XP on; on 2000 that function PDO answers nothing (task 48.13) | runtime (the PnP manager's stored `BusTypeGuid`, `LegacyBusType` and `BusNumber` of each devnode, read through SetupAPI by a guest tool of the leg; nothing disassembled, not this driver's counters) | Windows 2000 SP4 (`usbport`, `usbhub`), XP SP3 (`usbhub`, `usbccgp`), 7 SP1 x86, and 10 x64 19045 (`usbhub`, `USBHUB3`, `usbccgp`), in QEMU | `src/hcd_pdo.c` (`HcdPdoBusInformation`), `src/hcd_rh.c`; design record 13 section 20; `runs/run-48.md`, "48.13" |
 
@@ -1429,9 +1446,9 @@ sources or build depend on another's.
   repository's git objects at a pinned tag and refuses a published tree
   holding either folder.
 - **`NONFREE\` is the `non-free/` folder of the owner's `usb-wdm-nonfree`
-  at tag `v1.3.0`** (commit `d2f7a26987fb9e074f6c5c4e974b6cad80c96c46`), every
+  at tag `v1.4.0`** (commit `5ba92a162d331b965f9d2f4d56c4dd0d663b1fe2`), every
   file held to that commit's `SHA256.TXT`, whose own SHA-256
-  (`adf5ab70cb6bbf52ced63038f5f327cd1e2e466d71cdec61354537f0e75888f7`) is
+  (`b4b0f51543e69ae491ab623b2c10cf577980258e9ff791956d4a90f850a9960a`) is
   pinned in `package-common.ps1`; with the pack's `NOTICE.md` and `README.md`
   unchanged, its `STAGE.TXT` unchanged but for the lines of a folder left
   out, and a `SHA256.TXT` the cut writes. The pack's `nusb33/` is not in it:
@@ -1442,11 +1459,15 @@ sources or build depend on another's.
   | `3.2.0.0` | `v1.0.0` | `3b558c04a462a643abec84b31e5611c866e3a72d` | the whole `non-free/` |
   | `3.3.0.0`, `3.4.0.0` | `v1.1.0` | `565d11b40fbeb53f5a576c01b5ceba331892c610` | `non-free/wifi/` left out (owner, 2026-10-28: the Wi-Fi drivers stay in `usb-wdm-nonfree` and its own release): its Ethernet, HID and serial drivers |
   | `3.4.1.0` (owner, 2026-11-02: the next release uses the updated pack) | `v1.2.0` | `c40ad7e4568fe2be7a889a79f6ada01f33123e81` | as `v1.1.0`, and its audio driver: `audio/us122/w98se-me/`, TASCAM's US-122 driver 3.24 for 98 SE and ME, which TASCAM no longer offers |
-  | from `3.4.2.0` (owner, 2026-11-08) | `v1.3.0` | `d2f7a26987fb9e074f6c5c4e974b6cad80c96c46` | as `v1.2.0`, and Microsoft's USB smart card reader driver: `smartcard/usbccid/w2k-xp/` (5.2.3790.2444) and `smartcard/usbccid/wxp/` (6.0.6001.18176), copied only |
+  | `3.4.2.0`, `3.4.3.0` (owner, 2026-11-08) | `v1.3.0` | `d2f7a26987fb9e074f6c5c4e974b6cad80c96c46` | as `v1.2.0`, and Microsoft's USB smart card reader driver: `smartcard/usbccid/w2k-xp/` (5.2.3790.2444) and `smartcard/usbccid/wxp/` (6.0.6001.18176), copied only |
+  | from `3.5.0.0` (owner, 2026-11-11) | `v1.4.0` | `5ba92a162d331b965f9d2f4d56c4dd0d663b1fe2` (the tag was moved on 2026-11-14 to this commit from `2b337733b66c803faaf477fe3828d818f7724c72`, which differs from it only in a sentence of the pack's `README.md`) | as `v1.3.0`, and Realtek's drivers for the RTL8157 and RTL8159 and for 8 and 8.1: `ethernet/rtl8157/` (Realtek's 7.61.20 and 8.68.20 INFs with six commented-out lines enabled by the pack, beside Realtek's unchanged files; unsigned) and `ethernet/rtl815x/w8/` (Realtek's 8.68.20, unchanged), copied only |
 
   The folder's files are other makers' drivers (ASIX, Realtek, FTDI, WCH and
   Masahiko Morii's Xbox 360 controller drivers, among others; the pack's
-  `NOTICE.md` says whose each is), unmodified, as their makers released them.
+  `NOTICE.md` says whose each is), unmodified, as their makers released them,
+  except, from `v1.4.0`, the four INFs of `ethernet/rtl8157/`, in which the
+  pack enables six of Realtek's commented-out lines (the pack's `README.md`
+  and `NOTICE.md` say so).
   **Among them are Microsoft files**, the KMDF co-installers ASIX and Davicom
   ship with their drivers: at `v1.0.0`
   `ethernet/ax88772/w2k-xp/WdfCoInstaller01007.dll` (KMDF 1.7, 1.7.6001.0)
@@ -1493,7 +1514,7 @@ sources or build depend on another's.
   release** (the owner's own project, GPL-2.0-or-later from its `v0.1.2`,
   GPL-2.0-only before), every file held to a SHA-256 in
   `scripts/package/wdmfree-pin.txt`, with that release's `LICENSE` and
-  `NOTICE.md`. A driver qualifies only once its legs have passed on its
+  `NOTICE.md` and, from `v0.1.10`, its `LICENSE-docs.md`. A driver qualifies only once its legs have passed on its
   systems (roadmap 43.48). The pin, in order:
 
   | Tag | Commit | Task, owner | What changed |

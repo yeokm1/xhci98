@@ -140,6 +140,21 @@ XHCI_C_ASSERT(xhci_snap_hcd_ufail,
               XHCI_SNAPSHOT_HCD_UFAIL_AT +
                       XHCI_SNAPSHOT_HCD_UFAIL_COUNT *
                           XHCI_SNAPSHOT_HCD_UFAIL_RECORD_WORDS ==
+                  XHCI_SNAPSHOT_HCD_UTIME_RECORDS);
+
+/* Task 49.39: three words, then the times records, which end the header. */
+XHCI_C_ASSERT(xhci_snap_hcd_utime,
+              XHCI_SNAPSHOT_HCD_UTIME_RECORDS + 1 ==
+                  XHCI_SNAPSHOT_HCD_UTIME_WORDS &&
+              XHCI_SNAPSHOT_HCD_UTIME_WORDS + 1 ==
+                  XHCI_SNAPSHOT_HCD_UTIME_FIRST &&
+              XHCI_SNAPSHOT_HCD_UTIME_FIRST + 1 ==
+                  XHCI_SNAPSHOT_HCD_UTIME_AT &&
+              XHCI_SNAPSHOT_HCD_UT_ATA + 1 ==
+                  XHCI_SNAPSHOT_HCD_UTIME_RECORD_WORDS &&
+              XHCI_SNAPSHOT_HCD_UTIME_AT +
+                      XHCI_SNAPSHOT_HCD_UFAIL_COUNT *
+                          XHCI_SNAPSHOT_HCD_UTIME_RECORD_WORDS ==
                   XHCI_SNAPSHOT_HCD_HEAD_WORDS);
 
 /* The image carries the counter block whole, word for word. */
@@ -244,6 +259,12 @@ ULONG XhciSnapHcdHead(ULONG ports, ULONG word)
         return XHCI_SNAPSHOT_HCD_UFAIL_RECORD_WORDS;
     case XHCI_SNAPSHOT_HCD_UFAIL_FIRST:
         return XHCI_SNAPSHOT_HCD_UFAIL_AT;
+    case XHCI_SNAPSHOT_HCD_UTIME_RECORDS:
+        return XHCI_SNAPSHOT_HCD_UFAIL_COUNT;
+    case XHCI_SNAPSHOT_HCD_UTIME_WORDS:
+        return XHCI_SNAPSHOT_HCD_UTIME_RECORD_WORDS;
+    case XHCI_SNAPSHOT_HCD_UTIME_FIRST:
+        return XHCI_SNAPSHOT_HCD_UTIME_AT;
     default:
         /* XHCI_SNAPSHOT_HCD_TERMINAL, the routing record, the transfer
          * readings, the class driver records, 36.38's DNCTRL words and

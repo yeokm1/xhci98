@@ -179,9 +179,15 @@ MPSTATUS XhciWritePciConfig(PXHCI_EXTENSION ext,
  * (docs/usb-xhci-info/usbport-miniport-abi.md section 6) - **except while
  * `ext->InitBelowPassive` is set**, where the sleep phase is skipped entirely
  * and the wait is the 10 ms stall and nothing more. That is the in-place
- * recovery (task 13-R.1) running the same sequence from a DPC; a bit that has
- * not settled inside the stall makes the attempt refuse, and the retry comes
- * from the next health poll.
+ * recovery (task 13-R.1) running the same sequence at DISPATCH_LEVEL; a bit
+ * that has not settled inside the stall makes the attempt refuse. The
+ * extra time does NOT come from a later attempt: until task 49.35 that was
+ * the assumption, and the next attempt could begin on the very next
+ * thread pass, so an ASM1042 whose HCRST takes more than 11 ms spent all
+ * three inside one tick. Since 49.35 a reset still running when the stall
+ * ends is waited for by the controller thread at PASSIVE_LEVEL, for the
+ * start's 1000 ms, and the same recovery then runs again (hcd_ctl.c,
+ * hcdRecover; design record 17 section 4.6.1).
  */
 ULONG XhciWaitForBits(PXHCI_EXTENSION ext,
                       ULONG barOffset,
@@ -234,6 +240,15 @@ VOID XhciDelayMs(PXHCI_EXTENSION ext, ULONG milliseconds);
 MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources);
 
 /*
+ * Mode 4's quiet step before a message is connected (design record 15
+ * section 4.5.3, task 49.24): decode and validate (kept for the start's
+ * XhciInitController), the firmware handoff, then USBCMD.INTE and IMAN.IE
+ * cleared and read back. 0, or the XHCI_INIT_STEP_* that refused with its
+ * status in *failStatus. IRQL: PASSIVE_LEVEL.
+ */
+ULONG XhciQuietController(PXHCI_EXTENSION ext, PULONG failStatus);
+
+/*
  * **Task 13-R.1: bring a controller this driver declared failed back into
  * service, in place, from a context this driver reaches on its own.**
  *
@@ -258,9 +273,16 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources);
  * hub is unplugged and plugged back in, and is why the recovery does not have
  * to preserve anything.
  *
- * Returns 1 if the controller is running again, 0 if it is not - in which case
- * `ControllerFailed` is still set and `RecoveryLastStep`/`RecoveryLastStatus`
- * say where the sequence refused.
+ * Returns XHCI_RECOVER_RECOVERED (1) if the controller is running again;
+ * otherwise `ControllerFailed` is still set and `RecoveryLastStep`/
+ * `RecoveryLastStatus` say where the sequence refused, and the value says
+ * how: XHCI_RECOVER_REFUSED (0), charged; or, since task 49.35, uncharged,
+ * XHCI_RECOVER_RESET_BUSY (a reset still running, `RecoverResetOwed` set
+ * when this driver wrote it) or XHCI_RECOVER_BME_RESTORE, which the caller
+ * finishes at PASSIVE_LEVEL and then calls this again - with
+ * `RecoverResetProven` set when it saw the owed reset complete, so that
+ * call's xhciReset adopts that reset instead of writing another - and
+ * charges with XhciRecoverCharge if it cannot.
  *
  * **IRQL: DISPATCH_LEVEL, from the recovery timer's callback**, which is the
  * only context in which this is legal. On NT 5.x that callback holds no
@@ -273,6 +295,15 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources);
  * itself, which runs inside one of usbport's spin locks.
  */
 ULONG XhciRecoverController(PXHCI_EXTENSION ext);
+
+/*
+ * Task 49.35: an attempt the caller could not finish (RESET_BUSY whose reset
+ * did not settle in XHCI_TOL_RESET_SETTLE_MS, or BME_RESTORE whose restore
+ * was refused) charged once, as XhciRecoverController charges a refusal:
+ * RecoveryFailures and RecoveryFailuresConsecutive, the step and status, the
+ * latch re-set and ctrl.recover.refused noted. IRQL: <= DISPATCH_LEVEL.
+ */
+VOID XhciRecoverCharge(PXHCI_EXTENSION ext, ULONG step, ULONG status);
 
 /*
  * Task 38.10, XhciShutdownReset (design record 20 section 4.5): an HCRST
@@ -1214,6 +1245,27 @@ VOID XhciSlotInvalidateAll(PXHCI_EXTENSION ext, ULONG controllerStopped);
  */
 #define XHCI_RECOVERY_DELAY_MS      50UL
 #define XHCI_RECOVERY_MAX_ATTEMPTS  3UL
+/*
+ * Task 49.35: how many of each escalation a start notes in the log ring
+ * (evt.hc, evt.rearm.failed, cmd.*, intr.*.failed); the XHCI_TOL_STATS
+ * counters carry every one. Each path is closed by the latch it raises, so
+ * this bounds only a cascade inside one drain and the recoveries after it.
+ */
+#define XHCI_NOTE_ESCALATIONS       4UL
+/*
+ * Task 49.35 (design record 17 section 4.6.1): XhciRecoverController's
+ * outcomes. RECOVERED, and REFUSED (charged to RecoveryFailuresConsecutive
+ * as every refusal was before), end the attempt. RESET_BUSY (a reset still
+ * running: the HCRST this driver wrote, or one before it) and BME_RESTORE
+ * (refused at XHCI_INIT_STEP_BUS_MASTER_RESTORE with the bit this driver
+ * cleared still to put back) are not charged: the controller thread
+ * finishes them at PASSIVE_LEVEL, runs the same recovery again, and charges
+ * the attempt once if it cannot (hcd_ctl.c, hcdRecover).
+ */
+#define XHCI_RECOVER_REFUSED        0UL
+#define XHCI_RECOVER_RECOVERED      1UL
+#define XHCI_RECOVER_RESET_BUSY     2UL
+#define XHCI_RECOVER_BME_RESTORE    3UL
 /*
  * How many health polls an armed recovery callback may go undelivered before
  * the arming is declared lost and re-requested (revised 2026-09-05).

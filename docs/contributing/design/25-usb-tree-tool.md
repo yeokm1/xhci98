@@ -1,6 +1,16 @@
 # Design Record 25 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
-Status: revision 31, 2026-11-09 (roadmap-usb4 task 48.31's follow-up:
+Status: revision 34, 2026-11-14 (roadmap-usb4 task 49.43's legs: the
+fallback note at a root port alone, since the bus reports no failed
+enumeration at a hub's port, and a held port at logging level 0 as it
+reads, section 24 item 4);
+revision 33, 2026-11-13 (roadmap-usb4 task 49.37: the
+connection manager's state snapshot, `BASE.CT<n>` and `BASE.CB<n>`
+beside the controllers' files and in Save Report, through a sixth
+request of the query device, section 23, with sections 4.2 and 15);
+revision 32, 2026-11-13 (roadmap-usb4 task 49.35: a snapshot of
+every controller xhci98.sys drives, one set each, section 15 item 12);
+revision 31, 2026-11-09 (roadmap-usb4 task 48.31's follow-up:
 on 98 SE and ME a unit's details read "Marked removable." or "Not marked
 removable.", the devnode's `DN_REMOVABLE` as Windows reports it, no
 longer "Marked removable by the Thunderbolt driver.", record 24 section
@@ -393,11 +403,19 @@ branch, marked "(behind <router name>)".
     `...\Services\Class\...` on 98 SE and ME).
   - A value the driver refused (out of range) is said as refused, with
     the same advice.
-- **Addresses.** Neither node ever shows an internal address: xhcicm's
-  answer carries none (section 4.5); xhci98's ring is shown only at
-  levels 2 and 3 - at level 4 it can hold kernel addresses, so the tool
-  withholds it and says to use level 2 - and its raw extension image is
-  never shown or saved (section 4.6).
+- **Addresses.** Below level 4 neither node shows an internal address:
+  xhcicm's answer withholds its address records' values (section 4.5) and
+  xhci98's ring holds none. At level 4, from `3.5.0.0` (the owner's
+  decision of 2026-11-13, "Show it as it is"; decision T15 as revised),
+  both nodes show the log as the driver serves it, kernel addresses
+  included, under "Recording:  on (XhciLogVerbosity 4)" in the same form
+  as levels 2 and 3 and with no sentence added; the report carries it and
+  the snapshot's dump at level 4 too. Up to `3.4.3.0` the tool withheld
+  xhci98's level 4 ring and said to use level 2, and the report left a
+  level 4 dump out; that message stays for an xhci98.sys before `3.5.0.0`,
+  which serves no log at level 4 (`XHQ_F_WITHHELD` without
+  `XHQ_F_ADDRESSES`). The raw extension image is never shown or saved
+  (section 4.6).
 - **Text.** Every byte outside printable ASCII, CR and LF is shown as
   `.`. The details pane and the report hold the whole of both logs
   (16 KiB of ring each) with room to spare.
@@ -482,7 +500,8 @@ unelevated user can open it on every target is read by leg T.1 (section
   `DEVICE_CONTROL` answers `CM_Q_IOCTL` alone (and, since revision 9,
   `CM_QL_IOCTL`, section 4.5; since revision 12, `CM_QP_IOCTL`, section
   4.7; `CM_QM_IOCTL`, record 21 section 7.4; since revision 26,
-  `CM_QA_IOCTL`, section 21), everything else fails with
+  `CM_QA_IOCTL`, section 21; since revision 32, `CM_QS_IOCTL`, section
+  23), everything else fails with
   `STATUS_INVALID_DEVICE_REQUEST`, and PnP and power never reach it.
 - **Name.** `\Device\XhciCm<n>`, linked as `\DosDevices\XHCICM<n>`, `n`
   the first free of 0..15, created in the start IRP's system context (so
@@ -617,8 +636,11 @@ counters as text, then the log as text. Both texts are ASCII lines
   three records carry an address as their value: `cm.live.bar-changed`
   (the BAR as read, a bus address) and, on 98 SE and ME,
   `cm.reenum.9x.gone.superseded` and `cm.reenum.9x.gone.id-changed` (a
-  CONFIGMG devnode handle, a pointer). The builder writes their values as
-  `--------` and sets `CM_QL_F_WITHHELD`. A record added later whose value
+  CONFIGMG devnode handle, a pointer). Below level 4 the builder writes
+  their values as `--------` and sets `CM_QL_F_WITHHELD`; at level 4,
+  from `3.5.0.0` (the owner, 2026-11-13; section 3.5), it serves them as
+  recorded, as the DebugView emission always did, and a driver before it
+  withheld them at 4 too. A record added later whose value
   is an address joins that list (`cm_query.c`), which the host suite
   holds.
 - **Text.** A byte of the ring outside 0x20 to 0x7E, CR and LF is
@@ -666,11 +688,11 @@ tool does not know is shown as such, not decoded.
   already knows it is) and how to turn it on.
 - **Level 1**: the counters; "Recording is off" and the advice.
 - **Levels 2 and 3**: the counters and the ring.
-- **Level 4**: the counters; the ring is withheld, because at level 4 it
-  holds kernel addresses (`start.bar`, `start.ok`, `xhci_log.h`), and the
-  node says to use level 2 for a log the tool can show (`XHCITR
-  /snapshot`, `XHCISNAP`'s maintainer report up to `3.0.0.0`, is the
-  level-4 reading; section 15).
+- **Level 4**: from `3.5.0.0` as levels 2 and 3, the counters and the
+  ring with the kernel addresses it holds (`start.bar`, `start.ok`,
+  `xhci_log.h`; section 3.5). Up to `3.4.3.0` the ring was withheld here
+  and the node said to use level 2 (`XHCITR /snapshot`, `XHCISNAP`'s
+  maintainer report up to `3.0.0.0`, was the level-4 reading; section 15).
 - The counters are named from `XHCIHC_COUNTERS`'s own fields
   (`xhcitr\tr_hcctr.h`, one line a field, which the host suite holds to
   `src\xhci_counters.h` field by field by offset); a word past the table is
@@ -783,8 +805,10 @@ read's state, the build flavour), then the parts. Sizing is `XCMQ`'s.
   does, and it is not gated by the door's enable step: the counter block
   (`XHCIHC_COUNTERS`, little-endian words, the one word the door computes
   computed the same way) from level 1; the log ring as text, oldest first,
-  at levels 2 and 3 - at level 4 it can hold kernel addresses and is
-  withheld (`XHQ_F_WITHHELD`), as section 4.6 withholds it; and the
+  from level 2 - at level 4, from `3.5.0.0`, with the kernel addresses
+  it holds, `XHQ_F_ADDRESSES` set beside `XHQ_F_WITHHELD` (which a
+  driver before `3.5.0.0` set alone, serving no log there; record 13
+  section 8.12 says why the old flag stays set); and the
   controller's configuration space 00h to FFh at every level, 0 included,
   because it is not the log.
 - **The configuration space** is read on demand, one DWORD at a time
@@ -1796,7 +1820,9 @@ shown as disconnected, as before.
    | +4 | `CM_Q_RM_COUNT`: unexpected removals counted since this start; it wraps |
    | +8 | `CM_Q_RM_MEMBER`: the last one's member, bus 15:8, device 7:3, function 2:0; `CM_Q_UNKNOWN` before the first |
    | +12 | `CM_Q_RM_LOST`: surprise removals in a loss of the host interface (item 1), counted apart; it wraps |
-   | +16 | reserved, 0, to +31 |
+   | +16 | `CM_Q_RM_DRIVER`: the running driver's version (section 18) |
+   | +20 | `CM_Q_RM_IRQ`: the ring interrupt as in force, and why it is polled (record 21 section 4.5.17) |
+   | +24 | reserved, 0, to +31 |
 
    The record follows at 96 (`CM_Q_O_REC_OFFSET` says so), then the
    extensions and the instance ID, each at its offset as before;
@@ -2707,8 +2733,9 @@ the ring's text with the cut, the withheld value and the replaced bytes,
 the sizing answers) in the CM suite; the tool's readers of both logs
 (`xhcitr\tr_log.c`, pure: the `XCML` parse, the snapshot window's header,
 the ring by its head and used count, the HCD region's shape, the counter
-names held to `src\xhci_counters.h`, the level-4 withholding, the
-recording-off advice) in `test\test_trlog.c`.
+names held to `src\xhci_counters.h`, the level-4 withholding - from
+`3.5.0.0` level 4 shown as levels 2 and 3 are - the recording-off advice)
+in `test\test_trlog.c`.
 
 Revision 12: the PCI answer's builder (`src\cm\cm_qpci.c`, over modelled
 buses: a dock's chain, a loop, a bus outside the port's range, a chain
@@ -2902,7 +2929,11 @@ a Gen 1 table, a rate above 5 Gbit/s with LP 0, the VL805's capture).
   **Superseded by revision 12** (decision T3 revised): the tool reads
   `xhci98.sys` through its query request first (section 4.8), whose
   driver withholds the level-4 ring itself, and through the door only
-  for a driver that refuses the request.
+  for a driver that refuses the request. **Revised for `3.5.0.0`** (the
+  owner, 2026-11-13, "Show it as it is"): a user who chose level 4 to help
+  sent a report with no log, so both drivers serve the level-4 log as it
+  is and the tool shows it in the window, the report and the snapshot,
+  through the door as well, with no sentence added (section 3.5).
 
 - **T16** (owner, revision 12) A "PCI configuration" view, read-only,
   through this package's own drivers: the NHI, its tunnel ports and the
@@ -2917,7 +2948,8 @@ a Gen 1 table, a rate above 5 Gbit/s with LP 0, the VL805's capture).
 - **T18** (owner) `xhci98.sys`'s query request serves the configuration
   space at every level and is not gated by the door's enable step; what it
   serves of the log follows the level as `xhcicm.sys`'s does. Level 4's
-  ring is withheld by the driver, as the tool already withheld it.
+  ring is withheld by the driver, as the tool already withheld it (up to
+  `3.4.3.0`; served from `3.5.0.0`, decision T15 as revised).
 - **T19** (owner, 2026-10-16) Both drivers' logging level defaults to 2:
   the ring records, with no addresses (`XhciLogVerbosity` for xhci98.sys,
   `XhciCmLogVerbosity` for xhcicm.sys). The owner's P14s reading put the
@@ -3178,7 +3210,8 @@ moved) stays the reference for the route and the files.
    `XHCITR /snaptest -selftest-counters` prints against
    `src\xhci_counters.h`, as it checked XHCISNAP's.
 8. **File > Save Snapshot...** picks a folder (`SHBrowseForFolder`),
-   runs `/snapshot` there for the first xhci98 controller and shows the
+   runs `/snapshot` there for the first xhci98 controller (every one since
+   task 49.35, item 12) and shows the
    text, with the folder, in a message box. **Revision 25** (task 46.4,
    the owner, 2026-11-01): that message box held the engine's whole
    text, up to 6 KB, a window taller than a 640 by 480 screen. The
@@ -3216,9 +3249,11 @@ moved) stays the reference for the route and the files.
    controller 0, which may take no dump, the `.DEV` being written before
    any controller is opened and reporting that case. Each xhci98
    controller's dump `.TXT` follows, whole, slots and enumeration regions
-   included; a dump whose header says level 4, where it can hold memory
-   addresses, or says no level at all is withheld, as the "Driver log"
-   node withholds the ring (section 3.5). Save Report, or
+   included, at every level: up to `3.4.3.0` a dump whose header said
+   level 4, where it can hold memory addresses, or said no level at all
+   was withheld, as the "Driver log" node withheld the ring; from
+   `3.5.0.0` it follows whole, addresses included (section 3.5). Save
+   Report, or
    `/report`, alone is therefore the bug report; the raw `.BIN` and
    `.PSC` come only from `/snapshot` or `/dump`, when the maintainer
    asks for them.
@@ -3232,6 +3267,77 @@ moved) stays the reference for the route and the files.
 11. **The door.** `xhci98.sys`'s USBUSER pass-through is kept unchanged
     (section 4.8): Windows' own property tabs use it, and the snapshot
     reads through it.
+12. **Every controller (task 49.35, revision 32; the owner, 2026-11-13).** Item 8's Save Snapshot, the
+    tray's quick save and `XHCITR /snapshot` with no `/c` took "the first xhci98 controller" only, and `/c N`
+    is in no user document. A user's ASMedia ASM1042 failed beside a working Intel controller (issue 31), and
+    two snapshots in a row were of the Intel one. These three now take every controller `xhci98.sys` drives,
+    listed as Save Report lists them (item 9's `snap_hcd_number`): XHCI98HC<k> on NT, HCD<k> on 98 SE and ME,
+    where another stack can hold HCD0. The connection manager's snapshot (task 49.37) writes `BASE.CT<n>` and
+    `BASE.CB<n>` beside them, a different second letter.
+
+    - **The names.** One BASE per run. Each controller with door number k, as one character (`0`-`9`, then
+      `A`-`Z`; a controller numbered above 35 is not taken, and the message says so), gets four files:
+      - `BASE.D<k>`: its device report. It is the machine's, but each one records its own controller's door
+        and dump result, so none is dropped;
+      - `BASE.T<k>`: the text;
+      - `BASE.B<k>`: the image;
+      - `BASE.P<k>`: the PORTSC array.
+
+      For example `B112324A.D0`, `.T0`, `.B0`, `.P0`, `.D1`, `.T1`, `.B1`, `.P1`. The files' own texts name the
+      set as `BASE.DEV`, `.TXT`, `.BIN` and `.PSC`, the engine's names. The message says how they are renamed.
+    - **BASE.** The parent chooses it before any child runs (`tr_snap_pick_base`, pure, `tr_core.c`):
+      - the NAME given to `/snapshot`, refused (exit 6, nothing written) when any file of the set exists,
+        meaning `NAME.DEV`/`.TXT`/`.BIN`/`.PSC` or any `NAME.D?`/`.T?`/`.B?`/`.P?`;
+      - else the engine's own clock name, `mDDhhmmS`, with the first letter whose whole set is free.
+
+      A run that cannot choose one writes nothing, and says so.
+    - **How.**
+      1. For each controller the parent runs item 10's child, `/snapshot BASE /c <k>`, in a scratch directory
+         of its own under `%TEMP%` (`snap_temp_dir`, as Save Report's runs do). The child's names cannot meet
+         any other file, and the parent moves only what that directory holds.
+      2. After the child, the parent moves its `BASE.DEV`, `.TXT`, `.BIN` and `.PSC` into the chosen folder
+         as `BASE.D<k>`, `.T<k>`, `.B<k>`, `.P<k>`, without replacing (`MoveFile`; across volumes a copy that
+         fails on an existing file, then the source deleted).
+      3. It records for each controller the child's exit and each move's result, and removes the scratch
+         directory.
+
+      A move that fails leaves the scratch directory and its files in place, and the message names them.
+      The engine is unchanged, and so is `/snapshot /c N`: one set, `BASE.DEV`/`.TXT`/`.BIN`/`.PSC`. `/dump`
+      is unchanged.
+    - **Time.** Each child keeps its two-minute bound. `snap_child` now waits at most ten seconds for a child
+      it has terminated, instead of without end, then goes on to the next controller and says so. Six
+      controllers can take about twelve minutes at worst; a run normally takes seconds each.
+    - **A failed controller is still taken.** The door is the FDO's and answers in every controller state
+      (logging off excepted, as before), LATCHED FAILED included, and the latched one is the controller
+      wanted. A child that writes no dump (exit 4: its `.D<k>` says why), or does not end, leaves its
+      controller's line saying so, and the others are still taken.
+    - **The machine's parts once.** The device report's Thunderbolt networking section is the machine's, not
+      a controller's: the first controller's `.D<k>` has it, and every later child runs with XHCITR's own
+      `/nonet` (the engine's `-nonet`), whose section says where it is. The machine-wide parts taken once
+      per run (the connection manager's snapshot, task 49.37) join after the controller loop.
+    - **No xhci98 controller.** `/snapshot` without `/c` on a machine where `xhci98.sys` drives none runs
+      `/snapshot [NAME] /c 0` as before, one set under the engine's names, whose device report says why.
+      The closing text says it was taken only when that run ended with 0; otherwise it gives the exit and
+      the run's own words. A NAME is checked before either path runs a child.
+    - **The message** (Save Snapshot's box, the quick save's README.TXT and balloon, `/snapshot`'s closing
+      text). It names the folder once, then one line per controller from the publication record (`tr_snap_saved_all`, pure):
+      - "Controller 1 (XHCI98HC1): B112324A.D1, .T1, .B1 and .P1";
+      - "... .D1 only: no dump, its .D1 says why";
+      - "... the .T1 is not complete";
+      - "... not taken: did not end within two minutes";
+      - "... not moved: the files are in <scratch>".
+
+      At most eight lines, then "and N more". It closes with "(each file's own text names it BASE.DEV, .TXT,
+      .BIN or .PSC)". Its exit is 0 only when every controller's set is complete and moved, else the
+      highest child exit, or 9 for a move that failed. The quick save's balloon falls back to its box when
+      the text is longer, as it does today. Each line is short enough for item 8's 640 by 480 rule.
+    - **The pure half** (`tr_core.c`, host-tested in `test_tr`):
+      - `tr_snap_kchar(k)`: the character, none above 35;
+      - `tr_snap_pick_base`: over a callback that says whether a name exists;
+      - `tr_snap_saved_all`: the message and the exit, with every outcome, the "and N more" count and the
+        bounds.
+    - **Readers.** `docs/contributing/snapshot-reader.md` says the names. A script that expects one set reads
+      `/c N`'s, which keep their names.
 
 ## 16. The 98 SE pop-up (revision 17, task 43.55)
 
@@ -3542,6 +3648,37 @@ and ME the new file even waits beside the old one, named in
    then an update to a build of a higher version, not restarted: the
    status bar and both details say it differs; restart: they say the
    same and the status bar nothing.
+9. **A mixed install** (owner, 2026-11-13, from a field report: an entry
+   installed from `2.2.0.1`'s files on a machine whose controller ran
+   `3.4.3.0`). The "Device Manager entry" block (section 3.3) of an xhci98
+   controller and of an NHI compares the entry's `DriverVersion` (its
+   driver key, as the block's "Version:" line reads it; `tr_ver_parse`,
+   four decimal fields of 0 to 255) with the running version of item 1
+   (`tr_ver_mixed`, pure). Only an entry older than the running driver
+   gets a note, after "Version:": "This entry was installed from another
+   version's files (2.2.0.1) than the driver that is running (3.4.3.0):
+   run SETUP.EXE to update it." Nothing for equal versions; nothing for
+   an entry newer than the running driver (an update waiting for its
+   restart, which item 4's "Driver version:" line already says); nothing
+   when either version is not known, a running driver from before
+   `3.3.0.0` (which says none) included. 98 SE and ME read the same
+   value from the entry's `Services\Class` key and the running version
+   through the same requests, so the rule is the same there. `xhciuas`'s
+   entries and every device and tunnel port entry carry no note: no
+   running version is known for them (item 1). The snapshot's `.DEV` is
+   written before any controller is opened and carries the entry's
+   `DriverVersion` without the note; Save Report and `/report` carry the
+   details, the note with them. Host vectors in `test\test_tr.c`.
+10. **Where an entry came from** (owner, 2026-11-13, the same report;
+    the three facts only, Windows' driver-install log not read). The
+    same block prints, after "Version:" and its note, each where the
+    entry's driver key holds it as a nonempty string: "INF file:" (its
+    `InfPath`, for example `oem12.inf`), "Matching ID:" (its
+    `MatchingDeviceId`, the hardware or compatible id Windows matched)
+    and "Provider:" (its `ProviderName`); an absent value leaves its line
+    out. The block is every devnode's, so devices show them too. The
+    snapshot's `.DEV` lists the same three values among its driver-key
+    values (`InfPath = ...`), as it lists `DriverVersion`.
 
 ## 19. The storage transport (revision 21, task 44.35)
 
@@ -4224,7 +4361,7 @@ that day are the ones below.
    `src\xhci98.inf`, `src\xhci98-amd64.inf` and `src\cm\xhcicm.inf`.
 3. **Which rows** (the owner's choice V-1 with `XhciIntelIrqRoute`).
    USB, common: `XhciIntelPortSwitch` (0 and 1; 2 stays a hand edit, as
-   `portsw.vbs` leaves it), `XhciIntelIrqRoute`, `XhciIntelNoRouteIrq`,
+   the port switchover's scripts left it until task 49.47 removed them), `XhciIntelIrqRoute`, `XhciIntelNoRouteIrq`,
    `XhciInterruptMode`, `XhciForceBulkOnly`, `XhciSilentInstall` (98 SE and
    ME; on 1 the Tree merges the list first with Setup's own code, item 7).
    Advanced: Setup's USB Advanced list (record 26 section 5.4.1).
@@ -4237,7 +4374,11 @@ that day are the ones below.
    `StorPollMode`; advanced: the other eight. Out, as Setup: the log
    levels (the dialog's), `XhciCommandCheck`, the other hardware quirks and
    the Linux quirk values, `XhciCmTunnelBridge`, the bench switches, the
-   networking values, every `XhciQemu*` value.
+   networking values, every `XhciQemu*` value. **Revised by task 49.38**
+   (the owner, 2026-11-13: "go through xhci98 USB tree to make sure it's
+   advanced settings cover all the registry entries"): the paragraph's
+   "Out" list is replaced by item 18's rule, under which the page covers
+   every value a driver of the package reads.
 4. **A row's value** is read as raw (machine-wide and each device's own:
    absent, a DWORD, another type), precedence (machine-wide when present,
    of any type, as `hcdReadDword` and `cm_reg.c` read it), and what the
@@ -4381,6 +4522,18 @@ that day are the ones below.
     information balloon, XP's does), and with the option on Windows'
     information or error sound plays once (`MessageBeep`), on every
     Windows.
+    Task 49.39 (issue 26 section 8; 2026-11-12): the reporter's quick
+    saves taken just before a crash were lost - files a moment old can
+    still be in Windows' cache. Each file the save wrote (`REPORT.TXT`,
+    the snapshot's four, `XHCISET.TXT`, `README.TXT`) is opened again for
+    writing and `FlushFileBuffers` called on it before the balloon is
+    shown; a flush that fails is said in the balloon ("not all written to
+    the disk") and the save counts as not complete. No directory flush is
+    claimed. And when the folder's drive letter belongs to a disk the tree
+    shows under a controller `xhci98.sys` drives (the tray's own model, read
+    on the tray's thread before the save starts), the balloon adds "This
+    folder is on a USB drive xHCI98 drives: if that drive is the one in
+    trouble, save to another disk." - nothing is refused.
 15. **Its hotkey.** Off until ticked in the Settings window ("Quick-save
     hotkey", on the tool's own tab, item 16), per user (`QuickSaveKey`, the same key: the
     `RegisterHotKey` modifiers << 16 | the virtual key). The choices
@@ -4418,3 +4571,372 @@ that day are the ones below.
     refusal (too small, too many, a line break, no `END`, another
     version, no NUL), the arguments, the port switchover's texts, and
     the quick save's folder name, its fallback and the hotkey's choices.
+18. **Every value has a row** (task 49.38, the owner's request of
+    2026-11-13, which replaces item 3's "Out" list, and the owner's
+    answers of 2026-11-12). "Show advanced settings" lists every value the
+    package's drivers read, and the safe-removal mark service's two, but
+    the two log levels (the Logging level dialog's, item 1), `XhciCmNet`
+    (Setup's Thunderbolt networking box, with the driver it stages), the
+    network adapter's own values (its Properties, Advanced), every value of
+    the qemu flavour and what the drivers write for the tools. **One
+    table**: every row is a row of Setup's `instValues[]`, which both tools
+    read (the Tree's own `trsExtra[]` is gone), so Setup's Advanced lists
+    and its `/set` take the same values (record 26 section 5.4.1, "Since
+    task 49.38"). `INST_VALUE` gains `Group` (the header both tools show
+    above a group's first advanced row), `Kind` (a DWORD, or the text of
+    `XhciCmTunnelBridge`) and `Accept` (a range's numbers below 32); the
+    rules gain `INST_APPLY_NT5_XHCI` (2000, XP, XP x64),
+    `INST_APPLY_NT5X86_XHCI` (32-bit 2000 and XP), `INST_APPLY_PIRQ` and
+    `INST_APPLY_NOROUTE` (Setup links `src\xhci_pirq.c` for them), taken
+    by pointer forms of Setup's rule functions (`inst_def_*`). The rows
+    added: `XhciInterruptMode` 4 (with "Show advanced settings", 98 SE to
+    XP x64; a 4 was read as the default before, a mistake), the seven
+    mode-4 values, `XhciDmaStaging`, `XhciStagePoolKiB` (whole 64 KiB
+    blocks), `XhciTolerance`, `XhciCommandCheck`, `XhciAccept096`,
+    `XhciAcpiTables`, `XhciIntervalCap`, `XhciAvgTrbEsit`,
+    `XhciUsb2HubSpeedFallback`, the fourteen Linux quirk values, five
+    Thunderbolt networking values, `XhciCmInferAtStart`,
+    `XhciCmAsm4242Handover`, `XhciCmGen4LinkRecovery`, `XhciCmSleepEntry`,
+    `XhciCmAsmediaPcie7Credits`, `XhciCmTunnelBridge`, the mark service's
+    `LogBytes`, and a UAS drive's `XhciUasNoAtaPassThrough` and
+    `XhciUasFastReset`; and `XhciEventRingTrbs` (256 or 1024, any other
+    value read as the driver reads it, 1024); and, with task 49.39,
+    `XhciStreamDequeueRepair` in faults and checks (0 check and log only,
+    1 repair; the owner's texts). `XhciIntelNoRouteIrq` 0 on
+    Windows 2000 stays the Tree's alone (item 10 asks first; Setup does
+    not offer it there). A risky value carries its caution (what fails,
+    and how to set it back) and every row its Default.
+    *The groups*: the window shows a header row above each group
+    ("Advanced settings" for the rows before, then one UAS drive,
+    interrupt mode 4, memory, faults and checks, the controller quirks,
+    Linux's controller quirks; on the Thunderbolt tab Thunderbolt
+    networking, USB4 and the ASM4242); the list scrolls at 640 by 480 as
+    before, and its row and pending-change arrays are 160.
+    *The text row*: `XhciCmTunnelBridge` is a REG_SZ, offered in the number
+    box with its digits-only style taken off; the page and `/set` take
+    what the driver reads (`inst_bdf_list_ok`: `auto` in any case, empty,
+    or one to four `bb:dd.f` separated by commas, under 64 characters) and
+    write it as REG_SZ; Default writes `auto`.
+    *The drive rows* (the owner's answer Q3): `XhciUasNoAtaPassThrough`
+    and `XhciUasFastReset` live in each UAS drive's own key
+    (`INST_LOC_DRIVE`, `TRS_LOC_DEVICE`; 2000 to 10 `Enum\<instance
+    id>\Device Parameters`, 98 SE and ME `Enum\<instance id>`), which the
+    driver reads when the drive starts, so a change takes the drive
+    plugged in again. With one selected, "Applies to" lists "Every UAS
+    drive here" and each present devnode bound to `xhciuas`; a UAS drive's
+    right-click has "Settings...", which opens the USB tab with "Show
+    advanced settings" on, the first drive row selected and that drive as
+    the scope; there is no machine-wide form. The write: first the drive
+    found present (`CM_Locate_DevNodeA`), with the driver key the window
+    read and still bound to `xhciuas` (its service on 2000 and later, its
+    driver key's `NTMPDriver` on 98 SE and ME); then the key opened, never
+    made, with the rights the process has; on 2000 and later, refused for
+    access, the drive's existing Enum key opened, its Device Parameters
+    found there (a key that is not there is never made: the write is
+    refused; one deleted after it was found is made again by the
+    privileged open, which 2000 and XP offer no existing-only form of, and
+    is left empty with nothing written and the write refused), and opened
+    with
+    `REG_OPTION_BACKUP_RESTORE`, the backup and
+    restore privileges switched on for the one write (looked up at run
+    time, as the shutdown privilege is) and given back on every exit;
+    written and read back, and the drive found present again, else "was
+    written, but the drive left meanwhile: it takes effect when it is
+    plugged in again". The key's owner and permissions never change.
+    *What is left open*: the Tree holds no handle on the devnode (a request
+    to the driver for it is ruled out, section 22), so a drive can leave,
+    or another be given its instance, between the checks and the write.
+    Windows keeps an unplugged drive's Enum key, so such a write lands in
+    that drive's own key and takes effect when it is plugged in again; the
+    second check says so when it sees it. The window's list is held to a
+    fresh reading before Apply, and the elevated request names each drive
+    by its instance id and the driver key the window read, which the
+    elevated run checks before it writes. Setup does nothing with them:
+    no page, no `/set`, no uninstall step.
+    `test\test_trset.c` holds the rule both ways: every value named by the
+    INFs' `HKR` lines, the value definitions of the drivers' sources and
+    the mark service's `Parameters` reads, and every value row of
+    `docs\using\tuning.md`, is a row or on its commented exemption list;
+    every row is in `tuning.md` (Stor98's own, its README's, by name), with
+    the same range, default when absent and written value where
+    `tuning.md`'s column is a number.
+
+## 23. The connection manager's snapshot (revision 33, task 49.37)
+
+The owner's decision of 2026-11-13 ("save snapshot for CM as well for
+future debugging"): `XHCITR /snapshot` and File > Save Snapshot... take
+`xhcicm.sys`'s state as they take `xhci98.sys`'s. The driver half, the
+request `CM_QS_IOCTL` and its self-describing image `XCMS`, is design
+record 21 section 8.4.
+
+1. **Which NHIs.** Every query device that opens, `\\.\XHCICM0` to
+   `\\.\XHCICM15` (section 4.2: 16 at most, the names decimal), on every
+   target, each image kept only when its epoch equals that device's
+   `XCMQ` answer's (as the log is matched, section 4.5). In the file
+   names the device's number `n` is one character, 0-9 then A-F (device
+   10 is `.CTA`), the form the controllers' `k` takes in the same run.
+2. **The files**, beside the run's set and on the run's `BASE` whatever
+   scheme names it: `BASE.CT<n>`, the decoded text, and `BASE.CB<n>`, the
+   raw image as assembled from its windows. Made as the run's other files
+   are: `.TMP` first with an exclusive create, renamed with a bare
+   `MoveFileA`, never replacing a file the run did not make, and each name
+   counted among the set whose existence moves the clock name's letter
+   (`stamp_base`, section 15) and refuses a given name (exit 6). `/dump`
+   stays the controller's dump alone. A connection manager adds no new exit code but takes part in
+   the existing ones with their precedence: a `.CT<n>`, `.CB<n>` or one of
+   their temporaries made by something else after the name was chosen is
+   exit 8, as for a dump file (that image's own files removed, the other
+   file left as it was); an image taken but its `.CT<n>` or `.CB<n>` not
+   written in full is exit 3, as a dump's `.TXT` not written in full is.
+   An image not taken - no connection manager, a driver that does not
+   serve it, a device that answered nothing - changes no exit: it is said
+   on the screen and in the `.DEV`, as a controller at a Code is.
+3. **The `.DEV`** gains, after the "Thunderbolt networking" section,
+   "Thunderbolt connection manager state (xhcicm.sys)": one line per
+   query device - "XHCICM0: state saved in BASE.CT0 and BASE.CB0" with
+   the image's size and "no counted event during the read" or "taken
+   while it was changing", "not served by this xhcicm.sys", "not read:
+   error <n>", "not kept: the connection manager restarted during the
+   read" - or "No connection manager is running." Nothing else of the
+   image goes there.
+4. **The `.CT<n>`** is plain ASCII, CRLF, lines of 79 characters or
+   fewer. A head - the tool's version and the local time, the device's
+   number and PCI location, the image's version and size, the driver's
+   version and level, the clock at the gather, and "taken whole" or "taken
+   while it was changing: values may be a mixture" with the detector's two
+   values - then one block per table in the image's order: its name, its
+   record count, and for each record that has any nonzero value its index
+   and its nonzero fields as `name=value` (hexadecimal with `0x` from 10
+   up, decimal below; a signed field with a minus where negative), several
+   to a line; records all zero are counted ("records 2 to 3: all zero"),
+   not printed. A hashed field prints as `#3a7f`, and the head says once
+   what that is: "#xxxx: an identity (a UUID, UID, MAC address or serial)
+   as a hash salted anew at every start; equal hashes may be one
+   device". The tables a maintainer reads first come first, in the
+   driver's order (`nhi`, `cm.ctr`, `u4`, `u4.port`, `u4.link`, `u4.kid`,
+   `u4.oblig`, `u4.xd`, `u4.ctr`, `icm`, `icm.dev`, `icm.ctr`, `ring`,
+   `rirq`, `reenum`, `reenum.port`, `chain.bind`, `net`). A table name or
+   a field name outside letters, digits and `._[]` is printed as `?`, and
+   a field past the bytes received ends the block with "cut short".
+5. **Privacy.** The image carries no address, no name and no user data
+   (record 21 section 8.4), so the screening of section 15 has nothing
+   to screen in its values; the head's own lines follow section 15's rules
+   (no directory, no computer name). With `/nosysinfo` every hashed field
+   prints as `withheld`, as the `.DEV`'s unscreened strings do, and the
+   `.CB<n>` is written with those words zeroed and `CM_QS_F_WITHHELD` set,
+   so a run that asked for no system details carries no identity in any
+   form. An image of a version this tool does not read cannot be screened
+   that way: under `/nosysinfo` its `.CB<n>` is not written at all, and
+   the `.CT<n>` and the `.DEV` say so.
+6. **Save Report and `/report`** carry in their "Snapshot" part, once,
+   after the first controller's dump, each `.CT<n>`, whole: the image holds no
+   address at any level, so none is withheld by level. This makes the
+   report longer by about 7.5 KB a connection manager with one router
+   attached and 3 KB for an inert one (read on the emulator, task 49.37's
+   legs), more with more routers (owner
+   question Q1). The raw `.CB<n>` comes only from `/snapshot` or `/dump`.
+7. **Save Snapshot's message** (section 15 item 8's table) gains, after
+   its line, one line naming the images the run saved (the owner, 2026-11-13):
+   "The Thunderbolt / USB4 state is in <name>.CT0 and .CB0.", with more
+   than one "<name>.CT0 and .CB0, .CT1 and .CB1.", a `.CT<n>` whose
+   `.CB<n>` was not kept named alone, and no line when no query device
+   answered. The window takes them from the run's own "files written"
+   list in its output, not from the folder, so a file of that name another
+   program made is never named (`tr_cms_saved_files` and
+   `tr_cms_saved_line`, the pure half's, host-tested in `test_cm_snap`,
+   sixteen images included). The
+   engine's own text lists each `.CT<n>` and `.CB<n>` with the files
+   written, and its attach line names each `.CT<n>`, with "(the .BIN,
+   .PSC and .CB files only if asked)" on the line before it, within 79
+   columns.
+8. **Old and new.** A driver from before 49.37 answers
+   `STATUS_INVALID_DEVICE_REQUEST`: "not served by this xhcicm.sys", no
+   files. A newer image version: the `.CB<n>` is saved and the `.CT<n>`
+   says "an image of version N, which this XHCITR does not read; send the
+   .CB0". Within version 1 every directory decodes, older or newer.
+9. **Retry.** The tool reads the whole image (window after window, each
+   asking at the bytes it holds) up to three times, until one detector
+   value holds before and after every window of the read and each window
+   names the same whole size; it keeps the last read, and a read that
+   never agreed is kept with `CM_QS_F_TORN` set in the file's header and
+   the head's "taken while it was changing". The first window's header is
+   the image's header in the `.CB<n>`, its detector words the read's
+   lowest and highest.
+10. **The pure half** (`xhcitr\tr_cms.c`, `tr_cms.h`): the image's checks
+    and its decode into `TR_TEXT`, host-tested with the driver's own
+    builder in `test_cm_snap` (section 8.4 of record 21) and against a
+    fixture of canned bytes in the same suite; the Windows half
+    (`xhcitr\tr_cmsw.c`): the device loop, the windows, the files.
+11. **The all-controllers snapshot** (section 15 item 12: one `BASE` a
+    run, `BASE.D<k>`, `.T<k>`, `.B<k>` and `.P<k>` a controller, each
+    taken by a child run `/snapshot BASE /c k` in a scratch directory of
+    its own and moved in without replacing). The connection managers'
+    state belongs to the machine, not to a controller, so every child is
+    started with `/nocm` (the engine's `-nocm`: no image taken), and after
+    them one more child, `/snapshot BASE /cmonly` (the engine's
+    `-cmonly`), started in the destination folder itself, takes it once
+    with item 2's exclusive creates (`snap_cms`): a child, as the
+    controllers' runs are, because the engine's state is process-wide and
+    a quick save's worker allocates nothing and changes no directory. BASE
+    is chosen over the whole set, `.CT<n>`, `.CB<n>` and their temporaries
+    included (`tr_snap_pick_base`), so a given name with any of them is
+    refused before anything is written and the clock's letter moves past
+    them. The parent reads the child's list of files written for item 7's
+    line; a clash ends the message with "The Thunderbolt / USB4 state was
+    not saved: a file of its name was made by something else meanwhile.",
+    a child that did not start or end in two minutes with "The
+    Thunderbolt / USB4 state was not taken: its run did not start, or did
+    not end within two minutes." (exit at least 2), one that could not be
+    ended with "... did not end, and may still be writing." (exit 9, as a
+    controller's), another exit with "... its run ended with <n>." (at
+    least 2), a file not written in full with " Not every one was written
+    in full." after item 7's line, or "The Thunderbolt / USB4 state was
+    not saved in full: a file of it could not be written." when no
+    `.CT<n>` was; and the exit joins the run's: a clash 8, a file not
+    written in full 3, the run's 9 kept. The "Thunderbolt networking (xhcicm.sys)"
+    section stays where section 15 item 12 puts it, once, in the first
+    controller's `BASE.D<k>`. The image's own lines go to no device
+    report in that run (the `.CT<n>` head carries them). `/snapshot /c N`
+    keeps the single set, its `.DEV` and its images as items 2 and 3 have
+    them.
+
+## 24. A held port (roadmap-usb4 task 49.43, owner 2026-11-13)
+
+A user whose device failed enumeration three times read the result as
+"the device is not recognised": the driver's tolerance (design record 17)
+had held the root port, and only the snapshot's tolerance block said so
+("root port N charges 3: re-enumerations 3 of 3 ... NOW HELD,
+re-enumerations spent (powered)"). The tool now says it where the user
+looks, with no driver change.
+
+1. **The reading.** Each xhci98 controller's hold bytes are read through
+   the snapshot's own door windows, as `tr_snap.c`'s `print_tol` reads
+   them, read only: the HCD region's first window for the tolerance
+   block's place in the extension (header words 8 to 18:
+   `XHCI_SNAPSHOT_HCD_TOL_*`), then the extension's window at the block,
+   and at most three more where a location lies past it; each location's
+   hold is its byte 26 (`XHCI_TOL_LOC.Hold`; `tr_tol_map`,
+   `tr_tol_hold_offset`, `tr_tol_hold` in `tr_log.c`, pure, and
+   `hold_read` in `xhcitr.c`). The door copies memory and reads a
+   register only of a started controller in D0 (`hcdDoorSnapshot`), so
+   the reading never wakes a suspended one. At level 0 the door is closed
+   and nothing is known (`HoldState` -1). Read at each refresh of the
+   window's and the report's model, on the thread that refreshes it, as
+   its other requests to the controller are (the query's header among
+   them, which waits on the same door gate); a tray with no window open
+   does not read them there, only on its job thread (item 5).
+2. **At the port.** A held root port is shown in the tree even when no
+   device is reported there, its line ending " (on hold)"; its details
+   carry, after "Connection:", for hold 1 (re-enumerations spent,
+   powered: a replug or a controller start ends it) "Note: This port is on
+   hold after repeated failures. Unplug the device and plug it in again.
+   The hold also ends when the controller restarts." and for holds 2 and
+   3 (unpowered: only a controller start ends them) "Note: This port is
+   switched off after repeated failures. It stays off until the
+   controller restarts: restart Windows, or disable and enable the
+   controller in Device Manager." Save Report and `/report` carry the
+   details.
+3. **A hub's port.** The driver numbers a hub location by its hub object,
+   which the tool cannot match to a hub of its tree, so a held hub port is
+   said at the controller's details instead: "A port of a hub on this
+   controller is on hold after repeated failures. ..." (or "is switched
+   off ...", with the same advice), once per kind, and only while a hub is
+   connected to that controller: the driver keeps a hub location's hold
+   after the hub is unplugged, until it reuses that hub object or the
+   controller starts (`hcd_hub.c`), so with a hub connected the note can
+   still be an earlier hub's. A hub's hold is not announced in a balloon.
+4. **Not known.** Where no hold is known for an xhci98 root port (the
+   door closed or a read failed) and its connection is "the device
+   failed enumeration": "Note: If this keeps failing, unplug the device
+   and plug it in again." The bus reports that connection at a root port
+   alone, while the port's enumeration has failed for good; a hub's port
+   with no device record is answered as no device connected
+   (`hcd_door.c`, `hcdDoorConnection`), so the note never appears at a
+   hub's port, although the tool would print it at any xhci98 port so
+   reported (`details_uport` in `xhcitr.c`). Until revision 34 this item
+   listed a hub's port among its cases; read on XP on 2026-11-14, a hub's
+   port whose device failed its enumeration showed "no device connected"
+   and no note (`runs/run-49.md`, "49.43"). The note itself was not read
+   in a guest. Known and left: at logging level 0 the door is closed, so
+   a held port shows "(empty)" with no tag, no note and no notice (item
+   1; read on XP the same day, the held root port reading "no device
+   connected", not a failed enumeration, so the fallback note did not
+   appear there either).
+5. **The pop-up.** While the tray runs, every 10 s (`HOLD_POLL_EVERY`
+   polls of its one-second timer) a job thread of its own, one at a time
+   as the quick save's, reads each xhci98 controller's holds again and
+   posts the results to the tray (`WM_TRHOLD`), so a controller whose
+   door a recovery holds keeps only that job waiting, never the tray; no
+   new job starts while one is out. The job and its buffer are allocated
+   and freed on the tray's thread alone, and the job thread makes no C
+   runtime heap call, because the x86 build links the single-threaded
+   runtime, whose heap is not serialized; a job whose results cannot be
+   posted is freed by the next watch. Every location read goes to an
+   announce-once queue (`tr_holdq_observe`: a hold seen where none was,
+   or another kind, is queued once; a location seen clear is forgotten,
+   so a later hold announces again; one not read keeps what it had; at
+   most 16 queued, the rest counted); an announcement whose location has
+   since cleared or changed kind is dropped unshown (`tr_holdq_peek`), and
+   one is shown only from a reading of its controller in the same job,
+   while a controller not read this time keeps its own queued and lets
+   the others' pass (`tr_holdq_take`); a controller no longer listed when
+   the results come back is forgotten with its announcements, its reading
+   not taken (`tr_holdq_keep_keys`). A change of a location's hold, a
+   clear included, ends its episode and its queued announcement with it,
+   so a location has one queued at most.
+   At most one is shown a watch, and none within 10 s of another balloon
+   of the tool's, so a removal warning keeps the screen; on 98 SE the
+   tool's own pop-up is handed one only when none is showing or waiting,
+   so it is shown at once and never after a wait in which the hold may
+   have ended. Root ports alone are announced. The balloon is titled
+   "USB port on hold": "Port N of <controller> is on hold after repeated
+   failures. Unplug the device and plug it in again.", for holds 2 and 3
+   "Port N of <controller> is switched off after repeated failures.
+   Restart Windows to turn it on again." (both texts the owner's, the
+   second accepted 2026-11-14). On Windows 2000 and later it follows the
+   removal warning's option, "Warn when a device is removed unexpectedly"
+   (`WarnRemoved`, on by default, section 7.6 item 8); on 98 SE and ME,
+   where that option is not offered, it is always shown, the menu staying
+   as it is (owner, 2026-11-14; `tr_hold_notice_on`). With it off the
+   queue is emptied unshown. An announcement leaves the queue only when
+   its send is taken (`tr_holdq_find`, then `tr_holdq_sent`): the icon
+   there and the shell's `Shell_NotifyIcon` call accepted, or on 98 SE
+   the tool's pop-up ready. Until the icon is there (at login before it
+   is added, or after Explorer restarts, the faster notice's rule of
+   section 7.7) it waits uncounted; a refused call is tried again at a
+   later watch, one try a watch, and dropped (counted) at the thirtieth
+   (`TR_HQ_TRIES`, about five minutes); one whose hold has ended or
+   changed meanwhile is dropped, never shown. Known limit: a balloon the
+   shell accepted and then never showed (one queued behind Windows' own,
+   section 7.7 item 9) is not sent again, the re-send watch being the
+   faster and drive notices' alone; the port's note in the window still
+   says it. A controller's reading is used only within 3 s of the moment
+   its read returned (`TR_HOLD_FRESH_MS`, so a hold read before another
+   controller's door kept the job waiting is not announced after it may
+   have ended), and only when no suspend, resume or device change came
+   since that controller's own read began (one during an earlier
+   controller's read no longer counts against it); the next watch reads
+   again. Each job starts
+   its reading one controller on from the last job's (`tr_hold_rot_index`),
+   so every controller is in turn the last one read, and with N
+   controllers a stable hold is announced within N watches however slow
+   another's door is. Known limit: a controller whose door never returns
+   holds the job, and the tray announces no hold until it does; the
+   port's note in the window does not depend on the job. No new
+   component and no new request.
+6. **Host vectors** (`test\test_xhq.c`): the map against the driver's
+   header words and `XHCI_TOL_LOC.Hold`, the hold values against
+   `XHCI_TOL_HOLD_*`, bad shapes, a window that does not hold the byte,
+   the texts word for word, a balloon within 255 characters, the
+   announce-once rule, the option it follows on NT and on 98 SE and ME,
+   an announcement owed with no icon and then sent, a refused send kept
+   and then taken, the refusals' bound, one released while it waited,
+   a reading aged past its bound or with a resume or device change since
+   its own read began unused, one with a device change only during
+   another controller's read still announced,
+   a stable hold announced once within N watches with another
+   controller's door slower than the bound every time (two and three
+   controllers, one alone, the counter's wrap),
+   an announcement cleared before it is shown, a
+   removed controller and an unreadable one, and both bounds. The tool's self-test holds
+   `hold_root`, `hold_hub_kinds` and the note's wrapping.

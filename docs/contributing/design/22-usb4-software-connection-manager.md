@@ -3269,7 +3269,8 @@ kid unattributed.
   thread's read-only accessor (`cmCfgRead`, `HalGetBusData`), and an
   SHPC slot is read through DWORD Select, a write: so on the emulator's
   i440FX SHPC tunnel bridge a plain enclosure (its NVMe in the slot) is
-  no longer learned. Its eject keeps the tunnel up until the unplug, as
+  no longer learned (on Windows 2000 and later it is again since task
+  49.18, section 7.6.5; on 98 SE and ME this stands). Its eject keeps the tunnel up until the unplug, as
   for any port whose member is not known, and no stor98 statement names
   its member (section 10.2); a dock there (the emulator's switch, a far
   end) still is learned, and so is a plain enclosure on a q35 tunnel
@@ -3330,6 +3331,367 @@ plugged after the desktop was learned on the link's evidence
 (`u4.learn=00000103`, the tunnel port 00:05.0), Stor98 bound by the
 wizard, and its eject closed the tunnel (`u4.eject.bridge=00000028`,
 `u4.eject=00000100`, "The PCIe tunnel was closed.").
+
+#### 7.6.5 The SHPC slots read by the learning on Windows 2000 and later (task 49.18; owner, 2026-11-11; a design, reviewed and revised; coded; read)
+
+Put to the owner on 2026-11-11 as five options (`runs/run-49.md`,
+"49.18") and decided the same day: the learning on Windows 2000 and
+later reads an SHPC member's slots, the eject keeps its own notice
+wherever the port stays unknown, and `XhciCmInferAtStart` stays 0 by
+default (section 7.6.2 is not changed). The options not taken: the
+inference on by default on 2000 to 7; the inference at the eject; a
+teardown at the eject read back and kept or undone (the correspondence
+it rests on is the one not proven, and a path torn down cannot be put
+back as it was, section 7.6.2's read-back).
+
+**The gap.** Section 7.6.4 admits a gain that is no tunnel's far end
+only with the link's evidence, a port reading DOWN and then UP. An SHPC
+member reports through its slots alone, which are read through the
+capability's DWORD Select, a write; the learning read through the
+seam's read-only accessor, so on the emulator's i440FX tunnel bridge an
+endpoint directly behind the bridge (a plain enclosure) was never
+learned: its eject left the tunnel up until the unplug, and no stor98
+statement named its member (section 7.6.4, "What is no longer
+learned").
+
+**What is read.** Nothing new in the pure half: `XhciTbtPortRead`
+(`tbt_topo.c`, record 21 section 6.5) already reads an SHPC member's
+slots when its accessor has a writer, and the host vector of section
+7.6.4 already learns the i440FX endpoint through one. The registers are
+those of the PCI Standard Hot-Plug Controller and Subsystem
+Specification 1.0, section 4.2, as `tbt_topo.h` cites them: in the
+bridge's SHPC capability (ID 0Ch) the DWORD Select byte at +02h and the
+DWORD Data register at +04h, a window onto the SHPC working register
+set; through it DWORD 3, Slot Configuration (Number of Slots
+Implemented, bits 4:0), and DWORD 9 + n, the Logical Slot Register of
+slot n (PRSNT1#/PRSNT2#, bits 11:10, 11b an empty slot). One reading:
+the capability's first dword read (the DWORD Select found there kept),
+DWORD Select written 3 and DWORD Data read, then for each slot DWORD
+Select written 9 + n and DWORD Data read, then DWORD Select written
+back to what was found. Only the DWORD Select byte is ever written;
+DWORD Data is only read, so no working register is written through the
+window. The reading is UP with any slot occupied, DOWN with every slot
+empty, and a failed access - the restoring write included - is a
+reading not made. No copy of the specification is on the development
+host, so no sub-section is cited beyond the one `tbt_topo.h` already
+names (`docs/references/README.md` says where the document is
+obtained); the offsets and the bit positions were read again on
+2026-11-11 against [linux] `drivers/pci/hotplug/shpchp_hpc.c`
+(`DWORD_SELECT` 2h, `DWORD_DATA` 4h, `SLOT_NUM`, `FIRST_DEV_NUM`,
+`PRSNT_SHIFT` 10; `shpc_indirect_read` writes the select as a byte and
+reads the data dword; SPDX GPL-2.0+, read from a public code browser,
+not from the pinned mirror, facts only) and against the emulator's
+model (QEMU `hw/pci/shpc.c`: the select and the data register writable,
+a write that overlaps DWORD Data written through to the working
+register, a write of the select byte alone not).
+
+**The writer.** The one record 21 section 7.2 qualified for the stor98
+channel's reading: `CmRegConfigWrite` (`cm_reenum.c`), an
+`IRP_MN_WRITE_CONFIG` of one byte to the bridge's PDO through its
+filter's registration, at 40h or above (a capability, never the
+header), for a member of this domain's set whose filter is published
+and owned by this domain; it fails otherwise. Windows 98 SE and ME have
+no filter and so no writer.
+
+**Where it is given.** The learning's three calls alone - the arm
+(`cmU4Arm`), the attempt (`cmU4Learn`) and the recovery's arm before a
+rebuild - read through an accessor of their own, the seam's reader with
+this writer, and only when all of these hold at that call:
+
+- S1. The target is Windows 2000 or later (the filter route exists).
+- S2. Every member of the set is of source SHPC (record 21 section 6.3
+  source 4). Read from the discovery's record, no configuration access.
+  A set with any member of another source keeps the read-only accessor,
+  as today: an SHPC capability on a switch's port, a listed root port,
+  an override's, a router-named or an ACPI-named member is not read.
+- S3. Each member is the emulator's bridge by the admission the stor98
+  channel uses (`cm_nvlinkos.c`): it, or the bus-0 bridge whose bus
+  range holds it, carries QEMU's vendor id 1B36h, and it has an SHPC
+  capability and no PCI Express capability.
+
+Everything else keeps the seam's read-only accessor: the tunnel-up and
+tunnel-down polls of record 21 section 6.5 (which read nothing on an
+SHPC member, as before), the chained transaction (its candidates are
+not members, so the writer would fail for them and turn "no reading"
+into a failed one), the inference and its read-back (section 7.6.2 I3
+refuses SHPC members), the status record's path, the recovery's set
+record.
+
+**When, and at which IRQL.** `PASSIVE_LEVEL`, on the
+connection-manager thread, under no spin lock, where the learning
+already runs: at an arm (the bind, a set change, after a tunnel down
+this driver handled, before a recovery's rebuild) and at each learning
+attempt of a pending port inside its window (section 7.6). The write
+is a synchronous IRP to the PDO below the filter, so it does not pass
+through the filter's own dispatch. The select, read and restore of one
+reading run to the end on that thread, and the stor98 channel's reading
+of the same bridge runs on the same thread, so no two of this driver's
+readings interleave. Each reading of a 31-slot bridge is 33 writes and
+as many reads.
+
+**The reading owed.** The arm takes the evidence (section 7.6.4: each
+member empty in the new baseline has its port read). On an SHPC member
+that reading can be missing where a q35 port's never is: the member's
+filter not yet published or not yet owned when the bind arms (the
+filter's INF installed after the connection manager's, a bridge
+restarted), or the slot still reading occupied just after a tunnel down
+(the emulator empties the slot in its removal's last stage, record 21
+section 7.1). With no attempt until a port is pending, the evidence
+would then be missing at the next plug. So, under S1 to S3 only: after
+an arm that completed, a member empty in the baseline with no evidence
+bit is **owed** (`XhciTbtLearnOwed`), and while no port is pending the
+idle pass reads the owed members again -
+
+- at each idle pass until 2 s have passed since the arm (record 21
+  section 6.5's poll bound; the tunnel-down poll's time for the same
+  slot); and after that
+- once each time a member's filter record changes: for each member,
+  whether its filter is published and owned by this domain and that
+  publication's serial, read under the registration's lock with no
+  configuration access and compared member by member with the record
+  taken before the last reading (taken before it, so a publication
+  during a reading is tried at the next pass, never acknowledged
+  untried).
+
+The reading again is not an arm. An arm clears the armed mark before it
+scans and leaves it clear when a read fails, and the next attempt of an
+unarmed baseline arms against what answers then and consumes its gain;
+a retry that could fail that way would cost a far end's learning that
+needs no SHPC evidence at all. The refresh (`XhciTbtLearnEvidence`,
+pure, new) keeps the baseline and the armed mark whatever happens: over
+an armed baseline of this set, for each owed member alone, the
+occupancy is read again; where that read is whole, the secondary bus is
+the baseline's, nothing answers and the port then reads DOWN, the
+member's evidence bit is set; anything else - a failed read, another
+bus, a device answering, a port not DOWN - leaves that member as it
+was, owed. It sets bits only, by section 7.6.4's own condition (the
+port DOWN at a reading where nothing answered behind it); it spends
+none and moves nothing, so the spending rules of section 7.6.4 stay
+with the arm and the attempt. A device it sees answering on a member
+the baseline has empty is left for the next arm or attempt to see as
+they would have.
+
+It is not made while any port is pending: an attempt that moves the
+baseline reads the missing evidence itself (section 7.6.4), and a port
+pending means a link may be coming up. A slot that stays occupied with
+nothing answering behind it, or a writer that keeps failing, costs the
+2 s of passes and then nothing until a member's filter record changes;
+no pass reads configuration space for it after that.
+
+**What proves a port, and what does not.** Unchanged in kind; the SHPC
+reading only makes section 7.6.4's second kind of evidence available on
+such a member.
+
+- Proves: the router naming the port (section 7.6); one gain that is a
+  tunnel's far end; one gain of another shape on a member whose port
+  read DOWN while nothing answered behind it, nothing read answering
+  since, and UP at the gain - for an SHPC member, every slot empty then
+  and a slot occupied now.
+- Does not: a slot reading occupied by itself, with no gain; a gain on
+  a member whose slots were never read empty (a tunnel found up at
+  start, section 7.6.4: no transition can be read of a tunnel already
+  up; a card that was in the slot at the arm); a reading that failed in
+  part (`UNREAD`, or rejected where a slot was already read empty,
+  section 7.6.4's outcomes); an SHPC member that S2 or S3 does not
+  admit; any reading on 98 SE or ME. Each of these leaves the port
+  pending and its tunnel up until the unplug, as before: on 2000 and
+  later the eject unmapped (`u4.eject.unmapped`) with the tools' "stays
+  up until the device is unplugged" line (record 24 section 5.2); on 98
+  SE and ME the eject's own transaction, whose text has no line about
+  the tunnel.
+
+**By Windows.**
+
+- 2000, XP, XP x64 and Server 2003 x64, Vista, 7, 8, 8.1 and 10, both
+  architectures: the same code and the same route. On an admitted set a
+  plain enclosure plugged after the start is learned again, as it was
+  before task 48.43 narrowed the rule; its eject closes its tunnel
+  (`u4.eject`), tunnel changes act on its member, and the stor98
+  statement of a closed path names its member where section 10.2 and
+  record 21 section 7.2 qualify the target (2000 on x86, XP x64). The
+  task names 2000 to 7 because the gap was read there; 8 to 10 have the
+  same gap and the same route, the stor98 channel's reading has used
+  this writer on every one of them since task 39-A.7, and a version test
+  would keep the gap there for no reason. None of these systems drives
+  the emulator's SHPC itself, as read: no SHPC driver on 2000 and XP,
+  7 "does not drive SHPC" on i440FX (`usb4-emu`'s handoff, section 6a),
+  8 and 8.1 "does not take the bridge's SHPC" (`runs/run-43.md`,
+  43.23); so nothing of Windows' shares the select.
+- On a set that is not admitted (every real host read so far: tunnel
+  ports are PCI Express ports, members by the switch's ids, listed root
+  ports, router-named or ACPI-named) nothing changes on any Windows:
+  S2 fails on the discovery's record with no access made.
+- 98 SE and ME: unchanged. No writer, so the SHPC plain enclosure stays
+  unlearned there and its eject leaves the tunnel up until the unplug
+  (the 9x eject says nothing of the tunnel; the notice is the NT
+  watch's); 49.17's 9x reading is of that state.
+
+**A tunnel found up at start** stays as sections 7.6.2 to 7.6.4 leave
+it on every Windows: pending, its eject unmapped, the notice kept (on
+2000 and later; the 9x eject has no such line),
+unless `XhciCmInferAtStart` is 1 and I1 to I7 hold (never on an SHPC
+set). A dock or an enclosure with its own PCIe switch plugged after the
+start is a far end and was learned already, with or without this
+reading. Under the firmware connection manager (record 21) there is no
+learning and nothing here applies.
+
+**Failures.**
+
+- The writer fails (no published filter, not owned, the IRP refused, a
+  short write): the reading is not made. At an arm the member gets no
+  evidence bit and the arm is owed (above); at a gain with the evidence
+  held the attempt is `UNREAD` and the baseline kept; with no evidence
+  the gain is `SHAPE` as before. Never a binding that rests on the
+  failed reading; a far end binds without any port reading, as before.
+- The restoring write fails after the slots were read: the reading is
+  not kept (`ERROR`); where every slot had read empty the gain is
+  rejected, not left open (section 7.6.4). The select is then left at
+  the last index this driver wrote. That harms no reader of the working
+  register set through the bridge's memory BAR, and this driver's next
+  reading saves and restores what it finds.
+- Another agent using the same select between this driver's write and
+  its read (firmware, or an operating system's own SHPC driver) would
+  make a reading wrong in either direction. S3 keeps the writer to the
+  one bridge where that was read not to happen; this is why no real
+  SHPC bridge is admitted.
+- A refresh that fails part-way changes nothing for the member it
+  failed on: the baseline, its armed mark and every other bit stand.
+
+**Whom it changes.** No real machine: S3 admits a bridge by QEMU's
+vendor id only. In the emulator: the i440FX layouts whose every tunnel
+bridge is an SHPC `usb4-tunnel-bridge`, on Windows 2000 and later, for
+an endpoint directly behind the bridge plugged after the start (and
+for one whose port this driver's own teardown proved down before a
+re-plug). There the consumers of a learned binding act again as they
+did up to `3.4.2.0`: the eject's teardown, the tunnel changes' choice
+of member, the stor98 statements of section 10.2, the isolation
+statement of section 10.5. The earlier incidents on this path, searched
+in `runs/` and `issues/`: 39-A.5 (`runs/run-39.md`: the seam's poll has
+no writer and reads nothing on the SHPC bridge; kept so), 39-A.7 (the
+channel's own reading through this writer, on 2000 and XP x64, in use
+since), 48.43 (the rule that stopped the learning there for want of
+this reading), 48.35's S.1 (7 x86 on the SHPC bridge: the drive gone
+after a standby; a resume path, not a reading, open as 49.11 and 49.12
+left it). No incident names the select or the config write as a cause.
+
+**The residual.** As section 7.6.4's: a device that is no tunnel's,
+hot-added behind the emulator's bridge by the emulator's operator while
+a port is pending alone with its own function not yet answering, would
+carry the evidence.
+
+**No registry value, no text.** The reading has no switch: it cannot
+act on a bridge that is not the emulator's, so there is nothing for a
+user to turn off. One log line is added, `u4.learn.shpc` (bit 0 the
+writer given at an arm, bit 1 a member's evidence owed after the arm
+or the refresh), logged when its value differs from the last one
+logged. No tool or installer text
+changes.
+
+**As coded** (task 49.18, 2026-11-11). Pure, `tbt_topo.c`:
+`XhciTbtShpcSet` (S2), `XhciTbtLearnOwed`, `XhciTbtLearnEvidence` (the
+refresh) and `XhciTbtEvidenceDue` (its schedule); `XhciTbtPortRead`,
+`XhciTbtLearnArm` and `XhciTbtLearn` are not changed. Driver half:
+`cm_nhi.c`'s `cmU4LearnIo` builds the learning's accessor (a copy of
+the seam's reader, with `CmRegConfigWrite` as its writer under S1 to
+S3), `cmU4ArmRead` is the arm of `cmU4Arm` and of the recovery,
+`cmU4Learn` reads through the same accessor, and `cmU4ShpcRefresh`
+runs in the idle pass after an owed arm (`cmU4LearnPending`, after
+`ArmOwed`'s arm and before the inference's pass); `cm_nvlinkos.c`'s
+`CmNvlinkShpcBridge` is S1 and S3 (the stor98 channel's own test of
+the bridge); `cm_reenum.c`'s `CmRegMemberRecords` gives each member's
+filter record. Three words of state in the extension (`U4ShpcArmMs`,
+`U4ShpcRecord`, `U4ShpcLogged`, the last the log's alone). The
+refresh's first tests are S1 and S2, which read nothing, so off the
+filter route or on a set that is not all SHPC an idle pass neither
+reads nor locks anything for it. S3 is read again at each refresh the
+schedule allows, after the member records are acknowledged: a bridge
+whose admission could not be read at the arm is admitted by a later
+refresh, and a set that is never admitted costs the 2 s of passes after
+an arm and one try a publication, no more.
+
+**Tests.** Host vectors (`test/test_tbt_topo.c`), for the pure
+decisions the driver half takes from `tbt_topo.c`: the set's
+eligibility (`XhciTbtShpcSet`: every member SHPC; a switch's, a listed,
+a router-named member or an empty set refused); the owed members
+(`XhciTbtLearnOwed`: an empty member without its bit owed, an occupied
+one or one with its bit not, nothing owed of an unarmed baseline or of
+one over another set); the retry's schedule (`XhciTbtEvidenceDue`:
+inside the 2 s at every pass, after it only on a changed member
+record - an ownership lost and a serial moved that leave a sum equal
+included - never with a port pending, the clock's wrap). And the
+sequences on the i440FX model: an arm whose writer fails (no evidence,
+owed), the refresh with the writer working (the slot read empty), the
+endpoint then learned; an arm with the slot still occupied and nothing
+answering (owed), the slot emptied, the refresh, a re-plug learned; a
+refresh whose occupancy read fails (nothing changed, still armed, a far
+end then learned as before); a refresh that finds a device answering
+(no bit, the baseline not moved, the device then `SHAPE` at its
+attempt); a refresh of an unarmed baseline (nothing); a card in the
+slot at
+every arm never learned. Legs: 2000, XP and 7 x86 on the i440FX SHPC
+bridge under the software connection manager - a plain enclosure
+plugged after the start learned (`u4.learn` low byte `03`), its eject
+closing the tunnel, an unplug and a second plug learned again; a dock
+and an enclosure with its own switch ejected (far ends, learned as
+before); the enclosure at power-on with the pre-boot connection
+manager, its eject keeping the notice; the firmware connection
+manager's hosts as they were; 98 SE and 10 read for no change.
+
+**As read** (task 49.18, 2026-11-11; the `release` x86 `xhcicm.sys` of
+`d53e848be`, installed with the `3.4.3.0` tools on overlays of the q35
+bases; one vCPU, TCG; `runs/run-49.md`, "49.18").
+
+- The i440FX SHPC bridge, software connection manager, the host model
+  that answers no mapping (`u4.map.none`): on 2000, XP, 7 x86 and 10
+  x86 every start logged `u4.learn.shpc=00000001` (the writer given,
+  nothing owed). A plain enclosure plugged at the desktop was learned
+  (`u4.learn=00000103`, "its PCIe connection reaches the port at PCI
+  00:05.0") and its eject closed the tunnel (`u4.eject.bridge=00000028`,
+  `u4.eject=00000100`, "The PCIe tunnel was closed."); unplugged and
+  plugged again it read `u4.learn=00000102` and closed again (XP). The
+  same plug with the released `3.4.3.0` `xhcicm.sys` on XP:
+  `u4.learn=0000010F`, `u4.learn.expired`, `u4.eject.unmapped=00000028`
+  and the notice. On 7 the first plug after the install restarted the
+  host interface under the tunnel (`u4.carry.in` 1, `u4.preserved.own`):
+  that instance found the tunnel up and kept the notice, and the next
+  plug was learned and closed.
+- A tunnel found up at start (the enclosure at power-on with the
+  pre-boot connection manager on the i440FX bridge; the ASM4242 model's
+  firmware tunnel on q35): pending (`u4.preserved`,
+  `u4.learn.expired`), the eject stops the device and keeps the notice,
+  on 2000, XP and 7. 10 x86 on the ASM4242 model read the same start
+  (`u4.preserved=00010808`, `u4.learn.expired`); its eject was refused
+  by Windows before any request reached the driver (a volume of the
+  drive "did not allow it", three times), so the notice was not read
+  there.
+- q35, the ASM4242 model (members PCI Express ports; no `u4.learn.shpc`
+  line): a dock (2000, XP, 7) and an enclosure with its own switch (XP)
+  plugged after a start with nothing attached were learned as before
+  (`u4.learn=00000103`) and their ejects closed the tunnel; not read on
+  10. Where a unit had been there at power-on, its re-plug on the ACPI
+  machines (XP, 7) is learned but its eject is dropped at the hand-off
+  (`cm.reenum.eject.stale.why` bit 3: ACPI's bus filter stays on the
+  ejected bridge's PDO, record 21 section 7.4 item 1, open); the
+  released driver reads the same on XP, and 2000 on the Standard PC HAL
+  closes the tunnel there.
+- The firmware connection manager's host (the Alpine Ridge model), a
+  dock at power-on, 2000, XP and 7: "Windows has stopped ...",
+  `cm.reenum.eject.tunnel-left-up`, as before.
+- 98 SE on the i440FX bridge: the plain enclosure is not learned
+  (`u4.learn=0000010F`, `u4.learn.expired`), the eject stops the drive
+  and the tunnel stays up until the unplug; the released driver reads
+  the same. The 9x eject's text carries no line about the tunnel (the
+  notice is the NT watch's, record 24 section 5.2).
+
+Not read in a guest: the refresh (`u4.learn.shpc=00000003`, then `1`).
+`u4.learn.shpc` never read `3`: at the starts with nothing attached
+the filter was published and owned before the bind's arm and the plug
+that followed was learned, and after each tunnel down the next plug was
+learned too, so no arm was seen to leave a member owed; at the starts
+with the enclosure at power-on the slot was occupied, which owes
+nothing. The refresh stands on the host vectors alone.
+Not read: XP x64 and the other x64 systems (the same code; the stor98
+statement's member there), 8 and 8.1, ME.
 
 ### 7.7 The host interface lost: containment
 
@@ -5108,6 +5470,12 @@ cannot do, and the questions it left to the owner (section 11.1.11, answered
 emulator legs passed (section 11.1.12), 0 the behaviour of sections 7.6 and 11
 above.
 
+Since 3.5.0.0 (task 49.46) a drive Stor98 runs whose wake D0 failed against
+the absent tunnel is asked to power up again after the resume's release,
+under this profile as under the firmware connection manager's (decision
+U15 covers both, and the release is the same): design record 21 section
+6.3.1.
+
 #### 11.1.1 What ships, and where the limitation is written [code]
 
 - **Nothing refuses a sleep.** `cm_power.c` passes every power IRP but
@@ -5405,7 +5773,7 @@ the behaviour of every release up to `3.4.x`.
 Section 7.6's obligations and budget stand; after an entry that completed,
 each router is expected to read its configuration lost (Spec 4.5.2) and
 section 7.6's rebuild (sections 6.4 to 6.9 and the Detect gate) is Guide
-8.2.2's reconfiguration and path setup. Four changes:
+8.2.2's reconfiguration and path setup. Five changes:
 
 1. **A preserved tunnel is rebuilt too** (decision U34, question Q3). An
    obligation recorded at a suspend whose entry prepared every router of
@@ -5449,6 +5817,16 @@ section 7.6's rebuild (sections 6.4 to 6.9 and the Detect gate) is Guide
    this driver keeps it, because the device is then already present when
    Windows looks at the port, which is what a native hot-plug port needs
    (section 11.1.8).
+5. **On 98 SE and ME, the re-enumeration waits for Windows' restore of
+   the tunnel port** (task 48.35, 2026-11-10; record 21 section 6.1.3).
+   The wake resets the tunnel port bridge's header, and the rebuilt
+   tunnel's member operation reached the bridge before Windows 98 SE
+   restored it; its `Reenumerate_DevNode` on the reset bridge then left the
+   bridge unconfigured and the drive lost. Each member whose
+   bridge read a secondary bus at the suspend now waits, at its next
+   operation, until the bridge reads one again (Windows' restore), at most
+   20 s, then goes on as before; the outcome is logged
+   (`cm.reenum.9x.resume-wait`). Windows 2000 and later are untouched.
 
 **Daisy chains** (record 34 section 6.9): a kid's routers get the entry
 (item 5 of section 11.1.5) and its obligation is judged after its parent's,
@@ -5773,10 +6151,152 @@ native-port case of Q1.
   notice that finds the last one's worker still running starts nothing and
   logs it. The members are the poll thread's last reading. `mark_core.c` holds the
   choice (`mk_flush_wants`, `mk_flush_behind`) and its self-test cases.
+- Item 5 of section 11.1.6 (task 48.35, 2026-11-10; record 21 section
+  6.1.3): `src/cm/cm_cfgwk.c` (`CmCfgwkSuspend`, `CmCfgwkResumed`,
+  `cmWkResumeParked` before each member operation, the chain requests and
+  no-IRQ work of a marked member held), `src/cm/cm_reenum.c` (the calls at
+  the suspend and every end of the resume), `src/cm/cm_nvlinkos.c` (the
+  late scan armed at a fresh 9x exposure that finds no secondary bus),
+  `src/cm/cm_ports.c` (`CmPortsResumeWaitWanted`, `CmPortsResumeWait`,
+  host vectors in `test_cm_ports`, `test_resume_wait`).
 - Host vectors: `test_u4cm` (`test_sleep_entry`, over the fake fabric's new
   Enter Sleep and Sleep Ready model, its `NoSleepReady`, `SlpStuck` and
   `ClxStuck`), `test_tbt_hw` (the mailbox at a 55 ms tick), `test_cm` (the
   value) and `test_mark` (the flush's choice).
+
+#### 11.1.14 The function's return before the resume is published (task 49.11; a design, reviewed and revised)
+
+**What was read** (`runs/run-49.md`, "49.11"; 7 x86 on the i440FX
+emulator, `usb4-generic` with no pre-boot connection manager, the SHPC
+tunnel bridge 00:05.0, the ORICO model, `XhciCmSleepEntry` 1, the qemu
+flavour's log and the emulator's `usb4_*` trace): at the wake the
+emulator's reset drops the tunnel and removes the endpoint; this
+profile's resume rebuilds the PCIe tunnel (`u4.pcie.up` at `cm.ms`
+0x377EC); the rebuilt tunnel's stor98 UP is taken (`CmNhiU4Take`, whose
+scan of the secondary bus then finds nothing to publish); section 7.6's
+release follows at once (`cm.reenum.hold.released`, an invalidation),
+then the drain's `TUNNEL_UP` poll (`cm.reenum.up.poll=00000404`,
+`NO_READING`: on NT this bridge offers nothing the port reading can vote
+on - no PCI Express link or slot, and its SHPC register is not read
+without a configuration write); the bridge's BusRelations answer, 220 ms
+after the tunnel came up, holds no PDO (`cm.chain.rel=00000028`), and PnP
+removes the chain's two devices (`cm.chain.remove`). The endpoint answers
+behind the bridge 1.7 s after the tunnel came up (the trace's
+`usb4_tp_insert`, gen 2, after the emulated bridge's empty-slot settle);
+nothing asks the bridge again (an invalidation accepted is not a
+readiness debt; the learning retries attribute, they do not invalidate).
+At a hibernation the fresh machine has no departed endpoint, the function
+answers as soon as the tunnel is up, and the drive is kept. On hardware a
+function behind a newly trained link is not expected to answer at once
+either (the PCI Express Base Specification, section 6.6.1: 100 ms after
+the link trains before it may be addressed, at least 1.0 s before it may
+be judged broken).
+
+**The change.** In the NHI's resume under this profile (`CmNhiReinit`,
+the connection-manager thread, PASSIVE_LEVEL), when `TbtU4Resume` met
+every obligation (`TBT_OK`: `ok` and not `held`) and the re-enumeration
+runs on the filter route (NT), a settle wait (`CmReenumResumeSettle`,
+new) runs right after it: **before** the resume's liveness probe of the
+host interface (section 7.7's size-register read and the monitor's arm),
+the rebuilt tunnels' stor98 UP (`CmNhiU4Take`), section 7.6's release and
+invalidation (`CmReenumResumed`) and the drain's `TUNNEL_UP` exposure:
+each of them then finds the function there, as at a hibernation, and a
+loss of the host interface during the wait is judged by the probe that
+follows it, by the existing failure and containment order.
+
+1. **Who is waited for.** Each member whose filter this domain held at the
+   suspend (`CmReenumSuspend`: active then) and whose bridge's last
+   BusRelations answer then reported at least one PDO: it had a function,
+   so one is expected back. The PDO count is latched at the suspend's
+   mark (`CM_REENUM_PORT.SettleWant`), since the snapshot moves with every
+   answer while the member is held, and consumed by the wait. A member
+   that held nothing is not waited for; a stale latch costs at most the
+   bound. The set is copied under the filters' lock as scalars (bdfs); no
+   read or sleep is made under any lock. The wait also ends when the host
+   interface is unreachable (`CmNhiHwAccess`) or a stop, an exit or a
+   revocation is asked.
+2. **What shows the function.** `XhciTbtFunctionRead` (new, `tbt_topo.c`)
+   on the member: its bus number register read, the secondary bus (bits
+   15:8) valid only when nonzero, not 0xFF, above the primary and not
+   above the subordinate; then the vendor/device id at function 0 of
+   each device number of that bus (behind a PCI Express link device 0
+   alone answers, but a PCI bridge's slot puts its card at the slot's
+   device number: the emulator's SHPC slot 0 is device 1, which a first
+   coding that read device 0 alone missed, so its first leg waited the
+   whole bound): `PRESENT` at the first vendor id other than 0000h,
+   FFFFh and 0001h; else `NOT_READY` where one read 0001h (a
+   Configuration Request Retry Status as software may see it, PCI
+   Express Base Specification section 2.3.2); else `ABSENT`; `UNREAD`
+   when the bus numbers are not valid or a read fails. The port reading (section 6.5) is not used:
+   it votes on link, slot and SHPC presence, which can say `UP` before
+   the function answers. Only `PRESENT` ends a member's wait; every other
+   outcome is read again.
+3. **The bound.** One deadline for the whole set, 5000 ms from the first
+   reading (`CM_PORTS_SETTLE_MS`): the specification's 1.0 s plus margin
+   for an emulated or slow link and the coarse tick of section 5.3;
+   readings every 50 ms (`XHCI_TBT_POLL_STEP_MS`). The wait ends as soon
+   as every member waited for is `PRESENT`. When the deadline passes
+   nothing else changes: the take, the release and the drain follow as
+   before (decision U15), so the worst case is today's behaviour 5 s
+   later. Between readings `CmNhiWaitService` is called (it serves the
+   ICM and stor98 acknowledgements, not USB4 traffic; USB4 events wait
+   for the next pass, as during the rest of the resume).
+4. **What it costs.** Where the function answers at the first reading (a
+   preserved tunnel, a firmware connection manager's, a sleep the domain
+   kept power through, every hibernation read so far) the wait is one
+   reading per member. A member whose device was taken away during the
+   sleep is waited for to the deadline: that resume is up to 5 s longer.
+   The NHI's D0 IRP, held by `CmPowerD0Work` across the resume already,
+   and so the system power IRP the NHI's power path completes after it
+   (`cm_power.c`, `cmSystemDone`), are completed up to 5 s later; no
+   bridge's or other device's power IRP waits on it (the bridges' D0s
+   pass at once, task 43.24h).
+5. **Logged.** `cm.reenum.resume.settle` once per resume that waited for
+   any member: bits 31:24 the members waited for, 23:16 those `PRESENT`
+   by the end, 15:0 the elapsed ms (capped at 0xFFFF); and for each
+   member not `PRESENT` by the deadline `cm.reenum.resume.settle.late`,
+   its bdf in bits 23:8 and its last outcome in bits 7:0.
+6. **Scope, and what stays.** Only the immediate function is waited for:
+   behind a dock's or enclosure's own PCIe switch the switch's upstream
+   port answering ends the wait, though its downstream functions may
+   answer later (a chain's and a dock's resume keep their limitation,
+   record 34 section 6.9). A resume that is not `ok` (any obligation
+   unmet, even where other tunnels came back) keeps the failure path's
+   immediate release (decision U15's window): that partial resume keeps
+   today's limitation. The ICM profile (record 21) is not changed: its
+   firmware rebuilds the tunnels, and its standby leg (S.5) is unread. A
+   native PCIe hot-plug port's own resume (section 11.1.8) is not
+   changed. The CONFIGMG route (98 SE, ME) is record 21
+   section 6.1.3's (task 49.12). The hot-plug path's `TUNNEL_UP` poll is
+   unchanged. No registry value; no user-visible text but the user
+   documents' standby sentence for such a computer, which this change
+   lets go once the legs pass.
+
+7. **A deferred release exposes first.** Where a member's stor98 gate
+   stood at the release (`CmReenumResumed` holds its release behind the
+   gate, and the take's UP was refused meanwhile), the pass that finds
+   the gate down and releases a successful resume's member now calls
+   `CmNvlinkExpose` (fresh, naming no tunnel: an entry already UP keeps
+   its generation) before the invalidation (`CmPortsDeferredExpose`);
+   behind section 7.7's retirement barrier the exposure is owed instead
+   (the member's missed call with its exposure, made once the barrier
+   lifts). So obligation 1 of
+   `cm_nvlink.h` holds on that path too.
+
+Host vectors (`test_tbt_topo`): `XhciTbtFunctionRead` over the fake
+configuration space - secondary bus 0, 0xFF, equal to the primary, above
+the subordinate, a failed bus read (`UNREAD`); vendor 0001h (`NOT_READY`),
+0000h and FFFFh (`ABSENT`), a function (`PRESENT`), a failed id read
+(`UNREAD`), the card at device 1 with device 0 empty, a retry beside
+a function; and the settle loop's pure step (`CmPortsSettleAgain` in
+`cm_ports.c`: given each member's outcome, the elapsed time
+and the bound, whether to read again), with a late function, a transient
+unread, a member never back, several members with one late, and the
+deadline across a wrap of the millisecond clock. Acceptance: S.1's
+standby leg on 7 x86 at `XhciCmSleepEntry` 1 and 0 (the drive kept at
+t+40 s and t+190 s, files compare, `cm.reenum.resume.settle` logged),
+S.1's hibernation at 1, and the leg with the emulator's settle at 0 as
+the control.
 
 ## 12. Registry values, counters, the log
 

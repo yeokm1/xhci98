@@ -1247,6 +1247,50 @@ static void test_removals(void)
     (void)tr_query_parse(qa, n, &q);
     tr_removal_text(&q, out, sizeof(out));
     CHECK(strcmp(out, "not watched on this system") == 0, "text: not watched");
+    CHECK_EQ(q.RmIrq, 0, "no ring-interrupt word from this build");
+    CHECK(tr_ring_irq_text(q.RmIrq, 0, out, sizeof(out)) == 0 && out[0] == 0,
+          "ring interrupt: a driver before it, no line");
+    put32(qa, CM_Q_HDR_BYTES + CM_Q_RM_IRQ,
+          CM_Q_IRQ_PRESENT | (CM_Q_IRQ_WHY_NOT_9X << 8));
+    (void)tr_query_parse(qa, n, &q);
+    CHECK(tr_ring_irq_text(q.RmIrq, 0, out, sizeof(out)) == 1 &&
+              strcmp(out, "polled - 2 is not available on 98 SE and ME") == 0,
+          "ring interrupt: 2 on 98 SE and ME");
+    {
+        TR_U32 c;
+        CHECK(tr_ring_irq_text(CM_Q_IRQ_PRESENT | 2UL | (0x45UL << 16), 0,
+                               out, sizeof(out)) == 1 &&
+                  strcmp(out, "on, by message (vector 45h)") == 0,
+              "ring interrupt: vector 45h");
+        CHECK(tr_ring_irq_text(CM_Q_IRQ_PRESENT | 2UL | (10UL << 16) |
+                                   CM_Q_IRQ_IS_IRQ, 1, out, sizeof(out)) == 1 &&
+                  strcmp(out, "on, by message (IRQ 10)") == 0,
+              "ring interrupt: IRQ 10");
+        CHECK(tr_ring_irq_text(CM_Q_IRQ_PRESENT | 1UL, 0, out, sizeof(out)) &&
+                  strcmp(out, "on, by the line") == 0, "ring interrupt: line");
+        CHECK(tr_ring_irq_text(CM_Q_IRQ_PRESENT | 3UL, 1, out, sizeof(out)) &&
+                  has(out, "2 works as 1"), "ring interrupt: yield");
+        CHECK(tr_ring_irq_text(CM_Q_IRQ_PRESENT | (CM_Q_IRQ_WHY_NO_VECTOR << 8),
+                               1, out, sizeof(out)) &&
+                  strcmp(out, "polled - no spare interrupt") == 0,
+              "ring interrupt: no spare interrupt on NT");
+        CHECK(tr_ring_irq_text(CM_Q_IRQ_PRESENT | (CM_Q_IRQ_WHY_NO_VECTOR << 8),
+                               0, out, sizeof(out)) &&
+                  strcmp(out, "polled - no free vector") == 0,
+              "ring interrupt: no free vector on 9x");
+        CHECK(tr_ring_irq_text(CM_Q_IRQ_PRESENT | (99UL << 8), 0, out,
+                               sizeof(out)) &&
+                  strcmp(out, "polled (reason 99)") == 0,
+              "ring interrupt: an unknown reason");
+        for (c = 1; c <= CM_Q_IRQ_WHY_TEARDOWN; c++) {
+            CHECK(tr_ring_irq_text(CM_Q_IRQ_PRESENT | (c << 8), 0, out,
+                                   sizeof(out)) == 1 &&
+                      strncmp(out, "polled - ", 9) == 0 && strlen(out) <= 50 &&
+                      strstr(out, "msi4") == NULL,
+                  "ring interrupt: every reason named, within 50, no "
+                  "component named");
+        }
+    }
 
     /* Version 1: no block. */
     qbV1 = 1;
@@ -2153,6 +2197,18 @@ static void test_usb_eject(void)
         CHECK(tr_stopped_text(47, 1, tag, sizeof(tag), sen, sizeof(sen)) == 1 &&
               tr_stopped_text(28, 1, tag, sizeof(tag), sen, sizeof(sen)) == 0,
               "stopped: 2000 keeps the other codes");
+        /* record 24 section 7.6: the BIOS-held verdict before "not
+         * started" and every other reason */
+        CHECK(tr_eject_first(1, 1, 0) == TR_EF_BIOS,
+              "eject first: a unit at Code 10 left to the BIOS gets the BIOS text");
+        CHECK(tr_eject_first(1, 1, 1) == TR_EF_BIOS,
+              "eject first: a started unit with a BIOS-held member");
+        CHECK(tr_eject_first(1, 0, 0) == TR_EF_WHY,
+              "eject first: Code 10 with no BIOS-held evidence keeps 'not started'");
+        CHECK(tr_eject_first(1, 0, 1) == TR_EF_GO, "eject first: nothing refuses");
+        CHECK(tr_eject_first(0, 0, 0) == TR_EF_WHY &&
+              tr_eject_first(0, 1, 0) == TR_EF_WHY,
+              "eject first: not behind a Thunderbolt port");
         CHECK(tr_w2k_code24(1, 1, 1, 1) && tr_w2k_code24(1, 1, 0, 0),
               "code 24: 2000, stopped here, still configured (or a unit)");
         CHECK(!tr_w2k_code24(1, 1, 1, 0),
@@ -5025,6 +5081,46 @@ static void test_ver_route(void)
     tr_ver_text(0x0A0B0C0DUL, out, sizeof(out));
     CHECK(strcmp(out, "10.11.12.13") == 0, "packed to text");
 
+    /* The mixed-install note (owner, 2026-11-13): an entry's DriverVersion
+     * parsed, and the note only for an entry older than the running
+     * driver. */
+    {
+        TR_U32 v;
+        CHECK(tr_ver_parse("3.4.3.0", &v) && v == 0x03040300UL, "parsed");
+        CHECK(tr_ver_parse(" 2.2.0.1 ", &v) && v == 0x02020001UL,
+              "spaces around");
+        CHECK(tr_ver_parse("255.0.0.255", &v) && v == 0xFF0000FFUL, "255");
+        CHECK(!tr_ver_parse("3.4.3", &v) && v == 0, "three fields");
+        CHECK(!tr_ver_parse("3.4.3.0.1", &v), "five fields");
+        CHECK(!tr_ver_parse("3.256.0.0", &v), "a field past a byte");
+        CHECK(!tr_ver_parse("3.4.x.0", &v), "not a number");
+        CHECK(!tr_ver_parse("", &v), "empty");
+        CHECK(!tr_ver_parse(NULL, &v), "none");
+        CHECK(!tr_ver_parse("3..3.0", &v), "an empty field");
+        CHECK(!tr_ver_parse("0003.4.3.0", &v), "four digits");
+        /* The field case: a 2.2.0.1 entry under a 3.4.3.0 driver. */
+        CHECK_EQ(tr_ver_mixed(0x02020001UL, 1, 0x03040300UL, out,
+                              sizeof(out)), 1, "older entry: said");
+        CHECK(strcmp(out, "This entry was installed from another version's "
+                          "files (2.2.0.1) than the driver that is running "
+                          "(3.4.3.0): run SETUP.EXE to update it.") == 0,
+              "the sentence");
+        CHECK_EQ(tr_ver_mixed(0x03040300UL, 1, 0x03040300UL, out,
+                              sizeof(out)), 0, "equal: nothing");
+        CHECK(out[0] == '\0', "equal: empty");
+        CHECK_EQ(tr_ver_mixed(0x03050000UL, 1, 0x03040300UL, out,
+                              sizeof(out)), 0,
+                 "newer entry (an update waiting for its restart): nothing");
+        CHECK_EQ(tr_ver_mixed(0, 1, 0x03040300UL, out, sizeof(out)), 0,
+                 "entry not read: nothing");
+        CHECK_EQ(tr_ver_mixed(0x02020001UL, 0, 0x03040300UL, out,
+                              sizeof(out)), 0, "no running answer: nothing");
+        CHECK_EQ(tr_ver_mixed(0x02020001UL, 1, 0, out, sizeof(out)), 0,
+                 "a running driver before 3.3.0.0: nothing");
+        CHECK_EQ(tr_ver_mixed(0x03050000UL, 1, 0, out, sizeof(out)), 0,
+                 "a newer entry over a driver before 3.3.0.0: nothing");
+    }
+
     CHECK(tr_pfro_find(pfro, sizeof(pfro),
                        "C:\\WINDOWS\\system32\\drivers\\xhci98.sys", out,
                        sizeof(out)), "a pending replacement");
@@ -5200,6 +5296,183 @@ static void test_removable_9x(void)
           "no claim of who set it");
 }
 
+/* Task 49.35 (record 25 section 15 item 12): every controller's snapshot,
+ * its names and its message. The fake folder holds the names in `taken`. */
+static const char *const *snapTaken;
+
+static int snap_fake_exists(const char *name, void *context)
+{
+    int i;
+
+    (void)context;
+    for (i = 0; snapTaken[i] != NULL; i++) {
+        if (strcmp(snapTaken[i], name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void snap_one(TR_SNAP_ONE *o, int hcd, int rc, int moved)
+{
+    int f;
+
+    memset(o, 0, sizeof(*o));
+    o->Hcd = hcd;
+    sprintf(o->Door, "XHCI98HC%d", hcd);
+    o->Rc = rc;
+    for (f = 0; f < TR_SNAP_FILES; f++) {
+        o->Have[f] = (rc == 0 || rc == 3) || f == 0;
+        o->Moved[f] = moved ? o->Have[f] : 0;
+    }
+    strcpy(o->Scratch, "C:\\TEMP\\XS1");
+}
+
+static void test_snap_all(void)
+{
+    static const char *const none[] = { NULL };
+    static const char *const t1[] = { "B1123245.T1", NULL };
+    static const char *const devA[] = { "B112324A.DEV", NULL };
+    static const char *const allA[] = {
+        "B112324A.D0", "B112324B.T1", "B112324C.PSC.TMP", NULL
+    };
+    static const char *const given[] = { "MYSNAP.PZ", NULL };
+    TR_SNAP_ONE one[10];
+    char base[16];
+    char out[2048];
+    int i;
+    int x;
+
+    CHECK(tr_snap_kchar(0) == '0' && tr_snap_kchar(9) == '9', "0-9");
+    CHECK(tr_snap_kchar(10) == 'A' && tr_snap_kchar(35) == 'Z', "A-Z");
+    CHECK(tr_snap_kchar(36) == 0 && tr_snap_kchar(-1) == 0, "none past 35");
+
+    snapTaken = none;
+    CHECK(tr_snap_pick_base(NULL, 11, 11, 23, 24, snap_fake_exists, NULL,
+                            base) == TR_PICK_OK, "a free folder");
+    CHECK(strcmp(base, "B112324A") == 0, "mDDhhmmS, first letter");
+    snapTaken = devA;
+    CHECK(tr_snap_pick_base(NULL, 11, 11, 23, 24, snap_fake_exists, NULL,
+                            base) == TR_PICK_OK &&
+              strcmp(base, "B112324B") == 0, "a .DEV taken");
+    snapTaken = allA;
+    CHECK(tr_snap_pick_base(NULL, 11, 11, 23, 24, snap_fake_exists, NULL,
+                            base) == TR_PICK_OK &&
+              strcmp(base, "B112324D") == 0,
+          "every extension counts: .D0, .T1 and a .PSC.TMP each take a letter");
+    snapTaken = given;
+    CHECK(tr_snap_pick_base("MYSNAP", 11, 23, 24, 5, snap_fake_exists, NULL,
+                            base) == TR_PICK_TAKEN && base[0] == '\0',
+          "a given name with any file of its set is refused");
+    snapTaken = t1;
+    CHECK(tr_snap_pick_base("MYSNAP", 11, 23, 24, 5, snap_fake_exists, NULL,
+                            base) == TR_PICK_OK &&
+              strcmp(base, "MYSNAP") == 0, "a free given name is taken");
+    CHECK(tr_snap_pick_base("TOOLONGNAME", 11, 23, 24, 5, snap_fake_exists,
+                            NULL, base) == TR_PICK_NAME, "over 8.3 refused");
+    CHECK(tr_snap_pick_base("MYSNAP ", 11, 11, 23, 24, snap_fake_exists,
+                            NULL, base) == TR_PICK_NAME, "a space refused");
+    CHECK(tr_snap_pick_base("CON", 11, 11, 23, 24, snap_fake_exists, NULL,
+                            base) == TR_PICK_NAME, "a device name refused");
+    CHECK(tr_snap_pick_base("com1", 11, 11, 23, 24, snap_fake_exists, NULL,
+                            base) == TR_PICK_NAME, "COM1 in any case");
+    CHECK(tr_snap_pick_base("-x", 11, 11, 23, 24, snap_fake_exists, NULL,
+                            base) == TR_PICK_NAME, "not - first");
+    CHECK(tr_snap_pick_base("A_B-1", 11, 11, 23, 24, snap_fake_exists, NULL,
+                            base) == TR_PICK_OK, "letters, digits, _ and -");
+    CHECK(tr_snap_pick_base(NULL, 13, 23, 24, 5, snap_fake_exists, NULL,
+                            base) == TR_PICK_CLOCK, "the clock out of range");
+
+    snap_one(&one[0], 0, 0, 1);
+    snap_one(&one[1], 1, 0, 1);
+    x = tr_snap_saved_all("C:\\SNAP", "B112324A", one, 2, out, sizeof(out));
+    CHECK(x == 0, "both whole: exit 0");
+    CHECK(strstr(out, "Snapshot saved in C:\\SNAP:") == out, "the folder");
+    CHECK(strstr(out, "Controller 1 (XHCI98HC1): B112324A.D1, .T1, .B1 and "
+                      ".P1.") != NULL, "controller 1's set");
+    CHECK(strstr(out, "names it .DEV, .TXT, .BIN or .PSC") != NULL,
+          "the inner names said");
+
+    snap_one(&one[1], 1, 4, 1);
+    x = tr_snap_saved_all("C:\\SNAP", "B112324A", one, 2, out, sizeof(out));
+    CHECK(x == 4, "a dump not taken: its exit");
+    CHECK(strstr(out, "Snapshot in C:\\SNAP:") == out, "not 'saved'");
+    CHECK(strstr(out, "B112324A.D1; no dump: the .D1 says why.") != NULL,
+          "the .D1 alone");
+
+    snap_one(&one[1], 1, -1, 1);
+    one[1].Have[0] = 0;
+    x = tr_snap_saved_all("C:\\SNAP", "B112324A", one, 2, out, sizeof(out));
+    CHECK(x == 2 && strstr(out, "did not end within two minutes") != NULL,
+          "a child not ended");
+
+    snap_one(&one[1], 1, -2, 0);
+    x = tr_snap_saved_all("C:\\SNAP", "B112324A", one, 2, out, sizeof(out));
+    CHECK(x == 9 && strstr(out, "not ended: its files are left in "
+                                "C:\\TEMP\\XS1.") != NULL,
+          "a child that would not end: nothing moved, exit 9");
+
+    snap_one(&one[1], 1, 0, 1);
+    one[1].Moved[2] = 0;
+    x = tr_snap_saved_all("C:\\SNAP", "B112324A", one, 2, out, sizeof(out));
+    CHECK(x == 9 && strstr(out, "B112324A.D1, .T1 and .P1; not moved: "
+                                "B112324A.B1 (in C:\\TEMP\\XS1).") != NULL,
+          "a partial move names what moved and what stayed");
+
+    snap_one(&one[1], 1, 3, 1);
+    one[1].Have[1] = 0;
+    one[1].Moved[1] = 0;
+    x = tr_snap_saved_all("C:\\SNAP", "B112324A", one, 2, out, sizeof(out));
+    CHECK(x == 3 && strstr(out, "B112324A.D1, .B1 and .P1; no .T1 was "
+                                "written.") != NULL,
+          "exit 3 with no .TXT lists only what is there");
+
+    snap_one(&one[1], 1, 0, 0);
+    x = tr_snap_saved_all("C:\\SNAP", "B112324A", one, 2, out, sizeof(out));
+    CHECK(x == 9 && strstr(out, "not moved: B112324A.D1, .T1, .B1 and .P1 "
+                                "(in C:\\TEMP\\XS1).") != NULL,
+          "a move failed: exit 9");
+
+    snap_one(&one[1], 1, 3, 1);
+    x = tr_snap_saved_all("C:\\SNAP", "B112324A", one, 2, out, sizeof(out));
+    CHECK(x == 3 && strstr(out, "; the .T1 is not complete.") != NULL,
+          "a .TXT not complete");
+
+    for (i = 0; i < 10; i++) {
+        snap_one(&one[i], i, 0, 1);
+    }
+    x = tr_snap_saved_all("C:\\SNAP", "B112324A", one, 10, out, sizeof(out));
+    CHECK(x == 0 && strstr(out, "and 2 more.") != NULL &&
+              strstr(out, "Controller 8 ") == NULL, "eight lines, then more");
+
+    x = tr_snap_saved_all("C:\\SNAP", "B112324A", one, 0, out, sizeof(out));
+    CHECK(x == 4 && strstr(out, "No controller here") != NULL, "none");
+
+    {
+        static char big[TR_SNAP_MSG_BYTES];
+        char folder[260];
+        int j;
+
+        memset(folder, 'F', sizeof(folder) - 1);
+        folder[sizeof(folder) - 1] = '\0';
+        for (i = 0; i < 8; i++) {
+            snap_one(&one[i], i, 3, 0);
+            for (j = 0; j < 259; j++) {
+                one[i].Scratch[j] = 'S';
+            }
+            one[i].Scratch[259] = '\0';
+        }
+        x = tr_snap_saved_all(folder, "B112324A", one, 8, big, sizeof(big));
+        CHECK(x == 9 && strstr(big, "Controller 7 (XHCI98HC7)") != NULL &&
+                  strstr(big, "names it .DEV, .TXT, .BIN or .PSC.)") != NULL,
+              "eight failed moves with the longest paths fit the message");
+    }
+    snap_one(&one[0], 0, 0, 1);
+    snap_one(&one[1], 1, 0, 1);
+    x = tr_snap_saved_all("C:\\SNAP", "B112324A", one, 2, out, 40);
+    CHECK(strlen(out) < 40, "the message is bounded");
+}
+
 int main(void)
 {
     test_main_title();
@@ -5236,6 +5509,7 @@ int main(void)
     test_mark_rerun();
     test_eject_watch();
     test_snap_saved();
+    test_snap_all();
     test_removable_9x();
     {
         /* A UAS interface: bulk endpoints with companions and pipe usage. */

@@ -29,6 +29,7 @@
 #include "hcd.h"
 #include "xhci_hw.h"
 #include "xhci_stage.h"
+#include "xhci_dbg.h"
 
 /* ----------------------------------------------------------------------- */
 /* The boot ledger (task 48.33; design record 13 section 11.11.6)           */
@@ -57,6 +58,38 @@ VOID HcdDmaLedgerInit(PDRIVER_OBJECT driver)
     HcdLedgerDriver = driver;
 }
 
+#if defined(XHCI_FLAVOUR_QEMU)
+/* Task 49.29 (record 13 section 11.11.12), qemu only: the ledger's live and
+ * kept totals on the 0xE9 channel, which outlives every controller. */
+static VOID hcdLedgerPrint(const char *what)
+{
+    KIRQL oldIrql;
+    ULONG w[2];
+
+    KeAcquireSpinLock(&HcdLedgerLock, &oldIrql);
+    w[0] = HcdLedgerLive;
+    w[1] = HcdLedgerKept;
+    KeReleaseSpinLock(&HcdLedgerLock, oldIrql);
+    XHCI_DBG_WORDS(what, w, 2);
+}
+#endif
+
+/* The image kept for the rest of the boot, whatever kept it: an unproven
+ * stop's memory below, or mode 4's refusal table, whose entries must
+ * outlive every device object (design record 15 section 4.5.4). Under the
+ * ledger's lock, as the kept memory's own clearing is. IRQL: <=
+ * DISPATCH_LEVEL. */
+VOID HcdDmaKeepImage(VOID)
+{
+    KIRQL oldIrql;
+
+    KeAcquireSpinLock(&HcdLedgerLock, &oldIrql);
+    if (HcdLedgerDriver != NULL) {
+        HcdLedgerDriver->DriverUnload = NULL;
+    }
+    KeReleaseSpinLock(&HcdLedgerLock, oldIrql);
+}
+
 /* Returns 0, nothing charged, past the cap. */
 static ULONG hcdLedgerCharge(PHCD_CONTROLLER hc, ULONG bytes)
 {
@@ -78,6 +111,10 @@ static ULONG hcdLedgerCharge(PHCD_CONTROLLER hc, ULONG bytes)
     KeReleaseSpinLock(&HcdLedgerLock, oldIrql);
     if (!fits) {
         XhciLogNote(&hc->Hc, "dma.quarantine.cap", total);
+#if defined(XHCI_FLAVOUR_QEMU)
+        XHCI_DBG_VALUE("dma.ledger: REFUSED, bytes asked", bytes);
+        hcdLedgerPrint("dma.ledger: at the refusal");
+#endif
     }
     return fits;
 }
@@ -107,6 +144,10 @@ static VOID hcdLedgerKeep(PHCD_CONTROLLER hc, ULONG bytes)
     }
     KeReleaseSpinLock(&HcdLedgerLock, oldIrql);
     hc->CommonBuffersKept++;
+#if defined(XHCI_FLAVOUR_QEMU)
+    hc->QemuDmaKept++;
+    hc->QemuDmaKeptPages += bytes / PAGE_SIZE;
+#endif
     if (first) {
         XhciLogNote(&hc->Hc, "dma.quarantine.first", bytes);
     }
@@ -134,6 +175,12 @@ static PVOID hcdDmaAlloc(PHCD_CONTROLLER hc, ULONG bytes,
     if (va == NULL) {
         hcdLedgerReturn(bytes);
     }
+#if defined(XHCI_FLAVOUR_QEMU)
+    if (va != NULL) {
+        hc->QemuDmaMade++;
+        hc->QemuDmaMadePages += XhciStagePages(bytes) / PAGE_SIZE;
+    }
+#endif
     return va;
 }
 
@@ -151,6 +198,10 @@ static VOID hcdDmaFree(PHCD_CONTROLLER hc, ULONG bytes, PHYSICAL_ADDRESS pa,
     }
     hc->Dma->DmaOperations->FreeCommonBuffer(hc->Dma, bytes, pa, va, TRUE);
     hcdLedgerReturn(bytes);
+#if defined(XHCI_FLAVOUR_QEMU)
+    hc->QemuDmaFreed++;
+    hc->QemuDmaFreedPages += XhciStagePages(bytes) / PAGE_SIZE;
+#endif
 }
 
 /*
@@ -178,7 +229,11 @@ static VOID hcdDmaEventRingOpen(PHCD_CONTROLLER hc)
     hc->EvtRingVa = NULL;
     hc->EvtRingPa = 0;
     if (!hc->EvtWanted) {
-        hc->EvtRoute = HCD_EVT_ROUTE_VALUE;
+        /* Task 49.35: which rule chose the smaller ring. */
+        hc->EvtRoute = (hc->EvtPick == XHCI_EVT_PICK_HELD) ? HCD_EVT_ROUTE_HELD
+                       : (hc->EvtPick == XHCI_EVT_PICK_DEFAULT)
+                           ? HCD_EVT_ROUTE_DEFAULT
+                           : HCD_EVT_ROUTE_VALUE;
         return;
     }
     first = 0;
@@ -250,6 +305,17 @@ NTSTATUS HcdDmaOpen(PHCD_CONTROLLER hc)
     desc.InterfaceType = PCIBus;
     desc.MaximumLength = 0xFFFFFFFFUL;
 
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* Task 49.29 (record 13 section 11.11.12): this start's allocations
+     * counted from 0, and what the ledger carries over printed. */
+    hc->QemuDmaMade = 0;
+    hc->QemuDmaMadePages = 0;
+    hc->QemuDmaFreed = 0;
+    hc->QemuDmaFreedPages = 0;
+    hc->QemuDmaKept = 0;
+    hc->QemuDmaKeptPages = 0;
+    hcdLedgerPrint("dma.ledger: at the start, live/kept");
+#endif
     mapRegisters = 0;
     hc->Dma = IoGetDmaAdapter(hc->Pdo, &desc, &mapRegisters);
     if (hc->Dma == NULL) {
@@ -284,6 +350,33 @@ NTSTATUS HcdDmaOpen(PHCD_CONTROLLER hc)
     return STATUS_SUCCESS;
 }
 
+#if defined(XHCI_FLAVOUR_QEMU)
+/* Task 49.29 (record 13 section 11.11.12): this start's allocations handed
+ * to a caller (hcdDmaAlloc's own refusal of a range above 4 GB is not one),
+ * freed and kept, in number and in pages, and those neither freed nor kept
+ * (0 at an unproven stop with staging on; at staging 0 a kept device's own
+ * blocks stay live), then the ledger after it. IRQL: PASSIVE_LEVEL. */
+static VOID hcdDmaQemuTotals(PHCD_CONTROLLER hc)
+{
+    ULONG w[8];
+
+    w[0] = hc->QemuDmaMade;
+    w[1] = hc->QemuDmaMadePages;
+    w[2] = hc->QemuDmaFreed;
+    w[3] = hc->QemuDmaFreedPages;
+    w[4] = hc->QemuDmaKept;
+    w[5] = hc->QemuDmaKeptPages;
+    w[6] = hc->QemuDmaMade - hc->QemuDmaFreed - hc->QemuDmaKept;
+    w[7] = hc->QemuDmaMadePages - hc->QemuDmaFreedPages -
+           hc->QemuDmaKeptPages;
+    XHCI_DBG_WORDS("dma.alloc: made, freed, kept, left (n/pages each)", w,
+                   8);
+    XhciLogNote(&hc->Hc, "dma.qemu.kept.pages", hc->QemuDmaKeptPages);
+    XhciLogNote(&hc->Hc, "dma.qemu.left", w[6]);
+    hcdLedgerPrint("dma.ledger: after the release, live/kept");
+}
+#endif
+
 VOID HcdDmaClose(PHCD_CONTROLLER hc)
 {
     if (hc->Dma == NULL) {
@@ -299,10 +392,16 @@ VOID HcdDmaClose(PHCD_CONTROLLER hc)
          * addresses; giving them back would let the next owner's data be
          * overwritten. They stay allocated, and so does the adapter. */
         hc->Dma = NULL;
+#if defined(XHCI_FLAVOUR_QEMU)
+        hcdDmaQemuTotals(hc);
+#endif
         return;
     }
     hc->Dma->DmaOperations->PutDmaAdapter(hc->Dma);
     hc->Dma = NULL;
+#if defined(XHCI_FLAVOUR_QEMU)
+    hcdDmaQemuTotals(hc);
+#endif
 }
 
 /*

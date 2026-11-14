@@ -58,6 +58,7 @@ static void base(CM_QN_IN *in)
     in->RingsFailed = 6;
     in->IrqState = CM_QN_IRQ_OPEN;
     in->IrqKicks = 7;
+    in->IrqKind = CM_QN_KIND_MESSAGE;
 }
 
 static void test_service(void)
@@ -91,7 +92,8 @@ static void test_service(void)
     CHECK_EQ(g32(s, CM_QN_S_IRQ_STATE), CM_QN_IRQ_OPEN,
              "the data ring's interrupt (record 35 5.5), word 92");
     CHECK_EQ(g32(s, CM_QN_S_IRQ_KICKS), 7UL, "its kicks, word 96");
-    CHECK_EQ(g32(s, 100), 0UL, "reserved 0");
+    CHECK_EQ(g32(s, CM_QN_S_IRQ_KIND), CM_QN_KIND_MESSAGE,
+             "how it is delivered, word 100 (record 21 4.5.12)");
     CHECK_EQ(g32(out, CM_QN_O_SVC_BYTES), 104UL, "the block grown to 104");
     CHECK_EQ(CM_QN_SVC_MIN_BYTES, 96UL, "a driver before 48.38 wrote 96");
     /* The stopping flag is the answer's alone. */

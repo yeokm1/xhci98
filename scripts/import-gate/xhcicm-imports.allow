@@ -111,6 +111,8 @@ ntoskrnl.exe!KeDelayExecutionThread          all  required  w2k-export; win98-pr
 # macro reading this DATA export.
 ntoskrnl.exe!KeTickCount                     all  required  w2k-export; win98-precedent battc.sys 4.10.2222 (NTOSKRNL.EXE!KeTickCount, hint 93) (design record 13 Appendix A); the data export KeQueryTickCount reads
 ntoskrnl.exe!KeQueryTimeIncrement            all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeQueryTimeIncrement, hint 81) (+5 other 98 SE); ntkern-name
+HAL.dll!KfRaiseIrql                          all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (HAL.DLL!KfRaiseIrql, hint 8) (+8 other 98 SE). xhci98.sys's row, verbatim; msi4nt's hosted set (cm_rirqnt.c, record 21 section 4.5.14)
+HAL.dll!KfLowerIrql                          all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (HAL.DLL!KfLowerIrql, hint 7) (+9 other 98 SE). xhci98.sys's row, verbatim; msi4nt's hosted set (cm_rirqnt.c, record 21 section 4.5.14)
 HAL.dll!KeGetCurrentIrql                     all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (HAL.DLL!KeGetCurrentIrql, hint 3) (+15 other 98 SE)
 HAL.dll!KeStallExecutionProcessor            all  required  w2k-export; win98-precedent openhci.sys 4.10.2222 (HAL.DLL!KeStallExecutionProcessor, hint 5) (+15 other 98 SE); ntkern-name
 ntoskrnl.exe!PsCreateSystemThread            all  required  w2k-export; win98-precedent bt829.sys 4.10.2222 (NTOSKRNL.EXE!PsCreateSystemThread, hint BA); NUSB USBPORT.SYS 5.00.2195.5652 (hint C1) (design record 13 Appendix A row 112). The controller thread (section 5.4)

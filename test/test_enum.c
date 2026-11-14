@@ -1397,6 +1397,66 @@ static void test_link_keep(void)
 
 /* Task 45.23: the keep decision of design record 20 sections 4.3.2 and
  * 4.3.3. */
+/* Task 49.34 (record 20 section 4.3.4, M4): the serial counts only as the
+ * PDOs use it, and never once a duplicate was found - for either unit. */
+static void test_keep_serial(void)
+{
+    CHECK_EQ(XhciEnumKeepSerial(1, 1, 0), 1, "a unique serial");
+    CHECK_EQ(XhciEnumKeepSerial(0, 1, 0), 0, "not read as usable");
+    CHECK_EQ(XhciEnumKeepSerial(1, 0, 0), 0, "empty in the record");
+    CHECK_EQ(XhciEnumKeepSerial(1, 1, 1), 0, "a twin present");
+    CHECK_EQ(XhciEnumKeepSerial(0, 0, 1), 0, "nothing at all");
+    /* What hcdRkeepFlags then gives XhciEnumResumeKeep: no serial flag. */
+    CHECK_EQ(XhciEnumResumeKeep(1, XHCI_RKEEP_F_ROOT | XHCI_RKEEP_F_STARTED |
+                                       XHCI_RKEEP_F_STORAGE | XHCI_RKEEP_F_UAS |
+                                       XHCI_RKEEP_F_QUIET),
+             XHCI_RKEEP_WHY_NO_SERIAL, "a UAS drive with a duplicated serial");
+}
+
+/* Task 49.34 (record 20 section 4.3.4, M4): the Bulk-Only branch. */
+static void test_resume_keep_bot(void)
+{
+    ULONG bot;
+
+    bot = XHCI_RKEEP_F_ROOT | XHCI_RKEEP_F_STARTED | XHCI_RKEEP_F_STORAGE |
+          XHCI_RKEEP_F_SERIAL | XHCI_RKEEP_F_ONE_IFACE | XHCI_RKEEP_F_BOT_ON |
+          XHCI_RKEEP_F_BOT | XHCI_RKEEP_F_BOT_SYNC;
+    CHECK_EQ(XhciEnumResumeKeep(1, bot), XHCI_RKEEP_KEEP,
+             "a Bulk-Only stick between commands");
+    CHECK_EQ(XhciEnumResumeKeep(1, bot & ~XHCI_RKEEP_F_BOT_ON),
+             XHCI_RKEEP_WHY_BULK_ONLY, "switch off: dropped as before");
+    CHECK_EQ(XhciEnumResumeKeep(1, XHCI_RKEEP_F_ROOT | XHCI_RKEEP_F_STARTED |
+                                       XHCI_RKEEP_F_STORAGE |
+                                       XHCI_RKEEP_F_SERIAL |
+                                       XHCI_RKEEP_F_BOT | XHCI_RKEEP_F_BOT_SYNC),
+             XHCI_RKEEP_WHY_BULK_ONLY,
+             "switch off, every other input set: dropped as before");
+    CHECK_EQ(XhciEnumResumeKeep(0, bot), XHCI_RKEEP_WHY_OFF,
+             "XhciResumeKeep 0");
+    CHECK_EQ(XhciEnumResumeKeep(1, bot & ~XHCI_RKEEP_F_BOT),
+             XHCI_RKEEP_WHY_BOT_SHAPE, "not M2's shape");
+    CHECK_EQ(XhciEnumResumeKeep(1, bot & ~XHCI_RKEEP_F_SERIAL),
+             XHCI_RKEEP_WHY_NO_SERIAL, "no unique serial");
+    CHECK_EQ(XhciEnumResumeKeep(1, bot | XHCI_RKEEP_F_BUSY),
+             XHCI_RKEEP_WHY_BUSY, "a URB outstanding");
+    CHECK_EQ(XhciEnumResumeKeep(1, bot & ~XHCI_RKEEP_F_BOT_SYNC),
+             XHCI_RKEEP_WHY_BOT_STATE, "mid-command or sense owed");
+    CHECK_EQ(XhciEnumResumeKeep(1, bot & ~XHCI_RKEEP_F_ROOT),
+             XHCI_RKEEP_WHY_NOT_ROOT, "behind a hub");
+    CHECK_EQ(XhciEnumResumeKeep(1, bot | XHCI_RKEEP_F_ISOCH),
+             XHCI_RKEEP_WHY_ISOCH, "an isochronous pipe");
+    CHECK_EQ(XhciEnumResumeKeep(1, bot | XHCI_RKEEP_F_FAULTED),
+             XHCI_RKEEP_WHY_FAULTED, "faulted");
+    CHECK_EQ(XhciEnumResumeKeep(1, bot | XHCI_RKEEP_F_SUSPENDED),
+             XHCI_RKEEP_WHY_SUSPENDED, "selectively suspended");
+    /* A UAS drive is not affected by the Bulk-Only inputs. */
+    CHECK_EQ(XhciEnumResumeKeep(1, XHCI_RKEEP_F_ROOT | XHCI_RKEEP_F_STARTED |
+                                       XHCI_RKEEP_F_STORAGE | XHCI_RKEEP_F_UAS |
+                                       XHCI_RKEEP_F_SERIAL | XHCI_RKEEP_F_QUIET |
+                                       XHCI_RKEEP_F_BOT_ON),
+             XHCI_RKEEP_KEEP, "UAS with the switch on");
+}
+
 static void test_resume_keep(void)
 {
     ULONG base;
@@ -1496,6 +1556,8 @@ static void test_resume_keep(void)
 int main(void)
 {
     test_link_keep();
+    test_keep_serial();
+    test_resume_keep_bot();
     test_resume_keep();
     test_clean_paths();
     test_bad_sizes();

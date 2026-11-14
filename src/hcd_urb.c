@@ -257,6 +257,95 @@ static NTSTATUS hcdUrbComplete(PIRP irp, PURB urb, USBD_STATUS usbd,
     return HcdCompleteIrp(irp, status, 0);
 }
 
+#if defined(XHCI_FLAVOUR_QEMU)
+/*
+ * Task 49.29 (design record 13 section 11.11.12), qemu only: the per-request
+ * log. Every URB IRP sent to a device PDO is logged on the 0xE9 channel as
+ * it arrives (hcd_entry.c, before any branch) and just before each
+ * IoCompleteRequest that can complete one (HCD_QEMU_URB_OUT), each line with
+ * a sequence number of the log's own, taken and printed under the log's
+ * lock so its lines are emitted whole and in that order (other trace lines
+ * are not serialized against them); the IRP is the pairing key, its address
+ * at full width. On for the image, orphan PDOs included, from the first
+ * start that read XhciQemuStageFault bit 3 until Windows restarts
+ * (hcd_ctl.c). IRQL: <= DISPATCH_LEVEL; the IRP is still this driver's.
+ */
+volatile LONG HcdQemuUrbLog = 0;
+volatile LONG HcdQemuUrbsIn = 0;
+volatile LONG HcdQemuUrbsOut = 0;
+static ULONG hcdQemuUrbSeq = 0;
+static KSPIN_LOCK hcdQemuUrbLock;
+
+/* One line: the sequence, the IRP's address (two words on amd64), and two
+ * values. */
+static VOID hcdQemuUrbLine(const char *what, PIRP irp, ULONG a, ULONG b)
+{
+    KIRQL oldIrql;
+    ULONG w[5];
+    ULONG n;
+
+    KeAcquireSpinLock(&hcdQemuUrbLock, &oldIrql);
+    n = 0;
+    w[n++] = ++hcdQemuUrbSeq;
+#if defined(_WIN64)
+    w[n++] = (ULONG)((ULONG_PTR)irp >> 32);
+#endif
+    w[n++] = (ULONG)(ULONG_PTR)irp;
+    w[n++] = a;
+    w[n++] = b;
+    XHCI_DBG_WORDS(what, w, n);
+    KeReleaseSpinLock(&hcdQemuUrbLock, oldIrql);
+}
+
+/* Whether the IRP is a URB IRP at a device PDO, its URB (which may be
+ * NULL) in *urb. */
+static ULONG hcdQemuUrbOf(PIRP irp, PURB *urb)
+{
+    PIO_STACK_LOCATION stack;
+
+    stack = IoGetCurrentIrpStackLocation(irp);
+    if (stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL ||
+        stack->Parameters.DeviceIoControl.IoControlCode !=
+            IOCTL_INTERNAL_USB_SUBMIT_URB ||
+        stack->DeviceObject == NULL ||
+        ((PHCD_COMMON)stack->DeviceObject->DeviceExtension)->Kind !=
+            HCD_KIND_DEVICE_PDO) {
+        return 0;
+    }
+    *urb = (PURB)stack->Parameters.Others.Argument1;
+    return 1;
+}
+
+VOID HcdQemuUrbIn(PIRP irp)
+{
+    PURB urb;
+
+    if (HcdQemuUrbLog == 0 || !hcdQemuUrbOf(irp, &urb)) {
+        return;
+    }
+    (VOID)InterlockedIncrement((PLONG)&HcdQemuUrbsIn);
+    hcdQemuUrbLine("urb: in seq/irp/pdo/function", irp,
+                   (ULONG)(ULONG_PTR)IoGetCurrentIrpStackLocation(irp)
+                       ->DeviceObject,
+                   (urb != NULL) ? (ULONG)urb->UrbHeader.Function
+                                 : 0xFFFFFFFFUL);
+}
+
+VOID HcdQemuUrbOut(PIRP irp)
+{
+    PURB urb;
+
+    if (HcdQemuUrbLog == 0 || !hcdQemuUrbOf(irp, &urb)) {
+        return;
+    }
+    (VOID)InterlockedIncrement((PLONG)&HcdQemuUrbsOut);
+    hcdQemuUrbLine("urb: out seq/irp/ntstatus/usbd", irp,
+                   (ULONG)irp->IoStatus.Status,
+                   (urb != NULL) ? (ULONG)urb->UrbHeader.Status
+                                 : 0xFFFFFFFFUL);
+}
+#endif
+
 /* A device gone: refused, but completed at the next tick (HcdIoRefuseLater,
  * hcd_io.c) - never inside this dispatch, which a client's completion
  * routine can re-enter by resubmitting. The PDO's own timer, so an orphan
@@ -1496,6 +1585,9 @@ static VOID hcdUsbdxInit(VOID);
 VOID HcdUrbInit(VOID)
 {
     KeInitializeSpinLock(&hcdBusifLock);
+#if defined(XHCI_FLAVOUR_QEMU)
+    KeInitializeSpinLock(&hcdQemuUrbLock);
+#endif
     hcdUsbdxInit();
 }
 
@@ -2040,6 +2132,13 @@ static VOID hcdUsbdxInit(VOID)
     KeInitializeSpinLock(&hcdUsbdxLock);
 }
 
+/* Task 49.45: the frees refused as not the bus's, image-wide, for the
+ * door's counter word (UsbdxForeignFrees). A plain read. IRQL: any. */
+ULONG HcdUrbUsbdxForeignFrees(VOID)
+{
+    return (ULONG)hcdUsbdxForeignFrees;
+}
+
 /* Whether a QUERY_INTERFACE names GUID_USBD_INTERFACE_V1, compared field by
  * field as HcdUrbIsUsbdiQuery does. IRQL: any. */
 ULONG HcdUrbIsUsbdxQuery(const GUID *guid)
@@ -2339,6 +2438,29 @@ static VOID HCD_BUSIFFN hcdUsbdxUrbFree(PURB urb)
  * query takes one slot reference, which Unregister releases. IRQL:
  * PASSIVE_LEVEL.
  */
+/*
+ * Task 49.45 (design record 13 section 6.13.11): the V1 query's answer in
+ * the log, the first XHCI_USBDX_NOTE_V1_MAX per PDO, and counted. Nothing
+ * of the answer depends on it. IRQL: PASSIVE_LEVEL (PnP); no lock held.
+ */
+static VOID hcdUsbdxV1Note(PHCD_DEVICE_PDO pdo, ULONG answer, ULONG version,
+                           ULONG size)
+{
+    PHCD_CONTROLLER hc;
+
+    hc = pdo->Controller;
+    if (hc == NULL) {
+        return;
+    }
+    hcdCount(answer == XHCI_USBDX_V1_ANSWERED ? &hc->Counters.UsbdxV1Answered
+                                              : &hc->Counters.UsbdxV1Refused);
+    if (XhciUsbdxNoteWanted((ULONG)InterlockedIncrement(&pdo->NoteV1),
+                            XHCI_USBDX_NOTE_V1_MAX)) {
+        XhciLogNote(&hc->Hc, "usbdx.v1",
+                    XhciUsbdxNoteV1(answer, version, size));
+    }
+}
+
 NTSTATUS HcdUrbQueryUsbdx(PHCD_DEVICE_PDO pdo, PIRP irp)
 {
     PIO_STACK_LOCATION stack;
@@ -2355,6 +2477,7 @@ NTSTATUS HcdUrbQueryUsbdx(PHCD_DEVICE_PDO pdo, PIRP irp)
                    (version << 16) | size);
     if (XhciUsbdxV1Check(size, version, HCD_USBDX_PTR, 1, 1) ==
         XHCI_USBDX_NOT_OURS) {
+        hcdUsbdxV1Note(pdo, XHCI_USBDX_V1_NOT_OURS, version, size);
         return HcdCompleteIrp(irp, irp->IoStatus.Status,
                               irp->IoStatus.Information);
     }
@@ -2362,14 +2485,17 @@ NTSTATUS HcdUrbQueryUsbdx(PHCD_DEVICE_PDO pdo, PIRP irp)
         XhciUsbdxV1Check(size, version, HCD_USBDX_PTR,
                          out->ClientDeviceObject != NULL,
                          out->ClientPoolTag) != XHCI_USBDX_OK) {
+        hcdUsbdxV1Note(pdo, XHCI_USBDX_V1_INVALID, version, size);
         return HcdCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
     }
     if (pdo->Controller == NULL || !pdo->Listed) {
+        hcdUsbdxV1Note(pdo, XHCI_USBDX_V1_NO_DEVICE, version, size);
         return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
     }
     slot = hcdBusifClaim(pdo);
     if (slot == NULL) {
         XHCI_DBG_TEXT("hcd: USBD V1 interface refused, no context slot");
+        hcdUsbdxV1Note(pdo, XHCI_USBDX_V1_NO_SLOT, version, size);
         return HcdCompleteIrp(irp, STATUS_INSUFFICIENT_RESOURCES, 0);
     }
     out->Context = NULL;
@@ -2386,6 +2512,7 @@ NTSTATUS HcdUrbQueryUsbdx(PHCD_DEVICE_PDO pdo, PIRP irp)
     if (InterlockedIncrement(&hcdUsbdxRegistered) == 1) {
         XHCI_DBG_TEXT("hcd: USBD V1 interface answered, contract 0x602");
     }
+    hcdUsbdxV1Note(pdo, XHCI_USBDX_V1_ANSWERED, version, size);
     return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
 }
 
@@ -2396,6 +2523,44 @@ NTSTATUS HcdUrbQueryUsbdx(PHCD_DEVICE_PDO pdo, PIRP irp)
  * block is Argument1, the output Irp->AssociatedIrp.SystemBuffer. IRQL:
  * <= DISPATCH_LEVEL (usbdex sends it at PASSIVE_LEVEL).
  */
+/*
+ * Task 49.45 (design record 13 section 6.13.11): a capability request in
+ * the log - which capability (XhciUsbdxCapabilityId, 0 for a GUID this bus
+ * does not know, whose Data1 follows as usbdx.cap.guid under the same hold
+ * of the controller lock), the answer and the
+ * streams count - the first XHCI_USBDX_NOTE_CAP_MAX per PDO, and counted.
+ * `guid` NULL: the block was refused before its GUID was read. IRQL:
+ * <= DISPATCH_LEVEL; no lock held.
+ */
+static VOID hcdUsbdxCapNote(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
+                            const UCHAR *guid, ULONG answer, ULONG count)
+{
+    KIRQL oldIrql;
+    ULONG data1;
+    ULONG id;
+
+    if (hc == NULL) {
+        return;
+    }
+    hcdCount(answer == XHCI_USBDX_OK ? &hc->Counters.UsbdxCapAnswered
+                                     : &hc->Counters.UsbdxCapRefused);
+    if (!XhciUsbdxNoteWanted((ULONG)InterlockedIncrement(&pdo->NoteCap),
+                             XHCI_USBDX_NOTE_CAP_MAX)) {
+        return;
+    }
+    id = XhciUsbdxCapabilityId(guid);
+    data1 = (guid != NULL) ? ((ULONG)guid[0] | ((ULONG)guid[1] << 8) |
+                              ((ULONG)guid[2] << 16) | ((ULONG)guid[3] << 24))
+                           : 0UL;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    XhciLogNoteLocked(&hc->Hc, "usbdx.cap",
+                      XhciUsbdxNoteCap(id, answer, count));
+    if (guid != NULL && id == XHCI_USBDX_CAP_UNKNOWN) {
+        XhciLogNoteLocked(&hc->Hc, "usbdx.cap.guid", data1);
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+}
+
 static NTSTATUS hcdCapabilityIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
                                    PIRP irp, PHCD_USBDX_CAP_BLOCK blk)
 {
@@ -2409,16 +2574,21 @@ static NTSTATUS hcdCapabilityIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
         XhciUsbdxCapBlockCheck(blk->Version, blk->Size, HCD_USBDX_PTR,
                                blk->Context != NULL, blk->OutputLength,
                                out != NULL) != XHCI_USBDX_OK) {
+        /* Task 49.45: the block itself was refused; its GUID unread. */
+        hcdUsbdxCapNote(pdo, hc, NULL, XHCI_USBDX_INVALID, 0);
         return HcdCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
     }
     blk->ResultLength = 0;
     if (hc == NULL || !pdo->Listed) {
+        hcdUsbdxCapNote(pdo, hc, blk->CapabilityType,
+                        XHCI_USBDX_CAP_NO_DEVICE, 0);
         return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
     }
     answer = XhciUsbdxCapability(XhciUsbdxCapabilityId(blk->CapabilityType),
                                  pdo->SpeedClass, pdo->UsbdxStreams,
                                  blk->OutputLength, &count, &bytes);
     (VOID)InterlockedIncrement(&hcdUsbdxCapabilities);
+    hcdUsbdxCapNote(pdo, hc, blk->CapabilityType, answer, count);
     XHCI_DBG_VALUE("hcd: usbdx capability, GUID Data1 / answer",
                    ((ULONG)blk->CapabilityType[3] << 24) |
                        ((ULONG)blk->CapabilityType[2] << 16) |
@@ -2466,7 +2636,25 @@ static NTSTATUS hcdStaticStreamsUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
                                    sizeof(struct _URB_PIPE_REQUEST));
     }
     if (usbd != XHCI_USBDX_USBD_SUCCESS) {
-        hcdCount(&hc->UsbdxStreamRefused);
+        hcdCount(&hc->Counters.UsbdxStreamRefused);
+        /* Task 49.45: refused before the thread, so no endpoint was
+         * resolved: endpoint 0, the requested count only from an open long
+         * enough to hold it. */
+        if (XhciUsbdxNoteWanted(
+                (ULONG)InterlockedIncrement(&pdo->NoteStreams),
+                XHCI_USBDX_NOTE_STREAMS_MAX)) {
+            XhciLogNote(&hc->Hc,
+                        function == HCD_URB_OPEN_STATIC_STREAMS ? "usbdx.open"
+                                                                : "usbdx.close",
+                        XhciUsbdxNoteStreams(
+                            0, XHCI_USBDX_STREAMS_AT_DISPATCH,
+                            (function == HCD_URB_OPEN_STATIC_STREAMS &&
+                             urb->UrbHeader.Length >=
+                                 sizeof(HCD_URB_OPEN_STREAMS))
+                                ? ((PHCD_URB_OPEN_STREAMS)urb)->NumberOfStreams
+                                : 0UL,
+                            0));
+        }
         return hcdUrbComplete(irp, urb, (USBD_STATUS)usbd,
                               STATUS_INVALID_PARAMETER);
     }
@@ -2647,8 +2835,12 @@ static NTSTATUS hcdTelemetryIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
             }
         }
         status = STATUS_SUCCESS;
-        if (f->Word[XHCI98_FAIL_VER] != XHCI98_FAIL_VERSION ||
-            f->Word[XHCI98_FAIL_SIZE] != sizeof(XHCI98_FAILURES) ||
+        /* Task 49.39: version 2 (times and ATA bits after the ring), or
+         * version 1, each at its own size. */
+        if (!((f->Word[XHCI98_FAIL_VER] == XHCI98_FAIL_VERSION &&
+               f->Word[XHCI98_FAIL_SIZE] == sizeof(XHCI98_FAILURES)) ||
+              (f->Word[XHCI98_FAIL_VER] == XHCI98_FAIL_VERSION2 &&
+               f->Word[XHCI98_FAIL_SIZE] == sizeof(XHCI98_FAILURES2))) ||
             dev->Gone) {
             hc->Xstat.TeleRefused++;
             status = STATUS_INVALID_PARAMETER;
@@ -2657,6 +2849,19 @@ static NTSTATUS hcdTelemetryIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
         } else {
             for (i = 0; i < XHCI98_FAIL_TOTAL_WORDS; i++) {
                 t->Fail[i] = f->Word[i];
+            }
+            t->FailTimeCount = 0;
+            t->FailAta = 0;
+            for (i = 0; i < XHCI98_FAIL_RECORDS; i++) {
+                t->FailTimes[i] = 0;
+            }
+            if (f->Word[XHCI98_FAIL_VER] == XHCI98_FAIL_VERSION2) {
+                for (i = 0; i < XHCI98_FAIL_RECORDS; i++) {
+                    t->FailTimes[i] =
+                        ((PXHCI98_FAILURES2)rq)->Word[XHCI98_FAIL_TIMES_AT + i];
+                }
+                t->FailAta = ((PXHCI98_FAILURES2)rq)->Word[XHCI98_FAIL_ATA_AT];
+                t->FailTimeCount = f->Word[XHCI98_FAIL_COUNT];
             }
         }
         XhciControllerLockRelease(&hc->Hc, oldIrql);
@@ -2700,6 +2905,11 @@ static NTSTATUS hcdTelemetryIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
         t->Taken = 0;
         for (i = 0; i < XHCI98_FAIL_TOTAL_WORDS; i++) {
             t->Fail[i] = 0;
+        }
+        t->FailTimeCount = 0;
+        t->FailAta = 0;
+        for (i = 0; i < XHCI98_FAIL_RECORDS; i++) {
+            t->FailTimes[i] = 0;
         }
     }
     t->Slot = dev->SlotId;
@@ -2788,6 +2998,43 @@ static ULONG hcdIoctlSlot(ULONG code)
  * then waits Busy out, so a controller read here is not freed under this
  * dispatch (batch (c)).
  */
+/*
+ * Task 49.45 (design record 13 section 6.13.11): an internal IOCTL other
+ * than SUBMIT_URB that this dispatch completed with a failure, noted once
+ * per code per PDO (its first XHCI_USBDX_NOTE_IOCTL_SLOTS codes): pdo.ioctl
+ * with the code, pdo.ioctl.st with the status. Every one is counted. A slot
+ * is claimed by the interlocked count, the pair written under one hold of
+ * the controller lock; two processors can at worst note
+ * one code twice and never more than the table's room. Read after the IRP
+ * was completed: nothing of the IRP is touched. IRQL: <= DISPATCH_LEVEL; no
+ * lock held.
+ */
+static VOID hcdIoctlRefusedNote(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
+                                ULONG code, NTSTATUS status)
+{
+    KIRQL oldIrql;
+    LONG slot;
+
+    if (hc == NULL) {
+        return;
+    }
+    hcdCount(&hc->Counters.PdoIoctlRefused);
+    if (XhciUsbdxNoteSeen(pdo->NoteIoctl, (ULONG)pdo->NoteIoctlUsed,
+                          XHCI_USBDX_NOTE_IOCTL_SLOTS, code) ||
+        pdo->NoteIoctlUsed >= (LONG)XHCI_USBDX_NOTE_IOCTL_SLOTS) {
+        return;
+    }
+    slot = InterlockedIncrement(&pdo->NoteIoctlUsed) - 1;
+    if (slot < 0 || slot >= (LONG)XHCI_USBDX_NOTE_IOCTL_SLOTS) {
+        return;
+    }
+    pdo->NoteIoctl[slot] = code;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    XhciLogNoteLocked(&hc->Hc, "pdo.ioctl", code);
+    XhciLogNoteLocked(&hc->Hc, "pdo.ioctl.st", (ULONG)status);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+}
+
 NTSTATUS HcdDevicePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp)
 {
     PIO_STACK_LOCATION stack;
@@ -2896,12 +3143,14 @@ NTSTATUS HcdDevicePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp)
 
     case IOCTL_XHCI98_OPEN_STREAMS:
     case IOCTL_XHCI98_CLOSE_STREAMS:
+        pdo->OwnClient = 1;     /* task 49.45: the bus's own client */
         status = hcdStreamsIoctl(pdo, hc, irp,
                                  (PXHCI98_STREAMS_REQUEST)
                                      stack->Parameters.Others.Argument1);
         break;
 
     case IOCTL_XHCI98_TRANSFER_POLICY:
+        pdo->OwnClient = 1;
         status = hcdPolicyIoctl(hc, irp,
                                 (PXHCI98_TRANSFER_POLICY)
                                     stack->Parameters.Others.Argument1);
@@ -2943,6 +3192,9 @@ NTSTATUS HcdDevicePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp)
         }
         status = HcdCompleteIrp(irp, STATUS_NOT_SUPPORTED, 0);
         break;
+    }
+    if (code != IOCTL_INTERNAL_USB_SUBMIT_URB && !NT_SUCCESS(status)) {
+        hcdIoctlRefusedNote(pdo, hc, code, status);
     }
     (VOID)InterlockedDecrement(&pdo->Busy);
     return status;

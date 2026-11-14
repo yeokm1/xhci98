@@ -63,6 +63,34 @@
     Manual     $true: not started by release-matrix.ps1 (a window leg with
                no WindowKeys is Manual)
     Minutes    the leg's deadline (default 90)
+    Accel      the accelerator the leg runs on: tcg (the default) or whpx.
+               Only the two Windows 10 legs say whpx (owner, 2026-11-11,
+               roadmap-usb4 49.4; selftest.ps1 holds this file to it). A
+               WHPX leg starts cold (QEMU restores no saved state under
+               WHPX), is refused where WHPX cannot run its guest, and runs
+               under TCG only with -ForceTcg, the periodic cross-check
+    Cold       $true: the leg always starts cold from the starting point's
+               disk, under TCG too, so a WHPX leg forced to TCG is the same
+               leg on the other accelerator
+    TcgMinutes, TcgStallSeconds
+               the deadline, and the longest silence on COM1, of a WHPX leg
+               forced to TCG (10 x64's uninstall wrote nothing for 47 min
+               under TCG, runs/run-49.md "49.4"); Minutes and StallSeconds
+               (default 900) are for the leg's own accelerator
+    Devices    $true (Windows 10): after the stick's copy the controller is
+               disabled, enabled, removed and rescanned with Windows' own
+               pnputil, the stick copied to again after the enable and the
+               rescan (checks ctrl-disable, ctrl-enable, stick-copy-enable,
+               ctrl-remove, ctrl-rescan, stick-copy-rescan). Whether the
+               remove asked for a restart is recorded and not judged: the
+               same leg has given both answers. An uninstall that then
+               stops for the pending restart (exit 4, uninstall-pending)
+               is run again after the next start (uninstall-again)
+    TrustCert  $true (Windows 10 x64): the guest adds the package's own
+               nt-x64\xhci98-test.cer to Root and TrustedPublisher before
+               the install (cert-trust) and must be in test-signing mode
+               (test-signing). Such a leg Needs that file: an unsigned x64
+               package has no catalog, and Windows 10 x64 refuses it
 
     On 98 SE the console install stages the package and ends with exit 4
     (steps left: the controller's Add New Hardware wizard at the next start,
@@ -171,6 +199,33 @@
             ConsentKeys = @('alt-y')
             WindowKeys  = @('alt-n', 'until-install')
             Exits       = @{ install = @(3); list = @(0); uninstall = @(3); 'list-final' = @(0) }
+        }
+        @{
+            Id          = 'w10x86-console'
+            Guest       = 'w10x86'
+            Mode        = 'console'
+            Accel       = 'whpx'
+            Cold        = $true
+            InstallArgs = '/usb'
+            PromptStep  = 'nt6'
+            Devices     = $true
+            Minutes     = 60
+            TcgMinutes  = 240; TcgStallSeconds = 3600
+            Exits       = @{ install = @(3); list = @(0); uninstall = @(3, 4); 'uninstall-again' = @(3); 'list-final' = @(0) }
+        }
+        @{
+            Id          = 'w10x64-console'
+            Needs       = 'nt-x64\xhci98-test.cer'
+            Guest       = 'w10x64'
+            Mode        = 'console'
+            Accel       = 'whpx'
+            Cold        = $true
+            InstallArgs = '/usb'
+            TrustCert   = $true
+            Devices     = $true
+            Minutes     = 60
+            TcgMinutes  = 240; TcgStallSeconds = 3600
+            Exits       = @{ install = @(3); list = @(0); uninstall = @(3, 4); 'uninstall-again' = @(3); 'list-final' = @(0) }
         }
         @{
             Id          = 'me-nonfree'

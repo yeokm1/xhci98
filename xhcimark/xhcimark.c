@@ -239,6 +239,10 @@ static int inventoryDone;
 static const int *curProt;      /* this poll's protected nodes (mk_poll)  */
 static int scrubOk;             /* the last CDDB scrub completed          */
 static int scrubFailLogged;     /* its failure was logged (once per run)  */
+static MK_LOCS locs;            /* the locations kept (record 21 7.8.3)   */
+static volatile LONG locResume; /* a resume notice: every record stale    */
+static HANDLE idleEvent;        /* set while no poll runs (record 21 7.8.4) */
+static MK_HOLD hold;            /* the installer's hold as last seen      */
 
 /* ======================================================================== */
 /* The log                                                                  */
@@ -434,6 +438,79 @@ static int mk_prop_dword(DWORD dn, ULONG prop, ULONG *v)
            n == sizeof(*v);
 }
 
+/* A DWORD property's CONFIGRET; a short answer reads as a failure. */
+static DWORD mk_prop_dword_cr(DWORD dn, ULONG prop, ULONG *v)
+{
+    ULONG type = 0;
+    ULONG n = sizeof(*v);
+    DWORD cr;
+
+    *v = 0;
+    cr = api.GetProp(dn, prop, &type, v, &n, 0);
+    return cr == MK_CR_SUCCESS && n != sizeof(*v) ? MK_CR_BUFFER_SMALL : cr;
+}
+
+/* Record 21 section 7.8.3 (task 49.26): devnode `dn`'s bus number and
+ * address by its instance `id`, `started` its status as just read. On 2000
+ * and XP Windows answers the address by asking the device's stack, so it
+ * is read once per instance and never while the device is not started; the
+ * kept values serve otherwise. 1 with *bus and *address when known. */
+static int mk_loc(DWORD dn, const char *id, int started, ULONG *bus,
+                  ULONG *address)
+{
+    INST_U32 b = 0;
+    INST_U32 a = 0;
+    ULONG vb = 0;
+    ULONG va = 0;
+    DWORD cr;
+    int r;
+
+    if (id[0] == '\0') {
+        return 0;
+    }
+    r = mk_loc_get(&locs, id, started, (INST_U32)GetTickCount(), &b, &a);
+    if (r == MK_LOC_KEPT) {
+        *bus = (ULONG)b;
+        *address = (ULONG)a;
+        return 1;
+    }
+    if (r != MK_LOC_READ) {
+        return 0;
+    }
+    cr = mk_prop_dword_cr(dn, MK_CM_DRP_BUSNUMBER, &vb);
+    if (cr == MK_CR_SUCCESS) {
+        cr = mk_prop_dword_cr(dn, MK_CM_DRP_ADDRESS, &va);
+    }
+    r = cr == MK_CR_SUCCESS ? MK_LOC_R_OK :
+        cr == MK_CR_NO_SUCH_VALUE ? MK_LOC_R_NOVALUE : MK_LOC_R_FAILED;
+    mk_loc_put(&locs, id, r, (INST_U32)vb, (INST_U32)va,
+               (INST_U32)GetTickCount());
+    if (r != MK_LOC_R_OK) {
+        return 0;
+    }
+    *bus = vb;
+    *address = va;
+    return 1;
+}
+
+/* The same for a devnode read afresh, outside the walk: its id and its
+ * status read now. */
+static int mk_loc_fresh(DWORD dn, ULONG *bus, ULONG *address)
+{
+    char id[INST_ID_CHARS];
+    ULONG st = 0;
+    ULONG pr = 0;
+    int started;
+
+    memset(id, 0, sizeof(id));
+    if (api.DeviceId(dn, id, sizeof(id) - 1, 0) != MK_CR_SUCCESS) {
+        return 0;
+    }
+    started = api.Status(&st, &pr, dn, 0) == MK_CR_SUCCESS &&
+              (st & MK_DN_STARTED) != 0;
+    return mk_loc(dn, id, started, bus, address);
+}
+
 /* Record 21 section 7.7: what Windows recorded of the unit's capabilities,
  * as mk_win_recorded reads it, on 2000 and XP (NT 5.x) alone; -1 elsewhere
  * and when the read fails. */
@@ -482,14 +559,15 @@ static void mk_walk_from(DWORD dn, int parent, int depth)
         cr = mk_prop_text(dn, MK_CM_DRP_SERVICE, t->Service,
                           sizeof(t->Service), NULL);
         t->ServiceBad = cr != MK_CR_SUCCESS && cr != MK_CR_NO_SUCH_VALUE;
-        t->HasLoc = mk_prop_dword(dn, MK_CM_DRP_BUSNUMBER, &t->Bus) &&
-                    mk_prop_dword(dn, MK_CM_DRP_ADDRESS, &t->Address);
         t->StatusOk = api.Status(&t->Status, &t->Problem, dn, 0) ==
                       MK_CR_SUCCESS;
         if (!t->StatusOk) {
             t->Status = 0;
             t->Problem = 0;
         }
+        t->HasLoc = mk_loc(dn, t->Id,
+                           t->StatusOk && (t->Status & MK_DN_STARTED) != 0,
+                           &t->Bus, &t->Address);
         cr = api.Child(&child, dn, 0);
         if (cr == MK_CR_SUCCESS) {
             mk_walk_from(child, me, depth + 1);
@@ -513,10 +591,15 @@ static int mk_walk(void)
 
     nodeCount = 0;
     walkBad = 0;
+    if (InterlockedExchange((LONG *)&locResume, 0) != 0) {
+        mk_loc_stale_all(&locs);
+    }
     if (api.Locate(&root, NULL, MK_CM_LOCATE_NORMAL) != MK_CR_SUCCESS) {
         return 0;
     }
+    mk_loc_walk_begin(&locs);
     mk_walk_from(root, -1, 0);
+    mk_loc_walk_end(&locs, walkBad == 0);
     return 1;
 }
 
@@ -811,7 +894,33 @@ typedef struct _MK_SA {
 } MK_SA;
 
 /* SYNCHRONIZE and MUTEX_MODIFY_STATE to everyone, full access to SYSTEM
- * and the Administrators (record 25 section 6.3's shared mutex). */
+ * and the Administrators (record 25 section 6.3's shared mutex); with
+ * everyone 0 no entry for everyone at all (the idle event, record 21
+ * section 7.8.4). */
+static int mk_obj_owner(HANDLE h);
+
+/* A named object this service made (the handle with WRITE_OWNER) given
+ * SYSTEM, this process's own user, as its owner; 1 when it reads so. */
+static int mk_obj_owner_system(HANDLE h)
+{
+    SID_IDENTIFIER_AUTHORITY nt = SECURITY_NT_AUTHORITY;
+    SECURITY_DESCRIPTOR sd;
+    PSID sSystem = NULL;
+
+    if (mk_obj_owner(h) == INST_OWNER_SYSTEM) {
+        return 1;
+    }
+    if (AllocateAndInitializeSid(&nt, 1, SECURITY_LOCAL_SYSTEM_RID, 0, 0, 0,
+                                 0, 0, 0, 0, &sSystem)) {
+        if (InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION) &&
+            SetSecurityDescriptorOwner(&sd, sSystem, FALSE)) {
+            (void)SetKernelObjectSecurity(h, OWNER_SECURITY_INFORMATION, &sd);
+        }
+        FreeSid(sSystem);
+    }
+    return mk_obj_owner(h) == INST_OWNER_SYSTEM;
+}
+
 static void mk_make_sa(MK_SA *s, DWORD everyone)
 {
     SID_IDENTIFIER_AUTHORITY world = SECURITY_WORLD_SID_AUTHORITY;
@@ -829,7 +938,8 @@ static void mk_make_sa(MK_SA *s, DWORD everyone)
                                  DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0,
                                  &sAdmins) &&
         InitializeAcl((PACL)s->Acl, sizeof(s->Acl), ACL_REVISION) &&
-        AddAccessAllowedAce((PACL)s->Acl, ACL_REVISION, everyone, sWorld) &&
+        (everyone == 0 ||
+         AddAccessAllowedAce((PACL)s->Acl, ACL_REVISION, everyone, sWorld)) &&
         AddAccessAllowedAce((PACL)s->Acl, ACL_REVISION, GENERIC_ALL, sSystem) &&
         AddAccessAllowedAce((PACL)s->Acl, ACL_REVISION, GENERIC_ALL, sAdmins) &&
         InitializeSecurityDescriptor(&s->Sd, SECURITY_DESCRIPTOR_REVISION) &&
@@ -848,6 +958,49 @@ static void mk_make_sa(MK_SA *s, DWORD everyone)
     if (sAdmins != NULL) {
         FreeSid(sAdmins);
     }
+}
+
+/* Record 21 section 7.8.4: who owns a named object (the handle opened with
+ * READ_CONTROL): INST_OWNER_SYSTEM, INST_OWNER_ADMINS, or INST_OWNER_OTHER
+ * (another owner, or one that could not be read). */
+static int mk_obj_owner(HANDLE h)
+{
+    SID_IDENTIFIER_AUTHORITY nt = SECURITY_NT_AUTHORITY;
+    union {
+        SECURITY_DESCRIPTOR Sd;
+        BYTE B[512];
+    } u;
+    DWORD need = 0;
+    PSID owner = NULL;
+    BOOL defaulted = FALSE;
+    PSID sSystem = NULL;
+    PSID sAdmins = NULL;
+    int r = INST_OWNER_OTHER;
+
+    if (h == NULL ||
+        !GetKernelObjectSecurity(h, OWNER_SECURITY_INFORMATION, &u.Sd,
+                                 sizeof(u), &need) ||
+        !GetSecurityDescriptorOwner(&u.Sd, &owner, &defaulted) ||
+        owner == NULL) {
+        return INST_OWNER_OTHER;
+    }
+    if (AllocateAndInitializeSid(&nt, 1, SECURITY_LOCAL_SYSTEM_RID, 0, 0, 0,
+                                 0, 0, 0, 0, &sSystem) &&
+        EqualSid(owner, sSystem)) {
+        r = INST_OWNER_SYSTEM;
+    } else if (AllocateAndInitializeSid(&nt, 2, SECURITY_BUILTIN_DOMAIN_RID,
+                                        DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0,
+                                        0, &sAdmins) &&
+               EqualSid(owner, sAdmins)) {
+        r = INST_OWNER_ADMINS;
+    }
+    if (sSystem != NULL) {
+        FreeSid(sSystem);
+    }
+    if (sAdmins != NULL) {
+        FreeSid(sAdmins);
+    }
+    return r;
 }
 
 #define MK_MUTEX_RIGHTS (SYNCHRONIZE | 0x0001)
@@ -1306,11 +1459,9 @@ static int mk_fresh_unit(const char *id, const MK_ENTRY *e, DWORD *dn)
 
     if (api.Locate(dn, (char *)id, MK_CM_LOCATE_NORMAL) != MK_CR_SUCCESS ||
         api.Parent(&parent, *dn, 0) != MK_CR_SUCCESS ||
-        !mk_prop_dword(parent, MK_CM_DRP_BUSNUMBER, &bus) ||
-        !mk_prop_dword(parent, MK_CM_DRP_ADDRESS, &address) ||
+        !mk_loc_fresh(parent, &bus, &address) ||
         bus != ((e->Member >> 8) & 0xFFUL) || address != mk_addr_of(e->Member) ||
-        !mk_prop_dword(*dn, MK_CM_DRP_BUSNUMBER, &bus) || bus != e->Bus ||
-        !mk_prop_dword(*dn, MK_CM_DRP_ADDRESS, &address) ||
+        !mk_loc_fresh(*dn, &bus, &address) || bus != e->Bus ||
         address != e->Address) {
         return 0;
     }
@@ -2913,8 +3064,7 @@ static int mk_s98_still_below(DWORD dn, INST_U32 bdf)
         if (api.Parent(&p, dn, 0) != MK_CR_SUCCESS) {
             return 0;
         }
-        if (mk_prop_dword(p, MK_CM_DRP_BUSNUMBER, &bus) &&
-            mk_prop_dword(p, MK_CM_DRP_ADDRESS, &address) &&
+        if (mk_loc_fresh(p, &bus, &address) &&
             bus == ((bdf >> 8) & 0xFFUL) && address == mk_addr_of(bdf)) {
             return 1;
         }
@@ -4712,10 +4862,12 @@ static void mk_br_unit(const MK_NHI *h, const MK_ENTRY *e, int unit,
                 continue;
             }
         }
-        if (!nodes[k].HasLoc) {
-            continue;
-        }
-        att = mk_bridge_attached(&h->M, e->Member, mk_node_bdf(&nodes[k]));
+        /* A bridge whose location is not known (one never started, record
+         * 21 section 7.8.3) is judged with its attachment unknown: problem
+         * 12 still asks for the restart. */
+        att = nodes[k].HasLoc ?
+              mk_bridge_attached(&h->M, e->Member, mk_node_bdf(&nodes[k])) :
+              MK_BA_UNKNOWN;
         if (mk_bridge_needs(nodes[k].StatusOk,
                             (nodes[k].Status & MK_DN_STARTED) != 0,
                             (nodes[k].Status & MK_DN_HAS_PROBLEM) != 0,
@@ -5449,6 +5601,8 @@ static int mk_flush_disk_behind(long disk, const INST_U32 *members, int m)
     DWORD up;
     ULONG bus;
     ULONG addr;
+    ULONG st;
+    ULONG pr;
     INST_U32 chain[64];
     int n;
     int behind = 0;
@@ -5492,7 +5646,12 @@ static int mk_flush_disk_behind(long disk, const INST_U32 *members, int m)
         dn = di.DevInst;
         while (n < 64 && api.Parent(&up, dn, 0) == MK_CR_SUCCESS) {
             dn = up;
-            if (mk_prop_dword(dn, MK_CM_DRP_BUSNUMBER, &bus) &&
+            /* Another thread than the walk's (record 21 section 7.8.3):
+             * its own reads, once per notice, never of a devnode not
+             * started. */
+            if (api.Status(&st, &pr, dn, 0) == MK_CR_SUCCESS &&
+                (st & MK_DN_STARTED) != 0 &&
+                mk_prop_dword(dn, MK_CM_DRP_BUSNUMBER, &bus) &&
                 mk_prop_dword(dn, MK_CM_DRP_ADDRESS, &addr)) {
                 chain[n++] = (INST_U32)(((bus & 0xFFUL) << 8) | (((addr >> 16) & 0x1FUL) << 3) |
                                         (addr & 7UL));
@@ -5655,7 +5814,7 @@ static void mk_flush(DWORD event)
     CloseHandle(w);
 }
 
-static DWORD mk_poll(void)
+static DWORD mk_poll_run(void)
 {
     int any;
     int *prot;
@@ -5720,6 +5879,112 @@ static DWORD mk_poll(void)
     return mk_poll_ms(any);
 }
 
+/* Record 21 section 7.8.4 (task 49.26): the idle event is reset before
+ * the installer's hold event is tested and set again when the poll has
+ * ended, whether it ran or not, so an installer that made its hold and
+ * then saw the idle event set knows no poll is under way and none starts
+ * after: a poll that tested the event before it existed holds the idle
+ * event reset until it ends. The run's number (HoldRun) is read with the
+ * event: a new number is a new run's hold even when the event was never
+ * seen absent between two runs, and a poll skipped for a number writes it
+ * back as HoldAck, which the run waits for. A hold is ignored once it has
+ * lasted MK_HOLD_MAX_MS, and so is a hold event that neither SYSTEM nor
+ * the Administrators own (not an installer's). Nothing here waits. */
+static int holdForeignLogged;
+
+/* HoldRun as this poll passes it to mk_hold_step: the value read; when it
+ * cannot be read, the number of the hold under way (a failed read never
+ * begins a new hold, so it cannot stretch the 15 minutes), or 0 (which
+ * holds and is never acknowledged). Then HoldAck written: 1 when written. */
+static INST_U32 mk_hold_gen_read(void)
+{
+    HKEY k;
+    DWORD v = 0;
+    DWORD n = sizeof(v);
+    DWORD type = 0;
+    int ok = 0;
+
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, MK_PARAMS_KEY, 0, KEY_QUERY_VALUE,
+                      &k) == ERROR_SUCCESS) {
+        ok = RegQueryValueExA(k, INST_MK_HOLD_RUN, NULL, &type, (LPBYTE)&v,
+                              &n) == ERROR_SUCCESS && type == REG_DWORD &&
+             n == sizeof(v);
+        RegCloseKey(k);
+    }
+    if (!ok) {
+        return hold.Held ? hold.Gen : 0;
+    }
+    return (INST_U32)v;
+}
+
+static int mk_hold_ack_write(INST_U32 gen)
+{
+    HKEY k;
+    DWORD v = (DWORD)gen;
+    LONG e;
+
+    e = RegOpenKeyExA(HKEY_LOCAL_MACHINE, MK_PARAMS_KEY, 0, KEY_SET_VALUE,
+                      &k);
+    if (e == ERROR_SUCCESS) {
+        e = RegSetValueExA(k, INST_MK_HOLD_ACK, 0, REG_DWORD,
+                           (const BYTE *)&v, sizeof(v));
+        RegCloseKey(k);
+    }
+    return e == ERROR_SUCCESS;
+}
+
+static DWORD mk_poll(void)
+{
+    HANDLE e;
+    DWORD r = 1000;
+    DWORD now;
+    INST_U32 since = hold.Since;
+    INST_U32 lastGen = hold.Gen;
+    int wasHeld = hold.Held;
+    int exists;
+    int ev;
+
+    if (idleEvent != NULL) {
+        ResetEvent(idleEvent);
+    }
+    exists = 0;
+    e = OpenEventA(SYNCHRONIZE | READ_CONTROL, FALSE, INST_MK_HOLD_EVENT);
+    if (e != NULL) {
+        exists = inst_mk_owner_ok(mk_obj_owner(e), 0);
+        CloseHandle(e);
+        if (!exists && !holdForeignLogged) {
+            mk_log("a hold event that no installer made (its owner is neither "
+                   "SYSTEM nor the Administrators) is ignored");
+            holdForeignLogged = 1;
+        }
+    }
+    now = GetTickCount();
+    if (mk_hold_step(&hold, exists, exists ? mk_hold_gen_read() : 0,
+                     (INST_U32)now, &ev)) {
+        if (ev == MK_HOLD_EV_EXPIRED) {
+            mk_log("the installer's hold has lasted %lu minutes: the poll runs "
+                   "again", (unsigned long)(MK_HOLD_MAX_MS / 60000UL));
+        } else if (ev == MK_HOLD_EV_ENDED) {
+            mk_log("the installer's hold ended after %lu s",
+                   (unsigned long)((now - (DWORD)since) / 1000UL));
+        }
+        r = mk_poll_run();
+    } else if (ev == MK_HOLD_EV_BEGAN && wasHeld) {
+        mk_log("the installer's hold is a new run's (its number %lu, the "
+               "last %lu): counted again from now", (unsigned long)hold.Gen,
+               (unsigned long)lastGen);
+    } else if (ev == MK_HOLD_EV_BEGAN) {
+        mk_log("the installer's hold: no device is read until it ends");
+    }
+    if (hold.AckDue && mk_hold_ack_write(hold.Gen)) {
+        hold.AckedGen = hold.Gen;
+    }
+    if (idleEvent != NULL) {
+        SetEvent(idleEvent);
+    }
+    return r;
+}
+
 /* ======================================================================== */
 /* The service                                                              */
 /* ======================================================================== */
@@ -5761,6 +6026,11 @@ static DWORD WINAPI mk_handler_ex(DWORD control, DWORD type, LPVOID data, LPVOID
         if (mk_flush_wants((INST_U32)type)) {
             mk_flush(type);
         }
+        if (mk_loc_resume_event((INST_U32)type)) {
+            /* Record 21 section 7.8.3: the poll thread marks every kept
+             * location stale at its next walk. */
+            InterlockedExchange((LONG *)&locResume, 1);
+        }
         return NO_ERROR;
     }
     mk_handler(control);
@@ -5801,6 +6071,47 @@ static int mk_prepare(void)
     if (nodes == NULL) {
         mk_log("refused: no memory for the device tree");
         return 1;
+    }
+    mk_loc_reset(&locs);
+    /* Record 21 section 7.8.4: the idle event, made by the service alone
+     * (never by -once, which takes no part), owned by SYSTEM, open to
+     * SYSTEM and the Administrators only, and kept for its life, so an
+     * installer that finds it owned by SYSTEM knows the running service
+     * honours its hold; without it the installer stops the service for its
+     * run instead. One that another process made first is not used. */
+    idleEvent = NULL;
+    if (!logConsole) {
+        MK_SA sa;
+        DWORD e = 0;
+
+        mk_make_sa(&sa, 0);
+        if (sa.Ok) {
+            idleEvent = CreateEventA(&sa.Sa, TRUE, TRUE, INST_MK_IDLE_EVENT);
+            e = GetLastError();
+        }
+        if (idleEvent != NULL && e == ERROR_ALREADY_EXISTS &&
+            mk_obj_owner(idleEvent) != INST_OWNER_SYSTEM) {
+            CloseHandle(idleEvent);
+            idleEvent = NULL;
+            mk_log("the idle event was made by another process before this "
+                   "service: it is not used, and an installer run stops this "
+                   "service instead of holding it");
+        } else if (idleEvent != NULL && e != ERROR_ALREADY_EXISTS &&
+                   !mk_obj_owner_system(idleEvent)) {
+            /* The LocalSystem token's default owner is not SYSTEM (XP,
+             * measured), so SYSTEM is named the owner explicitly: an
+             * installer trusts this event only with that owner. */
+            e = GetLastError();
+            CloseHandle(idleEvent);
+            idleEvent = NULL;
+            mk_log("the idle event could not be given SYSTEM as its owner "
+                   "(error %lu): an installer run stops this service instead "
+                   "of holding it", (unsigned long)e);
+        } else if (idleEvent == NULL) {
+            mk_log("the idle event could not be made (error %lu): an "
+                   "installer run stops this service instead of holding it",
+                   (unsigned long)(sa.Ok ? e : ERROR_INVALID_SECURITY_DESCR));
+        }
     }
     return 0;
 }

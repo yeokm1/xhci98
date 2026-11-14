@@ -652,6 +652,8 @@ ULONG XhciControllerHealthPoll(PXHCI_EXTENSION ext)
             ext->ControllerFatal = 1;
             ext->FatalStatusDetected++;
             escalate = 1;
+            /* Task 49.35: the reading itself, in a release build. */
+            XhciLogNoteLocked(ext, "ctrl.fatal", usbsts);
             XHCI_DBG_VALUE("check: FATAL controller status, USBSTS", usbsts);
         }
     } else if (XhciTolHchRecover(
@@ -798,6 +800,10 @@ ULONG XhciControllerHealthPoll(PXHCI_EXTENSION ext)
                 ext->CommandAgeEscalated = 1;
                 ext->CommandAgeResets++;
                 escalate = 1;
+                /* Task 49.35: recorded in a release build. */
+                XhciLogNoteLocked(ext, "cmd.age.reset",
+                                  (ext->CommandOwnerOp << 16) |
+                                      ext->CommandOwner);
                 XHCI_DBG_VALUE("check: aborted command outstanding past every "
                                "watchdog interval - requesting controller "
                                "reset, TRB", ext->CommandTrbPA);
@@ -1291,6 +1297,19 @@ static VOID xhciCommandAborted(PXHCI_EXTENSION ext, ULONG pointer)
  * Called with the controller lock held; returns the action its caller takes
  * after dropping it. IRQL: DISPATCH_LEVEL.
  */
+/* Task 49.35: a divergence recorded in a release build - reason in 31:28
+ * (1 no abort outstanding, 2 a second abandonment, 3 the abandoned command
+ * not rewritable, 4 a position the ring cannot hold), the stopped pointer's
+ * low 28 bits beside it. Controller lock held. */
+static VOID xhciNoteDiverged(PXHCI_EXTENSION ext, ULONG reason, ULONG pointer)
+{
+    ext->Tol.Stats.CmdDiverged++;
+    if (ext->Tol.Stats.CmdDiverged <= XHCI_NOTE_ESCALATIONS) {
+        XhciLogNoteLocked(ext, "cmd.diverged",
+                          (reason << 28) | (pointer & 0x0FFFFFFFUL));
+    }
+}
+
 static ULONG xhciCommandRingStopped(PXHCI_EXTENSION ext, ULONG pointer)
 {
     ULONG abandoned;
@@ -1304,6 +1323,7 @@ static ULONG xhciCommandRingStopped(PXHCI_EXTENSION ext, ULONG pointer)
          * live. */
         ext->CommandRingDiverged++;
         ext->CommandResetRequests++;
+        xhciNoteDiverged(ext, 1, pointer);
         XHCI_DBG_VALUE_CHANGED("command: stopped event with no abort "
                                "outstanding - the ring has diverged, TRB",
                                pointer);
@@ -1367,6 +1387,7 @@ static ULONG xhciCommandRingStopped(PXHCI_EXTENSION ext, ULONG pointer)
          */
         ext->CommandRingDiverged++;
         ext->CommandResetRequests++;
+        xhciNoteDiverged(ext, 2, pointer);
         XHCI_DBG_VALUE_CHANGED("command: stopped again with a rewritten No Op "
                                "still unanswered - requesting controller "
                                "reset, TRB", pointer);
@@ -1381,6 +1402,7 @@ static ULONG xhciCommandRingStopped(PXHCI_EXTENSION ext, ULONG pointer)
                                XHCI_TRB_TYPE_NOOP_COMMAND) != XHCI_RING_OK) {
             ext->CommandRingDiverged++;
             ext->CommandResetRequests++;
+            xhciNoteDiverged(ext, 3, pointer);
             XHCI_DBG_VALUE_CHANGED("command: stopped on the abandoned command "
                                    "and it could not be rewritten - requesting "
                                    "controller reset, TRB", pointer);
@@ -1395,6 +1417,7 @@ static ULONG xhciCommandRingStopped(PXHCI_EXTENSION ext, ULONG pointer)
     if (XhciRingSetDequeue(&ext->CommandRing, pointer) != XHCI_RING_OK) {
         ext->CommandRingDiverged++;
         ext->CommandResetRequests++;
+        xhciNoteDiverged(ext, 4, pointer);
         XHCI_DBG_VALUE_CHANGED("command: stopped at a position this ring cannot "
                                "hold - requesting controller reset, TRB",
                                pointer);
@@ -1524,6 +1547,11 @@ ULONG XhciCommandEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
                  */
                 ext->CommandsFatal++;
                 ext->CommandResetRequests++;
+                /* Task 49.35: recorded in a release build. */
+                ext->Tol.Stats.CmdFatal++;
+                if (ext->Tol.Stats.CmdFatal <= XHCI_NOTE_ESCALATIONS) {
+                    XhciLogNoteLocked(ext, "cmd.fatal", code);
+                }
                 XHCI_DBG_VALUE_CHANGED("command: a completion code Table 6-90 "
                                        "calls fatal - requesting controller "
                                        "reset, code", code);
@@ -1719,6 +1747,8 @@ static VOID NTAPI xhciCommandTimeout(PVOID miniPortExtension, PVOID context)
             timeout->Attempt >= XHCI_COMMAND_ABORT_WAITS) {
             ext->CommandResetRequests++;
             action = XHCI_CMD_ACTION_RESET;
+            /* Task 49.35: recorded in a release build. */
+            XhciLogNoteLocked(ext, "cmd.abort.stuck", crcr);
             XHCI_DBG_VALUE_CHANGED("command: abort did not complete, CRCR",
                                    crcr);
         } else {

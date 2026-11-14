@@ -95,6 +95,19 @@ completes its clients' requests and keeps only the driver's own memory;
 the stop's all-ones fallback fails closed. The owner's questions are in
 record 13. Nothing else changes.
 
+Revision 17, 2026-11-11, for roadmap-usb4 task 49.16, with no code:
+section 4.13.9. The staged path of section 4.13.8 audited against the
+code, path by path, with what no leg has read; the lists of what must be
+shown before `XhciDmaStaging` 1 could be chosen for a dock's controller
+or be the default; and the intermediate choices, for the owner. No
+default changes. Nothing else changes.
+
+Revision 18, 2026-11-11, for roadmap-usb4 tasks 49.29 and 49.16: section
+4.13.9. List 1 points at the instrumentation task 49.29 builds (record
+13 section 11.11.12), and the command stranded at `XhciDmaStaging` 0 is
+completed with an error, as the owner decided the same day. Nothing
+else changes.
+
 ## 1. What is asked, and what is not
 
 A tester on an AMD AM5 board reports that a USB mouse randomly stops
@@ -1078,6 +1091,96 @@ between CRS and Run/Stop. A bus with nothing outstanding saves as before;
 a controller without Force Save Context, every virtual machine's, declines
 earlier anyway. At every `XhciTolerance` value.
 
+### 4.6.1 A reset that outlasts the recovery's stall (task 49.35)
+
+**The reading.** A field report on `3.4.3.0` (an ASMedia ASM1042,
+`1B21:1042` revision 00, HCIVERSION 0.96, Windows XP x64): right after the
+start an escalation a release build did not record raised the first reset
+request (the note ring reads `iso.none`, `ctrl.failed.here=1`,
+`door.alias`). The in-place recovery ran `XhciInitController` with
+`InitBelowPassive` set, wrote HCRST, and the wait for `USBCMD.HCRST` to
+clear ran out after its 1 ms pause and 10 ms stall: refused at
+`XHCI_INIT_STEP_RESET` with USBSTS `00000001`. The next two attempts began
+on the next controller-thread passes - `XhciSlotInvalidateAll` wakes the
+thread, and `hcdRecover` asked again at once - found HCRST still set in
+`XhciRecoverController`'s pre-check and refused, each charged. All three
+began inside one tolerance tick, and the controller stayed latched. A
+second report shows the third attempt finding the reset finished, writing a
+fresh HCRST and failing the same way: this part's reset takes more than
+about 11 ms and well under a second. The recovery's own text assumed the
+extra time would come from "the next health poll"; nothing spaced the
+attempts, and each wrote a new HCRST.
+
+**The split.** `XhciRecoverController` keeps its DISPATCH_LEVEL contract
+and every stall its length. What it cannot finish it hands back uncharged
+(`XHCI_RECOVER_RESET_BUSY`: its pre-check found a reset running, or it
+refused at the reset with one running; `RecoverResetOwed` says the HCRST was
+this driver's), and `hcdRecover`, on the controller thread at
+PASSIVE_LEVEL with the power gate held, waits for it - USBCMD.HCRST and
+USBSTS.CNR read every 10 ms for up to `XHCI_TOL_RESET_SETTLE_MS` (1000, the
+start's own bound), through the pure `XhciTolResetSettle`, an all-ones read
+ending it. Settled with a reset owed, the reset is proven
+(`RecoverResetProven`) for the one call of the recovery that follows, whose
+`xhciReset` adopts it instead of writing another (`reset.adopted`): between
+the proof and that point the rerun writes only the quiesce's interrupt
+masks (USBCMD.INTE and IMAN, legal once CNR is 0, 5.4.2) and the xECP
+handoff, and finds HCH set, none of which needs a reset after it. A
+refusal at `XHCI_INIT_STEP_BUS_MASTER_RESTORE` with the bit this driver
+cleared still to put back is handed back the same way
+(`XHCI_RECOVER_BME_RESTORE`); until 49.35 it was charged and then run
+again, so one recovery could cost two. One loop in `hcdRecover` finishes
+both, at most three times, the bit put back before the rerun (a settled
+reset leaves the controller halted and reset, `hcdRestoreBusMaster`'s
+precondition), the window charged once as before. An attempt still not
+finished - a reset not settled in the bound, or the restore refused - is
+charged once (`XhciRecoverCharge`).
+
+**The pacing.** After any attempt that did not recover, the next is not
+begun before `XHCI_TOL_RECOVER_GAP_TICKS` (`XHCI_TOL_TICKS(500)`, 13 ticks:
+at least 540 ms, about 1.3 s nominal) have passed since its stamp
+(`RecoveryFailTick`, the pure `XhciTolRecoverPaced`); the request stays
+owed and the thread's 100 ms timeout brings it back. The latch is
+unchanged - three consecutive failures, the window - and a controller that
+never comes back now reaches it after three bounded waits and two gaps,
+about six seconds nominally, instead of inside one tick. At every
+`XhciTolerance` value: the clock runs at 0 too.
+
+**With mode 4 (task 49.24).** A continuation re-reads mode 4's admission
+(`Msg4Barred`, `Msg4Lost`) under the controller lock after each settle and
+stops before any restore or rerun (`ctrl.recover.msg4` 1); and a success
+is not taken while a loss is latched - the brake's DPC can set it while a
+call runs, on another processor or during a configuration IRP - the
+enables masked and `ControllerFailed` set again, uncharged
+(`ctrl.recover.msg4` 2). That closes the same window for the first call.
+
+**What is recorded.** Notes `ctrl.recover.resetbusy` (USBSTS),
+`ctrl.recover.settled` (ms waited), `ctrl.recover.unsettled` (USBCMD),
+`ctrl.recover.bme`, `reset.adopted`; and, at the escalations a release
+build did not record until 49.35, each bounded to the first
+`XHCI_NOTE_ESCALATIONS` (4) of a start: `evt.hc` (a Host Controller Event's
+completion code), `evt.rearm.failed` (IMAN), `intr.unmask.failed`,
+`intr.mask.unproven`, `cmd.diverged` (the reason in bits 31:28),
+`cmd.fatal` (the code), `cmd.abort.stuck` (CRCR), `cmd.age.reset`,
+`ctrl.fatal` (USBSTS); and `dma.proof` (the `XHCI_TOL_PROOF_*` verdict of
+every Bus Master Enable proof, the successful one that clears the bit
+included). The counters of section 4.8 carry the same at words 34 to 45.
+The Host Controller Event's escalation itself is unchanged.
+
+**Elsewhere below PASSIVE_LEVEL.** `InitBelowPassive` is set by the
+in-place recovery alone. The resume's reinitialization
+(`XhciResumeController` from `hcd_power.c`) and the start run at
+PASSIVE_LEVEL with the 1000 ms bound; the all-ones containment writes no
+HCRST; Windows 98 SE and ME run the same thread and paths.
+
+**Tests.** `test_tol`: `XhciTolResetSettle` against a fake controller that
+holds HCRST, and separately CNR, for 0, 5, 50, 500 and 1500 ms and for
+ever; the pacing; and a model of `hcdRecover`'s loop on the same fake - 0
+and 5 ms recover with no wait, 50 and 500 ms after one settle with one
+HCRST written, 1500 ms and for ever reach the latch after three charged
+failures at least the gap apart. The qemu flavour's faults 1B (every HCRST
+held `arg` x 10 ms, HCRST or CNR) and 1C (one Host Controller Event) are in
+section 5.
+
 ### 4.7 The interval cap (35-T.7, gated) and the Average TRB Length switch
 
 **The cap.** An interrupt endpoint whose Interval exceeds 8 (32 ms) is
@@ -1179,6 +1282,12 @@ since the driver prunes them only at its next admission - the containment
 and its branch, every nonzero counter by name, the code histogram with
 xHCI 1.2 Table 6-90's names, and each location charged, held or re-armed;
 `-selftest-tol` checks the decoder.
+Since task 49.35 the counter block has 46 named words before the
+histogram, not 34: `ResetSettles`, `ResetSettleMsMax`, `ResetUnsettled`,
+`ResetBusy`, `RecoverPaced`, `RecoverReruns`, `HcEvents`, `HcEventCode`, `RearmFails`,
+`CmdDiverged`, `CmdFatal` and `MaskFails` (section 4.6.1), shown in a
+plain Save Report's per-controller section; XHCITR still decodes a driver
+that serves 34, and an older XHCITR prints the new words by number.
 The extension that carries all of it must fit `XHCISNAP`'s extension
 image, which `hcd_door.c` checks at compile time: 256 KB since `7e95afa`,
 after 35-T.2's fields took the amd64 extension past the 128 KB it had been. The `tol.*` counter block also goes into
@@ -1685,6 +1794,277 @@ development host A with the stamped `2.2.0.3` `qemu` build:
 
 With 4.12.2 to 4.12.4 the disk does not stay stuck, so nothing waits on
 it.
+
+#### 4.12.8 A stream's dequeue read back after a cancel (issue 26 section 8, task 49.39, 2026-11-12)
+
+Issue 26 section 8: on an Intel 7 Series controller, after a data-in
+cancel on a UAS drive's stream endpoint, the drive's later reads were
+answered GOOD while their data-in TDs never ran, and one stream's Set TR
+Dequeue reached the controller with the endpoint Running although the read
+before it had said Stopped. Neither what restarts that endpoint nor where
+the stream's dequeue then stood is known. This section makes the driver
+check, after every cancel on a stream endpoint, that what the controller
+saved for each stream is what the driver's rings say, and act only where
+acting cannot lose or replay data. The owner's decision of 2026-11-12: on
+by default, with `XhciStreamDequeueRepair` 0 leaving the checks and their
+notes and taking no action.
+
+**When a Stream Context is authoritative.** xHCI 4.12 (p.219) and 4.6.9
+(p.119): before an endpoint enters Stopped the controller makes every
+stream's TR Dequeue Pointer and DCS reflect its forward progress
+(`docs/usb-xhci-info/xhci-data-structures.md`, the Reset Endpoint and Stop
+Endpoint row). The driver reads a Stream Context only when all of these
+hold, which is the cancel's own state:
+
+1. the Stop Endpoint's completion (or the Set TR Dequeue's) has been
+   received - every event the controller wrote before it has been consumed
+   (record 13 section 14's 43.69 gate);
+2. the endpoint's Output Context reads Stopped (`hcdCfgEpState`);
+3. no doorbell has been rung for the endpoint since that stop: the
+   endpoint is paused (`HcdIoPipePause`) from before the stop until the
+   cancel's own doorbells at its end;
+4. for the stream read, the held short-deferred TDs its saved dequeue shows
+   it has passed are settled (`HcdDevStopSettle`) - and a settle that did
+   not finish (the ring refused a retire) forbids any action on that
+   stream.
+
+A stream read while any of them fails is not compared.
+
+**c1 - the stream the cancel sets.** `hcdCfgCancelPipe` sends a Set TR
+Dequeue to the oldest surviving TD's first TRB, or to the enqueue when none
+survives: positions no execution of the controller has reached, since it
+stopped inside the cancelled head TD or before it. After a Success with the
+endpoint still Stopped (`hcdCfgSetDequeueOne`), the Stream Context is read
+and its TR Dequeue Pointer (63:4, both words) and DCS are compared with what
+was sent; SCT is masked, and checked to be 1 (Primary TR) separately. Equal:
+done. Different: the command is sent again, at most twice more, each
+followed by the same read; still different, or a command that fails, gives
+the device up: `hcdCfgStreamMark` and a failed return, so `hcdCfgFault`
+cycles the device alone (issue 24's route). The endpoint read Running after
+the Success: nothing is compared and nothing rewound, because it may have
+moved legitimately from the new position; it is stopped again (bounded,
+`hcdCfgStopBounded`) and that stream is then checked as c2 checks the
+others.
+
+**A restart between the difference and the resend** (the merge review of
+2026-11-13): issue 26 section 8.1 is exactly an endpoint read Stopped and
+then Running at the next command, so c1's own resend must not assume the
+endpoint is still at rest. Before each resend the endpoint is read again;
+read Running, nothing is sent and the pass goes back to the Running branch
+above: stopped again (bounded), then that stream's saved position placed
+as c2 places it - its saved progress assessed, never a rewind of what the
+controller may have done since. That branch places only an endpoint the
+bounded stop left exactly Stopped (`XhciStreamAfterRestop`): Halted or
+Error after it - the restarted endpoint faulted while the stop was pending
+- is no state whose Stream Context is authoritative, and neither a
+placement nor clearing the stream's fault restores it, so the device is
+given up, as for a stop that would not hold. For the same reason, once a
+difference has been found and not yet repaired, a read that finds the
+endpoint Halted or Error - before the resend, or at the pass after one -
+gives the device up: the first read's leave-it-to-the-quiesce answer for
+those states is for a stream compared equal or not yet compared, not for
+one whose saved position is known wrong, whose stream fault must not be
+cleared unplaced. A resend answered Context State Error is
+read the same way (`XhciStreamResendAfter`): the endpoint now Running is
+that branch too, not a give-up; read Stopped, Halted or Error, or another
+completion code, gives the device up as before. For a stream compared
+equal or not yet compared, the Running branch ends the pass (a placed
+stream is kept, an unplaceable one given up). This is `hcdCfgSetDequeueOne`'s own
+handling of a refused command - a restarted endpoint stopped again - with
+the one difference that after the stop the position is placed rather than
+the software dequeue sent again: c1 resends only because the saved
+position differed, and once the endpoint has run that difference may be
+the controller's real progress. The exception is a stream whose
+difference was found before the restart: it is resent only when it holds
+no TD of the driver's (below), so no run can have moved a transfer the
+driver owns, and after the stop it is read back again rather than placed -
+still different, its stale position is sent right on the endpoint now at
+rest (placement would only find a cancelled TD's position unplaceable and
+cycle the drive for nothing). At most two such stops and two resends
+(`HCD_DEQ_RESTOPS`, `HCD_DEQ_RESENDS`); past either, the device is given
+up.
+
+What no read can close is a restart after the last read and before the
+command lands, if the controller then takes the command because the stream
+is not the one it is executing (xHCI 4.6.10 takes Set TR Dequeue for a
+stream that is not active; 4.12: the controller does not know whether a
+device will select a stream again). A run in that window starts from the
+controller's saved position; if it reaches a TD the driver still has
+queued on that stream and moves it, a resend to the driver's position
+would replay that TD's transferred part. So c1 resends only for a stream
+that holds no TD of the driver's (`XhciStreamMayResend`: the queue empty,
+the endpoint Stopped at the read just before): no run in the window can
+move a transfer the driver owns, and replacing the stale position loses
+nothing. That is the issue's case: a UAS stream carries one command, and
+its cancel leaves the stream with none. A stream with a TD queued is given
+up at the difference, as before this revision, since nothing short of a
+device cycle proves that TD untouched. A run that starts from a resent
+position comes after the command; the next read finds the endpoint Running
+and the Running branch keeps that progress by placing it.
+
+**c2 - every other stream of the endpoint**, before the cancel's doorbells,
+in two steps. First the position alone (`XhciXferStopPosition`, the half
+of `XhciXferStopPlace` that reads no queue): a saved pointer on that
+stream's ring, inside its outstanding window (from the software dequeue to
+the enqueue, a Link TRB taken as the base it leads to) and carrying the DCS
+the ring gives that TRB, is a position the controller can hold. Any other -
+off the ring, behind the software dequeue, past the enqueue, the wrong DCS
+- is one it could not have reached by executing the ring, and rewinding it
+cannot be proven safe: a context the controller corrupted may sit anywhere
+relative to what it actually did. It is never repaired by a Set TR
+Dequeue: with the repair on the device is given up before any doorbell
+(`hcdCfgStreamMark`, then `hcdCfgFault`: the device alone cycled); with it
+off, it is noted and counted only. Then a holdable position is settled
+against the queue as 43.69 does for the cancelled pipe
+(`HcdDevStopSettle`): inside a queued TD or between them is legal, partial
+progress is kept and nothing is sent. Past a TD whose completion has not
+come, which the settle calls `UNREAD`, is noted and counted (`unsettled`)
+and nothing is done: QEMU publishes its fetch pointer past a TD it holds in
+flight (`xhci_kick_epctx`; `test_xfer`'s `test_stop_place_fetch_pointer`),
+and on a real controller that TD is left to its own timeout and to record
+13 section 16.15, which resets the device without losing the volume.
+
+**On QEMU's xHCI** 4.12.4's resync runs at the stop, before these checks,
+and gives every stream QEMU left on an address outside its window the
+software dequeue, so c2's give-up is not reached there by QEMU's own
+behaviour: only by the host vectors. A fetch pointer past a TD in flight is
+inside the window, kept by the resync, and is c2's `unsettled` case. c1 is
+reached on QEMU by fault 1D below, which alters the cancel's own command
+after the resync.
+
+**What a cycle costs** is issue 24's: the device leaves and returns, its
+volume with it, and a removable drive's volume may be verified again. It is
+taken only on a reading the specification says cannot occur.
+
+**`XhciStreamDequeueRepair`**, a `REG_DWORD` in the controller's driver key
+and in the machine-wide `Services\USB` key, which wins when there, read at
+each start (`hcd_ctl.c`, beside the quirk values): absent or 1, the checks
+act as above; 0, c1's read-back and c2's placement run and are noted and
+counted, and no extra Set TR Dequeue and no give-up follows - `3.4.3.0`'s
+behaviour; any other value is refused and 1 stands. Both INFs write it 1
+with no-clobber; an INF-gate row and a `tuning.md` row.
+
+**Notes and counters.** `cfg.deq.readback` (slot `<< 16` | DCI `<< 8` |
+stream `<< 4` | the verdict: 0 equal, 1 different and sent again, 2 given
+up, 3 Running, not compared), `cfg.deq.verify` (the same fields, the
+placement verdict and whether it was acted on), `cfg.deq.giveup`; counters
+`StreamDeqChecked`, `StreamDeqMismatch`, `StreamDeqResent`,
+`StreamDeqGiveUps`, `StreamDeqUnplaced`, `StreamDeqUnsettled`.
+
+**The injection** (qemu flavour; `XhciQemuInject`, `build-and-test.md`):
+
+- `1D` (29), a stale dequeue: the next `arg` stream Set TR Dequeues sent by
+  a cancel whose head TD was cancelled are sent for real with the TR Dequeue
+  Pointer and DCS of that head TD's first TRB in place of the driver's.
+  QEMU's `xhci_set_ep_dequeue` takes it and writes the Stream Context
+  (`xhci_set_ep_state`), so the read-back sees the stale position and the
+  stream would re-run the cancelled TD. A deliberately stale hardware
+  dequeue: a pass shows the driver recovers from that fault, not that it
+  is the Intel controller's mechanism. With `arg` 0 to 2, c1 sends the
+  command again and the cancel completes; from 3 every send is altered and
+  the device is given up.
+- `1E` (30), a restart between the read and the command: after
+  `hcdCfgSetDequeueOne` reads the endpoint Stopped and before the stream's
+  Set TR Dequeue is sent, the endpoint's doorbell is rung for a stream of
+  it holding a queued TD, at most `arg` times. QEMU then runs the endpoint:
+  the command meets Context State Error and the existing retry stops and
+  sends again, or lands and c1's Running branch follows.
+- `1F` (31), a restart inside the repair: after c1 has found a difference
+  and before its resend, the endpoint's doorbell is rung for another stream
+  of it - one holding a queued TD, else any other, whose empty ring runs
+  nothing but takes the endpoint Running - at most `arg` times. Used with `1D` (a difference to
+  repair), it shows the resend meeting a restarted endpoint: the pre-send
+  read or the command's Context State Error takes c1's Running branch, and
+  the stream is placed without a cycle. Noted `qemu.inj.repairrace`.
+
+Both are independent of the emulator's `usb-uas x-ata-passthrough-refuse`
+(`usb4-emu`'s `docs/XHCI98-HANDOFF.md`), which gives the drive's refusal
+with the data-in TD left to cancel. Each can be used without the other.
+
+**Vectors.** `test_stream`: c1's comparison (equal, a pointer off by one
+TRB, a DCS flipped, SCT not 1, the high word nonzero), and what follows a
+resend (`XhciStreamResendAfter`: Success reads back again; Context State
+Error with the endpoint Running is the Running branch; Context State Error
+with it Stopped, Halted or Error, another code, or no command is a
+give-up; `XhciStreamAfterRestop`: only Stopped after the bounded stop is
+placed - Running, Halted and Error give up; `XhciStreamMayResend`: only an
+empty stream read Stopped is resent - a queued TD, or any other state, is
+not). `test_xfer`:
+`XhciXferStopPosition` (empty, wrapped, inside the head TD, on the Link
+TRB, behind the software dequeue, past the enqueue, wrong DCS, off the
+ring) and `XhciXferStopPlace` unchanged by the split, including QEMU's
+fetch pointer past an unfinished TD after `XhciRingResyncOwed`, which is
+holdable and settles `UNREAD`. Legs (task 49.39): one mismatch
+repaired; a persistent one ending in the device cycle; command failures
+during the repair; neighbouring streams with transfers in flight
+unaffected; a TD partly done when cancelled; a copy-compare across a
+repair.
+
+#### 4.12.9 What the next report says (issue 26 section 8, task 49.39, 2026-11-12)
+
+Issue 26 section 8 could not tell where the data-in stream's dequeue stood
+while the reads starved: no report of `3.4.3.0` carries the endpoint's or
+the streams' contexts, the failure ring has no times, and an event inside
+no queued TD is a count with nothing else. Four additions, so that the
+reporter's next report settles the mechanism - a stale dequeue seen after a
+successful completion while stopped supports section 4.12.8; matching
+dequeues with continued starvation points elsewhere:
+
+- **The stream contexts** (`XHCI_SNAPSHOT_REGION_CONTEXTS`, region 4, a
+  new region, so the schema stays 5: an older driver answers
+  `XHCI_SNAPSHOT_S_BAD_REGION` and the tool says "not served by this
+  driver"; an older tool never asks). One record per endpoint with
+  streams open, in Slot ID and DCI order: the slot, the DCI, the Output
+  Endpoint Context's five dwords, the stream count, then for each stream
+  the Stream Context's first two dwords beside the driver's own view of
+  that stream's ring - its software dequeue (address and cycle), its
+  enqueue and the TDs queued. Pointer-free ULONGs; each record carries
+  its own size, and a reader walks by sizes. Read under the controller
+  lock while the controller is STARTED, as the slots region is
+  (`hcd_door.c`, `hcdDoorContexts`): one window can catch the controller
+  mid-move, and the text says so. XHCITR prints each stream as a line -
+  the saved position, its placement against the ring (the same
+  `XhciXferStopPosition` as section 4.12.8), the driver's dequeue and
+  enqueue - in `xhcitr\tr_ctx.c`, a file of its own.
+- **The stream trace** (`XHCI_SNAPSHOT_REGION_TRACE`, region 5): every
+  flavour, per controller, a ring of 256 entries of four ULONGs - the time
+  (the system time in the `at` notes' 102.4 us units), a kind byte with
+  slot, DCI and stream, and two values - of what happens to stream
+  endpoints only: a command sent and its completion code, an endpoint
+  state read, a stream's Set TR Dequeue's pointer with its DCS and SCT and
+  the read-back of section 4.12.8, a cancel's TD bounds, a stream's
+  doorbell, a stream's transfer event (pointer, code, length). Written
+  under the controller lock (the event path's own), so the cost is a
+  store per event. **A capture is taken**, not a stop: when a UAS
+  device's `RESET_PORT` arrives (before its Reset Device: record 13
+  section 16.15's reset) and when section 4.12.8 gives a device up, the
+  whole ring is copied, in the same hold, to a second buffer with a
+  capture number, the reason and the time, and the live ring goes on.
+  Reading the region changes neither: every read returns the last
+  capture and the live ring, so a save that fails, or a second report
+  taken later, still carries the same capture until a newer incident
+  replaces it (its number tells them apart).
+- **The failure ring's times** (`xhci98_xfer.h`): `XHCI98_FAILURES` version 2
+  appends eight time words (the class driver's own seconds since its start,
+  entry `i`'s at word `i`) after the unchanged header and ring. The bus
+  accepts version 1 at its size and version 2 at its size
+  (`hcd_urb.c`), and copies, in one hold, the existing 33 words to the
+  existing block (older XHCITR keeps its four-word stride) and the count
+  with the eight times, and the LUN's ATA refusal bits (record 13 section
+  16.16), to a new block appended after header word 929 with its own
+  records, words and first-record trio (`XHCI_SNAPSHOT_HCD_UTIME_*`). A
+  header that ends at 929 is an earlier driver's. XHCITR prints a time
+  beside each failure only when the new block's count equals the old
+  block's, and "ATA PASS-THROUGH (12)/(16) refused by the drive: answered
+  here until it is replugged" when a bit is set. `xhciuas` sends version 2
+  and falls back to version 1 when a bus refuses it.
+- **An event inside no queued TD** (`hcd_dev.c`, the transfer event's
+  path): the first eight of each start note `xfer.unmatched` (slot `<< 16`
+  | DCI `<< 8` | stream `<< 0`, the stream the ring names, 0 for none) and
+  `xfer.unmatched.trb` (the TRB pointer's low dword), and a trace entry.
+
+The quick save that carries these (record 25 section 22 item 14) now
+flushes what it wrote: see that record.
 
 ### 4.13 Releasing the transfers kept by a pinned containment (deferred, PCR.1)
 
@@ -2410,6 +2790,416 @@ requests pending, section 4.13.1's wait, until a user sets 1.
 XP and 7 x64, with the qemu flavour's fault switch at each point a
 request can be.
 
+#### 4.13.9 The staged path audited, and what must be shown before staging is the default (task 49.16)
+
+**Why.** Task 49.16 (the owner, 2026-11-11, from the README's driver
+issues): a dock unplugged with a keyboard, mouse, tablet or similar
+device on its own USB controller is never fully removed unless it was
+stopped first. That is section 4.13.1's wait, and section 4.13.8 already
+designs what ends it. This section is an audit of that design against
+the code as it stands on branch `3.5.0.0` at `a4436a9b2`, with no code
+changed, and the list of what must be read before `XhciDmaStaging` 1
+could be the default. No default is changed here.
+
+**What task 49.25 added, and what it did not** (2026-11-11; the legs'
+record is `runs/run-49.md`, "49.25", after "49.6 (fault 1)", whose
+order they repeat). On XP, under the firmware connection manager, an
+HP Thunderbolt Dock G2 model removed by surprise in the emulator, with
+its network function bound and used:
+
+- with `XhciDmaStaging` 0 on the dock's controller the removal never
+  finished and XP never shut down: the network driver's halt waited on a
+  cancelled control request, then on an ABORT_PIPE, and behind them on
+  five transfers left on the rings (legs X4b, X5 and X6; the report
+  read "CONTAINED" and "PINNED");
+- with 1, the same binary and the same order, every request completed,
+  `IRP_MN_SURPRISE_REMOVAL` and the removal reached every object of the
+  dock, and XP restarted (legs X7b and X8).
+
+So the mechanism of section 4.13.8 is supported: on one system, with
+one dock model and one client driver, in the emulator, with requests
+that happened to be on the rings, and with no replug afterwards. It
+does **not** establish that staging should be the default. That
+decision changes every transfer of every controller on every system,
+and rests on the lists below.
+
+**What 1 changes on a controller closed off without proof.** Read in
+the code; five places test the switch or act on it:
+
+- `HcdEnumContain` (`hcd_enum.c`) takes the proven containment's
+  `hcdDropAll` when there is a proof **or** staging is on, so every
+  device is drained and leaves through the departure; with 0 it only
+  drains, which on a pinned buffer keeps everything.
+- `HcdIoDeviceDrain` (`hcd_io.c`) returns before `HcdCfgFlushDevice`
+  and `HcdIoDrainPipe` only when the buffer is pinned **and** staging
+  is off.
+- `hcdPdoQuiesce` (`hcd_pdo.c`) waits for the PDO's pending count on a
+  pinned buffer with staging on, and skips that wait with it off.
+- `hcdStopBody` (`hcd_ctl.c`) releases every child PDO's held requests
+  (`HcdIoParkCloseAll`) after an unproven stop with staging on.
+- `xhciTryClearBusMaster` (`xhci_init.c`, through
+  `XhciStageCommandProof`), the fallback of a stop whose halt failed,
+  takes a Command register of `FFFFh` as a function off the bus with 0
+  and as no proof with 1.
+
+**Why a request may then complete.** The argument, each step read in
+the code:
+
+- *The controller names only the driver's memory.* Every data TRB of a
+  client's transfer names staging: a small buffer, a slab, a reserve,
+  the control slab or an isochronous share (`hcd_stage.c`). The hubs'
+  status transfers and enumeration's use the scratch, which is kept
+  with the rest (`hcd_hub.c`, `HcdHubRearm`, whose one element is in
+  `ScratchPa`). A Setup stage is in its TRB. The qemu flavour counts
+  any published element outside its TD's staging (`stage.foreign`).
+- *All of that memory is kept.* Each allocation comes from `hcdDmaAlloc`
+  and goes back through `hcdDmaFree` (`hcd_dma.c`), which keeps it and
+  moves its charge from live to kept while `CommonBufferPinned` is set;
+  `HcdDmaClose` then keeps the adapter too.
+- *The pin comes before the drain.* `HcdSvcDmaNotStopped` (`hcd_svc.c`)
+  sets the pin and closes staging's admission, and both routes that
+  contain call it before `HcdEnumContain` (`hcdContain`, `hcd_ctl.c`;
+  the unproven invalidation, `HcdEnumService`, `hcd_enum.c`). So a pipe
+  the drop closes keeps its staging, and a slab a drained record gives
+  back to the pool is handed to no other transfer.
+- *Nothing is copied from memory the controller may still write.* An
+  IN taken off without its Transfer Event copies nothing out while the
+  buffer is pinned (`hcdStageCopyOut`), and the event ring is not
+  drained on a failed controller (`xhci_evt.c`, the drain's
+  `ControllerFailed` test).
+- *Processor work is joined.* `HcdStageDrain` waits out the staging
+  DPC, the retry timer and every admission pass, copy and publication
+  before `HcdStageClose` and `HcdDmaClose` run (`hcdRelease`,
+  `hcd_ctl.c`).
+- *The accounting holds.* The ledger is the image's, not a
+  controller's; the first kept allocation clears `DriverUnload` under
+  its lock (`hcdLedgerKeep`).
+
+**The verdict of the reading.** In the paths read, nothing at 1 frees
+or reuses memory the controller may still name, and nothing completes
+a request twice. That is a reading of the code, not a proof: record 13
+section 11.11.9's checks of it are not built (below). One liveness risk
+was found and is **not** resolved: the held request of the table's
+fourth row.
+
+**Each path that completes or cancels a request on a contained
+controller.** "Contained" is after the latch (`Tol.Unreadable`);
+"failed" is the interval before it, from the first command timeout.
+
+| Path | Staging 0 | Staging 1 | Evidence | Open |
+| --- | --- | --- | --- | --- |
+| A client cancels a transfer on a ring | `hcdCancel` marks the record and wakes the thread; the thread serves no cancel on a failed controller (`HcdEnumService`, the `hcdHalted` tests), so it never completes | the same until the containment; its drain then ends the record, and `HcdIoPark` declines a cancelled request, so it completes at once | `hcd_io.c` (`hcdCancel`, `HcdIoPark`); X4b against X7b and X8 ("URB 13 completed after cancel") | the time to the containment is a command's timeout and the refused recovery, about 5 s in X8; no reading bounds it |
+| A client cancels a request not on a ring | a request waiting for a transfer record is unlinked by its own cancel routine and refused at the next tick, with no thread; a record held behind its pipe's owner or on a paused pipe is marked for the thread, as one on a ring is | the same; and a record waiting for staging, or a copy-out waiting for a window, is unlinked and completed with neither the thread nor the controller, one whose copy runs being finished by the copy's owner | `hcd_io.c` (`hcdWaitCancel`, `hcdCancel`, `HcdIoWideStop`), `hcd_stage.c` (`HcdStageCancelLocked`) | no leg has met a record in staging's own states at an unproven stop |
+| ABORT_PIPE sent after the containment | answered at dispatch with success; releases only requests already held on the PDO, not those on the rings | the same; every request was drained and held, so the abort releases them | `hcd_urb.c` (`hcdUnreadable`), `hcd_cfg.c` (`HcdCfgQueue`); X8 ("held URBs released", 4 and 1) | none read |
+| Any other request sent after the containment: a transfer, RESET_PIPE, a select, a static-streams request | held on its PDO, cancellable; released by a cancel, an abort that covers it, or the PDO's stop or removal | the same, and at the controller's own stop | `hcd_urb.c` (`hcdSubmitUrb`: the `Unreadable` test comes before the departed branch; `hcdUnreadable`), `hcd_io.c` (`HcdIoHoldUnreadable`) | **the liveness risk.** A client that sends such a request from its own removal handling and waits for it without a bound, before passing its REMOVE down, stalls the removal at either value; staging does not end that wait. On NT the client hears `IRP_MN_SURPRISE_REMOVAL` first (X8; section 4.13.6's legs). 98 SE and ME have no surprise removal, and ME's `usbaudio.sys` sends a select before its REMOVE (record 13 section 18.2): on a contained controller that select is held, and the release of record 13 section 18.5 (`HcdIoIsoRelease`), which sits in the departed branch, is never reached. Not read on any system |
+| ABORT_PIPE, RESET_PIPE or a select queued while failed, before the containment | stays queued for good: the thread serves nothing on a failed controller, the pinned drain returns before the flush, and the request has no cancel routine | flushed by the drain: an abort succeeds, any other is held on its PDO as in the row above | `hcd_cfg.c` (`HcdCfgService`, `HcdCfgFlushDevice`, `hcdCfgHoldUnreadable`); X5 and X6's second abort (its place in the queue is code reading, not a log line) | with 0, a request that names no client page waits for nothing it needs; a narrower fix exists and would not end the removal's wait (`runs/run-49.md`, "49.25") |
+| A port reset, or the private OPEN_STREAMS and CLOSE_STREAMS requests | one queued stays queued (above); a new one finds the device gone and is refused | one queued is completed by the drain; a new one is refused | `hcd_cfg.c` (`HcdCfgQueue`: the hold takes URBs only; `HcdCfgFlushDevice`) | none read |
+| A descriptor read queued through the door | completed even when the record is kept | completed | `hcd_io.c` (`HcdIoDeviceDrain`: `HcdDoorFlushDevice` before the early return) | none |
+| The idle request, `XhciSelectiveSuspend` 0 (the INFs' value) | held with a cancel routine, its callback never called; completed at the client's cancel or the PDO's stop or removal | the same | `hcd_urb.c` (`hcdIdleSubmit`, `HcdUrbIdleDrain`) | none |
+| The idle request, `XhciSelectiveSuspend` 1, its callback running at the stop | the callback's thread is abandoned and the pin recorded on its PDO; the PDO's rundown does not wait for it and keeps the object | **the same**: neither test reads the switch. The PDO object and the callback's context stay for the boot, and the idle request completes only when the client's callback returns | `hcd_susp.c` (`HcdSuspCbStop`, `hcdSuspCbAbandon`, `HcdSuspIdleRundown`, `hcdSuspCbThread`) | section 4.13.8's one exception, as designed. A client that itself waits for its callback is not moved on by the abandonment. No leg has a callback running at an unproven stop |
+| A child PDO's power requests | selective suspend's admission and every pended child request are settled by the stop | the same | `hcd_ctl.c` (`hcdStopBody`: `HcdSuspControllerDownLocked`, `HcdTmrJoin`) | not read on a contained controller at either value |
+| The controller's own power requests | a contained controller is not resumed. The shutdown's flush completes nothing on one: both routes that contain set `Tol.Unreadable`, and any value of it suppresses the flush of commands and of transfers alike (without it, a pinned or unhalted controller has its commands flushed and no transfer) | the same rule. The software queues were drained at the containment; requests held on a PDO stay held until their client or PDO lets go | `hcd_power.c` (`hcdResumeContained`, `hcdShutFlush`), `xhci_tol.c` (`XhciTolShutFlush`) | that XP's shutdown waits on the stalled removal, not on a power request, is an inference (no power request was sent in X6) |
+| STOP, SURPRISE_REMOVAL or REMOVE of a child PDO | held requests released; the wait for the count skipped on a pinned buffer, so the PDO does not wait, its client above does | held requests released; the count waited for, which the drain brings to 0 | `hcd_pdo.c` (`hcdPdoQuiesce`); X8 (minor 17h, then 02h, to every object) | a wait inside the PDO's own request is new with 1: it ends only once the containment or an invalidation has come. Read on XP alone |
+| A refusal completed at the next tick | a refused request is on its PDO's own list and timer, cancellable; the PDO's REMOVE waits for them, its STOP and SURPRISE_REMOVAL do not | the same | `hcd_io.c` (`HcdIoRefuseLater`), `hcd_pdo.c` (`hcdPdoRefusalsWait`) | none read |
+| The controller's stop or removal after the containment | every DMA block kept; the devices' records and requests kept | every DMA block kept; devices dropped, every held request released `CANCELED` (`HcdIoParkCloseAll`) | `hcd_ctl.c` (`hcdStopBody`), `hcd_dma.c`; X8 ("failing closed", then the release); `runs/run-48.md`, "48.33", the unproven stop on 7 x86 and 7 x64 | 98 SE, ME, 2000 and Vista have no such leg |
+| A stop before any containment whose halt fails and whose fallback reads `FFFFh` (a removal with nothing pending) | read as off the bus: everything freed, no pin, the evidence section 4.13.7 rejects | not proven: completed as above and the memory kept | `xhci_init.c` (`xhciTryClearBusMaster`), `xhci_stage.c` (`XhciStageCommandProof`); `runs/run-45.md`, "45.35", the USB disk case | with 1 each such removal keeps the controller's DMA memory for the boot (below) |
+| External hubs and the root hub | the hub's own status transfer carries no request; a hub's and the root hub's removal wait on nothing of the controller but the thread's detach, served halted or not | the same; the hubs leave with their subtrees in the drop | `hcd_io.c` (`hcdDrainOne`), `hcd_hubfdo.c`, `hcd_rh.c`, `hcd_enum.c` (`HcdEnumDetach`, `hcdDropAll`); X8 ("hub leaving") | on 98 SE and ME the root hub's REMOVE comes with the thread running; not read contained |
+| A composite device | each function PDO as a child PDO above, its requests held and released per PDO; the composite parent's PDO answers its descriptor reads and selects itself, at once, and holds nothing | the same routes | `hcd_pdo.c` (`hcdPdoQuiesce`, `HcdIoCancelPdo`), `hcd_urb.c` (`HcdCompositePdoInternalIoctl`) | not read contained |
+| UAS streams | kept with the rest | every stream's pipe drained; the stream block and the streams' staging kept through the same release | `hcd_io.c` (`HcdIoDrainPipe`), `hcd_stage.c` (`HcdStageStreamsClose`) | no unproven stop with a stream request in flight has been read |
+| Isochronous requests | kept with the rest | drained and held as a departure's; on a contained controller the select that would hand them back on 98 SE and ME is itself held (the fourth row) | `hcd_io.c` (`HcdIoPark`, `HcdIoIsoRelease`), `hcd_urb.c` | no unproven stop with audio playing has been read; issue 25's ground |
+
+**What differs between sections 4.13.8 and 11.11 and the code, and what
+no leg has read.**
+
+- Three texts describe the 0 route alone: the USB Tree's report prints
+  "PINNED: no proof DMA stopped; buffer, transfers kept" for a
+  containment without proof at either value (`xhcitr/tr_snap.c`); the
+  comment above `hcdContain` (`hcd_ctl.c`, its step 3); and the comment
+  above `HcdIoIsoRelease` (`hcd_io.c`), which says an unproven
+  controller parks nothing. With 1 the transfers are not kept and the
+  drain does park. The TRBs left on the kept rings name staging alone;
+  a held request still carries its client's buffer, which nothing the
+  controller can reach names any more. So the texts are wrong and the
+  behaviour is not. Left for the next change there.
+- Record 13 section 11.11.9's fault points - a record held `WAITING`,
+  `FILLING`, `READY`, `DRAINING` or `COPY_PENDING` when the stop meets
+  it - and its log of each request's one completion are not built
+  (section 11.11.11). `XhciQemuStageFault` bit 0 acts at the stop,
+  after the quiesce, so it does not make a containment on a started
+  controller either; section 5's injection of all ones without the
+  proof does. Every unproven stop read so far met requests published
+  on a ring, and none placed them there on purpose: bulk writes on
+  7 x86 and 7 x64 (`runs/run-48.md`, "48.33"), a network function's
+  reads on XP (X8).
+- No unproven stop has been read with a UAS stream request, with an
+  isochronous pipe running, with a selectively suspended PDO, or on
+  98 SE, ME, 2000 or Vista at all.
+- With 1, each stop of the table's row "a stop before any containment"
+  keeps the controller's common buffer, its event ring's block, its
+  scratch and all its staging. By the constants that is some 2.5 MiB
+  with the default pool (`XhciStagePoolKiB` 2048) before any pipe's,
+  stream's or isochronous allocation, against the ledger's 64 MiB for
+  the image, which the live charges of every started controller share.
+  So some tens of surprise removals in one boot, not hundreds, before
+  a start is refused (Code 10) or a pipe fails to open, as Q-STG.3 (a)
+  decided. The figure is an estimate; no leg has read the bytes kept,
+  the refusal, or the ledger carried over to a new controller (the
+  7 x86 leg saw the image stay loaded and did not read the notes).
+- An update keeps what an earlier install wrote: both INFs write
+  `XhciDmaStaging` under the don't-overwrite rule, and `3.4.3.0` wrote
+  0. A new default in the INFs would reach a fresh install alone; how
+  an existing value moves is the installer's to decide (record 23) and
+  is not designed.
+- The tunnel statement's own audit (section 4.13.7) is still owed, and
+  is not part of this one.
+
+**What must be shown first.** Three lists, because three decisions
+rest on them: staging for a dock's controller on 2000 to 7; the same
+on 98 SE and ME; and the default for every controller. Each item says
+what passes. Record 13 section 11.11.9's list stands whole; nothing
+here replaces it.
+
+*List 1: the unproven stop itself, on every system that would run it.*
+
+1. **Each state a request can be in at the stop** (record 13 section
+   11.11.9): waiting for staging, filling, ready, published, draining,
+   waiting for a window; the staging DPC queued and running; the retry
+   timer set; a mapping that fails some times, and one that never
+   maps, ended at its give-up; a cancel or an abort racing each. Passes
+   when each request completes exactly once, nothing is copied after a
+   completion, `stage.foreign` is 0, each PDO's pending count returns
+   to 0, and the allocations made equal those freed plus those the
+   ledger keeps. The fault points and the per-request log this needs
+   are not built; building them, or accepting another reading in their
+   place, comes before any change of default and is not this task's
+   (built since for task 49.29, record 13 section 11.11.12).
+2. **A containment on a started controller**, by section 5's injection
+   of all ones without the proof, with a HID read pending, a bulk copy
+   in flight, a UAS stream request in flight and audio playing, and
+   with an ABORT_PIPE sent while the controller is failed and not yet
+   contained: every PDO removed with the controller left started, the
+   abort answered, nothing faulting.
+3. **The request a client sends as it is removed** (the table's fourth
+   row), on 98 SE and ME first: a HID device, a mass-storage device
+   and an audio device playing through Windows' own `usbaudio.sys`,
+   each on a controller contained without proof at 1. Passes when the
+   removal completes. If a client is found waiting on a held request,
+   the hold on a contained controller (section 4.6) goes back to the
+   owner before anything else here.
+4. **The bytes kept.** After one unproven stop, the bytes kept; a run
+   to the cap with the pool raised, the start's refusal and a pipe's
+   read; the last controller removed and one added, the total carried
+   over. Today's notes cannot give this: `dma.quarantine.first` holds
+   the first kept allocation's size alone, `dma.quarantine.cap` the
+   total only at a refusal, and both leave with the removed
+   controller's log. A reading of the ledger's two totals that outlives
+   the controller comes first, and is not built (built since for task
+   49.29, record 13 section 11.11.12).
+5. **The idle request**, two cases apart. Ordinary: a held request, or
+   a callback that has returned, at an unproven stop:
+   `idle.quarantined` stays 0. Deliberate: a callback held from
+   returning at the stop: the PDO is kept and counted, the removal
+   below it completes, and the idle request completes once, when the
+   callback is let go.
+
+The command stranded at 0 (the table's fifth row; task 49.25's side
+finding) is folded into this task as a question, not as a condition
+of 1: the containment at 0 could complete an abort, and hold any other
+command, as its drain at 1 does, since none names a client's page.
+That ends no removal's wait by itself (the client still waits for its
+transfers), so it matters only for a controller left at 0, and it is a
+change of what 0 does: the owner's. If taken, its leg is that abort at
+0, and passes when the abort completes once while the transfers on
+the rings stay pending and their memory kept; no PDO's removal is its
+criterion.
+
+**The command stranded at 0, completed with an error (the owner,
+2026-11-11; task 49.16, design before code).** Where: `HcdIoDeviceDrain`
+(`hcd_io.c`), the early return taken when the buffer is pinned and
+staging is off. Before it returns, every command queued for the device's
+thread - its entries on `SlowIrps` and selective suspend's deferrals,
+but any a cancel routine owns - is taken off under the controller lock
+and completed `DEVICE_NOT_RESPONDING`, one without a URB (RESET_PORT,
+the streams requests) `STATUS_UNSUCCESSFUL`, as the shutdown latch's
+command flush completes them (`HcdCfgShutFlush`), counted
+(`cfg.stranded`). It reaches every route that pins at 0: the
+containment and the unproven invalidation (`HcdEnumContain`'s
+`hcdDrainAll`), and a later stop of the same controller.
+
+- *Why it is safe at 0.* None of these requests names a client page,
+  none was started (the thread serves nothing once the controller has
+  failed), and each completes on the thread's own path
+  (`hcdCfgComplete`). A command the thread was serving when the
+  controller failed is not on the list and ends as today. A request
+  sent after the containment is untouched: held, or an abort answered,
+  as the table's fourth row says (`HcdCfgQueue`).
+- *Why an error and not the drain's answers at 1.* At 1 the drain
+  answers an abort with success because the pipe's transfers are then
+  drained and held; at 0 they stay on the rings, so an abort that
+  succeeded would say what is not so. Holding the others would keep the
+  wait this change removes.
+- *What it does not do.* It ends no removal's wait: a client that waits
+  for its transfers (`cdcnet`'s quiesce, record 13 section 11.11's
+  reason) still waits at 0. It releases no held request.
+- *Whom it changes.* A client whose command was queued between the
+  failure and the containment now has it fail instead of never
+  returning: `cdcnet`'s second ABORT_PIPE in legs X5 and X6
+  (`runs/run-49.md`, "49.25"), a select or RESET_PIPE in the same
+  window (ME's `usbaudio.sys` sends a select before its REMOVE, record
+  13 section 18.2). Searched in `runs/`, `issues/` and the code's
+  comments for earlier incidents on this path: none beyond X5 and X6;
+  issue 30's select was refused at dispatch on a running controller,
+  not on this path. At 1 nothing changes.
+- *Its leg* is the paragraph above's: that abort at 0, passing when it
+  completes once while the transfers on the rings stay pending and
+  their memory kept.
+
+*List 2: the dock, unplugged without a stop (this task's own legs).*
+
+6. **On each system and architecture staging is to be chosen for**,
+   of 2000, XP, XP x64, and Vista and 7 in both architectures, under a
+   firmware connection manager, 1 on the dock's controller, with in
+   turn a HID device on that controller, its network function bound
+   and used, a disk in a copy, and a disk idle. One not read stays at
+   0. Passes when:
+   - every device of the dock is gone within a minute;
+   - `IRP_MN_SURPRISE_REMOVAL` and then the removal reach every object
+     of the dock;
+   - the report afterwards shows no controller contained;
+   - the dock plugged back is found, every device starts and works (a
+     key, a ping, a copy compared), three times in a row;
+   - after a last unplug Windows shuts down and restarts;
+   - on Vista and 7 the replug does not stop the computer responding
+     (`runs/run-45.md`, "45.49");
+   - the same order at 0 stalls with the HID device and with the
+     network function, so the leg can tell the two apart; with an idle
+     disk the dock is removed at 0 too (`runs/run-45.md`, "45.35" and
+     "45.49"), so the two disk cases are judged on their own outcome
+     at each value.
+7. **The same on 98 SE and ME**, where the removal arrives with no
+   surprise removal before it, after items 3 and 8.
+8. **98 SE and ME: where a copy reaches the client's bytes** (task
+   49.15). A copy runs in whatever process context its DPC finds. On
+   98 SE every buffer mass storage handed the bus in the workloads
+   read (COMMAND.COM copies and XHCIPERF on a Bulk-Only stick) carried
+   a system address, so no window was mapped (`runs/run-48.md`, "48.33
+   Staging off by default"); a Win32 copy and a UAS disk are unread.
+   Only the qemu flavour counts the sources (`stage.direct.buffer`,
+   `stage.direct.mdl`, `stage.direct.low`): it is put on the machine
+   by hand for the reading, in the emulator and on real hardware
+   alike, and is never published (design record 08). Copies by a Win32
+   program and by COMMAND.COM, to a Bulk-Only stick and a UAS disk,
+   pass with `stage.direct.low` 0 and every copy equal. Then the
+   window route, with `XhciQemuStageFault` bit 1: passes when
+   `stage.window.maps` shows windows were used and the copies compare
+   equal; and `XhciQemuStageMapProbe`, whose outcome must be a mapping
+   that returned NULL, with the copy going on after the unmapping -
+   the probe running out of MDLs reads nothing. Where the qemu flavour
+   will not load on a real machine, what is left there is the release
+   flavour's Win32 copy and compare at 1 with another program busy,
+   which reads the result and not the addresses.
+9. **One real dock**, on 98 SE and on one NT system: item 6's steps,
+   the owner's bench.
+
+*List 3: more, before 1 is the default for every controller.*
+
+10. **98 SE: playback beside copies** (task 49.5's left item). Over
+    its 18 s bound in 4 of 8 plays at 0, 1 of 8 at 1, and 4 of 8 with
+    the copies on C: alone at 0. Owed: that control at 1, and the same
+    on a real processor; passes when 1 is no worse than 0 on both.
+11. **A stop that is not a removal, with transfers in flight.** On
+    2000 no disable landed while the stick was in use (25 tries), and
+    the surprise removal read in its place passed at 0 and 1 (task
+    49.5). That reads the removal, not the stop's rundown: a disable
+    during copies is read at 1 on 98 SE (Device Manager; read at 0
+    only) and on XP (read at 0 only), and on 2000 if a route to it is
+    found.
+12. **The speed on real hardware, on an NT system.** Read on 98 SE
+    alone (the P14s's UAS drive: no difference); the emulator's cost
+    on 7 x64 reached 73 %. One NT reading at 0 and 1, the owner's
+    bound.
+13. **What 1 refuses that 0 serves.** An isochronous request larger
+    than its pipe's share, a start without the control slab or a
+    window MDL, a pipe without its reserve: `stage.iso.refused`,
+    `stage.noreserve` and `stage.pool.short` read 0 over the audio and
+    storage legs of each system, and a 98 SE start with little memory
+    still starts every controller.
+14. **The systems and memory layouts no leg at 1 has run**: Vista, XP
+    x64, 2000 under PAE and 7 x64 with 6 GB (record 13 section
+    11.11.9's last item), and Windows 8 to 10 wherever this driver is
+    installed on them, each with the copy and compare and a hot unplug;
+    or the default changed only on the systems read.
+
+**An intermediate choice with no change of default.** Three were
+considered; none is built.
+
+- **(A) As today.** 0 stays; a user sets `XhciDmaStaging` 1 in the
+  dock's controller's own key, which is what legs X7b and X8 did. It
+  changes nobody who does not ask. It needs that controller's key
+  found, which no tool does, and a restart of the controller; and a
+  machine-wide value of that name, in any type, is read in its place
+  (`hcdReadDword`, `hcd_ctl.c`).
+- **(B) Staging forced on for a controller behind a tunnel port.** A
+  tunnelled controller can leave at any time, and is the case this
+  task is about; an on-board one keeps 0. What it takes:
+  - the decision before staging's memory is made, at the first start
+    too: the switch is read early in the start (`hcd_ctl.c`), and the
+    one channel to the connection manager is asked at its end, on NT
+    alone, is answered on 2000 and XP alone, and binds only under the
+    USB4 software connection manager (section 4.13.6; record 22
+    section 10.5). So a new statement is needed, "this function is
+    behind a tunnel port", that the firmware connection manager's
+    client can make too, and a route for it on 98 SE and ME, where no
+    filter sits below this driver;
+  - a rule for the value: whether an explicit 0 still means off for
+    such a controller, and how a 0 the install wrote is told from one
+    a user chose; or a third value meaning "behind a tunnel only",
+    which changes what the INFs write and so is a change of default
+    in all but name;
+  - lists 1 and 2 for the systems it reaches.
+
+  Whom it changes: every client of a dock's own controller, on the
+  systems it is taken for, whose data is then copied - a dock's audio,
+  storage, network and HID - and nobody on an on-board controller. Its
+  risks are those of 1 itself, on fewer machines: items 3 and 8 still
+  decide 98 SE and ME, item 4 applies to exactly these controllers,
+  and item 13's refusals reach a dock's devices. Earlier incidents on
+  this path, searched in `runs/` and `issues/`: the playback bound of
+  item 10; one fatal exception 0E during a 98 SE start in the emulator
+  after the switch was set back to 0, one start in five, not
+  reproduced and not explained (`runs/run-48.md`, "48.33 The owner's
+  bench kit"); and issue 25, a USB audio device unplugged while
+  Windows' own driver plays it on 98 SE and ME, the ground of item 3.
+- **(C) By a list of controller ids.** Refused: a dock carries other
+  makers' controllers as well as the Thunderbolt controller's own, and
+  the same parts are soldered on boards.
+
+**Recommendation, for the owner.** Keep 0 in `3.5.0.0` and stay with
+(A) until list 1 is read. Then (B) on each system of 2000 to 7 that
+item 6 has passed on, and on no other; 98 SE and ME after items 3, 7
+and 8; and the default for every controller as a later decision, on
+list 3 and on (B)'s record in use. Under every
+choice the limitation of section 4.13 stands for a controller left at
+0.
+
+**Verification.** No code changes, so no host vectors and no legs of
+this section's own. Its readings are the code at `a4436a9b2` and the
+legs cited; where a row rests on code alone its last column says what
+is unread.
+
+**The shutdown at 0, read 2026-11-13** (guests of 2000 SP4, XP SP3,
+Vista SP2 x86 and 7 SP1 x86, the controller's failure injected, left
+contained at the shipped `XhciDmaStaging` 0): neither a normal shutdown
+nor a forced one finished (8 of 8 timed runs, held 10 and 20 minutes);
+the devices stay listed and reading the drives does not hang; only a
+power-off ended it. With audio playing the shutdown waits on the audio
+application; without it, it stops after the shutdown's power query with
+one request to the USB disk held. Owner, 2026-11-13 ("Say power
+button"): the user documents no longer say to restart the machine; they
+say not to disable the controller, to save the work, and to switch the
+computer off at the power button if Windows does not finish shutting
+down or restarting. A wording change only; no planned item.
+
 ### 4.14 Controllers below xHCI 1.0: version 0.96 accepted (38.11, revision 14)
 
 Roadmap-hcd task 38.11 (owner, 2026-10-13). Written before code, and
@@ -3016,6 +3806,8 @@ Persistent: injected again on each restart.
 | HCH | a real write clearing Run/Stop | real hardware; the in-place recovery runs for real |
 | All-ones, proof | the health poll's USBSTS read answers all-ones; configuration space is real | real Bus Master Enable clear and read-back |
 | All-ones, no proof | as above, with the Bus Master Enable read-back answering set | the pinned branch |
+| Slow reset (task 49.35, `1B` hex) | every HCRST the driver writes, while armed: the reads its waits make (`XhciWaitForBits`, the recovery's pre-check, the thread's settle, the adopted reset's check) answer HCRST set in USBCMD (port byte 0) or CNR set in USBSTS (1) for `arg` x 10 ms, 255 for ever; QEMU's own reset has completed at once | the recovery's stall, then the settle at PASSIVE_LEVEL and the adopted reset (section 4.6.1) |
+| Host Controller Event (task 49.35, `1C` hex) | one injected Host Controller Event, completion code `arg`, handed to the drain | the real escalation: `evt.hc`, the request, the recovery |
 
 The expected outcomes are fault-specific, and the legs check each:
 
@@ -3030,6 +3822,7 @@ The expected outcomes are fault-specific, and the legs check each:
 | Over-current | the port repowered and the device re-enumerated | the port held unpowered until a controller start |
 | HCH | one recovery | the window reached, the controller latched failed |
 | All-ones | none (shorter than the containment interval) | contained: with proof, devices dropped and transfers parked; without, the buffer pinned and transfers kept |
+| Slow reset, armed with a Host Controller Event or HCH to start a recovery | 50 ms: each recovery waits the reset out once and recovers | 1.5 s or for ever: three charged failures at least the gap apart, the controller latched failed |
 
 And beside them: a cancel, ABORT_PIPE, RESET_PIPE, SYNC_RESET_PIPE and
 RESET_PORT each pending at each of the soft retry's two decisions; a cycle

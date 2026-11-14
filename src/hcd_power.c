@@ -79,10 +79,11 @@ static ULONG hcdResumeContained(PHCD_CONTROLLER hc)
     ULONG terminal;
 
     ext = &hc->Hc;
-    terminal = XhciTolTerminal(ext->ControllerFailed, ext->Tol.Unreadable,
-                               ext->Tol.Window.Refused,
-                               ext->RecoveryFailuresConsecutive,
-                               XHCI_RECOVERY_MAX_ATTEMPTS);
+    terminal = XhciTolTerminalEx(ext->ControllerFailed, ext->Tol.Unreadable,
+                                 ext->Tol.Window.Refused,
+                                 ext->RecoveryFailuresConsecutive,
+                                 XHCI_RECOVERY_MAX_ATTEMPTS,
+                                 (hc->Msg4Lost != 0) ? 1UL : 0UL);
     if (!XhciTolResumeRefused(terminal)) {
         return 0;
     }
@@ -112,6 +113,9 @@ static VOID hcdSuspendSettled(PHCD_CONTROLLER hc)
     /* Task 45.23 (design record 20 section 4.3.3): pending from here to
      * this suspend's resume's end (hcdResume, HcdEnumService). */
     hc->ResumePhase = XHCI98_RESUME_PENDING;
+    /* Task 49.34 (design record 20 section 4.3.4, M9): the sleep this
+     * suspend serves, which the Bulk-Only keep's switch is read for. */
+    hc->SuspendSleep = (ULONG)hc->Common.SystemPower;
     if (XhciTolShutLatch((ULONG)hc->Common.SystemPower)) {
         hc->ShutLatched = 1;
     }
@@ -121,6 +125,9 @@ static VOID hcdSuspendSettled(PHCD_CONTROLLER hc)
      * other suspend quirks act inside XhciSuspendController. */
     HcdQuirkSuspend(hc);
     XhciSuspendController(&hc->Hc);
+    /* Task 49.24 (record 15 section 4.5.4, "Power"): the causes masked by
+     * the suspend, then mode 4's readiness flag cleared and the bar set. */
+    HcdMsg4Suspend(hc);
     /* Task 45.63 (record 13 section 5.8.1): the halt's proof, read while
      * the function is still in D0 - the callers' precondition - on a
      * started controller with its registers mapped, as hcdShutFlush reads
@@ -181,6 +188,27 @@ static VOID hcdResume(PHCD_CONTROLLER hc)
         XhciControllerLockRelease(&hc->Hc, oldIrql);
     }
     HcdQuirkResumed(hc, restores);
+}
+
+/*
+ * A resume with mode 4's step before it (design record 15 section 4.5.4,
+ * "Power"): the re-arm first; on success the readiness flag and the
+ * interrupter's flag, so the resume enables it; on a re-arm that failed
+ * twice the resume still runs (it is what clears SUSPENDED) with nothing
+ * enabled, and the connection is lost after it, since a reinitialization
+ * clears the failure latch. The power gate held, the power work item's
+ * thread (hcdD0Done defers while a connection is live). IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdResumeMsg4(PHCD_CONTROLLER hc)
+{
+    ULONG failed;
+
+    failed = HcdMsg4Resume(hc);
+    hcdResume(hc);
+    if (failed) {
+        HcdMsg4LostLatch(hc, (failed == 2) ? HCD_MSG4_LOST_BRAKED
+                                           : HCD_MSG4_LOST_REARM);
+    }
 }
 
 /*
@@ -364,7 +392,7 @@ static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
         HcdPirqResume(hc);
         hc->TolStartGen++;
         if (!hcdResumeContained(hc)) {
-            hcdResume(hc);
+            hcdResumeMsg4(hc);
         }
     }
     hc->Common.DevicePower = PowerDeviceD0;
@@ -461,7 +489,7 @@ static ULONG hcdDirectTransitionGated(PHCD_CONTROLLER hc)
         HcdPirqResume(hc);
         hc->TolStartGen++;
         if (!hcdResumeContained(hc)) {
-            hcdResume(hc);
+            hcdResumeMsg4(hc);
         }
         HcdPollGrant(hc);
         return 0;
@@ -469,6 +497,9 @@ static ULONG hcdDirectTransitionGated(PHCD_CONTROLLER hc)
     hc->WakesWithoutPower++;
     return 0;
 }
+
+static ULONG hcdSystemRequest(PHCD_CONTROLLER hc, PIRP Irp,
+                              DEVICE_POWER_STATE want);
 
 /* IRQL: PASSIVE_LEVEL (a system worker thread). */
 static VOID NTAPI hcdPowerWork(PVOID Context)
@@ -559,8 +590,11 @@ static NTSTATUS NTAPI hcdD0Done(PDEVICE_OBJECT DeviceObject, PIRP Irp,
 
     hc = (PHCD_CONTROLLER)Context;
     /* A failed D0 takes the same route as one that succeeded (task 45.63):
-     * hcdD0Finish ends what the bus holds before the IRP completes. */
-    if (KeGetCurrentIrql() == PASSIVE_LEVEL) {
+     * hcdD0Finish ends what the bus holds before the IRP completes. Under
+     * mode 4 with a connection live, always the work item: the library
+     * binds and reverts the calling thread's affinity, which a borrowed
+     * completion thread must not see (record 15 section 4.5.4). */
+    if (KeGetCurrentIrql() == PASSIVE_LEVEL && !HcdMsg4Live(hc)) {
         hcdD0Finish(hc, Irp);
     } else {
         hcdPowerDefer(hc, Irp, HCD_POWER_WORK_D0);
@@ -595,6 +629,31 @@ static VOID NTAPI hcdSystemDeviceDone(PDEVICE_OBJECT DeviceObject,
     }
 }
 
+/*
+ * The device IRP a system IRP wants, asked for; when it cannot be (no IRP
+ * and no callback follow) the work item makes the transition itself and
+ * then completes the system IRP. Returns 1: the system IRP is owned by
+ * what follows either way. IRQL: <= DISPATCH_LEVEL.
+ */
+static ULONG hcdSystemRequest(PHCD_CONTROLLER hc, PIRP Irp,
+                              DEVICE_POWER_STATE want)
+{
+    POWER_STATE state;
+    NTSTATUS status;
+
+    hc->PendingSystemIrp = Irp;
+    state.DeviceState = want;
+    status = PoRequestPowerIrp(hc->Pdo, IRP_MN_SET_POWER, state,
+                               hcdSystemDeviceDone, hc, NULL);
+    if (!NT_SUCCESS(status)) {
+        hc->PendingSystemIrp = NULL;
+        hc->PowerRequestFailures++;
+        hc->PowerDirectWant = want;
+        hcdPowerDefer(hc, Irp, HCD_POWER_WORK_DIRECT);
+    }
+    return 1;
+}
+
 /* IRQL: <= DISPATCH_LEVEL. */
 static NTSTATUS NTAPI hcdSystemDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
                                     PVOID Context)
@@ -602,8 +661,6 @@ static NTSTATUS NTAPI hcdSystemDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     PHCD_CONTROLLER hc;
     PIO_STACK_LOCATION stack;
     DEVICE_POWER_STATE want;
-    POWER_STATE state;
-    NTSTATUS status;
 
     UNREFERENCED_PARAMETER(DeviceObject);
 
@@ -640,18 +697,7 @@ static NTSTATUS NTAPI hcdSystemDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
         return STATUS_SUCCESS;
     }
 
-    hc->PendingSystemIrp = Irp;
-    state.DeviceState = want;
-    status = PoRequestPowerIrp(hc->Pdo, IRP_MN_SET_POWER, state,
-                               hcdSystemDeviceDone, hc, NULL);
-    if (!NT_SUCCESS(status)) {
-        /* No device IRP and no callback will follow: the work item makes the
-         * transition itself and then completes the system IRP. */
-        hc->PendingSystemIrp = NULL;
-        hc->PowerRequestFailures++;
-        hc->PowerDirectWant = want;
-        hcdPowerDefer(hc, Irp, HCD_POWER_WORK_DIRECT);
-    }
+    (VOID)hcdSystemRequest(hc, Irp, want);
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
 

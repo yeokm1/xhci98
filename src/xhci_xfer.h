@@ -746,6 +746,23 @@ ULONG XhciXferStopPlace(const XHCI_TRANSFER_QUEUE *queue,
                         PXHCI_XFER_STOP_PLACE place);
 
 /*
+ * Task 49.39 (design record 17 section 4.12.8, c2): the half of
+ * XhciXferStopPlace that reads no queue - whether a saved TR Dequeue
+ * Pointer is a position the controller can hold on `ring`: on it, a Link
+ * TRB taken as the base it leads to (with the cycle it toggles), inside its
+ * outstanding window or at the enqueue, with the DCS written there.
+ * XHCI_XFER_STOP_POS_HOLDABLE, `*index` the TRB (the base for a Link) and
+ * `*at` its distance from the software dequeue; otherwise
+ * XHCI_XFER_STOP_POS_INVALID (off the ring, a high dword, behind the
+ * software dequeue, past the enqueue, the wrong DCS). Pure.
+ */
+#define XHCI_XFER_STOP_POS_INVALID  0UL
+#define XHCI_XFER_STOP_POS_HOLDABLE 1UL
+
+ULONG XhciXferStopPosition(const XHCI_RING *ring, ULONG deqLow,
+                           ULONG deqHigh, PULONG index, PULONG at);
+
+/*
  * Task 43.69. A cancel's placement on a stopped endpoint whose queue head is
  * the stopped TD (or one the controller has not entered): the `count` TDs in
  * `cancelled` leave the queue, a cancelled TD other than the head is rewritten

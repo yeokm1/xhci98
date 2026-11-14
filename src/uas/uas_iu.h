@@ -575,6 +575,25 @@ ULONG UasNoAtaCdb(const UCHAR *cdb, ULONG cdbLength);
 ULONG UasInvalidCdbSense(PUCHAR sense, ULONG room);
 
 /*
+ * Task 49.39 (design record 13 section 16.16): a drive's own refusal of ATA
+ * PASS-THROUGH replayed. UasAtaBit: the LUN's bit for a CDB's operation
+ * code - UAS_ATA_REFUSED_12 for A1h, UAS_ATA_REFUSED_16 for 85h, 0 for any
+ * other. UasAtaRefusal: that bit when the drive answered such a command
+ * CHECK CONDITION with sense key 5, ASC 20h, ASCQ 00h (INVALID COMMAND
+ * OPERATION CODE) in fixed (70h/71h, at least 14 bytes) or descriptor
+ * (72h/73h, at least 4) sense; 0 otherwise. UasInvalidOpcodeSense writes
+ * that answer's fixed sense into sense (room bytes), returning the bytes
+ * written, at most UAS_INVALID_CDB_SENSE.
+ */
+#define UAS_ATA_REFUSED_12          0x01UL
+#define UAS_ATA_REFUSED_16          0x02UL
+
+ULONG UasAtaBit(const UCHAR *cdb, ULONG cdbLength);
+ULONG UasAtaRefusal(const UCHAR *cdb, ULONG cdbLength, ULONG scsiStatus,
+                    const UCHAR *sense, ULONG senseLength);
+ULONG UasInvalidOpcodeSense(PUCHAR sense, ULONG room);
+
+/*
  * Issue 26: one failure's four words for the record the bus keeps
  * (xhci98_xfer.h, XHCI98_FAILURES): w[0..3] as that header lays them out.
  * The sense key, ASC and ASCQ are read from sense (senseLength bytes,
@@ -601,6 +620,58 @@ ULONG UasFastResetDue(ULONG fast, ULONG armed, ULONG progress, ULONG now,
                       ULONG abortAt, ULONG startedAt);
 ULONG UasFinalCancelDue(ULONG fast, ULONG final, ULONG dataOutstanding,
                         ULONG waited);
+
+/*
+ * Issue 26 section 8 (task 49.39; design record 13 section 16.15): what a
+ * command whose own timeout has run out does next. UAS_FINAL_TIMEOUT_NONE:
+ * the ordinary timeout (ABORT TASK) - no final IU yet, or nothing of its
+ * data still outstanding. UAS_FINAL_TIMEOUT_WAIT: its final IU came less
+ * than UAS_FINAL_TIMEOUT_AGE seconds ago (finalAge, the class driver's
+ * seconds since the final IU): held at the deadline and asked again at the
+ * next tick, since status and data complete on separate pipes in either
+ * order. UAS_FINAL_TIMEOUT_RESET: the final IU is in and old enough and the
+ * data transfer is still outstanding (busy, under the driver's cancel, or
+ * holding a cancel reference): the device reset, not ABORT TASK - the
+ * device holds no task for a command it has answered.
+ */
+#define UAS_FINAL_TIMEOUT_AGE       2UL
+#define UAS_FINAL_TIMEOUT_NONE      0UL
+#define UAS_FINAL_TIMEOUT_WAIT      1UL
+#define UAS_FINAL_TIMEOUT_RESET     2UL
+
+ULONG UasFinalTimeoutDue(ULONG final, ULONG dataOutstanding,
+                         ULONG finalAge);
+
+/*
+ * Task 49.39 (design record 13 section 16.17): a command due for
+ * UAS_FINAL_TIMEOUT_RESET with resets (the device resets already taken for
+ * it since data was last delivered) at UAS_FINAL_RESET_LIMIT or more gives
+ * the drive up instead (1). UasDataDelivered: what clears that count - a
+ * data transfer that completed successfully with at least one byte; a
+ * command with no data phase, GOOD or not, never does.
+ */
+#define UAS_FINAL_RESET_LIMIT       3UL
+#define UAS_FINAL_DIR_IN            1UL
+#define UAS_FINAL_DIR_OUT           2UL
+
+ULONG UasFinalGiveUpDue(ULONG resets);
+ULONG UasDataDelivered(ULONG ok, ULONG bytes);
+
+/*
+ * The count is kept per direction (`counts`, UAS_FINAL_DIRS words: [0] for
+ * data-in, [1] for data-out). UasFinalCount: one reset taken for commands of
+ * the directions in `dirs` (a mask of UAS_FINAL_DIR_*) adds one to each of
+ * them. UasFinalClear: data delivered in `dir` clears that direction alone -
+ * writes that land never clear a count of reads that never came back, nor
+ * the other way round. UasFinalDue: 1 when a reset asked for by commands of
+ * `dirs` finds any of those directions at UAS_FINAL_RESET_LIMIT: the drive
+ * is given up instead.
+ */
+#define UAS_FINAL_DIRS              2UL
+
+VOID UasFinalCount(PULONG counts, ULONG dirs);
+VOID UasFinalClear(PULONG counts, ULONG dir);
+ULONG UasFinalDue(const ULONG *counts, ULONG dirs);
 
 VOID UasFailPack(PULONG w, ULONG event, ULONG origin, ULONG tag,
                  ULONG opcode, ULONG srbStatus, ULONG scsiStatus,

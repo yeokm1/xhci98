@@ -74,6 +74,13 @@ static NTSTATUS NTAPI cmConfigDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
  * takes. One request; a read fills its buffer with `fill` first, and the
  * bytes the bus driver reports (*info) are returned. IRQL: PASSIVE_LEVEL.
  */
+/* Record 21 section 4.5.14 item 4: during msi4nt's absence proof at a
+ * removal Windows reported (ProofRead, for that one call), reads at offset
+ * 0 of two or four bytes pass a revocation; nothing else does. */
+#define cmProofAdmits(nhi, read, offset, length) \
+    ((read) && (nhi)->Rirq.ProofRead && (offset) == 0 && \
+     ((length) == 2 || (length) == 4))
+
 static NTSTATUS cmConfigOnce(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
                              ULONG offset, ULONG length, UCHAR fill,
                              PULONG info)
@@ -92,7 +99,7 @@ static NTSTATUS cmConfigOnce(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
             p[i] = fill;
         }
     }
-    if (nhi->Live.Revoked) {
+    if (nhi->Live.Revoked && !cmProofAdmits(nhi, read, offset, length)) {
         /* Read again before each request: a surprise removal during the
          * first of a strict read's two stops the second. */
         return STATUS_DEVICE_REMOVED;
@@ -141,6 +148,19 @@ static NTSTATUS cmConfigOnce(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
  * zeros, and is an answer only when both read the same: a byte the bus
  * driver did not write differs between them. IRQL: PASSIVE_LEVEL.
  */
+static BOOLEAN cmConfigGate(PCM_NHI nhi, BOOLEAN read, ULONG offset,
+                            ULONG length)
+{
+    return (BOOLEAN)!(
+        (nhi->Live.Revoked && !cmProofAdmits(nhi, read, offset, length)) ||
+        (!read && (nhi->AccessClass == CM_ACCESS_PROBE ||
+                   !CmLiveAdmits(&nhi->Live, nhi->AccessClass) ||
+                   (nhi->AccessClass == CM_ACCESS_PREPARE &&
+                    offset != CM_PCI_COMMAND &&
+                    offset != TBT_ICL_VS_CAP_22 &&
+                    offset != TBT_ICL_VS_CAP_15))));
+}
+
 static BOOLEAN cmConfig(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
                         ULONG offset, ULONG length)
 {
@@ -163,13 +183,7 @@ static BOOLEAN cmConfig(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
     /* The USB4 recovery's preparation (record 22 section 7.7 part 2)
      * writes the Command register and section 4.2's platform registers,
      * and nothing else. */
-    if (nhi->Live.Revoked ||
-        (!read && (nhi->AccessClass == CM_ACCESS_PROBE ||
-                   !CmLiveAdmits(&nhi->Live, nhi->AccessClass) ||
-                   (nhi->AccessClass == CM_ACCESS_PREPARE &&
-                    offset != CM_PCI_COMMAND &&
-                    offset != TBT_ICL_VS_CAP_22 &&
-                    offset != TBT_ICL_VS_CAP_15)))) {
+    if (!cmConfigGate(nhi, read, offset, length)) {
         nhi->Counters.ConfigFailures++;
         return FALSE;
     }
@@ -205,6 +219,31 @@ static BOOLEAN cmConfig(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
         return FALSE;
     }
     return TRUE;
+}
+
+/* msi4nt's hosted configuration access (record 21 section 4.5.14): one
+ * request through the gate cmConfig keeps, returning the bytes the bus
+ * driver reported moved, which the library holds against what it asked
+ * (0 for a refused or failed request; a count above `length` is 0 too).
+ * NT only (98 SE's bus driver reports no length, and the library is never
+ * used there). IRQL: PASSIVE_LEVEL. */
+ULONG CmCfgBytes(PCM_NHI nhi, BOOLEAN read, PVOID buffer, ULONG offset,
+                 ULONG length)
+{
+    ULONG info;
+    NTSTATUS status;
+
+    if (length == 0 || length > 256 || offset > 256 - length ||
+        !cmConfigGate(nhi, read, offset, length)) {
+        nhi->Counters.ConfigFailures++;
+        return 0;
+    }
+    status = cmConfigOnce(nhi, read, buffer, offset, length, 0, &info);
+    if (!NT_SUCCESS(status) || info > length) {
+        nhi->Counters.ConfigFailures++;
+        return 0;
+    }
+    return info;
 }
 
 /* One aligned DW; all ones when the read is refused, which every caller
@@ -281,6 +320,43 @@ BOOLEAN CmCfgIntxRetire(PCM_NHI nhi, PULONG ours)
     }
     *ours = 1;
     return TRUE;
+}
+
+/* The NT quarantine's prerequisite (cm_rirqos.h, record 21 section 4.5.14
+ * item 4): the same narrow class as the retirement above - the identity DW
+ * matched, the Command word read, bit 2 (Bus Master Enable) alone cleared,
+ * read back - past the gate's recoverable states, refused once revoked.
+ * TRUE when the bit reads clear afterwards. IRQL: PASSIVE_LEVEL. */
+BOOLEAN CmCfgBusMasterRetire(PCM_NHI nhi)
+{
+    UCHAR b[2];
+    ULONG v;
+    ULONG info;
+    USHORT cmd;
+
+    if (nhi->Live.Revoked || nhi->Live.State == CM_LIVE_REVOKED) {
+        return FALSE;
+    }
+    if (!cmRetireRead(nhi, 0x00, &v) || v != nhi->LiveIds) {
+        return FALSE;
+    }
+    if (!cmRetireRead(nhi, CM_PCI_COMMAND, &v)) {
+        return FALSE;
+    }
+    cmd = (USHORT)(v & 0xFFFFUL);
+    if ((cmd & 0x0004U) == 0) {
+        return TRUE;
+    }
+    cmd = (USHORT)(cmd & ~0x0004U);
+    b[0] = (UCHAR)(cmd & 0xFF);
+    b[1] = (UCHAR)((cmd >> 8) & 0xFF);
+    if (!NT_SUCCESS(cmConfigOnce(nhi, FALSE, b, CM_PCI_COMMAND, 2, 0,
+                                 &info))) {
+        nhi->Counters.ConfigFailures++;
+        return FALSE;
+    }
+    return (BOOLEAN)(cmRetireRead(nhi, CM_PCI_COMMAND, &v) &&
+                     (v & 0x0004UL) == 0);
 }
 
 /* One word, so a write of the command register leaves the status

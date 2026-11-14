@@ -512,6 +512,86 @@ int mk_flush_wants(INST_U32 event);
  * (members[0..m)); 0 otherwise. */
 int mk_flush_behind(const INST_U32 *chain, int n, const INST_U32 *members, int m);
 
+/* ---- the location kept per instance (record 21 section 7.8.3) ----------- */
+
+/* A device's bus number and address are read once per instance id and
+ * never while it is not started: on 2000 and XP the address is answered
+ * by an IRP_MN_QUERY_CAPABILITIES to the device's stack (task 49.26). */
+#define MK_LOC_MAX          2048        /* the walk's devnodes at most     */
+#define MK_LOC_RETRY_MS     60000UL     /* a failed read's next try        */
+
+typedef struct _MK_LOC {
+    char Id[INST_ID_CHARS];
+    INST_U32 Bus;
+    INST_U32 Address;
+    INST_U32 RetryAt;       /* a failed read: the tick it may be read again */
+    int Has;                /* a location was read                        */
+    int Failed;             /* the read failed (not "no such value")      */
+    int Stale;              /* seen not started since it was read         */
+    int Seen;               /* reached since the walk began               */
+} MK_LOC;
+
+typedef struct _MK_LOCS {
+    int Count;
+    int Cursor;             /* where the next search begins               */
+    MK_LOC E[MK_LOC_MAX];
+} MK_LOCS;
+
+#define MK_LOC_NONE         0   /* no location known, nothing to read      */
+#define MK_LOC_KEPT         1   /* *bus, *address: the kept values         */
+#define MK_LOC_READ         2   /* read both now, then mk_loc_put          */
+
+#define MK_LOC_R_OK         0   /* both read                               */
+#define MK_LOC_R_NOVALUE    1   /* "no such value": no location, kept so   */
+#define MK_LOC_R_FAILED     2   /* any other failure: tried again later    */
+
+void mk_loc_reset(MK_LOCS *c);
+/* What to do for instance `id`, `started` its status just read (0 also
+ * when the status could not be read). A devnode not started marks its
+ * record stale and is never read; a started one is read when it has no
+ * record, a stale one, or a failed read whose retry time has come. */
+int mk_loc_get(MK_LOCS *c, const char *id, int started, INST_U32 now,
+               INST_U32 *bus, INST_U32 *address);
+void mk_loc_put(MK_LOCS *c, const char *id, int result, INST_U32 bus,
+                INST_U32 address, INST_U32 now);
+/* A walk's start and end: a record no whole walk reached is dropped. */
+void mk_loc_walk_begin(MK_LOCS *c);
+void mk_loc_walk_end(MK_LOCS *c, int whole);
+/* At a resume notice: every record stale, read again once started. */
+void mk_loc_stale_all(MK_LOCS *c);
+/* 1 for PBT_APMRESUMECRITICAL, PBT_APMRESUMESUSPEND and
+ * PBT_APMRESUMEAUTOMATIC. */
+int mk_loc_resume_event(INST_U32 event);
+
+/* ---- the installer's hold (record 21 section 7.8.4) ---------------------- */
+
+#define MK_HOLD_MAX_MS      900000UL    /* a hold longer is ignored        */
+
+typedef struct _MK_HOLD {
+    int Held;               /* a hold was seen and has not ended          */
+    int Expired;            /* it passed MK_HOLD_MAX_MS                   */
+    INST_U32 Since;
+    INST_U32 Gen;           /* the run's number the hold was seen with    */
+    INST_U32 AckedGen;      /* the number last acknowledged (HoldAck)     */
+    int AckDue;             /* this poll held for Gen, not yet acknowledged */
+} MK_HOLD;
+
+#define MK_HOLD_EV_NONE     0
+#define MK_HOLD_EV_BEGAN    1
+#define MK_HOLD_EV_EXPIRED  2
+#define MK_HOLD_EV_ENDED    3
+
+/* One poll's test of the hold event (`exists` 1 when it exists or cannot be
+ * told absent), with the run's number read beside it (`gen`, HoldRun; 0
+ * when not read): 1 the poll runs, 0 it is skipped; *event what to log. A
+ * number other than the hold's is a new run's hold, begun again whether
+ * or not the last one was seen ending (two runs back to back), so the
+ * stale bound counts from the new run. A skipped poll sets AckDue when Gen
+ * is not yet acknowledged; the caller writes HoldAck and then sets
+ * AckedGen. */
+int mk_hold_step(MK_HOLD *h, int exists, INST_U32 gen, INST_U32 now,
+                 int *event);
+
 /* ---- the self-test -------------------------------------------------------- */
 
 int mk_selftest(void (*report)(int ok, const char *what));

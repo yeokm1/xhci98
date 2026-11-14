@@ -328,6 +328,15 @@ ULONG XhciEnumLetGo(ULONG listed, ULONG reported, ULONG removeReceived);
 #define XHCI_RKEEP_F_ONE_IFACE   0x1000UL /* one interface in its
                                            * configuration (task 45.41; the
                                            * resume's keep ignores it)       */
+/* Task 49.34 (design record 20 section 4.3.4, M4): the Bulk-Only keep. */
+#define XHCI_RKEEP_F_BOT_ON      0x2000UL /* XhciResumeKeepBot keeps a
+                                           * Bulk-Only drive after this
+                                           * sleep                           */
+#define XHCI_RKEEP_F_BOT         0x4000UL /* M2's shape: one interface, a
+                                           * SCSI Bulk-Only setting, its two
+                                           * bulk pipes                      */
+#define XHCI_RKEEP_F_BOT_SYNC    0x8000UL /* its machine between commands,
+                                           * no sense owed, max LUN 0        */
 
 #define XHCI_RKEEP_KEEP              0UL
 #define XHCI_RKEEP_WHY_OFF           1UL
@@ -344,8 +353,25 @@ ULONG XhciEnumLetGo(ULONG listed, ULONG reported, ULONG removeReceived);
 #define XHCI_RKEEP_WHY_NOT_QUIET    11UL  /* UAS storage with no quiet
                                            * declaration (4.3.3)              */
 #define XHCI_RKEEP_WHY_OTHER_CFG    12UL  /* XHCI_RKEEP_F_OTHER_CFG          */
+#define XHCI_RKEEP_WHY_BOT_SHAPE    13UL  /* storage not on UAS and not M2's
+                                           * Bulk-Only shape                 */
+#define XHCI_RKEEP_WHY_BOT_STATE    14UL  /* the Bulk-Only transport not
+                                           * between commands, or not idle
+                                           * at the decision's commit        */
 
 ULONG XhciEnumResumeKeep(ULONG on, ULONG flags);
+
+/*
+ * Task 49.34 (design record 20 section 4.3.4, M4): whether a device's serial
+ * number counts for the keeps (XHCI_RKEEP_F_SERIAL): read as usable
+ * (`readOk`, with a non-empty id in the record, `recordId`) and no twin
+ * present (`twin`: a listed PDO group of another device record on any of
+ * this driver's controllers, of the same vendor and product id, whose serial
+ * as read is the same - HcdSerialUnique, which compares the serial as read,
+ * since the duplicate rule empties the instance id of one unit alone, and is
+ * taken at the decision and again at the reopening). Pure; any IRQL.
+ */
+ULONG XhciEnumKeepSerial(ULONG readOk, ULONG recordId, ULONG twin);
 
 /*
  * Task 45.41 (design record 13 section 15, L2): whether a device whose

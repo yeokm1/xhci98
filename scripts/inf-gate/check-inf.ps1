@@ -89,7 +89,8 @@ What it checks, grouped by the failure each rule prevents:
            is no longer the absent value but the one an install must have. Task 34.3 made it eight:
            XhciIntelPortSwitch, the Intel port switchover's switch, at 1
            (owner, 2026-10-05) and at 0 since task 36.42 (owner,
-           2026-10-09). Task 35-T.7 made it eleven: XhciTolerance
+           2026-10-09; kept by task 49.47, owner 2026-11-14: Setup, not
+           the INF, turns it on at a first install on a listed board). Task 35-T.7 made it eleven: XhciTolerance
            at 1, XhciIntervalCap at 1 and XhciAvgTrbEsit at 0 (design
            record 17 sections 4.7 and 4.11). Task 36.3 made it twelve:
            XhciIntelIrqRoute at 1, the Intel interrupt routing quirk
@@ -125,7 +126,8 @@ What it checks, grouped by the failure each rule prevents:
            reads is written by the install): XhciUsb2Bos, XhciResumeKeep
            and XhciLinkKeep at 1. Forty-one since task 46.21's
            XhciAcpiTables joined at 1. Forty-two since task 47.30's
-           XhciEventRingTrbs joined at 1024 (owner, 2026-11-06).
+           XhciEventRingTrbs joined at 1024 (owner, 2026-11-06), written
+           at 256 since task 49.35 (owner, 2026-11-13).
            Forty-three since UASBOT.1's XhciBulkOnlyOwnId joined at 1
            (owner, 2026-11-08).
            Forty-four since issue 29's XhciSsFlapFallback joined at 1
@@ -133,6 +135,22 @@ What it checks, grouped by the failure each rule prevents:
            XhciStagePoolKiB joined at 2048 (owner, 2026-11-09), and
            forty-six since its XhciDmaStaging joined at 1 (owner,
            2026-11-09), written at 0 since the owner's of 2026-11-10.
+           Forty-nine since XhciInterruptMode 4's XhciMsiStrategy,
+           XhciMsiIsaIrq and XhciMsiShare joined at 0 (task 49.24; design
+           record 15 sections 4.5.2 and 4.5.16; XhciMsiShare written at 8
+           since the owner's of 2026-11-13), and on the 32-bit file
+           fifty-three with the second claim pool's XhciMsiPools,
+           XhciMsiInputFirst, XhciMsiInputLast and XhciMsiInputBudget at 0,
+           which the 64-bit file may not write (VAL-MSG4POOL: the amd64
+           image does not read them; the owner, 2026-11-11).
+           XhciResumeKeepBot (task 49.34) joined at 0 on 2026-11-12 and
+           left on 2026-11-13: the owner's default is not the same on every
+           Windows (on for a hibernation on 2000 alone), 2000 and XP install
+           from the same sections, so the value is absent everywhere and
+           the driver gives each Windows its own (design record 20 section
+           4.3.4, M18); VAL-BOTABSENT refuses a line that writes it.
+           Fifty-one since task 49.39's XhciStreamDequeueRepair joined at
+           1 (owner, 2026-11-12), fifty-five on the 32-bit file.
            (**VAL-SZ was removed with XhciLogFile.** It was the
            string half - a REG_SZ's data is text two setup engines may quote,
            trim or tokenise differently, which a DWORD's is not - and with no
@@ -1628,7 +1646,7 @@ $requiredValues = @(
         Type    = "0x00010003"
         Default = "0"
         Why     = "roadmap-hcd task 34.3's Intel EHCI-to-xHCI port switchover on the 7-, 8- and 9-series and C610 PCH, read at start on every Intel controller (roadmap-hcd task 35.5): 1 routes on a listed controller, an exact 2 also on an unlisted one at the user's own risk, 0 leaves the routing as firmware set it. The INF writes the 0 so the switch is where a user looks for it, under 34.1's don't-overwrite rule so a user's 1 survives an update (owner, 2026-10-05; the default 0 since task 36.42, owner, 2026-10-09)"
-        DefaultWhy = "0 is the driver's own default since task 36.42 - absent, of another type or 0 is off (owner, 2026-10-09, after SweetLow's issue 17 comment: a connector left on EHCI works there); shipping 1 would move every switchable connector off a working USB 2.0 controller on an install nobody asked to"
+        DefaultWhy = "0 is the driver's own default since task 36.42 - absent, of another type or 0 is off (owner, 2026-10-09); roadmap-usb4 task 49.47 (owner, 2026-11-14) keeps it: an install from the INF alone - by hand, F6 or an integrated image - must not move the switchable connectors during Windows Setup, where an install drive may be on one; Setup itself writes 1 at a first install on a listed board"
     },
     @{
         Name    = "XhciIntelIrqRoute"
@@ -1678,6 +1696,59 @@ $requiredValues = @(
         Default = "0"
         Why     = "roadmap-hcd task 36.6's event delivery (design record 15 section 3), read at each start: 0 automatic (the line where it works, polling where there is none or the line is proven dead), 1 the line, 2 polling, 3 and above as 0. The INF writes the 0 so the value is where a user looks for it, under 34.1's don't-overwrite rule"
         DefaultWhy = "0 is the driver's own default (owner, 2026-10-05): on a controller whose line works it reads as the release before it"
+    },
+    @{
+        Name    = "XhciMsiStrategy"
+        Type    = "0x00010003"
+        Default = "0"
+        Why     = "XhciInterruptMode 4's vector source on 2000, XP and XP x64 (design record 15 sections 4.5.1 and 4.5.2; owner, 2026-11-10), read at each mode-4 start there: 0 a free ISA IRQ claimed, 1 the controller's own line borrowed, any other value refuses the start; no value turns into the other. The INF writes the 0 under 34.1's don't-overwrite rule so a user's choice survives an update"
+        DefaultWhy = "0 is the driver's own default - absent reads as 0 (owner, 2026-11-10): borrowing the line is the user's assertion that it is private, never the default"
+    },
+    @{
+        Name    = "XhciMsiIsaIrq"
+        Type    = "0x00010003"
+        Default = "0"
+        Why     = "the IRQ XhciMsiStrategy 0 claims (design record 15 sections 4.5.2 and 4.5.16; owner, 2026-11-11): 0 the library's choice, 3 to 7, 10 or 11 that IRQ and no other (on 32-bit 2000 and XP an upper input when the second pool is chosen), any other value refuses the start; read at each mode-4 start under strategy 0. The INF writes the 0 under 34.1's don't-overwrite rule so a user's choice survives an update"
+        DefaultWhy = "0 is the driver's own default, the library's choice (owner, 2026-11-11)"
+    },
+    @{
+        Name    = "XhciMsiShare"
+        Type    = "0x00010003"
+        Default = "8"
+        Why     = "XhciInterruptMode 4's shared claim (design record 15 section 4.5.1, decision 5; owner, 2026-11-13): the most controllers on one claimed interrupt before another is taken - 1 every controller an interrupt of its own or none, 2 to 16 a claim shared with this driver's other controllers up to that many, then the next controller claims a fresh one; 0, not offered, runs as 1 and above 16 as 16; read at each mode-4 start under strategy 0. The INF writes the 8 under 34.1's don't-overwrite rule so a user's choice survives an update"
+        DefaultWhy = "8 is the driver's own default - absent reads as 8 (owner, 2026-11-13: sharing on by default once the emulator legs of that day had passed; his decision of 2026-11-11, 0 until those legs and his bench, is superseded)"
+    },
+    @{
+        Name    = "XhciMsiPools"
+        Type    = "0x00010003"
+        Default = "0"
+        X86Only = $true
+        Why     = "the second claim pool (design record 15 section 4.5.16; owner, 2026-11-11), read on 32-bit 2000 and XP under mode 4 and strategy 0: 0 the ISA IRQs only, 1 the I/O APIC inputs above 23 only, 2 both, the ISA IRQs first; any other value refuses the start. The INF writes the 0 under 34.1's don't-overwrite rule so a user's choice survives an update"
+        DefaultWhy = "0 keeps the pool off: neither a default nor the installer turns it on before the emulator reading the owner named (2026-11-11)"
+    },
+    @{
+        Name    = "XhciMsiInputFirst"
+        Type    = "0x00010003"
+        Default = "0"
+        X86Only = $true
+        Why     = "the lowest I/O APIC input the second pool considers (design record 15 section 4.5.16), read only with that pool: 0 with XhciMsiInputLast 0 the library's 24 to 255, else 24 to 255. The INF writes the 0 under 34.1's don't-overwrite rule"
+        DefaultWhy = "0 is the library's range"
+    },
+    @{
+        Name    = "XhciMsiInputLast"
+        Type    = "0x00010003"
+        Default = "0"
+        X86Only = $true
+        Why     = "the highest I/O APIC input the second pool considers (design record 15 section 4.5.16), read only with that pool: 0 with XhciMsiInputFirst 0 the library's 24 to 255, else at least the first and at most 255. The INF writes the 0 under 34.1's don't-overwrite rule"
+        DefaultWhy = "0 is the library's range"
+    },
+    @{
+        Name    = "XhciMsiInputBudget"
+        Type    = "0x00010003"
+        Default = "0"
+        X86Only = $true
+        Why     = "how many different upper inputs this driver may have translated in one boot (msi4nt's HighBudget; design record 15 section 4.5.16), read only with the second pool: 0 the library's 16, 1 to 32, above 32 refuses the start. The INF writes the 0 under 34.1's don't-overwrite rule"
+        DefaultWhy = "0 is the library's 16"
     },
     @{
         Name    = "XhciPollIdleMs"
@@ -1849,6 +1920,13 @@ $requiredValues = @(
         DefaultWhy = "1 is the driver's own default - absent, another number or another type is on; only 0 turns it off (owner, 2026-10-30)"
     },
     @{
+        Name    = "XhciStreamDequeueRepair"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-usb4 task 49.39's stream dequeue checks after a cancel (design record 17 section 4.12.8), read at each start: at 1 a stream whose saved dequeue differs from the one just set is set again, and a stream left where the controller could not be cycles the device alone; at 0 the checks only note and count. Written by every path (owner, 2026-10-30: every value a released driver reads is written by the install) under 34.1's don't-overwrite rule so a user's 0 survives an update (owner, 2026-11-12: on by default)"
+        DefaultWhy = "1 is the driver's own default - absent, another number or another type is on; only 0 leaves the checks noting without acting"
+    },
+    @{
         Name    = "XhciAcpiTables"
         Type    = "0x00010003"
         Default = "1"
@@ -1886,9 +1964,9 @@ $requiredValues = @(
     @{
         Name    = "XhciEventRingTrbs"
         Type    = "0x00010003"
-        Default = "1024"
-        Why     = "roadmap-usb4 task 47.30's event ring (design record 13 section 11.10), read at each start before the ring is allocated: 256 keeps the one-page ring of the releases before it, anything else the 1,024-entry ring of its own, which falls back to the one-page ring when its memory is not there. Written (owner, 2026-11-06) under 34.1's don't-overwrite rule so a user's 256 survives an update"
-        DefaultWhy = "1024 is the driver's own default - absent, another number or another type is the larger ring; only 256 asks for the one-page ring (owner, 2026-11-06)"
+        Default = "256"
+        Why     = "roadmap-usb4 task 47.30's event ring (design record 13 sections 11.10 and 11.10.1), read at each start before the ring is allocated: 256 the one-page ring, any other value the 1,024-entry ring of its own, which falls back to the one-page ring when its memory is not there; a controller below xHCI 1.0 always uses 256 (task 49.35). Written at 256 from 3.5.0.0 (owner, 2026-11-13) under 34.1's don't-overwrite rule, so a fresh install has 256 and an update keeps the 1024 that 3.4.2.0 and 3.4.3.0 wrote, or a user's choice"
+        DefaultWhy = "256 is the driver's own default from 3.5.0.0 - absent is the one-page ring; any other number, or another type, is the larger ring, as 3.4.2.0 and 3.4.3.0 read it (owner, 2026-11-13)"
     },
     @{
         Name    = "XhciBulkOnlyOwnId"
@@ -1948,6 +2026,31 @@ $requiredValues = @(
 # 34.1 added the HCD's own four at their defaults.
 #
 $requiredValues = @($requiredValues | Where-Object { $_.Name -notlike "XhciVirtualHSHub*" })
+# XhciInterruptMode 4's second claim pool (task 49.24; design record 15
+# section 4.5.16): the amd64 image reads none of its four values, since the
+# pool is not offered on XP x64 (the owner, 2026-11-11), so the 64-bit file
+# writes none of them and is refused one (VAL-MSG4POOL).
+if ($Arch -eq "amd64") {
+    $requiredValues = @($requiredValues | Where-Object { -not $_.ContainsKey("X86Only") })
+    foreach ($ln in @($inf.Sections.Values | ForEach-Object { $_ })) {
+        if ($ln.Text -match '^\s*HKR\s*,[^,]*,\s*"?(XhciMsiPools|XhciMsiInputFirst|XhciMsiInputLast|XhciMsiInputBudget)"?\s*,') {
+            Add-Failure "VAL-MSG4POOL" ("line {0} writes '{1}'. The 64-bit driver does not read the second claim pool's values - the pool is not offered on XP x64 (design record 15 section 4.5.16) - so the value would be a switch that switches nothing." -f $ln.Line, $matches[1])
+        }
+    }
+}
+# Task 49.34's XhciResumeKeepBot (design record 20 section 4.3.4, M18;
+# owner, 2026-11-13): absent on every path of both files. Its default is the
+# driver's, by Windows - a Bulk-Only drive kept after a hibernation on 2000,
+# none on any other - and 2000 and XP install from the same sections, so any
+# written number would be wrong on one of them: 0 would turn 2000's keep off
+# at every fresh install, 1 would turn XP's on before its readings.
+foreach ($ln in @($inf.Sections.Values | ForEach-Object { $_ })) {
+    # Any root: an HKLM line into Services\USB would win over every
+    # controller's key on every Windows (the machine-wide value).
+    if ($ln.Text -match '^\s*HK(R|LM|CU|U|CR)\s*,[^,]*,\s*"?XhciResumeKeepBot"?\s*,') {
+        Add-Failure "VAL-BOTABSENT" ("line {0} writes 'XhciResumeKeepBot'. No install path may write it: its default differs by Windows (on after a hibernation on 2000 alone) and the driver gives it when the value is absent (design record 20 section 4.3.4, M18); a written number is wrong on 2000 or on XP, which share the sections." -f $ln.Line)
+    }
+}
 foreach ($ln in @($inf.Sections.Values | ForEach-Object { $_ })) {
     # The value name may be quoted ("XhciVirtualHSHub"); setup reads both.
     if ($ln.Text -match '^\s*HKR\s*,[^,]*,\s*"?(XhciVirtualHSHub\w*)"?\s*,') {

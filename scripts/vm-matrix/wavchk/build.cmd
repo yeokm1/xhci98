@@ -2,11 +2,12 @@
 rem build.cmd - build WAVCHK.EXE, the release legs' playback check
 rem (wavchk.c says what it does; build-and-test.md, "Faster emulator legs").
 rem The EXE is not tracked and in no package: run-leg.ps1 copies it onto
-rem the leg's CD for a leg whose Audio is set, and refuses such a leg until
-rem it is built. A 32-bit console image with the in-repo MSVC 6.0
-rem (tools\MSVC600; MSVC6 overrides it), /W3 /WX, the C runtime linked
-rem statically, importing KERNEL32 and WINMM alone; starts on Windows 98 SE
-rem to 11.
+rem the leg's CD for a leg whose Audio is set, and builds it through this
+rem file when it is missing (lib\leghost.ps1 Get-LegWavChk), refusing the
+rem leg only when that build fails. A 32-bit console image with the
+rem in-repo MSVC 6.0 (tools\MSVC600; MSVC6 overrides it), /W3 /WX, the C
+rem runtime linked statically, importing KERNEL32 and WINMM alone; starts
+rem on Windows 98 SE to 11.
 setlocal
 cd /d "%~dp0"
 

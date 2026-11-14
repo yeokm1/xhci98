@@ -38,6 +38,8 @@ typedef struct _INST_ENV {
     int Arch;               /* INST_ARCH_*                              */
     int AnyXhci;            /* a present xHCI controller (PCI\CC_0C0330) */
     int PswController;      /* one of them passes XhciPswGate           */
+    int PirqController;     /* one of them passes XhciPirqReviewed (task
+                               49.38: the interrupt routing rows)        */
     int CmNhi;              /* a present device xhcicm.inf matches      */
     int AsmHandover;        /* 98 SE and ME: 0 no ASMedia ASM4242 host
                                interface, 1 one whose firmware no record
@@ -585,6 +587,15 @@ const char *inst_hvci_text(int state, int cmInRun);
 #define INST_APPLY_NT_CM    8   /* 2000 to 10 with the connection manager
                                    (XhciCmAsm4242Reads; XhciCmRingInterrupt
                                    until task 48.26) */
+#define INST_APPLY_NT5_XHCI 9   /* 2000, XP and XP x64 with an xHCI
+                                   controller (the Tree's XhciInterruptMode
+                                   4 rows, task 49.38) */
+#define INST_APPLY_NT5X86_XHCI 10 /* 32-bit 2000 and XP with an xHCI
+                                   controller (mode 4's input pool) */
+#define INST_APPLY_PIRQ     11  /* a controller XhciPirqReviewed admits
+                                   (env->PirqController; task 49.38) */
+#define INST_APPLY_NOROUTE  12  /* ... on 2000, XP and XP x64 alone, greyed
+                                   elsewhere */
 
 /* Where a value lives (record 26 section 5.0): Services\USB machine-wide,
  * or the mark service's own Parameters key (its Restart). */
@@ -592,6 +603,29 @@ const char *inst_hvci_text(int state, int cmInRun);
 #define INST_LOC_MARK       1
 #define INST_LOC_PFW        2   /* XHCIPFW.VXD's static-VxD key (record 32
                                    section 12.10: XhciPfwNhiLine) */
+#define INST_LOC_DRIVE      3   /* one drive's own device key (the UAS
+                                   driver's two; task 49.38): the xHCI98
+                                   USB Tree's alone, Setup never writes
+                                   one */
+
+/* A value's kind (task 49.38): a DWORD, or a string (XhciCmTunnelBridge). */
+#define INST_VK_DWORD       0
+#define INST_VK_TEXT        1
+/* A text value's longest form, its NUL included (the driver refuses 64
+ * characters or more: cm_vals.h, CM_TUNNEL_BRIDGE_CHARS). */
+#define INST_TEXT_CHARS     64
+
+/* The Advanced rows' groups (task 49.38), the headers both tools show
+ * above a group's first row; a row with none is under "Advanced
+ * settings". */
+#define INST_G_M4   "Advanced: interrupt mode 4 on 2000 and XP"
+#define INST_G_MEM  "Advanced: memory"
+#define INST_G_CHK  "Advanced: faults and checks"
+#define INST_G_HW   "Advanced: controller quirks"
+#define INST_G_LNX  "Advanced: Linux's controller quirks (leave as installed)"
+#define INST_G_NET  "Advanced: Thunderbolt networking"
+#define INST_G_U4   "Advanced: USB4 and the ASM4242"
+#define INST_G_UAS  "Advanced: one UAS drive (the drive under Applies to)"
 #define INST_MK_PARAMS_KEY  "SYSTEM\\CurrentControlSet\\Services\\xhcimark\\Parameters"
 
 /* The values a choice list names (0 to 4: XhciFastPollFsLs's 4). */
@@ -622,10 +656,26 @@ typedef struct _INST_VALUE {
     int Loc;                /* INST_LOC_*: 0 for every Services\USB value */
     INST_U32 Step;          /* a range's number a multiple of it (0: any;
                                task 45.54, XhciMaxTransferKB's 4) */
+    /* Task 49.38: the Advanced group (INST_G_*, NULL for none), the kind
+     * (INST_VK_*), and for a range the numbers below 32 it takes (0:
+     * every one; XhciMsiIsaIrq's 0, 3 to 7, 10, 11 and 24 up). */
+    const char *Group;
+    int Kind;
+    INST_U32 Accept;
+    /* A range row whose numbers are a few picks (XhciEventRingTrbs's 256
+     * and 1024; NULL for none): Choice[k] says what Picks[k] means. */
+    const INST_U32 *Picks;
+    int PickCount;
+    /* The caution's part about an advanced choice (the owner, 2026-11-12:
+     * XhciInterruptMode 4 is said only where it is offered), added to
+     * Caution when the values a caution is about include one of
+     * CautionAdvMask; NULL for none. */
+    const char *CautionAdv;
+    INST_U32 CautionAdvMask;
 } INST_VALUE;
 
 /* The most values the table holds (the answers' arrays). */
-#define INST_MAX_VALUES     48
+#define INST_MAX_VALUES     128
 
 /* Where the installer writes a value (record 26 section 5.4, task 42-A.17;
  * owner, 2026-10-18): the machine-wide key both drivers read first, under
@@ -694,18 +744,99 @@ int inst_value_greyed(int index, const INST_ENV *env);
  * for a value every system takes. */
 const char *inst_value_only(int index);
 
+/* The four rules above for a definition that need not be a row of
+ * instValues[] (the xHCI98 USB Tree's own rows, xhcitr\tr_set.c trsExtra[];
+ * task 49.38): the same system rules by its Apply, its Settable mask. The
+ * index forms call these. */
+int inst_def_relevant(const INST_VALUE *v, const INST_ENV *env);
+int inst_def_greyed(const INST_VALUE *v, const INST_ENV *env);
+const char *inst_def_only(const INST_VALUE *v);
+INST_U32 inst_def_set_mask(const INST_VALUE *v, const INST_ENV *env);
+
 /* The value's default: the INF's AddReg line, or, for a value no INF
  * writes (NoInf) and for a 98 SE and ME Thunderbolt value the INF does
  * not write (the amd64 xhcicm.inf), the table's. 1 when there is one. */
 int inst_value_default(int index, const char *infText, INST_U32 *def);
 
+/* XhciResumeKeepBot's default (design record 20 section 4.3.4, M18): no INF
+ * writes it, and the driver's own (src\xhci_bot.c, XhciBotKeepDefault)
+ * is 1, a Bulk-Only drive kept after a hibernation, on Windows 2000 (NT
+ * 5.0) and 0 on every other Windows. */
+INST_U32 inst_keepbot_default(const INST_ENV *env);
+
+/* Whether Setup writes XhciResumeKeepBot itself (record 20 section 4.3.4,
+ * M19; owner, 2026-11-13: every value present after an install), at this
+ * Windows's default, as an answer of its own: 1 on 2000 and later (nt)
+ * with an xhci98 controller the run is for (targets), no answer given,
+ * the machine-wide value absent (mwState 0) and no controller's own key
+ * holding a DWORD of it (every State <= 0). An update keeps a value found
+ * anywhere; 98 SE and ME never seed. */
+struct _INST_VNOW;
+int inst_keepbot_seed(int nt, int targets, int answered, int mwState,
+                      const struct _INST_VNOW *now, int n);
+
+/* And the seed's second test: every xhci98 controller's own key, present
+ * or not and with no cap (all, n of them; a dock unplugged now may hold
+ * its user's 0), holds no DWORD of it (State 0), and the list is whole
+ * (scanOk) and every key was read (no State < 0). 1 when Setup may seed. */
+int inst_keepbot_seed_all(int scanOk, const struct _INST_VNOW *all, int n);
+
+/* XhciIntelPortSwitch (roadmap-usb4 task 49.47; owner, 2026-11-14): 0 in
+ * the INFs and when absent, so an install from the INF alone (by hand, F6,
+ * an integrated image) never moves the switchable connectors; Setup
+ * proposes 1, and writes it machine-wide unless answered otherwise, at a
+ * first install on a listed board. 1 when it does: listedNew (a present
+ * controller XhciPswGate admits, which this run installs xhci98 on with
+ * no xhci98 driver now), the machine-wide value absent (mwState 0), and
+ * no xhci98 controller's own key holding a DWORD of it (scanOk and all
+ * as inst_keepbot_seed_all takes them). An update keeps what is set. */
+int inst_psw_propose(int listedNew, int mwState, int scanOk,
+                     const struct _INST_VNOW *all, int n);
+
+/* The proposal is written only after this run installed xhci98 on a
+ * listed controller: never before the install, so a refused, failed or
+ * cancelled install, a run that installs no listed controller and a
+ * takeover stopped at its failure write nothing for it.
+ * inst_psw_counts_nt: one controller's result on 2000 and later - listed
+ * (XhciPswGate), its service xhci98 now, and started as the results check
+ * wants it (ok) or waiting for the restart its install asked for
+ * (pending: problem 14, a replaced controller's restart, 32-bit Vista
+ * and 7's helper restart, an update running the old file until then).
+ * inst_psw_counts_9x: on 98 SE and ME through the helper - ok (started,
+ * this release), swapped (the new file at the next start) or
+ * rebootPending ("installed, restart pending").
+ * inst_psw_write_now: 1 when the run writes the proposed 1 - proposed,
+ * a controller counted, no answer given, not /list, not cancelled, and no
+ * takeover of the run stopped at its failure (takeStopped). */
+int inst_psw_counts_nt(int listed, int ourService, int ok, int pending);
+int inst_psw_counts_9x(int listed, int ok, int swapped,
+                       int rebootPending);
+int inst_psw_write_now(int proposed, int installedOk, int answered,
+                       int list, int cancelled, int takeStopped);
+
+/* inst_value_default for this system: XhciResumeKeepBot's by
+ * inst_keepbot_default, every other value's as inst_value_default. */
+int inst_value_default_env(int index, const char *infText,
+                           const INST_ENV *env, INST_U32 *def);
+
 /* A range value's number (Hi nonzero) within Lo to Hi and on its Step
  * (record 26 section 5.4.1): 1 when it is, 0 otherwise or for a list. */
 int inst_value_in_range(int index, INST_U32 v);
 
+/* 1 when a range row takes v (its range, step, the numbers below 32 it
+ * takes, and its picks when it has them). */
+int inst_value_takes(const INST_VALUE *x, INST_U32 v);
+
+
 /* A range value's allowed numbers as text, "64 to 2048, a multiple of 4"
  * or "1 to 5000"; "" for a list. */
 void inst_value_range_text(int index, char *out, size_t cap);
+
+/* The same for this system (task 49.38: XhciMsiIsaIrq has no input above
+ * 23 on the amd64 image), and a range's top here; env NULL for none. */
+void inst_value_range_text_env(int index, const INST_ENV *env, char *out,
+                               size_t cap);
+INST_U32 inst_value_hi(int index, const INST_ENV *env);
 
 /* 98 SE and ME (record 23 section 8.2, revision 51): 1 when a controller
  * takes the values after the run - bound to the INF's service now, or a
@@ -716,8 +847,63 @@ int inst_value_target_9x(int serviceIsOurs, int action);
 int inst_value_answer(const char *line, INST_U32 mask, INST_U32 *value);
 
 /* "Name=Value" for /set: 1 with *index and *value, 0 unknown name, -1 a
- * value /set does not accept, -2 malformed. */
+ * value /set does not accept, -2 malformed, -3 a text row (task 49.38:
+ * inst_value_set_text takes it). */
 int inst_value_set(const char *arg, int *index, INST_U32 *value);
+
+/* "Name=Text" for a text row (XhciCmTunnelBridge): 1 with *index and the
+ * text (at most cap - 1 characters), 0 not a text row, -1 a text the
+ * driver would not take. */
+int inst_value_set_text(const char *arg, int *index, char *text,
+                        size_t cap);
+
+/* XhciCmTunnelBridge's form as the driver reads it (src\cm\cm_vals.c,
+ * CmValuesTakeBridge; src\cm\tbt_topo.c, XhciTbtParseBdfList): "auto"
+ * in any case, or empty, the driver's own finding; or one to four
+ * bb:dd.f (bb one or two hex digits, dd one or two up to 1F, f one digit
+ * up to 7) separated by commas, no spaces, fewer than INST_TEXT_CHARS
+ * characters in all. 1 when it is. */
+int inst_bdf_list_ok(const char *text);
+
+/* The settings search (task 49.38, the owner's Find of 2026-11-12): 1
+ * when text, its leading and trailing spaces ignored, is empty or found,
+ * without case, in the value's name, its meaning or one of its choice
+ * texts. inst_has_text: the same test on one string. */
+int inst_value_matches(const INST_VALUE *v, const char *text);
+
+/* XHCIINST /set /show [text] (task 49.38): every row Setup handles (a
+ * drive's own two left out) whose text matches find, each as its name and
+ * meaning, what it takes, and its machine-wide value now, read by rd (1
+ * a DWORD in *v, 2 a string in text, 0 not set, -1 unreadable or another
+ * type); `No setting matches "<find>".` when none does. Returns the rows
+ * listed. With env, the choices this system's drivers do not take there
+ * (inst_value_nine_unoffered) are left out of what it takes, and such a
+ * value stored is shown as inst_value_nine_text says; env NULL lists the
+ * table's. */
+typedef int (*INST_MW_READ)(int index, INST_U32 *v, char *text, size_t cap);
+int inst_settings_list(const char *find, const INST_ENV *env, INST_MW_READ rd,
+                       char *out, size_t cap);
+
+/* 98 SE and ME (the owner's decision of 2026-11-13): the drivers run
+ * XhciInterruptMode 4 as 0 and poll for XhciCmRingInterrupt 2 there, so
+ * Setup does not offer them. inst_value_nine_unoffered: the bits of those
+ * choices for this value on this system (0 on NT, or env NULL).
+ * inst_value_nine_text: for a stored `now` that is one of them, 1 and its
+ * reading as the xHCI98 USB Tree's settings page gives it, "4 (the driver
+ * uses its default, 0 - automatic)"; 0, out untouched, otherwise. The
+ * stored value itself is never changed. */
+INST_U32 inst_value_nine_unoffered(const INST_VALUE *v, const INST_ENV *env);
+int inst_value_nine_text(const INST_VALUE *v, const INST_ENV *env,
+                         INST_U32 now, char *out, size_t cap);
+int inst_has_text(const char *hay, const char *text);
+
+/* "auto", any case, or empty: the driver's own finding. */
+int inst_bdf_auto(const char *text);
+
+/* The INF's AddReg string for name ("auto" for XhciCmTunnelBridge), its
+ * quotes removed: 1 with it. */
+int inst_inf_addreg_text(const char *text, const char *name, char *out,
+                         size_t cap);
 
 /* The allowed values of a mask as text ("0, 1, 2"). */
 void inst_mask_text(INST_U32 mask, char *out, size_t cap);
@@ -909,6 +1095,9 @@ typedef struct _INST_OPTS {
                                section 7.1, revision 23)                */
     int NoTray;             /* /notray: XHCITR not started at login     */
     int NoUas;              /* /nouas: xhciuas.inf left out of the run  */
+    int Takeover;           /* /takeover: another manufacturer's driver replaced
+                               on xHCI controllers (record 23 section
+                               5.4.2, task 49.44)                       */
     int Storage;            /* /storage: the USB storage drivers, 98 SE
                                only (record 26 section 6.5.9)          */
     int NoStorage;          /* /nostorage: left out, on any system      */
@@ -949,6 +1138,9 @@ typedef struct _INST_OPTS {
     int SetCount;
     int SetIndex[INST_MAX_SET];
     INST_U32 SetValue[INST_MAX_SET];
+    char SetText[INST_MAX_SET][INST_TEXT_CHARS]; /* a text row's (49.38) */
+    int SetShow;            /* /set /show [text]: the listing (49.38)    */
+    char SetFind[INST_TEXT_CHARS];
 } INST_OPTS;
 
 /* XHCIINST /toomany's text (task 44.4; record 23 section 2): INSTALL.BAT's
@@ -1255,6 +1447,89 @@ int inst_id_path(const char *id, unsigned char *path, int *count, int room);
 /* 1 when a 98 instance id names the member at `bdf` whose record path is
  * path[0..pathCount-1] (pathCount 0: unknown, so only the BUS_ form can
  * match). */
+/* A Thunderbolt/USB4 stop refused on 98 SE and ME when Stor98 left an NVMe
+ * controller behind it to the BIOS (the owner, 2026-11-12; design note
+ * DESIGN-BIOSHELD, record 24 section 7.6). Stor98's find report (its
+ * service key, "StorFind <bus>.<dev>.<fn>", decimal) parsed: the state,
+ * the found function, and the memory range its port gave it ("range
+ * Lo:Hi", the devnode's own, which the found function's BAR matched; the
+ * "bars" are the port's own slot's, which a scan may have gone past). */
+#define INST_SF_UNKNOWN         0
+#define INST_SF_TAKEN           1   /* " taken", " taken: ... overridden" */
+#define INST_SF_BIOS            2   /* " left: already set up" (and ME's) */
+#define INST_SF_NOANSWER        3
+#define INST_SF_NOTRESTORED     4
+#define INST_SF_UNREADABLE      5
+#define INST_SF_VALUE           "StorFind"
+#define INST_SF_KEY             "System\\CurrentControlSet\\Services\\stor98"
+typedef struct _INST_STORFIND {
+    int State;
+    int HaveFound;
+    INST_U32 Bus;
+    INST_U32 Dev;
+    INST_U32 Fn;
+    int HaveBar;            /* a range, not 0:0                     */
+    INST_U32 BarLo;         /* "range Lo:Hi": the range's address    */
+    INST_U32 BarHi;
+} INST_STORFIND;
+void inst_storfind_parse(const char *text, INST_STORFIND *f);
+/* "StorFind b.d.f" (without case): 1 with its BDF. */
+int inst_storfind_name(const char *name, INST_U32 *bus, INST_U32 *dev,
+                       INST_U32 *fn);
+/* 1 when the stop is refused: not NT, the member an NVMe function (class
+ * 010802) at Code 10 now, and one of the n StorFind values (names[k],
+ * texts[k]) says it was left to the BIOS, its found function is its own
+ * name's, and its range is one of the member's memory bases this boot
+ * (memLo/memHi, nMem of them: the allocated configuration, else the
+ * boot one). A missing value, another state or no match goes on. */
+int inst_bios_held(int nt, int isNvme, INST_U32 problem,
+                   const INST_U32 *memLo, const INST_U32 *memHi, int nMem,
+                   const char *const *names, const char *const *texts,
+                   int n);
+extern const char instBiosHeldDialog[];
+extern const char instBiosHeldConsole[];
+
+/* The check fails closed (the merge review, 2026-11-13): one report, as
+ * RegEnumValueA gave it (enumResult INST_SFE_*), classified: not a
+ * function's report (another value of the key), a function's report that
+ * matches (inst_bios_held) or does not, or one that cannot be told (a
+ * name or text too long, not REG_SZ, no state, no found function or no
+ * range, a found function that is not its name's). */
+#define INST_SFE_OK             0
+#define INST_SFE_MORE           1   /* ERROR_MORE_DATA                    */
+#define INST_SFE_ERROR          2   /* any other failure                  */
+#define INST_SFR_SKIP           0
+#define INST_SFR_NOMATCH        1
+#define INST_SFR_MATCH          2
+#define INST_SFR_BAD            3
+int inst_storfind_report(int enumResult, const char *name, int isSz,
+                         const char *text, const INST_U32 *memLo,
+                         const INST_U32 *memHi, int nMem);
+/* The verdict over a whole check: INST_BH_GO (no NVMe function at Code 10
+ * behind the port; Stor98 not installed, its key absent; or a check that
+ * ran to the end and found no match), INST_BH_HELD (a match: the proven
+ * case), INST_BH_UNSURE (any part of the check that could not be done:
+ * the memory not read or overflowing, the key not opened, the list not
+ * read to the end, a report that cannot be told). keyState: 1 opened, 0
+ * absent (ERROR_FILE_NOT_FOUND), -1 not opened. */
+#define INST_BH_GO              0
+#define INST_BH_HELD            1
+#define INST_BH_UNSURE          2
+int inst_bios_verdict(int nt, int nRelevant, int memOk, int keyState,
+                      int enumOk, int nBad, int nMatch);
+/* A function's report (a "StorFind b.d.f" value that parses) and the
+ * memory base k (of n) its range is, or -1 (the merge review of
+ * 2026-11-13: every NVMe function at Code 10 behind the port needs a
+ * report of its own, whatever it says, or the check cannot tell). */
+int inst_storfind_base(const char *name, const char *text,
+                       const INST_U32 *memLo, const INST_U32 *memHi, int nMem);
+/* The verdict with the functions no report covered (nUncovered): with
+ * Stor98's key there, one or more is INST_BH_UNSURE. */
+int inst_bios_verdict2(int nt, int nRelevant, int memOk, int keyState,
+                       int enumOk, int nBad, int nMatch, int nUncovered);
+extern const char instBiosUnsureDialog[];
+extern const char instBiosUnsureConsole[];
+
 int inst_tb_loc_match(const char *id, INST_U32 bdf, const unsigned char *path,
                       int pathCount);
 
@@ -1435,6 +1710,10 @@ int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int usbOpt,
 #define INST_CW_NOCM8       0x10UL  /* 8, 8.1: no connection manager     */
 #define INST_CW_INTELTB     0x20UL  /* over Intel's Thunderbolt driver   */
 #define INST_CW_TOOLS9X     0x40UL  /* 98 SE, ME: the tools alone (46.22)*/
+#define INST_CW_TAKEOVER    0x80UL  /* another manufacturer's driver replaced on
+                                       a controller (record 23 section
+                                       5.4.2, task 49.44); set by the
+                                       engine, not inst_comp_warnings  */
 /* tb: the Thunderbolt component ticked; intel: Intel's Thunderbolt driver
  * runs a controller (record 23 section 8.5.1). */
 INST_U32 inst_comp_warnings(int is98se, int is9x, int is8, int haveCm,
@@ -1450,6 +1729,114 @@ void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
 #define INST_WARN_COLUMNS   78
 size_t inst_wrap_lines(const char *lead, const char *text, size_t width,
                       char *out, size_t cap);
+
+/* ---- The takeover (record 23 section 5.4.2, record 26 section 5.3.10;
+ * roadmap-usb4 task 49.44, owner 2026-11-13): an xHCI controller another
+ * manufacturer's driver runs, replaced behind a box unticked by default or
+ * /takeover. ---- */
+
+/* 1 when a present xHCI controller whose service is service is one the
+ * takeover covers: a service, not xhci98, and not Windows' own USBXHCI on
+ * 8, 8.1 and 10 (record 26 section 5.3.1 case 3a's). nt 0 (98 SE, ME): 0. */
+int inst_take_candidate(int nt, int osKind, const char *service);
+
+/* What the plan does with a candidate. */
+#define INST_TAKE_OFF       0   /* the choice off: "Skip (other driver)"  */
+#define INST_TAKE_YES       1   /* replaced                               */
+#define INST_TAKE_BOOTDISK  2   /* the Windows disk is below it           */
+#define INST_TAKE_BOOTUNK   3   /* where that disk is cannot be read:
+                                   replaced, with a warning (owner,
+                                   2026-11-13)                            */
+#define INST_TAKE_STOPPED   4   /* an earlier takeover of the run failed  */
+/* chosen: the box or /takeover; bootPath: inst_boot_path_has's answer for
+ * the controller (1 below it, 0 not, -1 unread); stopped: an earlier
+ * takeover of this run failed. */
+int inst_take_reason(int chosen, int bootPath, int stopped);
+/* The plan's row for a candidate by its reason; console adds the switch's
+ * name to the replacement's row. */
+const char *inst_take_row_text(int reason, int console);
+/* 1 when the reason replaces the driver (INST_TAKE_YES, INST_TAKE_BOOTUNK). */
+int inst_take_runs(int reason);
+/* 1 when a candidate would be replaced with the choice on (bootPath and
+ * stopped as inst_take_reason's). */
+int inst_take_able(int bootPath, int stopped);
+/* The count the texts that announce a replacement name (the console's hint,
+ * the window's box): the candidates, or 0, the texts not shown, when no
+ * candidate can be replaced (able: those inst_take_able admits). */
+int inst_take_said(int candidates, int able);
+/* The chosen argument a candidate's inst_take_reason gets: chosen (the box
+ * or /takeover, the USB drivers in the run) and, once the run has begun
+ * (locked), only for a candidate the warning covered (warned), so one a
+ * later reading finds stays "Skip (other driver)". */
+int inst_take_offered(int chosen, int locked, int warned);
+/* INST_TAKE_BOOTUNK's words: result 0 the warning's paragraph naming the
+ * controller (no newline), 1 the result's line under "Replaced ..." (with
+ * its newline). */
+void inst_take_bootunk_text(const char *name, int result, char *out,
+                            size_t cap);
+/* The warning's one paragraph for every such controller: names[0..n-1],
+ * at most INST_TAKE_NAMES_SAID by name, the rest counted, so the text is
+ * bounded whatever n is (1: inst_take_bootunk_text's). */
+#define INST_TAKE_NAMES_SAID    3
+void inst_take_bootunk_many(const char *const *names, int n, char *out,
+                            size_t cap);
+
+/* The system-dependent refusal of /takeover, or NULL: 98 SE and ME, and 8,
+ * 8.1 and 10 without /usb. (/cmonly and the uninstall's are the parser's,
+ * inst_parse_args.) */
+const char *inst_take_switch(int nt, int osKind, int usbOpt);
+
+/* The console's one line when /takeover is absent and n candidates are
+ * found (n >= 1), with its newline. */
+void inst_take_hint(int n, char *out, size_t cap);
+/* The window's box for n candidates, and its sentence: service the one
+ * service all n run, or NULL when they differ (or it is too long to say). */
+void inst_take_box_text(int n, char *out, size_t cap);
+void inst_take_line_text(int n, const char *service, char *out, size_t cap);
+/* The longest service name the sentence says by name. */
+#define INST_TAKE_NAME_MAX  24
+
+/* The results' lines (each ends with a newline): ok 1 "Replaced ...", 0
+ * "Could not replace ..."; filters, the devnode's filter names joined by
+ * ", " (NULL or "" none), said only after a replacement. */
+void inst_take_result_text(int ok, const char *service, const char *name,
+                           const char *filters, char *out, size_t cap);
+
+/* The uninstall's line for a recorded controller (with its newline). */
+#define INST_TAKE_BACK_GIVEN    0   /* bound to service, not this package's */
+#define INST_TAKE_BACK_NONE     1   /* present with no driver               */
+#define INST_TAKE_BACK_LATER    2   /* not present, or unreadable           */
+#define INST_TAKE_BACK_SETUP    3   /* present, Windows' installs unsettled */
+void inst_take_back_text(int kind, const char *name, const char *service,
+                         char *out, size_t cap);
+
+/* The kind of a recorded controller's line (record 23 section 5.4.2),
+ * from that controller's own reading: settled 1 when Windows' installs
+ * settled (one answer for all the recorded controllers); present 1 when
+ * the controller was found; svcRead the Service value's read (1 read, 0
+ * absent, below 0 unreadable) and service the value; problem its problem
+ * code (inst_dn_problem; INST_TAKE_PROB_UNREAD when the status was not
+ * read). A controller on a driver not this package's, not waiting to be
+ * set up, is GIVEN whatever the settle; one with no driver is SETUP while
+ * Windows has not finished (the XP Found New Hardware case) and NONE once
+ * it has; one at Code 1 or 18 is SETUP; one whose status was not read is
+ * LATER unless the settle ended. */
+#define INST_TAKE_PROB_UNREAD   0xFFFFFFFFUL
+int inst_take_back_kind(int settled, int present, int svcRead,
+                        const char *service, INST_U32 problem);
+
+/* The record HKLM\Software\xhci98\Takeover: one REG_SZ per controller,
+ * named by its instance id, "<state>;<service>;<InfPath>". */
+#define INST_TAKE_KEY_NAME  "Takeover"
+#define INST_TAKE_ATTEMPT   "attempt"
+#define INST_TAKE_DONE      "done"
+/* 1 composed, 0 it does not fit cap or a field holds ';'. */
+int inst_take_rec_text(const char *state, const char *service,
+                       const char *infPath, char *out, size_t cap);
+/* 1 parsed (state attempt or done, service not empty), 0 not. */
+int inst_take_rec_parse(const char *data, char *state, size_t stateCap,
+                        char *service, size_t serviceCap, char *infPath,
+                        size_t infCap);
 
 /* The UAS disk driver, xhciuas.sys (owner, 2026-10-19): a child of the
  * USB drivers, in the run only with them and unless /nouas or its
@@ -2029,6 +2416,36 @@ int inst_uninstall_route(int selfInInstallDir, int fromGiven,
 int inst_relaunch_cmd(char *out, size_t cap, const char *exe,
                       const char *fromDir, const char *log, int nopause,
                       int yes);
+
+/* ---- the log's place (record 23 section 7.5.1) ---------------------------- */
+
+#define INST_LOG_NAME           "XHCIINST.LOG"
+
+/* The temp folder's log: folder (GetTempPathA's answer, with its last
+ * backslash or without) and the name. 0, out empty, when the folder is
+ * empty, when the path does not fit cap, or when it is root, the root
+ * file's own path (compared without case). */
+int inst_log_temp_path(char *out, size_t cap, const char *folder,
+                       const char *root);
+
+/* Where a run's log goes: the /log path (given, not empty) and nothing
+ * else; without one the root file, then on 98 SE and ME (nt 0) the temp
+ * folder's (temp, empty for none); on 2000 to 10 (nt 1) the root file
+ * alone (revision 57). start answers 1 for a place the log was started
+ * in. *path is the place taken, NULL for INST_LOG_NONE. */
+#define INST_LOG_NONE           0
+#define INST_LOG_GIVEN          1
+#define INST_LOG_ROOT           2
+#define INST_LOG_TEMP           3
+typedef int (*INST_LOG_OPEN)(void *ctx, const char *path);
+int inst_log_pick(int nt, const char *given, const char *root,
+                  const char *temp, INST_LOG_OPEN start, void *ctx,
+                  const char **path);
+
+/* What the run says of a place that failed, after inst_log_pick's answer
+ * and with its arguments. 0, out empty, when the first place was taken. */
+int inst_log_fail_text(char *out, size_t cap, int place, const char *given,
+                       const char *root, const char *temp);
 
 /* ---- the window's switches (record 26 section 10) ------------------------- */
 
@@ -2970,6 +3387,103 @@ int inst_mk_system(const INST_ENV *env);
 int inst_mk_end_action(int cmService, int tbInRun, int markSystem,
                        int safeEject);
 
+/* The run's hold of the service's poll (record 21 section 7.8.4, task
+ * 49.26): the event a run keeps open from before its first change to its
+ * end, and the idle event the service keeps for its life, reset around
+ * each poll, which a run waits for once as a barrier. */
+#define INST_MK_HOLD_EVENT  "Global\\Xhci98MarkHold"
+#define INST_MK_IDLE_EVENT  "Global\\Xhci98MarkIdle"
+#define INST_MK_HOLD_WAIT_MS 60000UL
+/* The run's own hold told apart from the last run's (record 21 section
+ * 7.8.4): REG_DWORD values of the service's Parameters key, which only
+ * SYSTEM and the Administrators can write. HoldRun the run's number,
+ * written before its hold event is made; HoldAck the number the service
+ * last held its poll for, written by a poll that found the hold with that
+ * number and skipped. */
+#define INST_MK_HOLD_RUN    "HoldRun"
+#define INST_MK_HOLD_ACK    "HoldAck"
+/* The run's number after the last one written (never 0, which a value not
+ * read gives). */
+INST_U32 inst_mk_hold_gen_next(INST_U32 last);
+/* The run's number from what was read before it is written: lastRead and
+ * ackRead 1 the value read, 0 absent, -1 not readable. 0 (no number: the
+ * service is stopped for the run) when either could not be read; else the
+ * one after HoldRun (1 when absent), passing over HoldAck's, so a number
+ * already acknowledged is never reused. */
+INST_U32 inst_mk_hold_gen_pick(int lastRead, INST_U32 last, int ackRead,
+                               INST_U32 ack);
+/* How a run holds the poll: eventMade the hold event was created (or found
+ * with a trusted owner) and its number written, idleEvent the service's
+ * idle event opened with SYSTEM as its owner (a service that knows the hold
+ * runs: no other process can make an object owned by SYSTEM), idle the
+ * barrier passed within the wait: that event seen set once the hold
+ * existed and HoldAck read back as this run's number, running the
+ * service's state (1 running or starting, 0 stopped or not registered, -1
+ * unreadable). A barrier not passed stops the service. */
+#define INST_MK_HOLD_HELD   0   /* the event holds the poll                */
+#define INST_MK_HOLD_STOP   1   /* the service stopped for the run         */
+#define INST_MK_HOLD_NONE   2   /* no service polls: the event is enough   */
+int inst_mk_hold_how(int eventMade, int idleEvent, int idle, int running);
+
+/* One run at a time on NT (record 21 section 7.8.4): the run's guard, a
+ * named event open to SYSTEM and the Administrators alone whose existence
+ * is the guard (no thread owns it: the wizard reads on one thread and runs
+ * on another), made before the run reads the system - the plan, the
+ * recovery journal, the restart marker, HoldRun, the service's state - and
+ * kept to the hold's end; a run that dies closes it with its process. got:
+ * 1 made by this run, 0 found (another process has it), -1 not made;
+ * owner the found object's (INST_OWNER_*; this run's own is taken
+ * whatever its owner). Not taken: the run is refused before any change,
+ * without waiting. */
+#define INST_RUN_GUARD      "Global\\Xhci98SetupRun"
+#define INST_GUARD_TAKEN    0   /* this run is the only one                */
+#define INST_GUARD_BUSY     1   /* another Setup run holds it: refused     */
+#define INST_GUARD_FOREIGN  2   /* made by no installer: refused           */
+#define INST_GUARD_ERROR    3   /* not made or not waited for: refused     */
+int inst_run_guard_how(int got, int owner);
+
+/* A named object's owner (record 21 section 7.8.4): the idle event is
+ * trusted with SYSTEM alone (the service makes it), the hold event with
+ * SYSTEM or the Administrators (an elevated installer makes it). */
+#define INST_OWNER_OTHER    0
+#define INST_OWNER_SYSTEM   1
+#define INST_OWNER_ADMINS   2
+int inst_mk_owner_ok(int owner, int systemOnly);
+
+/* The restart a run owes a service it stopped (the run's flag or the
+ * service key's Parameters\SetupStopped marker of a run that ended before
+ * it restarted it): registered 1/0/-1 (svc_state), state the service's
+ * after the wait for a pending state (0 stopped, 1 SERVICE_RUNNING itself,
+ * 2 stop pending, 3 another pending or paused state, -1 unreadable): only
+ * SERVICE_RUNNING read back settles it. */
+#define INST_MK_RESTORE_NONE  0 /* nothing owed                            */
+#define INST_MK_RESTORE_CLEAR 1 /* running, or no longer registered: done  */
+#define INST_MK_RESTORE_START 2 /* stopped: start it, then read it again   */
+#define INST_MK_RESTORE_FAIL  3 /* still pending or unreadable: reported,
+                                   the marker kept for the next run       */
+int inst_mk_restore_how(int owed, int registered, int state);
+/* The hold's end touches the restart marker and the service only for the
+ * run that holds the run's guard (ownsGuard): a run that takes none, and a
+ * second call after the guard was given back, do nothing, so they never
+ * start a service another run has stopped. 1 when the end may read the
+ * marker and restart. */
+int inst_mk_end_may(int ownsGuard);
+/* Which runs take the run's guard (record 21 section 7.8.4): every install,
+ * update or uninstall run on NT that can change anything - the drivers,
+ * the other USB driver sets, the tools, settings, staging records, the
+ * service - a run of the tools alone and a run of a driver set alone
+ * included; not a /list run (nt 1, list 1), which changes nothing, and not
+ * on 98 SE and ME (nt 0), which have no service and no hold. 1 needed. */
+int inst_run_guard_needed(int nt, int list);
+/* While a front end may keep the run's guard after the read: readCode
+ * (inst_eng_begin's or inst_eng_read's, -1 went on), planFirst (the plan
+ * made before any page or question, -1 went on), ended (inst_eng_end has
+ * been reached: a run's end, a refusal at the questions or the run's
+ * start, the window closed). 1 kept: the run can still go on (the wizard's
+ * Components page may change a choice its plan refused); 0 given back now:
+ * the run can no longer change anything. */
+int inst_run_guard_keep(int readCode, int planFirst, int ended);
+
 /* The service's copy moved over system32's failed with Win32 error err
  * (task 44.76): the old copy still in use (5, access denied, or 32, a
  * sharing violation; Windows 2000 reports a service stopped before its
@@ -3009,8 +3523,8 @@ int inst_qc_build(const unsigned char *b, size_t n, INST_U32 member,
  * make-release.ps1 writes it for package-common.ps1's pins (the cut and
  * test-package.ps1 hold the two equal): the installer's record of what the
  * folder must hold. "" for a release with no such set. */
-#define INST_WDMFREE_SUMS       "553C5CA44F5C7AFB050A7AF2AFC5719F7881CB7501BAE477066E7E6711F09E80"
-#define INST_NONFREE_SUMS     "F6B23081EEB2CC7A4B5F5A634E5FD13E9F9A3ADDF4B06BEA87B1F193B364950F"
+#define INST_WDMFREE_SUMS       "509A46B852E0092F7E527DB6464F526A7913F1B3D18FA0023E5E1EE8FB05CA5E"
+#define INST_NONFREE_SUMS     "674BAFDE7BA8F7FE6855E19E3C8E2BB26D33BA4F0B9E10E1D9CFF6ABFBDDE062"
 /* The owner, 2026-10-23: NUSB 3.3's files and both sets under one folder,
  * in the download and in the install directory, every level 8.3. */
 #define INST_USBDRV_DIR         "USBDRV"

@@ -242,7 +242,19 @@ rem target; scripts\inf-gate\test-inf-checks.ps1 also compares the two
 rem xhci98 INFs directly.
 rem
 rem Exit codes: 0 = built and gated, 1 = failure, 2 = host tests inconclusive
-rem (a blocked exe launch, not a test failure - just run it again).
+rem (a blocked exe launch, not a test failure - just run it again), 3 = every
+rem gate passed but an image of the x86 package was not built, which only
+rem XHCI98_ALLOW_UNBUILT=1 allows (task 49.34; without it that is a 1).
+rem
+rem XHCI98_ALLOW_UNBUILT=1: S98VSD.VXD, XHCIPFW.VXD and XHCIPFW.SYS are in
+rem every x86 package, and their build.cmd answers 2 ("not built") when a
+rem tool it needs is not on this host - Open Watcom 2.0, the Windows 98 SE
+rem DDK, Python on PATH (the VxDs' link checks) or the Windows 2000 DDK. That
+rem fails the run, naming the image and the tool. Only with this variable set
+rem does the run go on without the image, say so at the step and again at
+rem the end ("NOT BUILT: ..."), print "BUILD INCOMPLETE" in place of "BUILD +
+rem GATES PASSED" and exit 3; make-package.ps1 then refuses the package
+rem without -AllowUnbuilt, and make-release.ps1 refuses a cut without them.
 
 setlocal
 
@@ -286,6 +298,12 @@ rem A pre-merge build of a branch sets XHCI98_SELFTEST_SKIP_OK=1 to let that
 rem skip stand in an "all" build too; a cut never sets it, and
 rem XHCI98_FULL_SELFTESTS=1 set by the caller still wins (owner, 2026-10-30).
 if /i "%FLAVORS%"=="all" if not "%XHCI98_SELFTEST_SKIP_OK%"=="1" set "XHCI98_FULL_SELFTESTS=1"
+rem An "all" run also builds every tool whose self-test it runs and fails a
+rem tool self-test whose EXE is still missing (build-steps.ps1 -All), whatever
+rem XHCI98_SELFTEST_SKIP_OK says; a release or qemu run passes such a step
+rem over and lists it at the end (task 49.26).
+set "ALLRUN="
+if /i "%FLAVORS%"=="all" set "ALLRUN=-All"
 if /i "%FLAVORS%"=="all" set "FLAVORS=release qemu"
 rem The Stor98-only run (task 48.9): both flavours' records, which each name
 rem the Stor98 images, are amended or deleted (:stor98only).
@@ -479,7 +497,10 @@ rem self-tests, the INF, UAS, CM, Stor98 and txtsetup.oem gates with their
 rem self-tests, the packager's, the QEMU launchers' and the VM matrix's
 rem self-tests, the Stor98 interface header, on the x86 run XHCITR and
 rem XHCIPERF rebuilt (XHCITR compiles the installer's pure half, so a cut
-rem never needs it built by hand) and their self-tests, the XHCIINST,
+rem never needs it built by hand) and their self-tests; in an "all" run
+rem also XHCIMARK, XHCIINST and XHCIDI rebuilt, and on amd64 XHCITR
+rem and XHCIPERF, so none of the tool self-tests below can be passed over
+rem (one whose EXE is still missing fails); the XHCIINST,
 rem XHCIMARK and XHCIDI self-tests when their EXEs are there, the host suite
 rem and on the x86 run Stor98's unit suite. scripts\build-steps.ps1 holds
 rem them as a table, with what each waits for and the message each failure
@@ -495,7 +516,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\build-steps.ps1" -SelfTest
 if errorlevel 1 goto stepstestfail
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\build-steps.ps1" -Arch %ARCH%
+    "%REPO%\scripts\build-steps.ps1" -Arch %ARCH% %ALLRUN%
 if errorlevel 2 goto inconclusive
 if errorlevel 1 goto stepsfail
 call :steptime STEPT0 "the checks that need no DDK"
@@ -525,9 +546,12 @@ rem S98VSD.VXD (task 43.46, design record 30 section 6.4), the Windows 98
 rem SE and ME IOS layer for Stor98's disks, on the x86 run: the release
 rem image always, the qemu flavour's (its debug-console writes) when this
 rem run builds qemu. Each link is gated by src\vsd\check-vsd.ps1 inside
-rem src\vsd\build.cmd; a 2 is "not built" (no Open Watcom or no 98 SE DDK
-rem on this host), said and passed over as for XHCIDI.EXE, and
-rem make-release.ps1 refuses a cut without the image.
+rem src\vsd\build.cmd; a 2 is "not built" (no Open Watcom, no 98 SE DDK or
+rem no Python on PATH on this host): a failure, unless XHCI98_ALLOW_UNBUILT=1
+rem (above, task 49.34), and make-release.ps1 refuses a cut without the
+rem image. Only the release image's 2 is "not built": the qemu image follows
+rem it with the same tools, so its 2 stays a failure.
+set "UNBUILT="
 if /i "%ARCH%"=="amd64" goto skipvsd
 echo.
 echo === build S98VSD.VXD ===
@@ -543,7 +567,8 @@ call "%REPO%\src\vsd\build.cmd" qemu
 if errorlevel 1 goto vsdfail
 goto skipvsd
 :vsdnotbuilt
-echo S98VSD.VXD was not built on this host (see above); the package goes without it.
+call :unbuilt S98VSD.VXD "src\vsd\build.cmd"
+if errorlevel 1 goto unbuiltfail
 :skipvsd
 if /i not "%ARCH%"=="amd64" call :steptime STEPT0 "build S98VSD.VXD"
 
@@ -552,8 +577,9 @@ rem SE and ME static VxD that closes PCI bridges' prefetchable windows
 rem lying wholly above 4 GB before the configuration manager reads them,
 rem on the x86 run as S98VSD.VXD is: the release image always, the qemu
 rem flavour's when this run builds qemu, each link gated by
-rem src\pfw\check-pfw.ps1 inside src\pfw\build.cmd; a 2 is "not built"
-rem (no Open Watcom or no 98 SE DDK on this host), said and passed over.
+rem src\pfw\check-pfw.ps1 inside src\pfw\build.cmd; a 2 is "not built" (no
+rem Open Watcom, no 98 SE DDK or no Python on PATH), a failure unless
+rem XHCI98_ALLOW_UNBUILT=1, as for S98VSD.VXD.
 if /i "%ARCH%"=="amd64" goto skippfw
 echo.
 echo === build XHCIPFW.VXD ===
@@ -569,7 +595,8 @@ call "%REPO%\src\pfw\build.cmd" qemu
 if errorlevel 1 goto pfwfail
 goto skippfw
 :pfwnotbuilt
-echo XHCIPFW.VXD was not built on this host (see above); the package goes without it.
+call :unbuilt XHCIPFW.VXD "src\pfw\build.cmd"
+if errorlevel 1 goto unbuiltfail
 :skippfw
 if /i not "%ARCH%"=="amd64" call :steptime STEPT0 "build XHCIPFW.VXD"
 
@@ -578,6 +605,7 @@ rem Windows 2000 and the 32-bit Vista, 7, 8, 8.1 and 10: a boot-start driver
 rem built with the Windows 2000 DDK by src\pfw\nt\build.cmd on the x86 run,
 rem the release image always and the qemu image when this run builds qemu,
 rem each gated there (the import gate's hlprx86 profile, check-pfwsys.ps1).
+rem A 2 (no Windows 2000 DDK) is a failure unless XHCI98_ALLOW_UNBUILT=1.
 if /i "%ARCH%"=="amd64" goto skippfwsys
 echo.
 echo === build XHCIPFW.SYS ===
@@ -593,7 +621,8 @@ call "%REPO%\src\pfw\nt\build.cmd" qemu
 if errorlevel 1 goto pfwsysfail
 goto skippfwsys
 :pfwsysnotbuilt
-echo XHCIPFW.SYS was not built on this host (see above); the package goes without it.
+call :unbuilt XHCIPFW.SYS "src\pfw\nt\build.cmd"
+if errorlevel 1 goto unbuiltfail
 :skippfwsys
 if /i not "%ARCH%"=="amd64" call :steptime STEPT0 "build XHCIPFW.SYS"
 
@@ -605,6 +634,16 @@ for %%F in (%FLAVORS%) do (
 )
 
 call :steptime RUNT0 "the whole run"
+rem The self-tests build-steps.ps1 passed over because their EXE is not
+rem there (that tool not built in this tree), listed again here so the end
+rem of the log says what this run did not check (task 49.34).
+set "STEPSABSENT=%REPO%\out\steps-%ARCH%\absent.txt"
+if exist "%STEPSABSENT%" (
+    echo.
+    echo NOT RUN, their EXE not built in this tree:
+    type "%STEPSABSENT%"
+)
+if defined UNBUILT goto incomplete
 echo.
 echo BUILD + GATES PASSED (%FLAVORS%)
 echo Next, to build the install media a VM can be pointed at:
@@ -952,6 +991,44 @@ call :gatestor98
 if errorlevel 1 exit /b 1
 call :gated -Finish -Amend
 exit /b %errorlevel%
+
+rem :unbuilt <image> <build.cmd> - an image of the x86 package answered 2,
+rem "not built" (its build.cmd named the missing tool on the line above).
+rem Exit 1 (the caller fails the run) unless XHCI98_ALLOW_UNBUILT=1, which
+rem adds the image to UNBUILT for the end of the run (task 49.34).
+:unbuilt
+echo.
+if not "%XHCI98_ALLOW_UNBUILT%"=="1" (
+    echo ERROR: %~1 was not built: the line above names the tool this host
+    echo lacks ^(Open Watcom 2.0, the Windows 98 SE DDK, Python on PATH or the
+    echo Windows 2000 DDK^). Every x86 package carries %~1, so this build stops
+    echo here. Make the tool reachable and run again, or check with
+    echo %~2 alone.
+    exit /b 1
+)
+echo ************************************************************************
+echo NOT BUILT: %~1 ^(%~2: see the line above^).
+echo XHCI98_ALLOW_UNBUILT=1 lets the run go on without it; this tree's x86
+echo package lacks it, and make-package.ps1 refuses that package without
+echo -AllowUnbuilt.
+echo ************************************************************************
+set "UNBUILT=%UNBUILT% %~1"
+exit /b 0
+
+:unbuiltfail
+echo.
+echo BUILD + GATES FAILED: an image of the x86 package was not built - see above.
+endlocal
+exit /b 1
+
+:incomplete
+echo.
+echo NOT BUILT:%UNBUILT% ^(XHCI98_ALLOW_UNBUILT=1^)
+echo BUILD INCOMPLETE (%FLAVORS%): every gate passed, but the x86 package
+echo lacks%UNBUILT%.
+echo make-package.ps1 refuses that package without -AllowUnbuilt.
+endlocal
+exit /b 3
 
 :pfwsysfail
 echo.

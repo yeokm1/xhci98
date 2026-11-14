@@ -1655,6 +1655,63 @@ ULONG UasNoAtaCdb(const UCHAR *cdb, ULONG cdbLength)
     return (cdb[0] == 0x85 || cdb[0] == 0xA1) ? 1UL : 0UL;
 }
 
+ULONG UasAtaBit(const UCHAR *cdb, ULONG cdbLength)
+{
+    if (cdb == NULL || cdbLength == 0) {
+        return 0;
+    }
+    if (cdb[0] == 0xA1) {
+        return UAS_ATA_REFUSED_12;
+    }
+    return (cdb[0] == 0x85) ? UAS_ATA_REFUSED_16 : 0UL;
+}
+
+ULONG UasAtaRefusal(const UCHAR *cdb, ULONG cdbLength, ULONG scsiStatus,
+                    const UCHAR *sense, ULONG senseLength)
+{
+    ULONG key;
+    ULONG asc;
+    ULONG ascq;
+
+    if (scsiStatus != UAS_SCSI_CHECK_CONDITION || sense == NULL) {
+        return 0;
+    }
+    if (senseLength >= 14 && (sense[0] & 0x7E) == 0x70) {
+        key = sense[2] & 0x0FUL;
+        asc = sense[12];
+        ascq = sense[13];
+    } else if (senseLength >= 4 && (sense[0] & 0x7E) == 0x72) {
+        key = sense[1] & 0x0FUL;
+        asc = sense[2];
+        ascq = sense[3];
+    } else {
+        return 0;
+    }
+    if (key != 0x05 || asc != 0x20 || ascq != 0x00) {
+        return 0;
+    }
+    return UasAtaBit(cdb, cdbLength);
+}
+
+ULONG UasInvalidOpcodeSense(PUCHAR sense, ULONG room)
+{
+    UCHAR fixed[UAS_INVALID_CDB_SENSE];
+    ULONG n;
+
+    uasClear(fixed, sizeof(fixed));
+    fixed[0] = 0x70;
+    fixed[2] = 0x05;
+    fixed[7] = (UCHAR)(UAS_INVALID_CDB_SENSE - 8);
+    fixed[12] = 0x20;
+    n = (room < UAS_INVALID_CDB_SENSE) ? room : UAS_INVALID_CDB_SENSE;
+    if (sense != NULL && n != 0) {
+        uasBytes(sense, fixed, n);
+    } else {
+        n = 0;
+    }
+    return n;
+}
+
 ULONG UasInvalidCdbSense(PUCHAR sense, ULONG room)
 {
     UCHAR fixed[UAS_INVALID_CDB_SENSE];
@@ -1719,6 +1776,57 @@ ULONG UasFastResetDue(ULONG fast, ULONG armed, ULONG progress, ULONG now,
         return 0;
     }
     return 1;
+}
+
+ULONG UasFinalTimeoutDue(ULONG final, ULONG dataOutstanding,
+                         ULONG finalAge)
+{
+    if (!final || !dataOutstanding) {
+        return UAS_FINAL_TIMEOUT_NONE;
+    }
+    return (finalAge >= UAS_FINAL_TIMEOUT_AGE) ? UAS_FINAL_TIMEOUT_RESET
+                                               : UAS_FINAL_TIMEOUT_WAIT;
+}
+
+ULONG UasFinalGiveUpDue(ULONG resets)
+{
+    return (resets >= UAS_FINAL_RESET_LIMIT) ? 1UL : 0UL;
+}
+
+ULONG UasDataDelivered(ULONG ok, ULONG bytes)
+{
+    return (ok && bytes != 0) ? 1UL : 0UL;
+}
+
+VOID UasFinalCount(PULONG counts, ULONG dirs)
+{
+    if ((dirs & UAS_FINAL_DIR_IN) != 0 && counts[0] != 0xFFFFFFFFUL) {
+        counts[0]++;
+    }
+    if ((dirs & UAS_FINAL_DIR_OUT) != 0 && counts[1] != 0xFFFFFFFFUL) {
+        counts[1]++;
+    }
+}
+
+VOID UasFinalClear(PULONG counts, ULONG dir)
+{
+    if ((dir & UAS_FINAL_DIR_IN) != 0) {
+        counts[0] = 0;
+    }
+    if ((dir & UAS_FINAL_DIR_OUT) != 0) {
+        counts[1] = 0;
+    }
+}
+
+ULONG UasFinalDue(const ULONG *counts, ULONG dirs)
+{
+    if ((dirs & UAS_FINAL_DIR_IN) != 0 && UasFinalGiveUpDue(counts[0])) {
+        return 1UL;
+    }
+    if ((dirs & UAS_FINAL_DIR_OUT) != 0 && UasFinalGiveUpDue(counts[1])) {
+        return 1UL;
+    }
+    return 0UL;
 }
 
 ULONG UasFinalCancelDue(ULONG fast, ULONG final, ULONG dataOutstanding,

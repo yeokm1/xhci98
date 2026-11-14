@@ -146,7 +146,10 @@ static int bp_names(PFN_BP_PROP prop, DWORD dn, const char *svc)
     return r;
 }
 
-int inst_boot_path_names(const char *svc)
+/* The walk from the system disk's devnode to the root: with svc, whether a
+ * devnode on it names svc in its filters; with id (svc NULL), whether the
+ * devnode of that instance id is on it (record 23 section 5.4.2). */
+static int bp_walk(const char *svc, const char *id)
 {
     HMODULE sa = LoadLibraryA("setupapi.dll");
     HMODULE cm = LoadLibraryA("cfgmgr32.dll");
@@ -169,6 +172,8 @@ int inst_boot_path_names(const char *svc)
     DWORD dn = 0;
     DWORD up;
     DWORD root = 0;
+    DWORD target = 0;
+    char wantId[512];
     DWORD i;
     int found = 0;
     int depth;
@@ -242,8 +247,17 @@ int inst_boot_path_names(const char *svc)
     if (locate(&root, NULL, 0) != 0) {
         goto cleanup;
     }
+    if (id != NULL) {
+        if (strlen(id) >= sizeof(wantId)) {
+            goto cleanup;
+        }
+        strcpy(wantId, id);
+        if (locate(&target, wantId, 0) != 0) {
+            goto cleanup;
+        }
+    }
     for (depth = 0; depth < BP_DEPTH_MAX; depth++) {
-        v = bp_names(prop, dn, svc);
+        v = id != NULL ? (dn == target ? 1 : 0) : bp_names(prop, dn, svc);
         if (v != 0) {
             r = v;
             break;
@@ -269,4 +283,14 @@ cleanup:
         FreeLibrary(sa);
     }
     return r;
+}
+
+int inst_boot_path_names(const char *svc)
+{
+    return bp_walk(svc, NULL);
+}
+
+int inst_boot_path_has(const char *instanceId)
+{
+    return instanceId != NULL ? bp_walk(NULL, instanceId) : -1;
 }

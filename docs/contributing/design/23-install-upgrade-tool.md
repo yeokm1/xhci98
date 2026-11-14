@@ -1,6 +1,45 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 55, 2026-11-10 (the owner's decision of that day: the
+Status: revision 64, 2026-11-14 (roadmap-usb4 task 49.44, reviewed and
+revised: only the controllers the warning covered are taken over, so one
+a barrier's reading finds after a warning that was not shown, or did not
+name it, is left for the run; section 5.4.2);
+revision 63, 2026-11-14 (roadmap-usb4 task 49.44, the owner's
+decision of that day: with every candidate refused, the warning's
+paragraph, the console's hint and the window's box are not shown, as the
+warning's "eligible" said; `inst_take_said`; section 5.4.2);
+revision 62, 2026-11-14 (roadmap-usb4 task 49.44, reviewed and
+revised: each recorded controller's line is chosen from its own reading
+whatever the settle, which answers once for all of them, so one already
+back on its driver says so beside one Windows is still setting up;
+section 5.4.2);
+revision 61, 2026-11-14 (roadmap-usb4 task 49.44, the owner's
+answer of that day: a recorded controller found again while Windows has
+not finished setting it up has a line of its own, read on XP with Found
+New Hardware open; section 5.4.2);
+revision 60, 2026-11-14 (roadmap-usb4 task 49.44: the
+uninstall's give-back waits as section 5.8's settle does, over the
+recorded controllers, since the pending question alone was read answering
+before Windows had queued the installs its re-scan started; section
+5.4.2);
+revision 59, 2026-11-13 (the owner's answers of that day on
+revision 58: "manufacturer" in place of "maker" in every takeover text; a
+controller whose Windows disk cannot be placed is replaced with a warning,
+not refused; the console's hint kept, its count first to fit 78 columns;
+the uninstall looks again at once; section 5.4.2);
+revision 58, 2026-11-13 (roadmap-usb4 task 49.44, the owner's
+decision of that day: Setup can take over a USB 3 controller another
+manufacturer's driver runs, behind a box unticked by default and `/takeover`,
+section 5.4.2, decision D3 amended, section 7.1);
+revision 57, 2026-11-11 (the owner's decision of that day: the
+temp folder fallback of revision 56 only on 98 SE and ME; on 2000 to 10
+a root file that cannot be written means no log, as before revision 56;
+section 7.5.1 and decision D8);
+revision 56, 2026-11-11 (the owner's decision of that day: the
+log stays at the root of the system drive and goes to the temp folder
+when the root file cannot be written, the path used always shown,
+section 7.5.1 and decision D8);
+revision 55, 2026-11-10 (the owner's decision of that day: the
 final line's shutdown form of revision 24 and record 26 section 5.9
 withdrawn, so 98 SE and ME end with the ordinary restart line after a
 Stor98 update and after the storage drivers' copy with a UAS entry at
@@ -1588,6 +1627,232 @@ restart every installed file equals the second package's and the new
 drivers run (`fc /b` of each file against the package; the controller
 and the NHI started). 98 SE: the same update as a no-regression check
 (the three by-bytes files as before, `xhci98.sys` now placed).
+
+### 5.4.2 Another manufacturer's driver on a controller: the takeover (revision 58; roadmap-usb4 task 49.44, owner 2026-11-13)
+
+**Why.** Decision D3 left a controller another manufacturer's driver runs, and
+Device Manager was the way to replace that driver. A report from the
+field (2026-11-13) read what that costs: on a computer whose two xHCI
+controllers ran a manufacturer's own USB 3 driver, Setup left both, as designed,
+and the driver was then swapped by hand in Device Manager one controller
+at a time, one of them from an earlier build's INF. The owner's decision
+of that day: Setup can take over such a controller itself, behind a box
+that is unticked by default ("Like non-default checkbox"); with the box
+unticked everything stays as before.
+
+**What it covers.** A present xHCI controller (`PCI\CC_0C0330` among its
+ids, section 5.4) whose `Service` is neither empty nor `xhci98`
+(`inst_take_candidate`, pure). Windows' own `USBXHCI` on 8, 8.1 and 10 is
+not one: it stays record 26 section 5.3.1 case 3a's, taken over by the USB
+drivers' box as before; Intel's `nhi` on a Thunderbolt NHI stays section
+8.5.1's. 98 SE and ME are not covered: the box is not shown there and
+`/takeover` is refused (no manufacturer's xHCI driver for those systems is known
+to this project's records, and record 27's helper stays as it is). The
+choice is one for every such controller (owner, 2026-11-13: one box, not a
+box per controller): the window's Components box (record 26 section
+5.3.10) or the console's `/takeover`, both absent by default.
+
+**The plan.** Each candidate's row, with the choice off, is "Skip (other
+driver)", as before. With it on:
+
+| The candidate | Row (window; the console adds " (/takeover)" to the first) |
+|---|---|
+| eligible | "Replace other driver"; planned as an install (the USBXHCI path: `HasService` cleared, so `inst_action` gives install) |
+| the disk Windows starts from is below it | "Skip (other driver; the Windows disk is behind it)" |
+| that cannot be read | "Replace other driver", as eligible, with a warning (below; the owner, 2026-11-13, revision 59) |
+| an earlier takeover of this run failed | "Skip (other driver; an earlier replacement failed)" |
+
+The disk is found as section 5.14's reading finds it (`inst_bootp.c`: the
+volume of the system directory, its disk number, the disk interface that
+answers it, its devnode), and the walk from that devnode to the root asks
+whether the controller's devnode is on it (`inst_boot_path_has`: 1, 0, or
+-1 when any step cannot be read). Read as -1, the candidate is replaced
+all the same (the owner, 2026-11-13, revision 59: warn and allow), and
+the user is told: the warning gains one paragraph naming every such
+controller, "Setup cannot tell whether the Windows disk is behind <name>.
+If it is, do not go on: Windows may not start once its driver is
+replaced." - with two or three, "<a> or <b>", "<a>, <b> or <c>"; with
+more, the first three named and the rest counted, "... or one more
+controller" or "... or <N> more controllers" (revision 59, so that the
+paragraph and the warning stay bounded: `inst_take_bootunk_many`), and
+its result line one more, "  Setup could not tell whether the Windows
+disk is behind it." (`inst_take_bootunk_text`; `inst_take_runs` says which
+reasons replace). A refused candidate stays foreign
+(`INST_ACT_FOREIGN`) and is never reached by a call: section 5.5's check
+that every device sharing the call's id is planned holds it there (an
+identical controller beside it is then said as today). The reasons are
+`inst_take_reason` (pure), the row texts `inst_take_row_text`.
+
+A filter on the candidate's devnode (its `UpperFilters` or
+`LowerFilters`) does not refuse it, and Setup neither removes nor changes
+it (owner, 2026-11-13). The plan names it in the log; the warning says it
+stays; the result names it again (below). Whether the setup engine itself
+clears a device's filters when its driver changes is read on the legs.
+
+A test-signing mode not confirmed on x64, or a package without the test
+signature, is not a refusal either (owner, 2026-11-13): the run gives
+section 5.10's note as for any install there, and the result's
+"test-signing mode is needed" line covers the controller as any other.
+
+**The console's hint.** With `/takeover` absent and at least one candidate
+that `/takeover` would replace (revision 63: one not refused for the
+Windows disk; the count still every candidate) (not on 98 SE and ME, and on 8, 8.1 and 10 only with the USB drivers in
+the run), the plan's device list is followed by one line: "1 USB 3
+controller runs another manufacturer's driver: /takeover replaces it." or
+"<N> USB 3 controllers run another manufacturer's driver: /takeover
+replaces it." (revision 59: the count first, since "Another
+manufacturer's driver runs <N> ..." is 79 columns at two digits). It is
+the one new output of a run with the choice off (the owner, 2026-11-13:
+kept); the window shows nothing new then but the box itself.
+
+**The switch.** `/takeover`, refused before anything is read: on 98 SE
+and ME ("/takeover: on Windows 98 SE and ME Setup does not replace another
+driver."); with `/cmonly` ("/takeover needs the USB drivers: not with
+/cmonly."); on 8, 8.1 and 10 without `/usb` ("/takeover: on Windows 8, 8.1
+and 10 give /usb with it."); and with `/uninstall`, `/devices` and
+`/eject`, as every install switch is. The usage lines: "  /takeover
+replace another manufacturer's driver on USB 3 controllers" and
+"                (not on 98 SE and ME; on 8, 8.1 and 10 with /usb)"
+(revision 59: "also" dropped, the line within 78 columns with
+"manufacturer"). `/list` with `/takeover`
+shows the plan with the choice on and changes nothing.
+
+**The warning** (record 26 section 5.3.1's mechanism, the bit
+`INST_CW_TAKEOVER`, set when the choice is on and at least one candidate is
+eligible, that is replaced: not one with the Windows disk behind it, one whose
+disk cannot be placed counting (revision 63); the window shows it on Next from the Components page, the
+console prints it under "WARNING:" before the go-ahead, and under `/yes`):
+"Another manufacturer's driver runs one or more USB 3 controllers here. If
+ticked, Setup replaces it with xHCI98 on each of them, one at a time, and
+stops at the first that fails. USB keyboards and mice on them stop working
+while each restarts, and on 32-bit Vista and 7 until Windows restarts.
+Have a keyboard/mouse that uses alternative connections like PS/2. A
+filter driver that manufacturer left on a controller is not removed and stays
+loaded with xHCI98. Uninstalling gives the controllers back to that driver
+while Windows still has it; Windows Update or the manufacturer's software may
+also put it back." Section 5.8's input warning is printed as well, as for
+any controller that changes.
+
+**The install.** In the controllers' pass (section 5.1), after every
+controller this package already runs or that has no driver: each eligible
+candidate the warning covered in turn (revision 64: the set is taken at the
+run's start, `take_lock`, empty when the warning was not shown; a candidate
+a later reading finds, at a barrier, stays "Skip (other driver)" for the
+run, `inst_take_offered`), by the same call as any controller -
+`UpdateDriverForPlugAndPlayDevicesA(NULL, <its first hardware id>,
+xhci98.inf, INSTALLFLAG_FORCE, &reboot)` - one call per id, so two
+identical controllers sharing that id are replaced by the one call. Before
+the call its record is written (below) with the state `attempt`, and the
+call is not made if the write fails; after a success the state becomes
+`done`; after a failure the record's value is deleted. After each call the
+barrier of section 5.8 runs (the controller started, its xHCI98 root hub
+expected, at most 20 seconds) and the controller is read again: bound to
+`xhci98`, at the package's version, started, no problem code and its root
+hub shown - or, with the restart the call asked for, bound to `xhci98` and
+not started yet, whatever problem code it still shows (on the 32-bit Vista
+and 7 Code 28 or Code 1; read on 7 x86 on 2026-11-14 with the stand-in
+below: Code 38, the other driver's image still in memory until the
+restart), or Code 14 - passes; any
+other reading, a failed call, or a settle that fails stops the takeover:
+the candidates not yet reached stay on their driver for this run, their
+rows "Skip (other driver; an earlier replacement failed)", and the run
+ends with the failed flag (exit 2). A controller the call left with Code
+52 or 39 on x64 with test-signing mode not confirmed is the steps flag of
+section 5.9, not a failure, and does not stop the takeover. The rest of
+the run (root hubs, hubs, UAS, the connection manager) goes on as before;
+the new root hub of a replaced controller is installed by the dependent
+passes as for an update from `2.3.x`.
+
+**The record.** `HKLM\Software\xhci98\Takeover`, one `REG_SZ` value per
+controller, named by its instance id, holding
+`<state>;<service>;<InfPath>` - the state (`attempt` or `done`), the
+service the controller ran before and its driver key's `InfPath` (empty
+when unreadable). A later install run that reads a recorded controller
+present and bound to a service other than `xhci98` (Windows Update or the
+manufacturer's software put its driver back) deletes its value; one recorded
+`attempt` and read bound to `xhci98` becomes `done`. Nothing else reads
+it: the uninstall's set (section 9.2) is the same with or without it.
+
+**The result.** Section 5.9's check applies unchanged (bound to
+`xhci98`, the package's `DriverVersion`, started, no problem code, its
+root hub present), and the filters are not part of it. After the results,
+one line per replaced controller: "Replaced <service> with xHCI98 on
+<name>." and, when its devnode still names filters, "  Its filter driver
+stays on it: <names>." (both read afresh from the devnode). A failure:
+"Could not replace <service> on <name>. The other controllers on another
+driver are left as they are." Each line within 78 columns, wrapped by the
+names' length.
+
+**The uninstall.** Section 9.2 removes a replaced controller's devnode as
+any other of this package's. When the record holds at least one
+controller, after step 6a (the INFs, services and files gone) the
+uninstall asks Windows to look for the hardware again on each recorded
+controller's parent (`CM_Reenumerate_DevNode`, synchronous), waits for
+Windows' installs to end, at most 60 seconds, as section 5.8's settle
+waits but over the recorded controllers alone: nothing pending
+(`CMP_WaitNoPendingInstallEvents` asked with no wait every
+`INST_SETTLE_POLL_MS`) and each recorded controller's reading (present,
+started, problem code, service) unchanged for `INST_SETTLE_QUIET_MS` with
+none still to be set up (Code 1 or 18). The pending question alone is not
+enough: on 7 x86 it answered at once, before Windows had queued the
+installs its re-scan started, so both controllers were read with no
+driver, and Windows' log shows the other driver installed on each from a
+quarter of a second later, successfully (revision 60). It then reads
+each recorded controller, whether or not the wait settled (it answers
+once for all of them; revision 62), and says one line from that
+controller's own reading: "<name>: given back to <service>." (bound to a
+service other than this package's and not waiting to be set up, the one
+read), "<name>: has no driver now. In Device Manager, Update Driver on it
+and let Windows search." (present, no service, the wait settled),
+"<name>: Windows is still setting it up. Answer its Found New Hardware
+window if one is open." (present with no service while the wait ran out,
+or at Code 1 or 18: read on XP, whose Found New Hardware window waited
+for the user to put the other driver back; revision 61), or "<name>: not
+found yet; Windows sets it up again at the next restart." (not present,
+its service unreadable, or its status unreadable while the wait ran out:
+a service is written before the device starts, so only a status read
+says its setup is over). None of the four is a failure
+(`inst_take_back_kind` chooses). Another of this package's
+controllers on the same parent may then show Windows' own Found New
+Hardware window at once rather than at the next start. The record is
+deleted with the rest of `HKLM\Software\xhci98`. The manufacturer's driver
+package, its services, its filters, its root hub and hub devnodes (gone
+non-present while xHCI98 ran the controller) and its CriticalDeviceDatabase
+entries are never touched, by the install or by the uninstall (decision
+D11, section 9.3).
+
+**What Windows may do afterwards.** The manufacturer's INF matches the
+controller's own hardware id and is usually signed; this package's
+matches the class id and is not signed by Microsoft, so it always ranks
+below. The forced install keeps the chosen driver; Device Manager's "Scan
+for hardware changes" does not choose a driver again for a devnode that
+has one (read on the legs). A new devnode (the controller in another
+slot, a firmware change), Device Manager's automatic driver search,
+Windows Update or the manufacturer's software choose the manufacturer's driver again;
+the tool changes no policy to prevent that (decision D6's rule), and the
+warning says it.
+
+**Host vectors** (`test\test_inst.c`): `inst_take_candidate` (empty,
+`xhci98`, `XHCI98`, `USBXHCI` on 8 to 10 and on 7, a manufacturer's name);
+`inst_take_reason` (each input alone and together); `inst_take_row_text`
+for every reason; `inst_take_switch` (each refusal by system and with
+`/cmonly`, `/usb`); the hint's two forms and the result lines at their
+longest names within 78 columns; `inst_comp_warn_text` with
+`INST_CW_TAKEOVER` alone and with every other bit; the record's value
+parsed and composed (`inst_take_rec_parse`, `inst_take_rec_text`).
+
+**The legs** (roadmap-usb4 task 49.44): guests with two xHCI controllers,
+a USB keyboard and mouse on one, and a stand-in for a manufacturer's driver: an
+INF of a made-up manufacturer binding the controllers' ids to a service of
+another name whose image is a renamed copy of `xhci98.sys`, made in the
+leg's scratch folder and never in the tree or a package. 7 x86 (the
+choice off: unchanged; on: both controllers replaced in turn, the record,
+the uninstall's lines), XP and 2000 (the same), Vista x86 (Code 1 until
+the restart), 10 x86 with one controller on `USBXHCI` and one on the
+stand-in (the USB drivers' box as before, the takeover beside it), 98 SE
+(no box; `/takeover` refused), a filter left on the stand-in's devnode
+(the warning, the result line), and the takeover refused with a disk the
+system starts from below the controller where a guest can boot so.
 
 ### 5.5 Installing: `UpdateDriverForPlugAndPlayDevices`
 
@@ -3343,6 +3608,7 @@ second-guessed (it may be an Update Driver's file waiting for its swap).
 | `/nouas` | leave the UAS disk driver out of the run (owner, 2026-10-19; record 26 section 5.3): `xhciuas.inf` neither staged nor installed, nor copied to `DevicePath` on 98 SE and ME, and an `xhciuas` already installed left as it is; refused with `/uninstall`, `/devices` and `/eject` |
 | `/storage`, `/nostorage` | (revision 24) Windows 98 SE: install the USB storage drivers of record 26 section 6.5 without asking, or leave them out; `/storage` refused on any other system, where the download does not carry them or carries other bytes, and with `/nostorage`; both refused with `/uninstall`, `/devices` and `/eject`; `/nostorage` changes nothing on another system |
 | `/usb` | (revision 26, proposal) Windows 8 and 8.1: put the USB drivers in the run, which there are otherwise left out, with record 26 section 5.3.1 case 3a's warning; elsewhere it changes nothing; refused with `/cmonly`, `/uninstall`, `/devices` and `/eject`. Revision 26 also lifts `/cmonly`'s refusal on 98 SE and ME (case 2's warning), `/storage`'s on any system but 98 SE (case 1: the copy to the install folder), and `/stor98`'s "never offered on 8 and 8.1" (case 3b), each warning printed before the go-ahead question and printed and logged under `/yes` |
+| `/takeover` | (revision 58) replace another manufacturer's driver on every xHCI controller it runs, one at a time (section 5.4.2); refused on 98 SE and ME, with `/cmonly`, on 8, 8.1 and 10 without `/usb`, and with `/uninstall`, `/devices` and `/eject`; without it a run leaves such a controller as before and the plan names the switch in one line |
 | `/notray` | install without the Run value that starts the xHCI98 USB Tree at login, and delete one an earlier run wrote (section 9.5); refused with `/uninstall`, `/devices` and `/eject` |
 | `/s98vsd`, `/nos98vsd` | (revision 36) preselect `S98VSD.VXD`, Stor98's large-transfer layer on 98 SE and ME, ticked or unticked (design record 30 section 7.2); without either it follows Stor98 (ticked whenever Stor98 is, the owner, 2026-10-22), and the console asks after Stor98's question, Enter and `/yes` giving Y. `/s98vsd` needs Stor98 in the run (`/stor98`, or `/thunderbolt` or `/cmonly` without `/nostor98`); refused together, with `/uninstall`, `/devices` and `/eject`, and both on every system but 98 SE and ME |
 | `/xhcipfw`, `/noxhcipfw` | (task 44.49; owner, 2026-10-27) preselect the step that closes PCI bridges' prefetchable windows lying wholly above 4 GB at each start, ticked or unticked: `XHCIPFW.VXD` on 98 SE and ME (design record 32 section 8), `XHCIPFW.SYS` on 2000, XP and the 32-bit Vista and 7 (section 11; on the 32-bit 8, 8.1 and 10 not offered since 2026-10-28, task 44.72: `/xhcipfw` refused there with "REFUSED: /xhcipfw: XHCIPFW.SYS may start too late on Windows 8, 8.1 and 10.", `/noxhcipfw` with the 64-bit systems' line, and a run removes an `XHCIPFW.SYS` this installer's record holds, record 32 section 11.3). It is the Thunderbolt 3 / USB4 support's child (the owner, 2026-10-27): with that support out of the run it is left out (an installed one kept as it is, with a line saying so), and `/xhcipfw` without `/thunderbolt` or `/cmonly` is refused, as `/s98vsd` is without Stor98. Without either switch the default is `inst_pfw_box`'s (the owner's Q9, which replaced Q7's rule): ticked whenever the Thunderbolt support is in the run, on every system offered it; with that support left out on 2000 to 7, the console says when it sees a PCI bridge at problem 12 with its firmware's prefetchable window above 4 GB and names `/thunderbolt`; the console asks right after the Thunderbolt question and before Stor98's, naming the file ("Close PCI windows above 4 GB (XHCIPFW.SYS)"), Enter and `/yes` giving that default, and on the 32-bit Vista and 7 says to set "Above 4G Decoding" off; refused together, with `/uninstall`, `/devices` and `/eject`, and both on every 64-bit system |
@@ -3456,16 +3722,223 @@ device is current and no setting changes, and the staged INFs are checked
 
 ### 7.5 The log
 
-Every run but `/list` appends to `XHCIINST.LOG` at the root of the system
-drive (`%SystemDrive%\` on NT, the drive of the Windows directory on 98
-and ME; decision D8), or where `/log` says: a header with the tool's
-version, the system's version, build and service pack, the architecture,
-the package path and flavour, the switches, the local time; then every
-line the console shows, where every routine resolved, every call made with
-its arguments and result (`GetLastError` in hex), every registry value
-written with its old and new value, and the exit code. The path is
-printed first and last, and the release notes ask for the file in a field
-report. A log that cannot be opened is said and does not stop the run.
+Every run appends to `XHCIINST.LOG` at the root of the system drive (the
+drive of the Windows directory, `GetWindowsDirectoryA`'s, on every system;
+`C:\` when that cannot be read; decision D8), or where `/log` says - but
+`/list` and `/devices` write no log unless `/log` names one: a header
+with the tool's version, the system's version, build and service pack,
+the architecture, the package path and flavour, the switches, the local
+time; then every line the console shows, where every routine resolved,
+every call made with its arguments and result (`GetLastError` in hex),
+every registry value written with its old and new value, and the exit
+code. The path is printed first and last, and the release notes ask for
+the file in a field report. A log that cannot be written is said and does
+not stop the run; on 98 SE and ME a run without `/log` tries the temp
+folder when the root file cannot be written (revision 56, limited to
+those two systems by revision 57; section 7.5.1).
+
+#### 7.5.1 The temp folder on 98 SE and ME when the root file cannot be written (revisions 56 and 57; owner, 2026-11-11)
+
+**The reason.** Until revision 56 a run whose root file could not be
+opened said so and ran with no log. That is the case on a system whose
+root is not writable - a read-only or full system drive, a file or folder
+of that name in the way - and a failed install there left nothing to
+attach to a report. The owner's decision (revision 56): the root stays
+the default, the temp folder is tried when the root file cannot be
+written, and the path actually used is always shown. Revision 57 (the
+owner, the same day) supersedes revision 56's fallback on every Windows
+and keeps it to 98 SE and ME: on 2000 to 10 the temp folder of a process
+comes from its environment and can belong to a less trusted account than
+the one whose rights the run has (an administrator running Setup inside
+that account's environment). On 2000 to 10 a root file that cannot be
+started means a run with no log, as before revision 56.
+
+**The rule.** A run that writes a log and was given no `/log` starts its
+log in `XHCIINST.LOG` at the root of the system drive, as before. When
+that fails:
+
+- on 98 SE and ME it tries `XHCIINST.LOG` in the temp folder: the path
+  `GetTempPathA` returns for the process, the call the uninstall's own
+  copy already uses (record 26 section 9.2). Windows chooses it from
+  `TMP`, then `TEMP`, each only where the folder exists, then the current
+  directory, and does not say that the folder can be written;
+- on 2000 to 10 it tries no other place and goes on with no log.
+
+The system is the engine's own reading of it, the version section 4.3
+reads, taken before the log is started: the temp folder is tried only
+where that reading says `VER_PLATFORM_WIN32_WINDOWS` (98 SE and ME; the
+run refuses any other 9x system later, after the log's lines). A reading
+that fails or says anything else tries no temp folder. On 2000 to 10 the
+temp folder is not looked up at all.
+
+A place is taken when the file opens for appending AND the run's first
+line (the blank line and `====` header every run starts with) was written
+and flushed with the stream's error flag still clear. Opening alone is
+not enough: on a full drive an existing file opens, and a new, empty one
+may even be created, while nothing can be written. A place that fails is
+closed and left: nothing is deleted or undone, because the tool cannot
+know that a file of that name is its own to remove (another run may have
+made it between the look and the open), and an empty file or a broken
+first line in a place that could not be written loses nothing. What the
+test proves is that the log could be started, not that every later line
+will land: the choice is made once, at the start, and a log that stops
+taking writes during the run is not moved (unchanged). The test applies
+on every system, to the root file and to a `/log` path alike.
+
+On 98 SE and ME the temp folder is not tried when `GetTempPathA` returns
+0 or a length that does not fit its buffer, when the path with the name
+does not fit the engine's path buffer, or when it names the root file
+itself (the temp folder is the system drive's root; compared without
+case). There is no third place: when both fail the run says so and goes
+on with no log, as every run whose log failed did before.
+
+**`/log` keeps its meaning**, on every system: a `/log` path that cannot
+be written is said and the run goes on with no log; the temp folder is
+not tried. The user (or a script) named the place and collects the file
+from there: a log written somewhere else satisfies nobody who asked for
+that file, the message says the named file was not written, and the run
+can be repeated with a path that works. The fallback is for the user who
+named nothing. One thing is new for `/log` too: the first-line test
+above, so a `/log` file that opens on a full drive is said instead of
+staying silently empty. The usage's `/log` line says where the log goes
+by default: `(default XHCIINST.LOG on the system drive; on 98 SE and ME
+the temp folder if that fails)`, over two lines.
+
+**What is shown.** The engine keeps the path it actually took
+(`inst_eng_log_path`), and every text that names the log takes it from
+there; no user text holds a fixed `C:\XHCIINST.LOG` (the two self-test
+screens that print a made-up path are fixtures). In order:
+
+| Case | Text, before the banner | "Log:" line and "Exit code N. The log is" line |
+|---|---|---|
+| root taken (the default), every system | nothing | the root path, as before |
+| root failed, temp taken (98 SE and ME) | `Cannot write the log to <root>. Using <temp>.` | the temp path |
+| root failed, temp failed (98 SE and ME) | `Cannot write the log to <root> or <temp>.` and, on the next line, `Continuing without a log.` | `none` / `(none)`, as before |
+| root failed, no temp place (2000 to 10 always; 98 SE and ME when there is no temp path to try) | `Cannot write the log to <root>. Continuing without a log.` | `none` / `(none)` |
+| `/log` failed, every system | `Cannot write the log to <the /log path>. Continuing without a log.` | `none` / `(none)` |
+
+The last two replace "The log file <path> could not be opened; continuing
+without it.", which no longer says all that the test covers. A run whose
+log failed prints `Log: none`; the longer `Log: none (/list and /devices
+write none unless /log names one)` is left to the run that tried no log,
+the only one it is true of (until revision 56 both printed it). The texts go
+out through the engine's ordinary output, so on the console the wrap of
+section 7.6 breaks a long path after a backslash and no line passes
+79 columns; nothing is cut. The window gets the same texts: the Welcome
+page's box shows the wait text while the reading runs and the reading's
+text when it ends - and on an install then the plan's text in its place,
+so the window does not rely on that line. What the window always shows is
+the path: the Welcome and Uninstall pages' one-line `Log file: <path>`
+and the Finish page's box, whose last line is the engine's "Exit code N.
+The log is <path>." (a wrapping, scrolling edit box, as before). Both
+take the path from the engine. The one-line control is a static text one
+line high: it cannot scroll, breaks only at a space, and would cut the
+end of a long path, which is the part that names the file (a `/log`
+path, or on 98 SE and ME the temp folder's). So where the whole line,
+measured in the page's font with its `Log file: ` lead, is wider than the
+control, the window shows the path shortened in the middle: the root
+(`C:\`, or the two backslashes of a network path), `...\`, then as many
+of the last folders as fit and the file name - `C:\...\Logs\XHCIINST.LOG`.
+The file name is always shown; a name that alone is wider than the line
+(only a `/log` name can be) is cut at its end as it is today. The whole
+path is on the Finish page and in the log itself. When no log could be
+started the line reads `Log file: none` once the reading has run (until
+revision 56 it stayed at `(not opened yet)`, which was not true). The
+control draws its text literally (`SS_NOPREFIX` on both pages), so an
+`&` in a folder's name shows as it is.
+
+**The two files' histories (98 SE and ME).** A run writes to one place
+only: nothing is split across the two files and nothing is copied or
+merged between them. A machine on which one run fell back and another
+did not therefore has two files, each holding only its own runs, and a
+reader given one should be told of the other. Two log-only lines do that,
+as far as a run can know (log-only: they are for the reader of the log;
+the user has been shown the path on the screen):
+
+- a run that fell back writes, right after its header, `Cannot write the
+  log to <root> (<reason>). Another log may be there.` - so the temp file
+  points at the root file;
+- a run that took the root file looks for `XHCIINST.LOG` in its own temp
+  folder and, where a file (not a folder) of that name exists, writes
+  `Another log may be at <temp path>.` - so the root file, the one the
+  user documents ask for, points at the temp file as long as it exists.
+
+"May be": the file is found by its name, not by who wrote it. The pointer
+is a best effort and its limits are these. The temp folder is whatever
+the environment of that run says: different for a run started with other
+`TMP` or `TEMP` values (a script) or, with neither set, from another
+current directory. A later run whose temp folder is not the fallback
+run's writes no pointer, and there can then be more than two files. A
+temp folder that is cleaned takes its log with it. The user documents
+therefore name both places for 98 SE and ME, and the tool shows the path
+at every run.
+
+On 2000 to 10 the log is the root file or the `/log` path (which may name
+any folder, a temp folder too): no run chooses a temp folder for itself
+or looks in one for another log, and neither pointer line is written.
+
+Merging was considered and not taken: a run would have to read back and
+delete a file that some other program may have written,
+the two files' runs interleave in time (a line carries the time, only
+the header the date), runs could be imported twice, and a failure in the
+middle would lose what two separate files keep.
+
+**The uninstall, Add/Remove Programs, a run after a restart.** Each of
+these is a run like any other and applies the rule on its own: on 98 SE
+and ME it appends to the root file when that can be written and to its
+own temp folder's file when it cannot, and shows which; on 2000 to 10 it
+appends to the root file or runs with no log. Nothing is recorded between
+runs - no registry value, no marker file - so no run is ever sent to a
+stale place: a root that works again is used again from the next run,
+whose pointer line (98 SE and ME) then names the temp file.
+
+The uninstall started from the install directory hands over to a copy of
+itself in the temp folder (record 26 section 9.2). That copy is a second
+process and chooses for itself, exactly as above: it is given the first
+run's `/log` argument as typed when there was one (as before; a relative
+`/log` path is then read from the copy's own current directory, which is
+not the first run's - an old limit this revision does not change) and
+otherwise nothing. Started with the first run's environment it normally
+reaches the same file, but that is not promised: the root can change
+between the two opens, and on 98 SE and ME with no `TMP` or `TEMP` the
+temp folder follows the current directory. Each of the two says its own
+path first and last. For a moment both have the same file open for
+appending, as before this revision; the C library lets both write and
+each line is flushed as written, but nothing serializes the two
+processes, so lines of the first run's end and the copy's start can
+interleave (unchanged, and not made worse by the fallback).
+
+**How the temp file is opened (98 SE and ME).** Exactly as the root file
+is: by name, for appending, never read back and never executed, and
+nothing is decided from its content.
+
+**Checks.** Pure, in the host suite (`test\test_inst.c`), with the
+system passed in: `inst_log_pick`, the order itself with the opening
+passed in as a function - on 98 SE and ME `/log` given and written,
+`/log` given and failing (nothing else tried), the root written (the
+temp place never tried), the root failing and the temp written, both
+failing, the root failing with no temp path; on 2000 to 10 the root
+written, the root failing with a temp path passed (the temp place never
+tried, no log), `/log` given and written, `/log` given and failing; a
+place that opens and cannot be written is the opening function's "no",
+which the engine's own function answers from the stream's error flag
+after the first line; `inst_log_temp_path` (the folder with and without
+its last backslash, the empty and the overlong folder refused, the root
+file's own path refused without case); `inst_log_fail_text` (the three
+texts). `wiz_lay_path_mid` in `test\test_wizlay.c` (the shortened path:
+a drive root and a network root kept, folders dropped from the front one
+at a time, the name always kept, a path with no folder returned whole, a
+small buffer refused). What needs a file system is read in the legs. On
+98 SE: a normal run; a run with the root file read-only (the fallback); a
+normal run after it, with its pointer line; the window's pages; the
+window's uninstall to the end. On XP and 2000: a normal run; a run with
+the root file read-only and one with a folder named `XHCIINST.LOG` at the
+root (no log, nothing written in any temp folder); on XP a limited user's
+run (no file in that user's temp folder); a normal run after them; the
+console and the window.
+
+The collectors of `scripts\vm-matrix\leg\` read `C:\XHCIINST.LOG`, the
+default, and are unchanged: a matrix guest's root can be written.
 
 ### 7.6 The console (owner, 2026-10-16; revision 10)
 
@@ -3503,7 +3976,7 @@ user-visible effect, off or on by default for a reason the user can judge
 
 | Value | INF, section | Asked when | Allowed (asked) | Allowed (`/set`) | Meaning shown |
 |---|---|---|---|---|---|
-| `XhciIntelPortSwitch` | `xhci98.inf`, the controller's | a present controller passes the driver's `XhciPswGate` (Intel 7-, 8- and 9-series, C610) | 0, 1 | 0, 1, 2 (2 is the README's "at your own risk" setting for other Intel controllers) | route the shared connectors from the EHCI controller to this driver |
+| `XhciIntelPortSwitch` | `xhci98.inf`, the controller's | a present controller passes the driver's `XhciPswGate` (Intel 7-, 8- and 9-series, C610) | 0, 1 | 0, 1, 2 (2 is the README's "at your own risk" setting for other Intel controllers) | route the shared connectors from the EHCI controller to this driver. From roadmap-usb4 task 49.47 the INF's 0 is not Enter's at a first install on such a board: Setup proposes 1 (Enter, and `/yes` with no other answer, write it machine-wide once the run has installed a listed controller, after the results check; a refused, failed or cancelled install writes nothing for it), and an update keeps what is set (design record 16 section 19) |
 | `XhciInterruptMode` | `xhci98.inf`, the controller's | never (revision 37, D20 (b); the window's Advanced) | - | 0, 1, 2; 3 on Vista and 7 only (it fails the start elsewhere) | automatic, line only, polling always, message only |
 | `XhciPollFineTimer` | `xhci98.inf`, the controller's | never (owner, 2026-10-15) | - | 0, 1 | a finer system clock while polling |
 | `XhciSelectiveSuspend` | `xhci98.inf`, the controller's | never (owner, 2026-10-15) | - | 0, 1 | put idle devices to sleep (off by default; read on the release notes' terms) |
@@ -4529,6 +5002,12 @@ the user.
   `USBXHCI` (a controller) and `stornvme` (a drive behind a tunnel, for
   Stor98) are not another vendor's, and are installed over; every other
   vendor's driver is left as before.
+  Amended by revision 58 (the owner, 2026-11-13; roadmap-usb4 task
+  49.44, section 5.4.2): on 2000 to 10, with the takeover box or
+  `/takeover`, both off by default, an xHCI controller another manufacturer's
+  driver runs is replaced, one at a time, unless the disk Windows starts
+  from is below it; every other device of another driver is left as
+  before.
 - **D4** A group running a newer release is not downgraded without
   `/force`, and an unknown version is never overridden (section 5.4).
 - **D5** The Vista and 7 trap is reported by default and replaced only with
@@ -4538,8 +5017,11 @@ the user.
 - **D7** Every changing run copies the package to an immutable directory
   of its own content under `%windir%\XHCI98\` and installs from there, on
   every system; only the uninstall removes the copies (section 4.4).
-- **D8** The log at the root of the system drive, appended; not written by
-  `/list` (section 7.5).
+- **D8** The log at the root of the system drive, appended; on 98 SE and
+  ME in the temp folder when the root file cannot be written (revision
+  56, limited to 98 SE and ME by revision 57), on 2000 to 10 no log then;
+  the path used always shown; not written by `/list` or `/devices` unless
+  `/log` names one (section 7.5).
 - **D9** The curated registry set of section 8.1, asked only where it
   applies, written only on an explicit answer.
 - **D10** (owner, 2026-10-15) The tool never runs `XHCICLN`; where old

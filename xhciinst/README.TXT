@@ -107,7 +107,7 @@ USBDRV\NUSB33, and USBDRV\NONFREE in the -nonfree download, carry some:
 see their readme.txt).
 
 The names in Device Manager: each USB 3 controller Setup knows is named
-with its maker and product, as in "xHCI98 USB 3 Controller (Renesas
+with its manufacturer and product, as in "xHCI98 USB 3 Controller (Renesas
 uPD720202)". Every install or update run writes that name (the device's
 FriendlyName), even one that had nothing to reinstall, and the uninstall
 removes it; a name you gave the controller yourself is kept. Installed
@@ -118,10 +118,23 @@ controllers take theirs from the INF, as in "xHCI98 TB3 Controller (Intel
 Titan Ridge)" and "xHCI98 USB4 Router (Intel Meteor Lake)" - TB2 and TB3
 are Thunderbolt 2 and Thunderbolt 3.
 
+Another manufacturer's driver: Setup leaves a USB 3 controller that another
+manufacturer's driver runs as it is, unless you tick "Replace another
+manufacturer's driver" on the Components page (shown only when there is
+such a controller) or give INSTALL /console /takeover (on Windows 8, 8.1
+and 10 with /usb; not on 98 SE and ME). Setup then replaces that driver
+with xHCI98 on each such controller, one at a time, and stops at the first
+that fails; it leaves a controller the Windows disk is behind. USB
+keyboards and mice on the controller stop working while it restarts, and
+on 32-bit Vista and 7 until Windows restarts. A filter driver of that
+manufacturer stays on the controller. The uninstall gives the controller
+back to that driver while Windows still has it; Windows Update or the
+manufacturer's software may also put it back.
+
 Connection manager only: you can leave out the USB drivers (xhci98.sys,
 xhciuas.sys) and install only the Thunderbolt / USB4 connection manager,
-for a computer whose USB 3 controllers already run another maker's driver
-- untick the USB drivers on the Components page, or INSTALL /console
+for a computer whose USB 3 controllers already run another manufacturer's
+driver - untick the USB drivers on the Components page, or INSTALL /console
 /cmonly. Untick the Thunderbolt / USB4 support too and Setup installs only
 the xHCI98 tools. On Windows 98 SE and ME Setup warns first: those systems
 have no USB 3 driver of their own. On Windows 8, 8.1 and 10 the USB
@@ -338,6 +351,7 @@ controllers and devices above 4 GB, ticked or unticked; /xhcipfw only with
 /thunderbolt or /cmonly), /tbnet and /notbnet (Thunderbolt networking ticked
 or unticked; /tbnet only with /thunderbolt or /cmonly), /faster and
 /nofaster (the "can run faster" notification on or off), /notray, /nouas,
+/takeover (the box that replaces another manufacturer's driver, ticked),
 /storage, /nostorage, /cmonly, /usb, /wdmfree:copy, /wdmfree:stage=<ids>,
 /wdmfree:trust (above), /wdmnonfree:copy and /wdmnonfree:stage=<ids> (the
 components, preselected; /free and /nonfree are the copies), /set Name=Value
@@ -407,6 +421,10 @@ The console tool
   INSTALL /console /nouas       installs without the UAS disk driver
                                 (xhciuas.sys); an installed one is
                                 kept
+  INSTALL /console /takeover    replaces another manufacturer's driver on
+                                USB 3 controllers, one at a time (not on
+                                98 SE and ME; on 8, 8.1 and 10 with
+                                /usb); without it they keep that driver
   INSTALL /console /storage     Windows 98 SE: installs the storage
                                 drivers without asking; on any other
                                 system it only copies their files to
@@ -461,11 +479,11 @@ driven by whatever driver Windows has for it: an NVMe drive by an NVMe
 driver (Windows 8.1 and 10 have their own; Windows 8 has none; the bundled
 Stor98 is ticked with the Thunderbolt support on 8 and 8.1 and unticked on
 10), the USB controller inside a dock by Windows' own USB 3 driver on 8,
-8.1 and 10 (on 2000 to 7 by another maker's driver only where it supports
-that controller), and the USB devices of a USB4 port's USB 3 connection on
-the computer's own USB controller. Safely Remove (xHCI98 USB Tree, INSTALL
-/console /eject) works as with the whole package. The connection manager
-needs nothing of xhci98.sys.
+8.1 and 10 (on 2000 to 7 by another manufacturer's driver only where it
+supports that controller), and the USB devices of a USB4 port's USB 3
+connection on the computer's own USB controller. Safely Remove (xHCI98 USB
+Tree, INSTALL /console /eject) works as with the whole package. The connection
+manager needs nothing of xhci98.sys.
 
 Installing without the USB drivers never updates or removes an xhci98
 already installed: it is kept. To go from the whole package to the
@@ -588,8 +606,8 @@ XhciSilentInstall (Windows 98 SE and ME only, off by default: on does what
 tools\silent\silent-on.bat does), XhciCmMode, XhciCmApprove and
 XhciCmSafeEject (with the Thunderbolt support), and
 XhciCmAsm4242Structural (98 SE and ME, with an ASMedia ASM4242 whose
-firmware Setup does not know as a known build). The release notes,
-"Registry settings", say what each does. A change takes effect at the
+firmware Setup does not know as a known build). docs/using/tuning.md
+says what each does. A change takes effect at the
 driver's next start. Advanced... on each tab has the settings to change
 only if the release notes advise it. On the USB tab: XhciInterruptMode,
 XhciLinkKeep, XhciSsFlapFallback, XhciResumeKeep, XhciUsb2Bos,
@@ -607,11 +625,10 @@ XhciCmNoIrqStart and XHCIPFW.VXD's XhciPfwNhiLine on 98 SE and ME,
 XhciCmBridgeReq on 2000 and XP, and the
 mark service's Restart on 2000 to 10. A value of another system is shown
 greyed. The console sets them only with /set Name=Value. The drivers' own
-install writes each value of the release notes' "Registry settings" and
-"The connection manager's registry values" at its default where it is
-missing, so it is already in the controller's key, every value the drivers
-read (each on the systems that read it: XhciCmBridgeNumbering and
-XhciCmNoIrqStart on 98 SE and ME alone,
+install writes each value docs/using/tuning.md lists at its default
+where it is missing, so it is already in the controller's key, every
+value the drivers read (each on the systems that read it:
+XhciCmBridgeNumbering and XhciCmNoIrqStart on 98 SE and ME alone,
 XhciCmBridgeReq on 2000 and XP); XhciCmTunnelBridge is written as "auto",
 the driver's own finding of the tunnel ports. Stor98's install does the
 same for its settings (its readme, "Settings"). A value you set is never
@@ -673,7 +690,8 @@ xHCI98 USB Tree or INSTALL /console /eject; these systems have no other
 way. If a program has a file open on the device, Windows declines and
 nothing changes: close it and try again. When the tool says "You can now
 unplug the device.", unplug it. Until then, Device Manager's Refresh can
-start it again.
+start it again. A drive the BIOS set up at power-on (MS-DOS compatibility
+mode) is not ejected: shut Windows down before you unplug it.
 
 Windows 2000 to 7: Safely Remove Hardware works as usual; /eject also asks
 Windows to stop a device it does not list. Run it as an administrator on
@@ -741,5 +759,7 @@ The log
 -------
 
 Every run except /list adds to XHCIINST.LOG at the root of the system
-drive (C:\XHCIINST.LOG on most machines). Attach it to a bug report about
-an install.
+drive (C:\XHCIINST.LOG on most machines). On 98 SE and ME, if that file
+cannot be written, the log goes to XHCIINST.LOG in the temp folder
+instead. Setup shows the path it used. Attach the file to a bug report
+about an install.

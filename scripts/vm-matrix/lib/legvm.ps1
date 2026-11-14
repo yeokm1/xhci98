@@ -42,6 +42,7 @@ function Read-LegConfig {
         }
         if ($g.Family -notin '9x', 'nt') { throw "guest $($g.Id): Family is 9x or nt" }
         if ($g.Layout -notin 'qwerty', 'dvorak') { throw "guest $($g.Id): Layout is qwerty or dvorak" }
+        if ($g.ContainsKey('Whpx') -and $g.Whpx -and "$($g.Whpx)" -notmatch '^whpx(,[A-Za-z0-9=_-]+)*$') { throw "guest $($g.Id): Whpx is the -accel value for WHPX on this host: whpx, or whpx,<option>=<value>" }
         if ($ids.ContainsKey($g.Id)) { throw "guest $($g.Id) twice" }
         $ids[$g.Id] = $true
         $g.Base = Resolve-RepoPath $g.Base
@@ -75,17 +76,21 @@ function Get-LegPorts {
 # qemu-xhci whose MSI-X could not be set up (no APIC, so no MSI) fails its own
 # state load with an assertion in msix_vector_unuse, measured on development
 # host A on 2026-10-22. Windows 98 SE and ME do not use the APIC.
+#
+# -Accel: the -accel value of one start (Get-LegAccelArg). Without it the
+# line is TCG's, as every starting point was saved: make-start.ps1 and the
+# hash never pass it, so a starting point is TCG's whatever its legs run on.
 function Get-LegHardwareArgs {
-    param($Guest)
-    $accel = 'tcg'
-    if ([int]$Guest.Smp -gt 1) { $accel = 'tcg,thread=multi' }
+    param($Guest, [string]$Accel = '')
+    # (PowerShell's names are case-blind: the parameter is the variable.)
+    if (-not $Accel) { $Accel = Get-LegAccelArg $Guest 'tcg' }
     $machine = 'pc'
     if ($Guest.ContainsKey('Machine') -and $Guest.Machine) { $machine = $Guest.Machine }
     $vga = 'std'
     if ($Guest.ContainsKey('Vga') -and $Guest.Vga) { $vga = $Guest.Vga }
     $rtc = 'base=localtime'
     if ($Guest.ContainsKey('Rtc') -and $Guest.Rtc) { $rtc = "base=$($Guest.Rtc)" }
-    $a = @('-machine', $machine, '-accel', $accel, '-cpu', $Guest.Cpu, '-smp', [string]$Guest.Smp,
+    $a = @('-machine', $machine, '-accel', $Accel, '-cpu', $Guest.Cpu, '-smp', [string]$Guest.Smp,
         '-m', [string]$Guest.Memory, '-vga', $vga, '-nic', 'none', '-rtc', $rtc)
     if ($machine -notlike 'q35*') {
         $a += @('-device', 'ide-hd,drive=hd0,bus=ide.0,unit=0',
@@ -125,6 +130,231 @@ function Get-LegHardwareArgs {
     return , $a
 }
 
+# The accelerator a leg runs on (roadmap-usb4 49.4; owner, 2026-11-11: the
+# two Windows 10 legs on WHPX, every other leg and every starting point on
+# TCG). A leg's own is its Accel in release-legs.psd1, tcg when it names
+# none; -ForceTcg (run-leg.ps1, release-matrix.ps1) runs a WHPX leg on TCG,
+# the periodic cross-check. Nothing here turns a TCG leg into a WHPX one,
+# and nothing falls back: a WHPX leg on a host without WHPX is refused
+# (Assert-LegWhpx). Returns Own and Use (tcg or whpx) and Forced.
+function Resolve-LegAccel {
+    param($Def, [bool]$ForceTcg = $false)
+    $own = 'tcg'
+    if ($Def.ContainsKey('Accel') -and $null -ne $Def.Accel -and "$($Def.Accel)" -ne '') { $own = "$($Def.Accel)" }
+    if ($own -cnotin 'tcg', 'whpx') { throw "leg $($Def.Id): Accel is tcg or whpx, not '$own'" }
+    $use = $own
+    if ($ForceTcg) { $use = 'tcg' }
+    return @{ Own = $own; Use = $use; Forced = ($use -ne $own) }
+}
+
+# The -accel value for a guest under tcg or whpx. TCG's is what it always
+# was, so a starting point's hash does not move: multi-threaded for a guest
+# with more than one processor. WHPX's is the guest's Whpx when the
+# configuration gives one (a host whose WHPX needs kernel-irqchip=off),
+# else plain whpx. One value, never a list: QEMU tries a second -accel when
+# the first cannot start, which would hide the accelerator a reading came
+# from.
+function Get-LegAccelArg {
+    param($Guest, [string]$Kind)
+    if ($Kind -ceq 'tcg') {
+        if ([int]$Guest.Smp -gt 1) { return 'tcg,thread=multi' }
+        return 'tcg'
+    }
+    if ($Kind -ceq 'whpx') {
+        if ($Guest.ContainsKey('Whpx') -and $Guest.Whpx) { return [string]$Guest.Whpx }
+        return 'whpx'
+    }
+    throw "accelerator '$Kind': tcg or whpx"
+}
+
+# Holds a QEMU command line to one accelerator, the one asked for: exactly
+# one -accel, with that value, and no other way of naming one (a guest's
+# Extra or a leg's backends could carry a second -accel, which QEMU would
+# try when the first cannot start; -machine accel= and -enable-kvm are the
+# older spellings). Throws otherwise.
+function Assert-LegOneAccel {
+    param([string[]]$QemuArgs, [string]$Accel)
+    $n = 0
+    for ($i = 0; $i -lt $QemuArgs.Count; $i++) {
+        $x = [string]$QemuArgs[$i]
+        if ($x -ceq '-accel') {
+            $n++
+            if ($i + 1 -ge $QemuArgs.Count -or [string]$QemuArgs[$i + 1] -cne $Accel) { throw "the QEMU command line names an accelerator other than the leg's '$Accel' (-accel $($QemuArgs[$i + 1])): take it out of the guest's Extra" }
+        }
+        if ($x -ceq '-enable-kvm' -or $x -ceq '-no-kvm') { throw "the QEMU command line carries $x beside the leg's -accel ${Accel}: take it out of the guest's Extra" }
+        if (($x -ceq '-machine' -or $x -ceq '-M') -and $i + 1 -lt $QemuArgs.Count -and [string]$QemuArgs[$i + 1] -match '(^|,)accel=') { throw "the QEMU command line names an accelerator in -machine ($($QemuArgs[$i + 1])) beside the leg's -accel ${Accel}: take it out" }
+    }
+    if ($n -ne 1) { throw "the QEMU command line holds $n -accel options, not the leg's one (-accel $Accel)" }
+}
+
+# The accelerator family of an -accel value: the word before its options.
+function Get-LegAccelKind {
+    param([string]$Accel)
+    return ($Accel -split ',')[0]
+}
+
+# Whether QEMU's "-accel help" text lists an accelerator.
+function Test-LegAccelListed {
+    param([string[]]$HelpLines, [string]$Kind)
+    foreach ($l in @($HelpLines)) { if ("$l".Trim() -ceq $Kind) { return $true } }
+    return $false
+}
+
+# The accelerator a running QEMU says it runs on (QMP query-accelerators,
+# which QEMU 11.1.2 answers; read on development host A on 2026-11-11), or
+# '' when this QEMU does not answer that.
+function Get-LegAccelLive {
+    param([int]$QmpPort)
+    try {
+        $r = Invoke-Qmp -Port $QmpPort -Command 'query-accelerators' -AllowError -TimeoutMs 5000
+        if ($r -and $r.PSObject.Properties['enabled'] -and $r.enabled) { return [string]$r.enabled }
+    } catch { }
+    return ''
+}
+
+# The command line of the WHPX probe: the guest's own machine, processors,
+# memory and -accel value and its Extra (the firmware's -L), no disk and no
+# default device, stopped (-S), QMP on the given port.
+function Get-LegWhpxProbeArgs {
+    param($Guest, [int]$QmpPort)
+    $machine = 'pc'
+    if ($Guest.ContainsKey('Machine') -and $Guest.Machine) { $machine = $Guest.Machine }
+    $a = @('-name', 'xhleg-whpx-probe', '-machine', $machine, '-accel', (Get-LegAccelArg $Guest 'whpx'),
+        '-cpu', $Guest.Cpu, '-smp', [string]$Guest.Smp, '-m', [string]$Guest.Memory,
+        '-nodefaults', '-display', 'none', '-S', '-qmp', "tcp:127.0.0.1:$QmpPort,server=on,wait=off")
+    if ($Guest.ContainsKey('Extra') -and $Guest.Extra) { $a += @($Guest.Extra) }
+    return , $a
+}
+
+# Refuses a WHPX leg where WHPX cannot run it, before anything of the leg is
+# started: this QEMU must list whpx, and the probe (Get-LegWhpxProbeArgs)
+# must come up and say whpx is what it runs on. WHPX makes its partition and
+# processors before QMP answers, so a host whose hypervisor platform is off,
+# or whose WHPX needs another option, ends the probe with QEMU's own
+# message, which the refusal carries. There is no fallback: the caller
+# stops, and -ForceTcg is the operator's to give. Returns the -accel value.
+function Assert-LegWhpx {
+    param($Config, $Guest, [hashtable]$Ports, [string]$What, [string]$Dir)
+    $accel = Get-LegAccelArg $Guest 'whpx'
+    $tail = 'Nothing was started. A WHPX leg does not fall back to TCG; -ForceTcg runs it under TCG (the cross-check).'
+    $help = @(& $Config.QemuExe -accel help 2>$null)
+    if (-not (Test-LegAccelListed $help 'whpx')) {
+        throw "${What}: $($Config.QemuExe) has no WHPX (-accel help: $((@($help | Select-Object -Skip 1) -join ' ').Trim())). $tail"
+    }
+    if (-not (Test-LegPortFree $Ports.Qmp)) { throw "${What}: port $($Ports.Qmp) is in use (the WHPX probe). $tail" }
+    New-Item -ItemType Directory -Force $Dir | Out-Null
+    $err = Join-Path $Dir 'whpx-probe.err'
+    $pa = Get-LegWhpxProbeArgs $Guest $Ports.Qmp
+    Assert-LegOneAccel $pa $accel
+    $line = ($pa | ForEach-Object { Quote-LegArg $_ }) -join ' '
+    $p = Start-Process -FilePath $Config.QemuExe -ArgumentList $line -PassThru -WindowStyle Hidden `
+        -RedirectStandardError $err -RedirectStandardOutput (Join-Path $Dir 'whpx-probe.out')
+    # From here the probe is ended whatever happens, a failed log line too.
+    try {
+        $null = $p.Handle
+        Add-LegPidLog $Config "started xhleg-whpx-probe pid $($p.Id) qmp $($Ports.Qmp) ($What)"
+        $deadline = (Get-Date).AddSeconds(30)
+        while (-not (Test-QmpUp $Ports.Qmp)) {
+            if ($p.HasExited) {
+                $said = "$(Get-Content -Raw -LiteralPath $err -ErrorAction SilentlyContinue)".Trim()
+                throw "${What}: WHPX cannot run this guest here (-accel $accel): $said $tail"
+            }
+            if ((Get-Date) -gt $deadline) { throw "${What}: the WHPX probe's QMP did not come up on $($Ports.Qmp) in 30 s. $tail" }
+            Start-Sleep -Milliseconds 300
+        }
+        $live = Get-LegAccelLive $Ports.Qmp
+        if ($live -and $live -cne 'whpx') { throw "${What}: asked for -accel $accel, QEMU runs on '$live'. $tail" }
+    } finally {
+        if (-not $p.HasExited) {
+            # QMP quit; this exact process when QMP does not take it.
+            $asked = $false
+            try { $null = Invoke-Qmp -Port $Ports.Qmp -Command 'quit' -AllowError -TimeoutMs 5000; $asked = $true } catch { }
+            if (-not $asked -or -not $p.WaitForExit(15000)) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; $null = $p.WaitForExit(10000) }
+        }
+        try { Add-LegPidLog $Config "ended xhleg-whpx-probe pid $($p.Id)" } catch { }
+    }
+    return $accel
+}
+
+# What of a start's QEMU stderr is a reason against the leg: all of it, but
+# under WHPX the one warning QEMU 11.1 prints at every WHPX start of these
+# machines, "warning: Ignoring request for interrupt vector 0" (read on
+# development host A on 2026-11-11, on the probe and on every Windows 10
+# start, each of which went on to pass). The file itself keeps every line.
+# Returns the text left, '' when nothing is.
+function Get-LegStderrReason {
+    param([string]$Text, [string]$Accel)
+    $keep = @()
+    foreach ($l in @("$Text" -split "`r?`n")) {
+        if (-not $l.Trim()) { continue }
+        if ((Get-LegAccelKind $Accel) -ceq 'whpx' -and $l -cmatch ': warning: Ignoring request for interrupt vector 0\s*$') { continue }
+        $keep += $l.TrimEnd()
+    }
+    return ($keep -join "`n")
+}
+
+# What stands between a leg's record and PASS, as reasons (none: PASS, with
+# no reason from the starts themselves). The guest must have said END;
+# every check the leg needs must be reported and every reported check
+# must pass; each exit code must be one the leg allows; no host step may
+# have failed.
+# A leg with Devices needs its six controller checks, so a guest script
+# that skipped the sequence cannot pass, and the remove's answer (done, or
+# restart asked) must be on record, though neither answer is a reason.
+# Its uninstall may end with exit 4 only as a pending restart: the guest
+# read that in the installer's log (uninstall-pending) and ran the
+# uninstall again after the next start (uninstall-again, required then
+# and only then). A leg with TrustCert needs cert-trust and test-signing.
+function Get-LegVerdictReasons {
+    param($Def, $Rec, [bool]$Ended, [bool]$Audio, [bool]$Devices, [bool]$Trust)
+    $why = @()
+    if (-not $Ended) { $why += 'the guest never said END' }
+    $need = @('driver-file', 'list-current', 'stick-seen', 'stick-copy', 'list-removed')
+    if ($Audio) { $need += @('audio-play', 'urbs-malformed') }
+    if ($Devices) { $need += @('ctrl-disable', 'ctrl-enable', 'stick-copy-enable', 'ctrl-remove', 'ctrl-rescan', 'stick-copy-rescan') }
+    if ($Trust) { $need += @('cert-trust', 'test-signing') }
+    if ($Def.ContainsKey('Checks')) { $need = @($Def.Checks) }
+    foreach ($c in $need) {
+        if (-not $Rec.checks.Contains($c)) { $why += "check $c not reported" }
+    }
+    foreach ($k in @($Rec.checks.Keys)) {
+        if ($Rec.checks[$k] -notlike 'PASS*') { $why += "check $k $($Rec.checks[$k])" }
+    }
+    $un4 = ($Rec.exits.Contains('uninstall') -and [string]$Rec.exits['uninstall'] -eq '4')
+    if ($Def.ContainsKey('Exits')) {
+        foreach ($k in $Def.Exits.Keys) {
+            $allowed = @($Def.Exits[$k] | ForEach-Object { [string]$_ })
+            if ($k -eq 'uninstall-again' -and -not $Rec.exits.Contains($k) -and -not $un4) { continue }
+            if (-not $Rec.exits.Contains($k)) { $why += "no exit code for $k" }
+            elseif ($allowed -notcontains [string]$Rec.exits[$k]) { $why += "exit $k $($Rec.exits[$k]), allowed $($allowed -join '/')" }
+        }
+    }
+    foreach ($s in $Rec.steps) { if ($s -match 'FAILED|still running|no BOOT line') { $why += "step: $s" } }
+    if ($Devices) {
+        if ($un4) {
+            if (-not $Rec.checks.Contains('uninstall-pending')) { $why += 'check uninstall-pending not reported (the uninstall ended with exit 4)' }
+            if (-not $Rec.exits.Contains('uninstall-again')) { $why += 'no exit code for uninstall-again (the uninstall ended with exit 4)' }
+        }
+        if ([string]$Rec.ctrlRemove -cnotin 'done', 'restart asked') { $why += 'the remove step did not say whether Windows asked for a restart' }
+    }
+    return , $why
+}
+
+# The line a leg's record and the matrix's table carry for the controller's
+# remove: its answer and the accelerator it was given under. The answer is
+# recorded under either accelerator and judged under neither, since TCG
+# itself has given both (runs/run-49.md, "49.4"). Under WHPX it is not
+# that step's reading: the step keeps a TCG reading, which only the same
+# leg under -ForceTcg on the same package gives, so the line says that the
+# reading is owed there and does not claim one.
+function Get-LegRemoveNote {
+    param([string]$Answer, [string]$Kind)
+    if (-not $Answer) { $Answer = 'not read' }
+    $t = "remove: $Answer under $Kind"
+    if ($Kind -cne 'tcg') { $t += '; recorded only: this step keeps a TCG reading, which this leg with -ForceTcg on the same package gives' }
+    return $t
+}
+
 function Get-LegHardwareHash {
     param($Guest, [string]$QemuVersion)
     $text = ((Get-LegHardwareArgs $Guest) -join "`n") + "`n" + $QemuVersion
@@ -151,14 +381,23 @@ function Quote-LegArg {
 # and on every guest a restart then becomes a cold start the host makes.
 # Backends: arguments no saved state depends on, so not in the starting
 # point's hash (an audio leg's -audiodev, whose device the host plugs later).
+# Accel: the start's -accel value (Get-LegAccelArg); none is TCG's. A saved
+# state is TCG's, and QEMU saves and loads none under WHPX ("State blocked
+# due to missing dirty memory tracking support", read 2026-11-11), so
+# -Incoming with any other accelerator is refused here. Once QMP is up QEMU
+# is asked which accelerator it runs on, and a start on another than the
+# one asked for is ended at once.
 function Start-LegQemu {
     param(
         $Config, $Guest, [hashtable]$Ports,
         [string]$Disk, [string]$Iso, [string]$RunDir, [string]$Tag,
-        [switch]$Incoming, [string]$Name = 'xhleg', [string[]]$Backends = @()
+        [switch]$Incoming, [string]$Name = 'xhleg', [string[]]$Backends = @(), [string]$Accel = ''
     )
+    if (-not $Accel) { $Accel = Get-LegAccelArg $Guest 'tcg' }
+    $kind = Get-LegAccelKind $Accel
+    if ($Incoming -and $kind -cne 'tcg') { throw "a saved state is restored under TCG only, not under -accel $Accel" }
     $serial = Join-Path $RunDir "serial-$Tag.log"
-    $a = @('-name', $Name) + (Get-LegHardwareArgs $Guest) + @($Backends)
+    $a = @('-name', $Name) + (Get-LegHardwareArgs $Guest -Accel $Accel) + @($Backends)
     $a += @('-display', 'none', '-vnc', "127.0.0.1:$($Ports.Vnc - 5900)",
         '-qmp', "tcp:127.0.0.1:$($Ports.Qmp),server=on,wait=off",
         '-action', 'reboot=shutdown',
@@ -168,6 +407,7 @@ function Start-LegQemu {
         '-serial', "file:$serial",
         '-boot', 'order=c')
     if ($Incoming) { $a += @('-S', '-incoming', "tcp:127.0.0.1:$($Ports.Mig)") }
+    Assert-LegOneAccel $a $Accel
     foreach ($p in $Ports.Qmp, $Ports.Vnc, $Ports.Mig) {
         if (-not (Test-LegPortFree $p)) { throw "port $p is in use" }
     }
@@ -187,7 +427,9 @@ function Start-LegQemu {
             if ((Get-Date) -gt $deadline) { throw "QEMU's QMP did not come up on $($Ports.Qmp)" }
             Start-Sleep -Milliseconds 300
         }
-        Add-LegPidLog $Config "started $Name tag $Tag pid $($p.Id) qmp $($Ports.Qmp)"
+        $live = Get-LegAccelLive $Ports.Qmp
+        if ($live -and $live -cne $kind) { throw "asked for -accel $Accel, QEMU runs on '$live'" }
+        Add-LegPidLog $Config "started $Name tag $Tag pid $($p.Id) qmp $($Ports.Qmp) accel $Accel"
     } catch {
         if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force; $null = $p.WaitForExit(10000) }
         Add-LegPidLog $Config "start failed, pid $($p.Id) ended ($Name tag $Tag)"

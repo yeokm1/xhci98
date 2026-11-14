@@ -20,6 +20,14 @@ When no leg is running and none fits the budget (other QEMUs on the host,
 or a leg larger than the budget), it says so once and waits at most
 -WaitMinutes (default 60), then stops and lists the legs not started.
 
+A leg runs on the accelerator release-legs.psd1 gives it: TCG, or WHPX for
+the two Windows 10 legs (roadmap-usb4 49.4). Before any leg starts, WHPX is
+probed once for each guest a selected WHPX leg runs on; where it cannot run
+that guest the matrix stops with QEMU's own message and starts nothing: a
+WHPX leg never falls back to TCG by itself. -ForceTcg runs every leg under
+TCG, the periodic cross-check of the WHPX legs. The table names each leg's
+accelerator.
+
 The package is the unpacked download (INSTALL.BAT at its top); it goes onto
 each leg's CD and is never run on the host.
 #>
@@ -31,7 +39,8 @@ param(
     [string[]]$Only = @(),
     [int]$MaxVcpu = -1,
     [int]$WaitMinutes = 60,
-    [switch]$Cold
+    [switch]$Cold,
+    [switch]$ForceTcg
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib\legvm.ps1')
@@ -62,8 +71,17 @@ function Test-LegConfigured {
     param($L)
     return [bool](@($cfg.Guests | Where-Object { $_.Id -eq $L.Guest }).Count)
 }
+# The accelerator a leg's row names: its -accel value, and that it was forced.
+function Get-LegAccelText {
+    param($L)
+    $a = Resolve-LegAccel $L ([bool]$ForceTcg)
+    $t = Get-LegAccelArg (Get-LegGuest $cfg $L.Guest) $a.Use
+    if ($a.Forced) { $t += ' (forced)' }
+    return $t
+}
 $todo = New-Object System.Collections.ArrayList
 $manual = @()
+$whpxGuests = [ordered]@{}
 $unconfigured = @()
 foreach ($l in $legSet.Legs) {
     if ($Only.Count -and $Only -notcontains $l.Id) { continue }
@@ -79,6 +97,7 @@ foreach ($l in $legSet.Legs) {
     $g = Get-LegGuest $cfg $l.Guest
     $null = Get-LegStartPoint $cfg $g $qver
     if ($l.ContainsKey('Audio') -and $l.Audio) { $null = Get-LegWavChk }
+    if ((Resolve-LegAccel $l ([bool]$ForceTcg)).Use -eq 'whpx' -and -not $whpxGuests.Contains($g.Id)) { $whpxGuests[$g.Id] = $l.Id }
     if ($MaxVcpu -gt 0 -and [int]$g.Smp -gt $MaxVcpu) { throw "leg $($l.Id) needs $($g.Smp) vCPUs, over MaxVcpu $MaxVcpu" }
     if ([int]$g.Smp -gt $logical) { throw "leg $($l.Id) needs $($g.Smp) vCPUs, over the host's $logical" }
     [void]$todo.Add(@{ Def = $l; Smp = [int]$g.Smp })
@@ -87,6 +106,11 @@ if ($todo.Count -eq 0 -and $manual.Count -eq 0) { throw 'no leg selected (or no 
 
 $runRoot = Join-Path $cfg.WorkDir ("runs\" + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 New-Item -ItemType Directory -Force $runRoot | Out-Null
+# WHPX, probed once for each guest a selected WHPX leg runs on, in slot 0
+# (no leg runs yet). A refusal stops the matrix here: nothing was started.
+foreach ($gid in $whpxGuests.Keys) {
+    $null = Assert-LegWhpx -Config $cfg -Guest (Get-LegGuest $cfg $gid) -Ports (Get-LegPorts $cfg 0) -What "leg $($whpxGuests[$gid]) (guest $gid)" -Dir (Join-Path $runRoot "whpx-probe-$gid")
+}
 $slots = [math]::Floor($cfg.PortCount / 3)
 $free = New-Object System.Collections.ArrayList
 for ($i = 0; $i -lt $slots; $i++) { [void]$free.Add($i) }
@@ -124,6 +148,7 @@ while ($todo.Count -gt 0 -or $running.Count -gt 0) {
                 '-Leg', $id, '-Package', (Quote-LegArg $Package), '-Legs', (Quote-LegArg $Legs), '-RunDir', (Quote-LegArg $dir), '-Slot', $slot)
             if ($cfgPath) { $la += @('-Config', (Quote-LegArg (Resolve-RepoPath $cfgPath))) }
             if ($Cold) { $la += '-Cold' }
+            if ($ForceTcg) { $la += '-ForceTcg' }
             $p = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') `
                 -ArgumentList ($la -join ' ') -PassThru -WindowStyle Hidden `
                 -RedirectStandardOutput (Join-Path $dir 'run-leg.log') -RedirectStandardError (Join-Path $dir 'run-leg.err')
@@ -160,37 +185,43 @@ foreach ($l in $legSet.Legs) {
     if ($Only.Count -and $Only -notcontains $l.Id) { continue }
     $res = Join-Path (Join-Path $runRoot $l.Id) 'result.json'
     if (-not (Test-LegConfigured $l)) {
-        $rows += [pscustomobject]@{ Leg = $l.Id; Guest = $l.Guest; Mode = $l.Mode; Verdict = 'NOT CONFIGURED'; Minutes = ''; Boots = ''; Restore = ''; Exits = ''; Notes = "no guest $($l.Guest) in the configuration" }
+        $rows += [pscustomobject]@{ Leg = $l.Id; Guest = $l.Guest; Mode = $l.Mode; Accel = ''; Verdict = 'NOT CONFIGURED'; Minutes = ''; Boots = ''; Restore = ''; Exits = ''; Notes = "no guest $($l.Guest) in the configuration" }
         continue
     }
     if (-not (Test-LegInPackage $l)) {
-        $rows += [pscustomobject]@{ Leg = $l.Id; Guest = $l.Guest; Mode = $l.Mode; Verdict = 'NOT IN PACKAGE'; Minutes = ''; Boots = ''; Restore = ''; Exits = ''; Notes = "the package has no $($l.Needs)" }
+        $rows += [pscustomobject]@{ Leg = $l.Id; Guest = $l.Guest; Mode = $l.Mode; Accel = (Get-LegAccelText $l); Verdict = 'NOT IN PACKAGE'; Minutes = ''; Boots = ''; Restore = ''; Exits = ''; Notes = "the package has no $($l.Needs)" }
         continue
     }
     if (Test-LegManual $l) {
-        $rows += [pscustomobject]@{ Leg = $l.Id; Guest = $l.Guest; Mode = $l.Mode; Verdict = 'OWED (manual)'; Minutes = ''; Boots = ''; Restore = ''; Exits = ''; Notes = "run-leg.ps1 -Leg $($l.Id) with an operator at VNC" }
+        $rows += [pscustomobject]@{ Leg = $l.Id; Guest = $l.Guest; Mode = $l.Mode; Accel = (Get-LegAccelText $l); Verdict = 'OWED (manual)'; Minutes = ''; Boots = ''; Restore = ''; Exits = ''; Notes = "run-leg.ps1 -Leg $($l.Id) with an operator at VNC" }
         continue
     }
     if ($notStarted -contains $l.Id) {
-        $rows += [pscustomobject]@{ Leg = $l.Id; Guest = $l.Guest; Mode = $l.Mode; Verdict = 'NOT STARTED'; Minutes = ''; Boots = ''; Restore = ''; Exits = ''; Notes = "no room in the vCPU budget for $WaitMinutes min" }
+        $rows += [pscustomobject]@{ Leg = $l.Id; Guest = $l.Guest; Mode = $l.Mode; Accel = (Get-LegAccelText $l); Verdict = 'NOT STARTED'; Minutes = ''; Boots = ''; Restore = ''; Exits = ''; Notes = "no room in the vCPU budget for $WaitMinutes min" }
         continue
     }
     if (-not (Test-Path -LiteralPath $res)) {
-        $rows += [pscustomobject]@{ Leg = $l.Id; Guest = $l.Guest; Mode = $l.Mode; Verdict = 'ERROR'; Minutes = ''; Boots = ''; Restore = ''; Exits = ''; Notes = "no result.json; see $($l.Id)\run-leg.log" }
+        $rows += [pscustomobject]@{ Leg = $l.Id; Guest = $l.Guest; Mode = $l.Mode; Accel = (Get-LegAccelText $l); Verdict = 'ERROR'; Minutes = ''; Boots = ''; Restore = ''; Exits = ''; Notes = "no result.json; see $($l.Id)\run-leg.log" }
         continue
     }
     $j = Get-Content -Raw -LiteralPath $res | ConvertFrom-Json
     $ex = @($j.exits.PSObject.Properties | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ' '
     $rs = @($j.boots | Where-Object { $_.restore } | ForEach-Object { $_.restoreSeconds }) -join ''
+    # The accelerator is the one the leg's own record names, never the one
+    # the matrix expected.
+    $ja = [string]$j.accel
+    if ($j.accelForced) { $ja += ' (forced)' }
+    $notes = @($j.reasons)
+    if ($j.PSObject.Properties['ctrlRemoveNote'] -and $j.ctrlRemoveNote) { $notes += [string]$j.ctrlRemoveNote }
     $rows += [pscustomobject]@{
-        Leg = $l.Id; Guest = $l.Guest; Mode = $l.Mode; Verdict = $j.verdict
+        Leg = $l.Id; Guest = $l.Guest; Mode = $l.Mode; Accel = $ja; Verdict = $j.verdict
         Minutes = [math]::Round($j.seconds / 60, 1); Boots = @($j.boots).Count; Restore = $rs; Exits = $ex
-        Notes = (@($j.reasons) -join '; ')
+        Notes = ($notes -join '; ')
     }
 }
 $md = @("# Release matrix $(Split-Path -Leaf $runRoot)", '', "Package: $Package", "QEMU: $qver", "Wall time: $([math]::Round($sw.Elapsed.TotalMinutes, 1)) min", '',
-    '| Leg | Guest | Mode | Verdict | Minutes | Starts | Restore s | Exit codes | Notes |', '|---|---|---|---|---|---|---|---|---|')
-foreach ($r in $rows) { $md += "| $($r.Leg) | $($r.Guest) | $($r.Mode) | $($r.Verdict) | $($r.Minutes) | $($r.Boots) | $($r.Restore) | $($r.Exits) | $($r.Notes) |" }
+    '| Leg | Guest | Mode | Accel | Verdict | Minutes | Starts | Restore s | Exit codes | Notes |', '|---|---|---|---|---|---|---|---|---|---|')
+foreach ($r in $rows) { $md += "| $($r.Leg) | $($r.Guest) | $($r.Mode) | $($r.Accel) | $($r.Verdict) | $($r.Minutes) | $($r.Boots) | $($r.Restore) | $($r.Exits) | $($r.Notes) |" }
 Set-Content -LiteralPath (Join-Path $runRoot 'results.md') -Value $md -Encoding ASCII
 $rows | Export-Csv -LiteralPath (Join-Path $runRoot 'results.csv') -NoTypeInformation -Encoding ASCII
 $rows | Format-Table -AutoSize | Out-String -Width 200 | Write-Host

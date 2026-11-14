@@ -131,11 +131,21 @@ static NTSTATUS hcdRemove(PHCD_CONTROLLER hc, PIRP irp)
      * forwarded. The bias AddDevice set is dropped here.
      */
     hc->Common.PnpState = HCD_PNP_REMOVED;
+    /* Task 49.24 (record 15 sections 4.5.4 and 4.5.17): mode 4's flag
+     * closed before the outstanding I/O is waited out, the causes masked
+     * first where the controller is proven still there: 98 SE and ME
+     * report a departed controller here alone, and another client of the
+     * vector still enters the routine. */
+    HcdMsg4Gone(hc, 0);
     HcdIoLeave(hc);
     (VOID)HcdWaitEvent(&hc->RemoveEvent, 0);
 
     if (hc->ControllerStarted) {
+        /* Task 49.24: a removal Windows reported, where mode 4's release
+         * may take msi4nt's absence proof (record 15 section 4.5.4). */
+        hc->Msg4Removal = 1;
         HcdStopController(hc);
+        hc->Msg4Removal = 0;
     }
     /* Record 17 section 4.13.6: released whatever the start reached
      * (idempotent), before the removal reaches xhcicm.sys's filter. */
@@ -196,6 +206,29 @@ NTSTATUS HcdControllerPnp(PHCD_CONTROLLER hc, PIRP irp)
 
     case IRP_MN_QUERY_STOP_DEVICE:
     case IRP_MN_QUERY_REMOVE_DEVICE:
+        /* Task 49.24 (design record 15 section 4.5.4): under mode 4 on NT
+         * 5 the message is released at the query-stop, which a release
+         * that cannot prove it off refuses; a released query is sent down
+         * and waited for, so a lower driver's refusal reconnects at once. */
+        if (stack->MinorFunction == IRP_MN_QUERY_STOP_DEVICE) {
+            status = HcdMsg4QueryStop(hc);
+            if (!NT_SUCCESS(status)) {
+                status = HcdCompleteIrp(irp, status, 0);
+                break;
+            }
+            if (hc->Msg4QueryReleased) {
+                hc->Common.PnpStateBeforeQuery = hc->Common.PnpState;
+                hc->Common.PnpState = HCD_PNP_STOP_PENDING;
+                irp->IoStatus.Status = STATUS_SUCCESS;
+                status = HcdForwardAndWait(hc, irp);
+                if (!NT_SUCCESS(status)) {
+                    HcdMsg4CancelStop(hc);
+                    hc->Common.PnpState = hc->Common.PnpStateBeforeQuery;
+                }
+                status = HcdCompleteIrp(irp, status, irp->IoStatus.Information);
+                break;
+            }
+        }
         hc->Common.PnpStateBeforeQuery = hc->Common.PnpState;
         hc->Common.PnpState = (stack->MinorFunction == IRP_MN_QUERY_STOP_DEVICE)
                                   ? HCD_PNP_STOP_PENDING
@@ -206,6 +239,9 @@ NTSTATUS HcdControllerPnp(PHCD_CONTROLLER hc, PIRP irp)
 
     case IRP_MN_CANCEL_STOP_DEVICE:
     case IRP_MN_CANCEL_REMOVE_DEVICE:
+        if (stack->MinorFunction == IRP_MN_CANCEL_STOP_DEVICE) {
+            HcdMsg4CancelStop(hc);
+        }
         if (hc->Common.PnpState == HCD_PNP_STOP_PENDING ||
             hc->Common.PnpState == HCD_PNP_REMOVE_PENDING) {
             hc->Common.PnpState = hc->Common.PnpStateBeforeQuery;
@@ -229,7 +265,15 @@ NTSTATUS HcdControllerPnp(PHCD_CONTROLLER hc, PIRP irp)
 
     case IRP_MN_SURPRISE_REMOVAL:
         HcdDoorControllerStop(hc);
+        /* Task 49.24 (record 15 section 4.5.4, "Surprise removal"): mode
+         * 4's readiness flag cleared first, under the interrupt object's
+         * lock and with no register touched, since another member of a
+         * shared claim still enters the routine; the barrier keeps a D0
+         * worker from opening it again. */
+        HcdMsg4Gone(hc, 1);
+        hc->Msg4Removal = 1;
         HcdStopController(hc);
+        hc->Msg4Removal = 0;
         hc->Common.PnpState = HCD_PNP_SURPRISE_REMOVED;
         irp->IoStatus.Status = STATUS_SUCCESS;
         status = HcdPassDown(hc, irp);
@@ -252,6 +296,25 @@ NTSTATUS HcdControllerPnp(PHCD_CONTROLLER hc, PIRP irp)
          * 1 forces onto the line; every other target passes it down as
          * before. */
         status = HcdMsiFilter(hc, irp);
+        break;
+
+    case IRP_MN_QUERY_PNP_DEVICE_STATE:
+        /* Task 49.24 (record 15 section 4.5.4, step 5): a controller that
+         * lost mode 4's message on 2000, XP and XP x64 answers failed, and
+         * the removal Windows then sends releases it. */
+        if (HcdMsg4Failed(hc)) {
+            status = HcdForwardAndWait(hc, irp);
+            if (status == STATUS_NOT_SUPPORTED) {
+                irp->IoStatus.Information = 0;
+            }
+            irp->IoStatus.Information |= PNP_DEVICE_FAILED;
+            XhciLogNote(&hc->Hc, "msg4.pnpstate",
+                        (ULONG)irp->IoStatus.Information);
+            status = HcdCompleteIrp(irp, STATUS_SUCCESS,
+                                    irp->IoStatus.Information);
+        } else {
+            status = HcdPassDown(hc, irp);
+        }
         break;
 
     case IRP_MN_QUERY_DEVICE_RELATIONS:

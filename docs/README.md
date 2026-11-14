@@ -5,8 +5,8 @@ source comments, scripts, and other docs use these same locations.
 
 ## Using
 
-- [Release notes](using/release-notes.md) - what the driver does, what it does
-  not, and its known limitations.
+- [Release notes](using/release-notes.md) - what is new, how to install and
+  use the drivers, and their known limitations.
 - [Tuning](using/tuning.md) - every registry setting of the controller
   driver and of the Thunderbolt and USB4 driver: where it is, its range and
   default, and what it does.
@@ -52,6 +52,10 @@ source comments, scripts, and other docs use these same locations.
   emulator, real machines), what no vehicle has read, and the readings
   behind the user documents, which carry no testing status themselves
   (owner, 2026-10-31).
+- [Release notes of past releases](contributing/release-notes-archive.md) -
+  the release notes' sections for each release from `2.3.0.0` to `3.4.3.0`
+  and their old update steps, as published, moved there when the release
+  notes were shortened (owner, 2026-11-12).
 - [Phase 11 VM run sheet](contributing/runs/run-11v.md) - ordered validation
   stages and their pass readings.
 - [Batch 13-E run sheet](contributing/runs/run-13e.md) - the E460 bench trip
@@ -203,6 +207,13 @@ source comments, scripts, and other docs use these same locations.
   on 98 SE and ME (48.36); the same-version update (48.42); a tunnel
   found up at start (48.43); and the restart at the installer's finish
   on 98 SE and ME (48.44).
+- [Phase 49 record](contributing/runs/run-49.md) - release `3.5.0.0`'s
+  readings, one section per task: the release legs' own faults (49.1),
+  usb-wdm-free 0.1.10 prepared (49.3), uac2's ME recording refusal (49.8),
+  2000's Code 31 after a recovery (49.9),
+  the Windows 10 legs under WHPX (49.4), the staging legs left (49.5),
+  a USB4 drive kept across standby (49.11, 49.12), Thunderbolt networking
+  and the docks' legs (49.2, 49.6, 49.7)
 - The post-release matrix reports, one pair per release (four from `1.1.0.0`
   on, which added XP x64 and Windows 7 x86 clones), produced by
   `run-matrix.ps1 -PostRelease` on freshly installed guests and read against

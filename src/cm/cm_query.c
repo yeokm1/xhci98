@@ -201,6 +201,8 @@ ULONG CmQueryBuild(UCHAR *buf, const CM_QUERY_IN *in)
     /* Which driver is running (roadmap-usb4 44.8): in every answer,
      * whoever built the block. */
     cmQPut(buf + CM_Q_HDR_BYTES, CM_Q_RM_DRIVER, XHCI_VER_PACKED);
+    /* The ring interrupt (record 21 section 4.5.17), the same way. */
+    cmQPut(buf + CM_Q_HDR_BYTES, CM_Q_RM_IRQ, in->RingIrq);
     n = cmQRouters(in->Record, in->RecordBytes);
     rec = 0;
     if (in->Record != NULL && in->RecordBytes >= CM_ST_HDR_BYTES &&
@@ -755,7 +757,10 @@ ULONG CmQueryLogAnswer(UCHAR *out, ULONG room, const CM_QLOG_IN *in,
         }
         out[o++] = c;
     }
-    if (cmQWithhold(out + CM_QL_HDR_BYTES + ctr, logBytes)) {
+    /* At level 4 the address values are served as recorded (the owner,
+     * 2026-11-13), the DebugView emission's rule (CmQueryLogLine). */
+    if (in->Verbosity < 4 &&
+        cmQWithhold(out + CM_QL_HDR_BYTES + ctr, logBytes)) {
         flags |= CM_QL_F_WITHHELD;
     }
     cmQPut(out, CM_QL_O_FLAGS, flags);

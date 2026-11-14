@@ -540,9 +540,9 @@ them has been established (docs/contributing/legal-provenance.md section 5).
 From 3.2.0.0 the -nonfree download also carries, in USBDRV\NONFREE\, other
 manufacturers' drivers as released, two Microsoft KMDF co-installers among
 them, unmodified; they are outside the grant above too, and no licence to
-redistribute them has been found beyond the statements of a few makers that
-the pack's NOTICE.md quotes (the same section 5). Since release 2.0.0.0 the
-drivers depend on two of the operating systems' own files: usbd.sys, whose
+redistribute them has been found beyond the statements of a few manufacturers
+that the pack's NOTICE.md quotes (the same section 5). Since release 2.0.0.0
+the drivers depend on two of the operating systems' own files: usbd.sys, whose
 helper functions the class drivers above xhci98.sys call, and usbui.dll,
 which provides the controller's and the root hub's property pages. The INF
 has Windows Setup copy them from the user's own installation source, never

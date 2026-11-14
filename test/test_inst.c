@@ -813,7 +813,9 @@ static void test_real_infs(void)
     /* Every xhci98 row of the value table is written by both INFs, at the
      * default the table's meaning assumes (task 45.54: docs\using\
      * tuning.md's "Written by the install" column, a range row's within
-     * its range and on its step). */
+     * its range and on its step) - but XhciResumeKeepBot, which neither
+     * writes (design record 20 section 4.3.4, M18): its default is the
+     * driver's for each Windows, 1 on 2000 alone. */
     {
         static const struct {
             const char *Name;
@@ -830,7 +832,26 @@ static void test_real_infs(void)
             { "XhciBulkOnlyOwnId", 1 },
             { "XhciFastPollFsLs", 0 }, { "XhciMaxTransferKB", 1024 },
             { "XhciWideMap", 0 }, { "XhciFirstEnumWaitMs", 5000 },
-            { "XhciFirstEnumPortMs", 2000 }
+            { "XhciFirstEnumPortMs", 2000 },
+            /* Task 49.38: every other value, in groups. */
+            { "XhciIntelIrqRoute", 1 }, { "XhciIntelNoRouteIrq", 1 },
+            { "XhciMsiStrategy", 0 }, { "XhciMsiIsaIrq", 0 },
+            { "XhciMsiShare", 8 }, { "XhciMsiPools", 0 },
+            { "XhciMsiInputFirst", 0 }, { "XhciMsiInputLast", 0 },
+            { "XhciMsiInputBudget", 0 }, { "XhciDmaStaging", 0 },
+            { "XhciStagePoolKiB", 2048 }, { "XhciEventRingTrbs", 256 },
+            { "XhciTolerance", 1 },
+            { "XhciCommandCheck", 1 }, { "XhciStreamDequeueRepair", 1 },
+            { "XhciAccept096", 1 },
+            { "XhciAcpiTables", 1 }, { "XhciIntervalCap", 1 },
+            { "XhciAvgTrbEsit", 0 }, { "XhciUsb2HubSpeedFallback", 1 },
+            { "XhciMsiAvoid", 1 }, { "XhciStreamsOff", 1 },
+            { "XhciResumeReinit", 1 }, { "XhciIntelShutdownToEhci", 1 },
+            { "XhciShutdownReset", 0 }, { "XhciSuspendHaltDelay", 1 },
+            { "XhciSuspendHaltTimeout", 1 }, { "XhciAsmediaFlowControl", 1 },
+            { "XhciTiIntervalCap", 1 }, { "XhciStuckLinkReset", 1 },
+            { "XhciStreamRingPad", 1 }, { "XhciControlLinkNoOp", 1 },
+            { "XhciIsochSpuriousSuccess", 1 }, { "XhciAmdSuspendBitClear", 1 }
         };
         int rowsSeen = 0;
         for (i = 0; i < instValueCount; i++) {
@@ -840,12 +861,192 @@ static void test_real_infs(void)
             if (instValues[i].Inf != INST_INF_XHCI) {
                 continue;
             }
+            if (inst_eq(instValues[i].Name, "XhciResumeKeepBot")) {
+                INST_U32 d;
+                CHECK(instValues[i].NoInf &&
+                          !inst_inf_addreg_default(x86, instValues[i].Name,
+                                                   &d86) &&
+                          !inst_inf_addreg_default(a64, instValues[i].Name,
+                                                   &d64),
+                      "XhciResumeKeepBot: NoInf, written by neither INF");
+                e = env(1, 5, 0, INST_ARCH_X86);
+                CHECK(inst_keepbot_default(&e) == 1 &&
+                          inst_value_default_env(i, x86, &e, &d) && d == 1,
+                      "XhciResumeKeepBot: 1 on 2000");
+                e = env(1, 5, 1, INST_ARCH_X86);
+                CHECK(inst_value_default_env(i, x86, &e, &d) && d == 0,
+                      "XhciResumeKeepBot: 0 on XP");
+                e = env(1, 5, 2, INST_ARCH_AMD64);
+                CHECK(inst_value_default_env(i, a64, &e, &d) && d == 0,
+                      "XhciResumeKeepBot: 0 on XP x64");
+                e = env(1, 6, 1, INST_ARCH_X86);
+                CHECK(inst_value_default_env(i, x86, &e, &d) && d == 0,
+                      "XhciResumeKeepBot: 0 on 7");
+                e = env(0, 4, 90, INST_ARCH_X86);
+                CHECK(inst_value_default_env(i, x86, &e, &d) && d == 0,
+                      "XhciResumeKeepBot: 0 on ME");
+                CHECK(instValues[i].Asked == 0x3UL &&
+                          instValues[i].Settable == 0xFUL &&
+                          instValues[i].Apply == INST_APPLY_NT_XHCI,
+                      "XhciResumeKeepBot: 0 or 1 asked on 2000 and later, "
+                      "0 to 3 by /set");
+                {
+                    char q[2048];
+                    INST_VNOW nv[1];
+                    INST_U32 en;
+                    nv[0].State = 0;
+                    nv[0].Value = 0;
+                    nv[0].Desc = "";
+                    inst_value_question(q, sizeof(q), i, 0x3UL, 1UL, nv, 1,
+                                        0, 0, &en);
+                    CHECK(en == 1 &&
+                              strstr(q, "not set, the driver uses 1") != NULL &&
+                              strstr(q, "the install writes") == NULL,
+                          "XhciResumeKeepBot unset: the driver's default, "
+                          "not an install's");
+                }
+                {
+                    /* M19: Setup writes it itself where nothing is set. */
+                    INST_VNOW sv[2];
+                    sv[0].State = 0;
+                    sv[0].Value = 0;
+                    sv[0].Desc = "";
+                    sv[1] = sv[0];
+                    sv[1].State = -1;
+                    CHECK(inst_keepbot_seed(1, 2, 0, 0, sv, 2),
+                          "seed: NT, unset everywhere, unanswered");
+                    CHECK(!inst_keepbot_seed(0, 2, 0, 0, sv, 2),
+                          "no seed on 98 SE and ME");
+                    CHECK(!inst_keepbot_seed(1, 0, 0, 0, sv, 0),
+                          "no seed without an xhci98 controller");
+                    CHECK(!inst_keepbot_seed(1, 2, 1, 0, sv, 2),
+                          "no seed over a user's answer (the engine asks "
+                          "it with answered 0 for an answer equal to the "
+                          "default)");
+                    CHECK(!inst_keepbot_seed(1, 2, 0, 1, sv, 2),
+                          "an update keeps a machine-wide value");
+                    CHECK(!inst_keepbot_seed(1, 2, 0, -1, sv, 2),
+                          "a machine-wide value not a number is kept");
+                    sv[1].State = 1;
+                    sv[1].Value = 0;
+                    CHECK(!inst_keepbot_seed(1, 2, 0, 0, sv, 2),
+                          "an update keeps a controller's own value");
+                }
+                {
+#define TEST_NOW_MANY 20  /* past inst_eng.c's INST_MAX_NOW, 16 */
+                    /* M19's second test: every controller, present or not,
+                     * past the presentation list's cap. */
+                    static INST_VNOW all[TEST_NOW_MANY];
+                    int k;
+                    for (k = 0; k < TEST_NOW_MANY; k++) {
+                        all[k].State = 0;
+                        all[k].Value = 0;
+                        all[k].Desc = "";
+                    }
+                    CHECK(inst_keepbot_seed_all(1, all, TEST_NOW_MANY),
+                          "seed_all: none holds it, more than the cap");
+                    all[TEST_NOW_MANY - 2].State = 1;    /* past the cap */
+                    CHECK(!inst_keepbot_seed_all(1, all, TEST_NOW_MANY),
+                          "a controller past the cap holding it");
+                    all[TEST_NOW_MANY - 2].State = 0;
+                    all[1].State = 1;   /* an unplugged dock's explicit 0 */
+                    all[1].Value = 0;
+                    CHECK(!inst_keepbot_seed_all(1, all, 2),
+                          "an absent controller's explicit 0 on 2000 kept");
+                    all[1].State = -1;
+                    CHECK(!inst_keepbot_seed_all(1, all, 2),
+                          "an unreadable key: no seed");
+                    all[1].State = 0;
+                    CHECK(!inst_keepbot_seed_all(0, all, 2),
+                          "a device list not whole: no seed");
+                    CHECK(inst_keepbot_seed_all(1, all, 0),
+                          "no xhci98 controller key at all: nothing holds it");
+                    /* Task 49.47 (owner, 2026-11-14): Setup proposes the
+                     * port switchover at a first install on a listed
+                     * board, and only there. */
+                    CHECK(inst_psw_propose(1, 0, 1, all, 2),
+                          "psw: a first install on a listed board proposes 1");
+                    CHECK(inst_psw_propose(1, 0, 1, all, 0),
+                          "psw: no xhci98 key yet (a first install) proposes 1");
+                    CHECK(!inst_psw_propose(0, 0, 1, all, 2),
+                          "psw: no listed controller installed now: never");
+                    CHECK(!inst_psw_propose(1, 1, 1, all, 2),
+                          "psw: a machine-wide value set (0, 1 or 2) is kept");
+                    CHECK(!inst_psw_propose(1, -1, 1, all, 2),
+                          "psw: a machine-wide value not a number is kept");
+                    CHECK(!inst_psw_propose(1, 0, 0, all, 2),
+                          "psw: a device list not whole: no proposal");
+                    all[1].State = 1;
+                    all[1].Value = 0;
+                    CHECK(!inst_psw_propose(1, 0, 1, all, 2),
+                          "psw: an update with 0 keeps 0");
+                    all[1].Value = 1;
+                    CHECK(!inst_psw_propose(1, 0, 1, all, 2),
+                          "psw: an update with 1 keeps 1 (nothing written)");
+                    all[1].Value = 2;
+                    CHECK(!inst_psw_propose(1, 0, 1, all, 2),
+                          "psw: an update with 2 keeps 2");
+                    all[1].State = -1;
+                    CHECK(!inst_psw_propose(1, 0, 1, all, 2),
+                          "psw: a key that cannot be read: no proposal");
+                    all[1].State = 0;
+                    all[1].Value = 0;
+                    /* The proposal is written only after a listed
+                     * controller was installed (task 49.47). */
+                    CHECK(inst_psw_counts_nt(1, 1, 1, 0),
+                          "psw nt: a listed controller started counts");
+                    CHECK(inst_psw_counts_nt(1, 1, 0, 1),
+                          "psw nt: installed, restart pending counts");
+                    CHECK(!inst_psw_counts_nt(1, 1, 0, 0),
+                          "psw nt: a failed install (a failed takeover) does not");
+                    CHECK(!inst_psw_counts_nt(1, 0, 0, 1),
+                          "psw nt: another driver still on it does not");
+                    CHECK(!inst_psw_counts_nt(0, 1, 1, 0),
+                          "psw nt: an unlisted controller does not");
+                    CHECK(inst_psw_counts_9x(1, 1, 0, 0) &&
+                          inst_psw_counts_9x(1, 0, 1, 0) &&
+                          inst_psw_counts_9x(1, 0, 0, 1),
+                          "psw 9x: started, swapped or restart pending counts");
+                    CHECK(!inst_psw_counts_9x(1, 0, 0, 0),
+                          "psw 9x: a failed or refused helper install does not");
+                    CHECK(!inst_psw_counts_9x(0, 1, 0, 0),
+                          "psw 9x: an unlisted controller does not");
+                    CHECK(inst_psw_write_now(1, 1, 0, 0, 0, 0),
+                          "psw: proposed and a listed controller installed: written");
+                    CHECK(!inst_psw_write_now(1, 0, 0, 0, 0, 0),
+                          "psw: no listed controller installed: nothing written");
+                    CHECK(!inst_psw_write_now(0, 1, 0, 0, 0, 0),
+                          "psw: not proposed: nothing written");
+                    CHECK(!inst_psw_write_now(1, 1, 1, 0, 0, 0),
+                          "psw: an answer is written as answers are, not here");
+                    CHECK(!inst_psw_write_now(1, 1, 0, 1, 0, 0),
+                          "psw: /list writes nothing");
+                    CHECK(!inst_psw_write_now(1, 1, 0, 0, 1, 0),
+                          "psw: a cancelled run writes nothing");
+                    CHECK(!inst_psw_write_now(1, 1, 0, 0, 0, 1),
+                          "psw: a listed controller installed, then a takeover "
+                          "stopped at its failure: nothing written");
+                }
+                e = env(1, 5, 1, INST_ARCH_X86);
+                CHECK(inst_value_default_env(inst_value_find("XhciResumeKeep"),
+                                             x86, &e, &d) && d == 1,
+                      "every other value: inst_value_default's");
+                continue;
+            }
             rowsSeen++;
             CHECK(inst_inf_addreg_default(x86, instValues[i].Name, &d86),
                   instValues[i].Name);
-            CHECK(inst_inf_addreg_default(a64, instValues[i].Name, &d64),
-                  instValues[i].Name);
-            CHECK_EQ(d86, d64, instValues[i].Name);
+            if (instValues[i].Apply == INST_APPLY_NT5X86_XHCI) {
+                /* Mode 4's input pool: the x86 image's alone. */
+                CHECK(!inst_inf_addreg_default(a64, instValues[i].Name,
+                                               &d64),
+                      "not in the amd64 INF");
+            } else {
+                CHECK(inst_inf_addreg_default(a64, instValues[i].Name,
+                                              &d64),
+                      instValues[i].Name);
+                CHECK_EQ(d86, d64, instValues[i].Name);
+            }
             for (w = 0; w < (int)(sizeof(want) / sizeof(want[0])); w++) {
                 if (inst_eq(want[w].Name, instValues[i].Name)) {
                     break;
@@ -1045,6 +1246,19 @@ static void test_cm_infs(void)
         INST_U32 d64;
         INST_U32 offered;
         if (instValues[i].Inf != INST_INF_CM) {
+            continue;
+        }
+        if (instValues[i].Kind == INST_VK_TEXT) {
+            /* Task 49.38: XhciCmTunnelBridge, a string both INFs write
+             * as auto. */
+            char t[INST_TEXT_CHARS];
+            CHECK(inst_inf_addreg_text(cm, instValues[i].Name, t,
+                                       sizeof(t)) &&
+                      strcmp(t, "auto") == 0 &&
+                      inst_inf_addreg_text(c64, instValues[i].Name, t,
+                                           sizeof(t)) &&
+                      strcmp(t, "auto") == 0,
+                  "the text row: both INFs write auto");
             continue;
         }
         if (instValues[i].NoInf) {
@@ -1836,21 +2050,16 @@ static void test_values(void)
     char text[64];
 
     CHECK(psw >= 0 && im >= 0 && ft >= 0 && ss >= 0 && cm >= 0, "rows found");
-    CHECK_EQ(inst_value_find("XhciTolerance"), -1, "a quirk value is not asked");
+    CHECK(inst_value_find("XhciTolerance") >= 0 &&
+              instValues[inst_value_find("XhciTolerance")].Asked == 0,
+          "task 49.38: a quirk value is a row, never asked");
     /* Task 45.54 (the owner, 2026-10-31): the log is an Advanced row now;
      * these stay out of the table. */
     {
+        /* Task 49.38: every value is a row (the owner, 2026-11-12) but
+         * these, which no page sets. */
         static const char *const out[] = {
-            "XhciCommandCheck", "XhciCmTunnelBridge",
-            "XhciCmAsmediaPcie7Credits", "XhciIntelIrqRoute",
-            "XhciIntervalCap", "XhciAvgTrbEsit", "XhciUsb2HubSpeedFallback",
-            "XhciAccept096", "XhciMsiAvoid", "XhciStreamsOff",
-            "XhciResumeReinit", "XhciIntelShutdownToEhci",
-            "XhciShutdownReset", "XhciSuspendHaltDelay",
-            "XhciSuspendHaltTimeout", "XhciAsmediaFlowControl",
-            "XhciTiIntervalCap", "XhciStuckLinkReset", "XhciStreamRingPad",
-            "XhciControlLinkNoOp", "XhciIsochSpuriousSuccess",
-            "XhciAmdSuspendBitClear"
+            "XhciCmNet", "XhciNetMtu", "XhciEventRing"
         };
         int k;
         for (k = 0; k < (int)(sizeof(out) / sizeof(out[0])); k++) {
@@ -1946,6 +2155,8 @@ static void test_values(void)
             for (rs = 0; rs < instValueCount; rs++) {
                 if (instValues[rs].Loc != INST_LOC_MW &&
                     !inst_eq(instValues[rs].Name, "Restart") &&
+                    !inst_eq(instValues[rs].Name, "LogBytes") &&
+                    instValues[rs].Loc != INST_LOC_DRIVE &&
                     !inst_eq(instValues[rs].Name, "XhciPfwNhiLine")) {
                     break;
                 }
@@ -1975,7 +2186,18 @@ static void test_values(void)
     CHECK(inst_value_set("XhciPollFineTimer=1", &idx, &v) == 1 &&
           idx == ft && v == 1, "/set still sets the fine timer");
     CHECK(!inst_value_applies(cm, &e), "no NHI: no cm values");
-    CHECK_EQ(inst_value_set_mask(im, &e), 0x7, "98: interrupt mode 0-2");
+    CHECK_EQ(inst_value_set_mask(im, &e), 0x7,
+             "98: interrupt mode 0-2, no 4 (it runs as 0 there)");
+    {
+        INST_ENV eme = e;
+        eme.Minor = 90;
+        CHECK_EQ(inst_value_set_mask(im, &eme), 0x7, "ME: no 4 either");
+    }
+    CHECK(strstr(instValues[im].Choice[4], "98") == NULL &&
+          strstr(instValues[im].Choice[4], "msi4") == NULL &&
+          strstr(instValues[im].CautionAdv, "98") == NULL &&
+          strstr(instValues[im].CautionAdv, "msi4") == NULL,
+          "mode 4's choice and caution: 2000 and XP, no component named");
     e.PswController = 1;
     CHECK(inst_value_applies(psw, &e), "an Intel 7-9 controller: port switch");
     e.CmNhi = 1;
@@ -2010,7 +2232,7 @@ static void test_values(void)
               strstr(instValues[si].Caution, "CD") == NULL,
               "the silent install's note: the restart alone");
     }
-    CHECK_EQ(inst_value_set_mask(im, &e), 0x7, "2000: no MSI");
+    CHECK_EQ(inst_value_set_mask(im, &e), 0x17, "2000: no MSI but mode 4");
     e = env(1, 6, 1, INST_ARCH_AMD64);
     e.AnyXhci = 1;
     CHECK_EQ(inst_value_set_mask(im, &e), 0xF, "7: MSI offered");
@@ -2031,7 +2253,7 @@ static void test_values(void)
     CHECK(inst_value_set("XhciCmMode:3", &idx, &v) == 1 && v == 3, "':' form");
     CHECK_EQ(inst_value_set("XhciPollFineTimer=2", &idx, &v), -1, "not allowed");
     e = env(1, 5, 1, INST_ARCH_X86);
-    CHECK_EQ(inst_value_set_mask(im, &e), 0x7, "XP: /set refuses mode 3");
+    CHECK_EQ(inst_value_set_mask(im, &e), 0x17, "XP: /set refuses mode 3");
     e = env(1, 6, 0, INST_ARCH_X86);
     CHECK_EQ(inst_value_set_mask(im, &e), 0xF, "Vista: /set takes mode 3");
     CHECK_EQ(inst_value_set_mask(psw, &e), 0x7, "/set takes port switch 2");
@@ -2180,7 +2402,7 @@ static void test_values(void)
               30000, 0 },
             { "XhciFirstEnumPortMs", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0, 0,
               30000, 0 },
-            { "XhciCmRingInterrupt", INST_INF_CM, INST_APPLY_CM, 0x3, 0, 0,
+            { "XhciCmRingInterrupt", INST_INF_CM, INST_APPLY_CM, 0x7, 0, 0,
               0 },
             { "XhciCmUsb4V2", INST_INF_CM, INST_APPLY_CM, 0x3, 0, 0, 0 }
         };
@@ -2260,14 +2482,26 @@ static void test_values(void)
                                   sizeof(range));
             CHECK(inst_eq(range, "1 to 5000"), "a range text with no step");
             CHECK(!inst_value_in_range(wm, 0), "a list row is no range");
-            /* The ring interrupt: every system since task 48.26. */
+            /* The ring interrupt: every system since task 48.26; 2 (task
+             * 49.27) on 2000 and later alone. */
             CHECK(!inst_value_greyed(ri, &e98) && inst_value_set_mask(ri, &e98)
                   == 0x3 && inst_value_allowed(ri, &e98, 1) &&
+                  !inst_value_allowed(ri, &e98, 2) &&
+                  !inst_value_allowed(ri, &e98, 3) &&
                   inst_value_only(ri) == NULL,
-                  "XhciCmRingInterrupt on 98 SE: taken (task 48.26)");
+                  "XhciCmRingInterrupt on 98 SE: 0 and 1 taken, not 2");
+            CHECK(strstr(instValues[ri].Choice[2], "msi4") == NULL &&
+                  strstr(instValues[ri].Caution, "msi4") == NULL &&
+                  strstr(instValues[ri].Caution, "98") == NULL,
+                  "XhciCmRingInterrupt: no component named, no 98 SE clause");
             CHECK(!inst_value_greyed(ri, &exp) && inst_value_set_mask(ri, &exp)
-                  == 0x3 && inst_value_allowed(ri, &exp, 1),
+                  == 0x7 && inst_value_allowed(ri, &exp, 1) &&
+                  inst_value_allowed(ri, &exp, 2),
                   "XhciCmRingInterrupt on XP: taken");
+            CHECK(instValues[ri].Choice[2] != NULL &&
+                  instValues[ri].Choice[3] == NULL &&
+                  instValues[ri].CautionMask == 0x6,
+                  "XhciCmRingInterrupt: 2's meaning, the caution on 1 and 2");
             ex.Major = 10;
             ex.Minor = 0;
             ex.CmNhi = 1;
@@ -4763,12 +4997,15 @@ static void test_questions(void)
         int named = 0;
         for (b = 0; b < INST_CHOICES; b++) {
             named += instValues[i].Choice[b] != NULL;
-            if ((instValues[i].Settable & (1UL << b)) == 0) {
+            if ((instValues[i].Settable & (1UL << b)) == 0 &&
+                b >= instValues[i].PickCount) {
+                /* a row of picks: Choice[k] is its k-th pick's */
                 CHECK(instValues[i].Choice[b] == NULL,
                       "a choice has a meaning only where the value is allowed");
             }
         }
-        CHECK(named > 0 || instValues[i].Hi != 0,
+        CHECK(named > 0 || instValues[i].Hi != 0 ||
+                  instValues[i].Kind == INST_VK_TEXT,
               "every value names its choices, or is a range");
         CHECK(strchr(instValues[i].Meaning, '(') == NULL,
               "the meaning carries no choice list");
@@ -4825,16 +5062,16 @@ static void test_questions(void)
           "each keeps its own");
     /* The caution, shown where it is about an offered value. */
     now[0].State = 0;
-    inst_value_question(out, sizeof(out), mode, 0x7, 0, now, 1, 0, 0, &enter);
-    CHECK(strstr(out, "  NOTE: with 1, the controller") != NULL,
-          "the caution names only the offered value it is about");
-    inst_value_question(out, sizeof(out), mode, 0xF, 0, now, 1, 0, 0, &enter);
-    CHECK(strstr(out, "  NOTE: with 1 or 3, the controller") != NULL,
-          "both, where 3 is offered");
-    inst_value_question(out, sizeof(out), mode, 0x5, 0, now, 1, 0, 0, &enter);
-    CHECK(strstr(out, "NOTE") == NULL, "no caution without 1 or 3");
+    /* Task 49.38: the interrupt mode's caution is one text, with mode
+     * 4's way back (it is never asked; Advanced and /set show it). */
+    inst_value_question(out, sizeof(out), mode, 0x17, 0, now, 1, 0, 0, &enter);
+    CHECK(strstr(out, "  NOTE: with 1 or 3, the controller") != NULL &&
+              strstr(out, "Last Known Good") != NULL &&
+              strstr(out, "msi4") == NULL,
+          "the interrupt mode's caution, with mode 4's way back, no "
+          "component named");
     inst_caution_text(mode, 1UL << 3, longName, sizeof(longName));
-    CHECK(strncmp(longName, "with 3, ", 8) == 0, "/set 3: the caution of 3");
+    CHECK(strncmp(longName, "with 1 or 3, ", 13) == 0, "/set 3: the caution");
     inst_caution_text(inst_value_find("XhciForceBulkOnly"), 0x3, longName,
                       sizeof(longName));
     CHECK(strncmp(longName, "applies when", 12) == 0, "a plain caution as is");
@@ -5568,6 +5805,392 @@ static void test_uas(void)
           "/nouas belongs to an install");
     CHECK(inst_parse_args(1, argv, &o, err, sizeof(err)) == 0 && !o.NoUas,
           "no switch: UAS in the run");
+}
+
+/* ---- the takeover (record 23 section 5.4.2; task 49.44) ----------------- */
+
+/* 1 when every line of text is within cols columns. */
+static int take_cols(const char *text, size_t cols)
+{
+    size_t col = 0;
+
+    for (; *text != '\0'; text++) {
+        col = *text == '\n' ? 0 : col + 1;
+        if (col > cols) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void test_takeover(void)
+{
+    INST_OPTS o;
+    char err[256];
+    char *argv[4];
+    char t[1024];
+    char w[2048];
+    char s[16];
+    char v[64];
+    char f[64];
+    int n;
+
+    /* The candidates. */
+    CHECK(inst_take_candidate(1, INST_OS_FULL, "nusb3xhc") &&
+          inst_take_candidate(1, INST_OS_FULL, "iusb3xhc") &&
+          inst_take_candidate(1, INST_OS_CMONLY, "asmtxhci"),
+          "takeover: a manufacturer's driver on 2000 to 10 is a candidate");
+    CHECK(!inst_take_candidate(1, INST_OS_FULL, "xhci98") &&
+          !inst_take_candidate(1, INST_OS_FULL, "XHCI98") &&
+          !inst_take_candidate(1, INST_OS_FULL, "") &&
+          !inst_take_candidate(1, INST_OS_FULL, NULL),
+          "takeover: this package's own, or no driver, is none");
+    CHECK(!inst_take_candidate(1, INST_OS_CMONLY, "USBXHCI") &&
+          !inst_take_candidate(1, INST_OS_CMONLY, "usbxhci") &&
+          inst_take_candidate(1, INST_OS_FULL, "USBXHCI"),
+          "takeover: Windows' own USBXHCI on 8 to 10 stays case 3a's");
+    CHECK(!inst_take_candidate(0, INST_OS_FULL, "nusb3xhc"),
+          "takeover: none on 98 SE and ME");
+
+    /* The reasons and the rows. */
+    CHECK(inst_take_reason(0, 0, 0) == INST_TAKE_OFF &&
+          inst_take_reason(0, 1, 1) == INST_TAKE_OFF &&
+          inst_take_reason(1, 0, 0) == INST_TAKE_YES &&
+          inst_take_reason(1, 1, 0) == INST_TAKE_BOOTDISK &&
+          inst_take_reason(1, 1, 1) == INST_TAKE_BOOTDISK &&
+          inst_take_reason(1, -1, 0) == INST_TAKE_BOOTUNK &&
+          inst_take_reason(1, 0, 1) == INST_TAKE_STOPPED,
+          "takeover: the reasons");
+    CHECK(strcmp(inst_take_row_text(INST_TAKE_OFF, 0),
+                 "Skip (other driver)") == 0 &&
+          strcmp(inst_take_row_text(INST_TAKE_OFF, 1),
+                 "Skip (other driver)") == 0 &&
+          strcmp(inst_take_row_text(INST_TAKE_YES, 0),
+                 "Replace other driver") == 0 &&
+          strcmp(inst_take_row_text(INST_TAKE_YES, 1),
+                 "Replace other driver (/takeover)") == 0 &&
+          strcmp(inst_take_row_text(INST_TAKE_BOOTDISK, 1),
+                 "Skip (other driver; the Windows disk is behind it)") == 0 &&
+          strcmp(inst_take_row_text(INST_TAKE_BOOTUNK, 0),
+                 "Replace other driver") == 0 &&
+          strcmp(inst_take_row_text(INST_TAKE_STOPPED, 0),
+                 "Skip (other driver; an earlier replacement failed)") == 0,
+          "takeover: the rows");
+    CHECK(strcmp(inst_take_row_text(INST_TAKE_OFF, 0),
+                 inst_action_text(INST_ACT_FOREIGN)) == 0,
+          "takeover: the choice off reads as before");
+    CHECK(inst_take_runs(INST_TAKE_YES) && inst_take_runs(INST_TAKE_BOOTUNK) &&
+          !inst_take_runs(INST_TAKE_OFF) &&
+          !inst_take_runs(INST_TAKE_BOOTDISK) &&
+          !inst_take_runs(INST_TAKE_STOPPED),
+          "takeover: an unread Windows disk is warned and replaced (owner, "
+          "2026-11-13)");
+    CHECK(inst_take_able(0, 0) && inst_take_able(-1, 0) &&
+          !inst_take_able(1, 0) && !inst_take_able(1, 1) &&
+          !inst_take_able(0, 1),
+          "takeover: a candidate is replaceable as its reason with the "
+          "choice on");
+    {
+        /* The texts that announce a replacement (the warning's paragraph,
+         * the hint, the box) are due only where one can happen (owner,
+         * 2026-11-14): the plans by inst_boot_path_has's answers. */
+        static const int allRefused[2] = { 1, 1 };
+        static const int oneEach[2] = { 0, 1 };
+        static const int unreadAndRefused[2] = { -1, 1 };
+        int able;
+        int k;
+
+        able = 0;
+        for (k = 0; k < 2; k++) {
+            able += inst_take_able(allRefused[k], 0);
+        }
+        CHECK(able == 0 && inst_take_said(2, able) == 0,
+              "takeover: every candidate refused - no paragraph, hint or box");
+        CHECK(inst_take_said(1, inst_take_able(1, 0)) == 0,
+              "takeover: the one candidate refused - nothing announced");
+        able = 0;
+        for (k = 0; k < 2; k++) {
+            able += inst_take_able(oneEach[k], 0);
+        }
+        CHECK(able == 1 && inst_take_said(2, able) == 2,
+              "takeover: one eligible, one refused - shown as before, both "
+              "counted");
+        able = 0;
+        for (k = 0; k < 2; k++) {
+            able += inst_take_able(unreadAndRefused[k], 0);
+        }
+        CHECK(able == 1 && inst_take_said(2, able) == 2,
+              "takeover: an unread disk is replaced, so it is announced");
+        CHECK(inst_take_said(0, 0) == 0,
+              "takeover: no candidate - nothing announced, as before");
+        CHECK(inst_take_said(3, 3) == 3 && inst_take_said(1, 1) == 1,
+              "takeover: every candidate eligible - as before");
+    }
+    {
+        /* The engine's sequence (inst_eng.c plan, take_lock): the plan
+         * shown, the warning's set taken at the run's start, then a
+         * barrier's reading that finds a candidate not seen before. */
+        int warnShown;
+        int r;
+
+        /* The plan shown, /takeover: the one candidate refused. */
+        r = inst_take_reason(inst_take_offered(1, 0, 0), 1, 0);
+        warnShown = inst_take_said(1, inst_take_able(1, 0)) > 0;
+        CHECK(r == INST_TAKE_BOOTDISK && !warnShown,
+              "takeover sequence: all refused - no warning, the refusal row");
+        /* The barrier finds an eligible one; the warning covered none. */
+        r = inst_take_reason(inst_take_offered(1, 1, 0), 0, 0);
+        CHECK(r == INST_TAKE_OFF && !inst_take_runs(r) &&
+              strcmp(inst_take_row_text(r, 1),
+                     inst_action_text(INST_ACT_FOREIGN)) == 0,
+              "takeover sequence: a controller found after a suppressed "
+              "warning is not replaced, \"Skip (other driver)\"");
+        /* No candidate in the plan shown: the same (before 2026-11-14 a
+         * controller found at a barrier was replaced unwarned). */
+        warnShown = inst_take_said(0, 0) > 0;
+        r = inst_take_reason(inst_take_offered(1, 1, 0), 0, 0);
+        CHECK(!warnShown && !inst_take_runs(r),
+              "takeover sequence: no candidate shown - one found later is "
+              "left");
+        /* Warned for A; B appears later: A replaced, B left. */
+        CHECK(inst_take_runs(inst_take_reason(inst_take_offered(1, 1, 1), 0,
+                                              0)) &&
+              !inst_take_runs(inst_take_reason(inst_take_offered(1, 1, 0), 0,
+                                               0)),
+              "takeover sequence: only the controllers the warning covered");
+        CHECK(inst_take_offered(1, 0, 0) && !inst_take_offered(0, 0, 1) &&
+              !inst_take_offered(0, 1, 1),
+              "takeover sequence: before the run, the choice alone; off, "
+              "never");
+    }
+    inst_take_bootunk_text("Renesas USB 3.0 eXtensible Host Controller - 0100 "
+                           "(Microsoft)", 0, t, sizeof(t));
+    CHECK(strcmp(t, "Setup cannot tell whether the Windows disk is behind "
+                    "Renesas USB 3.0 eXtensible Host Controller - 0100 "
+                    "(Microsoft). If it is, do not go on: Windows may not "
+                    "start once its driver is replaced.") == 0,
+          "takeover: the unread Windows disk's warning");
+    inst_wrap_lines("  ", t, INST_WARN_COLUMNS, w, sizeof(w));
+    CHECK(take_cols(w, 78), "takeover: that warning within 78 columns");
+    {
+        static const char *const nm[3] = { "A", "B", "C" };
+        inst_take_bootunk_many(nm, 1, t, sizeof(t));
+        CHECK(strcmp(t, "Setup cannot tell whether the Windows disk is behind "
+                        "A. If it is, do not go on: Windows may not start once "
+                        "its driver is replaced.") == 0,
+              "takeover: one unplaced disk, the one paragraph");
+        inst_take_bootunk_many(nm, 2, t, sizeof(t));
+        CHECK(strstr(t, "behind A or B. If it is,") != NULL,
+              "takeover: two unplaced disks in one paragraph");
+        inst_take_bootunk_many(nm, 3, t, sizeof(t));
+        CHECK(strstr(t, "behind A, B or C. If it is,") != NULL,
+              "takeover: three");
+        inst_take_bootunk_many(nm, 4, t, sizeof(t));
+        CHECK(strstr(t, "behind A, B, C or one more controller. If") != NULL,
+              "takeover: four, the fourth counted");
+        inst_take_bootunk_many(nm, 20, t, sizeof(t));
+        CHECK(strstr(t, "behind A, B, C or 17 more controllers. If") != NULL &&
+              strlen(t) < 900, "takeover: twenty, bounded");
+    }
+    inst_take_bootunk_text("X", 1, t, sizeof(t));
+    CHECK(strcmp(t, "  Setup could not tell whether the Windows disk is "
+                    "behind it.\n") == 0 && take_cols(t, 78),
+          "takeover: the unread Windows disk's result line");
+
+    /* The switch. */
+    CHECK(inst_take_switch(0, INST_OS_FULL, 0) != NULL &&
+          strstr(inst_take_switch(0, INST_OS_FULL, 1), "98 SE and ME") != NULL,
+          "takeover: refused on 98 SE and ME");
+    CHECK(inst_take_switch(1, INST_OS_CMONLY, 0) != NULL &&
+          strstr(inst_take_switch(1, INST_OS_CMONLY, 0), "/usb") != NULL &&
+          inst_take_switch(1, INST_OS_CMONLY, 1) == NULL &&
+          inst_take_switch(1, INST_OS_FULL, 0) == NULL,
+          "takeover: on 8 to 10 only with /usb; on 2000 to 7 alone");
+    argv[0] = "x";
+    argv[1] = "/takeover";
+    CHECK(inst_parse_args(2, argv, &o, err, sizeof(err)) == 0 && o.Takeover,
+          "/takeover");
+    CHECK(inst_parse_args(1, argv, &o, err, sizeof(err)) == 0 && !o.Takeover,
+          "no /takeover: off");
+    argv[2] = "/cmonly";
+    CHECK(inst_parse_args(3, argv, &o, err, sizeof(err)) == 1 &&
+          strcmp(err, "/takeover needs the USB drivers: not with /cmonly") ==
+              0, "/takeover with /cmonly refused");
+    argv[2] = "/uninstall";
+    CHECK(inst_parse_args(3, argv, &o, err, sizeof(err)) == 1,
+          "/takeover belongs to an install (/uninstall)");
+    argv[2] = "/devices";
+    CHECK(inst_parse_args(3, argv, &o, err, sizeof(err)) == 1,
+          "/takeover belongs to an install (/devices)");
+    argv[2] = "/list";
+    CHECK(inst_parse_args(3, argv, &o, err, sizeof(err)) == 0 &&
+          o.Takeover && o.List, "/takeover with /list");
+
+    /* The console's hint, the window's box and sentence. */
+    inst_take_hint(1, t, sizeof(t));
+    CHECK(strcmp(t, "1 USB 3 controller runs another manufacturer's driver: "
+                    "/takeover replaces it.\n") == 0, "takeover: hint, one");
+    inst_take_hint(12, t, sizeof(t));
+    CHECK(strcmp(t, "12 USB 3 controllers run another manufacturer's driver: "
+                    "/takeover replaces it.\n") == 0 && take_cols(t, 78),
+          "takeover: hint, several, within 78 columns");
+    inst_take_box_text(1, t, sizeof(t));
+    CHECK(strcmp(t, "Replace another manufacturer's driver on 1 USB 3 controller")
+              == 0, "takeover: box, one");
+    inst_take_box_text(99, t, sizeof(t));
+    CHECK(strcmp(t, "Replace another manufacturer's driver on 99 USB 3 controllers")
+              == 0 &&
+          inst_text_lines(t, inst_page_cols(272)) <= inst_page_rows(12),
+          "takeover: box, several, one line in its control");
+    inst_take_line_text(1, "nusb3xhc", t, sizeof(t));
+    CHECK(strcmp(t, "It runs nusb3xhc now. If unticked, Setup leaves it as "
+                    "it is.") == 0, "takeover: sentence, one");
+    inst_take_line_text(2, "nusb3xhc", t, sizeof(t));
+    CHECK(strcmp(t, "They run nusb3xhc now. If unticked, Setup leaves them "
+                    "as they are.") == 0, "takeover: sentence, several");
+    inst_take_line_text(2, NULL, t, sizeof(t));
+    CHECK(strcmp(t, "They run other drivers now. If unticked, Setup leaves "
+                    "them as they are.") == 0,
+          "takeover: sentence, several drivers");
+    inst_take_line_text(1, "abcdefghijklmnopqrstuvwxyz", t, sizeof(t));
+    CHECK(strcmp(t, "It runs another driver now. If unticked, Setup leaves "
+                    "it as it is.") == 0,
+          "takeover: sentence, a name too long to say");
+    inst_take_line_text(3, "abcdefghijklmnopqrstuvwx", t, sizeof(t));
+    CHECK(strstr(t, "abcdefghijklmnopqrstuvwx") != NULL &&
+          inst_text_lines(t, inst_page_cols(260)) <= inst_page_rows(18),
+          "takeover: sentence at its longest name fits two lines");
+
+    /* The warning. */
+    inst_comp_warn_text(INST_CW_TAKEOVER, "C:\\XHCI98", t, sizeof(t));
+    CHECK(strstr(t, "Another manufacturer's driver runs one or more USB 3 "
+                    "controllers here. If ticked,") == t &&
+          strstr(t, "filter driver") != NULL &&
+          strstr(t, "Windows Update") != NULL,
+          "takeover: the warning's words");
+    inst_wrap_lines("  ", t, INST_WARN_COLUMNS, w, sizeof(w));
+    CHECK(take_cols(w, 78), "takeover: the warning within 78 columns");
+    inst_comp_warn_text(INST_CW_TAKEOVER | INST_CW_USB8 | INST_CW_INTELTB,
+                        "C:\\XHCI98", w, sizeof(w));
+    CHECK(strstr(w, "On Windows 8, 8.1 and 10") < strstr(w, "Another manufacturer's") &&
+          strstr(w, "Another manufacturer's") < strstr(w, "Intel's Thunderbolt"),
+          "takeover: the warning after the USB drivers', before Intel's");
+    CHECK(inst_comp_warnings(0, 0, 0, 1, 1, 0, 0, 1, 1) & INST_CW_TAKEOVER ?
+          0 : 1, "takeover: never set by inst_comp_warnings");
+
+    /* The results and the uninstall's lines. */
+    inst_take_result_text(1, "nusb3xhc", "Renesas USB 3.0 eXtensible Host "
+                          "Controller - 0100 (Microsoft)", "nusb3flt",
+                          t, sizeof(t));
+    CHECK(strstr(t, "Replaced nusb3xhc with xHCI98 on Renesas") == t &&
+          strstr(t, "\n  Its filter driver stays on it: nusb3flt.\n") != NULL,
+          "takeover: result, replaced with a filter");
+    inst_wrap_lines("", t, INST_WARN_COLUMNS, w, sizeof(w));
+    CHECK(take_cols(w, 78), "takeover: result within 78 columns wrapped");
+    inst_take_result_text(1, "nusb3xhc", "X", "", t, sizeof(t));
+    CHECK(strcmp(t, "Replaced nusb3xhc with xHCI98 on X.\n") == 0,
+          "takeover: result, no filter");
+    inst_take_result_text(0, "nusb3xhc", "X", "f", t, sizeof(t));
+    CHECK(strcmp(t, "Could not replace nusb3xhc on X. The other controllers "
+                    "on another driver are left as they are.\n") == 0,
+          "takeover: result, failed");
+    inst_take_back_text(INST_TAKE_BACK_GIVEN, "X", "nusb3xhc", t, sizeof(t));
+    CHECK(strcmp(t, "X: given back to nusb3xhc.\n") == 0,
+          "takeover: uninstall, given back");
+    inst_take_back_text(INST_TAKE_BACK_NONE, "X", "", t, sizeof(t));
+    CHECK(strcmp(t, "X: has no driver now. In Device Manager, Update Driver "
+                    "on it and let Windows search.\n") == 0,
+          "takeover: uninstall, no driver");
+    inst_take_back_text(INST_TAKE_BACK_LATER, "X", "", t, sizeof(t));
+    CHECK(strcmp(t, "X: not found yet; Windows sets it up again at the next "
+                    "restart.\n") == 0, "takeover: uninstall, later");
+    inst_take_back_text(INST_TAKE_BACK_SETUP, "X", "", t, sizeof(t));
+    CHECK(strcmp(t, "X: Windows is still setting it up. Answer its Found New "
+                    "Hardware window if one is open.\n") == 0,
+          "takeover: uninstall, still setting up");
+    inst_take_back_text(INST_TAKE_BACK_SETUP, "xHCI98 USB 3 Controller (Red "
+                        "Hat QEMU xHCI)", "", t, sizeof(t));
+    inst_wrap_lines("", t, INST_WARN_COLUMNS, w, sizeof(w));
+    CHECK(take_cols(w, 78), "takeover: still setting up within 78 columns");
+
+    /* Which line: each controller's own reading; the settle only splits
+     * no driver into SETUP (unsettled) and NONE (settled). */
+    CHECK(inst_take_back_kind(0, 1, 0, "", 28UL) == INST_TAKE_BACK_SETUP,
+          "takeover: kind, no driver, not settled");
+    CHECK(inst_take_back_kind(0, 1, 1, "", 0UL) == INST_TAKE_BACK_SETUP,
+          "takeover: kind, empty Service, not settled");
+    CHECK(inst_take_back_kind(0, 1, 1, "tstxhc", 0UL) ==
+          INST_TAKE_BACK_GIVEN,
+          "takeover: kind, back on its driver, not settled");
+    CHECK(inst_take_back_kind(0, 1, 1, "tstxhc", 31UL) ==
+          INST_TAKE_BACK_GIVEN,
+          "takeover: kind, back on its driver at another code, not settled");
+    CHECK(inst_take_back_kind(0, 1, 1, "tstxhc", INST_PROB_NOT_CONFIGURED) ==
+          INST_TAKE_BACK_SETUP, "takeover: kind, a service at Code 1");
+    CHECK(inst_take_back_kind(1, 1, 1, "tstxhc", INST_PROB_REINSTALL) ==
+          INST_TAKE_BACK_SETUP, "takeover: kind, a service at Code 18");
+    CHECK(inst_take_back_kind(0, 1, 1, "tstxhc", INST_TAKE_PROB_UNREAD) ==
+          INST_TAKE_BACK_LATER, "takeover: kind, status unread, not settled");
+    CHECK(inst_take_back_kind(1, 1, 1, "tstxhc", INST_TAKE_PROB_UNREAD) ==
+          INST_TAKE_BACK_GIVEN, "takeover: kind, status unread, settled");
+    CHECK(inst_take_back_kind(0, 1, -1, "", 0UL) == INST_TAKE_BACK_LATER,
+          "takeover: kind, Service unreadable, not settled");
+    CHECK(inst_take_back_kind(0, 0, -1, "", INST_TAKE_PROB_UNREAD) ==
+          INST_TAKE_BACK_LATER, "takeover: kind, not present, not settled");
+    CHECK(inst_take_back_kind(1, 0, -1, "", INST_TAKE_PROB_UNREAD) ==
+          INST_TAKE_BACK_LATER, "takeover: kind, not present, settled");
+    CHECK(inst_take_back_kind(1, 1, 1, "tstxhc", 0UL) == INST_TAKE_BACK_GIVEN,
+          "takeover: kind, given back");
+    CHECK(inst_take_back_kind(1, 1, 1, "USBXHCI", 0UL) ==
+          INST_TAKE_BACK_GIVEN, "takeover: kind, given back to Windows' own");
+    CHECK(inst_take_back_kind(1, 1, 0, "", 28UL) == INST_TAKE_BACK_NONE,
+          "takeover: kind, no Service value");
+    CHECK(inst_take_back_kind(1, 1, 1, "", 0UL) == INST_TAKE_BACK_NONE,
+          "takeover: kind, empty Service value");
+    CHECK(inst_take_back_kind(1, 1, -1, "", 0UL) == INST_TAKE_BACK_LATER,
+          "takeover: kind, Service unreadable");
+    CHECK(inst_take_back_kind(1, 1, 1, "xhci98", 0UL) == INST_TAKE_BACK_LATER,
+          "takeover: kind, still this package's");
+    {
+        /* One uninstall, the settle run out: one controller back on its
+         * driver, one Windows is still setting up, one not found. */
+        int k1 = inst_take_back_kind(0, 1, 1, "tstxhc", 0UL);
+        int k2 = inst_take_back_kind(0, 1, 0, "", 28UL);
+        int k3 = inst_take_back_kind(0, 0, -1, "", INST_TAKE_PROB_UNREAD);
+        CHECK(k1 == INST_TAKE_BACK_GIVEN && k2 == INST_TAKE_BACK_SETUP &&
+              k3 == INST_TAKE_BACK_LATER,
+              "takeover: kind, mixed: restored, pending, absent");
+    }
+
+    /* The record. */
+    CHECK(inst_take_rec_text("attempt", "nusb3xhc", "oem12.inf", t,
+                             sizeof(t)) &&
+          strcmp(t, "attempt;nusb3xhc;oem12.inf") == 0,
+          "takeover: record composed");
+    CHECK(inst_take_rec_text("done", "nusb3xhc", NULL, t, sizeof(t)) &&
+          strcmp(t, "done;nusb3xhc;") == 0, "takeover: record, no InfPath");
+    CHECK(!inst_take_rec_text("done", "a;b", "x", t, sizeof(t)) &&
+          !inst_take_rec_text("done", "", "x", t, sizeof(t)) &&
+          !inst_take_rec_text("done", "abc", "x", t, 6),
+          "takeover: record refused");
+    n = inst_take_rec_parse("done;nusb3xhc;oem12.inf", s, sizeof(s), v,
+                            sizeof(v), f, sizeof(f));
+    CHECK(n == 1 && strcmp(s, "done") == 0 && strcmp(v, "nusb3xhc") == 0 &&
+          strcmp(f, "oem12.inf") == 0, "takeover: record parsed");
+    CHECK(inst_take_rec_parse("attempt;x;", s, sizeof(s), v, sizeof(v), f,
+                              sizeof(f)) == 1 && f[0] == '\0',
+          "takeover: record parsed, no InfPath");
+    CHECK(!inst_take_rec_parse("maybe;x;y", s, sizeof(s), v, sizeof(v), f,
+                               sizeof(f)) &&
+          !inst_take_rec_parse("done;;y", s, sizeof(s), v, sizeof(v), f,
+                               sizeof(f)) &&
+          !inst_take_rec_parse("done;x;y;z", s, sizeof(s), v, sizeof(v), f,
+                               sizeof(f)) &&
+          !inst_take_rec_parse("done", s, sizeof(s), v, sizeof(v), f,
+                               sizeof(f)) &&
+          !inst_take_rec_parse("done;x;y", s, 3, v, sizeof(v), f, sizeof(f)) &&
+          s[0] == '\0',
+          "takeover: record refused when parsed");
 }
 
 /* ---- owner, 2026-11-04: no xhciuas on 8 to 10; absent devnodes updated -- */
@@ -7319,6 +7942,134 @@ static void test_marks(void)
           inst_mk_end_action(-1, 1, 1, 0) == INST_MK_LEAVE,
           "a run's end with XhciCmSafeEject 0: no service, every mark gone "
           "(a run that set it without the Thunderbolt component too)");
+    CHECK(inst_mk_hold_how(1, 1, 1, 1) == INST_MK_HOLD_HELD &&
+          inst_mk_hold_how(1, 1, 1, -1) == INST_MK_HOLD_HELD,
+          "the hold: a service that knows it, the barrier passed: held");
+    CHECK(inst_mk_hold_how(1, 0, 0, 1) == INST_MK_HOLD_STOP &&
+          inst_mk_hold_how(1, 0, 0, -1) == INST_MK_HOLD_STOP,
+          "the hold: an earlier release's service running (or unread): "
+          "stopped for the run");
+    CHECK(inst_mk_hold_how(1, 1, 0, 1) == INST_MK_HOLD_STOP &&
+          inst_mk_hold_how(1, 1, 0, -1) == INST_MK_HOLD_STOP,
+          "the hold: the idle event not seen set within the wait: the "
+          "service stopped for the run");
+    CHECK(inst_mk_owner_ok(INST_OWNER_SYSTEM, 1) &&
+          !inst_mk_owner_ok(INST_OWNER_ADMINS, 1) &&
+          !inst_mk_owner_ok(INST_OWNER_OTHER, 1) &&
+          inst_mk_owner_ok(INST_OWNER_ADMINS, 0) &&
+          !inst_mk_owner_ok(INST_OWNER_OTHER, 0),
+          "named objects: an idle event not SYSTEM's is no service's; a hold "
+          "event of another owner is no installer's");
+    CHECK(inst_mk_restore_how(0, 1, 0) == INST_MK_RESTORE_NONE &&
+          inst_mk_restore_how(1, 1, 1) == INST_MK_RESTORE_CLEAR &&
+          inst_mk_restore_how(1, 0, 0) == INST_MK_RESTORE_CLEAR &&
+          inst_mk_restore_how(1, 0, -1) == INST_MK_RESTORE_CLEAR &&
+          inst_mk_restore_how(1, 1, 0) == INST_MK_RESTORE_START &&
+          inst_mk_restore_how(1, 1, 2) == INST_MK_RESTORE_FAIL &&
+          inst_mk_restore_how(1, 1, 3) == INST_MK_RESTORE_FAIL &&
+          inst_mk_restore_how(1, 1, -1) == INST_MK_RESTORE_FAIL &&
+          inst_mk_restore_how(1, -1, 0) == INST_MK_RESTORE_FAIL,
+          "the owed restart: cleared only once read running or removed, started "
+          "when stopped, a stop still pending or an unread state reported "
+          "and kept");
+    CHECK(inst_mk_hold_how(0, 1, 1, 1) == INST_MK_HOLD_STOP &&
+          inst_mk_hold_how(0, 0, 0, 1) == INST_MK_HOLD_STOP &&
+          inst_mk_hold_how(0, 0, 0, 0) == INST_MK_HOLD_STOP,
+          "the hold not made (no event): the service stopped instead");
+    CHECK(inst_mk_hold_gen_next(0UL) == 1UL &&
+          inst_mk_hold_gen_next(1UL) == 2UL &&
+          inst_mk_hold_gen_next(41UL) == 42UL &&
+          inst_mk_hold_gen_next(0xFFFFFFFFUL) == 1UL,
+          "the hold's run number: the last one's plus one, never 0, and "
+          "never the last one's");
+    CHECK(inst_mk_hold_gen_pick(-1, 0UL, 1, 1UL) == 0UL &&
+          inst_mk_hold_gen_pick(1, 1UL, -1, 0UL) == 0UL &&
+          inst_mk_hold_gen_pick(0, 0UL, 0, 0UL) == 1UL &&
+          inst_mk_hold_gen_pick(1, 4UL, 1, 4UL) == 5UL &&
+          inst_mk_hold_gen_pick(0, 0UL, 1, 1UL) == 2UL &&
+          inst_mk_hold_gen_pick(1, 0xFFFFFFFFUL, 1, 1UL) == 2UL,
+          "the hold's run number: none when HoldRun or HoldAck cannot be "
+          "read (an earlier run's hold, expired, with HoldAck 1 and HoldRun "
+          "unread: no reuse of 1); 1 when both are absent; never the "
+          "number already acknowledged");
+    CHECK(inst_run_guard_how(1, INST_OWNER_ADMINS) == INST_GUARD_TAKEN &&
+          inst_run_guard_how(1, INST_OWNER_OTHER) == INST_GUARD_TAKEN &&
+          inst_run_guard_how(0, INST_OWNER_ADMINS) == INST_GUARD_BUSY &&
+          inst_run_guard_how(0, INST_OWNER_SYSTEM) == INST_GUARD_BUSY &&
+          inst_run_guard_how(0, INST_OWNER_OTHER) == INST_GUARD_FOREIGN &&
+          inst_run_guard_how(-1, INST_OWNER_ADMINS) == INST_GUARD_ERROR &&
+          inst_run_guard_how(-1, INST_OWNER_OTHER) == INST_GUARD_ERROR,
+          "one run at a time: the guard made by this run runs; found and an "
+          "installer's (another run), found and no installer's, or not "
+          "made: refused");
+    {
+        /* The hold's end's lifecycle: run A holds the guard and has stopped
+         * the service (its marker set); a run of the tools alone ending
+         * meanwhile, and A's own second end after the guard was given back
+         * (another run may hold it by then), touch nothing. */
+        int ownsA = 1;
+        int ownsTools = 0;
+
+        CHECK(inst_mk_end_may(ownsA) &&
+              !inst_mk_end_may(ownsTools),
+              "the hold's end: only the guard's holder reads the marker and "
+              "restarts; a run that took none does nothing");
+        ownsA = 0;  /* given back at A's first end */
+        CHECK(!inst_mk_end_may(ownsA),
+              "the hold's end called again after the guard was given back: "
+              "nothing (another run may have stopped the service)");
+    }
+    CHECK(inst_run_guard_needed(1, 0) && !inst_run_guard_needed(1, 1) &&
+          !inst_run_guard_needed(0, 0) && !inst_run_guard_needed(0, 1),
+          "the run's guard: every NT run that can change anything (the "
+          "tools alone and a driver set alone included); not /list, not 98 "
+          "SE and ME");
+    /* Every exit path of both front ends after the guard is taken: kept
+     * only while the run can still go on. */
+    CHECK(!inst_run_guard_keep(INST_EXIT_REFUSED, -1, 0),
+          "the guard: the reading refused (the device scan, a driver set "
+          "asked for and not there, no rights): given back");
+    CHECK(!inst_run_guard_keep(-1, INST_EXIT_REFUSED, 0),
+          "the guard: the first plan refused (the wizard's Welcome greyed, "
+          "the console's end): given back");
+    CHECK(inst_run_guard_keep(-1, -1, 0),
+          "the guard: read and planned, the questions or the pages still "
+          "open (the wizard's Components page refusing a choice included): "
+          "kept");
+    CHECK(!inst_run_guard_keep(-1, -1, 1),
+          "the guard: inst_eng_end reached (a run's end, the questions "
+          "declined or refused, a refusal at the run's start, the window "
+          "closed before Install): given back");
+    CHECK(!inst_run_guard_keep(INST_EXIT_DONE, -1, 1) &&
+          !inst_run_guard_keep(-1, INST_EXIT_DONE, 1),
+          "the guard: a reading or plan that ended the run, then the end: "
+          "given back (once: the give is idempotent)");
+    {
+        /* Two runs started together, the guard deciding which picks a
+         * number: run A takes it and picks; run B finds it held and picks
+         * nothing (it is refused before any read); after A's end B's next
+         * attempt takes it and picks the number after A's, never A's. */
+        INST_U32 a;
+        INST_U32 b = 0;
+        int guardA = inst_run_guard_how(1, INST_OWNER_ADMINS);
+        int guardB = inst_run_guard_how(0, INST_OWNER_ADMINS);
+
+        a = guardA == INST_GUARD_TAKEN ?
+            inst_mk_hold_gen_pick(1, 6UL, 1, 6UL) : 0UL;
+        if (guardB == INST_GUARD_TAKEN) {
+            b = inst_mk_hold_gen_pick(1, 6UL, 1, 6UL);
+        }
+        CHECK(a == 7UL && b == 0UL,
+              "two runs together: the guard's holder picks 7, the other "
+              "picks nothing");
+        b = inst_run_guard_how(1, INST_OWNER_ADMINS) == INST_GUARD_TAKEN ?
+            inst_mk_hold_gen_pick(1, a, 1, a) : 0UL;
+        CHECK(b == 8UL && b != a,
+              "two runs: the later one, once the first has ended, picks 8");
+    }
+    CHECK(inst_mk_hold_how(1, 0, 0, 0) == INST_MK_HOLD_NONE,
+          "the hold: no service running: the event alone, for a service the "
+          "run starts");
     CHECK(inst_mk_put_next(1, 5UL, 1) == INST_MK_PUT_RETRY &&
           inst_mk_put_next(1, 32UL, 1) == INST_MK_PUT_RETRY &&
           inst_mk_put_next(0, 5UL, 1) == INST_MK_PUT_RETRY &&
@@ -9587,10 +10338,11 @@ static void names_xhci_inf(const char *text, const char *section, int ids,
 }
 
 /* Task 44.55: a document's table of the USB 3 controllers (the page
- * controller-names.md, the release notes' "Controller names in Device
- * Manager") against the table: every table row of that section that names
- * "xHCI98 USB 3 Controller (...)" lists its ids as `VVVV:DDDD`, each the
- * table's id for that name, and every row of the table is listed once.
+ * controller-names.md, its one copy since the release notes left it,
+ * owner 2026-11-13) against the table: every table row of that section
+ * that names "xHCI98 USB 3 Controller (...)" lists its ids as
+ * `VVVV:DDDD`, each the table's id for that name, and every row of the
+ * table is listed once.
  * The controllers that virtual machines emulate are the exception (owner,
  * 2026-11-06): the user documents leave them out, and target-standing.md's
  * "The virtual machines' controllers in the name table" lists them and
@@ -9742,7 +10494,6 @@ static void test_names(void)
     char *x86 = load("..\\src\\xhci98.inf");
     char *a64 = load("..\\src\\xhci98-amd64.inf");
     char *readme = load("..\\docs\\using\\controller-names.md");
-    char *notes = load("..\\docs\\using\\release-notes.md");
     char *standing = load("..\\docs\\contributing\\target-standing.md");
     size_t vi;
     int rec;
@@ -9895,7 +10646,6 @@ static void test_names(void)
               "each virtual machine's controller is in the table");
     }
     names_doc(readme, "# Controller names", "controller-names.md", 0);
-    names_doc(notes, "## Controller names in Device Manager", "release-notes.md", 0);
     names_doc(standing, "## The virtual machines' controllers in the name table",
               "target-standing.md", 1);
     free(cm);
@@ -9904,7 +10654,6 @@ static void test_names(void)
     free(a64);
     free(readme);
     free(standing);
-    free(notes);
 }
 
 /* Record 26 section 6.7.11 (draft 37): the driver packages of the other
@@ -10242,7 +10991,7 @@ static void test_help(void)
 {
     /* Each topic's paragraphs, in INST_HELP_* order. */
     static const size_t paras[INST_HELP_COUNT] = {
-        3, 3, 9, 8, 4, 3, 7, 8, 5, 3, 3, 4, 3, 2, 3, 3, 1, 3, 2
+        3, 3, 10, 8, 4, 3, 7, 8, 5, 3, 3, 4, 3, 2, 3, 3, 1, 3, 2
     };
     static const char *const banned[] = {
         "tested", "testing", "emulat", "virtual machine", "experimental"
@@ -11083,8 +11832,664 @@ static void test_copy_rows_4622(void)
     CHECK(strlen(row) == 39, "copy rows: held to its buffer");
 }
 
+/* The log's place (record 23 section 7.5.1). */
+static const char *logOpens[4];
+static int logOpenCount;
+static const char *logTried[4];
+static int logTriedCount;
+
+static int log_open_stub(void *ctx, const char *path)
+{
+    int i;
+
+    (void)ctx;
+    if (logTriedCount < 4) {
+        logTried[logTriedCount++] = path;
+    }
+    for (i = 0; i < logOpenCount; i++) {
+        if (strcmp(logOpens[i], path) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* nt 0: 98 SE and ME; nt 1: 2000 to 10 (revision 57). */
+static int log_pick_on(int nt, const char *given, const char *temp,
+                       const char *a, const char *b, const char **path)
+{
+    logOpenCount = 0;
+    logTriedCount = 0;
+    if (a != NULL) {
+        logOpens[logOpenCount++] = a;
+    }
+    if (b != NULL) {
+        logOpens[logOpenCount++] = b;
+    }
+    return inst_log_pick(nt, given, "C:\\XHCIINST.LOG", temp, log_open_stub,
+                         NULL, path);
+}
+
+static int log_pick(const char *given, const char *temp, const char *a,
+                    const char *b, const char **path)
+{
+    return log_pick_on(0, given, temp, a, b, path);
+}
+
+static void test_log_place(void)
+{
+    static const char root[] = "C:\\XHCIINST.LOG";
+    static const char temp[] = "C:\\WINDOWS\\TEMP\\XHCIINST.LOG";
+    static const char given[] = "D:\\L.LOG";
+    const char *path;
+    char out[600];
+    char big[600];
+
+    CHECK(inst_log_temp_path(out, sizeof(out), "C:\\WINDOWS\\TEMP\\", root) &&
+          strcmp(out, temp) == 0, "the temp log: the folder as Windows gives it");
+    CHECK(inst_log_temp_path(out, sizeof(out), "C:\\WINDOWS\\TEMP", root) &&
+          strcmp(out, temp) == 0, "the temp log: no last backslash");
+    CHECK(!inst_log_temp_path(out, sizeof(out), "", root) && out[0] == '\0',
+          "the temp log: no folder");
+    CHECK(!inst_log_temp_path(out, sizeof(out), "c:\\", root) &&
+          out[0] == '\0', "the temp log: the root file itself, without case");
+    CHECK(!inst_log_temp_path(out, sizeof(out), "C:", root) && out[0] == '\0',
+          "the temp log: the root file itself, the backslash added");
+    CHECK(inst_log_temp_path(out, sizeof(out), "D:\\", root) &&
+          strcmp(out, "D:\\XHCIINST.LOG") == 0,
+          "the temp log: another drive's root");
+    CHECK(inst_log_temp_path(out, 29, "C:\\WINDOWS\\TEMP\\", root) &&
+          !inst_log_temp_path(out, 28, "C:\\WINDOWS\\TEMP\\", root) &&
+          out[0] == '\0', "the temp log: held to its buffer");
+    CHECK(inst_log_temp_path(out, 29, "C:\\WINDOWS\\TEMP", NULL) &&
+          !inst_log_temp_path(out, 28, "C:\\WINDOWS\\TEMP", NULL),
+          "the temp log: the added backslash counted");
+    memset(big, 'P', sizeof(big) - 1);
+    big[sizeof(big) - 1] = '\0';
+    memcpy(big, "C:\\", 3);
+    CHECK(!inst_log_temp_path(out, sizeof(out), big, root) && out[0] == '\0',
+          "the temp log: an overlong folder");
+
+    CHECK(log_pick("", temp, root, temp, &path) == INST_LOG_ROOT &&
+          path != NULL && strcmp(path, root) == 0 && logTriedCount == 1,
+          "the log: the root file, the temp folder not tried");
+    CHECK(log_pick(NULL, temp, NULL, temp, &path) == INST_LOG_TEMP &&
+          path != NULL && strcmp(path, temp) == 0 && logTriedCount == 2 &&
+          strcmp(logTried[0], root) == 0 && strcmp(logTried[1], temp) == 0,
+          "the log: the root file first, then the temp folder");
+    CHECK(log_pick("", temp, NULL, NULL, &path) == INST_LOG_NONE &&
+          path == NULL && logTriedCount == 2, "the log: both failing");
+    CHECK(log_pick("", "", NULL, NULL, &path) == INST_LOG_NONE &&
+          path == NULL && logTriedCount == 1 &&
+          log_pick("", NULL, NULL, NULL, &path) == INST_LOG_NONE &&
+          logTriedCount == 1, "the log: no temp path to try");
+    CHECK(log_pick(given, temp, given, temp, &path) == INST_LOG_GIVEN &&
+          path != NULL && strcmp(path, given) == 0 && logTriedCount == 1,
+          "the log: /log");
+    CHECK(log_pick(given, temp, root, temp, &path) == INST_LOG_NONE &&
+          path == NULL && logTriedCount == 1 &&
+          strcmp(logTried[0], given) == 0,
+          "the log: a /log that fails, nothing else tried");
+
+    /* 2000 to 10: the root file or no log, the temp place never tried
+     * even when a path is passed (revision 57). */
+    CHECK(log_pick_on(1, "", temp, root, temp, &path) == INST_LOG_ROOT &&
+          path != NULL && strcmp(path, root) == 0 && logTriedCount == 1,
+          "the log on NT: the root file");
+    CHECK(log_pick_on(1, "", temp, NULL, temp, &path) == INST_LOG_NONE &&
+          path == NULL && logTriedCount == 1 &&
+          strcmp(logTried[0], root) == 0,
+          "the log on NT: the root failing, the temp folder not tried");
+    CHECK(log_pick_on(1, NULL, "", NULL, NULL, &path) == INST_LOG_NONE &&
+          path == NULL && logTriedCount == 1,
+          "the log on NT: the root failing, no temp path");
+    CHECK(log_pick_on(1, given, temp, given, temp, &path) == INST_LOG_GIVEN &&
+          path != NULL && strcmp(path, given) == 0 && logTriedCount == 1,
+          "the log on NT: /log");
+    CHECK(log_pick_on(1, given, temp, root, temp, &path) == INST_LOG_NONE &&
+          path == NULL && logTriedCount == 1 &&
+          strcmp(logTried[0], given) == 0,
+          "the log on NT: a /log that fails, nothing else tried");
+
+    CHECK(!inst_log_fail_text(out, sizeof(out), INST_LOG_ROOT, "", root,
+                              temp) && out[0] == '\0' &&
+          !inst_log_fail_text(out, sizeof(out), INST_LOG_GIVEN, given, "",
+                              "") && out[0] == '\0',
+          "the log: nothing said of the first place taken");
+    CHECK(inst_log_fail_text(out, sizeof(out), INST_LOG_TEMP, "", root,
+                             temp) &&
+          strcmp(out, "Cannot write the log to C:\\XHCIINST.LOG. Using "
+                      "C:\\WINDOWS\\TEMP\\XHCIINST.LOG.") == 0 &&
+          strlen(out) <= 79, "the log: the temp folder used, said");
+    CHECK(inst_log_fail_text(out, sizeof(out), INST_LOG_NONE, NULL, root,
+                             temp) &&
+          strcmp(out, "Cannot write the log to C:\\XHCIINST.LOG or "
+                      "C:\\WINDOWS\\TEMP\\XHCIINST.LOG.\nContinuing without "
+                      "a log.") == 0 &&
+          strchr(out, '\n') - out <= 79, "the log: both failing, said");
+    CHECK(inst_log_fail_text(out, sizeof(out), INST_LOG_NONE, "", root, "") &&
+          strcmp(out, "Cannot write the log to C:\\XHCIINST.LOG. Continuing "
+                      "without a log.") == 0,
+          "the log: the root failing, no temp path (as on NT), said");
+    CHECK(inst_log_fail_text(out, sizeof(out), INST_LOG_NONE, given, root,
+                             temp) &&
+          strcmp(out, "Cannot write the log to D:\\L.LOG. Continuing "
+                      "without a log.") == 0,
+          "the log: a /log that fails, said with its own path alone");
+    CHECK(inst_log_fail_text(out, 20, INST_LOG_TEMP, "", root, temp) &&
+          strcmp(out, "Cannot write the lo") == 0,
+          "the log: the text held to its buffer");
+}
+
+/* Task 49.38 (the owner, 2026-11-12): every value is a row of Setup's
+ * table too, with the new system rules, mode 4, the routing rows' Setup
+ * side, the drive rows Setup never handles and the text row. */
+/* Task 49.38: XHCIINST /set /show [text]'s listing, with a reader that
+ * says every value is set machine-wide to 1 (a string: auto). */
+static int fake_mw(int index, INST_U32 *v, char *text, size_t cap)
+{
+    if (instValues[index].Kind == INST_VK_TEXT) {
+        inst_copy(text, "auto", cap);
+        return 2;
+    }
+    *v = 1;
+    return 1;
+}
+
+/* A reader that says every value is set machine-wide to its own number,
+ * 4 for XhciInterruptMode and 2 for XhciCmRingInterrupt (the owner's
+ * decision of 2026-11-13: what 98 SE and ME do with them). */
+static int fake_mw_nine(int index, INST_U32 *v, char *text, size_t cap)
+{
+    if (instValues[index].Kind == INST_VK_TEXT) {
+        inst_copy(text, "auto", cap);
+        return 2;
+    }
+    if (inst_eq(instValues[index].Name, "XhciInterruptMode")) {
+        *v = 4;
+    } else if (inst_eq(instValues[index].Name, "XhciCmRingInterrupt")) {
+        *v = 2;
+    } else {
+        *v = 1;
+    }
+    return 1;
+}
+
+/* Setup's listing and its readings of a stored 4 or 2 on 98 SE and ME, and
+ * the same on NT (unchanged). */
+static void test_set_show_nine(void)
+{
+    static char out[65536];
+    char t[160];
+    INST_ENV e98 = env(0, 4, 10, INST_ARCH_X86);
+    INST_ENV eme = env(0, 4, 90, INST_ARCH_X86);
+    INST_ENV exp = env(1, 5, 1, INST_ARCH_X86);
+    const INST_VALUE *im = &instValues[inst_value_find("XhciInterruptMode")];
+    const INST_VALUE *ri = &instValues[inst_value_find("XhciCmRingInterrupt")];
+
+    CHECK(inst_value_nine_unoffered(im, &e98) == 0x10UL &&
+          inst_value_nine_unoffered(ri, &e98) == 0x4UL &&
+          inst_value_nine_unoffered(im, &eme) == 0x10UL &&
+          inst_value_nine_unoffered(im, &exp) == 0 &&
+          inst_value_nine_unoffered(ri, &exp) == 0 &&
+          inst_value_nine_unoffered(im, NULL) == 0,
+          "nine: mode 4 and ring 2 on 98 SE and ME alone");
+    CHECK(inst_value_nine_text(im, &e98, 4, t, sizeof(t)) &&
+          strcmp(t, "4 (the driver uses its default, 0 - automatic)") == 0,
+          "nine: a stored 4 read as the USB Tree reads it");
+    CHECK(inst_value_nine_text(ri, &eme, 2, t, sizeof(t)) &&
+          strcmp(t, "2 (the driver uses its default, 0 - no: check every "
+                    "XhciCmPollIdleMs)") == 0,
+          "nine: a stored ring 2 read as the USB Tree reads it");
+    t[0] = 'x';
+    CHECK(!inst_value_nine_text(im, &e98, 2, t, sizeof(t)) &&
+          !inst_value_nine_text(ri, &e98, 1, t, sizeof(t)) &&
+          !inst_value_nine_text(im, &exp, 4, t, sizeof(t)) &&
+          !inst_value_nine_text(im, &e98, 99, t, sizeof(t)) && t[0] == 'x',
+          "nine: any other value, or NT, as it is");
+
+    (void)inst_settings_list("XhciInterruptMode", &e98, fake_mw_nine, out,
+                             sizeof(out));
+    CHECK(strstr(out, "XhciInterruptMode: ") == out &&
+              strstr(out, "Allowed: 0 automatic; 1 interrupt only; 2 always "
+                          "poll; 3 MSI only.") != NULL &&
+              strstr(out, "MSI on 2000") == NULL &&
+              strstr(out, "Machine-wide: 4 (the driver uses its default, 0 - "
+                          "automatic).") != NULL,
+          "/set /show on 98 SE: no 4 offered, a stored 4 explained");
+    (void)inst_settings_list("XhciCmRingInterrupt", &eme, fake_mw_nine, out,
+                             sizeof(out));
+    CHECK(strstr(out, "Allowed: 0 no: check every XhciCmPollIdleMs; 1 yes.") !=
+              NULL &&
+              strstr(out, "by message") == NULL &&
+              strstr(out, "Machine-wide: 2 (the driver uses its default, 0 - "
+                          "no: check every XhciCmPollIdleMs).") != NULL,
+          "/set /show on ME: no ring 2 offered, a stored 2 explained");
+    (void)inst_settings_list("XhciInterruptMode", &exp, fake_mw_nine, out,
+                             sizeof(out));
+    CHECK(strstr(out, "4 MSI on 2000 / XP, no fallback.") != NULL &&
+              strstr(out, "Machine-wide: 4.") != NULL &&
+              strstr(out, "uses its default") == NULL,
+          "/set /show on XP: as before");
+    (void)inst_settings_list("XhciCmRingInterrupt", &exp, fake_mw_nine, out,
+                             sizeof(out));
+    CHECK(strstr(out, "2 yes, by message.") != NULL &&
+              strstr(out, "Machine-wide: 2.") != NULL,
+          "/set /show on XP: ring 2 as before");
+
+    /* The console's questions and answers: neither value is asked on any
+     * system (Asked 0), so neither is in a question or in /list, and on 98
+     * SE and ME no answer or /set takes 4 or 2. */
+    {
+        int imi = inst_value_find("XhciInterruptMode");
+        int rii = inst_value_find("XhciCmRingInterrupt");
+        INST_U32 a;
+        INST_ENV *s[2];
+        int k;
+        s[0] = &e98;
+        s[1] = &eme;
+        for (k = 0; k < 2; k++) {
+            s[k]->AnyXhci = 1;
+            s[k]->CmNhi = 1;
+            CHECK(!inst_value_applies(imi, s[k]) && !inst_value_applies(rii, s[k]),
+                  "9x: neither value is asked, a controller and an NHI present");
+            CHECK((inst_value_asked_mask(imi, s[k]) & 0x10UL) == 0 &&
+                  (inst_value_asked_mask(rii, s[k]) & 0x4UL) == 0,
+                  "9x: neither 4 nor 2 in what a question would offer");
+            CHECK(inst_value_answer("4", inst_value_asked_mask(imi, s[k]), &a) == -1 &&
+                  inst_value_answer("2", inst_value_asked_mask(rii, s[k]), &a) == -1,
+                  "9x: an answer of 4 or 2 refused");
+            CHECK(!inst_value_allowed(imi, s[k], 4) &&
+                  !inst_value_allowed(rii, s[k], 2) &&
+                  inst_value_allowed(rii, s[k], 1),
+                  "9x: /set refuses 4 and 2, takes ring 1");
+        }
+        exp.AnyXhci = 1;
+        exp.CmNhi = 1;
+        CHECK(inst_value_allowed(imi, &exp, 4) && inst_value_allowed(rii, &exp, 2),
+              "XP: /set takes 4 and 2 as before");
+        CHECK(inst_value_asked_mask(imi, &exp) == instValues[imi].Asked &&
+              inst_value_asked_mask(rii, &exp) == instValues[rii].Asked,
+              "XP: the asked masks as before");
+    }
+}
+
+static void test_set_show_4938(void)
+{
+    static char out[65536];
+    int n;
+    int idx;
+    INST_U32 v;
+    INST_OPTS o;
+    char err[256];
+    char *argv1[4];
+
+    n = inst_settings_list("", NULL, fake_mw, out, sizeof(out));
+    CHECK(n == instValueCount - 2, "every row but a drive's two");
+    CHECK(strstr(out, "XhciUasNoAtaPassThrough") == NULL, "no drive row");
+    n = inst_settings_list("tunnelbridge", NULL, fake_mw, out, sizeof(out));
+    CHECK(n == 1 && strstr(out, "XhciCmTunnelBridge: ") == out &&
+              strstr(out, "Machine-wide: auto.") != NULL, "one row, its string");
+    n = inst_settings_list("MSIAVOID", NULL, fake_mw, out, sizeof(out));
+    CHECK(n == 1 && strstr(out, "Machine-wide: 1.") != NULL, "any case");
+    n = inst_settings_list("zzz-none", NULL, fake_mw, out, sizeof(out));
+    CHECK(n == 0 && strcmp(out, "No setting matches \"zzz-none\".\n") == 0,
+          "no match: one line");
+    CHECK(inst_value_matches(&instValues[inst_value_find("XhciTolerance")],
+                             "leaving a device dead"), "a meaning matches");
+    argv1[0] = "xhciinst";
+    argv1[1] = "/set";
+    argv1[2] = "/show";
+    argv1[3] = "quirk";
+    memset(&o, 0, sizeof(o));
+    CHECK(inst_parse_args(4, argv1, &o, err, sizeof(err)) == 0 && o.SetShow &&
+              strcmp(o.SetFind, "quirk") == 0 && o.SetCount == 0,
+          "/set /show <text> parsed");
+    (void)idx;
+    (void)v;
+}
+
+/* XhciEventRingTrbs: Setup's number row of two picks, written by the
+ * INFs (256). */
+static void test_event_ring_4938(void)
+{
+    char t[128];
+    int er = inst_value_find("XhciEventRingTrbs");
+
+    CHECK(er >= 0, "the event ring's row");
+    if (er < 0) {
+        return;
+    }
+    CHECK(inst_value_in_range(er, 256) && inst_value_in_range(er, 1024),
+          "256 and 1024");
+    CHECK(!inst_value_in_range(er, 512) && !inst_value_in_range(er, 0) &&
+              !inst_value_in_range(er, 1025), "nothing else");
+    inst_value_range_text(er, t, sizeof(t));
+    CHECK(strcmp(t, "256 or 1024") == 0, "its range text");
+    CHECK(instValues[er].Loc == INST_LOC_MW && !instValues[er].NoInf,
+          "Services\\USB, written by the INFs");
+    CHECK_EQ(inst_value_find("XhciEventRing"), -1, "the 49.35 name is gone");
+}
+
+/* The BIOS-held drive (DESIGN-BIOSHELD): Stor98's find report parsed, and
+ * the refusal; the owner's desktop's R5 memory ranges as the member's. */
+static void test_bios_held(void)
+{
+    static const char *taken =
+        "port 3.0.0 slot 0 range AC000000:00000000 len 16384; read 256 class "
+        "010802 bars AC000004 00000000 00000000 00000000 00000000 00000000; "
+        "found 4.0.0; cmd 0006 cc 00460001 csts 00000001 taken; result 1";
+    static const char *bios =
+        "port 3.0.0 slot 0 range AC000000:00000000 len 16384; read 256 class "
+        "010802 bars AC000004 00000000 00000000 00000000 00000000 00000000; "
+        "found 4.0.0; cmd 0006 cc 00460001 csts 00000001 left: already set "
+        "up; result 0";
+    static const char *biosMe =
+        "port 3.0.0 slot 0 range AC000000:00000000 len 16384; read 256 class "
+        "010802 bars AC000004 00000000 00000000 00000000 00000000 00000000; "
+        "found 4.0.0; cmd 0006 cc 00460001 csts 00000001 left: already set "
+        "up, StorTakeFirmware ignored on Windows ME; result 0";
+    static const char *noAns = "...; found 4.0.0; cmd 0006 cc 00000000 csts "
+                               "00000000 left: no answer; result 0";
+    static const char *notRest = "...; found 4.0.0; cmd 0004 left: command "
+                                 "not restored; result 0";
+    static const INST_U32 other4[1] = { 0xB0000000UL };
+    static const char *unread = "...; found 4.0.0; cmd 0006 left: unreadable "
+                                "reach 2; result 0";
+    static const char *over = "...; found 4.0.0; cmd 0006 taken: already set "
+                              "up, overridden by StorTakeFirmware; result 1";
+    /* The R5 member: "Memory AC000000-AC003FFF, AC005000-AC005FFF,
+     * AC004000-AC004FFF" (allocated, as the boot configuration). */
+    static const INST_U32 lo[3] = { 0xAC000000UL, 0xAC005000UL, 0xAC004000UL };
+    static const INST_U32 hi[3] = { 0, 0, 0 };
+    const char *names[2];
+    const char *texts[2];
+    INST_STORFIND f;
+    INST_U32 b;
+    INST_U32 d;
+    INST_U32 fn;
+
+    inst_storfind_parse(bios, &f);
+    CHECK(f.State == INST_SF_BIOS && f.HaveFound && f.Bus == 4 && f.Dev == 0 &&
+              f.Fn == 0 && f.HaveBar && f.BarLo == 0xAC000000UL &&
+              f.BarHi == 0, "left: already set up, its BDF and BAR0");
+    inst_storfind_parse(biosMe, &f);
+    CHECK_EQ(f.State, INST_SF_BIOS, "the ME form is left to the BIOS too");
+    inst_storfind_parse(taken, &f);
+    CHECK_EQ(f.State, INST_SF_TAKEN, "taken");
+    inst_storfind_parse(over, &f);
+    CHECK_EQ(f.State, INST_SF_TAKEN, "taken: overridden");
+    inst_storfind_parse(noAns, &f);
+    CHECK_EQ(f.State, INST_SF_NOANSWER, "no answer");
+    inst_storfind_parse(notRest, &f);
+    CHECK_EQ(f.State, INST_SF_NOTRESTORED, "command not restored");
+    inst_storfind_parse(unread, &f);
+    CHECK_EQ(f.State, INST_SF_UNREADABLE, "unreadable");
+    inst_storfind_parse("found none", &f);
+    CHECK(f.State == INST_SF_UNKNOWN && !f.HaveFound, "nothing known");
+    inst_storfind_parse("port 1.0.0 slot 0 range FE600000:00000001 len 16384; "
+                        "read 256 class 060400 bars 00000000 00000000 "
+                        "00000000 00000000 00000000 00000000; found 1.2.3; cmd "
+                        "0006 taken; result 1", &f);
+    CHECK(f.HaveBar && f.BarLo == 0xFE600000UL && f.BarHi == 1 && f.Bus == 1 &&
+              f.Dev == 2 && f.Fn == 3,
+          "the range's high half; a found function past the port's slot");
+    inst_storfind_parse("port 1.0.0 slot 0 range 00000000:00000000 len 0; "
+                        "found none", &f);
+    CHECK(!f.HaveBar && !f.HaveFound, "no range, nothing found");
+    CHECK(inst_storfind_name("StorFind 115.31.7", &b, &d, &fn) && b == 115 &&
+              d == 31 && fn == 7, "the name, decimal");
+    CHECK(!inst_storfind_name("StorFind", &b, &d, &fn) &&
+              !inst_storfind_name("StorFind 1.32.0", &b, &d, &fn) &&
+              !inst_storfind_name("StorFindX 1.0.0", &b, &d, &fn),
+          "the last-find value and bad names are no function's");
+
+    names[0] = "StorFind 4.0.0";
+    texts[0] = bios;
+    CHECK(inst_bios_held(0, 1, 10, lo, hi, 3, names, texts, 1),
+          "98 SE, NVMe, Code 10, left to the BIOS, its BAR: refused");
+    CHECK(!inst_bios_held(1, 1, 10, lo, hi, 3, names, texts, 1), "NT: not");
+    CHECK(!inst_bios_held(0, 0, 10, lo, hi, 3, names, texts, 1), "not NVMe");
+    CHECK(!inst_bios_held(0, 1, 0, lo, hi, 3, names, texts, 1),
+          "started (a stale value): not");
+    CHECK(!inst_bios_held(0, 1, 28, lo, hi, 3, names, texts, 1),
+          "another problem: not");
+    CHECK(!inst_bios_held(0, 1, 10, lo, hi, 3, names, texts, 0),
+          "no StorFind value: not");
+    CHECK(!inst_bios_held(0, 1, 10, lo, hi, 0, names, texts, 1),
+          "no memory read: not");
+    texts[0] = taken;
+    CHECK(!inst_bios_held(0, 1, 10, lo, hi, 3, names, texts, 1), "taken: not");
+    texts[0] = noAns;
+    CHECK(!inst_bios_held(0, 1, 10, lo, hi, 3, names, texts, 1),
+          "no answer: not");
+    texts[0] = bios;
+    names[0] = "StorFind 5.0.0";
+    CHECK(!inst_bios_held(0, 1, 10, lo, hi, 3, names, texts, 1),
+          "the name's BDF not the text's: not");
+    names[0] = "StorFind";
+    CHECK(!inst_bios_held(0, 1, 10, lo, hi, 3, names, texts, 1),
+          "the last-find value alone: not");
+    names[0] = "StorFind 4.0.0";
+    {
+        static const INST_U32 other[1] = { 0xB0000000UL };
+        /* The port's slot unrelated (a bridge's zero BARs), the scan's
+         * found function at the member's range: refused. */
+        static const char *scanned =
+            "port 3.0.0 slot 0 range AC000000:00000000 len 16384; read 256 "
+            "class 060400 bars 00000000 00000000 00000000 00000000 00000000 "
+            "00000000; found 4.0.0; cmd 0006 cc 00460001 csts 00000001 left: "
+            "already set up; result 0";
+        CHECK(!inst_bios_held(0, 1, 10, other, hi, 1, names, texts, 1),
+              "another range (another boot's or another drive's): not");
+        texts[0] = scanned;
+        CHECK(inst_bios_held(0, 1, 10, lo, hi, 3, names, texts, 1),
+              "found by a scan past the port's slot: refused by its range");
+        texts[0] = bios;
+    }
+    names[1] = names[0];
+    texts[1] = texts[0];
+    names[0] = "StorFind 9.0.0";
+    texts[0] = taken;
+    CHECK(inst_bios_held(0, 1, 10, lo, hi, 3, names, texts, 2),
+          "the matching one among several");
+    CHECK(strstr(instBiosHeldDialog, "MS-DOS compatibility mode") != NULL &&
+              strncmp(instBiosHeldConsole, "Not stopped: ", 13) == 0,
+          "the owner's two texts");
+
+    /* It fails closed (the merge review): each report classified. */
+    CHECK_EQ(inst_storfind_report(INST_SFE_OK, "StorFind 4.0.0", 1, bios, lo,
+                                  hi, 3), INST_SFR_MATCH, "a match");
+    CHECK_EQ(inst_storfind_report(INST_SFE_OK, "StorFind 4.0.0", 1, taken,
+                                  lo, hi, 3), INST_SFR_NOMATCH, "taken");
+    CHECK_EQ(inst_storfind_report(INST_SFE_OK, "StorPollMode", 0, "", lo, hi,
+                                  3), INST_SFR_SKIP, "another value");
+    CHECK_EQ(inst_storfind_report(INST_SFE_OK, "StorFind", 1, bios, lo, hi,
+                                  3), INST_SFR_SKIP, "the last-find value");
+    CHECK_EQ(inst_storfind_report(INST_SFE_MORE, "StorFind 4.0.0", 1, bios,
+                                  lo, hi, 3), INST_SFR_BAD,
+             "a value too long to read: cannot tell");
+    CHECK_EQ(inst_storfind_report(INST_SFE_ERROR, "", 0, "", lo, hi, 3),
+             INST_SFR_BAD, "a value that did not read: cannot tell");
+    CHECK_EQ(inst_storfind_report(INST_SFE_OK, "StorFind 4.0.0", 0, bios, lo,
+                                  hi, 3), INST_SFR_BAD, "not REG_SZ");
+    CHECK_EQ(inst_storfind_report(INST_SFE_OK, "StorFind 4.0.0", 1,
+                                  "garbled", lo, hi, 3), INST_SFR_BAD,
+             "a text that does not parse");
+    CHECK_EQ(inst_storfind_report(INST_SFE_OK, "StorFind 5.0.0", 1, bios, lo,
+                                  hi, 3), INST_SFR_BAD,
+             "a found function not its name's");
+    CHECK_EQ(inst_storfind_report(INST_SFE_OK, "StorFind 4.0.0", 1,
+                                  "port 4.0.0 range AC000000:00000000; found "
+                                  "4.0.0; cmd 0006 left:", lo, hi, 3),
+             INST_SFR_BAD, "a truncated state: cannot tell");
+    CHECK_EQ(inst_storfind_report(INST_SFE_OK, "StorFind 4.0.0", 1,
+                                  "port 4.0.0 range AC000000:00000000; found "
+                                  "4.0.0; result 1", lo, hi, 3),
+             INST_SFR_BAD, "no state at all: cannot tell");
+    CHECK_EQ(inst_bios_verdict(0, 1, 1, 1, 1,
+                               inst_storfind_report(INST_SFE_OK,
+                                   "StorFind 4.0.0", 1,
+                                   "port 4.0.0 range AC000000:00000000; "
+                                   "found 4.0.0; cmd 0006 left:", lo, hi, 3)
+                                   == INST_SFR_BAD, 0),
+             INST_BH_UNSURE, "the verdict over a truncated state: refused");
+    CHECK_EQ(inst_storfind_report(INST_SFE_OK, "StorFind 4.0.0", 1, bios, lo,
+                                  hi, 0), INST_SFR_NOMATCH,
+             "no memory to compare (the verdict says unsure)");
+    /* The verdict. */
+    CHECK_EQ(inst_bios_verdict(0, 1, 1, 1, 1, 0, 0), INST_BH_GO,
+             "read to the end, no match: go on");
+    CHECK_EQ(inst_bios_verdict(0, 1, 1, 1, 1, 0, 1), INST_BH_HELD, "a match");
+    CHECK_EQ(inst_bios_verdict(0, 1, 0, 1, 1, 0, 1), INST_BH_HELD,
+             "a match whatever else failed");
+    CHECK_EQ(inst_bios_verdict(0, 1, 0, 1, 1, 0, 0), INST_BH_UNSURE,
+             "memory not read (or overflowing, or none): refused");
+    CHECK_EQ(inst_bios_verdict(0, 1, 1, -1, 1, 0, 0), INST_BH_UNSURE,
+             "the key not opened: refused");
+    CHECK_EQ(inst_bios_verdict(0, 1, 1, 1, 0, 0, 0), INST_BH_UNSURE,
+             "the list not read to the end: refused");
+    CHECK_EQ(inst_bios_verdict(0, 1, 1, 1, 1, 1, 0), INST_BH_UNSURE,
+             "a report that cannot be told: refused");
+    CHECK_EQ(inst_bios_verdict(0, 1, 0, 0, 1, 0, 0), INST_BH_GO,
+             "Stor98 not installed (no key): go on");
+    CHECK_EQ(inst_bios_verdict(0, 0, 0, -1, 0, 3, 0), INST_BH_GO,
+             "no NVMe function at Code 10 behind the port: go on");
+    CHECK_EQ(inst_bios_verdict(1, 1, 0, -1, 0, 3, 0), INST_BH_GO, "NT");
+    /* Every function at Code 10 needs a report of its own (the merge
+     * review of 2026-11-13): none is cannot-tell, whatever else. */
+    CHECK_EQ(inst_storfind_base("StorFind 4.0.0", taken, lo, hi, 3), 0,
+             "a taken report names the first base");
+    CHECK_EQ(inst_storfind_base("StorFind 4.0.0", bios, other4, hi, 1), -1,
+             "a report of another range names none");
+    CHECK_EQ(inst_storfind_base("StorFind", taken, lo, hi, 3), -1,
+             "the last-find value is no function's report");
+    CHECK_EQ(inst_bios_verdict2(0, 1, 1, 1, 1, 0, 0, 1), INST_BH_UNSURE,
+             "a Code 10 function with no report of its own: refused");
+    CHECK_EQ(inst_bios_verdict2(0, 2, 1, 1, 1, 0, 0, 1), INST_BH_UNSURE,
+             "one of two with no report: refused");
+    CHECK_EQ(inst_bios_verdict2(0, 1, 1, 1, 1, 0, 0, 0), INST_BH_GO,
+             "every function reported (taken): go on");
+    CHECK_EQ(inst_bios_verdict2(0, 1, 1, 0, 1, 0, 0, 1), INST_BH_GO,
+             "no Stor98 key: go on, whatever is uncovered");
+    CHECK_EQ(inst_bios_verdict2(0, 1, 1, 1, 1, 0, 1, 1), INST_BH_HELD,
+             "a match stays the proven case");
+    CHECK_EQ(inst_bios_verdict2(0, 0, 1, 1, 1, 0, 0, 3), INST_BH_GO,
+             "no function at Code 10: go on");
+    CHECK_EQ(inst_bios_verdict2(1, 1, 1, 1, 1, 0, 0, 1), INST_BH_GO, "NT");
+    CHECK(strstr(instBiosUnsureDialog, "could not tell") != NULL &&
+              strncmp(instBiosUnsureConsole, "Not stopped: ", 13) == 0,
+          "the cannot-tell texts");
+}
+
+static void test_every_row_4938(void)
+{
+    INST_ENV e;
+    INST_U32 v;
+    char text[INST_TEXT_CHARS];
+    char longText[96];
+    int idx;
+    int im = inst_value_find("XhciInterruptMode");
+    int nr = inst_value_find("XhciIntelNoRouteIrq");
+    int ir = inst_value_find("XhciIntelIrqRoute");
+    int st = inst_value_find("XhciMsiStrategy");
+    int pl = inst_value_find("XhciMsiPools");
+    int irq = inst_value_find("XhciMsiIsaIrq");
+    int na = inst_value_find("XhciUasNoAtaPassThrough");
+    int tb = inst_value_find("XhciCmTunnelBridge");
+
+    CHECK(im >= 0 && nr >= 0 && ir >= 0 && st >= 0 && pl >= 0 && irq >= 0 &&
+          na >= 0 && tb >= 0, "49.38: the rows");
+    if (im < 0 || nr < 0 || ir < 0 || st < 0 || pl < 0 || irq < 0 ||
+        na < 0 || tb < 0) {
+        return;
+    }
+    /* The text row's form, as the driver parses it. */
+    CHECK(inst_bdf_list_ok("auto") && inst_bdf_list_ok("AUTO") &&
+          inst_bdf_list_ok(""), "auto and empty");
+    CHECK(inst_bdf_list_ok("4:0.0") && inst_bdf_list_ok("04:1f.7") &&
+          inst_bdf_list_ok("04:00.0,05:00.0,0a:1F.3,ff:00.0"), "lists");
+    CHECK(!inst_bdf_list_ok("04:20.0") && !inst_bdf_list_ok("04:00.8") &&
+          !inst_bdf_list_ok("104:00.0") && !inst_bdf_list_ok("04:00") &&
+          !inst_bdf_list_ok("04:00.0,") && !inst_bdf_list_ok(" 04:00.0") &&
+          !inst_bdf_list_ok("04:00.0, 05:00.0") &&
+          !inst_bdf_list_ok("1:0.0,2:0.0,3:0.0,4:0.0,5:0.0") &&
+          !inst_bdf_list_ok("g4:00.0"), "what the driver would refuse");
+    CHECK(inst_value_set("XhciCmTunnelBridge=auto", &idx, &v) == -3,
+          "a text row is not a number");
+    CHECK(inst_value_set_text("XhciCmTunnelBridge=04:00.0", &idx, text,
+                              sizeof(text)) == 1 &&
+          idx == tb && strcmp(text, "04:00.0") == 0, "/set takes a list");
+    CHECK(inst_value_set_text("XhciCmTunnelBridge=04:00", &idx, text,
+                              sizeof(text)) == -1, "and refuses a bad one");
+    CHECK(inst_value_set_text("XhciCmMode=1", &idx, text, sizeof(text)) == 0,
+          "a number row is not a text row");
+    /* Mode 4: 2000 to XP x64 alone. */
+    e = env(0, 4, 10, INST_ARCH_X86);
+    e.AnyXhci = 1;
+    CHECK(inst_value_set("XhciInterruptMode=4", &idx, &v) == 1,
+          "the table takes 4");
+    CHECK(!inst_value_allowed(im, &e, 4), "98 SE: not 4");
+    e = env(1, 5, 1, INST_ARCH_X86);
+    e.AnyXhci = 1;
+    CHECK(inst_value_allowed(im, &e, 4), "XP: 4");
+    e = env(1, 6, 1, INST_ARCH_X86);
+    e.AnyXhci = 1;
+    CHECK(!inst_value_allowed(im, &e, 4) && inst_value_allowed(im, &e, 3),
+          "7: 3, not 4");
+    /* The mode-4 values: 2000/XP/XP x64; the pool on the 32-bit pair. */
+    e = env(1, 5, 2, INST_ARCH_AMD64);
+    e.AnyXhci = 1;
+    CHECK(inst_value_relevant(st, &e) && !inst_value_greyed(st, &e),
+          "XP x64: the strategy");
+    CHECK(inst_value_greyed(pl, &e) && inst_value_set_mask(pl, &e) == 0,
+          "XP x64: no pool");
+    CHECK(strcmp(inst_value_only(pl), "32-bit Windows 2000 and XP only") == 0,
+          "its text");
+    CHECK(!inst_value_allowed(irq, &e, 24) && inst_value_allowed(irq, &e, 11),
+          "XP x64: no input above 23");
+    e = env(1, 5, 1, INST_ARCH_X86);
+    e.AnyXhci = 1;
+    CHECK(inst_value_allowed(irq, &e, 24) && !inst_value_allowed(irq, &e, 9),
+          "XP: 24 up, not 9");
+    e = env(0, 4, 10, INST_ARCH_X86);
+    e.AnyXhci = 1;
+    CHECK(inst_value_greyed(st, &e) && !inst_value_allowed(irq, &e, 10),
+          "98 SE: greyed and refused");
+    /* The routing rows: hidden with no reviewed controller; NoRouteIrq 0
+     * not offered by Setup on Windows 2000. */
+    e = env(1, 5, 0, INST_ARCH_X86);
+    e.AnyXhci = 1;
+    CHECK(!inst_value_relevant(ir, &e) && !inst_value_greyed(ir, &e),
+          "no reviewed controller: no routing row");
+    e.PirqController = 1;
+    CHECK(inst_value_relevant(ir, &e) && inst_value_relevant(nr, &e),
+          "a reviewed controller");
+    CHECK_EQ(inst_value_set_mask(nr, &e), 0x6, "2000: NoRouteIrq 1 and 2");
+    e.Minor = 1;
+    CHECK_EQ(inst_value_set_mask(nr, &e), 0x7, "XP: 0 to 2");
+    e = env(1, 6, 1, INST_ARCH_X86);
+    e.AnyXhci = 1;
+    e.PirqController = 1;
+    CHECK(inst_value_greyed(nr, &e) && inst_value_set_mask(nr, &e) == 0,
+          "7: NoRouteIrq greyed");
+    /* The drive rows: the USB Tree's alone. */
+    CHECK(instValues[na].Loc == INST_LOC_DRIVE && instValues[na].Asked == 0,
+          "a drive row: never asked, a drive's key");
+    CHECK(inst_value_set("XhciUasNoAtaPassThrough=1", &idx, &v) == 0,
+          "and not Setup's /set");
+    inst_caution_text(tb, 0, longText, sizeof(longText));
+    CHECK(strncmp(longText, "a list replaces", 15) == 0, "its caution");
+}
+
 int main(void)
 {
+    test_every_row_4938();
+    test_set_show_4938();
+    test_set_show_nine();
+    test_event_ring_4938();
+    test_bios_held();
+    test_log_place();
     test_copy_rows_4622();
     test_prog();
     test_prog_shrink();
@@ -11133,6 +12538,7 @@ int main(void)
     test_summary_head();
     test_uas();
     test_uas_absent();
+    test_takeover();
     test_uninstall_entry();
     test_page_texts();
     test_secure_boot_refusals();

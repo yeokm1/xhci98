@@ -41,12 +41,27 @@
   `setupx.lib` in
   `tools/win98ddk-extracted/`), and never for the driver
 - QEMU, installed normally on the host
-- Optional for a gated build, required for a release cut: Open Watcom 2.0
-  (above), the Windows 98 SE DDK extracted into `tools/win98ddk-extracted/`,
-  and Python on `PATH` (the VxDs' link checks). Without them `S98VSD.VXD`,
-  `XHCIPFW.VXD` and `XHCIDI.EXE` are reported not built and passed over
-  (each build's exit code 2), and `make-release.ps1` refuses a cut without
-  them
+- Required for a gated build and a release cut: Open Watcom 2.0 (above),
+  the Windows 98 SE DDK extracted into `tools/win98ddk-extracted/`, and
+  Python on `PATH` (the VxDs' link checks; a `.cmd` wrapper that resets
+  `PATH` must put Python's folder back). Without them `S98VSD.VXD` and
+  `XHCIPFW.VXD` are not built (each build's exit code 2) and
+  `build-driver.cmd` fails, naming the image and the tool; only
+  `XHCI98_ALLOW_UNBUILT=1` lets it go on without them, saying so at the
+  step and at the end ("BUILD INCOMPLETE", exit 3), and `make-package.ps1`
+  then refuses the package unless `-AllowUnbuilt` (roadmap-usb4 task 49.34,
+  after gated builds whose wrapper had no Python on `PATH` passed without
+  both VxDs). A gated build of either architecture asks for Python first,
+  in a step of its own (`python` in `scripts\build-steps.ps1`, which runs
+  the first `python.exe` on `PATH` and prints its path) before
+  `scripts\gen-cm-snap.py`'s check of the connection manager snapshot's
+  field tables, so a `PATH` without Python fails there, naming Python
+  (task 49.7). The Microsoft Store's `python.exe` alias in
+  `WindowsApps` is found on `PATH` but runs nothing (exit 9009): it counts
+  as no Python, to that step and to the two VxD builds, which answer 2
+  for it. `XHCIDI.EXE` is built by `xhciinst\build.cmd`, not the gated
+  build, and is reported not built there; `make-release.ps1` refuses a cut
+  without any of the three
 
 Neither driver toolchain is installed machine-wide. Both live inside the
 repository, are used in place, and write no registry key: MSVC 6.0 runs from
@@ -139,8 +154,9 @@ record 30 section 6), from `src\vsd\`:
 
 - `src\vsd\build.cmd` (`qemu` for the qemu flavour's image, which writes
   to QEMU's debug console) finds `wcc386.exe` under `%WATCOM%` in `BINNT64`
-  or `BINNT` and Python on `PATH`, and answers exit 2 ("not built") on a
-  host without either or without the DDK. `src\vsd\stage-ddk.ps1` holds
+  or `BINNT` and Python on `PATH` (a `python.exe` that runs, so not the
+  Store's alias alone), and answers exit 2 ("not built") on a host without
+  either or without the DDK. `src\vsd\stage-ddk.ps1` holds
   ten DDK headers and the DDK's `LINK.EXE` 5.12 with its `MSPDB50.DLL` to
   `docs\references\README.md`'s hashes and copies them into the
   git-ignored `src\vsd\obj\`, mending the staged headers (a trailing
@@ -257,7 +273,7 @@ Setup scripts:
 | `scripts\check-flavour-marker.ps1` | Reads the flavour marker string out of a linked `.sys` and refuses anything but exactly one, matching the flavour asked for. `build-driver.cmd` runs it on each binary after the import gate; `make-release.ps1` reads the same marker to refuse publishing a `qemu` build (or an old `debug` one) as the release. It is what says a binary in `objfre` really is the release flavour, which `VS_FF_DEBUG` cannot (it marked both checked builds, `qemu` and, until task 45.45, `debug`) |
 | `scripts\check-source-charset.ps1` | Refuses a byte inside tracked source that no part of this project's toolchain is meant to see: a **control byte below 0x20 other than TAB, CR and LF** anywhere in the file, **any byte >= 0x80** anywhere in the file, and a **UTF-8 BOM** at the head of a file the 1998-era toolchain reads (`.c .h .asm .rc .def .inf .bat .cmd`, `makefile`, `sources`). Covers the source trees its `$trees` list names - `src\`, `test\`, `scripts\`, `xhciinst\`, `xhcimark\`, `xhcitr\`, `xhciqual\` and `xhciperf\` (`xhcisnap\` went with the tool) - through an extension allowlist, so it never opens a binary, and skips four git-ignored paths by name. Run by `scripts\check-text.ps1`, the first step of `build-driver.cmd`. The BOM rule is deliberately narrower than the other two: five tracked files carry a BOM today and none is read by that toolchain, and on a `.ps1` the BOM is not a defect but the fix, since Windows PowerShell 5.1 reads a BOM-less script as the system ANSI codepage - so a BOM the rule permits is not then counted a second time as three non-ASCII bytes. The non-ASCII rule was taken on 2026-09-12 and cost one character, a UTF-8 section sign in an `src\xhci.h` comment. Seven in-memory self-tests run on **every** invocation and abort the gate if the detector is broken - a gate that has only ever passed reports a pass it did not establish. Roadmap task 22.7; it exists because a BEL written into `src\xhci_slot.c` by a PowerShell escape compiled all three x86 flavours and passed every other gate (`lessons.md`) |
 | `scripts\check-readme-text.ps1` | Holds the four tool readmes `make-release.ps1` publishes (`xhcimark`, `xhciinst`, `xhcitr` and `xhciperf`, each `README.TXT`; `xhciperf` since the batch 7 merge of 43.50; `xhcicln` was a fifth until the tool was dropped in `3.3.0.0`, task 44.82) to the rule the cut refuses a generated text for: no line past **78 columns** and no character that is not **printable ASCII** (TAB allowed). The rule (`Get-PlainTextFaults`), the list (`$script:ToolReadmeDirs`) and how a readme is read (`Read-ToolReadmeLines`) are `scripts\package\package-common.ps1`'s, which the cut's `Write-GeneratedText` uses too, so the two cannot drift. It also renders `releases\history.md` as the cut renders an entry of it in the top-level `readme.txt` (`ConvertFrom-MarkdownBlocks`, moved to `package-common.ps1` for it; every entry, though since roadmap-usb4 task 45.29 the readme carries the version's own entry alone, `Get-HistoryEntryLines`, and a one-line list of the earlier releases, `Get-HistoryEarlierText`) and holds that to the same rule, since the wrap cannot shorten a word longer than a line and passes a non-ASCII character through. `-SelfTest` runs the rule's own refusals in memory. Run by `scripts\check-text.ps1` on every gated build, self-tested first. The footer the cut appends to each tool readme, and the rest of the top-level readme, are `make-release.ps1`'s own text, which `check-text.ps1` reads from its templates. Roadmap-usb4 task 43.61; until it, a long line two merges had left was found only by 43.11's test cut |
-| `scripts\check-text.ps1` | Every text check of the gated build and of the release cut, run as `build-driver.cmd`'s first step so a text failure costs no build, and on its own in seconds (roadmap-usb4 task 44.1; the `3.2.0.0` builds of 2026-10-24 stopped twice on a line past 78 columns). It runs the build's three, each its own script: `xhciqual\test\check-bat-eol.ps1`, `check-source-charset.ps1` and `check-readme-text.ps1`. Then it runs the cut's checks that need no build, from the cut's own code. It reads `make-release.ps1`'s syntax tree for every text the cut publishes from a template: each here-string assigned to a variable (the readme template and its parts, the qualifier's readme, each tool's readme footer and `NOTICE.TXT`), and each line added to the readme's file list (`$contents`, a paragraph wrapped with `Format-Wrapped` included) or to an incomplete cut's list (`$missingTools`). Each line is held to 78 columns of printable ASCII. Placeholders take the width the cut gives them (`{VERSION}` from `src\xhci_version.h`, the directory names of a two-architecture cut), or nothing where the cut puts a block of its own. Expansions and format items count as nothing, or as their alignment's width, so the width is a lower bound. A placeholder that no `Replace()` on that same text substitutes is a fault, and so are a `TODO(...)` or `TBD` and a claim of `package-common.ps1`'s `$script:ReadmeForbiddenPhrases` in any of them. The readme template is also held to the cut's rules on a version written by hand and on the snapshot schema (`$allowedTemplateVersions`, `Get-SnapSchema` and `Find-DraftMarkers`, read from `make-release.ps1`). It renders `package-common.ps1`'s download readme parts for every download of every set, with and without the driver pack. It requires the changelog entry for the tree's version, one `releases\history.md` heading dated as the INF (`Get-ChangelogEntryFaults`, which the cut calls too), so a version bump carries its entry's heading from the start. It finds draft markers in the release notes and the history. And it holds the shipped silent-install batches, `SILENT.REG`, the port switchover's two batches and `portsw.vbs`, and the field report batches to `package-common.ps1`'s content checks. The cut's checks that two sources agree on a number (XHCITR's snapshot schema against the driver's, each tool's shared version macro) are not text and stay the cut's. So `make-release.ps1` keeps one shape: an error message is thrown or passed to `Stop-CutCheck` as written, never assigned, because an assigned here-string is read as published text. It does not check what the cut renders from a build or a pin: the sizes and hashes in the readme's file list, a `NOTICE.TXT`'s linker copyright lines, the driver pack's texts and the release notes' Stor98 declaration. Those are `make-release.ps1`'s, and `-CheckOnly`'s before it. Every check runs and every fault is listed; exit 1 if any. `-SelfTest` drives the readers and rules over a stand-in cut script and stand-in trees, and runs `check-readme-text.ps1 -SelfTest` |
+| `scripts\check-text.ps1` | Every text check of the gated build and of the release cut, run as `build-driver.cmd`'s first step so a text failure costs no build, and on its own in seconds (roadmap-usb4 task 44.1; the `3.2.0.0` builds of 2026-10-24 stopped twice on a line past 78 columns). It runs the build's three, each its own script: `xhciqual\test\check-bat-eol.ps1`, `check-source-charset.ps1` and `check-readme-text.ps1`. Then it runs the cut's checks that need no build, from the cut's own code. It reads `make-release.ps1`'s syntax tree for every text the cut publishes from a template: each here-string assigned to a variable (the readme template and its parts, the qualifier's readme, each tool's readme footer and `NOTICE.TXT`), and each line added to the readme's file list (`$contents`, a paragraph wrapped with `Format-Wrapped` included) or to an incomplete cut's list (`$missingTools`). Each line is held to 78 columns of printable ASCII. Placeholders take the width the cut gives them (`{VERSION}` from `src\xhci_version.h`, the directory names of a two-architecture cut), or nothing where the cut puts a block of its own. Expansions and format items count as nothing, or as their alignment's width, so the width is a lower bound. A placeholder that no `Replace()` on that same text substitutes is a fault, and so are a `TODO(...)` or `TBD` and a claim of `package-common.ps1`'s `$script:ReadmeForbiddenPhrases` in any of them. The readme template is also held to the cut's rules on a version written by hand and on the snapshot schema (`$allowedTemplateVersions`, `Get-SnapSchema` and `Find-DraftMarkers`, read from `make-release.ps1`). It renders `package-common.ps1`'s download readme parts for every download of every set, with and without the driver pack. It requires the changelog entry for the tree's version, one `releases\history.md` heading dated as the INF (`Get-ChangelogEntryFaults`, which the cut calls too), so a version bump carries its entry's heading from the start. It finds draft markers in the release notes and the history. And it holds the shipped silent-install batches, `SILENT.REG`, and the field report batches to `package-common.ps1`'s content checks. The cut's checks that two sources agree on a number (XHCITR's snapshot schema against the driver's, each tool's shared version macro) are not text and stay the cut's. So `make-release.ps1` keeps one shape: an error message is thrown or passed to `Stop-CutCheck` as written, never assigned, because an assigned here-string is read as published text. It does not check what the cut renders from a build or a pin: the sizes and hashes in the readme's file list, a `NOTICE.TXT`'s linker copyright lines, the driver pack's texts and the release notes' Stor98 declaration. Those are `make-release.ps1`'s, and `-CheckOnly`'s before it. Every check runs and every fault is listed; exit 1 if any. `-SelfTest` drives the readers and rules over a stand-in cut script and stand-in trees, and runs `check-readme-text.ps1 -SelfTest` |
 | `scripts\source-stamp.ps1` | `-Write <objdir>` hashes every file `src\sources` names plus every header in `src\`, and the built `xhci98.sys` itself, recording the list beside that binary; `-Check <objdir>` recomputes both. `build-driver.cmd` writes one after each successful build and `make-release.ps1` refuses to publish a `.sys` whose sources have changed since, one that is not the binary its stamp was written for, or one with no usable stamp at all (`-AllowUnstampedDriver` is the named way past that last case, and only that one) - the driver's equivalent of the "EXE newer than its own sources" refusals the release script already makes for the two DOS tools. Content, not timestamps: the script says why at length |
 | `scripts\test-qemu-launchers.ps1` | Generates all eleven VMs' launchers (2a, 2b, the SMP 2d, the xHCI-only Windows 2000, Windows ME, Windows XP, Windows XP x64, Windows Vista, Windows 7, and - since roadmap task 21.8's generators were written on 2026-09-10 - Windows Vista x64 and Windows 7 x64) against stand-in QEMU files and verifies per-boot debug-console log rotation, the SMP default/fallback flags, that each of the four 6.x generators and the XP x64 one refuses `pentium3` **and names the feature that guest is missing** - long mode for the three 64-bit guests, the NX bit for the two 32-bit 6.x ones, so that nobody "fixes" a 64-bit refusal by reaching for a model with NX and no long mode - that no two launchers share a QEMU monitor port, that task 21.8's two guests still hold 55563 and 55564 (the assertion that replaced the one holding those ports for guests which did not exist yet), and that every launcher's run-time QEMU resolver announces which rung answered. Those last four read the preamble's **real output** rather than its source, because an `echo` that does not survive `cmd`'s parsing is worth nothing; run by `build-driver.cmd` |
 | `scripts\setup-qemu-win2k.ps1` | Same for the Win2000 SP4 (Phase 2b) VM, the second first-class target. Monitor port 55556, and it also stages `usbd.sys` (`-Win2KUsbdSys`) |
@@ -908,14 +924,43 @@ again by the packager:
   runtime library and the Windows 98 SE DDK's `LINK.EXE` 5.12, gated by
   `src\vsd\check-vsd.ps1` and `src\pfw\check-pfw.ps1` and their Python
   link checks. Exit 2 is "not built" (no Open Watcom, no 98 SE DDK or no
-  Python on this host), said and passed over; `make-release.ps1` refuses a
-  cut without either image.
+  Python that runs on this host), and `build-driver.cmd` fails on it unless
+  `XHCI98_ALLOW_UNBUILT=1` (above, task 49.34). `make-package.ps1` refuses
+  a package whose tree image is missing (unless `-AllowUnbuilt`) or older
+  than its sources (always; the lists of `package-common.ps1`'s
+  `Get-VsdImageInputs`, `Get-PfwVxdImageInputs` and
+  `Get-PfwSysImageInputs`, which `make-release.ps1` holds a cut to as
+  well). Each `build.cmd` and `build-driver.cmd` delete the old image
+  before building, so a failed build leaves none to package.
 - `XHCIPFW.SYS` (`src\pfw\nt\build.cmd`, design record 32 section 11),
   the Windows 2000 DDK's build, as the x86 drivers are, gated by the
   import gate's `-GateProfile hlprx86` with
   `scripts\import-gate\xhcipfw-imports.allow` and by
   `src\pfw\nt\check-pfwsys.ps1`. It keeps its build without `/Oy-`
   (design record 08 section 14, the owner's decision of 2026-10-30).
+  Its exit 2 (no Windows 2000 DDK) and a missing or stale image are held
+  as the two VxDs' are.
+- At the end of a release or qemu run `build-driver.cmd` lists the
+  self-tests `scripts\build-steps.ps1` passed over because their EXE is not
+  built in this tree (`out\steps-<arch>\absent.txt`: XHCIINST, XHCIMARK,
+  XHCIDI and, on amd64, XHCITR and XHCIPERF are built by their own
+  `build.cmd`). An `all` run (`build-steps.ps1 -All`) builds them itself
+  first on both architectures - `xhcimark\build.cmd`, `xhciinst\build.cmd`,
+  then `xhciinst\di\build.cmd` in a step of its own after it (the
+  installer's build also runs it but takes its exit 2, no Open Watcom, as
+  success and leaves an older `xhcidi.exe` in place; here exit 2 fails the
+  run) and, on amd64, `xhcitr\build.cmd` and `xhciperf\build.cmd` (each
+  of these deletes its EXEs first and fails when a compiler is missing) -
+  each self-test waiting for
+  its tool's build, a failed build failing the run with the tool named,
+  and a self-test whose EXE is still missing failing too, naming the build
+  to run, instead of being passed over; a cut can no longer pass without
+  the installer's and the mark service's import tables read (task 49.26's
+  follow-up; the 3.5.0.0 `OpenEventA` row). `XHCI98_SELFTEST_SKIP_OK` does not touch
+  this. And in
+  a gated build the host suite fails, rather than passing "x86 only", when
+  WDK 7.1's amd64 compiler is not at its `WDK71` (`build-steps.ps1` sets
+  `XHCI98_HOST_AMD64_REQUIRED=1` for it; task 49.34).
 
 ### The cut's builds, the self-tests' skips, Stor98 and the driver pack
 
@@ -1129,12 +1174,13 @@ reviewed and revised).
 - **How many at once, and in which order.** At most `XHCI98_BUILD_STEPS`
   processes (default 4, so a cut's two builds start eight on a host other
   work shares; `1` runs them one at a time, in the table's order). The
-  five longest come first in the table - the packager's self-tests, the
-  host suite, the two tool builds and Stor98's unit suite - so the short
-  ones fill in beside them. A step whose EXE is absent (XHCIINST,
-  XHCIMARK, XHCIDI, and on the amd64 run XHCITR and XHCIPERF where they
-  were never built) is said and passed over, as `build-driver.cmd` passed
-  over it.
+  longest come first in the table - the packager's self-tests, the host
+  suite, the tool builds and Stor98's unit suite - so the short ones fill
+  in beside them. In a release or qemu run a step whose EXE is absent
+  (XHCIINST, XHCIMARK, XHCIDI, and on the amd64 run XHCITR and XHCIPERF
+  where they were never built) is said and passed over, as
+  `build-driver.cmd` passed over it; in an `all` run the tools are built
+  first and such a step fails (`-RequireExe`).
 - **What the log shows.** When a step ends its log is printed whole under
   its old `=== <title> ===` heading, followed by `--- <title>: passed
   (exit 0, m:ss)` or `failed`, so a step's output is never interleaved
@@ -1214,8 +1260,12 @@ reviewed and revised).
   `-SelfTest` on stand-in steps (two at once, one at a time in order with a
   dependency, a failure stopping later starts with its message, the
   inconclusive code alone and beside a failure, an absent EXE passed over,
-  each step's own `TEMP`, `TMP` and directory, a dangling wait refused, and
-  the build's two tables), which `build-driver.cmd` runs before the block.
+  and under `-RequireExe` failing with its build named and the later steps
+  stopped, each step's own `TEMP`, `TMP` and directory, a dangling wait
+  refused, the build's two tables, the `all` tables, where each tool
+  self-test waits for its tool's build on both architectures, and an older
+  helper image with its build's exit 2 failing the run), which
+  `build-driver.cmd` runs before the block.
 
 ### The INF gate's self-tests, in process and skipped when unchanged (roadmap-usb4 task 45.30)
 
@@ -4296,8 +4346,10 @@ VM disk of development host A, outside the tree:
 autologon desktop about 4.5 minutes at `-smp 2`, both guests; a
 `pnputil` or registry reading a few seconds; `msinfo32 /report` about ten
 minutes; `Get-PnpDeviceProperty` one key at a time far too slow (one
-pipeline per reading instead). Usable for the reading and install legs;
-no WHPX for the legs (43.12 keeps every guest on TCG). The display
+pipeline per reading instead). Usable for the reading and install legs.
+These kits ran on TCG (43.12 kept every guest there); the two Windows 10
+release legs have since moved to WHPX, in the release matrix ("Faster
+emulator legs", "The accelerator of a leg"). The display
 sleeps after about ten minutes: send a key before a screendump.
 
 **The vehicle's limits on 10** (record 13 section 6.14.3): QEMU's
@@ -5321,6 +5373,11 @@ failed. Until it has passed on a target, design record 13 section 5.6 stays
 `static` for that target and the release notes say so.
 
 ### The port switchover script, `portsw.vbs` (roadmap-hcd task 36.42)
+
+**Retired in `3.5.0.0`** (roadmap-usb4 task 49.47): no cut publishes
+`tools\portsw\`, and the three files left `src\`; the xHCI98 USB Tree's
+Settings window and `XHCITR /set` set the value. This section and the
+next are the legs of the releases up to `3.4.3.0`.
 
 Task 36.42 put `portsw.vbs` at the root of every flavour directory of a
 package beside `xhci98.inf`, and `2.3.0.0` was published so. Since task
@@ -7615,13 +7672,19 @@ and data on every path (`[Xhci.AddReg]` for 98 SE and ME,
 | `XhciFastPollFsLs` | each start | 0 | 0-4 (`XhciPipeFastMode`) | 0 | yes |
 | `XhciFirstEnumWaitMs` | each start | 5000 | 0-30000 | 5000 | yes |
 | `XhciFirstEnumPortMs` | each start | 2000 | 0 to the wait | 2000 | yes |
-| `XhciIntelPortSwitch` | each start, Intel controllers only | 0 | 0 off, 1 listed controllers, an exact 2 any Intel | 0 | yes |
+| `XhciIntelPortSwitch` | each start, Intel controllers only | 0 | 0 off, 1 listed controllers, an exact 2 any Intel | 0 | yes (Setup writes 1 machine-wide at a first install on a listed board, task 49.47) |
 | `XhciIntelIrqRoute` | each start; a return to D0 reapplies the start's reading | 1 | 0-2; another number, 1 | 1 | yes |
 | `XhciTolerance` | each start | 1 | 0 off, any other 1 | 1 | yes |
 | `XhciIntervalCap` | each start | 1 | 0-2 | 1 | yes |
 | `XhciAvgTrbEsit` | each start | 0 | 0-1 | 0 | yes |
 | `XhciMaxTransferKB` | each start | 1024 | 64-2048 in steps of 4; else 1024 | 1024 | yes |
-| `XhciInterruptMode` | each start; on NT 6 also at AddDevice (record 18's mode cache) | 0 | 0 automatic, 1 line, 2 polling, 3 and above as 0 | 0 | yes |
+| `XhciInterruptMode` | each start; on NT 6 also at AddDevice (record 18's mode cache) | 0 | 0 automatic, 1 line, 2 polling, 3 a message (NT 6), 4 a message with the MSI stability improvements (NT 5.x; on 98 SE and ME as 0), 5 and above as 0 | 0 | yes |
+| `XhciMsiStrategy` | each mode-4 start on 2000, XP and XP x64 (record 15 section 4.5.2) | 0 | 0 an ISA IRQ claimed, 1 the line borrowed; else refused, reason 30 | 0 | yes |
+| `XhciMsiIsaIrq` | each mode-4 start under strategy 0 | 0 | 0 the library's choice, 3-7, 10, 11; 24-255 inside the range with the upper pool (32-bit); else refused, reason 30 | 0 | yes |
+| `XhciMsiShare` | each mode-4 start under strategy 0 | 8 | 1 no sharing, 2-16 the most controllers on one IRQ before another is taken; 0 as 1, above 16 as 16 (record 15 section 4.5.19) | 8 | yes |
+| `XhciMsiPools` | each mode-4 start under strategy 0, x86 image only (record 15 section 4.5.16) | 0 | 0 ISA, 1 upper, 2 both; else refused, reason 30 | 0 (x86 INF only) | yes |
+| `XhciMsiInputFirst`, `XhciMsiInputLast` | with `XhciMsiPools` 1 or 2 | 0 | both 0 the library's 24-255, else 24 <= first <= last <= 255; else refused, reason 30 | 0 (x86 INF only) | yes |
+| `XhciMsiInputBudget` | with `XhciMsiPools` 1 or 2 | 0 | 0 the library's 16, 1-32; else refused, reason 30 | 0 (x86 INF only) | yes |
 | `XhciPollIdleMs` | each start | 50 | 1-5000; 0 as 50 | 50 | yes |
 | `XhciPollActiveMs` | each start | 1 | 1 to the idle period; 0 as 1 | 1 | yes |
 | `XhciPollFineTimer` | each start; read on 98 SE and ME and no effect there | 0 | 0 off, any other 1 | 0 (since 38.3; 1 until the owner's change of 2026-10-14) | yes |
@@ -7633,6 +7696,7 @@ and data on every path (`[Xhci.AddReg]` for 98 SE and ME,
 | `XhciUsb2HubSpeedFallback` | each start | 1 | only 0 off | 1 (since 36.51) | yes |
 | `XhciAccept096` | each start, latched for the started lifetime | 1 | 0 the 1.0 floor, any other the 0.96 floor | 1 (since 38.11) | yes |
 | `XhciCommandCheck` | each start, latched for the started lifetime | 1 | only 0 off | 1 (since 45.45) | yes |
+| `XhciStreamDequeueRepair` | each start | 1 | only DWORD 0 off (check and log only) | 1 (since 49.39) | yes |
 | `XhciMsiAvoid` | each start; on NT 6 also at AddDevice (the requirements filter's cache, record 20 section 4.1) | 1 | 0 off, 1 listed, 2 every controller; another number or type, 1 | 1 (since 38.10) | yes |
 | `XhciStreamsOff` | each start | 1 | 0, 1, 2; else 1 | 1 (since 38.10) | yes |
 | `XhciResumeReinit` | each start | 1 | 0, 1, 2; else 1 | 1 (since 38.10) | yes |
@@ -8207,6 +8271,11 @@ in the guest fires a fault at run time by writing it:
 | `18` | A SET_INTERFACE not taken (38.10) | the next SET_INTERFACE a SELECT_INTERFACE sends - from any device, so fire it just before the switch it is for - is answered and never sent, once: `arg` 0 a STALL, 1 not established (any other `arg` is refused). QEMU's devices take every SET_INTERFACE their descriptors allow, so this is how a guest reaches design record 20 section 5.3's step 4: on an interface with two settings (`usb-audio`'s streaming interface) a STALL re-instates the old one (`cfg.select.rollback`, `SelectRollbacks`, then `SelectRollbacksReopened` once the old endpoints' clears complete; isochronous endpoints get none), on an interface with one setting it is a success through CLEAR_FEATURE(ENDPOINT_HALT) on the new endpoints (`SelectStallSuccesses`), and not established leaves the interface with no pipe and its new endpoints held stale (`RingsRetained`). Noted `qemu.inj.setif` (slot, stalled) and `cfg.select.end` (slot, interface, answer, last event) |
 | `19` | A switch's Configure Endpoint not taken (38.10) | the next Configure Endpoint of an interface switch - a SELECT_INTERFACE's or a function select's step 3, or a function's unconfigure or release, which share it (`arg` 0, 2) or a rollback's (`arg` 1, 3; fire `18` with `arg` 0 as well to reach it) - is answered and never issued, once: 0 and 1 refused with Resource Error, the controller changing nothing (after `arg` 0 a select puts the old pipes back, `SelectsReattached`, while an unconfigure or release holds them closed and stale, `RingsRetained`; after `arg` 1 the new endpoints are held stale); 2 and 3 with no completion and the controller reset requested, as a command that never completes is answered (everything held pinned, `RingsPinned`, until the recovery's HCRST drops every device). Noted `qemu.inj.selcfg` (rollback, code) |
 | `1A` | A Stop Endpoint's race (issue 26) | the next `arg` Stop Endpoints (0 one) on an endpoint with streams open - a UAS drive's, so a cancel on it reaches one: a command the drive refuses with CHECK CONDITION, whose data transfer `xhciuas` then cancels - are sent for real, so the endpoint is truly Stopped, and answered Context State Error, and the next read of that endpoint's context is answered Running: the race an Intel 7 Series controller showed, which in `3.4.1.0` left the cancel's endpoint paused for good. A Stop that does not succeed for real is returned as it is, with no race. The bounded stop issues it again (`cfg.stop.again`) and, for `arg` 0 to 3, the cancel completes; from 4 every restop meets the race too, and the stop is given up (`cfg.stop.giveup`) and the device cycled. Noted `qemu.inj.stoprace` (slot `<< 8` \| DCI) |
+| `1B` | A slow reset (task 49.35, design record 17 section 4.6.1) | every HCRST the driver writes from now on, until `FF`: the reads its reset waits make answer HCRST set in USBCMD (port byte 0) or CNR set in USBSTS (port byte 1) for `arg` x 10 ms, `FF` for ever, though QEMU's own reset completed at once. Arm it, then start a recovery with `1C` or `05`: 5 (50 ms) is waited out at PASSIVE_LEVEL and recovers (`ctrl.recover.settled`, `reset.adopted`); 150 (1.5 s) and `FF` reach the latch after three paced, charged failures. The recovery window (three begun in ten minutes) can refuse a second leg on the same boot: restart the guest between legs |
+| `1C` | A Host Controller Event (task 49.35) | one Host Controller Event, completion code `arg`, handed to the drain: `evt.hc`, the reset request and the recovery, as a real one |
+| `1D` | A stale stream dequeue (task 49.39) | the next `arg` (0 one) stream Set TR Dequeues a cancel sends after taking its head TD off - a UAS drive's, so a command the drive refuses with its data-in TD posted (the emulator's `usb-uas x-ata-passthrough-refuse=on`) or any data-in cancel - go out for real with that TD's first TRB and its cycle in place of the driver's position. QEMU takes it and writes the Stream Context, so the stream would run the cancelled TD again: a deliberately stale hardware dequeue, not a model of any controller's mechanism. Design record 17 section 4.12.8's read-back meets it: with `arg` 0 to 2 the command is sent again and the cancel completes (`cfg.deq.readback`); from 3 every send is altered and the device alone is cycled (`cfg.deq.giveup`); with `XhciStreamDequeueRepair` 0 it is noted only. Noted `qemu.inj.staledeq` (slot `<< 16` \| DCI `<< 8` \| stream) |
+| `1E` | A restart between the read and the command (task 49.39) | the next `arg` (0 one) times a stream's Set TR Dequeue is about to be sent, a doorbell is first rung for another stream of the endpoint that holds a TD, so QEMU may run the endpoint before the command: the command then meets Context State Error and the existing retry stops and sends it again (`cfg.deq.retry`), or it lands and the read-back finds the endpoint Running (`cfg.deq.readback` low nibble 3). Noted `qemu.inj.restart` (slot `<< 16` \| DCI `<< 8` \| the stream rung) |
+| `1F` | A restart inside the read-back's repair (task 49.39) | the next `arg` (0 one) times the read-back is about to resend a stream's Set TR Dequeue after a difference, a doorbell is first rung for another stream of the endpoint (one that holds a TD, else any other: an empty ring runs nothing but takes the endpoint Running), so the endpoint runs between the difference and the resend: the pre-send read finds it Running, or the resend meets Context State Error (`cfg.deq.retry` low nibble 1), and either way the read-back stops it again and places the stream without a cycle (record 17 section 4.12.8). Use it with `1D`, which makes the difference. Noted `qemu.inj.repairrace` (slot `<< 16` \| DCI `<< 8` \| the stream rung) |
 | `FF` | CLEAR | every emulated answer and the lost-interrupt window off, and no further `08` to `12` injection; one already in flight runs to its end (the driver's Reset Endpoint, or the slot's Disable Slot), so no endpoint is left Stopped under a driver that believes it Halted |
 
 Codes `08` to `12` (hex) are 35-T.2 to 35-T.4's, record 17 section 5's rows
@@ -8332,9 +8401,18 @@ REGEDIT4
 "XhciQemuInject"=dword:01020000
 ```
 
-On the NT targets the same file (or `reg add <key> /v XhciQemuInject /t
-REG_DWORD /d 0x01020000 /f` where `reg.exe` exists; Windows 2000 has it only
-from its Support Tools). Wait a second or two after each write before
+On 2000 to 10 the trigger goes in the machine-wide key,
+`HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\USB` (or `reg add <key> /v
+XhciQemuInject /t REG_DWORD /d 0x01020000 /f` where `reg.exe` exists; Windows
+2000 has it only from its Support Tools): since task 49.24 the once-a-second
+read there looks at that key alone, because the controller's driver key is
+opened through `IoOpenDeviceRegistryKey`, which waits behind the PnP manager,
+and from the controller thread it once waited for ever with a stick's I/O in
+flight (2000, 2026-11-12, `runs/run-49.md`, 49.24). A value left in the driver
+key is still read once at the start, and latched there, so on these systems a
+kit that writes the trigger to the driver key no longer fires anything; on
+98 SE and ME either key works, the machine-wide one winning, as for every
+value. Wait a second or two after each write before
 reading the result. The expected outcome of each fault, transient and
 persistent, is record 17 section 5's second table; the 35-V legs read them
 with a HID device and a Bulk-Only copy running.
@@ -9129,8 +9207,11 @@ operator, or an agent typing blind into the guest, ran the installer, and
 the results were read off screenshots. Most of a leg's time went on boots
 under TCG and on that driving. Three things now replace it. Each is a
 tracked script in `scripts\vm-matrix\` and none depends on `scripts\local\`.
-Every guest stays on TCG: the owner ruled out WHPX on 2026-10-20, because
-the NT guests have problems under it.
+Every starting point is made and saved under TCG, and every leg runs on TCG
+except the two Windows 10 legs, which run under WHPX ("The accelerator of
+a leg" below; owner, 2026-11-11, for those two legs only: the rule of
+2026-10-20, no WHPX because the NT guests have problems under it, stands
+for every other guest).
 
 **A starting point per guest** (`make-start.ps1 -Guest <id>`). This is a
 saved machine state beside a frozen disk:
@@ -9176,18 +9257,28 @@ phase ends by switching the machine off:
    - the driver file is checked;
    - `INSTALL /console /list` must show the controller current;
    - a USB stick the host plugs in on request must show up, and a 4 MiB
-     file copied to it must compare equal with `fc /b`. On 2000 to 7 the
-     copy first waits for the stick's volume to be installed: Windows'
+     file copied to it must compare equal with `fc /b`. A file of that name
+     already on the stick is removed first and must then be gone (a folder
+     of that name fails the check), so old data with the same bytes cannot
+     pass a copy that failed. On 2000 to 10 `copy`'s and `fc`'s exit codes
+     must both be 0 as well (`leg\XHCOPY.CMD`, which every copy check of
+     `LEGNT.CMD` uses); on 98 SE and ME, where `COMMAND.COM` gives no exit
+     code to rely on for its `copy`, the file must be there after the copy
+     and `fc` must say "no differences". On 2000 to 7 no
+     drive is looked at until the stick's volume is installed: Windows'
      device-install log must show it finished (2000 and XP: one more
      `STORAGE\` line saying "finished successfully" in `setupapi.log`;
      Vista and 7: more `STORAGE\` lines in `setupapi.dev.log` and no
-     section left open) and then not grow for 15 s, at most 200 s. A stick
-     whose volume was installed before logs nothing new: once the log is
-     quiet the copy goes on, with a note on COM1. Anything else at the bound
-     fails the check. The stick's letter is then found again. XP restarts a
-     stick's volume at the end of its first install, and a file copied
-     before the restart was not found after it (`runs/run-44.md`, "44.20
-     (continued, 2)");
+     section left open) and then not grow for 15 s, at most 300 s from the
+     request. A stick whose volume was installed before logs nothing new:
+     once the log is quiet the leg goes on, with a note on COM1. Anything
+     else at the bound fails `stick-seen`. Only then is the stick's letter
+     searched for. XP restarts a stick's volume at the end of its first
+     install, and a file copied before the restart was not found after it
+     (`runs/run-44.md`, "44.20 (continued, 2)"); and on 2000 the search
+     itself, made while the volume was being installed, held it open, so
+     the install's query-remove was vetoed and Windows asked for a restart
+     (`runs/run-48.md`, "48.final", `w2k-nonfree`);
    - `INSTALL /console /uninstall /yes /nopause` runs.
 3. After the next start, `/list` must succeed and show nothing current.
 
@@ -9220,8 +9311,10 @@ against Windows' own driver for another controller before the emulator is
 blamed"). The check is 2000's only: XP's leg script is the same, so
 adding `Audio` to `xp-console` is a one-line change, not yet run; 98 SE
 cannot take it, since QEMU's `usb-audio` stops 98 SE's own
-`usbaudio.sys` under any stack (Phase 9). A leg with `Audio` refuses to
-start, and the matrix with it, until `WAVCHK.EXE` is built.
+`usbaudio.sys` under any stack (Phase 9). The EXE is not tracked, so a
+tree made for a cut has none: a leg with `Audio`, and the matrix with it,
+runs `build.cmd` when it is missing and refuses to start only when that
+build fails.
 
 Measured on 2026-11-10 (development host A, the q35 2000 base, QEMU
 11.1.2): against `releases\3.4.2.0`, `audio-play` failed (`waveOutOpen`
@@ -9250,7 +9343,12 @@ The host takes the steps a guest cannot take. These are named in
 - on 98 SE, the controller's Add New Hardware wizard at the first start
   after the install (record 23 section 6.2). It blocks every program
   started at logon until it is answered, so the poller cannot run until
-  the host has walked it;
+  the host has walked it. So the poller's `BOOT` line ends the step at
+  once, before any key or at any page before the last: Windows may install
+  the controller's tree by itself and raise no wizard (the window leg,
+  where the run already gave the controller its driver), and a step that
+  waited for a wizard that never came left the guest's request for the
+  stick unread (`runs/run-48.md`, "48.final");
 - on 98 SE, the same wizard at the start after the uninstall, when the
   controller has no driver again: it is escaped;
 - the first stick's wizard (roadmap-usb4 43.42, still open);
@@ -9284,7 +9382,142 @@ host's own steps (the 98 SE wizards, a few minutes each) keep their own
 deadlines, so a freeze during one can fail that step and the leg.
 
 `-Cold` runs the same leg from a cold start instead of the saved state.
-That is the measurement of what the starting points save.
+That is the measurement of what the starting points save. A leg with
+`Cold` in `release-legs.psd1` always starts so.
+
+**The accelerator of a leg (roadmap-usb4 49.4; owner, 2026-11-11).** A leg
+runs on the accelerator `release-legs.psd1` gives it in `Accel`: `tcg`
+when it names none, `whpx` for `w10x86-console` and `w10x64-console` and
+for no other leg (`selftest.ps1` holds the file to that). The rule and what
+it rests on (`runs/run-49.md`, "49.4", development host A, QEMU 11.1.2):
+
+- Under TCG the 10 x86 leg took 77 minutes and the 10 x64 leg 116; under
+  WHPX 21 and 28, with every reading the same but one (the controller's
+  remove, below).
+- QEMU saves and restores no machine state under WHPX ("State blocked due
+  to missing dirty memory tracking support"). So a starting point cannot be
+  made or used under it: every starting point stays TCG's, `make-start.ps1`
+  names no accelerator, and a starting point's hash is the TCG machine's
+  whatever its legs run on. A WHPX leg uses the starting point's disk only
+  and starts cold; the two Windows 10 legs say `Cold`, so they start cold
+  under TCG too and the two accelerators run the same leg.
+- **No fallback.** Before anything of a WHPX leg is started, `run-leg.ps1`
+  (and `release-matrix.ps1`, once for each guest a selected WHPX leg runs
+  on, before its first leg) checks that this QEMU lists `whpx` (`-accel
+  help`) and starts a probe: the guest's own machine, processors and
+  memory under the WHPX value, no disk, stopped. The probe must answer QMP
+  and say `whpx` is what it runs on (`query-accelerators`). Where it does
+  not, the script stops with QEMU's own message, having started no leg:
+  "WHPX cannot run this guest here ... A WHPX leg does not fall back to
+  TCG; -ForceTcg runs it under TCG (the cross-check)." QEMU is given one
+  `-accel` and never a list (it tries a second when the first cannot
+  start), and a second one from a guest's `Extra` is refused. Each start
+  asks QEMU again which accelerator it runs on and is ended if that is not
+  the one asked for.
+- **The record names it.** `result.json` holds `accel` (the `-accel` value
+  every start ran with), `accelOwn` (the leg's own) and `accelForced`, each
+  start its own `accel`, `cmdline-<start>.txt` the whole command line, and
+  the matrix's table an Accel column taken from each leg's record.
+- **The periodic cross-check: `-ForceTcg`.** `run-leg.ps1 -Leg
+  w10x64-console -ForceTcg` (or `release-matrix.ps1 -ForceTcg`, which hands
+  it to every leg) runs a WHPX leg under TCG, with the leg's `TcgMinutes`
+  and `TcgStallSeconds` as its deadline and its longest silence on COM1
+  (under TCG the 10 x64 uninstall wrote nothing for 47 minutes while it
+  removed the package from the driver store). Run both Windows 10 legs so
+  at every release cut, on the cut's package, and again after a change of
+  the emulator, of the leg scripts or of the Windows 10 images, and after
+  a WHPX failure that is not explained. Nothing forces WHPX onto a TCG leg.
+- `Whpx` on a guest in `release.config.psd1` is that host's `-accel` value
+  for WHPX where plain `whpx` does not start (`whpx,kernel-irqchip=off` on
+  the hosts the older launchers were written for; "Windows 2000 SMP Stress
+  VM (Phase 2d)").
+
+**The Windows 10 legs.** `w10x86-console` and `w10x64-console` are console
+legs with `/usb` (Windows 10 has its own xHCI driver, which the installer
+replaces only when told to) on the q35 bases of Windows 10 22H2. Their
+starting points are made as any other (`make-start.ps1`, under TCG: on 10
+the poller's setup is typed into the Run box and started elevated,
+`SetupElevated` `run`). Two keys of `release-legs.psd1` are theirs:
+
+- `Devices`: after the stick's copy, with the stick still in, the guest
+  disables, enables, removes and rescans the controller with Windows' own
+  `pnputil` (`/disable-device`, `/enable-device`, `/remove-device`,
+  `/scan-devices`, which Windows 10 has from version 2004), and copies to
+  the stick again after the enable and after the rescan. Six checks:
+  `ctrl-disable` (the stick's drive gone), `ctrl-enable` and
+  `stick-copy-enable`, `ctrl-remove`, `ctrl-rescan` and
+  `stick-copy-rescan`. All six are needed for PASS. Before the disable
+  the guest waits, as best it can and for at most 8 minutes, for the
+  stick's volume to show no transfer (ten samples 2 s apart, read with
+  `typeperf`). The first forced-TCG leg's disable, about 60 s after the
+  stick's first plug, was deferred by Windows to the next restart
+  (`pnputil` exit 3010, the controller still started). What stood in its
+  way was not read; Windows' own use of a newly plugged stick is
+  suspected (`runs/run-49.md`, "49.4 (continued)"). No transfer does not
+  prove that nothing has the volume open, so the wait is a guard, not a
+  guarantee, and the disable itself is what is judged.
+- `TrustCert` (10 x64): the guest adds the package's own
+  `nt-x64\xhci98-test.cer` to Root and TrustedPublisher before the install
+  (`cert-trust`) and must already be in test-signing mode (`test-signing`;
+  the bases are). The leg needs a signed x64 package, a release's: a
+  package staged without the project's key has no catalog, Windows 10 x64
+  refuses it, and the leg is listed as not in the package.
+
+**The controller's remove keeps a TCG reading.** It is the one step the
+two accelerators did not agree on in the kits these legs replace: on
+2026-11-11 the remove asked for a restart in all four WHPX legs and in
+neither TCG leg, and at the `3.4.3.0` legs TCG asked too. What asks is
+Windows, and its device-install log names why (`runs/run-49.md`, "49.4
+(continued)"; the part of the log the remove wrote is on COM1 in every
+leg). Two reasons were read there on 2026-11-11. Each is what Windows
+named; what brings each about, and whether the accelerator has a part in
+it beyond timing, is not settled:
+
+- **A USB audio function that is open.** "Query-removal was vetoed by
+  USB\VID_46F4&PID_0002&MI_00... (veto type 5: PNP_VetoOutstandingOpen)",
+  then "Setting needs reboot": the function is QEMU's `usb-audio`, which
+  Windows' own `usbaudio` drives, and something has it open. The kits
+  carried that device; these legs do not. Read on 10 x86 under WHPX with
+  `usb-audio`, the stick, a hub and a mouse on the bus (scratch copies of
+  the leg, 15 runs). With a sound playing through the device the remove
+  was refused on `xhci98` (2 of 2) and with the controller on Windows'
+  own xHCI driver, nothing of the package installed (2 of 2): the refusal
+  is Windows' answer to a device in use, whichever driver the controller
+  has. With no sound playing, a remove a few seconds after the
+  controller's enable was refused on `xhci98` (4 of 4, `pnputil` and
+  SetupAPI's `DIF_REMOVE` alike) and not on Windows' own driver (4 of 4);
+  on `xhci98` a remove 30 s, 60 s and 3 minutes after the enable was not
+  refused (1 run each). Two more runs on `xhci98` were not refused a few
+  seconds after the enable: one on 10 x86 with the audio device and no
+  hub or mouse, one on 10 x64 with all of them. So after an enable the
+  function stays open for some seconds on `xhci98`, not in every
+  arrangement, and on Windows' own driver it was already closed at the
+  same moment. What has it open then, and why for longer on `xhci98`, was
+  not read, and every one of these runs was under WHPX. The kits' split
+  fits a matter of timing (under WHPX their remove followed the enable
+  within seconds, under TCG by minutes), which is a likely reading, not a
+  measured one: no matched pair under TCG was run.
+- **The stick's volume.** The forced-TCG leg of 2026-11-11, which has no
+  audio device, was asked for a restart too: "Query-removal was vetoed by
+  STORAGE\Volume\...USBSTOR#Disk&Ven_QEMU... (veto type 6:
+  PNP_VetoDevice)", the volume of the stick the leg had copied to just
+  before. The WHPX legs' remove, with the same stick, has answered "done"
+  in every run so far (nine runs of the two legs).
+
+So the answer follows what Windows has open or in use at that moment,
+which the leg does not control, and it is recorded under either
+accelerator and judged under neither: `ctrl-remove`
+passes when `pnputil` removed the device with or without asking for a
+restart, the guest says which (`ctrlRemove` in `result.json`, "done" or
+"restart asked"), and the part of Windows' device-install log the remove
+wrote goes to COM1. What follows is judged as always: the rescan and its
+copy, the uninstall and the list after it. After a remove that asked for
+a restart the uninstall may stop with exit 4 ("removed, restart
+pending"); the guest must find those words in the installer's log
+(`uninstall-pending`), and runs the uninstall again after the next cold
+start (`uninstall-again`), before the last start's list. A WHPX leg's
+record says of the remove "recorded only: this step keeps a TCG reading",
+and claims none: the reading is the forced-TCG leg's on the same package.
 
 **One leg per system installs with the installer's window**
 (`run-leg.ps1 -Leg <id>-window`). The guest is restored with the CD in,
@@ -9307,7 +9540,8 @@ A running leg holds its vCPUs for its whole life, between its cold starts
 too. Other QEMUs on the host are counted as they run.
 
 It writes one table, `results.md` and `results.csv`, with each leg's
-verdict, minutes, starts, restore time, exit codes and reasons. The Manual
+accelerator, verdict, minutes, starts, restore time, exit codes and
+reasons. The Manual
 legs appear in it as owed, and a leg whose guest the configuration does
 not have as not configured. A leg that needs a part only another
 download carries (the 43.48 legs need the -nonfree download's
@@ -9739,3 +9973,61 @@ them from the row that points here and its neighbours.
 | A.1 | SP4's native `usbhub.sys` (5.00.2195.6689, 40,176 B, from the fresh Windows 2000 image) carries no `SelectiveSuspend`, `DisableSelectiveSuspend` or `IdleNotification` string, ASCII or UTF-16; SP4's `usbport.sys` (5.00.2195.6681) carries `DisableSelectiveSuspend` (3), `HcDisableSelectiveSuspend` (2) and `SelectiveSuspend` (3) | static (a string search over the files extracted from the image; nothing disassembled, nothing executed) | build-and-test.md, "A replug onto an idle-suspended controller"; F18's Windows 2000 reading |
 | A.2 | Vista SP2 x86 `usbport.sys` (6.0.6002.18005, 226,304 B, `tools/vista-x86-extracted/`) carries, as UTF-16 substring matches (so a longer name is counted again under the shorter), `DisableSelectiveSuspend` (2), `HcDisableSelectiveSuspend` (1), `SelectiveSuspend` (2) and `FastS4_OverrideBiosS4` (1); Windows 7 SP1 x86 `usbport.sys` (6.1.7601.17514, 284,672 B, `tools/win7-x86-extracted/`) carries `DisableSelectiveSuspend` (1), `SelectiveSuspend` (2), and neither `HcDisableSelectiveSuspend` nor `FastS4_OverrideBiosS4`. On the Vista guest, `FastS4_OverrideBiosS4` is present in the clean-install `vm\vista.img`'s `Windows\System32\config\SYSTEM` hive and `DisableSelectiveSuspend` is not; that image's `Windows\inf\usbport.inf` names `FastS4` nowhere, its `AddReg` sections included | static (a string search over the extracted files and over `SYSTEM` and `usbport.inf` pulled from the image with `7z e`; nothing disassembled, the guest not booted for it). The value's *effect* on both stacks is a separate, runtime reading: the driver's own debug-console trace and `USBCMD`/`USBSTS` read off the QEMU monitor, 2026-09-16 | `build-and-test.md`, "Windows Vista and Windows 7 target VMs", the idle-suspend reading; issue 5 section 5 |
 | A.3 | Windows XP Professional x64 SP2's `AMD64\LAYOUT.INF`: `usbport.sys = 100,,212480,,,,4_,4,1,3,,1,4`, `usbhub.sys = 100,,102400,...`, `usbd.sys = 1,,222222,...`, `usbui.dll = 1,,222222,,,,,2,1,3`, and no `usbhub20.sys` row at all; `[SourceDisksNames.amd64]` gives disk 1 = `\amd64` on the base CD and disk 100 = `\amd64` on the service-pack source, so the first two resolve to `AMD64\SP2.CAB` and the last two to `AMD64\DRIVER.CAB`. The four files there are 212,480 B, 102,400 B, 7,552 B (5.2.3790.1830) and 123,392 B (5.2.3790.1830); the first three sizes match `tools/winxp64-extracted/` exactly, which is what authenticates the reading | static (7-Zip on the owner's own ISO and on the two cabinets; `expand` not needed, `LAYOUT.INF` is uncompressed on this medium; nothing executed) | `src/xhci98-amd64.inf`'s header block; `build-and-test.md`, "The files the OS supplies"; roadmap task 21.3 |
+
+## Mode 4 for testers (`XhciInterruptMode` `4`)
+
+Mode 4 is a hidden beta (owner, 2026-11-12): the installer never offers or mentions it,
+`README.md` and the release notes say nothing of it, and `docs/using/tuning.md` lists its values only as an
+unsupported test feature. Only the Advanced settings rows of Setup and of the USB Tree show it. This section is
+what a tester is pointed at; design record 15 section 4.5 is the design, and the legs are in `runs/run-49.md`
+(49.24).
+
+`XhciInterruptMode` `4` gives the controller a message-signalled interrupt (MSI) on Windows systems that have none of their own: Windows 2000, XP, Server 2003 and XP x64. Automatic (`0`) never chooses it. Vista and later have their own (`3`), and a controller set to `4` there does not start.
+
+**There is no fallback.** When the message cannot be connected, the controller does not start (Code 10): it does not use its line or polling instead. A keyboard, a mouse or a disk on that controller is then not available until the setting is changed. If the message stops arriving while the controller runs, the controller stops working; on 2000 and XP Windows is told that the device failed. To go back: set `XhciInterruptMode` to another value (`0`, automatic), then disable and enable the controller in Device Manager, or restart. If Windows 2000 or XP does not finish starting, press F8 at the start and choose "Last Known Good Configuration". When the driver could not turn a controller's message off at a stop or a removal, that controller does not start again, under any value, until Windows restarts; the log says so.
+
+The 98 SE and ME message path is not part of `3.5.0.0` (owner, 2026-11-13): on 98 SE and ME a `4` runs as `0`
+(automatic), and Setup and the USB Tree offer `4` on 2000, XP and XP x64 alone.
+
+On **2000, XP and XP x64** the message is built into the driver. `XhciMsiStrategy` says where its vector comes from:
+
+- `0` (default): a free ISA interrupt (IRQ 3 to 7, 10 or 11) is claimed for the controller, because the controller's own line is usually shared with other devices. The IRQ is then reserved for the controller, and no device started later can use it. The driver never takes IRQ 0, 1, 2, 8, 9, 12 to 15 or the ACPI interrupt, nor an IRQ the firmware overrides or marks level-triggered, one any device uses or is configured for, or one the chipset routes a PCI interrupt to. Of the rest it takes the first of 10, 11, 5, 7, 6, 3 and 4 that Windows grants and that stays quiet while the driver listens on it. When none is left, the controller does not start. The log says, for every IRQ, why it was taken or not.
+- `1`: the controller's own interrupt line is borrowed. Set it only when no other device uses that IRQ: on a shared line the other devices can fail to start, or the line can be raised all the time. The driver refuses to start the controller when it sees another device on the line, but it cannot see every case.
+- Any other value: the controller does not start.
+
+`XhciMsiIsaIrq` (default `0`, the driver's choice) forces the IRQ that strategy `0` claims: `3`, `4`, `5`, `6`, `7`, `10` or `11`. The rules above still apply, except a device's possible configuration, and when the IRQ is refused the controller does not start. Any other value also stops the controller from starting. Use it when the log shows that the IRQ chosen is wrong for the computer, for example a serial port or a sound card the firmware does not describe. A wrong IRQ shows as the controller stopping with an error, and the log reports the interrupt entered many times with nothing to do. A device that raises the IRQ fast enough could instead make Windows stop responding: watch the first starts with this mode on a new computer. Disabling the unused device in the firmware setup also helps.
+
+`XhciMsiShare` (default `8`) is the most controllers of this driver on one claimed IRQ before another IRQ is taken: controllers fill one IRQ up to that many, and the next takes a fresh one (`2` to `16`; larger values count as `16`). `1` gives every controller an IRQ of its own: a controller that finds none left then does not start. `0` is not offered and counts as `1`. A controller that stops and starts again joins the fullest IRQ with room, and takes a fresh one only when its IRQ is full. Only this driver's controllers share; the Thunderbolt or USB4 host's own message never does.
+
+These values, like every value here, can be set once for every controller in the machine-wide key, or for one controller in its own key with no machine-wide value set (see "Where the values are, and every value"). A forced `XhciMsiIsaIrq` set machine-wide is one IRQ for every controller. A forced ISA IRQ (`3`, `4`, `5`, `6`, `7`, `10` or `11`) is shared when `XhciMsiShare` is `2` or more (the default `8` included): the second controller joins it, up to `XhciMsiShare` controllers, and one beyond that does not start. With `XhciMsiShare` `1` (or a stored `0`) a second controller on the same forced IRQ does not start. A forced input above 23 is never shared (below). To give each controller its own IRQ, delete the machine-wide value and set one in each controller's key.
+
+On **32-bit 2000 and XP** strategy `0` can also take an I/O APIC input above 23 that no device of the computer is declared to use. It is off unless set, and is not available on XP x64:
+
+- `XhciMsiPools` (default `0`): `0` the ISA IRQs only; `1` the inputs above 23 only; `2` both, the ISA IRQs first. Any other value: the controller does not start.
+- `XhciMsiInputFirst` and `XhciMsiInputLast` (default `0` and `0`, every input from 24 to 255): the lowest and the highest input considered. Either both are `0`, or `24` <= first <= last <= `255`; any other pair, one of them `0` included, stops the controller from starting. Read only when `XhciMsiPools` is `1` or `2`.
+- `XhciMsiInputBudget` (default `0`, 16): how many different inputs above 23 the driver may ask Windows for in one boot, `1` to `32`; above `32` the controller does not start. Each one asked for uses up a vector of the computer until the next restart. Read only when `XhciMsiPools` is `1` or `2`.
+
+With an input above 23, `XhciMsiIsaIrq` may also name that input (`24` to `255`, inside the range). An input above 23 is never shared, whatever `XhciMsiShare` says, and a computer with no free input there does not start the controller under `1`. So a forced input above 23 set machine-wide leaves every controller after the first not started.
+
+Every value is read when the controller starts: disable and enable the controller, or restart.
+
+**Why a start was refused** (2000, XP and XP x64). The USB Tree cannot open a controller that did not start, so its
+dump says nothing then. `regedit /e` of the MSI code's state key under `HKLM\HARDWARE`
+shows each copy's `History` value: the MSI code's calls of this boot, with the claim
+and every IRQ's reason, a connect refused and its status, a quarantine. A refusal this driver makes before it calls
+the MSI code leaves no history - a value out of range, `XhciMsiAvoid`, the x86 helper not running, a controller
+refused after a quarantine until the restart - and then the Device Manager code and the values set are all there is;
+the newest event shown may then be an earlier attempt's.
+
+Where its legs have been read, all of them in QEMU guests: `runs/run-49.md`, section 49.24 (49.24.1 worker m4c
+on the build of `b38a54473`; 49.24.2 worker m4x on `7e82e5a55`; 49.24.3 worker m4n on `7e82e5a55` for 2000). Anything
+not named here has not been read with mode 4; "not read yet" marks legs
+still running when this was written.
+
+| Windows | Read and passed | Read, with a limit | Not read |
+|---|---|---|---|
+| 98 SE and ME | The 98 SE and ME message path is not part of `3.5.0.0` (owner, 2026-11-13); a `4` runs as `0`. | | |
+| 2000 SP4 (`halmacpi`, one processor) | start (claimed IRQ 3, MSI-X, vector 51h), the published state, copy and compare, restart, shutdown; disable and enable; stranded events served by the backstop with the connection kept, and the loss (cause 2), with and without a copy in flight: Windows told, the controller removed (49.24.3, 1a to 1e'') | after a loss the controller stays stopped until Windows restarts; a remove and rescan needs the reinstall, as in mode 0; standby and hibernation are not offered by the vehicle (49.24.3, 1c', 1d) | `halaacpi`; two processors |
+| XP SP3 | start (claimed IRQ 3, MSI-X, vector 1B2h), the published state, copy and compare, restarts, disable and enable, shutdown; the stranded events and the loss (Code 43, recovered by disable and enable); the quarantine (Code 10 until a restart); hibernation and resume with the re-arm, and an injected failed re-arm (49.24.1 xp1; 49.24.2 xr, xq, xq tag f); nine controllers at the default `XhciMsiShare` 8 with three free IRQs (eight on one IRQ, the ninth on a second, a stick on each clean, a disable and enable rejoining, a hibernation keeping the claims) and at `1` and a stored `0` (three started, six refused cleanly, Code 10), 2026-11-13 (record 15 section 4.5.19) | standby not offered by the vehicle (49.24.2); remove and rescan needs the reinstall (49.24.2 xq) | the loss with a copy in flight |
+| XP x64 | start (claimed IRQ 3, MSI-X), the published state, copy and compare, shutdown (49.24.1 xp64) | | not read yet: worker m4x's XP x64 legs (49.24.2) |
+| 7 x86 | mode 4 refused as designed (Code 10); modes 0 and 3 unaffected (49.24.2 wr) | | |

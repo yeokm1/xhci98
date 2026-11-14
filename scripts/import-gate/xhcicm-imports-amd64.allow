@@ -121,7 +121,7 @@ ntoskrnl.exe!KeInitializeTimer             all    required  nt52-amd64-export; t
 ntoskrnl.exe!KeSetTimer                    all    required  nt52-amd64-export; twin of the x86 row (task 45.59)
 ntoskrnl.exe!KeCancelTimer                 all    required  nt52-amd64-export; twin of the x86 row (task 45.59)
 ntoskrnl.exe!ObfReferenceObject            all    required  nt52-amd64-export; twin of the x86 row (task 45.59)
-ntoskrnl.exe!ExQueueWorkItem               all    required  SITES=cm_filt.obj nt52-amd64-export; twin of the x86 row (task 48.29)
+ntoskrnl.exe!ExQueueWorkItem               all    required  SITES=cm_filt.obj,cm_reenum.obj nt52-amd64-export; twin of the x86 row (task 48.29); task 49.46, cm_reenum.obj: named only in the wake power-up's route R2, which is not compiled (CM_WPU_R2_BUILT 0, design record 21 section 6.3.1); the site is here because these objects are LTCG and the rule is checked on the source text, while the x86 row, checked on the objects, keeps cm_filt.obj alone
 
 [deny]
 

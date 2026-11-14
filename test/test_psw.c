@@ -114,8 +114,8 @@ static ULONG fakeValue(PVOID context, PULONG value)
 
 /* A Lynx Point with four SuperSpeed and fourteen USB 2.0 connectors
  * switchable, all on EHCI, as firmware on Auto leaves it; a Lenovo
- * subsystem id, and XhciIntelPortSwitch set to 1 by the user (the INF has
- * written 0 since task 36.42). */
+ * subsystem id, and XhciIntelPortSwitch at 1 (the INF's value since task
+ * 49.47). */
 static void fakeInit(FAKE_CFG *f, XHCI_PSW_IO *io)
 {
     ULONG i;
@@ -205,7 +205,8 @@ static void test_board(void)
 static void test_mode(void)
 {
     /* A listed controller: on for a found nonzero value, off when absent
-     * (task 36.42); 2 is not a bypass. */
+     * (task 36.42; kept by task 49.47 for text-mode Setup); 2 is not a
+     * bypass. */
     CHECK_EQ(XhciPswMode(ID_LISTED, 0, 0), XHCI_PSW_MODE_OFF,
              "listed, absent is off");
     CHECK_EQ(XhciPswMode(ID_LISTED, 0, 5), XHCI_PSW_MODE_OFF,
@@ -572,7 +573,8 @@ static void test_life_start(void)
     checkAccess(&f, 1, 'v', FAKE_VALUE, 0, "the value after the id");
 
     /* Absent, or of another type (the executor's reader refuses both the
-     * same way): off, the default since task 36.42. */
+     * same way): off, on a listed controller too (task 36.42; kept by task
+     * 49.47, owner 2026-11-14: text-mode Setup writes no value). */
     fakeInit(&f, &io);
     f.ValueFound = 0;
     CHECK_EQ(XhciPswLifeStart(&io, &life, &st), 0, "listed, value absent");
@@ -582,6 +584,17 @@ static void test_life_start(void)
     CHECK_EQ(life.Value, 0, "the value logged as 0");
     CHECK_EQ(life.On, 0, "not on");
     CHECK_EQ(life.Written, 0, "nothing written");
+    CHECK_EQ(f.Count, 2, "the id and the value, no subsystem read");
+    CHECK_EQ(fakeWrites(&f, XHCI_PSW_USB3_PSSEN) +
+             fakeWrites(&f, XHCI_PSW_XUSB2PR), 0, "no write when absent");
+    CHECK_EQ(XhciPswLifeEnd(&io, &life, &st), 0, "no release");
+
+    fakeInit(&f, &io);
+    f.Id = ID_SPT;
+    f.ValueFound = 0;
+    CHECK_EQ(XhciPswLifeStart(&io, &life, &st), 0, "Sunrise Point, absent");
+    CHECK_EQ(life.Decision, XHCI_PSW_DECIDE_OFF, "unlisted absent is off");
+    CHECK_EQ(life.On, 0, "not on");
     CHECK_EQ(f.Count, 2, "the id and the value, no subsystem read");
     CHECK_EQ(fakeWrites(&f, XHCI_PSW_USB3_PSSEN) +
              fakeWrites(&f, XHCI_PSW_XUSB2PR), 0, "no write when absent");

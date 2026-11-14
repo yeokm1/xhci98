@@ -68,9 +68,10 @@ $trees = @("src", "test", "scripts", "xhciinst", "xhcimark", "xhcitr", "xhciqual
 
 # File kinds the 1998-era toolchain reads. All three rules apply to these.
 # `.oem` is txtsetup.oem, which text-mode Setup reads (task 33.3); `.vbs` is
-# src\portsw.vbs, which Windows 98's Script Host reads (roadmap-hcd 36.42);
-# `.bat` covers src\portsw-on.bat and portsw-off.bat, which COMMAND.COM runs
-# on Windows 98 SE and ME (roadmap-hcd 36.56); `.reg` is src\silent.reg,
+# src\silent.vbs, which Windows 98's Script Host reads (task 38.2; and
+# src\portsw.vbs from roadmap-hcd 36.42 until task 49.47); `.bat` covers
+# src\silent-on.bat and silent-off.bat, which COMMAND.COM runs on Windows
+# 98 SE and ME (task 38.2); `.reg` is src\silent.reg,
 # which Windows 98's REGEDIT imports (task 38.2), and `.manifest` the tools'
 # application manifests, which rc.exe embeds and the loader reads.
 $toolchainExt = @(".c", ".h", ".asm", ".rc", ".def", ".inf", ".bat", ".cmd", ".oem", ".vbs", ".reg", ".manifest")

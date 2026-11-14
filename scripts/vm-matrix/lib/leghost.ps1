@@ -66,10 +66,16 @@ function Remove-LegMedium {
 
 # Waits until the screen has stopped changing (a dialog has finished
 # drawing), at least $MinSeconds after $Since and at most $MaxSeconds.
+# $Until, when given, ends the wait at once (returning $false) as soon as it
+# answers true: a host step that must not keep the guest's lines unread.
 function Wait-LegScreen {
-    param([int]$QmpPort, [string]$Dir, [datetime]$Since, [int]$MinSeconds = 30, [int]$MaxSeconds = 300)
-    while (((Get-Date) - $Since).TotalSeconds -lt $MinSeconds) { Start-Sleep -Seconds 2 }
+    param([int]$QmpPort, [string]$Dir, [datetime]$Since, [int]$MinSeconds = 30, [int]$MaxSeconds = 300, [scriptblock]$Until = $null)
+    while (((Get-Date) - $Since).TotalSeconds -lt $MinSeconds) {
+        if ($Until -and (& $Until)) { return $false }
+        Start-Sleep -Seconds 2
+    }
     while (((Get-Date) - $Since).TotalSeconds -lt $MaxSeconds) {
+        if ($Until -and (& $Until)) { return $false }
         if (Test-ScreenSettled -QmpPort $QmpPort -Dir $Dir) { return $true }
     }
     return $false
@@ -508,28 +514,38 @@ function Invoke-LegHostStep {
             # files from"; Finish; Yes to the restart (which ends QEMU). The
             # copy's dialogs come when the copy reaches them, so they are
             # recognised on the screen (Get-Leg98Dialog), not timed.
-            $settled = Wait-LegScreen -QmpPort $QmpPort -Dir $Dir -Since $Since -MinSeconds 40
+            $pollerUp = { (Get-LegSerialLines $SerialPath) -match '^XHLEG BOOT' }
+            $settled = Wait-LegScreen -QmpPort $QmpPort -Dir $Dir -Since $Since -MinSeconds 40 -Until $pollerUp
             Save-LegShot $QmpPort $Dir "$Tag-hcd-0"
             # No wizard when the install already gave the controller its
             # driver (the window's run on the q35 machine, read 2026-10-26):
-            # the poller then starts, and no key is sent.
+            # the poller then starts, and no key is sent. The poller up at
+            # any point before the wizard's last page ends the step too, at
+            # once: Windows can install the controller's tree by itself
+            # ("New Hardware Found: xHCI98 USB 3 Root Hub" on the window
+            # leg, 2026-11-10), and the step that waited out its 300 s for a
+            # last page that never came left the guest's request for the
+            # stick unread for 6 minutes, so the stick came too late. Every
+            # wait up to that page, the screen waits included, reads COM1.
             $deadline = (Get-Date).AddSeconds(300)
             $seen = $false
             while ((Get-Date) -lt $deadline -and -not $Process.HasExited) {
+                if (& $pollerUp) { return "${Step}: no wizard, the poller up (the controller had its driver)" }
                 if ((Get-Leg98Dialog -QmpPort $QmpPort -Dir $Dir) -eq 'wizard') { $seen = $true; break }
-                if ((Get-LegSerialLines $SerialPath) -match '^XHLEG BOOT') { return "${Step}: no wizard, the poller up (the controller had its driver)" }
                 Start-Sleep -Seconds 5
             }
             if (-not $seen) { Save-LegShot $QmpPort $Dir "$Tag-hcd-nowizard"; return "${Step}: FAILED, neither the wizard nor the poller in 300 s" }
             for ($i = 1; $i -le 4; $i++) {
                 if ($Process.HasExited) { return "${Step}: FAILED, QEMU ended at Next $i" }
+                if (& $pollerUp) { Save-LegShot $QmpPort $Dir "$Tag-hcd-poller"; return "${Step}: the poller up after $($i - 1) Next keys (no wizard left to walk)" }
                 Send-QmpChord -Port $QmpPort -Chord 'ret'
-                $null = Wait-LegScreen -QmpPort $QmpPort -Dir $Dir -Since (Get-Date) -MinSeconds 4 -MaxSeconds 60
+                $null = Wait-LegScreen -QmpPort $QmpPort -Dir $Dir -Since (Get-Date) -MinSeconds 4 -MaxSeconds 60 -Until $pollerUp
                 Save-LegShot $QmpPort $Dir "$Tag-hcd-$i"
             }
             $typed = 0; $disk = 0; $quiet = 0; $copySeen = $false
             $deadline = (Get-Date).AddSeconds(300)
             while ((Get-Date) -lt $deadline -and -not $Process.HasExited) {
+                if (& $pollerUp) { Save-LegShot $QmpPort $Dir "$Tag-hcd-poller"; return "${Step}: the poller up before the wizard's last page (Insert Disk $disk, directory typed $typed)" }
                 $state = Get-Leg98Dialog -QmpPort $QmpPort -Dir $Dir
                 if ($state -eq 'insert-disk') {
                     $copySeen = $true; $disk++; Save-LegShot $QmpPort $Dir "$Tag-hcd-disk$disk"
@@ -678,10 +694,18 @@ function Add-LegAudio {
 }
 
 # WAVCHK.EXE, the guest's playback check, built by wavchk\build.cmd; an
-# audio leg cannot run without it.
+# audio leg cannot run without it. Not tracked, so a tree made for a cut has
+# none (48.final): built here, once, when it is missing.
 function Get-LegWavChk {
-    $p = Join-Path (Split-Path -Parent $PSScriptRoot) 'wavchk\WAVCHK.EXE'
-    if (-not (Test-Path -LiteralPath $p)) { throw "an audio leg needs ${p}: run scripts\vm-matrix\wavchk\build.cmd" }
+    $d = Join-Path (Split-Path -Parent $PSScriptRoot) 'wavchk'
+    $p = Join-Path $d 'WAVCHK.EXE'
+    if (-not (Test-Path -LiteralPath $p)) {
+        $out = & (Join-Path $d 'build.cmd') 2>&1
+        $code = $LASTEXITCODE
+        if ($code -ne 0 -or -not (Test-Path -LiteralPath $p)) {
+            throw "an audio leg needs ${p}, and wavchk\build.cmd could not build it (exit ${code}): $(@($out) -join ' / ')"
+        }
+    }
     return $p
 }
 

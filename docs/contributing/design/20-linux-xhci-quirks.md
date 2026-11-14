@@ -687,6 +687,9 @@ outside it changes:
   `resume.keep.d0wait`. Past the bound the D0 completes all the same, and
   what the function drivers then send to a device the pass has not yet
   kept or dropped goes as it did before this change.
+- The serial a storage device needs (the flag `XHCI_RKEEP_F_SERIAL`) is,
+  since 2026-11-12, a serial no other present device carries, checked at the
+  decision and at the reopening (section 4.3.4, M4, which records the change).
 - K8 needs no change in `xhciuas.sys`: a UAS drive is kept only with no
   URB pending on its PDOs when the thread's pass looks (`UrbsPending`, the
   count the check reads), and its stream handles are the kept pipes'.
@@ -694,7 +697,8 @@ outside it changes:
   power-down; it shows a command in flight because `xhciuas.sys` posts a
   command's status URB before its command IU and keeps it until the
   command ends (`uas_xport.c`, `uasPump`). A Bulk-Only drive is not kept until the
-  drain contract of each `usbstor` is read (K4).
+  drain contract of each `usbstor` is read (K4). Section 4.3.4 designs keeping one without the class
+  driver's help (task 49.34).
 - Read on q35 XP (`runs/run-45.md`, "45.23"): a UAS drive idle at the
   hibernation, a file held open on it and written every second, is
   restored in place and the file goes on growing with no error; the
@@ -720,7 +724,8 @@ The owner decided on 2026-10-30 that a UAS drive under load when a resume
 re-initializes the controller - a copy loop, a virtual machine's disk
 under constant writes - is kept as well, in `3.4.0.0`, instead of dropped
 (section 4.3.2's `XHCI_RKEEP_WHY_BUSY`). A Bulk-Only drive stays dropped
-(section 4.3.2: the drain contract of the `usbstor` drivers is unread).
+(section 4.3.2: the drain contract of the `usbstor` drivers is unread); section 4.3.4
+designs keeping one, on the bus's own proof of the transport (task 49.34).
 
 **B1. What the re-initialization leaves of a request in flight.** HCRST
 took the slot, so every TRB the controller held on the drive's rings, the
@@ -914,6 +919,523 @@ or a flush that runs out of time, an abandoned internal command, a check
 whose command times out, a keep pass slower than fifteen seconds, a drive
 with neither identification page, and Windows 2000 SP4 and 98 SE
 hibernation where the harness cannot enter it.
+
+#### 4.3.4 A Bulk-Only drive kept across the re-initialization (task 49.34; design, put to the owner)
+
+Status: design of 2026-11-11, reviewed and revised; decided by the owner on 2026-11-12 (M16) and built for
+`3.5.0.0`. Roadmap-usb4 task 49.34, opened by the owner from 49.32 (`runs/run-49.md`, "49.32" and "49.32
+(continued)").
+
+**Why.** Sections 4.3.2 and 4.3.3 keep a UAS drive across a resume that re-initializes the controller and drop a
+Bulk-Only one (`XHCI_RKEEP_WHY_BULK_ONLY`), so a mounted Bulk-Only volume is surprise-removed after every such
+resume. In 49.32's emulator readings (Windows 2000, two processors, a hibernation with copy loops running on a
+Bulk-Only stick and a UAS disk) Windows could then stop inside its FAT file system while delivering the stick's old
+volume that removal (3 of 5 hibernations); Windows 2000's own EHCI stack, left alone, carried the same stick across
+the hibernation (3 of 3: no removal, the loop went on), and made to remove it after the hibernation showed the same
+wait's signature (2 of 3, with this project's drivers still serving the other devices). What starts that wait is
+not known; what is known is that this driver's removal of the stick exposes the volume to it where Windows' own stack
+did not remove the stick. This section designs keeping a Bulk-Only drive instead, on the UAS keep's terms.
+
+**M1. The reasons for the drop, and the answer to each.** The record gives four (sections 4.3.1, K4; 4.3.2, the K8
+line; 4.3.3, its opening):
+
+- (a) *A Bulk-Only command spans several URBs, and no URB outstanding does not prove no command outstanding*: a
+  command can sit between its finished CBW and its data or CSW. Answered by M3: the bus reads the transport's own
+  framing on the wire it carries - each CBW, the data phase's bytes, each CSW - and keeps the drive only at a proven
+  boundary, where the last command's CSW has been validated and nothing has been sent since.
+- (b) *A command in flight cannot be continued after the device's reset, and issuing it again is not safe* (B2).
+  Answered by exclusion, not by recovery: a drive with any command begun and not ended is not kept (M3, M4), so no
+  command crosses the reset and none is issued again.
+- (c) *Failing the URBs in flight hands the class driver a transport error whose recovery - each `usbstor`'s reset
+  recovery - is unread.* Avoided by the same exclusion: no URB of a kept Bulk-Only drive is failed (M4's latch drops
+  the drive instead of failing one), so the class driver is never asked to recover anything the keep caused.
+- (d) *Each `usbstor`'s drain contract - that it finishes every command before its D3 - is unread.* Not assumed. The
+  bus checks the wire (M3), which covers the device side; what is left is the class driver's own state across the
+  sleep, which the bus cannot read. Two parts of it are named and covered: a sense owed after a CHECK CONDITION
+  (M3's SENSE state: not kept), and a command prepared but not yet sent (M4's latch: sent before the reopening, it
+  drops the drive; sent after, it is a new command). The rest - that each `usbstor` carries on over a device the
+  restore reset, as it does under Windows' own stack after a hibernation, where the device lost power - is admitted
+  per Windows by readings (M9, M14), not assumed: a Windows gets the keep by default only once read.
+
+The UAS keep answered these through `xhciuas.sys`'s own cooperation (B3 to B7). A Bulk-Only drive's class driver is
+Windows' own `usbstor.sys` on 2000 to 10, NUSB's `usbstor.sys` with `USBNTMAP.SYS` on 98 SE, ME's own on ME: none is
+this project's, so none can hold, flush, declare or check. This design asks nothing of the class driver; it relies on
+its behaviour, read per Windows.
+
+**M2. Scope.**
+
+- *Windows.* 2000 first (the owner's interest; where 49.32 was seen). XP to 10 (32- and 64-bit): the same mechanism,
+  which asks nothing of their `usbstor`; each is admitted by its readings (M9). 98 SE and ME: deferred, off by default
+  - their storage stack (IOS, NUSB's or ME's `usbstor`, `USBNTMAP` on 98 SE) is unread across a standby or a
+  hibernation under any host controller driver, the owner's 98 SE bench machine offers no standby, and the dormant
+  PDOs of record 13 section 5.2 are a 9x path the UAS keep's legs did not read either. The switch acts there if set.
+- *Resumes.* Every resume that re-initializes the controller (`XhciResumeController`'s re-initialization, a
+  hibernation or a standby whose state was lost or not restorable; `XhciResumeReinit`'s controllers), under K1 and
+  K2 as built: only once that resume returned success, its HCRST done. A resume that restored the controller keeps
+  every device without this section. **A controller recovery is out** (K1): it follows a fault, while every class
+  driver is in D0 and sending, so there is no point at which the stack above has stopped; the fault may have ended a
+  transfer the controller had partly carried out with no completion seen by the host, so the bus's view of the wire
+  is not the device's; and the device may be the fault. Every device is dropped at a recovery, as today.
+- *Devices.* A Bulk-Only drive on a root port: in. Behind a hub: out, as every device behind a hub is today (K3's
+  subtree restore is not built). A composite device with a Bulk-Only function: out in the first build (owner, M14;
+  the decision takes the whole PDO group, and no vehicle here presents a composite Bulk-Only device). One interface,
+  one LUN: the device's configuration has one interface, of class 08, subclass 06h (the SCSI transparent command
+  set) and protocol 50h at its active alternate, and its max LUN is 0 (M3). Other subclasses (RBC 01h, ATAPI 02h,
+  QIC-157 03h, UFI 04h, SFF-8070i 05h, vendor values) are out of the first build: protocol 50h fixes the framing, the
+  subclass the command set, and M5's check sends and parses SCSI commands only - so a drive whose command set the
+  bus does not know is dropped before any command of the bus reaches it. The CDBs M5 sends are SPC/SBC's: TEST UNIT
+  READY and REQUEST SENSE (6 bytes), READ CAPACITY (10) (10 bytes) and (16) (16 bytes), each with bCBWCBLength its own
+  length. A card reader with no medium: in when it has one LUN (its commands are
+  TEST UNIT READY and the like, tracked as any command); its medium is checked by M5's capacity check. Several LUNs
+  (most multi-slot readers): out in the first build (owner, M14): one command after the resume proves nothing about
+  another LUN's medium. A device run on its Bulk-Only form though it offers UAS too (record 13 section 10.7.3): in, as
+  a Bulk-Only drive. Control/Bulk/Interrupt devices (protocols 00h and 01h) and every protocol but 50h: out.
+
+**M3. The transport proof: a Bulk-Only state machine per interface.** Pure (in `xhci_xport.c` or a file of its own,
+host vectors), fed by the bus's own submissions and completions on the interface's two bulk pipes and on EP0 for the
+class and endpoint requests that name the interface or its endpoints. Fail-closed: every event the machine does not
+list leads to UNKNOWN, and UNKNOWN is left only through a SYNC event.
+
+- SYNC: the device is defined to be waiting for a CBW. Entered only at events that establish it: the completion of
+  the first SELECT_CONFIGURATION after the bus enumerated the device (it was reset and addressed and has carried
+  nothing since); the Bulk-Only reset recovery, in the specification's order (Bulk-Only Transport 1.0, sections 3.1
+  and 5.3.4): a Bulk-Only Mass Storage Reset (class request FFh) that succeeds, then CLEAR_FEATURE(ENDPOINT_HALT)
+  succeeding on the Bulk-In endpoint, then on the Bulk-Out endpoint, with nothing else on the interface between; the
+  bus's own port reset and replay (RESET_PORT, `hcdCfgResetPort`); and a keep's restore, only through M4's
+  reopening. A SELECT_INTERFACE that completes while SYNC with no CBW carried since the SYNC event (a class driver
+  selecting the alternate again at its start) leaves SYNC as it is: nothing has crossed the transport. Any other
+  SELECT_INTERFACE, and every SELECT_CONFIGURATION but the first, is UNKNOWN, not SYNC: it does not reset the
+  device's Bulk-Only state, and this bus may complete SELECT_INTERFACE successfully after the device STALLed
+  SET_INTERFACE, by clearing the endpoints' halts (`hcd_cfg.c`, the SELECT_INTERFACE path), which proves nothing of
+  the transport. (The SET_INTERFACE the bus sends inside its own SELECT_CONFIGURATION, read in R2, is part of that
+  select, before its completion.) Initial state before the first configuration: UNKNOWN.
+- A CBW: in SYNC or IDLE - or in SENSE, for a REQUEST SENSE only (below) - a bulk-OUT submission of exactly 31 bytes
+  whose bytes are readable without a mapping call
+  (the URB's `TransferBuffer`, or an MDL mapped or describing nonpaged pool, as `hcdCopyAnswer` reaches a client's
+  buffer), with signature 43425355h, bCBWCBLength 1 to 16 and bCBWLUN no higher than the recorded max LUN. It records
+  the tag, dCBWDataTransferLength (L), the direction and the CDB's opcode: CBW_SENT. Anything else submitted in SYNC or IDLE - another
+  OUT, any IN, an unreadable buffer - is UNKNOWN.
+- CBW_SENT: the CBW's own completion, successful with 31 bytes, leads to DATA (L > 0) or STATUS (L = 0); a STALL
+  (a device stalls a CBW it found invalid, which needs the reset recovery), any other error or a cancel is UNKNOWN.
+  Any bulk transfer submitted while CBW_SENT is UNKNOWN.
+- DATA: transfers in the CBW's direction count their actual bytes against L; one in the other direction is
+  UNKNOWN. The data phase ends - STATUS - when L bytes have moved, when a transfer completes short, or when one
+  completes STALLed and the class driver's CLEAR_FEATURE(ENDPOINT_HALT) or RESET_PIPE on that pipe then succeeds. Any
+  other error, or a cancel, is UNKNOWN.
+- STATUS: the next bulk-IN completion is the CSW candidate: successful, exactly 13 bytes, readable, signature
+  53425355h, the CBW's tag, bCSWStatus 0 or 1, dCSWDataResidue no larger than L. A STALL on that read followed by a
+  successful clear of the halt allows one more candidate (the Bulk-Only specification lets the host clear a stalled
+  CSW read and read again); a second STALL, any other error, a mismatch or a malformed candidate is UNKNOWN; status 2
+  (phase error, which needs the reset recovery) is UNKNOWN.
+- IDLE: a validated CSW with status 0.
+- SENSE: a validated CSW with status 1. The class driver owes a REQUEST SENSE, and the device's reset would replace
+  that sense with its own power-on attention, so SENSE is not keepable. In SENSE the one CBW accepted is a REQUEST
+  SENSE (CDB opcode 03h); the command carries a mark through CBW_SENT, DATA and STATUS, and its CSW validated with
+  status 0 leads to IDLE, with status 1 or any failure to UNKNOWN. Any other CBW in SENSE is UNKNOWN.
+- UNKNOWN: also every ABORT_PIPE, a RESET_PIPE outside the cases above, a cancel of any of its transfers, RESET_PORT
+  and CYCLE_PORT before their replay, a failed SELECT, a STALLed or failed Get Max LUN after the first, and every
+  SELECT but the first. UNKNOWN is sticky by design: a drive left in it is dropped at the next such resume, as
+  today, until a SYNC event; that is the cost of failing closed.
+- The max LUN: the answer to the class driver's Get Max LUN (class request FEh) as the bus completes it, 0 when it
+  STALLs (Bulk-Only specification, section 3.2); not seen, it is unknown and the device is not kept (M2's one LUN).
+
+Keepable: SYNC or IDLE. Host vectors cover every transition, payloads carrying either signature in a data phase,
+13-byte and 31-byte data phases, short data, stalls in the data and the status phase, a residue above L, a wrong tag,
+a phase error, an unreadable buffer, a transfer posted before its CBW completed, and SENSE discharged and not.
+
+The machine reads only bytes the bus already carries, at the submission (the CBW, before publication) and at the
+completion (the CSW, after the transfer's buffers are flushed back, `HcdIoMapped`'s completion path, whatever
+`XhciDmaStaging` is). It changes nothing a client sees.
+
+**M4. The decision and the latch.** `XhciEnumResumeKeep` gains a branch for storage that is not UAS, in place of
+`XHCI_RKEEP_WHY_BULK_ONLY` alone, on three new inputs from `hcdRkeepFlags`: `XHCI_RKEEP_F_BOT` (M2's one Bulk-Only
+interface, one LUN), `XHCI_RKEEP_F_BOT_SYNC` (its machine keepable) and the switch (M9); and new refusals
+`XHCI_RKEEP_WHY_BOT_OFF`, `_BOT_SHAPE` (not one interface of subclass 06h, one LUN, or mixed storage), `_BOT_STATE` (the machine not
+keepable). The serial number is required, and unique among the devices present. Before 2026-11-12 `XHCI_RKEEP_F_SERIAL`
+tested the device record's `SerialState` and `SerialId` alone (`hcdRkeepFlags`), but a duplicate found at the
+PDOs' creation clears the serial from the newcomer's PDOs only (`hcdDormantRevive`, `hcd_pdo.c`), leaving its
+record's - and the first unit's - intact, so two units sharing a serial could each pass; and a mark made at that
+moment would not survive a later re-enumeration of one unit (its PDOs no longer carry the id the duplicate rule
+compares). So uniqueness is computed when it is needed, from the serial as read: `HcdSerialUnique` (`hcd_pdo.c`)
+looks, under `hcdSerialLock` and each controller's PDO list lock in turn, for another device's listed PDO group
+with the same vendor and product id and the same serial, as the group's device record read it at its enumeration
+(which the duplicate rule never empties, and a dormant group's revival does not leave stale) or as its PDO kept it
+(`KeepSerialId`, refreshed at each revival) - either source counts, so neither a record in the middle of the restore's own reread nor a PDO
+whose serial was unread at its creation hides a twin; `XhciEnumKeepSerial` (`xhci_enum.c`, host vectors in `test_enum`) gives
+the flag only with none. It is taken at the decision and again at the reopening: the pipes of a kept storage
+device are unpaused in one hold of `hcdSerialLock` that has just found no twin (`hcdCfgReplayResume`, `hcd_cfg.c`;
+the order `hcdSerialLock`, then the controller lock), so a twin listed before the reopening drops the device
+(the resume keep's `hcdRkeepDrop`, the link keep's cycle), and one listed after it is a twin arriving after the
+keep, a case M5's residue already names. This closes the same gap in the UAS keep as built (section 4.3.2) and in
+the link keep of task 45.41 (record 13 section 15), as its own change of 2026-11-12, ahead of the Bulk-Only keep:
+**it changes shipped behaviour from `3.4.0.0` on** - two UAS drives sharing a serial number, both present on this
+driver's controllers, are now dropped at a resume that re-initializes the controller, and neither is restored in
+place by the link keep, where before either could be kept. No URB outstanding (`XHCI_RKEEP_F_BUSY` clear) is
+required as for UAS, on an admission count that is exact (M4's latch, below). The rest of the decision is
+unchanged.
+
+The device-wide latch closes the window between that decision and the device's reopening:
+- The decision for a Bulk-Only drive is taken under the controller lock, and in the same hold sets the device's keep
+  latch, with its machine's state and the device's idleness read in it (`HcdBotLatch`, `hcd_bot.c`). Idleness is
+  read exactly, not from a count: every transfer record of every pipe free and no request waiting on one
+  (`HcdIoDeviceIdleLocked`, `hcd_io.c`), and no request of the device queued for the thread or deferred
+  (`HcdCfgDeviceQueuedLocked`, `hcd_cfg.c`). `UrbsPending` cannot serve: it is raised after `HcdIoSubmit` has
+  released the lock, so a request whose record was reserved before the decision would be invisible to it; the
+  record itself is not.
+- Every admission point of a function's request to the device clears the latch: `HcdIoSubmit` (any transfer, EP0
+  included, where it already clears the UAS quiet mark), `HcdCfgQueue` (SELECT_CONFIGURATION, SELECT_INTERFACE,
+  ABORT_PIPE, RESET_PIPE, RESET_PORT and every request queued on `SlowIrps`) and `HcdEnumCycle` (CYCLE_PORT, which
+  `hcd_urb.c` hands to it directly and which it records in `PortCycle`, outside that queue). A device with a cycle
+  already recorded at the decision is not kept (`_BOT_STATE`). The bus's own control transfers of the restore
+  (`HcdThreadControl`) pass none of them.
+- The reopening of a kept Bulk-Only drive is one step under the controller lock, at the end of its restore: the latch
+  intact, no `SlowIrps` entry of the device, no cycle recorded for its port, no twin of its serial (in a hold of `hcdSerialLock`, M4), every internal
+  record of M5's check retired, nothing waiting on any of its pipes;
+  then every pipe's pause is lifted in that same hold (a locked variant of `hcdCfgReplayResume`'s per-pipe resume, for this case), and the machine is set
+  to SYNC. Otherwise the restore fails, and the device takes `hcdRkeepDrop`, whose waiting URBs complete as any drop's.
+- So whatever a function sends from the decision to the reopening - a D0 that `hcdResumeKeepWait` completed at its
+  15 s bound with the pass not done, a request queued by the class driver's own D0 path, a deferred mapping (whose URB
+  was outstanding at the decision, which `XHCI_RKEEP_F_BUSY` refuses) - ends the keep in the drop: today's outcome,
+  never a URB failed under a kept drive.
+- `HcdCfgResumeQuiet` then finds nothing to complete on a kept Bulk-Only drive: a request it could complete was
+  either taken before the decision, which then read the device busy, or admitted after it, which cleared the latch,
+  so the reopening fails and the drive is dropped either way: a client request the quiet failed is never left
+  under a kept drive.
+
+**M5. Identity after the resume, and the medium.** The restore's checks as built (section 4.3.2, K5): the same root
+port, the link back within 1 s, the same speed and SuperSpeed link rank, the 18-byte device descriptor, the whole
+configuration descriptor and the serial string, each equal; any difference, any failed read, an empty port, a port
+change during the restore: the drop. The serial is required and must be unique (M4); a drive without one is dropped
+as today. Two drives of one model with different serials swapped between ports during the sleep: each port's serial
+differs from its record, both are dropped, and both enumerate afresh.
+
+The USB identity is the bridge's: behind it may be another medium in a reader or another disk in the same enclosure,
+and the stick's cached writes would then reach a medium they do not belong to. So, before the reopening and with the
+class driver still fenced by the latch, the bus runs a medium check of its own, as the UAS keep's B7 does, with only
+commands every Windows class driver sends such a device at its start, and nothing that writes. Every response it
+parses - here and in the baseline below - is read only within its usable length: the smaller of the data transfer's
+actual length and dCBWDataTransferLength less dCSWDataResidue, taken after a validated CSW with status 0 (bytes past
+it are ignored, as Bulk-Only Transport 1.0 section 5.3.3 requires); a response whose usable length is short of the
+fields read fails.
+- TEST UNIT READY. A CHECK CONDITION is followed by REQUEST SENSE, whose data is used only when it is valid: response
+  code 70h or 71h with a usable length of at least 14 bytes (the additional sense length reaching the ASC and ASCQ),
+  or 72h or 73h with at least 4. A UNIT ATTENTION with ASC 29h (power on, reset, or bus device reset occurred: what the port
+  reset itself raises) is read past, up to four times; NOT READY with ASC 04h and ASCQ 01h (becoming ready) is retried
+  every 500 ms within a 10 s bound; NOT READY with ASC 3Ah (medium not present) is the no-medium answer. Every other
+  sense - ASC 28h (medium may have changed), 2Ah (parameters changed), 3Fh (operating conditions or inquiry data
+  changed), any other attention or error - and invalid sense data fail the check.
+- READ CAPACITY (10), CDB opcode 25h: valid only with a usable length of at least 8 bytes; when its last LBA is
+  FFFFFFFFh, READ CAPACITY (16) (opcode 9Eh, service action 10h), valid only with a usable length of at least 12.
+The answer is compared with the one the class driver itself last received, which the bus records from the traffic it
+already carries, under the same validity rules (a READ CAPACITY (10) or (16) command of the class driver, its data
+and its validated status-0 CSW, recorded per LUN; an answer short of its fields is not recorded): the same last LBA
+and block length, or no medium both times. No recorded answer, any difference, any failure or timeout, any phase the
+machine does not validate: the drop. The bus sends no INQUIRY vital product data page (Linux reads none from a USB
+storage device unless forced, `drivers/usb/storage/scsiglue.c`, `slave_configure`, `skip_vpd_pages` [linux]).
+
+*How the check is carried* (it makes the bus a Bulk-Only initiator for a moment, on pipes paused for the client):
+- Its transfers are records marked as the bus's own (a flag on the transfer record, not the CBW's tag, since class
+  drivers have no reserved tag space), submitted by the controller thread through a path that passes the pause the
+  client's submissions wait on (`hcd_io.c`, the paused pipe's waiting list), and completed to the thread's own wait,
+  never to a client IRP; every completion, cancel and drain path tests the flag before treating a record as a
+  client's (`hcd_dev.c`'s bulk completion among them).
+- Each command is bounded (its CBW, data and CSW within 5 s, the whole check within 15 s; a client request sent
+  meanwhile, once the D0 has completed at its own bound, clears the latch as any does); a timeout or any failure drops the drive, and a timed-out
+  record keeps its buffer (a block of the controller's scratch, as `HcdThreadControl` uses) until the controller
+  retires the TD or the drop's teardown proves it gone, as the control helper's quarantine does for its own
+  (`hcd_enum.c`, `HcdThreadControl`).
+- The reopening requires every internal record retired. The replay is split from the reopening: the replay lays the
+  rings and clears the endpoints' sequence and halt bookkeeping once, before the check; the check then advances the
+  rings, toggles and queue positions as any transfers do; the reopening only lifts the pause, keeping them as the
+  check left them (it does not repeat `hcdCfgReplayResume`'s clearing).
+- Its CBWs carry tags of the bus's own; its CSWs and responses are validated by the machine's own parsers
+  (`XhciBotParseCsw`, `XhciBotParseSense`, `XhciBotParseCapacity`, `XhciBotUsable`), and the machine, not fed by
+  them, is set to SYNC at the reopening, so the class driver's next CBW is a new command whatever its tag. A
+  transfer of the check that does not end within its bound leaves its TD possibly still writing the scratch: as an
+  EP0 timeout does, the scratch is tainted and the controller's reset asked for, which takes every slot.
+
+What that check takes from the class driver: the device's reset attention (ASC 29h), which the class driver would
+otherwise see on its first command, and nothing else - any other attention ends the keep in the drop rather than
+being consumed. Under Windows' own stack in R1 (M15) the class driver did not see the reset attention either: the
+firmware's own enumeration of the stick at the resume had taken it, and Windows' first command after the resume
+completed with no CHECK CONDITION. Whether every Windows' class stack tolerates not seeing it is one of M9's
+readings.
+
+What the bus still cannot tell:
+- another medium of the same capacity and block size in the same reader or enclosure (for a reader, a card of the
+  same size; for an enclosure, a disk of the same model);
+- a twin with the same serial swapped in while asleep with a medium of the same capacity (a duplicate present at
+  the same time is refused, M4);
+- a medium written by another computer during the sleep, which no identity can show. The UAS keep does not detect
+  that either (its B7 reads the unit serial pages and the capacity, not the contents), nor does Windows' own stack,
+  which in R1 read neither the serial nor the capacity after the hibernation and in 49.32 (E1) kept the old devnode
+  for a stick presented on the same port with another serial number.
+In those cases the kept volume's cached writes reach the medium that is there, as they would under Windows' own
+stack. **That residue does not meet the requirement that a kept drive never reads or writes the wrong medium**, and
+no identity the bus can read closes it. So the keep is built only on the owner's explicit acceptance of that residue
+(M14), which the owner gave on 2026-11-12 (M16); refused, no Bulk-Only drive would have been kept, since the bus cannot tell a drive whose medium can be changed from one
+whose cannot. The release text claims nothing more than the residue allows.
+
+**M6. The transport after the restore, and what the class driver is told.** The restore as built (K6,
+`HcdCfgResumeReplay`): the port reset, Enable Slot, Address Device, SET_CONFIGURATION with the record's value,
+Configure Endpoint for the two bulk endpoints (the host's toggle at DATA0, and the device's set to DATA0 by the
+configuration, USB 2.0 section 9.1.1.5; at SuperSpeed the same restore the UAS keep and RESET_PORT use), the
+record's alternate where it is not 0; then M5's medium check. No Bulk-Only Mass Storage Reset and no CLEAR_FEATURE
+are sent: by M3 nothing
+is in flight, and the port reset already returned the device to its state after enumeration, in which it waits for
+a CBW. That is what Windows 2000's own EHCI stack was read doing (R1, M15): after the hibernation it addressed the
+stick again, read the device descriptor and the first 9 bytes of the configuration descriptor, set the
+configuration, and the class driver's next CBW followed with no Bulk-Only reset, no CLEAR_FEATURE and no Get Max LUN
+between - so this restore sends what that stack sends, and reads more (the whole configuration descriptor, the
+serial and M5's medium check, none of which that stack read). The class driver is told nothing: no URB of it is completed, with an error
+or otherwise (none was outstanding, and M4 drops the drive rather than fail one); its D0 completes after the keep
+pass as for any kept device (`hcdResumeKeepWait`, within its bound); its pipe handles are the kept pipes; its next
+CBW is a new command, which the device, reset, answers with no pending attention when M5's check or the firmware
+took it (R1: the firmware). How each Windows' `usbstor` and disk class driver take either is theirs and
+the same under both stacks; which attention a given bridge reports is the bridge's (M14).
+
+**M7. No watch after the reopening.** After the reopening the drive is an ordinary device, and a command that fails
+on it is the class driver's to recover, as on any device. A check that cycled the port on the first command's
+transaction error (designed and dropped on review) would turn an error the class driver recovers from - its pipe
+reset, its Bulk-Only reset recovery, its port reset - into the surprise removal this section exists to avoid: a
+transaction error does not show that the keep failed, and nothing the bus can see shows that the class driver's
+recovery has failed. So nothing is added after the reopening; the identity and the boundary are decided before it
+(M8). The owner decided no check after the reopening (2026-11-12, M16).
+
+**M8. Failure.** The rule, in two parts:
+- *The keep proper* - everything before the reopening: every failure or unproven condition ends in `hcdRkeepDrop`,
+  the surprise removal and fresh enumeration of today. That is: the port empty or not linked in 1 s, the speed or
+  link rank different, Enable Slot or Address Device failing, a descriptor, configuration or serial differing or not
+  read, a port change during the restore, the rings not claimed back, the controller halted, the machine not
+  keepable, a serial not unique, M5's medium check failing or differing, the quiet completing anything, the latch
+  cleared or a request waiting at the reopening. The code holds it by the restore's existing
+  shape (every failure returns 0 to `hcdResumeInvalidate`, which drops), by a decision and a machine that are pure
+  and host-tested on every branch, and by a reopening that is a single locked test; nothing of this section adds a
+  path from a failure to a kept device.
+- *After the reopening*: nothing is added (M7). A command that fails is the class driver's to recover, as on any
+  device and as under Windows' own stack after a hibernation, and a drive that leaves is removed by its port's change, as any device's. This design claims no more than that: a kept drive that later fails in a
+  way the class driver recovers from stays, and one it cannot recover from stays as failed as it would under
+  Windows' own stack.
+In no branch is a drive kept whose identity or medium check failed, whose transport was not at a proven boundary, or
+that was sent anything between the decision and its reopening. What a kept drive can still receive wrongly is M5's
+stated residue - a medium the checks cannot tell from the old one - and nothing else this design knows of.
+
+**M9. The switch.** A new value, `XhciResumeKeepBot` (a DWORD in the controller's key), a mask of the sleeps after
+which a Bulk-Only drive is kept: bit 0 (1) after a hibernation, bit 1 (2) after a standby, so 3 is both. The sleep
+is the system state the controller's suspend was for (S4, or S1 to S3), recorded at the suspend
+(`hcdSuspendSettled`, from the system set-power the D-IRP serves) and read at the keep pass; a resume whose state
+was not recorded keeps no Bulk-Only drive. The two are separate because their paths need not exercise the same
+behaviour of the stack above - the drain at the power-down, the device's power across the sleep, the class driver
+at the D0 - and each is admitted per Windows by its own readings. Absent, 0, a value with no known bit, or another
+type keeps none (so a binary installed without its INF keeps none); unknown bits are ignored. Read at each start
+beside `XhciResumeKeep`, it acts only while that is on; log note `resume.keepbot.on`. A new name rather than a
+value 2 of `XhciResumeKeep`: both controller INFs write `XhciResumeKeep` at 1 with no-overwrite (`0x00010003`), so an
+upgraded install keeps its 1, and a new meaning of 2 would never reach it, where a new name is written at its
+default on the update. Written by both INFs' AddReg with no-overwrite, at 0 in every section until a Windows and a sleep are
+read (2026-11-12), with the INF-gate row and the `docs/using/tuning.md` row; `target-standing.md`'s registry
+section takes the readings. Offering it on the installer window's Advanced page and in XHCITR's settings
+(record 26's table, record 23's never-asked rows, `inst_core.c`, `tr_set.c`) is left for the owner: their texts are
+the owner's to write. Recommended defaults for `3.5.0.0`: on each NT system,
+the bit of each sleep whose readings (M13's legs and an R1-type capture under its own stack) are read, and no bit for
+a sleep not yet read - hibernation on 2000 first, where 49.32 was seen; 0 on 98 SE and ME (M2). Since the INF writes
+one value per section, a per-system default within one section (2000 and XP share `Xhci.Dev.NTx86`, Vista to 10
+share `Xhci.Dev6.NTx86` and the 64-bit file's) means either reading both systems of a section or writing the
+smaller value there. The owner decides (M14).
+
+**M10. What this does and does not do for 49.32.** It removes the exposure at a resume: a Bulk-Only stick kept is not
+surprise-removed, so its mounted volume never meets the removal in whose handling 49.32's guests stopped, where
+Windows' own stack carried the stick. It does not fix that wait: the wait was read inside Windows' file system and
+cache manager, its signature came back with Windows' own stack made to remove the stick after the hibernation
+(49.32, F1 and F5), and what starts it is not known; every drive the keep still drops - behind a hub, without a
+serial, busy at the sleep, any M8 failure, a controller recovery, 98 SE and ME, the switch off - still meets the removal, and with it the chance of that wait on
+2000. The known-limitation text 49.32 asks for stays needed.
+
+**M11. After a controller recovery (49.9).** A controller recovery still drops every device (M2), so the case 49.9
+addressed - a dropped drive presented again under the same instance id while Windows 2000 has not finished removing
+its old devnode - remains after a recovery, and after a resume for every drive this section does not keep. Nothing
+here changes it, and this design adds nothing for it: 49.9 found no Code 31 to fix (none in 9 recoveries and 5
+hibernations on two processors at the base, the new PDO always created before the old one's REMOVE and started all
+the same), the recoveries it ran with copies on the stick did not stall (`runs/run-49.md`, "49.9 (day)", R2, R7,
+R9, R11, R12, F2, F3), and the owner abandoned it. What a recovery does to a mounted Bulk-Only volume on 2000 is the
+removal 49.32 is about, on a path where no device can be kept.
+
+**M12. Where.** The machine and the decision's new inputs pure (`xhci_xport.c` or a new `xhci_bot.c`; `xhci_enum.c`),
+host vectors in `test_enum` and a new suite or `test_xport`. The bus: the machine's feeding at submission and
+completion (`hcd_io.c`, `hcd_urb.c` for the EP0 requests and Get Max LUN's answer, `hcd_cfg.c` for the SELECTs,
+resets and pipe requests), the latch (`hcd_io.c` `HcdIoSubmit`, `hcd_cfg.c` `HcdCfgQueue`), the flags and the
+reopening (`hcd_enum.c` `hcdRkeepFlags`, `hcdRkeepRestore`, `HcdEnumCycle`; `hcd_cfg.c` the locked reopening), the
+admission count and the quiet's count (`hcd_io.c`, `hcd_cfg.c`), the duplicate-serial mark (`hcd_pdo.c`, for the
+UAS keep too), the medium check (a thread-issued Bulk-Only command on the kept, still paused pipes: new, beside
+`HcdThreadControl`, its CBW, data and CSW validated by the same pure machine), the switch
+(`hcd_ctl.c`), the sleep state the suspend was for (`hcd_power.c`), the log notes (`resume.keep.port`'s why codes,
+`resume.keepbot.on`). No change in `xhciuas.sys` or in any class driver.
+
+**M13. Tests.**
+- Host vectors: every transition of M3; the decision's new branch with every input; the latch's life (set at the
+  decision, cleared by a transfer, by a queued request, by EP0, by a cycle; intact through the restore's own
+  transfers); the exact idleness across the window between a record's reservation and its count; the
+  uniqueness for both units of a shared serial, a twin listed during a restore before and after the reopening's
+  hold, and a twin re-enumerated after the first collision; a subclass other than 06h
+  (dropped, no command of the bus sent); the medium check's
+  comparison (equal, another capacity, another block size, no
+  medium both times, medium then none, ASC 28h, 29h read past, 2Ah and 3Fh dropping, invalid or short sense,
+  READ CAPACITY short of 8 or 12 bytes in the baseline and in the check, no recorded answer, a timeout keeping the
+  buffer); the sleep-state gate (M9).
+- Legs, each with data compared byte for byte after every resume:
+  - 2000, two processors, stall2's recipe (FH, copy loops on the stick and the UAS disk, hibernation): the stick kept
+    (`resume.keep.port` why 00), no Unsafe Removal box, its loop going on across the resume and every pass after
+    compared; repeated at least as often as 49.32's stalls were read (five hibernations), with the probe keyboard to
+    show enumeration going on.
+  - 2000, one processor; XP (q35, the 45.23 harness); 7 and 10 where the harness enters hibernation; each the same.
+  - The stick unplugged during the sleep (dropped, enumerated as a new device if put back); replaced by another serial
+    on the same port (dropped); a twin with the same serial and an image of another size (dropped by M5); a twin
+    with the same serial and an image of the same size and other contents (kept - the stated limit - and what
+    Windows then does with the volume read and recorded, M14); the same for a disk replaced behind the same bridge
+    (a `usb-storage` image swapped while the guest is hibernated); swapped with a second stick between two ports
+    (both dropped); two sticks with the same serial present at the sleep (both dropped).
+  - A transfer in flight at the suspend: a qemu-flavour fault point that holds a Bulk-Only command between its CBW
+    and its data or CSW across the suspend (dropped, why `_BOT_STATE`); a CSW with status 1 left as the last
+    (SENSE: dropped).
+  - A request sent between the decision and the reopening (a qemu-flavour delay in the restore, the D0 bound passed):
+    dropped by the latch; a request reserved just before the decision (a qemu-flavour delay between the reservation
+    and its count): dropped by the admission count or the quiet's count, never failed under a kept drive.
+  - `XhciResumeKeepBot` 0 and absent: dropped as before.
+  - After the reopening, a qemu-flavour fault point failing the first transfer with a Transaction Error: not cycled
+    by the bus, the class driver's recovery read and recorded.
+  - Standby (S3 where the guest offers it, with the controller's state lost as in QEMU) beside each hibernation leg,
+    for bit 1 of the switch (M9).
+  - ME standby, as a reading only (M2), with the switch set.
+- Owed to the bench: a real stick and a real card reader across a real standby and hibernation on 2000, where the
+  bench can run 2000 at all (it has not; `target-standing.md`).
+
+**M14. What is not known, and the owner's points.** Read only on a guest or the bench:
+- Which buffer form each `usbstor` gives the CBW and the CSW (a `TransferBuffer`, or an MDL mapped or not): if a
+  Windows gives an unmapped MDL, M3 is UNKNOWN there and nothing is kept on it until the design is revised (a
+  mapping through the staged path's helper, `hcd_stage.c`, is the candidate).
+- Whether each `usbstor` sends Get Max LUN and READ CAPACITY where the bus sees them (else M2's one-LUN rule or M5's
+  check keeps nothing); 2000's does both at its start (R1).
+- That each Windows' class stack carries on over a device the restore reset, and what it does with the attention:
+  the R1-type capture and the legs per Windows (M9). In particular what happens to the residue of M5 (a medium
+  of the same size).
+- How often a stick is at a boundary when the sleep comes under load on each Windows (49.32's 2000 traces show no URB
+  outstanding at the keep pass in every one of eleven hibernations with copies running; the boundary itself is M3's
+  to read, in R2 and the legs).
+- 98 SE's and ME's storage stacks across a standby or a hibernation.
+- A real stick's and a real bridge's behaviour after the port reset (which attention, how long until ready).
+The owner decides: the default per Windows (M9); composite devices and several LUNs (M2: recommended out of the
+first build); a check after the reopening (M7: recommended none); 98 SE and ME (M2: recommended deferred); M5's
+residue, a change to the requirement that a kept drive never meets the wrong medium (recommended: accepted and
+stated, since Windows' own stack has it and more; refused, no Bulk-Only drive is kept).
+
+**M16. The owner's decisions (2026-11-12).** M5's residue is accepted: a same-capacity medium swapped in a reader or
+an enclosure, a same-serial twin with a same-size medium, and contents changed by another computer during the
+sleep are not detected, and the documents that describe the keep say so (`target-standing.md`, the setting's
+rows). No check after the reopening (M7): every failure before the reopening ends in today's drop, and after it a
+failing command is the class driver's to recover. Built now, for `3.5.0.0`. Confirmed by the owner the same
+day: the name `XhciResumeKeepBot` and its tuning-table description as drafted (M9); on by default for each
+Windows and each sleep only once its own readings pass, anything unread off (M9); 98 SE and ME deferred (0, M2);
+hubs, composite devices and multi-LUN readers out (M2). The release-notes line stays a draft until the legs show
+which Windows it is on for.
+
+**M17. As built (2026-11-12).** The design above is built in `xhci98.sys` for `3.5.0.0`, behind
+`XhciResumeKeepBot`, which both controller INFs write at 0 (no Bulk-Only drive kept) until a Windows and a sleep are
+read. Where the build settles or departs from the text:
+- The machine (M3) is `xhci_bot.c` with its host suite `test_bot`; the decision's branch is `XhciEnumResumeKeep`'s
+  (`xhci_enum.c`, `test_enum`), with the refusals `XHCI_RKEEP_WHY_BOT_SHAPE` (13) and `_BOT_STATE` (14); with the
+  switch off for the sleep the refusal is `XHCI_RKEEP_WHY_BULK_ONLY` (8), as before. The bus's half is `hcd_bot.c`.
+- Idleness at the decision's commit (M4) is read exactly, from the transfer records and waiting lists of every pipe
+  and the slow-request queue (`HcdIoDeviceIdleLocked`, `HcdCfgDeviceQueuedLocked`), not from a count; the quiet's
+  own count was not needed (M4's paragraph on `HcdCfgResumeQuiet`).
+- The medium check (M5) runs on `BotXfer`, a transfer of the bus's own routed like a hub's status read (`hcd_dev.c`,
+  `hcd_io.c`, `hcd_cfg.c`), its phases in the controller scratch's control area, under elapsed-time budgets (5 s a
+  command, 15 s the check, 10 s the becoming-ready retries), each the larger of the sleeps it counted and the
+  tolerance clock. It is not fed to the machine; its CSWs and answers are validated by the machine's parsers. The
+  port's last look comes before the Bulk-Only reopening (`hcdRkeepRestore` calls `HcdBotReopen` after it).
+- The first Windows 2000 leg read what M14 left open about buffer forms: 2000's `usbstor` gives a CSW and Get Max
+  LUN's answer in buffers the bus can read, and a READ CAPACITY's data in a locked MDL neither mapped nor of
+  nonpaged pool (flags 8Ah), so no capacity was recorded and nothing was kept. Such an answer of at most 32 bytes is
+  now copied through one window MDL of the controller's own (`HcdStageCopyHead`, `hcd_stage.c`), built over the
+  client's MDL and mapped and unmapped as the staging copies' windows are, opened only with the switch on.
+- The switch is read with `XhciResumeKeep`; the sleep is the system state the suspend served (`hcdSuspendSettled`).
+  The qemu flavour alone reads `XhciQemuBotDelayMs` (the reopening delayed, held to 30 s) for M13's window leg.
+- The duplicate-serial fix of M4 shipped as its own change (`aa8d4eb1a`) for the UAS and link keeps as well.
+- Not built: nothing of M7 (decided none, M16). The installer window's and XHCITR's settings pages do not offer
+  the value yet (M9).
+The legs are `runs/run-49.md`, "49.34 (code)".
+
+**M18. The default by Windows (owner, 2026-11-13).** On for a hibernation on Windows 2000 (1), off on every other
+Windows and for a standby everywhere (0): 2000's hibernation is the one read on a Windows 2000 vehicle with the
+stick kept and its copies whole (`runs/run-49.md`, "49.34 (code)"); XP stays off until its two swapped-stick legs
+(XR1's fresh start and PnP hang, XR2's power-off) are understood; standby is unread on 2000 and XP. One file,
+`xhci98.inf`, installs 2000 and XP from the same sections, so the default is not a number it can write:
+- A section for 2000 alone is not to be had from a decoration. A models decoration names the lowest version it
+  serves, so 2000 is what is left in the undecorated `[XhciModels]` once XP has a section of its own: an
+  `NTx86.5.1` section repeating all 160-odd model lines (the installer's name table among them, record 23 section
+  5.13), with its own device sections and a fourth gate path. What 2000 SP4's setupapi makes of an `NTx86.5.1`
+  decoration was never read (task 22.5 read `NTx86.6.0` alone, which 2000 and XP both pass over), nor what the
+  driver store and DISM do with such a section in a boot image (record 11, decision 13), so it would trade one
+  value's default for two unread install paths.
+- Written at 0 everywhere, 2000 would keep nothing on a fresh install; at 1, XP would keep before its legs are
+  understood.
+- So the value is **absent** from every path of both INFs, and the driver gives each Windows its default when it
+  finds none, or a value that is not a DWORD (`XhciBotKeepDefault`, `xhci_bot.c`, with `test_bot`'s vectors; 2000
+  is WDM 1.10 and not 1.20, as `hcd_ctl.c`'s other Windows 2000 tests). The gate refuses any line that writes it
+  (VAL-BOTABSENT, with self-test cases on both files) and the footprints lose the line. Task 45.50's rule, that
+  every value the driver reads is in the key after an install, is kept by Setup instead of the INF (M19).
+- Nothing released wrote the value, so no machine updated from a release carries a 0 of the INFs' own.
+- Setup offers it (`inst_core.c`): asked on 2000 and later with 0 or 1, 0 to 3 by `/set` and the window's rows,
+  its default `inst_keepbot_default`'s, the driver's; the value it writes machine-wide goes at an uninstall, as
+  every row's. The xHCI98 USB Tree's settings page
+  has it among the advanced USB rows beside `XhciResumeKeep` (`tr_set.c`), with the same default.
+- When XP or a standby is read, the change is `XhciBotKeepDefault` and `inst_keepbot_default`, with their
+  vectors, and the tuning row.
+
+The legs are `runs/run-49.md`, "49.34 (defaults and the settings)": the installed default end to end on 2000 (ID2),
+and XR1 and XR2 re-read - XR1 had no hibernation (its first QEMU never ran Windows) and XR2's power-off was
+`FHKX.BAT`'s own shutdown after its readings - with four further swapped-stick legs on XP, value 1 and value 0,
+each resumed and dropped as designed (XR3 to XR6). The condition the owner set for XP is so far met; XP's default
+is the owner's to change.
+
+**M19. Setup writes it (owner, 2026-11-13).** So that every value is in the key after an install, Setup writes
+`XhciResumeKeepBot` itself. In an NT run that installs or updates an xhci98 controller, once the user's answers
+are taken, the row is answered by Setup at this Windows's default (`inst_keepbot_seed`, `inst_keepbot_default`: 1
+on 2000, 0 on every other Windows) when nobody answered it or the answer is that default, the machine-wide value is
+absent and no such controller's own key holds a DWORD of it; and, since the machine-wide write overrides every
+controller's own key, no xhci98 controller's key at all, present or not (a dock unplugged now keeps its user's 0)
+and with no cap on their number, holds one, every key was read and the device list is whole
+(`inst_keepbot_seed_all`; else nothing is written and the log says why). `write_values` then writes it with the other answers into `Services\USB`, the key every
+value Setup writes goes to and the one the driver reads first for every controller, so the one write reaches each
+of them. A user's number (the question, `/set`, the window's rows) is written as every answer is; an update keeps a
+value found machine-wide or in a controller's key, as every other value is kept. The run says "XhciResumeKeepBot
+set to N for all controllers (this Windows's default)." and owes no restart for it (it is the value already in
+force); `/list` says it would. The uninstall deletes it with the others.
+- What is not covered, and runs on the driver's default instead (the same number): an install from the INF alone
+  (Have Disk), a run that installs or updates no driver (every driver current, or the tools alone: it says it
+  changes no driver setting), a controller added after the run, and a controller whose key lacks the value while
+  another's holds one (a value set by hand there; the machine-wide write would override it).
+- 98 SE and ME: never seeded, the row being NT-only; a `/set` of it there is written, as for the other NT-only
+  rows, and read as nothing (the keep is not built there, M2).
+- After such an install the console question's machine-wide line and the window's row show the number, and the
+  Tree reads it from the machine-wide key; "not set, the driver uses N" remains for an install from the INF alone.
+- Read in `runs/run-49.md`, "49.34 (defaults and the settings)": a fresh install by Setup wrote 1 on 2000 (FI1,
+  whose hibernation then kept the stick) and 0 on XP (XFI).
+
+**M15. Readings this design rests on.**
+- 49.32's qemu-flavour traces (`runs/run-49.md`, "49.32 (continued)"):
+  at the keep pass of each of eleven hibernations of the Windows 2000 two-processor guest with copy loops running on
+  the stick, the stick's flags were `0x10A5` (root, started, storage, serial, one interface) with why 8: no URB
+  outstanding on its PDO, every time.
+- R1 and R2 (`runs/run-49.md`, "49.34 (design)": two captures of the stick by QEMU's `usb-storage` `pcap`, on copies
+  of 49.32's vehicle, the FH recipe, one hibernation each). R1, the stick under Windows 2000's own EHCI stack: its
+  `usbstor` sent Get Max LUN (answered 0) and READ CAPACITY at its start; before the power-off a SYNCHRONIZE CACHE and
+  then one more WRITE(10), whose CSW (status 0) was the last traffic - a transport boundary; after the resume the
+  firmware enumerated the stick (taking its attention), then Windows addressed it again, read the device descriptor
+  and 9 bytes of the configuration descriptor, set the configuration, and the class driver's next CBW followed (a
+  WRITE(10) at the next block run of the copy), with no serial read, no Bulk-Only reset, no CLEAR_FEATURE, no Get Max
+  LUN and no CHECK CONDITION. R2, the stick on this driver: the last command before the power-off a SYNCHRONIZE CACHE
+  whose CSW (status 0) came - a boundary - and the keep pass's flags `0x10A5`, why 8, as in 49.32; then the drop and
+  a fresh enumeration. Each is one trial: comparative evidence of what the stacks do, not a rate, and nothing about
+  another Windows.
 
 ### 4.4 Q4, `XhciIntelShutdownToEhci` (`XHCI_SPURIOUS_REBOOT`)
 

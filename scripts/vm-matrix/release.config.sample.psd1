@@ -50,7 +50,12 @@
     # or before an install can (XP's Found New Hardware wizard, esc-fnh).
     # PrepSteps are host steps make-start.ps1 takes once, after the poller's
     # setup (XP's unsigned-driver policy at Ignore, xp-signing-ignore).
-    # Every guest runs on TCG (owner, 2026-10-20: no WHPX). A 9x guest takes
+    # Every starting point is made and saved under TCG, and every leg runs
+    # on TCG but the two Windows 10 legs, which release-legs.psd1 puts on
+    # WHPX (owner, 2026-11-11, changing the rule of 2026-10-20 for those
+    # two). Whpx: this host's -accel value for WHPX when plain whpx does not
+    # start there (whpx,kernel-irqchip=off on some hosts); nothing else of
+    # a guest names an accelerator (an -accel in Extra is refused). A 9x guest takes
     # a CPU with a local APIC (pentium3, not pentium3,-apic): QEMU 11.1
     # cannot load a qemu-xhci's saved state when MSI-X could not be set up.
     # Machine: q35 for every new leg (owner, 2026-10-25), as the q35 bases
@@ -70,6 +75,11 @@
     # SetupElevated (Vista, 7): the poller's setup is started elevated from
     # the Start menu's search box, and its consent prompt answered with
     # ConsentKey (default alt-y, Yes on 7; Vista's Continue is alt-c).
+    # SetupElevated 'run' (10): from the Run box instead; ConsentSeconds is
+    # the wait for the consent prompt (default 8) and SetupSeconds the wait
+    # for the setup to report (default 60), both longer on 10 under TCG;
+    # DesktopSeconds is the least time from power-on to the desktop (default
+    # 60: a screen that is still before then is not taken for the desktop).
     Guests = @(
         @{
             Id = 'w98se'; Name = 'Windows 98 SE'; Family = '9x'
@@ -120,6 +130,24 @@
             Machine = 'q35'; DiskBus = 'ahci'; Rtc = '2026-09-20T12:00:00'
             Cpu = 'qemu64'; Smp = 2; Memory = 2048; Layout = 'dvorak'; SetupElevated = $true
             BootSeconds = 1200; SettleSeconds = 60
+        }
+        @{
+            Id = 'w10x86'; Name = 'Windows 10 22H2 x86'; Family = 'nt'
+            Base = 'SET-ME\q35-bases\w10x86\disk.qcow2'
+            Extra = @('-L', 'SET-ME\usb4-emu\vms\qemu-baseline\share')
+            Machine = 'q35'; DiskBus = 'ahci'
+            Cpu = 'qemu64,+3dnowprefetch'; Smp = 2; Memory = 2048; Layout = 'qwerty'
+            SetupElevated = 'run'; ConsentSeconds = 30; SetupSeconds = 180; DesktopSeconds = 540
+            BootSeconds = 1800; SettleSeconds = 120
+        }
+        @{
+            Id = 'w10x64'; Name = 'Windows 10 22H2 x64'; Family = 'nt'
+            Base = 'SET-ME\q35-bases\w10x64\disk.qcow2'
+            Extra = @('-L', 'SET-ME\usb4-emu\vms\qemu-baseline\share')
+            Machine = 'q35'; DiskBus = 'ahci'
+            Cpu = 'qemu64,+3dnowprefetch'; Smp = 2; Memory = 4096; Layout = 'qwerty'
+            SetupElevated = 'run'; ConsentSeconds = 30; SetupSeconds = 180; DesktopSeconds = 540
+            BootSeconds = 1800; SettleSeconds = 120
         }
     )
 }

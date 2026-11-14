@@ -27,6 +27,7 @@
 #include "xhci_pipe.h"
 #include "xhci_func.h"
 #include "xhci_xport.h"
+#include "xhci_bot.h"
 #include "xhci_silent.h"
 #include "xhci_regsrc.h"
 #include "xhci_hub.h"
@@ -36,6 +37,7 @@
 #include "xhci_psw.h"
 #include "xhci_pirq.h"
 #include "xhci_stream.h"
+#include "xhci_usbdx.h"
 #include "xhci_counters.h"
 #include "xhci_inj.h"
 #include "xhci_xstat.h"
@@ -44,6 +46,7 @@
 #include "xhci_poll.h"
 #include "xhci_msi.h"
 #include "xhci_hlpr.h"
+#include "xhci_msg4.h"
 
 /* Message-signalled interrupts (design records 15 section 4.3 and 18): the
  * qemu flavour's failed message connection, its switch that keeps the
@@ -72,16 +75,20 @@ VOID HcdTscRead(PULONG lo, PULONG hi);
 /*
  * Task 47.30 (design record 13 section 11.10, point 9): how a start reached
  * its event ring, bits 23:16 of the evt.ring note. XhciEventRingTrbs 256
- * asks for the in-block ring (HCD_EVT_ROUTE_VALUE); the qemu flavour's
- * XhciQemuEventRing 1 does too (HCD_EVT_ROUTE_TEST), 2 takes the wide
- * block whatever the first one's placement, 3 has both requests read as
- * refused.
+ * asks for the in-block ring (HCD_EVT_ROUTE_VALUE); task 49.35 adds a
+ * controller below xHCI 1.0 held there (HCD_EVT_ROUTE_HELD) and the value
+ * absent (HCD_EVT_ROUTE_DEFAULT). With the larger ring asked for, the qemu
+ * flavour's XhciQemuEventRing 1 keeps the in-block ring
+ * (HCD_EVT_ROUTE_TEST), 2 takes the wide block whatever the first one's
+ * placement, 3 has both requests read as refused.
  */
 #define HCD_EVT_ROUTE_BLOCK     0UL /* the 16 KiB block                  */
 #define HCD_EVT_ROUTE_WIDE      1UL /* the 32 KiB block's window         */
 #define HCD_EVT_ROUTE_REFUSED   2UL /* no block: the in-block ring       */
 #define HCD_EVT_ROUTE_TEST      3UL /* the qemu value's in-block ring    */
 #define HCD_EVT_ROUTE_VALUE     4UL /* XhciEventRingTrbs 256             */
+#define HCD_EVT_ROUTE_HELD      5UL /* 49.35: the controller below 1.0   */
+#define HCD_EVT_ROUTE_DEFAULT   6UL /* 49.35: the value absent           */
 #define HCD_EVT_QEMU_NONE       0UL
 #define HCD_EVT_QEMU_SMALL      1UL
 #define HCD_EVT_QEMU_WIDE       2UL
@@ -107,6 +114,11 @@ typedef struct _HCD_UAS_TELE {
      * count then its ring), all 0 until one comes; zeroed when another
      * device takes the record. */
     ULONG Fail[XHCI98_FAIL_TOTAL_WORDS];
+    /* Task 49.39: a version 2 record's times and ATA refusal bits, and the
+     * failure count they belong to (0 with a version 1 record). */
+    ULONG FailTimeCount;
+    ULONG FailTimes[XHCI98_FAIL_RECORDS];
+    ULONG FailAta;
 } HCD_UAS_TELE, *PHCD_UAS_TELE;
 XHCI_C_ASSERT(hcd_uas_tele_words,
               XHCI98_TELE_WORDS == XHCI_SNAPSHOT_HCD_TELE_BODY_WORDS);
@@ -564,6 +576,10 @@ typedef struct _HCD_PIPE {
                                      * owes it a Set TR Dequeue (hcd_cfg.c,
                                      * hcdCfgRecoverDequeue); controller
                                      * lock                               */
+    /* Task 49.45 (design record 13 section 6.13.11): short IN transfers
+     * completed as USBD_STATUS_ERROR_SHORT_TRANSFER on this pipe, the first
+     * XHCI_USBDX_NOTE_SHORT_MAX noted; interlocked. */
+    volatile LONG ShortRefused;
     struct _HCD_PIPE *Parent;       /* a stream's endpoint pipe           */
     struct _HCD_STREAMS *Streams;   /* the endpoint's open streams        */
     /* Task 38.10 (design record 20 section 5; the thread's): a closed pipe
@@ -752,6 +768,27 @@ typedef struct _HCD_USB_DEVICE {
     ULONG ResumeEpoch;      /* one more at each restore across a
                              * re-initialization (hcd_enum.c); controller
                              * lock                                       */
+    /* Task 49.34 (design record 20 section 4.3.4; hcd_bot.c): a Bulk-Only
+     * drive's transport as the bus sees it, fed only with
+     * XhciResumeKeepBot on (BotShape 1: M2's one interface, one SCSI
+     * Bulk-Only setting, its two bulk pipes' DCIs); controller lock.
+     * BotConfigured: a select has been served since the enumeration.
+     * BotLatch: set by the keep's decision, cleared by any admission of a
+     * function request; BotKeeping: a Bulk-Only keep in progress, its
+     * decision's copy of the class driver's capacity answer in
+     * BotRecorded. BotXfer: the medium check's own transfer (no IRP),
+     * armed and done under the controller lock. */
+    XHCI_BOT Bot;
+    ULONG BotShape;
+    ULONG BotDciIn;
+    ULONG BotDciOut;
+    ULONG BotConfigured;
+    ULONG BotLatch;
+    ULONG BotKeeping;
+    XHCI_BOT_CAP BotRecorded;
+    XHCI_TRANSFER BotXfer;
+    ULONG BotXferArmed;
+    ULONG BotXferDone;
     ULONG LinkKeepCount;    /* task 45.41 (design record 13 section 15,
                              * L2): kept across a link's recovery this
                              * many times since LinkKeepFirst, a tolerance-
@@ -982,6 +1019,11 @@ typedef struct _HCD_DEVICE_PDO {
                                      * kept when a duplicate empties
                                      * SerialId: what a dormant group
                                      * named by its place is matched on  */
+    char KeepSerialId[XHCI_SERIAL_ID_BYTES]; /* task 49.34: the serial its
+                                     * device last read, refreshed at a
+                                     * revival: what the keeps' twin check
+                                     * (hcdSerialTwinLocked) compares, and
+                                     * nothing else reads; PdoListLock   */
     ULONG SerialUnread;             /* every serial read failed
                                      * (HCD_SERIAL_FAILED): ReadSerialId
                                      * is unknown, not empty              */
@@ -1037,6 +1079,24 @@ typedef struct _HCD_DEVICE_PDO {
      * stream; latched at creation on the thread, so the dispatch reads no
      * register. */
     ULONG UsbdxStreams;
+    /* Task 49.45 (design record 13 section 6.13.11; xhci_usbdx.h): the
+     * notes of what the client asked, bounded per PDO and zeroed at its
+     * IRP_MN_REMOVE_DEVICE. The two tables hold the QUERY_INTERFACE GUIDs
+     * (Data1) and the refused internal IOCTL codes already noted, a slot
+     * claimed by the interlocked count; the four counts claim the usbdx
+     * notes and, at level 3, the per-URB lines of a UAS PDO. OwnClient: a
+     * request of the bus's private interface (xhci98_streams.h,
+     * xhci98_xfer.h) arrived, so the client is this package's own UAS
+     * driver and the per-URB lines are not written. */
+    ULONG NoteQi[XHCI_USBDX_NOTE_QI_SLOTS];
+    volatile LONG NoteQiUsed;
+    ULONG NoteIoctl[XHCI_USBDX_NOTE_IOCTL_SLOTS];
+    volatile LONG NoteIoctlUsed;
+    volatile LONG NoteV1;
+    volatile LONG NoteCap;
+    volatile LONG NoteStreams;
+    volatile LONG NoteUrbs;
+    volatile LONG OwnClient;
     ULONG PciBus;
     ULONG PciAddress;
     volatile ULONG PciRead;
@@ -1502,6 +1562,7 @@ typedef struct _HCD_CONTROLLER {
     KAFFINITY IntAffinity;
     KINTERRUPT_MODE IntMode;
     BOOLEAN IntShared;
+    UCHAR IntShare;             /* the descriptor's ShareDisposition (mode 4) */
     /* The raw list's interrupt resource and the delivery it gives, kept
      * for the routing quirk (task 36.3), which names the IRQ from the raw
      * resource and never from the translated vector. */
@@ -1550,9 +1611,13 @@ typedef struct _HCD_CONTROLLER {
      * ring's block, as allocated (freed by these), and the window in it the
      * ring uses, NULL and 0 when the start runs the in-block ring; set by
      * HcdDmaOpen, cleared by HcdDmaClose, read by HcdSvcEventRing. EvtWanted
-     * is XhciEventRingTrbs as the start read it (1 the larger ring, 0 the
+     * is the value as the start read it (1 the larger ring, 0 the
      * in-block one) and EvtRoute how the start reached its ring
-     * (HCD_EVT_ROUTE_*). Outside the extension a start zeroes; not
+     * (HCD_EVT_ROUTE_*). Task 49.35 (record 13 section 11.10.1): EvtWanted
+     * is XhciEventRingPick's answer, EvtPick the answer itself
+     * (XHCI_EVT_PICK_*), EvtValueRead how XhciEventRingTrbs read
+     * (XHCI_EVT_READ_*) and EvtHciVersion the HCIVERSION it was given
+     * (0xFFFF unread). Outside the extension a start zeroes; not
      * serialized. */
     PVOID EvtBlockVa;
     PHYSICAL_ADDRESS EvtBlockPa;
@@ -1562,6 +1627,9 @@ typedef struct _HCD_CONTROLLER {
     ULONG EvtWanted;
     ULONG EvtValueRaw;
     ULONG EvtRoute;
+    ULONG EvtPick;
+    ULONG EvtHciVersion;
+    ULONG EvtValueRead;         /* XHCI_EVT_READ_*                 */
 
     /* The service layer (hcd_svc.c). */
     ULONG ConfigLastStatus;
@@ -1638,11 +1706,10 @@ typedef struct _HCD_CONTROLLER {
     ULONG IoctlUnknown;
     /* Windows 8's client contract (task 43.29, design record 13 section
      * 6.13.7): the streams count each new PDO latches (written by the
-     * thread at hcdXportFlags), and the stream URBs served and refused. */
+     * thread at hcdXportFlags). The stream URBs served and refused are
+     * counted in Counters since task 49.45 (UsbdxStreamOpens and the two
+     * beside it), so the USB Tree's report prints them. */
     ULONG UsbdxMaxStreams;
-    ULONG UsbdxStreamOpens;
-    ULONG UsbdxStreamCloses;
-    ULONG UsbdxStreamRefused;
 
     /* DoneList (controller lock) holds the records the event DPC retired,
      * completed by the deferred work after the lock's release (hcd_io.c).
@@ -1728,6 +1795,29 @@ typedef struct _HCD_CONTROLLER {
     ULONG StageDirectMdl;
     ULONG StageDirectLow;
     ULONG IsoStageRefused;
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* Task 49.29 (record 13 section 11.11.12), qemu only: the hold - the
+     * state it keeps (XhciQemuStageFault bits 19:16, HCD_STAGE_HOLD_*), its
+     * phase (HCD_STAGE_HOLD_IDLE, _HELD, _SPENT; StageLock), the record it
+     * keeps, its polls and its timer - and the copies made for a record
+     * already detached from its request (`stage.copy.detached`). */
+    ULONG StageHoldPoint;
+    ULONG StageHoldPhase;
+    PHCD_XFER StageHoldX;
+    ULONG StageHoldPolls;
+    KTIMER StageHoldTimer;
+    KDPC StageHoldDpc;
+    ULONG StageCopyDetached;
+    /* The DMA allocations this controller made, freed and kept, in number
+     * and in pages (hcd_dma.c): made equals freed plus kept at the end of
+     * HcdDmaClose. */
+    ULONG QemuDmaMade;
+    ULONG QemuDmaMadePages;
+    ULONG QemuDmaFreed;
+    ULONG QemuDmaFreedPages;
+    ULONG QemuDmaKept;
+    ULONG QemuDmaKeptPages;
+#endif
     /* Task 48.33 (record 13 section 11.11.6, step 4): an unproven stop
      * released every child PDO's held requests (HcdIoParkCloseAll), and
      * none is held again until the next start; read under the cancel spin
@@ -1922,6 +2012,19 @@ typedef struct _HCD_CONTROLLER {
      * the thread has not yet kept or dropped (hcd_power.c, hcdD0Finish). */
     volatile LONG ResumeKeepPending;
     ULONG ResumeKeepOn;
+    ULONG ResumeKeepBot;            /* task 49.34: XhciResumeKeepBot's bits
+                                     * (1 hibernation, 2 standby), at start */
+    ULONG SuspendSleep;             /* the SYSTEM_POWER_STATE the last
+                                     * suspend served (hcd_power.c)       */
+    PMDL BotWin;                    /* task 49.34: the window over a
+                                     * client's MDL a short Bulk-Only
+                                     * answer is read through (hcd_stage.c,
+                                     * HcdStageCopyHead), with the keep on */
+    volatile LONG BotWinBusy;
+#if defined(XHCI_FLAVOUR_QEMU)
+    ULONG QemuBotDelayMs;           /* task 49.34's leg aid: the Bulk-Only
+                                     * reopening delayed this long        */
+#endif
     ULONG LinkKeepOn;               /* task 45.41: XhciLinkKeep, at start   */
     ULONG SsFlapFallback;           /* issue 29: XhciSsFlapFallback, at start */
     ULONG ResumeKept;               /* devices restored in place          */
@@ -2009,6 +2112,67 @@ typedef struct _HCD_CONTROLLER {
     NTSTATUS MsgConnectStatus;
     ULONG QemuMsgFail;
 
+    /* XhciInterruptMode 4 (design record 15 section 4.5, roadmap-usb4
+     * task 49.24), settled at each start (hcd_msg4.c):
+     * the system class (XHCI_MSG4_SYS_*), the values as read and the
+     * claim they ask for; the connection - msi4nt's info block, kept
+     * untyped so the header stays in its seam - and the object the
+     * readiness flag's writes synchronise on (the KINTERRUPT, also
+     * hc->Interrupt); the library's last status; the readiness flag
+     * (Msg4Ready, written only under the ISR's exclusion); the bar on
+     * re-enabling (Msg4Barred); the lost connection's cause (Msg4Lost,
+     * HCD_MSG4_LOST_*, under the controller lock) and whether the
+     * thread's half has run; the function's location; the removal mark
+     * (a removal Windows reported); whether the stop proved the
+     * controller halted; whether the start's No Op came by the message;
+     * the stranded-event judge (controller lock) with the events drained
+     * at its last look; strategy 1's stray run. */
+    ULONG Msg4System;
+    ULONG Msg4StrategyRead;
+    ULONG Msg4IsaIrqRead;
+    ULONG Msg4ShareRead;
+    ULONG Msg4PoolsRead;
+    ULONG Msg4InputFirstRead;
+    ULONG Msg4InputLastRead;
+    ULONG Msg4BudgetRead;
+    ULONG Msg4Share;
+    XHCI_MSG4_CLAIM Msg4Claim;
+    PVOID Msg4Info;
+    PVOID Msg4SyncObject;
+    ULONG Msg4Status;
+    volatile LONG Msg4Ready;
+    ULONG Msg4Barred;
+    LONG Msg4Lost;
+    ULONG Msg4LostDone;
+    ULONG Msg4QueryReleased;
+    ULONG Msg4Bdf;
+    ULONG Msg4BdfKnown;
+    ULONG Msg4Removal;
+    ULONG Msg4Gone;                 /* a removal seen: the flag is never
+                                     * opened again this start; written
+                                     * before the flag's clear, read under
+                                     * the ISR's exclusion                */
+    ULONG Msg4JudgeGen;             /* one more at every reset of the
+                                     * judge, under the controller lock   */
+    ULONG Msg4Halted;
+    ULONG Msg4NoOpPassed;
+    XHCI_MSG4_JUDGE Msg4Judge;
+    ULONG Msg4JudgeEvents;
+    ULONG Msg4StrayRun;
+    /* NT 5 (hcd_msgnt.c): the ISA claim held apart from the connection;
+     * whether the function implements Interrupt Disable (read after the
+     * connect's arm); strategy 1's brake tripped by the routine for the
+     * DPC to latch; the brake look owed and the tolerance tick of the last
+     * one; the qemu flavour's XhciQemuMsg4Fail and the bit in force. */
+    ULONG Msg4ClaimHeld;
+    ULONG Msg4StrategyCache;    /* the filter's (hcd_msi86.c)            */
+    ULONG Msg4IdImplemented;
+    volatile LONG Msg4StrayTripped;
+    volatile LONG Msg4LookOwed;
+    ULONG Msg4LookAt;
+    ULONG QemuMsg4Fail;
+    volatile LONG Msg4InjectNow;
+
     /* The requirements filter (design record 18 section 4.2): the mode as
      * read at AddDevice and refreshed at each start (both system-thread
      * contexts), with the qemu switches beside it; the filter's record -
@@ -2074,6 +2238,10 @@ typedef struct _HCD_CONTROLLER {
      * per (command, refusal code). The counters are the counter block's
      * Strict* words. */
     ULONG StrictOn;
+    /* Task 49.39 (design record 17 section 4.12.8): XhciStreamDequeueRepair,
+     * 1 the checks act (the default), 0 they note only. Latched at the
+     * start. */
+    ULONG StreamDeqRepair;
     ULONG StrictSlotEnabled[(XHCI_MAX_SLOTS + 1 + 31) / 32];
     ULONG StrictSeen[64][2];
     ULONG StrictRefusalSeen[64];
@@ -2161,6 +2329,26 @@ typedef struct _HCD_CONTROLLER {
     ULONG InjStopRaceSlot;
     ULONG InjStopRaceDci;
     ULONG InjStopRaceReads;
+    /* Task 49.35: fault 1B's slow reset - armed, the hold each HCRST takes
+     * (ms, 0xFFFFFFFF for ever), CNR held instead of HCRST, and the hold
+     * of the last HCRST written: running, and when (KeQuerySystemTime's
+     * low part). InjLock. */
+    ULONG InjResetArmed;
+    ULONG InjResetHoldMs;
+    ULONG InjResetCnr;
+    ULONG InjResetHolding;
+    ULONG InjResetStamp;
+    /* Task 49.39: fault 1D's sends still to alter, and the cancel's stale
+     * position while it sends (Slot 0 none); fault 1E's doorbells still to
+     * ring. InjLock. */
+    ULONG InjStaleDeq;
+    ULONG InjStaleSlot;
+    ULONG InjStaleDci;
+    ULONG InjStaleStream;
+    ULONG InjStalePa;
+    ULONG InjStaleDcs;
+    ULONG InjRestartRace;
+    ULONG InjRepairRace;            /* task 49.39: fault 1F's doorbells */
     ULONG InjBulkStream;            /* 36.22: the held TD's stream, 0 none */
     /* BULK_TIMEOUT: armed to lose the target endpoint's
      * next TD's completion events; once one is lost, every event inside
@@ -2409,6 +2597,17 @@ typedef struct _HCD_CONTROLLER {
     XHCI_XSTAT Xstat;
     XHCI_XPIPE_STATS Xpipe;         /* 36.24; controller lock            */
     HCD_UAS_TELE UasTele[HCD_UAS_TELE_RECORDS];
+    /* Task 49.39 (design record 17 section 4.12.9): the stream trace, live
+     * and the last capture, and the capture's number, reason, time and the
+     * live head at it. Controller lock. */
+    ULONG TraceHead;
+    ULONG Trace[XHCI_SNAPSHOT_TRACE_ENTRIES][XHCI_SNAPSHOT_TRACE_ENTRY_WORDS];
+    ULONG TraceCap[XHCI_SNAPSHOT_TRACE_ENTRIES]
+                  [XHCI_SNAPSHOT_TRACE_ENTRY_WORDS];
+    ULONG TraceCapSeq;
+    ULONG TraceCapWhy;
+    ULONG TraceCapAt;
+    ULONG TraceCapHead;
     /* The shutdown latch (roadmap-hcd 37.3, design record 13 section 5.8):
      * set in the controller-lock hold that sets PowerDown at a D3 whose
      * system state is PowerSystemShutdown, before the halt, and cleared by
@@ -2575,6 +2774,19 @@ ULONG HcdIoEnter(PHCD_CONTROLLER hc);
 VOID HcdIoLeave(PHCD_CONTROLLER hc);
 NTSTATUS HcdPassDown(PHCD_CONTROLLER hc, PIRP irp);
 NTSTATUS HcdCompleteIrp(PIRP irp, NTSTATUS status, ULONG_PTR information);
+#if defined(XHCI_FLAVOUR_QEMU)
+/* Task 49.29 (record 13 section 11.11.12), qemu only: the per-request log
+ * of the URB IRPs sent to a device PDO (hcd_urb.c), on while any start
+ * has read XhciQemuStageFault bit 3, and its two totals. */
+extern volatile LONG HcdQemuUrbLog;
+extern volatile LONG HcdQemuUrbsIn;
+extern volatile LONG HcdQemuUrbsOut;
+VOID HcdQemuUrbIn(PIRP irp);
+VOID HcdQemuUrbOut(PIRP irp);
+#define HCD_QEMU_URB_OUT(irp) HcdQemuUrbOut(irp)
+#else
+#define HCD_QEMU_URB_OUT(irp)
+#endif
 
 /* hcd_pnp.c */
 NTSTATUS HcdControllerPnp(PHCD_CONTROLLER hc, PIRP irp);
@@ -2791,6 +3003,44 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
 VOID HcdHubCollect(PHCD_CONTROLLER hc, PHCD_HUB hub);
 VOID HcdHubRearm(PHCD_CONTROLLER hc, PHCD_HUB hub);
 VOID HcdHubXferRetired(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+
+/* hcd_bot.c (task 49.34, design record 20 section 4.3.4). The slow
+ * requests' events, as HcdBotSlowEnd takes them. */
+#define HCD_BOT_EV_SELECT_CONFIG    1UL
+#define HCD_BOT_EV_SELECT_IFACE     2UL
+#define HCD_BOT_EV_ABORT            3UL
+#define HCD_BOT_EV_RESET_CLEAR      4UL /* RESET_PIPE, SYNC_CLEAR_STALL  */
+#define HCD_BOT_EV_RESET_HOST       5UL /* SYNC_RESET_PIPE: host only    */
+#define HCD_BOT_EV_RESET_PORT       6UL
+/* A transfer admitted to the device (HcdIoSubmit): the latch cleared and
+ * a Bulk-Only pipe's submission fed. Controller lock held. */
+VOID HcdBotAdmitLocked(PHCD_USB_DEVICE dev, PHCD_PIPE pipe,
+                       const HCD_IO_REQUEST *req);
+/* A transfer's end, before its URB is written (HcdIoDeferred). No lock
+ * held; IRQL <= DISPATCH_LEVEL. */
+VOID HcdBotXferEnd(PHCD_CONTROLLER hc, struct _HCD_XFER *x, LONG status);
+/* A slow request's end (the thread's dispatcher). Thread only. */
+VOID HcdBotSlowEnd(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG event,
+                   PHCD_PIPE pipe, LONG usbd);
+/* BotXfer retired or drained. Controller lock held. */
+VOID HcdBotXferRetired(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+/* The keep's inputs (XHCI_RKEEP_F_BOT_ON, _BOT, _BOT_SYNC). Thread. */
+ULONG HcdBotFlags(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+/* The decision's commit: the machine, the device idle and the latch set in
+ * one hold. 0 refuses the keep. Thread. */
+ULONG HcdBotLatch(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+/* The restore's Bulk-Only part: the replay held paused and the medium
+ * check; then, after the port's last look, the locked reopening. Each 0
+ * for the drop. Thread, powered. */
+ULONG HcdBotRestore(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+ULONG HcdBotReopen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+/* Whether no request of a client is taken or waiting on any pipe of the
+ * device (hcd_io.c), or queued for the thread (hcd_cfg.c). Controller lock
+ * held. */
+ULONG HcdIoDeviceIdleLocked(PHCD_USB_DEVICE dev);
+ULONG HcdCfgDeviceQueuedLocked(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+/* HcdCfgResumeReplay's `unique` asking for the pipes left paused. */
+#define HCD_REPLAY_HOLD             2UL
 ULONG HcdHubPortDisable(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n);
 VOID HcdHubFlapSend(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n);
 ULONG HcdHubPathPresent(PHCD_CONTROLLER hc, PHCD_PORT q);
@@ -2834,6 +3084,11 @@ VOID HcdStrictStart(PHCD_CONTROLLER hc);
 
 /* hcd_dev.c */
 ULONG HcdDevRetryReplay(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG token);
+VOID HcdTraceLocked(PHCD_CONTROLLER hc, ULONG kind, ULONG slot, ULONG dci,
+                    ULONG stream, ULONG a, ULONG b);
+VOID HcdTrace(PHCD_CONTROLLER hc, ULONG kind, ULONG slot, ULONG dci,
+              ULONG stream, ULONG a, ULONG b);
+VOID HcdTraceCapture(PHCD_CONTROLLER hc, ULONG why);
 ULONG HcdDevStopSettle(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG deqLow,
                        ULONG deqHigh);
 
@@ -2841,11 +3096,13 @@ ULONG HcdDevStopSettle(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG deqLow,
  * release (design record 17 section 5; xhci_inj.h). */
 #if defined(XHCI_FLAVOUR_QEMU)
 NTSTATUS HcdCtlQemuReadDword(PHCD_CONTROLLER hc, PCWSTR name, PULONG value);
+NTSTATUS HcdCtlQemuReadMachineDword(PCWSTR name, PULONG value);
 VOID HcdInjStart(PHCD_CONTROLLER hc);
 VOID HcdInjPoll(PHCD_CONTROLLER hc);
 ULONG HcdInjIsrDrop(PHCD_CONTROLLER hc);
 ULONG HcdInjStartHeld(PHCD_CONTROLLER hc);
 VOID HcdInjStartRelease(PHCD_CONTROLLER hc);
+ULONG HcdInjContainNoProof(PHCD_CONTROLLER hc);
 ULONG HcdInjUsbsts(PHCD_CONTROLLER hc, ULONG usbsts);
 USHORT HcdInjPciCommand(PHCD_CONTROLLER hc, USHORT command);
 VOID HcdInjService(PHCD_CONTROLLER hc);
@@ -2859,6 +3116,12 @@ ULONG HcdInjClearHalt(PHCD_CONTROLLER hc, ULONG slot, ULONG dci,
 ULONG HcdInjSetInterface(PHCD_CONTROLLER hc, ULONG slot, PULONG stalled);
 ULONG HcdInjSelectConfigure(PHCD_CONTROLLER hc, ULONG rollback,
                             PULONG code);
+VOID HcdInjStaleArm(PHCD_CONTROLLER hc, struct _HCD_USB_DEVICE *dev,
+                    struct _HCD_PIPE *pipe, ULONG firstIndex);
+VOID HcdInjRestartRace(PHCD_CONTROLLER hc, struct _HCD_USB_DEVICE *dev,
+                       struct _HCD_PIPE *pipe);
+VOID HcdInjRepairRace(PHCD_CONTROLLER hc, struct _HCD_USB_DEVICE *dev,
+                      struct _HCD_PIPE *pipe);
 #endif
 
 /* hcd_cfg.c */
@@ -2867,6 +3130,7 @@ NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 VOID HcdCfgReleaseFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                            ULONG interfaceMask);
 VOID HcdCfgFlushDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+VOID HcdCfgFailDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 /* A departing device's fallback cycle of its location, charged to the
  * location's budget (hcd_cfg.c, beside hcdCfgFault; task 43.53's late
  * thread transfer too). The caller has checked dev->Location and the PDO.
@@ -2882,7 +3146,8 @@ ULONG HcdCfgLinkKeep(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
  * its new one (hcd_cfg.c). Thread only. */
 VOID HcdCfgResumeQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 VOID HcdCfgResumeSettle(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
-ULONG HcdCfgResumeReplay(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+ULONG HcdCfgResumeReplay(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                         ULONG unique);
 /* The shutdown latch's flush of the queued commands (37.3, record 13
  * section 5.8); returns how many it completed. IRQL: PASSIVE_LEVEL, the
  * power gate held. */
@@ -2916,6 +3181,16 @@ ULONG HcdDevicePdoRepresentAsk(PHCD_CONTROLLER hc, ULONG parentSerial);
 ULONG HcdDevicePdoRepresentFunctions(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 VOID HcdPdoRetireInit(VOID);
 VOID HcdSerialInit(VOID);
+/* Task 49.34 (design record 20 section 4.3.4, M4): whether no other device
+ * record's listed PDO group, on any controller of this driver, carries
+ * dev's vendor and product id and its serial as read. HcdSerialHold takes
+ * hcdSerialLock and leaves it held, for a reopening made under it (the
+ * order hcdSerialLock, then the controller lock), released by
+ * HcdSerialUnhold; HcdSerialUnique takes and releases it. Neither with a
+ * PdoListLock or the controller lock held. IRQL: <= DISPATCH_LEVEL. */
+ULONG HcdSerialHold(PHCD_USB_DEVICE dev, PKIRQL serialIrql);
+VOID HcdSerialUnhold(KIRQL serialIrql);
+ULONG HcdSerialUnique(PHCD_USB_DEVICE dev);
 VOID HcdSerialControllerAdd(PHCD_CONTROLLER hc);
 VOID HcdSerialControllerRemove(PHCD_CONTROLLER hc);
 ULONG HcdPdoRetire(PDEVICE_OBJECT obj);
@@ -2935,6 +3210,9 @@ LONG HcdUrbIoRequest(PVOID urb, PHCD_IO_REQUEST req);
 ULONG HcdUrbIsUsbdiQuery(const GUID *guid);
 NTSTATUS HcdUrbQueryInterface(PHCD_DEVICE_PDO pdo, PIRP irp);
 ULONG HcdUrbIsUsbdxQuery(const GUID *guid);
+/* Task 49.45: the frees refused as not the bus's, image-wide (the door's
+ * UsbdxForeignFrees word). IRQL: any. */
+ULONG HcdUrbUsbdxForeignFrees(VOID);
 NTSTATUS HcdUrbQueryUsbdx(PHCD_DEVICE_PDO pdo, PIRP irp);
 VOID HcdUrbIdleDrain(PHCD_DEVICE_PDO pdo);
 VOID HcdUrbBusifRelease(PHCD_DEVICE_PDO pdo);
@@ -2951,6 +3229,9 @@ VOID HcdIoDrainPipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd);
 VOID HcdIoPipeRelease(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 VOID HcdIoPipePause(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 VOID HcdIoPipeResume(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
+/* HcdIoPipeResume's count alone, its streams' too; the caller holds the
+ * controller lock and calls HcdIoPipeRelease after it (task 49.34). */
+VOID HcdIoPipeUnpauseLocked(PHCD_PIPE pipe);
 /* `usbd`: what a promoted record the cancel ends reports (36.24). */
 ULONG HcdIoPipeCancelAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd);
 ULONG HcdIoPipeMarkAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd);
@@ -3029,7 +3310,119 @@ VOID HcdDmaStreamKeep(PHCD_CONTROLLER hc, ULONG bytes);
 /* The boot ledger (Q-STG.3; record 13 section 11.11.6), from DriverEntry.
  * IRQL: PASSIVE_LEVEL. */
 VOID HcdDmaLedgerInit(PDRIVER_OBJECT driver);
+/* The image kept for the boot (DriverUnload cleared under the ledger's
+ * lock): mode 4's refusal table outlives every device object (design
+ * record 15 section 4.5.4). IRQL: <= DISPATCH_LEVEL. */
+VOID HcdDmaKeepImage(VOID);
 
+/* hcd_msg4.c: XhciInterruptMode 4's lifetime, common to both systems
+ * (design record 15 sections 4.5.3 to 4.5.9 and 4.5.16). */
+/* Msg4Lost's causes (section 4.5.9). */
+#define HCD_MSG4_LOST_NONE          0L
+#define HCD_MSG4_LOST_BRAKED        1L
+#define HCD_MSG4_LOST_STRANDED      2L
+#define HCD_MSG4_LOST_REARM         3L
+#define HCD_MSG4_LOST_RECONNECT     4L
+/* Statuses of this driver's own, kept in Msg4Status beside the library's
+ * (0 to 14): the quiet step's refusal (the step in 7:0),
+ * the function's location not established (the matches in 7:0), and a
+ * system this build does not connect. */
+#define HCD_MSG4_ST_QUIET           0x0100UL
+#define HCD_MSG4_ST_LOCATION        0x0200UL
+#define HCD_MSG4_ST_NOT_BUILT       0x0300UL
+#define HCD_MSG4_ST_READY           0x0400UL    /* the flag could not be set */
+/* IRQL: PASSIVE_LEVEL, DriverEntry. */
+VOID HcdMsg4Init(VOID);
+/* The system class (XHCI_MSG4_SYS_*). IRQL: PASSIVE_LEVEL. */
+ULONG HcdMsg4SystemClass(VOID);
+/* Whether the refusal table refuses this function's start, any mode;
+ * reads the location only when the table holds something. IRQL:
+ * PASSIVE_LEVEL. */
+ULONG HcdMsg4StartRefused(PHCD_CONTROLLER hc);
+/* The connection at the start, from hcdConnect: the quiet step, the
+ * seam's connect, the outcome. IRQL: PASSIVE_LEVEL. */
+NTSTATUS HcdMsg4Connect(PHCD_CONTROLLER hc);
+/* Whether a mode-4 connection is live on this controller. IRQL: any. */
+ULONG HcdMsg4Live(PHCD_CONTROLLER hc);
+/* The readiness flag set (and the bar lifted, XHCI_EXT_FLAG_INTERRUPTS
+ * set) or cleared (and the bar set, the flag cleared), under the ISR's
+ * exclusion. IRQL: PASSIVE_LEVEL. */
+ULONG HcdMsg4Open(PHCD_CONTROLLER hc);
+VOID HcdMsg4Close(PHCD_CONTROLLER hc);
+/* Every start's reset of the lifetime's state, whatever the mode, before
+ * anything reads it; and the judge's fresh count at an in-place recovery.
+ * IRQL: PASSIVE_LEVEL. */
+VOID HcdMsg4StartReset(PHCD_CONTROLLER hc);
+VOID HcdMsg4JudgeRestart(PHCD_CONTROLLER hc);
+/* The start's No Op by interrupt, after the interrupter is on and before
+ * the thread runs: STATUS_SUCCESS or the start refused (reason 31).
+ * IRQL: PASSIVE_LEVEL. */
+NTSTATUS HcdMsg4NoOpSeen(PHCD_CONTROLLER hc);
+/* A start refused after the connect with a status of this driver's own:
+ * the delivery none, the reason and the status published as every
+ * refusal's are. IRQL: PASSIVE_LEVEL. */
+NTSTATUS HcdMsg4RefuseStart(PHCD_CONTROLLER hc, ULONG reason, ULONG status);
+/* The release (section 4.5.4 and 4.5.7), from hcdRelease before the DPC
+ * drain: the flag cleared, the disconnect, the quarantine or the
+ * no-hardware form, the refusal table. IRQL: PASSIVE_LEVEL. */
+VOID HcdMsg4Release(PHCD_CONTROLLER hc);
+/* The D0 step (power work item, the power gate held): the re-arm, then
+ * the flag and the interrupter's flag for the resume; 1 when it failed
+ * and the connection is lost. IRQL: PASSIVE_LEVEL. */
+ULONG HcdMsg4Resume(PHCD_CONTROLLER hc);
+/* The way to D3: the flag cleared, the bar set (causes masked by the
+ * suspend). IRQL: <= DISPATCH_LEVEL on NT, PASSIVE on 98 SE and ME. */
+VOID HcdMsg4Suspend(PHCD_CONTROLLER hc);
+/* A connection lost while running (section 4.5.4): the latch, up to
+ * DISPATCH_LEVEL, under no lock of the caller's; the thread's half at
+ * PASSIVE_LEVEL from the controller thread. */
+VOID HcdMsg4LostLatch(PHCD_CONTROLLER hc, LONG cause);
+VOID HcdMsg4LostThread(PHCD_CONTROLLER hc);
+/* The watchdog (section 4.5.6): the backstop's caller asks whether the
+ * judge watches this controller now (controller lock held), and reports
+ * a stranded drain; the DPC reports a drain's events; the tick asks the
+ * judge's deadline. IRQL: DISPATCH_LEVEL. */
+ULONG HcdMsg4WatchedLocked(PHCD_CONTROLLER hc);
+ULONG HcdMsg4ServedLocked(PHCD_CONTROLLER hc);
+VOID HcdMsg4Gone(PHCD_CONTROLLER hc, ULONG surprise);
+VOID HcdMsg4StrandedLocked(PHCD_CONTROLLER hc, PULONG lost);
+VOID HcdMsg4DrainLocked(PHCD_CONTROLLER hc, PULONG lost);
+VOID HcdMsg4TickLocked(PHCD_CONTROLLER hc, PULONG lost);
+/* hcd_ctl.c: the routine the seam's trampoline calls, message 0 only,
+ * gated by the readiness flag (section 4.5.5); the capability read; the
+ * function's location (NT: the properties; 98 SE and ME: the match walk).
+ * IRQL: the routine at its delivery's; the others PASSIVE_LEVEL. */
+BOOLEAN HcdCtlMsg4Isr(PHCD_CONTROLLER hc, ULONG messageId);
+ULONG HcdCtlMsgCapability(PHCD_CONTROLLER hc);
+ULONG HcdCtlMsg4Location(PHCD_CONTROLLER hc, PULONG bdf, PULONG matches);
+ULONG HcdCtlLineShared(PHCD_CONTROLLER hc, PULONG bdf, PULONG id,
+                       PULONG functions);
+/* hcd_msg4.c for the seam: the refusal table's entry with the image kept,
+ * and Bus Master Enable cleared before a quarantine. IRQL:
+ * PASSIVE_LEVEL. */
+VOID HcdMsg4EnterRefusal(PHCD_CONTROLLER hc);
+VOID HcdMsg4ClearBusMaster(PHCD_CONTROLLER hc);
+/* NT 5's query-stop and its cancel (section 4.5.4), from hcd_pnp.c in the
+ * PnP IRP's thread; the controller thread's brake look (section 4.5.6);
+ * the DPC's latch of strategy 1's brake; whether Windows is to be told the
+ * device failed. IRQL: PASSIVE_LEVEL but HcdMsg4DpcBrake (DISPATCH). */
+NTSTATUS HcdMsg4QueryStop(PHCD_CONTROLLER hc);
+VOID HcdMsg4CancelStop(PHCD_CONTROLLER hc);
+VOID HcdMsg4Look(PHCD_CONTROLLER hc);
+VOID HcdMsg4DpcBrake(PHCD_CONTROLLER hc);
+ULONG HcdMsg4Failed(PHCD_CONTROLLER hc);
+/* hcd_msgnt.c: msi4nt's seam, 2000 to XP x64 (sections 4.5.3 and 4.5.4).
+ * Each returns an MSGIRQ_STATUS_* value (or HCD_MSG4_ST_*). IRQL:
+ * PASSIVE_LEVEL, but HcdMsgNtSync (<= DISPATCH_LEVEL). */
+VOID HcdMsgNtInit(PUNICODE_STRING registryPath);
+ULONG HcdMsgNtConnect(PHCD_CONTROLLER hc, ULONG reconnect, PULONG reason);
+ULONG HcdMsgNtSync(PHCD_CONTROLLER hc, LONG ready);
+ULONG HcdMsgNtReArm(PHCD_CONTROLLER hc);
+ULONG HcdMsgNtDisconnect(PHCD_CONTROLLER hc, ULONG flags, ULONG injectBit);
+VOID HcdMsgNtRelease(PHCD_CONTROLLER hc, ULONG silent);
+VOID HcdMsgNtReleaseClaim(PHCD_CONTROLLER hc);
+ULONG HcdMsgNtLook(PHCD_CONTROLLER hc);
+VOID HcdMsgNtReportFailed(PHCD_CONTROLLER hc);
 /* hcd_stage.c (task 48.33; design record 13 section 11.11) */
 /* A slab of the shared pool. State HCD_STAGE_SLAB_*, under StageLock. */
 typedef struct _HCD_STAGE_SLAB {
@@ -3058,6 +3451,22 @@ typedef struct _HCD_STAGE_SLAB {
 #define HCD_STAGE_QEMU_UNPROVEN  0x00000001UL
 #define HCD_STAGE_QEMU_WINDOW98  0x00000002UL
 #define HCD_STAGE_QEMU_MAPFAIL(v) (((v) >> 8) & 0xFFUL)
+/* Task 49.29 (record 13 section 11.11.12): bit 2, the hold arms the
+ * injection of all ones without the proof as it takes its record; bit 3,
+ * the per-request log; bits 19:16, the state the hold keeps. */
+#define HCD_STAGE_QEMU_CONTAIN   0x00000004UL
+#define HCD_STAGE_QEMU_URBLOG    0x00000008UL
+#define HCD_STAGE_QEMU_HOLD(v)   (((v) >> 16) & 0xFUL)
+#define HCD_STAGE_HOLD_NONE      0UL
+#define HCD_STAGE_HOLD_WAITING   1UL
+#define HCD_STAGE_HOLD_FILLING   2UL
+#define HCD_STAGE_HOLD_READY     3UL
+#define HCD_STAGE_HOLD_DRAINING  4UL
+#define HCD_STAGE_HOLD_COPY      5UL
+#define HCD_STAGE_HOLD_DPC       6UL
+#define HCD_STAGE_HOLD_IDLE      0UL
+#define HCD_STAGE_HOLD_HELD      1UL
+#define HCD_STAGE_HOLD_SPENT     2UL
 VOID HcdStageInitObjects(PHCD_CONTROLLER hc);
 NTSTATUS HcdStageOpen(PHCD_CONTROLLER hc);
 VOID HcdStageDrain(PHCD_CONTROLLER hc);
@@ -3164,6 +3573,8 @@ VOID HcdQuirkLinkPadded(PHCD_CONTROLLER hc, ULONG padded);
 #define HCD_MSI_ROUTINES_SYSTEM     1UL     /* amd64: MmGetSystemRoutineAddress */
 #define HCD_MSI_ROUTINES_HELPER     2UL     /* x86: the helper's answer    */
 #define HCD_MSI_ROUTINES_NOT_FOUND  3UL     /* looked for, not found       */
+#define HCD_MSI_ROUTINES_MSI4NT     4UL     /* mode 4: msi4nt's connection */
+/* 5 belonged to an unreleased build and is not produced. */
 
 #define HCD_MSI_FROM_NONE           0UL
 #define HCD_MSI_FROM_ADDDEVICE      1UL
@@ -3248,6 +3659,11 @@ PVOID HcdHlprTimerRoutine(PHCD_CONTROLLER hc, ULONG look);
 ULONG HcdMsiRoutines(PHCD_CONTROLLER hc, PVOID *connect, PVOID *disconnect);
 ULONG HcdMsiNoLineOffered(PHCD_CONTROLLER hc);
 ULONG HcdMsiSystem(VOID);
+/* The name lookup for mode 4 (record 18 section 15.16): amd64
+ * MmGetSystemRoutineAddress; x86 the helper's minor-1 routine, fetched by
+ * HcdMsiFindRoutineLook (1 when it was). IRQL: PASSIVE_LEVEL. */
+ULONG HcdMsiFindRoutineLook(PHCD_CONTROLLER hc);
+PVOID HcdMsiResolve(PCWSTR name);
 VOID HcdMsiRemove(PHCD_CONTROLLER hc);
 VOID HcdMsiCountersStart(PHCD_CONTROLLER hc);
 VOID HcdMsiTraceStart(PHCD_CONTROLLER hc, ULONG grant, NTSTATUS status);
@@ -3349,6 +3765,12 @@ PVOID HcdPoolAllocRequirements(ULONG bytes);
 VOID HcdPoolFree(PVOID p);
 PMDL HcdPoolWindowMdl(ULONG bytes);
 VOID HcdPoolWindowMdlFree(PMDL mdl);
+/* Task 49.34 (hcd_stage.c): the first `n` bytes (at most
+ * HCD_BOT_COPY_BYTES) of a client's locked MDL copied to `to` through the
+ * controller's own window, never the client's MDL changed; 0 when it is
+ * not open, busy or will not map. IRQL: <= DISPATCH_LEVEL. */
+#define HCD_BOT_COPY_BYTES  32UL
+ULONG HcdStageCopyHead(PHCD_CONTROLLER hc, PMDL client, PUCHAR to, ULONG n);
 ULONG HcdPoolOutstandingCount(VOID);
 PVOID HcdPoolAllocHandedOff(ULONG bytes);
 

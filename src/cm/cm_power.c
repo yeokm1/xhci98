@@ -194,6 +194,13 @@ VOID CmNhiQuiesce(PCM_NHI nhi)
         CmOscntShutdown(nhi);
     }
     if (nhi->DevicePower != PowerDeviceD0) {
+        if (nhi->SystemPower == PowerSystemShutdown) {
+            /* A message kept across a sleep whose D0 did not return
+             * (record 21 section 4.5.12): ended by the library's
+             * disconnect, no register of the NHI's touched. Nothing when
+             * nothing is connected. */
+            CmRirqDown(nhi, CM_RIRQ_DOWN_D3);
+        }
         return;
     }
     /* The ring interrupt down while the function is still in D0, before
@@ -304,9 +311,15 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
         CmLogNote(nhi, "u4.recover.snapshot", CmLiveEpisode(&nhi->Live));
     }
     if (!nhi->Suspended || nhi->DevicePower != PowerDeviceD0) {
+        /* Record 21 section 4.5.18: back in D0 (or never out of it). */
+        CmRirqHwGateOpen(nhi);
         return TRUE;
     }
     nhi->Suspended = 0;
+    /* Record 21 section 6.3.1: the resume's identity, before its work;
+     * its release is checked against it. */
+    CmWpuResumeBegin(nhi);
+    CmRirqHwGateOpen(nhi);
     ran = FALSE;
     if (nhi->U4On && (nhi->U4.Contained || !CmNhiHwAccess(nhi))) {
         /* Record 22 section 7.7: a contained instance is never restarted
@@ -368,6 +381,12 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
             CmLogNote(nhi, "cm.resume-failed", (ULONG)(-rc));
             CmLogNote(nhi, "u4.inert-reason", nhi->U4.InertReason);
             ok = FALSE;
+        } else if (nhi->ReenumOn) {
+            /* Record 22 section 11.1.14 (task 49.11): every obligation
+             * met, so each held member's function is waited for before
+             * the liveness probe below, the stor98 UP's scan, the
+             * release's invalidation and the drain, which then find it. */
+            CmReenumResumeSettle(nhi);
         }
     }
     if (nhi->U4On) {
@@ -676,6 +695,10 @@ static NTSTATUS NTAPI cmSystemDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
         return cmSystemPass(nhi, Irp);
     }
     if (route == CM_PWR_DETACH) {
+        /* Record 21 section 4.5.18: the routine's gate closed before the
+         * IRP goes on - the queued quiescence may never run; after the
+         * hold that published the shutdown, so no opening undoes it. */
+        CmRirqHwGateClose(nhi, CM_RIRQ_GATE_POWER);
         /* Queued before the release, and nothing of the extension's is
          * touched after it: a removal stops and joins the thread before
          * the extension goes. Not queued (no thread): nothing of this
@@ -729,6 +752,11 @@ NTSTATUS CmNhiPower(PCM_NHI nhi, PIRP irp)
         IoCompleteRequest(irp, IO_NO_INCREMENT);
         return STATUS_DELETE_PENDING;
     }
+    /* Record 21 section 6.3.1: a sleep, shutdown or power-down received
+     * closes the wake power-up's asks before the thread runs. */
+    CmWpuNhiPowerSeen(nhi, stack->MinorFunction,
+                      (ULONG)stack->Parameters.Power.Type,
+                      (ULONG)stack->Parameters.Power.State.SystemState);
     if (stack->MinorFunction != IRP_MN_SET_POWER) {
         /* Every request but SET_POWER passes down as a filter's would,
          * held until PoCallDriver returns. */

@@ -96,6 +96,7 @@ typedef struct _CM_NV_U4 {
     ULONG LateBridge[XHCI_TBT_MAX_TUNNELS];
     ULONG LateFrom[XHCI_TBT_MAX_TUNNELS];
     ULONG LateOn[XHCI_TBT_MAX_TUNNELS];
+    ULONG LateMs[XHCI_TBT_MAX_TUNNELS];  /* its window (record 21 6.1.3) */
     /* Task 42-A.6: the latest new tunnel (CM_NVLINK_TUNNEL) named for each
      * member's bridge, with which every later exposure of that bridge
      * labels what it publishes (cmNvTunnelOf): re-applied, it changes
@@ -112,6 +113,11 @@ typedef struct _CM_NV_U4 {
 } CM_NV_U4;
 
 #define CM_NV_LATE_MS 10000UL
+/* Record 21 section 6.1.3 (task 48.35): a fresh exposure on 98 SE and ME
+ * that finds the bridge with no secondary bus (after a standby, before
+ * Windows has restored it) arms the late scan for the CONFIGMG worker's
+ * resume bound (CM_PORTS_RW_BOUND_MS, 20 s) plus CM_NV_LATE_MS. */
+#define CM_NV_LATE_NOBUS_MS (20000UL + CM_NV_LATE_MS)
 
 static CM_NV_U4 cmNvU4[CM_NV_DOMAINS];
 
@@ -307,6 +313,28 @@ static ULONG cmNvQ35Kind(PCM_NHI nhi, ULONG bridge)
         return CM_NVLINK_Q35_NONE;
     }
     return CmNvlinkQ35Kind(port.PcieCaps, port.LinkCap, slotCap);
+}
+
+BOOLEAN CmNvlinkShpcBridge(PCM_NHI nhi, ULONG bridge)
+{
+    XHCI_TBT_CFG io;
+    XHCI_TBT_PORT port;
+    ULONG verdict;
+
+    if (!cmNvNt) {
+        return FALSE;
+    }
+    io.Read = cmNvCfgRead;
+    io.Write = NULL;
+    io.Context = nhi;
+    io.Reads = 0;
+    io.Writes = 0;
+    verdict = XhciTbtPortRead(&io, bridge, &port);
+    if (verdict == XHCI_TBT_PORT_ERROR || verdict == XHCI_TBT_PORT_GONE) {
+        return FALSE;
+    }
+    return (BOOLEAN)(port.ShpcCap != 0 && port.PcieCap == 0 &&
+                     cmNvEmulator(bridge));
 }
 
 /* Whether `bridge` is this domain's own: a member of its set that no
@@ -864,7 +892,8 @@ static CM_NV_U4 *cmNvU4Of(PCM_NHI nhi, BOOLEAN create);
  * instance bound before it finds its entry later, and the retirement
  * before the exposure kept any old statement away from it. An entry
  * found UP keeps its generation (the late scan names no tunnel). */
-static VOID cmNvLateArm(PCM_NHI nhi, ULONG bridge, BOOLEAN arm)
+static VOID cmNvLateArm(PCM_NHI nhi, ULONG bridge, BOOLEAN arm,
+                        ULONG ms)
 {
     CM_NV_U4 *u;
     ULONG k;
@@ -893,6 +922,7 @@ static VOID cmNvLateArm(PCM_NHI nhi, ULONG bridge, BOOLEAN arm)
     }
     u->LateBridge[k] = bridge;
     u->LateFrom[k] = cmNvNow(nhi);
+    u->LateMs[k] = ms;
     u->LateOn[k] = 1;
 }
 
@@ -1070,6 +1100,12 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh, ULONG tunnel)
     }
     if (bus == CM_NVLINK_NONE) {
         CmLogNote(nhi, "cm.nvlink.up.no-bus", bridge);
+        if (fresh && !cmNvNt) {
+            /* Record 21 section 6.1.3: the UP owed once Windows has put
+             * the bus back and the function answers (the late scan reads
+             * the secondary bus again at each pass). */
+            cmNvLateArm(nhi, bridge, TRUE, CM_NV_LATE_NOBUS_MS);
+        }
         return 0;
     }
     if (!ready) {
@@ -1102,7 +1138,7 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh, ULONG tunnel)
          * Answered: no later scan. An entry still UP for an older tunnel
          * is not advanced later by an exposure naming none (the late scan
          * included): the endpoint may be bound by then. */
-        cmNvLateArm(nhi, bridge, (BOOLEAN)((r >> 16) == 0));
+        cmNvLateArm(nhi, bridge, (BOOLEAN)((r >> 16) == 0), CM_NV_LATE_MS);
     }
     return r & 0xFFFFUL;
 }
@@ -1984,7 +2020,7 @@ VOID CmNvlinkService(PCM_NHI nhi)
             u->LateOn[i] = 0;
             CmLogNote(nhi, "cm.nvlink.up.late",
                       ((cmNvNow(nhi) - u->LateFrom[i]) << 8) | i);
-        } else if (cmNvNow(nhi) - u->LateFrom[i] >= CM_NV_LATE_MS) {
+        } else if (cmNvNow(nhi) - u->LateFrom[i] >= u->LateMs[i]) {
             u->LateOn[i] = 0;
             CmLogNote(nhi, "cm.nvlink.up.late-none", u->LateBridge[i]);
         }

@@ -315,14 +315,9 @@ void tr_hcd_head_text(TR_TEXT *t, const TR_SNAPW *w, int nt)
 {
     tr_put(t, "xhci98 driver log\n");
     tr_printf(t, "  Build:      %s\n", trlFlavour(w->Flavour));
-    if (w->VerbosityApplied >= 2 && w->VerbosityApplied <= 3) {
+    if (w->VerbosityApplied >= 2 && w->VerbosityApplied <= 4) {
         tr_printf(t, "  Recording:  on (XhciLogVerbosity %lu)\n",
                   (unsigned long)w->VerbosityApplied);
-    } else if (w->VerbosityApplied == 4) {
-        tr_put(t, "  Recording:  on (XhciLogVerbosity 4)\n"
-                  "  Level 4 records internal addresses, so this tool does "
-                  "not show the log.\n  Set level 2 in View > Logging level and "
-                  "restart Windows for a log it can\n  show.\n");
     } else {
         tr_printf(t, "  Recording:  off (XhciLogVerbosity %lu: counters "
                      "only)\n", (unsigned long)w->VerbosityApplied);
@@ -337,10 +332,7 @@ int tr_hcd_ring_text(TR_TEXT *t, const TR_SNAPW *w, TR_U32 asked)
     TR_U32 i;
     TR_U32 skip;
 
-    if (w->VerbosityApplied == 4) {
-        return TR_RING_WITHHELD;
-    }
-    if (w->VerbosityApplied < 2) {
+    if (w->VerbosityApplied < 2 || w->VerbosityApplied > 4) {
         return TR_RING_OFF;
     }
     if (w->Region != TR_SNAP_REGION_EXT || w->Offset != asked ||
@@ -394,6 +386,362 @@ TR_U32 tr_hc_count(void)
 const char *tr_hc_name(TR_U32 i)
 {
     return i < tr_hc_count() ? trlHcNames[i] : NULL;
+}
+
+/* ======================================================================== */
+/* xhci98.sys: a held port (task 49.43)                                      */
+/* ======================================================================== */
+
+/* The HCD region's header words (tr_snap.c print_tol). */
+#define TRL_HCD_VERSION         1UL
+#define TRL_HCD_TOL_HEAD_WORDS  20UL
+#define TRL_TOL_LOC_MIN_BYTES   28UL
+
+int tr_tol_map(const unsigned char *hcd, size_t n, TR_U32 extBytes,
+               TR_TOLMAP *m)
+{
+    TR_U32 head;
+    TR_TOLMAP g;
+
+    memset(m, 0, sizeof(*m));
+    if (hcd == NULL || n < TRL_HCD_TOL_HEAD_WORDS * 4 ||
+        trlGet(hcd, 0) == 0 || trlGet(hcd, 0) > TRL_HCD_VERSION) {
+        return 0;
+    }
+    head = trlGet(hcd, 4);
+    if (head < TRL_HCD_TOL_HEAD_WORDS * 4) {
+        return 0;
+    }
+    g.TolAt = trlGet(hcd, 32);
+    g.TolBytes = trlGet(hcd, 36);
+    g.LocBytes = trlGet(hcd, 52);
+    g.RootAt = trlGet(hcd, 56);
+    g.RootLocs = trlGet(hcd, 60);
+    g.HubAt = trlGet(hcd, 64);
+    g.HubLocs = trlGet(hcd, 68);
+    g.HubPorts = trlGet(hcd, 72);
+    /* Two comparisons each, never a sum that could wrap. */
+    if (g.TolAt > extBytes || g.TolBytes > extBytes - g.TolAt ||
+        (g.TolAt & 3UL) != 0 || g.LocBytes < TRL_TOL_LOC_MIN_BYTES ||
+        (g.LocBytes & 3UL) != 0 || g.RootLocs > TR_TOL_MAX_LOCS ||
+        g.HubLocs > TR_TOL_MAX_LOCS || g.RootAt > g.TolBytes ||
+        g.RootLocs > (g.TolBytes - g.RootAt) / g.LocBytes ||
+        g.HubAt > g.TolBytes ||
+        g.HubLocs > (g.TolBytes - g.HubAt) / g.LocBytes ||
+        (g.HubLocs != 0 && g.HubPorts == 0)) {
+        return 0;
+    }
+    *m = g;
+    return 1;
+}
+
+TR_U32 tr_tol_hold_offset(const TR_TOLMAP *m, TR_U32 loc)
+{
+    if (loc < m->RootLocs) {
+        return m->TolAt + m->RootAt + loc * m->LocBytes + TR_TOL_HOLD_AT;
+    }
+    return m->TolAt + m->HubAt + (loc - m->RootLocs) * m->LocBytes +
+           TR_TOL_HOLD_AT;
+}
+
+int tr_tol_hold(const TR_TOLMAP *m, const TR_SNAPW *w, TR_U32 loc)
+{
+    TR_U32 at;
+
+    if (m == NULL || w == NULL || w->Payload == NULL ||
+        w->Region != TR_SNAP_REGION_EXT ||
+        loc >= m->RootLocs + m->HubLocs) {
+        return -1;
+    }
+    at = tr_tol_hold_offset(m, loc);
+    if (at < w->Offset || at - w->Offset >= w->PayloadBytes) {
+        return -1;
+    }
+    return (int)w->Payload[at - w->Offset];
+}
+
+const char tr_hold_fallback[] =
+    "If this keeps failing, unplug the device and plug it in again.";
+const char tr_hold_tag[] = " (on hold)";
+
+const char *tr_hold_note(int hold)
+{
+    switch (hold) {
+    case TR_HOLD_REENUMS:
+        return "This port is on hold after repeated failures. Unplug the "
+               "device and plug it in again. The hold also ends when the "
+               "controller restarts.";
+    case TR_HOLD_REPOWERS:
+    case TR_HOLD_OC_WAIT:
+        return "This port is switched off after repeated failures. It stays "
+               "off until the controller restarts: restart Windows, or "
+               "disable and enable the controller in Device Manager.";
+    default:
+        return NULL;
+    }
+}
+
+const char *tr_hold_hub_note(int hold)
+{
+    switch (hold) {
+    case TR_HOLD_REENUMS:
+        return "A port of a hub on this controller is on hold after "
+               "repeated failures. Unplug the device and plug it in again. "
+               "The hold also ends when the controller restarts.";
+    case TR_HOLD_REPOWERS:
+    case TR_HOLD_OC_WAIT:
+        return "A port of a hub on this controller is switched off after "
+               "repeated failures. It stays off until the controller "
+               "restarts: restart Windows, or disable and enable the "
+               "controller in Device Manager.";
+    default:
+        return NULL;
+    }
+}
+
+void tr_hold_balloon(int hold, int hub, TR_U32 port, const char *ctrl,
+                     char *out, size_t cap)
+{
+    char name[96];
+    char where[140];
+    const char *tail;
+
+    tr_copy(name, ctrl != NULL && ctrl[0] ? ctrl : "the USB controller",
+            sizeof(name));
+    if (hub) {
+        tr_sprintf(where, sizeof(where), "A port of a hub on %s", name);
+    } else {
+        tr_sprintf(where, sizeof(where), "Port %lu of %s",
+                   (unsigned long)port, name);
+    }
+    tail = hold == TR_HOLD_REENUMS
+               ? "is on hold after repeated failures. Unplug the device and "
+                 "plug it in again."
+               : "is switched off after repeated failures. Restart Windows "
+                 "to turn it on again.";
+    if (cap > 256) {
+        cap = 256;
+    }
+    tr_sprintf(out, cap, "%s %s", where, tail);
+}
+
+int tr_hold_notice_on(int nt, int warn)
+{
+    return !nt || warn != 0;
+}
+
+void tr_holdq_init(TR_HOLDQ *q)
+{
+    memset(q, 0, sizeof(*q));
+}
+
+int tr_holdq_observe(TR_HOLDQ *q, TR_U32 key, TR_U32 loc, int hold)
+{
+    int i;
+    int was = TR_HOLD_NONE;
+    TR_HQENT *s = NULL;
+
+    if (hold < 0) {
+        return 0;
+    }
+    for (i = 0; i < q->SeenN; i++) {
+        if (q->Seen[i].Key == key && q->Seen[i].Loc == loc) {
+            s = &q->Seen[i];
+            was = s->Hold;
+            break;
+        }
+    }
+    if (s == NULL) {
+        if (hold == TR_HOLD_NONE) {
+            return 0;
+        }
+        if (q->SeenN < TR_HQ_SEEN) {
+            s = &q->Seen[q->SeenN++];
+        } else {
+            /* Full: a clear entry again, else the first. */
+            for (i = 0; i < q->SeenN && q->Seen[i].Hold != TR_HOLD_NONE;
+                 i++) {
+            }
+            s = &q->Seen[i < q->SeenN ? i : 0];
+        }
+        s->Key = key;
+        s->Loc = loc;
+    }
+    s->Hold = hold;
+    if (hold == was) {
+        return 0;
+    }
+    /* A change ends the episode: its announcement, if still queued, goes,
+     * so a location has one at most. */
+    for (i = 0; i < q->QN;) {
+        if (q->Q[i].Key == key && q->Q[i].Loc == loc) {
+            memmove(&q->Q[i], &q->Q[i + 1],
+                    (size_t)(q->QN - i - 1) * sizeof(q->Q[0]));
+            q->QN--;
+            continue;
+        }
+        i++;
+    }
+    if (hold == TR_HOLD_NONE) {
+        return 0;
+    }
+    if (q->QN >= TR_HQ_MAX) {
+        q->Dropped++;
+        return 0;
+    }
+    q->Q[q->QN].Key = key;
+    q->Q[q->QN].Loc = loc;
+    q->Q[q->QN].Hold = hold;
+    q->Q[q->QN].Tries = 0;
+    q->QN++;
+    return 1;
+}
+
+/* The hold last seen at a location, TR_HOLD_NONE when none is kept. */
+static int trlSeen(const TR_HOLDQ *q, TR_U32 key, TR_U32 loc)
+{
+    int i;
+
+    for (i = 0; i < q->SeenN; i++) {
+        if (q->Seen[i].Key == key && q->Seen[i].Loc == loc) {
+            return q->Seen[i].Hold;
+        }
+    }
+    return TR_HOLD_NONE;
+}
+
+void tr_holdq_pop(TR_HOLDQ *q)
+{
+    if (q->QN == 0) {
+        return;
+    }
+    memmove(&q->Q[0], &q->Q[1], (size_t)(q->QN - 1) * sizeof(q->Q[0]));
+    q->QN--;
+}
+
+int tr_holdq_peek(TR_HOLDQ *q, TR_HQENT *e)
+{
+    /* An announcement whose location has since cleared or changed kind
+     * is no longer true: dropped, never shown. */
+    while (q->QN != 0 &&
+           trlSeen(q, q->Q[0].Key, q->Q[0].Loc) != q->Q[0].Hold) {
+        tr_holdq_pop(q);
+    }
+    if (q->QN == 0) {
+        return 0;
+    }
+    *e = q->Q[0];
+    return 1;
+}
+
+static int trlKeyIn(TR_U32 key, const TR_U32 *keys, int n)
+{
+    int i;
+
+    for (i = 0; i < n; i++) {
+        if (keys[i] == key) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void tr_holdq_keep_keys(TR_HOLDQ *q, const TR_U32 *keys, int n)
+{
+    int i;
+    int k;
+
+    for (i = 0, k = 0; i < q->SeenN; i++) {
+        if (trlKeyIn(q->Seen[i].Key, keys, n)) {
+            q->Seen[k++] = q->Seen[i];
+        }
+    }
+    q->SeenN = k;
+    for (i = 0, k = 0; i < q->QN; i++) {
+        if (trlKeyIn(q->Q[i].Key, keys, n)) {
+            q->Q[k++] = q->Q[i];
+        }
+    }
+    q->QN = k;
+}
+
+int tr_holdq_find(TR_HOLDQ *q, const TR_U32 *keys, int n, TR_HQENT *e)
+{
+    int i;
+
+    for (i = 0; i < q->QN;) {
+        if (trlSeen(q, q->Q[i].Key, q->Q[i].Loc) != q->Q[i].Hold) {
+            memmove(&q->Q[i], &q->Q[i + 1],
+                    (size_t)(q->QN - i - 1) * sizeof(q->Q[0]));
+            q->QN--;
+            continue;
+        }
+        if (trlKeyIn(q->Q[i].Key, keys, n)) {
+            *e = q->Q[i];
+            return 1;
+        }
+        i++;
+    }
+    return 0;
+}
+
+int tr_holdq_sent(TR_HOLDQ *q, const TR_HQENT *e, int ok)
+{
+    int i;
+
+    for (i = 0; i < q->QN; i++) {
+        if (q->Q[i].Key == e->Key && q->Q[i].Loc == e->Loc &&
+            q->Q[i].Hold == e->Hold) {
+            break;
+        }
+    }
+    if (i == q->QN) {
+        return 0;
+    }
+    if (!ok && ++q->Q[i].Tries < TR_HQ_TRIES) {
+        return 0;
+    }
+    if (!ok) {
+        q->Dropped++;
+    }
+    memmove(&q->Q[i], &q->Q[i + 1], (size_t)(q->QN - i - 1) * sizeof(q->Q[0]));
+    q->QN--;
+    return 1;
+}
+
+int tr_hold_reading_usable(TR_U32 readAt, TR_U32 now, TR_U32 maxMs,
+                           TR_U32 epochAtStart, TR_U32 epochNow)
+{
+    if (epochAtStart != epochNow) {
+        return 0;
+    }
+    return (TR_U32)(now - readAt) <= maxMs;
+}
+
+int tr_hold_rot_index(TR_U32 start, int n, int i)
+{
+    if (n <= 0 || i < 0) {
+        return 0;
+    }
+    return (int)((start % (TR_U32)n + (TR_U32)i) % (TR_U32)n);
+}
+
+int tr_holdq_take(TR_HOLDQ *q, const TR_U32 *keys, int n, TR_HQENT *e)
+{
+    if (!tr_holdq_find(q, keys, n, e)) {
+        return 0;
+    }
+    (void)tr_holdq_sent(q, e, 1);
+    return 1;
+}
+
+int tr_holdq_next(TR_HOLDQ *q, TR_HQENT *e)
+{
+    if (!tr_holdq_peek(q, e)) {
+        return 0;
+    }
+    tr_holdq_pop(q);
+    return 1;
 }
 
 /* ======================================================================== */
@@ -679,7 +1027,11 @@ void tr_xhq_log_text(TR_TEXT *t, const TR_XHQ *x, int nt)
                   (unsigned long)x->VerbosityRead,
                   (unsigned long)x->Verbosity);
     }
-    if (x->Verbosity >= 2 && x->Verbosity <= 3) {
+    /* From 3.5.0.0 level 4's log is served as it is, XHQ_F_ADDRESSES beside
+     * XHQ_F_WITHHELD; XHQ_F_WITHHELD alone is a driver before it, which
+     * serves no log at level 4. */
+    if (x->Verbosity >= 2 && x->Verbosity <= 4 &&
+        (x->Verbosity < 4 || (x->Flags & XHQ_F_ADDRESSES))) {
         tr_printf(t, "  Recording:  on (XhciLogVerbosity %lu)\n",
                   (unsigned long)x->Verbosity);
     } else if (x->Flags & XHQ_F_WITHHELD) {
@@ -713,7 +1065,8 @@ void tr_xhq_log_text(TR_TEXT *t, const TR_XHQ *x, int nt)
         tr_printf(t, "    (%lu of %lu nonzero.)\n", (unsigned long)shown,
                   (unsigned long)words);
     }
-    if ((x->Flags & XHQ_F_RECORDING) && !(x->Flags & XHQ_F_WITHHELD)) {
+    if ((x->Flags & XHQ_F_RECORDING) &&
+        (!(x->Flags & XHQ_F_WITHHELD) || (x->Flags & XHQ_F_ADDRESSES))) {
         tr_printf(t, "\n  Log (%lu records since the start",
                   (unsigned long)x->Appends);
         if (x->Dropped != 0) {

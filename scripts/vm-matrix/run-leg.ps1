@@ -18,12 +18,30 @@ allows, and no step failed.
 A leg with Audio set (2000 to 7) also checks playback: its QEMU carries
 -audiodev none, the host plugs QEMU's usb-audio into the controller when the
 guest asks, and the guest plays the CD's WAV with WAVCHK.EXE (wavchk\, built
-by its build.cmd; the leg refuses to start without it), then reads XHCITR's
+by its build.cmd, which the leg runs when the EXE is missing, and refuses
+to start only when that build fails), then reads XHCITR's
 report for refused URBs (checks audio-play and urbs-malformed).
 
 -Cold boots the first phase from the starting point's disk instead of
 restoring its saved state: the same leg, timed the way legs ran before the
-starting points (a cold start to the desktop first).
+starting points (a cold start to the desktop first). A leg with Cold in
+release-legs.psd1 always starts so.
+
+A leg runs on TCG unless release-legs.psd1 gives it Accel 'whpx' (the two
+Windows 10 legs; roadmap-usb4 49.4). A WHPX leg starts cold, since QEMU
+restores no saved state under WHPX, and is refused, before anything is
+started, where WHPX cannot run its guest: it never falls back to TCG by
+itself. -ForceTcg runs such a leg under TCG instead, the periodic
+cross-check, with the leg's TcgMinutes and TcgStallSeconds as its
+deadlines. result.json names the accelerator (accel, accelOwn,
+accelForced) and each start's own.
+
+A leg with Devices (Windows 10) also disables, enables, removes and
+rescans the controller after the stick's copy, the stick copied to again
+after the enable and the rescan. Whether the remove asked for a restart is
+recorded (ctrlRemove), not judged. A leg with TrustCert (Windows 10 x64)
+needs a signed x64 package: the guest trusts the package's own test
+certificate before the install.
 
 A window leg (Mode window) installs with the installer's window instead:
 the guest is restored with the CD in, and the host types SETUP.EXE into
@@ -51,6 +69,7 @@ param(
     [string]$RunDir = '',
     [int]$Slot = 0,
     [switch]$Cold,
+    [switch]$ForceTcg,
     [switch]$Operator,
     [int]$LegMinutes = 0,
     [switch]$KeepDisk
@@ -76,6 +95,16 @@ if (-not (Test-Path -LiteralPath (Join-Path $Package 'INSTALL.BAT'))) { throw "$
 if ($def.ContainsKey('Needs') -and $def.Needs -and -not (Test-Path -LiteralPath (Join-Path $Package $def.Needs))) {
     throw "leg ${Leg}: $Package has no $($def.Needs) (the download this leg needs)"
 }
+# The accelerator: the leg's own, or TCG when forced (the cross-check).
+$acc = Resolve-LegAccel $def ([bool]$ForceTcg)
+$accelArg = Get-LegAccelArg $guest $acc.Use
+# Devices and TrustCert are LEGNT.CMD's, and Windows 10's.
+$devices = ($def.ContainsKey('Devices') -and $def.Devices)
+$trust = ($def.ContainsKey('TrustCert') -and $def.TrustCert)
+if (($devices -or $trust) -and $guest.Family -eq '9x') { throw "leg ${Leg}: Devices and TrustCert are for a Windows 10 guest (LEGNT.CMD)" }
+if ($trust -and -not (Test-Path -LiteralPath (Join-Path $Package 'nt-x64\xhci98-test.cer'))) {
+    throw "leg ${Leg}: $Package has no nt-x64\xhci98-test.cer: this leg needs a signed x64 package (an unsigned one carries no catalog, and Windows 10 x64 refuses it)"
+}
 if (-not $RunDir) { $RunDir = Join-Path $cfg.WorkDir ("runs\{0}-{1}" -f (Get-Date -Format 'yyyyMMdd-HHmmss'), $Leg) }
 New-Item -ItemType Directory -Force $RunDir | Out-Null
 $ports = Get-LegPorts $cfg $Slot
@@ -83,12 +112,19 @@ $qver = Get-LegQemuVersion $cfg
 $start = Get-LegStartPoint $cfg $guest $qver
 # A disk-medium guest's medium is there from power-on, so its legs start cold.
 if (Test-LegDiskMedium $guest) { $Cold = [switch]$true }
+# So does a leg that says Cold, and any leg under WHPX: a starting point's
+# state is TCG's, and QEMU restores none under WHPX.
+if (($def.ContainsKey('Cold') -and $def.Cold) -or $acc.Use -ne 'tcg') { $Cold = [switch]$true }
 if (-not $cfg.ContainsKey('StickImage') -or -not (Test-Path -LiteralPath (Resolve-RepoPath $cfg.StickImage))) {
     throw 'StickImage: a qcow2 USB stick image with TESTDATA.BIN at its root'
 }
 $stickBase = Resolve-RepoPath $cfg.StickImage
-if ($LegMinutes -le 0) { $LegMinutes = 90; if ($def.ContainsKey('Minutes')) { $LegMinutes = [int]$def.Minutes } }
+if ($LegMinutes -le 0) {
+    $LegMinutes = 90; if ($def.ContainsKey('Minutes')) { $LegMinutes = [int]$def.Minutes }
+    if ($acc.Forced -and $def.ContainsKey('TcgMinutes')) { $LegMinutes = [int]$def.TcgMinutes }
+}
 $stall = 900; if ($def.ContainsKey('StallSeconds')) { $stall = [int]$def.StallSeconds }
+if ($acc.Forced -and $def.ContainsKey('TcgStallSeconds')) { $stall = [int]$def.TcgStallSeconds }
 $hostSteps = @{}; if ($def.ContainsKey('HostSteps')) { $hostSteps = $def.HostSteps }
 # InstallArgs: more switches for the console install (e.g. /nonfreestage).
 $installArgs = ''; if ($def.ContainsKey('InstallArgs')) { $installArgs = [string]$def.InstallArgs }
@@ -112,11 +148,17 @@ if ($audio) {
     $backends = Get-LegAudioBackends
 }
 
+# A WHPX leg where WHPX cannot run its guest stops here, with nothing of
+# the leg started and no result.json: never a TCG run under a WHPX leg's name.
+if ($acc.Use -eq 'whpx') { $null = Assert-LegWhpx -Config $cfg -Guest $guest -Ports $ports -What "leg $Leg" -Dir $RunDir }
+
 $rec = [ordered]@{
     leg = $Leg; guest = $guest.Id; mode = $mode; cold = [bool]$Cold; package = (Resolve-Path -LiteralPath $Package).Path
+    accel = $accelArg; accelOwn = $acc.Own; accelForced = [bool]$acc.Forced
     qemu = $qver; started = (Get-Date -Format s); boots = @(); steps = @(); checks = [ordered]@{}; exits = [ordered]@{}
     verdict = ''; reasons = @(); seconds = 0; pausedSeconds = 0
 }
+if ($devices) { $rec.ctrlRemove = '' }
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 $legDeadline = (Get-Date).AddMinutes($LegMinutes)
 
@@ -132,8 +174,11 @@ if ($guest.Family -eq '9x') {
     [IO.File]::WriteAllText((Join-Path $cd 'XHMODE.BAT'), "@echo off`r`nset XHMODE=$mode`r`nset XHARGS=$installArgs`r`n", [Text.Encoding]::ASCII)
 } else {
     Copy-Item -LiteralPath (Join-Path $legDir 'LEGNT.CMD') -Destination (Join-Path $cd 'XHLEG.CMD')
+    Copy-Item -LiteralPath (Join-Path $legDir 'XHCOPY.CMD') -Destination $cd
     $xa = ''; if ($audio) { $xa = '1' }
-    [IO.File]::WriteAllText((Join-Path $cd 'XHMODE.CMD'), "@echo off`r`nset `"XHMODE=$mode`"`r`nset `"XHARGS=$installArgs`"`r`nset `"XHAUDIO=$xa`"`r`n", [Text.Encoding]::ASCII)
+    $xd = ''; if ($devices) { $xd = '1' }
+    $xt = ''; if ($trust) { $xt = '1' }
+    [IO.File]::WriteAllText((Join-Path $cd 'XHMODE.CMD'), "@echo off`r`nset `"XHMODE=$mode`"`r`nset `"XHARGS=$installArgs`"`r`nset `"XHAUDIO=$xa`"`r`nset `"XHDEVSEQ=$xd`"`r`nset `"XHTRUST=$xt`"`r`n", [Text.Encoding]::ASCII)
 }
 if ($audio) {
     New-Item -ItemType Directory -Force (Join-Path $cd 'XHWAV') | Out-Null
@@ -181,6 +226,7 @@ function Read-LegLines {
         if ($ln -match '^XHLEG POWEROFF') { $script:sawPowerOff = $true; if (-not $script:powerOffAt) { $script:powerOffAt = Get-Date } }
         if ($ln -match '^XHLEG CHECK (\S+) (PASS|FAIL)(.*)$') { $rec.checks[$Matches[1]] = ($Matches[2] + $Matches[3]).Trim() }
         if ($ln -match '^XHLEG EXIT (\S+) (\S+)$') { $rec.exits[$Matches[1]] = $Matches[2] }
+        if ($devices -and $ln -match '^XHLEG NOTE ctrl-remove (done|restart asked)$') { $rec.ctrlRemove = $Matches[1] }
         if ($ln -match '^XHLEG END') { $script:ended = $true; if (-not $script:endAt) { $script:endAt = Get-Date } }
         if (-not $Proc -or $Proc.HasExited) { continue }
         if ($ln -match '^XHLEG WANT plug-stick') {
@@ -214,7 +260,7 @@ try {
         $boot++
         $tag = "b$boot"
         $restore = ($boot -eq 1 -and -not $Cold)
-        $b = [ordered]@{ boot = $boot; restore = $restore; startSecond = [math]::Round($sw.Elapsed.TotalSeconds, 1) }
+        $b = [ordered]@{ boot = $boot; restore = $restore; accel = $accelArg; startSecond = [math]::Round($sw.Elapsed.TotalSeconds, 1) }
         $t0 = Get-Date
         $serial = Join-Path $RunDir "serial-$tag.log"
         $proc = $null
@@ -227,7 +273,7 @@ try {
         $hostStopped = $false
         try {
             if ($restore) {
-                $proc = Start-LegQemu -Config $cfg -Guest $guest -Ports $ports -Disk $disk -Iso $start.Idle -RunDir $RunDir -Tag $tag -Incoming -Name "xhleg-$Leg" -Backends $backends
+                $proc = Start-LegQemu -Config $cfg -Guest $guest -Ports $ports -Disk $disk -Iso $start.Idle -RunDir $RunDir -Tag $tag -Incoming -Name "xhleg-$Leg" -Backends $backends -Accel $accelArg
                 Restore-LegState $ports $start.State
                 Set-LegCd $ports $legIso
                 $null = Invoke-Qmp -Port $ports.Qmp -Command 'cont'
@@ -235,7 +281,7 @@ try {
             } elseif ($boot -eq 1 -and $guest.ContainsKey('ColdStep') -and (Test-LegDiskMedium $guest)) {
                 # A disk medium is there from power-on; the cold step clears
                 # the way while the poller may already have started the leg.
-                $proc = Start-LegQemu -Config $cfg -Guest $guest -Ports $ports -Disk $disk -Iso $legIso -RunDir $RunDir -Tag $tag -Name "xhleg-$Leg" -Backends $backends
+                $proc = Start-LegQemu -Config $cfg -Guest $guest -Ports $ports -Disk $disk -Iso $legIso -RunDir $RunDir -Tag $tag -Name "xhleg-$Leg" -Backends $backends -Accel $accelArg
                 $r = Invoke-LegHostStep -Step $guest.ColdStep -QmpPort $ports.Qmp -Dir $RunDir -Since $t0 -Process $proc -SerialPath $serial -Tag $tag -Layout $guest.Layout
                 $rec.steps += "boot $boot $r"
                 if ($r -match 'FAILED|no BOOT line') { throw "cold step: $r" }
@@ -243,13 +289,13 @@ try {
                 # A cold first start (-Cold) takes the guest's cold step with
                 # the empty CD in, and only then the leg's CD: the leg must not
                 # begin while the step is still clearing the way (XP's wizard).
-                $proc = Start-LegQemu -Config $cfg -Guest $guest -Ports $ports -Disk $disk -Iso $start.Idle -RunDir $RunDir -Tag $tag -Name "xhleg-$Leg" -Backends $backends
+                $proc = Start-LegQemu -Config $cfg -Guest $guest -Ports $ports -Disk $disk -Iso $start.Idle -RunDir $RunDir -Tag $tag -Name "xhleg-$Leg" -Backends $backends -Accel $accelArg
                 $r = Invoke-LegHostStep -Step $guest.ColdStep -QmpPort $ports.Qmp -Dir $RunDir -Since $t0 -Process $proc -SerialPath $serial -Tag $tag -Layout $guest.Layout
                 $rec.steps += "boot $boot $r"
                 if ($r -match 'FAILED|no BOOT line') { throw "cold step: $r" }
                 Set-LegCd $ports $legIso
             } else {
-                $proc = Start-LegQemu -Config $cfg -Guest $guest -Ports $ports -Disk $disk -Iso $legIso -RunDir $RunDir -Tag $tag -Name "xhleg-$Leg" -Backends $backends
+                $proc = Start-LegQemu -Config $cfg -Guest $guest -Ports $ports -Disk $disk -Iso $legIso -RunDir $RunDir -Tag $tag -Name "xhleg-$Leg" -Backends $backends -Accel $accelArg
             }
             # The step a start needs comes from the phase the last start ended
             # in (AfterPhaseN), so it follows the guest, not a count of starts.
@@ -375,7 +421,8 @@ try {
         }
         $err = Join-Path $RunDir "qemu-$tag.err"
         if ((Test-Path -LiteralPath $err) -and (Get-Item -LiteralPath $err).Length -gt 0) {
-            $rec.reasons += "boot $boot QEMU stderr: " + ((Get-Content -Raw -LiteralPath $err).Trim())
+            $said = Get-LegStderrReason (Get-Content -Raw -LiteralPath $err) $accelArg
+            if ($said) { $rec.reasons += "boot $boot QEMU stderr: $said" }
         }
         $b.seconds = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
         $rec.boots += $b
@@ -387,29 +434,13 @@ try {
 if ($prompts) { $rec.steps += "driver-install questions answered (Continue Anyway, Install anyway or Install) $prompts times" }
 if ($fnhPages) { $rec.steps += "Found New Hardware wizard pages answered: $fnhPages" }
 # The verdict.
-if (-not $ended) { $rec.reasons += 'the guest never said END' }
-$need = @('driver-file', 'list-current', 'stick-seen', 'stick-copy', 'list-removed')
-if ($audio) { $need += @('audio-play', 'urbs-malformed') }
-if ($def.ContainsKey('Checks')) { $need = @($def.Checks) }
-foreach ($c in $need) {
-    if (-not $rec.checks.Contains($c)) { $rec.reasons += "check $c not reported" }
-}
-foreach ($k in @($rec.checks.Keys)) {
-    if ($rec.checks[$k] -notlike 'PASS*') { $rec.reasons += "check $k $($rec.checks[$k])" }
-}
-if ($def.ContainsKey('Exits')) {
-    foreach ($k in $def.Exits.Keys) {
-        $allowed = @($def.Exits[$k] | ForEach-Object { [string]$_ })
-        if (-not $rec.exits.Contains($k)) { $rec.reasons += "no exit code for $k" }
-        elseif ($allowed -notcontains [string]$rec.exits[$k]) { $rec.reasons += "exit $k $($rec.exits[$k]), allowed $($allowed -join '/')" }
-    }
-}
-foreach ($s in $rec.steps) { if ($s -match 'FAILED|still running|no BOOT line') { $rec.reasons += "step: $s" } }
+$rec.reasons += Get-LegVerdictReasons -Def $def -Rec $rec -Ended $ended -Audio $audio -Devices $devices -Trust $trust
+if ($devices) { $rec.ctrlRemoveNote = Get-LegRemoveNote $rec.ctrlRemove $acc.Use }
 if ($rec.reasons.Count -eq 0) { $rec.verdict = 'PASS' } else { $rec.verdict = 'FAIL' }
 $rec.seconds = [math]::Round($sw.Elapsed.TotalSeconds, 1)
 $rec.finished = (Get-Date -Format s)
 $rec | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $RunDir 'result.json') -Encoding ASCII
-Write-Host ("{0} {1} in {2} s{3}" -f $Leg, $rec.verdict, $rec.seconds, $(if ($rec.reasons.Count) { ': ' + ($rec.reasons -join '; ') } else { '' }))
+Write-Host ("{0} {1} in {2} s under -accel {3}{4}{5}" -f $Leg, $rec.verdict, $rec.seconds, $accelArg, $(if ($acc.Forced) { ' (forced; the leg is a WHPX leg)' } else { '' }), $(if ($rec.reasons.Count) { ': ' + ($rec.reasons -join '; ') } else { '' }))
 if ($rec.verdict -eq 'PASS') { $legExit = 0 }
 } finally {
     Remove-LegMedium $legIso

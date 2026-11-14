@@ -53,7 +53,7 @@ BEGIN
     LTEXT           "", IDC_TITLE, 8, 4, 284, 10
     LTEXT           "", IDC_TEXT, 8, 18, 284, 42
     LTEXT           "", IDC_SYSTEM, 8, 62, 284, 18
-    LTEXT           "", IDC_LOG, 8, 81, 284, 10
+    LTEXT           "", IDC_LOG, 8, 81, 284, 10, SS_NOPREFIX
     CONTROL         "", IDC_LIST, "SysListView32", LVS_REPORT |
                     LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER |
                     WS_TABSTOP, 8, 93, 284, 70
@@ -71,7 +71,7 @@ BEGIN
     AUTOCHECKBOX    "", IDC_U_AGREE, 8, 70, 284, 20, BS_MULTILINE | BS_TOP |
                     WS_TABSTOP
     LTEXT           "", IDC_SYSTEM, 8, 94, 284, 18
-    LTEXT           "", IDC_LOG, 8, 114, 284, 10
+    LTEXT           "", IDC_LOG, 8, 114, 284, 10, SS_NOPREFIX
     EDITTEXT        IDC_STATUS, 8, 126, 284, 42, ES_MULTILINE | ES_READONLY |
                     ES_AUTOVSCROLL | WS_VSCROLL
 END
@@ -98,6 +98,8 @@ BEGIN
     LTEXT           "", IDC_C_DRIVERS_T, 20, 15, 272, 16
     AUTOCHECKBOX    "", IDC_C_UAS, 20, 33, 272, 10, WS_TABSTOP
     LTEXT           "", IDC_C_UAS_T, 32, 44, 260, 18
+    AUTOCHECKBOX    "", IDC_C_TAKE, 20, 44, 272, 10, WS_TABSTOP
+    LTEXT           "", IDC_C_TAKE_T, 32, 55, 260, 18, SS_NOPREFIX
     AUTOCHECKBOX    "", IDC_C_STOR, 8, 44, 284, 10, WS_TABSTOP
     LTEXT           "", IDC_C_STOR_T, 20, 55, 272, 31, SS_NOPREFIX
     AUTOCHECKBOX    "", IDC_C_TB, 8, 65, 284, 10, WS_TABSTOP
