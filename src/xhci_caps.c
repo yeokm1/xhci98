@@ -1031,6 +1031,31 @@ ULONG XhciVersionFloor(ULONG found, ULONG value)
     return (found && value == 0) ? XHCI_HCIVERSION_1_0 : XHCI_HCIVERSION_0_96;
 }
 
+ULONG XhciEventRingPick(ULONG read, ULONG value, ULONG capDword0)
+{
+    if (capDword0 != 0xFFFFFFFFUL &&
+        ((capDword0 >> 16) & 0xFFFFUL) < XHCI_HCIVERSION_1_0) {
+        return XHCI_EVT_PICK_HELD;
+    }
+    if (read == XHCI_EVT_READ_ABSENT) {
+        return XHCI_EVT_PICK_DEFAULT;
+    }
+    if (read == XHCI_EVT_READ_DWORD && value == XHCI_EVENT_RING_TRBS) {
+        return XHCI_EVT_PICK_SMALL;
+    }
+    return XHCI_EVT_PICK_LARGE;
+}
+
+ULONG XhciEventRingHoldNoted(ULONG pick, ULONG read, ULONG value)
+{
+    if (pick != XHCI_EVT_PICK_HELD || read == XHCI_EVT_READ_ABSENT) {
+        return 0;
+    }
+    return (read == XHCI_EVT_READ_DWORD && value == XHCI_EVENT_RING_TRBS)
+               ? 0UL
+               : 1UL;
+}
+
 ULONG XhciEffectiveCapDword0(ULONG raw, ULONG override)
 {
     if (raw == 0xFFFFFFFFUL || override == 0 || override >= 0xFFFFUL) {

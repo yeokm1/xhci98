@@ -15,4 +15,10 @@
  * devnode not found). NT only; PASSIVE, any thread. */
 int inst_boot_path_names(const char *svc);
 
+/* 1 when the devnode of instanceId is the system disk's or one of its
+ * ancestors up to the root, 0 when it is not, -1 when that could not be
+ * read (as above, or no present devnode of that id). Record 23 section
+ * 5.4.2: a controller with the Windows disk behind it is not taken over. */
+int inst_boot_path_has(const char *instanceId);
+
 #endif

@@ -87,6 +87,7 @@
 #include <io.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include "tr_ctx.h"
 #if defined(_WIN64)
 /* The compiler's own CPUID intrinsic; WDK 7.1 ships no intrin.h. */
 void __cpuid(int info[4], int leaf);
@@ -158,6 +159,7 @@ void __cpuid(int info[4], int leaf);
 #include "../src/xhci_version.h"
 #include "tr_log.h"
 #include "tr_net.h"
+#include "tr_cmsw.h"
 
 #define XHCISNAP_VERSION XHCI_VER_STR
 #define XHCISNAP_BUILT   __DATE__ " " __TIME__
@@ -409,6 +411,11 @@ static const unsigned long snap_guid[4] = {
  * refused, because a version bump is a field that changed meaning.
  */
 #define SNAP_REGION_HCD             3UL
+/* Task 49.39 (design record 17 section 4.12.9): the stream contexts and
+ * the stream trace, decoded by tr_ctx.c. */
+#define SNAP_REGION_CONTEXTS        4UL
+#define SNAP_REGION_TRACE           5UL
+#define SNAP_WORDS_MAX_BYTES        65536UL
 #define SNAP_HCD_VERSION            1UL
 #define SNAP_HCD_HEAD_WORDS         8UL
 #define SNAP_HCD_PORT_WORDS         16UL
@@ -440,7 +447,7 @@ static const unsigned long snap_guid[4] = {
 #define SNAP_POLL_FOUND_ACTIVE      0x4UL
 #define SNAP_POLL_DELIVERY_POLL     2UL
 #define SNAP_POLL_DELIVERIES        6UL
-#define SNAP_POLL_REASONS           21UL
+#define SNAP_POLL_REASONS           35UL
 #define SNAP_POLL_PIN_READ          1UL
 #define SNAP_POLL_PIN_UNREADABLE    2UL
 #define SNAP_POLL_RETIRED_STATES    6UL
@@ -459,7 +466,7 @@ static const unsigned long snap_guid[4] = {
  */
 #define SNAP_MSI_FIRST              96UL    /* MsiRoutines' word            */
 #define SNAP_MSI_WORDS              18UL
-#define SNAP_MSI_ROUTINES           4UL
+#define SNAP_MSI_ROUTINES           6UL
 #define SNAP_MSI_STATES             5UL
 #define SNAP_MSI_REFUSALS           5UL
 #define SNAP_MSI_CLASSES            7UL
@@ -473,7 +480,8 @@ static const unsigned long snap_guid[4] = {
  * a 35.3 driver's, which has none of it.
  */
 #define SNAP_HCD_TOL_HEAD_WORDS     20UL
-#define SNAP_TOL_NAMED_WORDS        34UL    /* the counters this tool names */
+#define SNAP_TOL_NAMED_WORDS        46UL    /* the counters this tool names */
+#define SNAP_TOL_MIN_WORDS          34UL    /* the fewest a driver serves   */
 #define SNAP_TOL_CODES              256UL   /* the histogram, last          */
 #define SNAP_TOL_LOC_MIN_BYTES      28UL    /* six words, then the bytes    */
 #define SNAP_TOL_WINDOW_SLOTS       3UL
@@ -1187,6 +1195,15 @@ static int companionOpened;
 static int companionFailed;
 /* 1 when the command line came through XHCITR /snaptest (xhcitr.c). */
 int trSnapTest;
+/* Task 49.35: the device report leaves the Thunderbolt networking section
+ * out (-nonet, an all-controllers run's later controllers). */
+static int netOff;
+/* Task 49.37: the run leaves the connection managers' state out (-nocm):
+ * an all-controllers run's children, whose parent takes it once. */
+static int cmOff;
+/* -cmonly (with -report NAME): the connection managers' state alone, into
+ * the current directory - an all-controllers run's own process for it. */
+static int cmOnly;
 static int extMismatch;
 static int faultWrite;
 static int faultClose;
@@ -2749,6 +2766,155 @@ static void write_companion_enum_notes(const unsigned char *ring,
 }
 
 /*
+ * Task 49.35 (design record 13 section 11.10.1): the event ring the start
+ * chose, in words, from the last `evt.ring` record (the pick in bits 31:24,
+ * the route in 23:16, the entries in 15:0) and, from 3.5.0.0, the last
+ * `evt.ring.value`, `evt.ring.read` (0 absent, 1 a DWORD, 2 another type;
+ * -1 when not seen), `evt.ring.hciversion` and whether `evt.ring.held` was
+ * noted. The pick tells the rules apart: 0 a driver of 3.4.2.0 or 3.4.3.0,
+ * 1 to 3 the interim XhciEventRing of a test build before 3.5.0.0, 4 to 7
+ * XhciEventRingTrbs from 3.5.0.0. Prints nothing when there is no such
+ * record.
+ */
+static void evt_ring_value(unsigned long val, int read)
+{
+    if (read == 2) {
+        comp("XhciEventRingTrbs, of another type,");
+    } else if (read == 1) {
+        comp("XhciEventRingTrbs %lu", val);
+    } else {
+        comp("XhciEventRingTrbs");
+    }
+}
+
+static void evt_ring_line(unsigned long v, unsigned long ver, int verSeen,
+                          unsigned long val, int read, int heldSeen)
+{
+    unsigned long pick;
+    unsigned long route;
+    unsigned long n;
+
+    pick = (v >> 24) & 0xFFUL;
+    route = (v >> 16) & 0xFFUL;
+    n = v & 0xFFFFUL;
+    comp("\nevent ring chosen at the start (task 49.35): %lu entries", n);
+    switch (route) {
+    case 0:
+    case 1:
+        if (pick == 7) {
+            comp(", the larger ring: ");
+            evt_ring_value(val, read);
+            comp(" asks for it\n");
+        } else if (pick == 3) {
+            comp(", the larger ring: XhciEventRing 1024 asks for it (a "
+                 "test build)\n");
+        } else {
+            comp(", the larger ring\n");
+        }
+        break;
+    case 2:
+        comp(", the smaller ring: no memory for the larger one\n");
+        break;
+    case 3:
+        comp(", the smaller ring: XhciQemuEventRing asks for it\n");
+        break;
+    case 4:
+        comp(", the smaller ring: %s 256 asks for it\n",
+             pick == 1 ? "XhciEventRing" : "XhciEventRingTrbs");
+        break;
+    case 5:
+        if (pick == 2) {
+            comp(", the smaller ring: automatic below xHCI 1.0 (a test "
+                 "build)\n");
+            break;
+        }
+        if (verSeen) {
+            comp(", the smaller ring: the controller is xHCI %lX.%02lX, "
+                 "below 1.0, which always uses 256",
+                 (ver >> 8) & 0xFFUL, ver & 0xFFUL);
+        } else {
+            comp(", the smaller ring: the controller is below xHCI 1.0, "
+                 "which always uses 256");
+        }
+        if (heldSeen) {
+            comp("; ");
+            evt_ring_value(val, read);
+            comp(" asks for the larger ring\n");
+        } else {
+            comp("\n");
+        }
+        break;
+    case 6:
+        comp(", the smaller ring: no XhciEventRingTrbs, the default\n");
+        break;
+    default:
+        comp(" (route %lu, which this build does not name)\n", route);
+        break;
+    }
+}
+
+static void write_companion_evt_note(const unsigned char *ring,
+                                     unsigned long start,
+                                     unsigned long mask,
+                                     unsigned long used)
+{
+    char line[128];
+    unsigned long len;
+    unsigned long i;
+    unsigned long v;
+    unsigned long ver;
+    unsigned long val;
+    int seen;
+    int verSeen;
+    int heldSeen;
+    int read;
+    unsigned char c;
+
+    len = 0;
+    seen = 0;
+    verSeen = 0;
+    heldSeen = 0;
+    read = -1;
+    v = 0;
+    ver = 0;
+    val = 0;
+    for (i = 0; i < used; i++) {
+        c = ring[(start + i) & mask];
+        if (c == '\r') {
+            continue;
+        }
+        if (c != '\n') {
+            if (len < sizeof(line) - 1) {
+                line[len++] = (char)c;
+            }
+            continue;
+        }
+        line[len] = '\0';
+        len = 0;
+        if (strncmp(line, "evt.ring=", 9) == 0 && strlen(line) == 17) {
+            v = strtoul(line + 9, NULL, 16);
+            seen = 1;
+        } else if (strncmp(line, "evt.ring.hciversion=", 20) == 0 &&
+                   strlen(line) == 28) {
+            ver = strtoul(line + 20, NULL, 16);
+            verSeen = ver != 0xFFFFUL;
+        } else if (strncmp(line, "evt.ring.held=", 14) == 0 &&
+                   strlen(line) == 22) {
+            heldSeen = 1;
+        } else if (strncmp(line, "evt.ring.value=", 15) == 0 &&
+                   strlen(line) == 23) {
+            val = strtoul(line + 15, NULL, 16);
+        } else if (strncmp(line, "evt.ring.read=", 14) == 0 &&
+                   strlen(line) == 22) {
+            read = (int)strtoul(line + 14, NULL, 16);
+        }
+    }
+    if (seen) {
+        evt_ring_line(v, ver, verSeen, val, read, heldSeen);
+    }
+}
+
+/*
  * Print the note ring's text out of the raw extension image. The ring is a byte
  * ring with a head, so the oldest byte is `(head - used)` masked to its size -
  * and printing it from offset 0 would give a rotated file, which is why the
@@ -2875,6 +3041,7 @@ static void write_companion_ring(const SNAP_HEADER *h, const unsigned char *ext,
              "5 days, or across a change of the\n clock, is misplaced)\n");
     }
     write_companion_enum_notes(ext + h->RingOffset, start, mask, h->RingUsed);
+    write_companion_evt_note(ext + h->RingOffset, start, mask, h->RingUsed);
 }
 
 /* ---- the PORTSC decode, which is the headline at the bench -------------- */
@@ -3341,6 +3508,42 @@ static const char *const held_counter_names[SNAP_HELD_WORDS] = {
     "HeldIrq"
 };
 
+/* Task 49.24's thirty-eight (XhciInterruptMode 4, design record 15
+ * sections 4.5.9 and 4.5.16) follow at 264, by name in the list and
+ * summed up by print_msg4. */
+#define SNAP_MSG4_AT                264UL
+#define SNAP_MSG4_WORDS             38UL
+static const char *const msg4_counter_names[SNAP_MSG4_WORDS] = {
+    "Msg4Strategy", "Msg4IsaIrq", "Msg4Share", "Msg4Pools", "Msg4InputFirst",
+    "Msg4InputLast", "Msg4Budget", "Msg4Irq", "Msg4Members",
+    "Msg4ClaimStatus", "Msg4Sci", "Msg4Sources", "Msg4IrqReason0",
+    "Msg4IrqReason1", "Msg4IrqReason2", "Msg4IrqReason3", "Msg4Vector",
+    "Msg4Stranded", "Msg4Lost", "Msg4BrakeEntries", "Msg4BrakeStray",
+    "Msg4BrakeRun", "Msg4MemberEntries", "Msg4MemberStray", "Msg4Refused",
+    "Msg4PoolsScanned", "Msg4HighFirst", "Msg4HighLast", "Msg4HighIoApics",
+    "Msg4HighIoApicCount", "Msg4HighEnd", "Msg4HighLastInput",
+    "Msg4HighDetail", "Msg4HighBudget", "Msg4HighNew", "Msg4HighSpent",
+    "Msg4HighBudgetRefused", "Msg4HighFirstRefused"
+};
+
+/* Task 49.39's six (design record 17 section 4.12.8) follow at 302. */
+#define SNAP_SDEQ_AT                302UL
+#define SNAP_SDEQ_WORDS             6UL
+static const char *const sdeq_counter_names[SNAP_SDEQ_WORDS] = {
+    "StreamDeqChecked", "StreamDeqMismatch", "StreamDeqResent",
+    "StreamDeqGiveUps", "StreamDeqUnplaced", "StreamDeqUnsettled"
+};
+
+/* Task 49.45's twelve (design record 13 section 6.13.11) follow at 308. */
+#define SNAP_UDX_AT                 308UL
+#define SNAP_UDX_WORDS              12UL
+static const char *const udx_counter_names[SNAP_UDX_WORDS] = {
+    "UsbdxV1Answered", "UsbdxV1Refused", "UsbdxCapAnswered",
+    "UsbdxCapRefused", "UsbdxStreamOpens", "UsbdxStreamCloses",
+    "UsbdxStreamRefused", "UsbdxClientUrbs", "UsbdxForeignFrees",
+    "PdoQiUnanswered", "PdoIoctlRefused", "XferShortRefused"
+};
+
 /*
  * The HCD image's layout as its header gives it, checked against the bytes
  * that arrived: 1 when every figure fits. print_hcd refuses a shape that
@@ -3447,6 +3650,15 @@ static const char *hcd_counter_name(unsigned long i)
     }
     if (i >= SNAP_HELD_AT && i - SNAP_HELD_AT < SNAP_HELD_WORDS) {
         return held_counter_names[i - SNAP_HELD_AT];
+    }
+    if (i >= SNAP_MSG4_AT && i - SNAP_MSG4_AT < SNAP_MSG4_WORDS) {
+        return msg4_counter_names[i - SNAP_MSG4_AT];
+    }
+    if (i >= SNAP_SDEQ_AT && i - SNAP_SDEQ_AT < SNAP_SDEQ_WORDS) {
+        return sdeq_counter_names[i - SNAP_SDEQ_AT];
+    }
+    if (i >= SNAP_UDX_AT && i - SNAP_UDX_AT < SNAP_UDX_WORDS) {
+        return udx_counter_names[i - SNAP_UDX_AT];
     }
     return NULL;
 }
@@ -4039,8 +4251,9 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
 
 /* ---- controller tolerance: the extension's Tol, placed by the HCD header */
 
-/* XHCI_TOL_STATS (src/xhci_tol.h), its first 34 words in field order; the
- * histogram of 256 follows them. test\test_snap.c holds the driver to it. */
+/* XHCI_TOL_STATS (src/xhci_tol.h), its first 46 words in field order (34
+ * before task 49.35, all a driver up to 3.4.3.0 serves); the histogram of
+ * 256 follows them. test\test_snap.c holds the driver to it. */
 static const char *const tol_counter_names[SNAP_TOL_NAMED_WORDS] = {
     "Tolerance", "CapMode", "AvgTrbMode", "CapApplied", "CapIntervals",
     "BackstopDrains", "QueueErrors", "QueueBadCodes", "QueueUnmatched",
@@ -4050,7 +4263,10 @@ static const char *const tol_counter_names[SNAP_TOL_NAMED_WORDS] = {
     "CyclesNoReason", "CyclesRefusedCode", "CyclesHaltNoTd", "CyclesPed",
     "CyclesPrePdo", "CyclesDropped", "CyclesRefused",
     "HaltReads", "HaltStale", "PedFaults", "OcFaults", "Repowers", "Holds",
-    "HchRecoveries", "WindowRefused", "DeadEpisodes", "Contained"
+    "HchRecoveries", "WindowRefused", "DeadEpisodes", "Contained",
+    "ResetSettles", "ResetSettleMsMax", "ResetUnsettled", "ResetBusy",
+    "RecoverPaced", "RecoverReruns", "HcEvents", "HcEventCode", "RearmFails",
+    "CmdDiverged", "CmdFatal", "MaskFails"
 };
 
 /* What each counter is, for the reader of a report (record 17 4.1-4.6). */
@@ -4074,7 +4290,16 @@ static const char *const tol_counter_meanings[SNAP_TOL_NAMED_WORDS] = {
     "root ports found disabled (PED)", "root port over-currents",
     "root port repowers", "locations held",
     "recoveries requested by an unexpected HCH",
-    "recoveries the window refused", "all-ones USBSTS episodes", ""
+    "recoveries the window refused", "all-ones USBSTS episodes", "",
+    "recovery resets waited for at PASSIVE_LEVEL",
+    "the longest of those waits, in ms", "...that ran out (1 s)",
+    "recoveries met by a reset still running",
+    "passes a recovery waited out its pacing",
+    "reruns of a recovery its continuations made",
+    "Host Controller Events (each fails the controller)",
+    "the last one's completion code", "interrupter re-arms that failed",
+    "command ring divergences", "fatal Command Completion codes",
+    "interrupt masks or unmasks not proven"
 };
 
 /* xHCI 1.2 Table 6-90. */
@@ -4125,6 +4350,9 @@ static const char *tol_terminal_text(unsigned long t)
         return "CONTAINED: halt and reset did not complete and Bus Master "
                "Enable would not clear; DMA not proven stopped, common "
                "buffer pinned";
+    case 6:
+        return "LATCHED FAILED: XhciInterruptMode 4's message was lost "
+               "(the cause below); no recovery is made";
     default:
         return "?";
     }
@@ -4229,7 +4457,7 @@ static void print_tol(const unsigned char *hcd, unsigned long hcdBytes,
         return;
     }
     if (tolAt > extBytes || tolBytes > extBytes - tolAt ||
-        statsWords < SNAP_TOL_NAMED_WORDS + SNAP_TOL_CODES ||
+        statsWords < SNAP_TOL_MIN_WORDS + SNAP_TOL_CODES ||
         statsWords > tolBytes / 4 || (windowAt & 3UL) != 0 ||
         windowAt > tolBytes || tolBytes - windowAt < 20 ||
         (clockAt & 3UL) != 0 || clockAt > tolBytes - 4 ||
@@ -4857,19 +5085,82 @@ static int tsc_state(void)
 #define SNAP_UFAIL_FIRST_AT         862UL
 #define SNAP_UFAIL_ENTRIES          8UL
 #define SNAP_UFAIL_ENTRY_WORDS      4UL
+/* Task 49.39 (design record 17 section 4.12.9): the times' block after
+ * the failure records; a header ending at word 929 has none. */
+#define SNAP_HCD_UTIME_HEAD_WORDS   932UL
+#define SNAP_UTIME_RECORDS_AT       929UL
+#define SNAP_UTIME_WORDS_AT         930UL
+#define SNAP_UTIME_FIRST_AT         931UL
+#define SNAP_UTIME_RECORD_WORDS     10UL
 
-static const char *const ufail_event[8] = {
+/* The times' record for class driver record r, or NULL when this header
+ * has none or not this shape. */
+static const unsigned char *utime_record(const unsigned char *hcd,
+                                         unsigned long hcdBytes,
+                                         unsigned long headBytes,
+                                         unsigned long r)
+{
+    unsigned long records;
+    unsigned long words;
+    unsigned long first;
+
+    if (headBytes < SNAP_HCD_UTIME_HEAD_WORDS * 4 ||
+        hcdBytes < SNAP_HCD_UTIME_HEAD_WORDS * 4) {
+        return NULL;
+    }
+    records = get32(hcd, SNAP_UTIME_RECORDS_AT * 4);
+    words = get32(hcd, SNAP_UTIME_WORDS_AT * 4);
+    first = get32(hcd, SNAP_UTIME_FIRST_AT * 4);
+    if (records > 16 || words < SNAP_UTIME_RECORD_WORDS || words > 1024 ||
+        first > headBytes / 4 || first > hcdBytes / 4 ||
+        records * words > headBytes / 4 - first ||
+        records * words > hcdBytes / 4 - first || r >= records) {
+        return NULL;
+    }
+    return hcd + (first + r * words) * 4;
+}
+
+static const char *const ufail_event[11] = {
     "?", "CHECK CONDITION", "timed out", "ended by recovery",
     "refused (RESPONSE IU)", "answered here, not sent", "another status",
-    "device reset at once (XhciUasFastReset)"
+    "device reset at once (XhciUasFastReset)",
+    "device reset: the drive answered but its data never arrived",
+    "answered here: the drive refused it before",
+    "given up: the drive's data never arrived after 3 resets; "
+    "until it is replugged"
 };
 static const char *const ufail_origin[3] = {
     "class driver", "program", "own command"
 };
 
+/* Task 49.39 (design record 13 section 16.16): the drive's refusals the
+ * class driver now answers itself. */
+static void print_ata_latch(const unsigned char *hcd, unsigned long hcdBytes,
+                            unsigned long headBytes, unsigned long r)
+{
+    const unsigned char *ut;
+    unsigned long bits;
+    unsigned long lun;
+
+    ut = utime_record(hcd, hcdBytes, headBytes, r);
+    if (ut == NULL) {
+        return;
+    }
+    bits = get32(ut, 9 * 4);
+    for (lun = 0; lun < 16; lun++) {
+        if ((bits >> (2 * lun)) & 3UL) {
+            comp("    LUN %lu: ATA PASS-THROUGH%s%s refused by the drive: "
+                 "answered here until it is replugged\n", lun,
+                 ((bits >> (2 * lun)) & 1UL) ? " (12)" : "",
+                 ((bits >> (2 * lun)) & 2UL) ? " (16)" : "");
+        }
+    }
+}
+
 static void print_ufail(const unsigned char *hcd, unsigned long hcdBytes,
                         unsigned long headBytes, unsigned long r)
 {
+    const unsigned char *ut;
     unsigned long records;
     unsigned long words;
     unsigned long first;
@@ -4912,8 +5203,12 @@ static void print_ufail(const unsigned char *hcd, unsigned long hcdBytes,
         return;
     }
     n = (count < SNAP_UFAIL_ENTRIES) ? count : SNAP_UFAIL_ENTRIES;
-    comp("    failures: %lu recorded, the last %lu, oldest first:\n", count,
-         n);
+    ut = utime_record(hcd, hcdBytes, headBytes, r);
+    if (ut != NULL && get32(ut, 0) != count) {
+        ut = NULL;      /* times from another send: not this ring's */
+    }
+    comp("    failures: %lu recorded, the last %lu, oldest first%s:\n",
+         count, n, ut != NULL ? " (at: the class driver's seconds)" : "");
     for (i = 0; i < n; i++) {
         k = (count - n + i) % SNAP_UFAIL_ENTRIES;
         e = f + (1 + k * SNAP_UFAIL_ENTRY_WORDS) * 4;
@@ -4921,8 +5216,13 @@ static void print_ufail(const unsigned char *hcd, unsigned long hcdBytes,
         w1 = get32(e, 4);
         w2 = get32(e, 8);
         w3 = get32(e, 12);
-        comp("      %s, %s, tag %lu, CDB %02lXh, %lu bytes, timeout %lu s\n",
-             (w0 >> 24) < 8 ? ufail_event[w0 >> 24] : "?",
+        if (ut != NULL) {
+            comp("      at %lu s: ", get32(ut, (1 + k) * 4));
+        } else {
+            comp("      ");
+        }
+        comp("%s, %s, tag %lu, CDB %02lXh, %lu bytes, timeout %lu s\n",
+             (w0 >> 24) < 11 ? ufail_event[w0 >> 24] : "?",
              ((w0 >> 16) & 0xFFUL) < 3 ? ufail_origin[(w0 >> 16) & 0xFFUL]
                                        : "?",
              (w0 >> 8) & 0xFFUL, w0 & 0xFFUL, w3, w2 & 0xFFUL);
@@ -4944,6 +5244,7 @@ static void print_ufail(const unsigned char *hcd, unsigned long hcdBytes,
              (w2 & 0x1000UL) ? " final-IU-in" : "",
              (w2 & 0x2000UL) ? " data-posted" : "");
     }
+    print_ata_latch(hcd, hcdBytes, headBytes, r);
 }
 
 static void print_xstat(const unsigned char *hcd, unsigned long hcdBytes)
@@ -5166,7 +5467,30 @@ static const char *const poll_reason_text[SNAP_POLL_REASONS] = {
     "automatic: a message granted, refused by XhciMsiAvoid (Linux's "
     "XHCI_BROKEN_MSI), so polled",
     "automatic: the line granted could not be connected (2000/XP), so "
-    "polled"
+    "polled",
+    "XhciInterruptMode 4: a message interrupt",
+    "XhciInterruptMode 4, but this Windows has message interrupts of its "
+    "own (use 3): the start fails",
+    "XhciInterruptMode 4 with XhciMsiStrategy 1, but there is no line to "
+    "borrow: the start fails",
+    "XhciInterruptMode 4, refused by XhciMsiAvoid: the start fails",
+    "XhciInterruptMode 4 with XhciMsiStrategy 1, but another device is on "
+    "the line (or it could not be told): the start fails",
+    "XhciInterruptMode 4, but the message could not be connected (the "
+    "status below says why): the start fails",
+    "refused this boot: an earlier message on this controller could not "
+    "be proven off; it starts again after Windows restarts",
+    "reserved (an unreleased build)",
+    "reserved (an unreleased build)",
+    "XhciInterruptMode 4, but XhciMsiStrategy, XhciMsiIsaIrq or a pool "
+    "value is outside its range: the start fails",
+    "XhciInterruptMode 4, but the start's No Op did not arrive through "
+    "the message: the start fails",
+    "reserved (an unreleased build)",
+    "XhciInterruptMode 4, but no spare interrupt was left to take "
+    "(the reasons below): the start fails",
+    "XhciInterruptMode 4, but the IRQ's claim was refused (the status "
+    "below): the start fails"
 };
 
 static const char *const poll_role_text[3] = {
@@ -5210,9 +5534,10 @@ static const char *poll_reason_name(unsigned long v)
  */
 static void print_intr_values(const unsigned char *k)
 {
-    static const char *const mode_text[4] = {
+    static const char *const mode_text[5] = {
         "automatic", "the line interrupt only", "polling",
-        "a message interrupt only"
+        "a message interrupt only",
+        "a message interrupt only (2000, XP)"
     };
     unsigned long found;
     unsigned long read;
@@ -5224,12 +5549,15 @@ static void print_intr_values(const unsigned char *k)
     used = get32(k, 1 * 4);
     if ((found & SNAP_POLL_FOUND_MODE) == 0) {
         comp("  XhciInterruptMode      not found; in effect %lu (%s), the "
-             "default\n", used, poll_code(mode_text, 4, used));
+             "default\n", used, poll_code(mode_text, 5, used));
     } else {
         comp("  XhciInterruptMode      value %lu; in effect %lu (%s)\n",
-             read, used, poll_code(mode_text, 4, used));
-        if (read > 3) {
+             read, used, poll_code(mode_text, 5, used));
+        if (read > 4) {
             comp("        ^ %lu is reserved, so it runs as 0.\n", read);
+        } else if (read == 4 && used == 0) {
+            comp("        ^ 4 is not available on 98 SE and ME, so it runs "
+                 "as 0.\n");
         }
     }
 
@@ -5280,6 +5608,145 @@ static void print_intr_values(const unsigned char *k)
  * of 63 words is a driver from before polling, which is said and not
  * decoded.
  */
+/*
+ * XhciInterruptMode 4 (task 49.24; design record 15 sections 4.5.9 and
+ * 4.5.16): the values as read, the claim, the connection, the watchdog,
+ * the lost connection and the refusal table, under mode 4 alone. A block
+ * shorter than 302 words is a driver from before it, which prints nothing
+ * here.
+ */
+static const char *const msg4_status_text[15] = {
+    "OK", "version", "no MSI capability", "the HAL cannot (PIC mode, "
+    "x2APIC, or its vector and IRQL for the claim's interrupt disagree)",
+    "no vector (no line, or no free interrupt)", "unsupported (a routine "
+    "not found, not this Windows, or the upper inputs' record not read or "
+    "written)", "in use", "not "
+    "initialised", "no memory", "invalid parameter", "configuration space "
+    "access failed", "reserved", "the claim is kept", "the "
+    "brake tripped", "no input above 23 in the range"
+};
+static const char *const msg4_lost_text[5] = {
+    "not lost", "the brake tripped: the message's vector was stopped; "
+    "restart Windows to use this controller", "eight stranded events "
+    "within 60 s",
+    "a re-arm failed (after a resume or a lost "
+    "message)", "the reconnect after a cancelled "
+    "stop failed"
+};
+static const char *const msg4_irq_reason_text[17] = {
+    "not tried", "chosen", "never claimed", "the ACPI interrupt",
+    "a firmware override", "level-triggered", "used by a device",
+    "a device may be configured for it", "routed to PCI by the chipset",
+    "refused by Windows (a conflict)", "no vector from Windows",
+    "held by a device", "heard during the listen", "joined",
+    "full", "excluded", "over the budget for this boot"
+};
+
+static void msg4_value(const char *name, unsigned long v)
+{
+    if (v == 0xFFFFFFFFUL) {
+        comp("  %-22s not found (or not read here)\n", name);
+    } else {
+        comp("  %-22s %lu\n", name, v);
+    }
+}
+
+static void print_msg4(const unsigned char *k, unsigned long counters)
+{
+    const unsigned char *m;
+    unsigned long status;
+    unsigned long irq;
+    unsigned long i;
+    unsigned long r;
+
+    if (counters < SNAP_MSG4_AT + SNAP_MSG4_WORDS || get32(k, (SNAP_POLL_FIRST + 1) * 4) != 4) {
+        return;
+    }
+    m = k + SNAP_MSG4_AT * 4;
+    comp("\nmessage interrupt, XhciInterruptMode 4:\n");
+    status = get32(k, (SNAP_MSI_FIRST + 3) * 4);
+    if (status < 15) {
+        comp("  connection status      %lu (%s)\n", status,
+             msg4_status_text[status]);
+    } else if ((status & 0xFF00UL) == 0x0100UL) {
+        comp("  connection status      %08lX (the controller could not be "
+             "quieted before the connect, step %lu)\n", status,
+             status & 0xFFUL);
+    } else if ((status & 0xFF00UL) == 0x0200UL) {
+        comp("  connection status      %08lX (the controller's PCI "
+             "location not found: %lu matches)\n", status, status & 0xFFUL);
+    } else if (status == 0x0300UL) {
+        comp("  connection status      %08lX (not in this driver for this "
+             "Windows)\n", status);
+    } else if (status == 0x0400UL) {
+        comp("  connection status      %08lX (the interrupt could not be "
+             "readied)\n", status);
+    } else {
+        comp("  connection status      %08lX\n", status);
+    }
+    msg4_value("XhciMsiStrategy", get32(m, 0));
+    msg4_value("XhciMsiIsaIrq", get32(m, 1 * 4));
+    msg4_value("XhciMsiShare", get32(m, 2 * 4));
+    msg4_value("XhciMsiPools", get32(m, 3 * 4));
+    msg4_value("XhciMsiInputFirst", get32(m, 4 * 4));
+    msg4_value("XhciMsiInputLast", get32(m, 5 * 4));
+    msg4_value("XhciMsiInputBudget", get32(m, 6 * 4));
+    irq = get32(m, 7 * 4);
+    status = get32(m, 9 * 4);
+    if (irq != 0 || status != 0) {
+        comp("  claimed IRQ            %lu%s, %lu on it; the claim's "
+             "status %lu (%s)\n", irq, irq > 23 ? " (an input above 23)" : "",
+             get32(m, 8 * 4), status,
+             status < 15 ? msg4_status_text[status] : "this driver's own");
+        for (i = 0; i < 16; i++) {
+            r = (get32(m, (12 + i / 4) * 4) >> ((i % 4) * 8)) & 0xFFUL;
+            if (r != 0) {
+                comp("    IRQ %-2lu             %s\n", i,
+                     r < 17 ? msg4_irq_reason_text[r] : "?");
+            }
+        }
+    }
+    comp("  vector                 %02lXh\n", get32(m, 16 * 4));
+    comp("  stranded events        %lu\n", get32(m, 17 * 4));
+    r = get32(m, 18 * 4);
+    if (r != 0) {
+        comp("  LOST                   %s\n",
+             r < 5 ? msg4_lost_text[r] : "?");
+        if (r != 1) {
+            comp("                         restart Windows to use this "
+                 "controller\n");
+        }
+    }
+    if (get32(m, 19 * 4) != 0 || get32(m, 22 * 4) != 0) {
+        comp("  brake                  claim %lu entries, %lu stray, run "
+             "%lu; this controller %lu, %lu stray\n", get32(m, 19 * 4),
+             get32(m, 20 * 4), get32(m, 21 * 4), get32(m, 22 * 4),
+             get32(m, 23 * 4));
+    }
+    if (get32(m, 24 * 4) != 0) {
+        comp("  refused this boot      %lu function(s) in the table (one "
+             "more when it is full)\n", get32(m, 24 * 4));
+    }
+    if (get32(m, 25 * 4) & 2UL) {
+        comp("  inputs above 23        scanned %lu to %lu on %lu I/O APIC(s); "
+             "highest with a vector %lu\n", get32(m, 26 * 4),
+             get32(m, 27 * 4), get32(m, 29 * 4), get32(m, 30 * 4));
+        comp("    budget               %lu; this claim charged %lu; the "
+             "boot's charges %lu; refused for the budget %lu\n",
+             get32(m, 33 * 4), get32(m, 34 * 4), get32(m, 35 * 4),
+             get32(m, 36 * 4));
+        if (get32(m, 37 * 4) != 0) {
+            comp("    first refused        input %lu, %s\n",
+                 (get32(m, 37 * 4) >> 8) & 0xFFUL,
+                 (get32(m, 37 * 4) & 0xFFUL) < 17
+                     ? msg4_irq_reason_text[get32(m, 37 * 4) & 0xFFUL]
+                     : "?");
+        }
+        comp("    last translated      input %lu, detail %08lX\n",
+             get32(m, 31 * 4), get32(m, 32 * 4));
+    }
+}
+
 /*
  * Record 15 section 4.4 (task 46.6): the start's walk for a device holding
  * this controller's line, 98 SE and ME alone. A block shorter than 264
@@ -5425,6 +5892,7 @@ static void print_intr(const unsigned char *hcd, unsigned long hcdBytes,
              "(%lu)\n", get32(k, 30 * 4));
     }
     print_held(hcd + countersAt, counters);
+    print_msg4(hcd + countersAt, counters);
 
     if (headBytes < SNAP_HCD_DELIVERY_HEAD_WORDS * 4 ||
         hcdBytes < SNAP_HCD_DELIVERY_HEAD_WORDS * 4) {
@@ -5667,7 +6135,10 @@ static const char *const msi_routines_text[SNAP_MSI_ROUTINES] = {
     "not looked for (not Vista or 7, or no message granted)",
     "MmGetSystemRoutineAddress (64-bit)",
     "the helper xhcihlpr.sys (32-bit; xhcimsi.sys before 2.4)",
-    "looked for, NOT found"
+    "looked for, NOT found",
+    "XhciInterruptMode 4: a message interrupt, in the driver (2000, XP, "
+    "XP x64)",
+    "reserved (an unreleased build)"
 };
 
 static const char *const msi_state_text[SNAP_MSI_STATES] = {
@@ -6379,13 +6850,13 @@ static int selftest_hcd_bad(void)
 /*
  * `-selftest-counters`: every counter word named through print_hcd, as the
  * dump prints it, over a canned image whose word i holds i + 1 (so every
- * word is nonzero and its value names its place): 0 to 263 and two words
+ * word is nonzero and its value names its place): 0 to 319 and two words
  * past the last block. selftest.cmd compares each printed name and value
  * with the field order of src\xhci_counters.h, so a lookup that the
  * compiler turns into the wrong table or offset fails there (task 36.35's
  * 18-word shift under MSVC 6.0 /O2).
  */
-#define SNAP_COUNTERS_TEST_WORDS    (SNAP_HELD_AT + SNAP_HELD_WORDS + 2UL)
+#define SNAP_COUNTERS_TEST_WORDS    (SNAP_UDX_AT + SNAP_UDX_WORDS + 2UL)
 static int selftest_counters(void)
 {
     static unsigned char image[32 + SNAP_COUNTERS_TEST_WORDS * 4];
@@ -7344,10 +7815,35 @@ static int selftest_notes(void)
         "enum.port.quiet=0F000008\r\n";
     static unsigned char ring[1024];
 
+    static const char evt[] =
+        "evt.ring.value=00000400\r\n"
+        "evt.ring.read=00000001\r\n"
+        "evt.ring.hciversion=00000096\r\n"
+        "evt.ring.held=00000400\r\n"
+        "evt.ring=06050100\r\n";
+
     memcpy(ring, text, sizeof(text) - 1);
     companion = NULL;
     write_companion_enum_notes(ring, 0, sizeof(ring) - 1,
                                (unsigned long)(sizeof(text) - 1));
+    /* Task 49.35: the event ring's choice in words. */
+    memcpy(ring, evt, sizeof(evt) - 1);
+    write_companion_evt_note(ring, 0, sizeof(ring) - 1,
+                             (unsigned long)(sizeof(evt) - 1));
+    evt_ring_line(0x00000400UL, 0, 0, 0, -1, 0);
+    evt_ring_line(0x07000400UL, 0x0110UL, 1, 1024UL, 1, 0);
+    evt_ring_line(0x07010400UL, 0x0110UL, 1, 0xFFFFFFFFUL, 2, 0);
+    evt_ring_line(0x03000400UL, 0x0096UL, 1, 1024UL, -1, 0);
+    evt_ring_line(0x00040100UL, 0, 0, 0, -1, 0);
+    evt_ring_line(0x04040100UL, 0x0100UL, 1, 256UL, 1, 0);
+    evt_ring_line(0x01040100UL, 0x0100UL, 1, 256UL, -1, 0);
+    evt_ring_line(0x07020100UL, 0, 0, 512UL, 1, 0);
+    evt_ring_line(0x05060100UL, 0x0120UL, 1, 0xFFFFFFFFUL, 0, 0);
+    evt_ring_line(0x06050100UL, 0x0095UL, 1, 0xFFFFFFFFUL, 2, 1);
+    evt_ring_line(0x06050100UL, 0x0096UL, 1, 0xFFFFFFFFUL, 1, 1);
+    evt_ring_line(0x06050100UL, 0x0096UL, 1, 256UL, 1, 0);
+    evt_ring_line(0x02050100UL, 0x0096UL, 1, 0, -1, 0);
+    evt_ring_line(0x00090100UL, 0, 0, 0, -1, 0);
     return 0;
 }
 
@@ -8112,6 +8608,10 @@ static int stamp_base(unsigned month, unsigned day, unsigned hour,
                 break;
             }
         }
+        /* And the connection manager's (record 25 section 23). */
+        if (!taken && tr_cms_set_taken(out, exists, context, NULL, 0)) {
+            taken = 1;
+        }
         if (!taken) {
             return STAMP_OK;
         }
@@ -8215,8 +8715,7 @@ static int report_name_taken(const char *base, char *which, size_t whichSize)
             return 1;
         }
     }
-    which[0] = '\0';
-    return 0;
+    return tr_cms_set_taken(base, stamp_exists_here, NULL, which, whichSize);
 }
 
 static int stamp_exists_canned(const char *name, void *context)
@@ -9997,7 +10496,8 @@ static void dev_consider(DWORD dn, int haveDn, const char *id, int haveSt,
         dev_line("driver key", "%s, which does not open", text);
     } else {
         static const char *const names[] = {
-            "NTMPDriver", "InfSection", "DriverVersion", "DriverDate", NULL
+            "NTMPDriver", "InfSection", "DriverVersion", "DriverDate",
+            "InfPath", "MatchingDeviceId", "ProviderName", NULL
         };
         int k;
 
@@ -10413,16 +10913,72 @@ static void snap_door_path(char *out, unsigned long controller, int legacy)
  * gave is printed here, before that line, and the line itself is the attach
  * list - or says there is nothing to attach.
  */
+/* The connection managers' .CT<n> names (" NAME" each), set by
+ * take_report once its images are written (record 25 section 23). */
+static const char *reportAttachCms = "";
+
 static void report_attach_line(const char *base, int dev, int txt)
 {
     if (!dev) {
         printf("Nothing to attach: nothing was written.\n");
+    } else if (txt && reportAttachCms[0] != '\0') {
+        /* Kept within 79 columns: the note goes on the line before. */
+        printf("(the .BIN, .PSC and .CB files only if asked)\n");
+        printf("Attach: %s.DEV %s.TXT%s\n", base, base, reportAttachCms);
     } else if (txt) {
         printf("Attach: %s.DEV %s.TXT (the .BIN and .PSC only if asked)\n",
                base, base);
     } else {
-        printf("Attach: %s.DEV\n", base);
+        printf("Attach: %s.DEV%s\n", base, reportAttachCms);
     }
+}
+
+/*
+ * -report NAME -cmonly: the connection managers' state alone (task 49.37,
+ * record 25 section 23 item 11), for an all-controllers run, whose parent
+ * chose NAME over the whole set and starts this in the destination folder:
+ * the images into NAME.CT<n> and NAME.CB<n> as take_report makes them, the
+ * lines take_report puts in its .DEV and its list of files written on the
+ * screen, and the exit /snapshot gives them: 0, 3 a file not written in
+ * full, 8 a name another run made meanwhile, 2 with no NAME.
+ */
+static int take_cms_only(const char *given)
+{
+    static char dev[4096];
+    static char files[1024];
+    static char attach[256];
+    char clash[40];
+    char tool[64];
+    char when[24];
+    TR_TEXT dt;
+    TR_TEXT ft;
+    TR_TEXT at;
+    int rc;
+
+    if (given == NULL) {
+        printf("XHCITR /snapshot: -cmonly takes a NAME. Nothing was "
+               "written.\n");
+        return 2;
+    }
+    run_time_once();
+    sprintf(tool, "XHCITR %s, built %s", XHCISNAP_VERSION, XHCISNAP_BUILT);
+    sprintf(when, "%04u-%02u-%02u %02u:%02u", (unsigned)runTime.wYear,
+            (unsigned)runTime.wMonth, (unsigned)runTime.wDay,
+            (unsigned)runTime.wHour, (unsigned)runTime.wMinute);
+    tr_text_init(&dt, dev, sizeof(dev));
+    tr_text_init(&ft, files, sizeof(files));
+    tr_text_init(&at, attach, sizeof(attach));
+    rc = tr_cms_take(given, sysinfoOff, tool, when, &dt, &ft, &at, clash,
+                     sizeof(clash));
+    printf("%s", dev);
+    printf("\n--- files written in the current directory\n%s", files);
+    if (rc == TR_CMS_TAKE_CLASH) {
+        printf("  *** %s appeared after this run chose its name - another "
+               "run or program\n      made it. It is left as it was.\n",
+               clash);
+        return REPORT_CLASH;
+    }
+    return rc == TR_CMS_TAKE_INCOMPLETE ? REPORT_TXT_BAD : REPORT_OK;
 }
 
 static int take_report(unsigned long controller, const char *given)
@@ -10437,7 +10993,15 @@ static int take_report(unsigned long controller, const char *given)
     int devOk;
     int appendOk;
     int dumpRc;
+    int cmsRc;
     int k;
+    static char cmsDev[4096];
+    static char cmsFiles[1024];
+    static char cmsAttach[256];
+    static char cmsClash[32];
+    TR_TEXT cmsDevT;
+    TR_TEXT cmsFilesT;
+    TR_TEXT cmsAttachT;
     static const char *const outExts[] = { ".DEV", ".TXT", ".BIN", ".PSC" };
     static const char *const dumpExts[] = {
         ".TXT", ".BIN", ".PSC", ".BIN.TMP", ".PSC.TMP", NULL
@@ -10445,6 +11009,11 @@ static int take_report(unsigned long controller, const char *given)
 
     run_time_once();
     sysNamesOff = sysinfoOff;
+    cmsRc = TR_CMS_TAKE_OK;
+    tr_text_init(&cmsDevT, cmsDev, sizeof(cmsDev));
+    tr_text_init(&cmsFilesT, cmsFiles, sizeof(cmsFiles));
+    tr_text_init(&cmsAttachT, cmsAttach, sizeof(cmsAttach));
+    cmsClash[0] = '\0';
     reportClash = 0;
     reportClashName[0] = '\0';
     reportBinOurs = 0;
@@ -10564,7 +11133,13 @@ named:
     printf("\ninstalled files:\n");
     write_dev_files();
     comp("\n  Thunderbolt networking (xhcicm.sys):\n");
-    write_dev_net();
+    if (netOff) {
+        /* Task 49.35: an all-controllers run (xhcitr.c, snap_all) writes
+         * this machine-wide section once, in its first controller's set. */
+        comp("  in the first controller's device report of this run.\n");
+    } else {
+        write_dev_net();
+    }
     comp("\n  dump: taken after this file was written; its result is "
          "appended below. If\n  nothing follows, the dump did not "
          "finish.\n");
@@ -10599,6 +11174,28 @@ named:
         reportMode = 1;
         dumpRc = take_dump(controller, base, 0);
         reportMode = 0;
+    }
+    /* The connection managers' state (record 25 section 23), when no file
+     * of the run's set was taken by another run. */
+    if (!reportClash && !cmOff) {
+        char tool[64];
+        char when[24];
+
+        sprintf(tool, "XHCITR %s, built %s", XHCISNAP_VERSION,
+                XHCISNAP_BUILT);
+        sprintf(when, "%04u-%02u-%02u %02u:%02u", (unsigned)runTime.wYear,
+                (unsigned)runTime.wMonth, (unsigned)runTime.wDay,
+                (unsigned)runTime.wHour, (unsigned)runTime.wMinute);
+        printf("\n--- the connection manager's state -------------------------\n");
+        cmsRc = tr_cms_take(base, sysNamesOff, tool, when, &cmsDevT,
+                            &cmsFilesT, &cmsAttachT, cmsClash,
+                            sizeof(cmsClash));
+        printf("%s", cmsDev);
+        if (cmsRc == TR_CMS_TAKE_CLASH) {
+            printf("  *** %s appeared after this run chose its name - another "
+                   "run or program\n      made it. It is left as it was.\n",
+                   cmsClash);
+        }
     }
 
     companionOpened = 0;
@@ -10649,6 +11246,9 @@ named:
                      "channel that is off (xhci98's Logging level 2 in the "
                      "xHCI98 USB Tree, then restart), gives no dump.", door);
         }
+        if (cmsDev[0] != '\0') {
+            comp("%s", cmsDev);
+        }
         comp("end of device report\n");
         appendOk = finish_companion();
     }
@@ -10669,6 +11269,7 @@ named:
             printf("  %s\n", name);
         }
     }
+    printf("%s", cmsFiles);
     if ((dumpRc == 0 || dumpRc == 3) && devFlagNo != 0) {
         printf("*** dump taken from a controller Device Manager reports as "
                "%s%s;\n    %s.DEV says so.\n", devFlag,
@@ -10678,12 +11279,17 @@ named:
         rc = REPORT_DEV_BAD;
     } else if (reportClash) {
         rc = REPORT_CLASH;
+    } else if (dumpRc == 3 || cmsRc == TR_CMS_TAKE_INCOMPLETE) {
+        rc = REPORT_TXT_BAD;
     } else if (dumpRc == 0) {
         rc = REPORT_OK;
-    } else if (dumpRc == 3) {
-        rc = REPORT_TXT_BAD;
     } else {
         rc = REPORT_NO_DUMP;
+    }
+    /* A connection manager's file another run made: exit 8 too, the
+     * controller's set kept (record 25 section 23 item 2). */
+    if (rc != REPORT_DEV_BAD && cmsRc == TR_CMS_TAKE_CLASH) {
+        rc = REPORT_CLASH;
     }
     /* What SNAPGET.BAT's exit-code ladder said, said here, so that the
      * last line on the screen is the attach line (owner, 2026-10-13). */
@@ -10696,6 +11302,14 @@ named:
                                  "name, or none."
                                : "Run XHCITR /snapshot again: it takes the "
                                  "next letter.");
+    } else if (rc == REPORT_CLASH) {
+        printf("%s was made by another run or program after this one chose "
+               "the name.\nIt was left alone, and the connection manager's "
+               "state was not kept under\nthis name. %s\n", cmsClash,
+               (given != NULL) ? "Run XHCITR /snapshot again with another "
+                                 "name, or none."
+                               : "Run XHCITR /snapshot again: it takes the "
+                                 "next letter.");
     } else if (rc == REPORT_DEV_BAD) {
         printf("%s.DEV could not be written in full: the disk may be full "
                "or read-only. Copy\nthis directory somewhere you can write "
@@ -10703,8 +11317,9 @@ named:
                on_nt() ? " On Vista and\nlater, run it from a command "
                          "prompt started with Run as administrator." : "");
     } else if (rc == REPORT_TXT_BAD) {
-        printf("The dump's .TXT is not complete: read the lines above, and "
-               "say so when you\nattach it.\n");
+        printf("The dump's .TXT or a connection manager's state file is not "
+               "complete: read\nthe lines above, and say so when you attach "
+               "it.\n");
     } else if (rc == REPORT_NO_DUMP) {
         printf("No dump was taken; %s.DEV says why. If the log channel is "
                "off,\nset xhci98's Logging level to 2 in the xHCI98 USB Tree, "
@@ -10715,6 +11330,7 @@ named:
     }
     /* Only files that are there: a failed dump leaves no .TXT to attach
      * (the p38-1 legs, 2026-10-13). */
+    reportAttachCms = cmsAttach;
     sprintf(name, "%s.TXT", base);
     report_attach_line(base, GetFileAttributesA(devPath) != 0xFFFFFFFFUL,
                        reportTxtOurs && !reportClash &&
@@ -11052,6 +11668,69 @@ static unsigned long read_slots(HANDLE device, int *state,
  * its windows count in the tear detector.
  */
 static unsigned char hcd_image[SNAP_HCD_MAX_BYTES];
+static unsigned char ctx_image[SNAP_WORDS_MAX_BYTES];
+static unsigned char trace_image[SNAP_WORDS_MAX_BYTES];
+
+/* Task 49.39: a word region (the contexts, the trace) in as many windows
+ * as it takes, as read_hcd reads its own; *state 1 read, 2 not served by
+ * this driver, 0 failed. */
+static unsigned long read_words(HANDLE device, unsigned long region,
+                                unsigned char *image, int *state,
+                                unsigned long *tearFirst,
+                                unsigned long *tearLast, int *tearTorn,
+                                int *tearSeen)
+{
+    SNAP_HEADER header;
+    const unsigned char *payload;
+    unsigned long have;
+
+    have = 0;
+    *state = 0;
+    for (;;) {
+        if (!take_window(device, region, have, &header, &payload)) {
+            return 0;
+        }
+        if ((header.Status & SNAP_S_BAD_REGION) != 0) {
+            *state = 2;
+            return 0;
+        }
+        if (!*tearSeen) {
+            *tearFirst = header.TearDetector;
+            *tearSeen = 1;
+        } else if (header.TearDetector != *tearFirst) {
+            *tearTorn = 1;
+        }
+        *tearLast = header.TearDetector;
+        if ((header.Status & ~(SNAP_S_TRUNCATED | SNAP_S_PAST_END)) != 0 ||
+            header.Region != region || header.Offset != have ||
+            (header.RegionBytes & 3UL) != 0 ||
+            header.RegionBytes > SNAP_WORDS_MAX_BYTES ||
+            header.PayloadBytes > SNAP_PARAM_BYTES - sizeof(SNAP_HEADER) ||
+            (header.PayloadBytes & 3UL) != 0 ||
+            header.Offset > header.RegionBytes ||
+            header.PayloadBytes > header.RegionBytes - header.Offset ||
+            (header.PayloadBytes == 0 &&
+             (header.Status & SNAP_S_TRUNCATED) != 0)) {
+            printf("  region %lu: an inconsistent reply\n", region);
+            return 0;
+        }
+        memcpy(image + have, payload, header.PayloadBytes);
+        have += header.PayloadBytes;
+        if ((header.Status & SNAP_S_TRUNCATED) == 0) {
+            break;
+        }
+    }
+    if (have != header.RegionBytes) {
+        return 0;
+    }
+    *state = 1;
+    return have;
+}
+
+static void ctx_line(const char *line)
+{
+    comp("%s", line);
+}
 
 static unsigned long read_hcd(HANDLE device, int *state,
                               unsigned long *tearFirst,
@@ -11371,6 +12050,14 @@ int tr_snap_main(int argc, char **argv)
             selftestReport = argv[++i];
         } else if (strcmp(argv[i], "-nosysinfo") == 0) {
             sysinfoOff = 1;
+        } else if (strcmp(argv[i], "-nonet") == 0) {
+            /* Task 49.35: XHCITR's own, for every controller of an
+             * all-controllers run but the first. */
+            netOff = 1;
+        } else if (strcmp(argv[i], "-nocm") == 0) {
+            cmOff = 1;
+        } else if (strcmp(argv[i], "-cmonly") == 0) {
+            cmOnly = 1;
         } else {
             usage();
             return 2;
@@ -11438,6 +12125,9 @@ int tr_snap_main(int argc, char **argv)
         return 2;
     }
 
+    if (doReport && cmOnly) {
+        return take_cms_only(baseGiven ? base : NULL);
+    }
     if (doReport) {
         return take_report(controller, baseGiven ? base : NULL);
     }
@@ -11468,6 +12158,10 @@ static int take_dump(unsigned long controller, const char *base,
     int slotState;
     unsigned long hcdBytes;
     int hcdState;
+    unsigned long ctxBytes;
+    int ctxState;
+    unsigned long traceBytes;
+    int traceState;
     int companionWasWritten;
     HANDLE device;
     char devicePath[32];
@@ -11579,6 +12273,11 @@ static int take_dump(unsigned long controller, const char *base,
                            &tearTorn, &tearSeen);
     hcdBytes = read_hcd(device, &hcdState, &tearFirst, &tearLast, &tearTorn,
                         &tearSeen);
+    ctxBytes = read_words(device, SNAP_REGION_CONTEXTS, ctx_image, &ctxState,
+                          &tearFirst, &tearLast, &tearTorn, &tearSeen);
+    traceBytes = read_words(device, SNAP_REGION_TRACE, trace_image,
+                            &traceState, &tearFirst, &tearLast, &tearTorn,
+                            &tearSeen);
     CloseHandle(device);
     if (portscBytes == (unsigned long)-1) {
         DeleteFileA(extTmpPath);
@@ -11775,6 +12474,22 @@ static int take_dump(unsigned long controller, const char *base,
              "and the .BIN are what it gives).\n");
     } else {
         comp("\nHCD region: the read failed; see the progress lines above.\n");
+    }
+
+    /* Task 49.39 (design record 17 section 4.12.9). */
+    if (ctxState == 1) {
+        tr_ctx_print(ctx_image, ctxBytes, ctx_line);
+    } else if (ctxState == 2) {
+        comp("\nstream contexts: not served by this driver (before 3.5.0.0)\n");
+    } else {
+        comp("\nstream contexts: the read failed\n");
+    }
+    if (traceState == 1) {
+        tr_trace_print(trace_image, traceBytes, ctx_line);
+    } else if (traceState == 2) {
+        comp("\nstream trace: not served by this driver (before 3.5.0.0)\n");
+    } else {
+        comp("\nstream trace: the read failed\n");
     }
 
     /*

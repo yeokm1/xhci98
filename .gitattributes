@@ -4,8 +4,8 @@
 # batch files, silently breaking the :logerr safety paths.
 *.BAT eol=crlf
 # ...and the lowercase spelling, because gitattributes patterns are CASE
-# SENSITIVE on every platform. The tree holds both spellings (src/portsw-on.bat,
-# src/silent-on.bat beside xhciinst/INSTALL.BAT), and a `.bat` matched by
+# SENSITIVE on every platform. The tree holds both spellings
+# (src/silent-on.bat beside xhciinst/INSTALL.BAT), and a `.bat` matched by
 # the uppercase rule alone would be checked out LF-only, with exactly the
 # goto-label failure the rule above exists to prevent, and nothing would say
 # so.
@@ -68,7 +68,7 @@ LICENSE eol=crlf
 # SILENT.VBS. The packager holds SILENT.REG to its exact CRLF bytes, so a
 # clone with core.autocrlf false or input would fail the package self-test
 # and cut an LF-only list (task 38.2). The scripts are
-# pinned with it (portsw.vbs too), so the published texts follow one rule.
+# pinned with it, so the published texts follow one rule.
 *.reg eol=crlf
 *.REG eol=crlf
 *.vbs eol=crlf

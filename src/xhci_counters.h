@@ -523,9 +523,101 @@ typedef struct _XHCIHC_COUNTERS {
     ULONG HeldBdf;
     ULONG HeldId;
     ULONG HeldIrq;
-} XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
+    /* XhciInterruptMode 4 (design record 15 sections 4.5.9 and 4.5.16;
+     * roadmap-usb4 task 49.24), appended at word 264, written by the start
+     * (the values, the claim, the connection), by the controller thread's
+     * brake look and by the lost connection's latch: XhciMsiStrategy,
+     * XhciMsiIsaIrq, XhciMsiShare, XhciMsiPools, XhciMsiInputFirst,
+     * XhciMsiInputLast and XhciMsiInputBudget as read (FFFFFFFFh not
+     * found or not read); the IRQ or input claimed or joined (0 none),
+     * the functions on the claim, the claim's status, its Sci and Sources,
+     * the picker's reason for each IRQ 0 to 15 a byte each (IRQ 4n in 7:0
+     * of the n-th word); the vector; the stranded events this lifetime;
+     * the lost connection's cause (HCD_MSG4_LOST_*); the claim's brake
+     * counts and this function's own at the last look; the functions in
+     * the image's refusal table (the latch one more); and the claim's
+     * upper half - the pools scanned, the range, the I/O APICs and their
+     * count, the highest input given a vector, the last translated and
+     * its detail, the budget, the inputs this claim charged and the boot's
+     * charges after it, the inputs refused for the budget, and the first
+     * upper input refused in scope (input 15:8, reason 7:0). */
+    ULONG Msg4Strategy;
+    ULONG Msg4IsaIrq;
+    ULONG Msg4Share;
+    ULONG Msg4Pools;
+    ULONG Msg4InputFirst;
+    ULONG Msg4InputLast;
+    ULONG Msg4Budget;
+    ULONG Msg4Irq;
+    ULONG Msg4Members;
+    ULONG Msg4ClaimStatus;
+    ULONG Msg4Sci;
+    ULONG Msg4Sources;
+    ULONG Msg4IrqReason0;
+    ULONG Msg4IrqReason1;
+    ULONG Msg4IrqReason2;
+    ULONG Msg4IrqReason3;
+    ULONG Msg4Vector;
+    ULONG Msg4Stranded;
+    ULONG Msg4Lost;
+    ULONG Msg4BrakeEntries;
+    ULONG Msg4BrakeStray;
+    ULONG Msg4BrakeRun;
+    ULONG Msg4MemberEntries;
+    ULONG Msg4MemberStray;
+    ULONG Msg4Refused;
+    ULONG Msg4PoolsScanned;
+    ULONG Msg4HighFirst;
+    ULONG Msg4HighLast;
+    ULONG Msg4HighIoApics;
+    ULONG Msg4HighIoApicCount;
+    ULONG Msg4HighEnd;
+    ULONG Msg4HighLastInput;
+    ULONG Msg4HighDetail;
+    ULONG Msg4HighBudget;
+    ULONG Msg4HighNew;
+    ULONG Msg4HighSpent;
+    ULONG Msg4HighBudgetRefused;
+    ULONG Msg4HighFirstRefused;
+    /* Task 49.39 (design record 17 section 4.12.8), appended at word 302:
+     * a stream endpoint's dequeues checked after a cancel - the read-backs
+     * of a stream just set (c1) and the other streams placed (c2); the
+     * read-backs that differed, the Set TR Dequeues sent again for them,
+     * the devices given up (either check, XhciStreamDequeueRepair 1), the
+     * positions the controller could not hold, and the holdable ones the
+     * settle could not place (past a TD whose completion had not come). */
+    ULONG StreamDeqChecked;
+    ULONG StreamDeqMismatch;
+    ULONG StreamDeqResent;
+    ULONG StreamDeqGiveUps;
+    ULONG StreamDeqUnplaced;
+    ULONG StreamDeqUnsettled;
+    /* Task 49.45 (design record 13 section 6.13.11), appended at word 308:
+     * the later client contract at this controller's device PDOs - the
+     * USBD V1 interface answered and refused, the capability requests
+     * answered and refused, the stream URBs served (opens, closes) and
+     * refused (moved here from HCD_CONTROLLER), and two image-wide figures
+     * the door writes at the read (no path increments them here): the
+     * client URBs the bus's allocators hold and the frees refused as not
+     * the bus's. Then every QUERY_INTERFACE a device PDO did not answer and
+     * every internal IOCTL it refused (before the notes' dedup), and every
+     * short IN transfer completed as USBD_STATUS_ERROR_SHORT_TRANSFER.
+     * Dispatch and completion writers interlock; the thread's open and
+     * close counts are plain, as before the move. */
+    ULONG UsbdxV1Answered;
+    ULONG UsbdxV1Refused;
+    ULONG UsbdxCapAnswered;
+    ULONG UsbdxCapRefused;
+    ULONG UsbdxStreamOpens;
+    ULONG UsbdxStreamCloses;
+    ULONG UsbdxStreamRefused;
+    ULONG UsbdxClientUrbs;
+    ULONG UsbdxForeignFrees;
+    ULONG PdoQiUnanswered;
+    ULONG PdoIoctlRefused;
+    ULONG XferShortRefused;} XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
 
 XHCI_C_ASSERT(xhcihc_counters_all_ulong,
-              sizeof(XHCIHC_COUNTERS) == 264 * sizeof(ULONG));
+              sizeof(XHCIHC_COUNTERS) == 320 * sizeof(ULONG));
 
 #endif /* XHCI_COUNTERS_H */

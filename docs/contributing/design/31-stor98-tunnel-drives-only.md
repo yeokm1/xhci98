@@ -1502,8 +1502,9 @@ installer's case 3b or Device Manager is; the release notes say so.
 - is a PCI function of the NVMe class (`mk_s98_wanted`'s `IsPci`,
   `Nvme`, from its compatible ids);
 - is below a verified tunnel port of a verifiable domain, read as the
-  switch read it (the driver's status record and the tree walk, whole),
-  and not protected (record 24 section 4.3's protected functions);
+  switch read it (the driver's status record and the tree walk, whole;
+  each devnode's location as record 21 section 7.8.3 keeps it, read once
+  per instance and only while it is started), and not protected (record 24 section 4.3's protected functions);
 - has **no driver of its own**: `Service` empty, not started, not
   disabled - never a devnode on Stor98 or on another driver; and on 8.1
   also one on `stornvme`, started with no problem (the 8.1 arm, section

@@ -247,6 +247,11 @@ static ULONG hcdPipeResult(PHCD_CONTROLLER hc, PHCD_PIPE pipe,
                 HcdHubXferRetired(hc, pipe->Device);
                 continue;
             }
+            if (t == &pipe->Device->BotXfer) {
+                /* Task 49.34: the medium check's own (hcd_bot.c). */
+                HcdBotXferRetired(hc, pipe->Device);
+                continue;
+            }
             hc->Counters.TransfersCompleted++;
             HcdIoRetired(hc, t);
         }
@@ -359,6 +364,60 @@ static ULONG hcdSysUnitsNow(VOID)
 
     KeQuerySystemTime(&now);
     return XhciXstatSysUnits(now.LowPart, (ULONG)now.HighPart);
+}
+
+/*
+ * Task 49.39 (design record 17 section 4.12.9): one entry of the stream
+ * trace. Stream endpoints only - the callers decide. IRQL: <=
+ * DISPATCH_LEVEL, controller lock held.
+ */
+VOID HcdTraceLocked(PHCD_CONTROLLER hc, ULONG kind, ULONG slot, ULONG dci,
+                    ULONG stream, ULONG a, ULONG b)
+{
+    PULONG e;
+
+    e = hc->Trace[hc->TraceHead % XHCI_SNAPSHOT_TRACE_ENTRIES];
+    e[0] = hcdSysUnitsNow();
+    e[1] = ((kind & 0xFFUL) << 24) | ((slot & 0xFFUL) << 16) |
+           ((dci & 0xFFUL) << 8) | (stream & 0xFFUL);
+    e[2] = a;
+    e[3] = b;
+    hc->TraceHead++;
+}
+
+/* The same, the controller lock taken here. IRQL: <= DISPATCH_LEVEL, the
+ * controller lock not held. */
+VOID HcdTrace(PHCD_CONTROLLER hc, ULONG kind, ULONG slot, ULONG dci,
+              ULONG stream, ULONG a, ULONG b)
+{
+    KIRQL oldIrql;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    HcdTraceLocked(hc, kind, slot, dci, stream, a, b);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+}
+
+/* A capture: the live ring copied whole, numbered, in one hold; the live
+ * ring goes on. A read never changes either. IRQL: <= DISPATCH_LEVEL, the
+ * controller lock not held. */
+VOID HcdTraceCapture(PHCD_CONTROLLER hc, ULONG why)
+{
+    KIRQL oldIrql;
+    ULONG i;
+    ULONG w;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    for (i = 0; i < XHCI_SNAPSHOT_TRACE_ENTRIES; i++) {
+        for (w = 0; w < XHCI_SNAPSHOT_TRACE_ENTRY_WORDS; w++) {
+            hc->TraceCap[i][w] = hc->Trace[i][w];
+        }
+    }
+    hc->TraceCapSeq++;
+    hc->TraceCapWhy = why;
+    hc->TraceCapAt = hcdSysUnitsNow();
+    hc->TraceCapHead = hc->TraceHead;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    XhciLogNote(&hc->Hc, "trace.capture", (hc->TraceCapSeq << 8) | why);
 }
 
 static PHCD_PIPE hcdEventPipe(PHCD_CONTROLLER hc, ULONG slotId, ULONG dci)
@@ -553,6 +612,7 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
     ULONG unmatched;
     ULONG foreign;
     ULONG reset;
+    PHCD_PIPE traced;
 
     hc = HcdControllerFromExt(ext);
     slotId = XHCI_TRB_GET_SLOT_ID(event->Control);
@@ -567,6 +627,18 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
     endpoint = NULL;
     pipe = hcdEventPipe(hc, slotId, dci);
     cc = XHCI_TRB_GET_COMPLETION(event->Status);
+    /* Task 49.39 (record 17 section 4.12.9): every event of a stream
+     * endpoint in the trace before any path below returns, its stream 0
+     * when no ring holds the TRB (or the pointer is not one to resolve). */
+    if (pipe != NULL && pipe->Streams != NULL) {
+        traced = (XHCI_EVENT_IS_EVENT_DATA(event->Control) ||
+                  event->Param1 != 0)
+                     ? NULL
+                     : hcdEventStream(pipe, event->Param0);
+        HcdTraceLocked(hc, XHCI_TRACE_K_EVENT, slotId, dci,
+                       (traced != NULL) ? traced->StreamId : 0UL,
+                       event->Param0, (cc << 24) | (event->Status & 0x00FFFFFFUL));
+    }
     if (pipe != NULL && pipe->Iso != NULL &&
         (cc == XHCI_CC_RING_UNDERRUN || cc == XHCI_CC_RING_OVERRUN)) {
         /* Record 13 section 11.10: the stream ran dry, and when. */
@@ -668,6 +740,15 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
         XHCI_XFER_OK) {
         hc->Counters.TransferEventsUnclaimed++;
         return 0;
+    }
+    /* Task 49.39 (design record 17 section 4.12.9): an event inside no
+     * queued TD, the first eight of a start, with the TRB it names. */
+    if (pipe->Queue->UnmatchedEvents != unmatched &&
+        ext->Tol.Stats.QueueUnmatched < 8) {
+        XhciLogNoteLocked(ext, "xfer.unmatched",
+                          (slotId << 16) | (dci << 8) |
+                              (pipe->StreamId & 0xFFUL));
+        XhciLogNoteLocked(ext, "xfer.unmatched.trb", event->Param0);
     }
     hcdTolSumQueue(ext, pipe->Queue, errors, badCodes, unmatched, foreign);
     if (result.NeedsRecovery && !result.RefusedRetire) {

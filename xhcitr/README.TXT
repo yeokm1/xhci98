@@ -43,7 +43,7 @@ connections (tunnels) to each device, and the Windows devices behind
 them. Under "USB" are the USB controllers, each with its root hub, ports,
 hubs and devices, their speed and their Device Manager entry.
 
-Each controller is named with its maker and PCI ID, for example
+Each controller is named with its manufacturer and PCI ID, for example
 "... - Intel 8086:02ED"; the USB controller inside a Thunderbolt chip
 reads "... - Thunderbolt 3 controller's USB (8086:15C1)". A root hub
 shows its ports and how many are USB 2.0 and USB 3, for example "Root
@@ -55,6 +55,24 @@ ranges, the IRQ and (on Windows 2000 and later) the bus numbers Windows
 gave it, and its PCI location. A device with a problem code also shows
 what it asked for, so a device that wants an IRQ and was given none is
 easy to spot.
+
+For a USB controller the xhci98 driver runs, and for a Thunderbolt or
+USB4 controller, the Device Manager entry says when the entry was
+installed from an older version's files than the driver that is
+running; SETUP.EXE then updates it. Every Device Manager entry also
+shows, where Windows recorded them, the INF file it was installed from,
+the hardware or compatible ID Windows matched, and the provider.
+
+When a device keeps failing, the xhci98 driver stops trying its port
+for a while: the port is on hold. The port's line in the tree then ends
+"(on hold)" and its details say what to do: unplug the device and plug
+it in again (a port switched off by the driver comes back only when the
+controller restarts: restart Windows, or disable and enable the
+controller in Device Manager). A held port of a hub is named at its
+controller. While the tool's icon is in the notification area it also
+says so in a balloon (on 98 SE, a pop-up), once for each hold; on
+Windows 2000 and later only while "Warn when a device is removed
+unexpectedly" is ticked, as it is unless you clear it.
 
   File > Refresh (F5)      reads everything again
   File > Save Report...    writes the whole tree with every detail, the
@@ -125,7 +143,9 @@ device without a disk is shown but not stopped from here.
 
 On Windows 98 SE and ME the device leaves Device Manager when it is
 stopped; until you unplug it, Device Manager's Refresh can start it
-again. On Windows 2000 and later Windows holds it stopped until you
+again. A Thunderbolt/USB4 drive the BIOS set up at power-on (it runs in
+MS-DOS compatibility mode) is not stopped: shut Windows down first.
+On Windows 2000 and later Windows holds it stopped until you
 unplug it, and the tree shows it "[stopped - unplug it]".
 
 On Windows Vista and later, if Windows refuses because the device needs
@@ -148,7 +168,9 @@ item under it, and each Thunderbolt or USB4 controller a "Driver log
 (xhcicm)" item. Select one to read the driver's log and counters from the
 running driver: whether it is recording, the counters that are not zero,
 and the log, oldest line first. File > Save Report and /report include
-both logs. Nothing in them is an internal address.
+both logs. At levels 1 to 3 nothing in them is an internal address; from
+3.5.0.0 a log at level 4 is shown as the driver recorded it, memory
+addresses included, here and in the report.
 
 Where a log is off, the item says how to turn it on (the xhcicm
 driver records by default):
@@ -174,21 +196,31 @@ the devices in their slots, each root port's enumeration and, at level
 SNAPGET.BAT and SNAPOFF.BAT, which the package no longer carries.
 
 File > Save Report and /report end with the snapshot's text for each
-xHCI controller the xhci98 driver runs, so the report alone is what a
-problem report needs. At level 4 the dump can hold memory addresses, so
-the report leaves it out and says so.
+xHCI controller the xhci98 driver runs, and the state of each TB / USB4
+controller's connection manager, so the report alone is what a problem
+report needs. From 3.5.0.0 the report includes the dump at level 4
+too, with the memory addresses it holds.
 
 File > Save Snapshot... and XHCITR /snapshot write the snapshot's own
-files, which a problem report attaches beside the report:
+files, which a problem report attaches beside the report. From 3.5.0.0
+they take every controller the xhci98 driver runs, four files for each,
+k being the controller's number (0 to 9, then A to Z):
 
-  NAME.DEV   the device report
-  NAME.TXT   the dump, as text
-  NAME.BIN   the driver's raw state, for the maintainer
-  NAME.PSC   the raw port registers
+  NAME.Dk    the device report
+  NAME.Tk    the dump, as text
+  NAME.Bk    the driver's raw state, for the maintainer
+  NAME.Pk    the raw port registers
 
-NAME is made from the date and time (for example 3141022A for 14 March
-at 10:22), or is the 1 to 8 letter name you give; an earlier set is
-never overwritten.
+and for each TB / USB4 controller, n being its number (0 to 9, then A to
+F), its connection manager's state:
+
+  NAME.CTn   the state, as text
+  NAME.CBn   the same state, raw, for the maintainer
+
+XHCITR /snapshot /c N takes controller N alone, as NAME.DEV, NAME.TXT,
+NAME.BIN and NAME.PSC, with the NAME.CTn and NAME.CBn files. NAME is made
+from the date and time (for example 3141022A for 14 March at 10:22), or is
+the 1 to 8 letter name you give; an earlier set is never overwritten.
 
 PCI configuration
 -----------------
@@ -285,6 +317,13 @@ Each tab is shown only where its driver is installed:
 
 The list shows the common settings; tick "Show advanced settings" for
 the rest, which you should change only if the release notes advise it.
+The advanced settings hold every value the drivers read but the logging
+levels (Logging level...) and XhciCmNet (Setup's Thunderbolt networking
+box), in groups such as one UAS drive, memory, faults and checks,
+controller quirks, Linux's controller quirks, Thunderbolt networking and
+USB4. A UAS drive's two settings apply to the drive chosen
+under "Applies to"; a UAS drive's right-click opens them for that drive.
+docs/using/tuning.md says what each setting does.
 Each row shows the value now and the value the install writes. Select a
 row to read what it does and pick a value; the row then shows the new
 value and a *. Apply saves every change at once; Close without Apply
@@ -299,11 +338,11 @@ XhciIntelNoRouteIrq (the Intel interrupt repairs; the second on Windows
 in place, as Setup and silent-on.bat do). Logging level... opens the
 logging level window (above). On the Thunderbolt / USB4 tab they are
 XhciCmMode, XhciCmApprove and XhciCmSafeEject; on the Stor98 tab
-StorWriteThrough and StorPollMode. The release notes, "Registry
-settings", say what each does.
+StorWriteThrough and StorPollMode. docs/using/tuning.md says what each
+does.
 
 "Applies to" picks the controllers: every one (the default), or one of
-them, named with its maker, PCI ID and location. For every controller
+them, named with its manufacturer, PCI ID and location. For every controller
 the value is written where the drivers read it: into the machine-wide
 key, HKLM\System\CurrentControlSet\Services\USB, where a value is set
 there (it wins for every controller), else into each controller's own
@@ -510,10 +549,11 @@ From a command line
                                refused unless /yes is given
   XHCITR /set /show            lists the settings and exits
   XHCITR /snapshot [NAME] [/c N] [/nosysinfo]
-                               writes the snapshot's four files in the
-                               current directory (/c N: controller N,
-                               default 0; /nosysinfo: without the
-                               Windows, processor and BIOS details)
+                               writes the snapshot's files in the
+                               current directory, four for each
+                               controller (/c N: controller N alone;
+                               /nosysinfo: without the Windows,
+                               processor and BIOS details)
   XHCITR /dump [/c N] [/o NAME] [/nosysinfo]
                                writes the dump alone (NAME.TXT, .BIN and
                                .PSC; NAME is XHCITR without /o),
@@ -527,8 +567,12 @@ where their output is redirected.
 
 Exit codes: 0 done, 1 refused (nothing changed), 2 failed, 3 done and
 Windows must restart (/set), 4 Windows refused or a step remains for you
-(/set: a drive to plug in again). /snapshot: 0 both files written in
-full, 2 a name or switch refused, 3 to 8 as XHCITR /snapshot /? says.
+(/set: a drive to plug in again). /snapshot: 0 every controller's files
+written in full, 2 a name or switch refused, or a controller's run that
+could not start or was stopped after two minutes, 3 to 8 as XHCITR
+/snapshot /? says (for several controllers, the highest), 9 a
+controller's files left out of place, or its run still going after it
+was stopped (the message names where its files are).
 
 Licence
 -------

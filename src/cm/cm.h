@@ -388,6 +388,13 @@ typedef struct _CM_NHI {
     ULONG U4CarryTick;
     XHCI_TBT_BINDS Binds;
     ULONG ArmOwed;
+    /* Record 22 section 7.6.5 (task 49.18), the thread's alone: the clock
+     * at the last learning arm, each member's filter record
+     * (CmRegMemberRecords) taken before the last SHPC reading, and the
+     * u4.learn.shpc value last logged. */
+    ULONG U4ShpcArmMs;
+    ULONG U4ShpcRecord[XHCI_TBT_MAX_TUNNELS];
+    ULONG U4ShpcLogged;
     /* Design record 34 section 3.12 (task 48.30): the chained tunnels'
      * structural and occupancy bindings and their transaction (tbt_chain.h),
      * the thread's alone; whether a MAY_CONNECT refusal was logged. */
@@ -594,6 +601,10 @@ typedef struct _CM_NHI {
      * taken 1 MB too high (the page one bus off, not the port), 2 MCFG
      * taken as absent. */
     ULONG QemuEcamFault;
+    /* XhciCmQemuWakePowerUpForce, the qemu flavour's alone (task 49.46,
+     * design record 21 section 6.3.1): nonzero arms every member at every
+     * wake as if its wake power-up had failed, for the legs. */
+    ULONG QemuWpuForce;
 #endif
 
     CM_COUNTERS Counters;
@@ -747,6 +758,13 @@ typedef struct _CM_QUERY_DEV {
     ULONG QaTier;
     ULONG QaReaders;
     UCHAR *QaGone;
+    /* The state snapshot (record 21 section 8.4, task 49.37): the NHI's
+     * extension, set at creation and cleared by CmQuerySnapGone, followed
+     * only under a SnapUse hold taken with Lock held and Connected set;
+     * the identity hashes' salt, drawn once per start, never on the wire. */
+    struct _CM_NHI *SnapNhi;
+    ULONG SnapUse;
+    ULONG SnapSalt;
 } CM_QUERY_DEV, *PCM_QUERY_DEV;
 
 /* The PDOs a bridge filter's snapshot keeps (record 21 section 7.4). */
@@ -960,7 +978,88 @@ typedef struct _CM_FILTER {
     ULONG KeptDeparted;     /* its departure recorded, not yet ended        */
     ULONG KeptRemoves;      /* logical removals seen (the log)              */
     WORK_QUEUE_ITEM KeptWork;   /* its destruction above PASSIVE_LEVEL      */
+
+    /* ---- the wake power-up (design record 21 section 6.3.1, task 49.46),
+     * a child's, every field under Lock. Epochs are CmWpuEpoch's values,
+     * 0 none. Rel: the logical units of disk type its last BusRelations
+     * answer carried (route R1), referenced; Disk, with DiskLink and
+     * DiskTok: those the disk arrivals matched to its PDO (route R2),
+     * referenced, each current while its link's token is. ---- */
+    ULONG WpuFailEpoch;     /* the epoch of its wake D0 that failed        */
+    ULONG WpuFailStatus;
+    ULONG WpuFailLogged;    /* the epoch it was logged in                  */
+    ULONG WpuOtherEpoch;    /* a wake D0 failing with another status: never
+                               armed on, logged once an epoch             */
+    ULONG WpuOtherStatus;
+    ULONG WpuOtherLogged;
+    ULONG WpuConsumed;      /* the epoch it was asked or skipped in        */
+    ULONG WpuClosed;        /* a removal seen, not cancelled or restarted  */
+    ULONG WpuSending;       /* the thread between admission and requests  */
+    KEVENT WpuSendDone;     /* signalled whenever WpuSending is 0          */
+    ULONG WpuStartGen;      /* successful starts seen                      */
+    ULONG WpuOwner;         /* CM_WPU_OWN_* from its driver key            */
+    ULONG WpuOwnerOwed;     /* started, its owner not read yet (the thread
+                               reads it while the recovery is on)          */
+    ULONG WpuOwnerWhy;      /* the two readings: install section in 3:0,
+                               the top of its stack in 7:4 (CM_WPU_OWN_*) */
+    ULONG WpuRelAnswers;    /* BusRelations answers seen since its start   */
+    ULONG WpuRelLogged;     /* the unit count last logged, + 1             */
+    ULONG WpuRelCount;
+    PDEVICE_OBJECT WpuRel[4];
+    ULONG WpuDiskCount;
+    PDEVICE_OBJECT WpuDisk[4];
+    ULONG WpuDiskLink[4];
+    ULONG WpuDiskTok[4];
 } CM_FILTER, *PCM_FILTER;
+
+/*
+ * The wake power-up (design record 21 section 6.3.1, task 49.46). The
+ * child filter's half (cm_filt.c): CmWpuChildInit at its creation;
+ * CmWpuD0Seen from its D0 completion (<= DISPATCH_LEVEL); the rest at
+ * PASSIVE_LEVEL from its PnP dispatch: CmWpuRelations with an answer on
+ * its way back, CmWpuStarted after a successful start, CmWpuClose before
+ * a removal, stop or query-remove is forwarded (waiting for a request
+ * being sent, bounded; `drop` drops the units), CmWpuReopen after a
+ * cancelled query-remove. CmWpuD0Context, the context a child's D0 is
+ * dispatched with (the epoch and its start count). CmWpuPowerSeen, at the
+ * dispatch of every power IRP a filter of this driver receives, and
+ * CmWpuNhiPowerSeen at an NHI's (<= DISPATCH_LEVEL): a system sleep or
+ * shutdown closes the asks of every domain at once, before any thread
+ * runs, and begins a new epoch (once per sleep); a device power-down
+ * closes every domain until its own next release, the NHI's own its
+ * domain besides. CmWpuDomStop, from the NHI's PnP dispatch at a
+ * query-stop, query-remove, stop, surprise removal or removal: that
+ * domain latched closed, reopened only by its own cancel (CmWpuDomCancel)
+ * or start (CmWpuDomStart). CmWpuResumeBegin, when the NHI's resume work
+ * begins: the identity its release is checked against (cm_reenum.c).
+ * CmWpuAdded, from the NHI's AddDevice: its value pending. CmWpuCount,
+ * from its PnP dispatch: at its start once its values are read (`on`:
+ * counted when XhciCmWakePowerUp is 1, no longer pending), and at its
+ * stop, surprise removal or removal. CmWpuOn: TRUE while a counted NHI is
+ * started, while any NHI's value is pending, or before any NHI was added
+ * (so that a drive started before its NHI is not missed); FALSE, the
+ * filters record nothing for the wake power-up.
+ */
+VOID CmWpuChildInit(PCM_FILTER child);
+VOID CmWpuD0Seen(PCM_FILTER child, ULONG dispatchEpoch, NTSTATUS status);
+VOID CmWpuRelations(PCM_FILTER child, const DEVICE_RELATIONS *rel);
+VOID CmWpuStarted(PCM_FILTER child);
+VOID CmWpuClose(PCM_FILTER child, BOOLEAN drop);
+VOID CmWpuReopen(PCM_FILTER child);
+ULONG CmWpuEpochNow(VOID);
+/* cm_reg.c: the owner test's install-section reading, CM_WPU_OWN_*
+ * (cm_ports.h). PASSIVE_LEVEL. */
+ULONG CmRegWpuOwner(PDEVICE_OBJECT pdo);
+PVOID CmWpuD0Context(PCM_FILTER child);
+VOID CmWpuPowerSeen(UCHAR minor, ULONG type, ULONG state);
+VOID CmWpuNhiPowerSeen(PCM_NHI nhi, UCHAR minor, ULONG type, ULONG state);
+VOID CmWpuDomStop(PCM_NHI nhi);
+VOID CmWpuDomCancel(PCM_NHI nhi);
+VOID CmWpuDomStart(PCM_NHI nhi);
+VOID CmWpuResumeBegin(PCM_NHI nhi);
+BOOLEAN CmWpuOn(VOID);
+VOID CmWpuAdded(PCM_NHI nhi);
+VOID CmWpuCount(PCM_NHI nhi, BOOLEAN on);
 
 /* cm_filt.c: the kept child (design record 31 section 4.10). The
  * dispatch of every major function on one (admission and the lower
@@ -1360,6 +1459,12 @@ VOID CmQueryPublish(PCM_NHI nhi, BOOLEAN inert);
  * of it, every asker already posting done. On the thread, PASSIVE_LEVEL. */
 VOID CmQueryWorkerGone(PCM_NHI nhi);
 NTSTATUS CmQueryDispatch(PDEVICE_OBJECT device, PIRP irp);
+/* cm_snapos.c (record 21 section 8.4): the salt, at the query device's
+ * creation; the hold's end, in CmQueryClose before the NHI can go (it
+ * clears SnapNhi and waits until no gather holds it); CM_QS_IOCTL. */
+VOID CmQuerySnapSalt(PCM_QUERY_DEV q, const CM_NHI *nhi);
+VOID CmQuerySnapGone(PCM_NHI nhi);
+NTSTATUS CmQuerySnap(PCM_QUERY_DEV q, PIRP irp, BOOLEAN nt);
 /* The firmware tables the NHI still holds (none handed to a query
  * device) freed, its state cleared (task 46.21): at the next handover and
  * at a stop. PASSIVE_LEVEL, the PnP path or the start's thread. */

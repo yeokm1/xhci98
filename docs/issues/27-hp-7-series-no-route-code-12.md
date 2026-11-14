@@ -251,7 +251,9 @@ On the bench the blue ports reached the xHCI only with
 `XhciIntelPortSwitch` 1: the firmware routes the ports to it only from
 `_OSC` for Windows 8 and later (section 3), so under XP they stay on the
 EHCIs. The default stays 0 (owner, 2026-11-07); `docs/using/tuning.md`
-tells these computers' users to set it. A Settings window in XHCITR that
+tells these computers' users to set it. Superseded by roadmap-usb4 task
+49.47 (owner, 2026-11-14): the INF default stays 0, and from `3.5.0.0`
+Setup writes 1 at a first install on a listed board. A Settings window in XHCITR that
 shows and sets the controller's values, this one among them, came from
 this bench as task 47.35 (in progress at this writing).
 

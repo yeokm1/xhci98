@@ -58,12 +58,11 @@
 #     published text or download readme part
 #   - the shipped scripts the cut holds to their content rules:
 #     src\silent-on.bat and silent-off.bat (Get-SilentBatchFaults),
-#     src\silent.reg (Get-SilentRegFaults), src\portsw-on.bat and
-#     portsw-off.bat (Get-PswBatchFaults), src\portsw.vbs
-#     (Get-PlainScriptFaults) and each field report batch
+#     src\silent.reg (Get-SilentRegFaults) and each field report batch
 #     (Get-ReportBatchSpecs, Get-ReportBatchFaults), all package-common.ps1's
-#   - the name by which src\silent.vbs and src\portsw.vbs find the
-#     controller: their IsXhciDesc, the same in both, takes every name
+#     (the port switchover's scripts until task 49.47 removed them)
+#   - the name by which src\silent.vbs finds the controller: its
+#     IsXhciDesc takes every name
 #     src\xhci98.inf and xhci98-amd64.inf give the controller and the names
 #     earlier releases gave it, and refuses the INFs' other device names
 #     (package-common.ps1's Get-ControllerDescFaults, task 44.75)
@@ -85,7 +84,10 @@
 #     never edited: its ignored out\, the unmodified upstream reference copy
 #     third_party\, and the published releases\<version>\. String
 #     literals are read as any other text, a test's printed output included.
-#   Both are enforced ($script:WordingRulesEnforced): each fault is listed
+#   - the owner's decision of 2026-11-13: no tracked file names the separate
+#     component the 98 SE / ME message-interrupt client served, outside
+#     the vendored src\msi4nt.h (Get-ComponentFaults)
+#   All are enforced ($script:WordingRulesEnforced): each fault is listed
 #   and fails the run. They were report-only from their addition until the
 #   tree was clean of what they found then (2026-11-06).
 #
@@ -474,9 +476,8 @@ function Get-HistoryFaults {
 function Get-ShippedScriptFaults {
     # The batch, registry and script files the cut publishes, read as bytes
     # and Latin-1 as the packager's self-tests read them, held to their
-    # content rules: the silent install's two batches and SILENT.REG, the
-    # port switchover's two batches and portsw.vbs, and each field report
-    # batch.
+    # content rules: the silent install's two batches and SILENT.REG, and
+    # each field report batch.
     param([string]$Root)
 
     $latin1 = [System.Text.Encoding]::GetEncoding(28591)
@@ -486,10 +487,6 @@ function Get-ShippedScriptFaults {
         $files += @{ Rel = $b.Rel; Check = { param($t, $x) Get-SilentBatchFaults -Text $t -Value $x }; Arg = $b.Value }
     }
     $files += @{ Rel = "src\silent.reg"; Check = { param($t, $x) Get-SilentRegFaults -Text $t }; Arg = $null }
-    foreach ($b in @(@{ Rel = "src\portsw-on.bat"; Value = "1" }, @{ Rel = "src\portsw-off.bat"; Value = "0" })) {
-        $files += @{ Rel = $b.Rel; Check = { param($t, $x) Get-PswBatchFaults -Text $t -Value $x }; Arg = $b.Value }
-    }
-    $files += @{ Rel = "src\portsw.vbs"; Check = { param($t, $x) Get-PlainScriptFaults -Bytes ([System.Text.Encoding]::GetEncoding(28591).GetBytes($t)) }; Arg = $null }
     foreach ($spec in @(Get-ReportBatchSpecs)) {
         $files += @{ Rel = ($spec.Dir + "\" + $spec.Name); Check = { param($t, $x) Get-ReportBatchFaults -Text $t -Spec $x }; Arg = $spec }
     }
@@ -545,6 +542,27 @@ $script:WordingPatterns = @(
     @{ Rx = '\bround\s+\d+\s+of\s+(?:the\s+)?review'; Why = "names a review round" },
     @{ Rx = '\bfindings?\s+#?\d+'; Why = "names a finding number" }
 )
+
+# The owner's decision of 2026-11-13 (release 3.5.0.0): the 98 SE / ME
+# message-interrupt client left the tree, and no tracked file names the
+# separate component it served. The name is spelled by character code, as
+# the review tool's, so that this file does not carry it. Outside the rule:
+# src\msi4nt.h alone, the vendored header kept byte for byte, whose own
+# comments name it (docs\ came under the rule once its rewrite landed).
+$script:ComponentWord = -join ([char[]](0x6D, 0x73, 0x69, 0x34, 0x76, 0x78, 0x64))
+$script:ComponentSkip = @('^src\\msi4nt\.h$')
+
+function Get-ComponentFaults {
+    # The lines of one tracked file against the component's name, any case.
+    param([string[]]$Lines, [string]$Label)
+    $faults = @()
+    for ($n = 0; $n -lt $Lines.Count; $n++) {
+        if ($Lines[$n] -match $script:ComponentWord) {
+            $faults += "$Label line $($n + 1): names the separate component the 98 SE / ME message-interrupt client served"
+        }
+    }
+    return $faults
+}
 
 function Get-DocByteFaults {
     # A docs\ Markdown file's bytes: a TAB or any other control byte but CR
@@ -640,6 +658,9 @@ function Get-TreeWordingFaults {
         $wordCount++
         $text = [System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($f.FullName))
         $faults += @(Get-WordingFaults -Lines ($text -split "`n") -Label $rel -Readme:($rel -ieq "README.md"))
+        $named = $true
+        foreach ($pattern in $script:ComponentSkip) { if ($rel -match $pattern) { $named = $false; break } }
+        if ($named) { $faults += @(Get-ComponentFaults -Lines ($text -split "`n") -Label $rel) }
     }
     return [pscustomobject]@{ Faults = $faults; DocFiles = $docByteCount; Files = $wordCount }
 }
@@ -835,6 +856,11 @@ if ($SelfTest) {
             ($rf.Count -eq 2 -and (Test-Has $rf "README.md line 2:") -and (Test-Has $rf "README.md line 9:"))
         $rf = @(Get-WordingFaults -Lines $rm -Label "other.md")
         Assert-Self "wording: the AI usage section is skipped in README.md alone" ($rf.Count -eq 4)
+        $cw = $script:ComponentWord
+        $cl = @("/* the message library (msi4nt) */", "#include `"$cw.h`"", "Uses $($cw.ToUpperInvariant()).", "msi4 alone")
+        $cf = @(Get-ComponentFaults -Lines $cl -Label "c.c")
+        Assert-Self ("component: its name found in any case, msi4nt and a prefix not: " + ($cf -join " | ")) `
+            ($cf.Count -eq 2 -and (Test-Has $cf "c.c line 2:") -and (Test-Has $cf "c.c line 3:"))
 
         # The tree walk's scope (2026-11-06): Stor98's own texts and the CM's
         # copy of its header are read; a dated run sheet, Stor98's ignored
@@ -870,10 +896,8 @@ if ($SelfTest) {
             ($hf.Count -eq 2 -and (Test-Has $hf "x_ut.c line 1: names the review tool") -and (Test-Has $hf "x_ut.c line 2: names a review round"))
 
         # The shipped scripts: this tree's copies pass, and a changed value
-        # in SILENT.REG, a port switchover batch setting the other value, an
-        # LF line in portsw.vbs and a missing report batch are each refused.
-        $copies = @("src\silent-on.bat", "src\silent-off.bat", "src\silent.reg",
-                    "src\portsw-on.bat", "src\portsw-off.bat", "src\portsw.vbs") +
+        # in SILENT.REG and a missing report batch are each refused.
+        $copies = @("src\silent-on.bat", "src\silent-off.bat", "src\silent.reg") +
                   @(Get-ReportBatchSpecs | ForEach-Object { $_.Dir + "\" + $_.Name })
         foreach ($rel in $copies) {
             $to = Join-Path $root $rel
@@ -885,27 +909,19 @@ if ($SelfTest) {
         $regPath = Join-Path $root "src\silent.reg"
         $reg = [System.IO.File]::ReadAllText($regPath)
         [System.IO.File]::WriteAllText($regPath, $reg.Replace("hex:c3,08,06,50", "hex:c3,08,06,62"))
-        $onPath = Join-Path $root "src\portsw-on.bat"
-        $on = [System.IO.File]::ReadAllText($onPath)
-        [System.IO.File]::WriteAllText($onPath, $on.Replace("cscript //nologo portsw.vbs 1", "cscript //nologo portsw.vbs 0"))
-        $vbsPath = Join-Path $root "src\portsw.vbs"
-        [System.IO.File]::WriteAllText($vbsPath, ([System.IO.File]::ReadAllText($vbsPath) + "' an LF line`n"))
-        Remove-Item -LiteralPath (Join-Path $root $copies[6])
+        Remove-Item -LiteralPath (Join-Path $root $copies[3])
         $sf = @(Get-ShippedScriptFaults -Root $root)
         Assert-Self ("the mutated scripts: " + ($sf -join " | ")) (
             @($sf | Where-Object { $_.StartsWith("src\silent.reg: ") }).Count -ge 1 -and
-            @($sf | Where-Object { $_.StartsWith("src\portsw-on.bat: ") }).Count -ge 1 -and
-            @($sf | Where-Object { $_ -eq "src\portsw.vbs: a line not ended by CRLF" }).Count -eq 1 -and
             @($sf | Where-Object { $_.Contains("is missing; the cut publishes it") }).Count -eq 1)
 
-        # The controller's names (task 44.75): this tree's two scripts and
-        # two INFs pass; the whole-name match the scripts had before 44.75, a
-        # listed model's name they would refuse, a hub's name they would
-        # take, and the two scripts' constants differing are each refused.
+        # The controller's names (task 44.75): this tree's script and two
+        # INFs pass; the whole-name match the scripts had before 44.75, a
+        # listed model's name it would refuse and a hub's name it would
+        # take are each refused.
         foreach ($rel in @("src\silent.vbs", "src\xhci98.inf", "src\xhci98-amd64.inf")) {
             Copy-Item -LiteralPath (Join-Path $repo $rel) -Destination (Join-Path $root $rel)
         }
-        Copy-Item -LiteralPath (Join-Path $repo "src\portsw.vbs") -Destination $vbsPath -Force
         $cf = @(Get-ControllerDescFaults -Root $root)
         Assert-Self ("this tree's controller names: " + ($cf -join " | ")) ($cf.Count -eq 0)
         $silentPath = Join-Path $root "src\silent.vbs"
@@ -924,9 +940,7 @@ if ($SelfTest) {
             @{ What = "an indented model line with an old name"; Path = $infPath; Orig = $infText
                Text = $infText.Replace("`r`n%XRedHatQEMUxHCIDesc%=", "`r`n  %XOldNameDesc%=Xhci.Dev,PCI\VEN_FFFF&DEV_FFFF`r`n%XRedHatQEMUxHCIDesc%=").Replace("`r`n[Strings]`r`n", "`r`n[Strings]`r`nXOldNameDesc=`"xHCI98 USB 3.x Controller (Old)`"`r`n"); Want = "(%XOldNameDesc%) is refused" },
             @{ What = "the root hub named as a controller"; Path = $amdPath; Orig = $amdText
-               Text = $amdText.Replace('RootHubDesc="xHCI98 USB 3 Root Hub"', 'RootHubDesc="xHCI98 USB 3 Controller (Root Hub)"'); Want = "is not the controller and IsXhciDesc takes it" },
-            @{ What = "XHCI_DESC_OLD differing"; Path = $vbsPath; Orig = [System.IO.File]::ReadAllText($vbsPath)
-               Text = ([System.IO.File]::ReadAllText($vbsPath)).Replace('Const XHCI_DESC_OLD = "xHCI98 USB 3.x eXtensible Host Controller"', 'Const XHCI_DESC_OLD = "xHCI98 USB 3.x Controller"'); Want = "differs from src\silent.vbs's" }
+               Text = $amdText.Replace('RootHubDesc="xHCI98 USB 3 Root Hub"', 'RootHubDesc="xHCI98 USB 3 Controller (Root Hub)"'); Want = "is not the controller and IsXhciDesc takes it" }
         )
         foreach ($nc in $nameCases) {
             Assert-Self ("{0}: the mutation did not apply" -f $nc.What) ($nc.Text -cne $nc.Orig)

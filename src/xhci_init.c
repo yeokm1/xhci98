@@ -1008,6 +1008,49 @@ static ULONG xhciHalt(PXHCI_EXTENSION ext)
 static ULONG xhciReset(PXHCI_EXTENSION ext)
 {
     ULONG value;
+    ULONG usbsts;
+
+    /*
+     * Task 49.35 (design record 17 section 4.6.1): the reset the controller
+     * thread saw complete, adopted. The previous call of the recovery wrote
+     * HCRST and its 10 ms stall ran out (RecoverResetOwed); the thread then
+     * read HCRST and CNR both 0 at PASSIVE_LEVEL and set RecoverResetProven
+     * for this one call. Since then only the quiesce's interrupt masks
+     * (USBCMD.INTE and IMAN, legal once CNR is 0, 5.4.2), the xECP handoff
+     * and the halt check (HCH is set after a reset) have reached the
+     * controller, and none of them needs a reset after it; a second HCRST
+     * here would only run out again on the controller that took this path.
+     * The bits are read once more, and anything but both clear refuses as
+     * the waits below would.
+     */
+    if (ext->InitBelowPassive && ext->RecoverResetProven) {
+        ext->RecoverResetProven = 0;
+        ext->RecoverResetOwed = 0;
+        value = XhciReadOp(ext, XHCI_OP_USBCMD);
+        usbsts = XhciReadOp(ext, XHCI_OP_USBSTS);
+#if defined(XHCI_FLAVOUR_QEMU)
+        value = HcdInjResetAnswer(ext, XHCI_OP_USBCMD, value);
+        usbsts = HcdInjResetAnswer(ext, XHCI_OP_USBSTS, usbsts);
+#endif
+        if (value == 0xFFFFFFFFUL || usbsts == 0xFFFFFFFFUL ||
+            (value & XHCI_USBCMD_HCRST) != 0 ||
+            (usbsts & XHCI_USBSTS_CNR) != 0) {
+            XHCI_DBG_VALUE("reset: the proven reset reads running, USBCMD",
+                           value);
+            return 0;
+        }
+        (VOID)XhciControllerUpdateFlags(ext, XHCI_EXT_FLAG_RS_CONFIRMED, 0);
+        ext->InterruptDeliverySuppressed = 1;
+        ext->RecoverResetsAdopted++;
+        XhciLogNote(ext, "reset.adopted", usbsts);
+        return 1;
+    }
+    if (!ext->InitBelowPassive) {
+        /* A start or a resume at PASSIVE_LEVEL waits its own 1000 ms: no
+         * recovery's reset is owed past it. */
+        ext->RecoverResetOwed = 0;
+        ext->RecoverResetProven = 0;
+    }
 
     /*
      * A reset may already be in progress, and a second HCRST on top of it is
@@ -1015,12 +1058,12 @@ static ULONG xhciReset(PXHCI_EXTENSION ext)
      * Operational register ... until CNR = 0"). The in-place recovery is the
      * path that produces one - its waits are stall-only, so a controller
      * whose HCRST takes longer than the 10 ms stall refuses at
-     * XHCI_INIT_STEP_RESET and the next poll's attempt finds the previous
-     * reset still running - and XhciRecoverController now refuses on that
-     * reading before it writes anything, so this wait is what covers the
-     * PASSIVE-level starts and resumes that can meet a reset firmware or a
-     * power transition left running. Settled on the first read in the
-     * ordinary case.
+     * XHCI_INIT_STEP_RESET - and XhciRecoverController refuses on that
+     * reading before it writes anything (since task 49.35 uncharged, the
+     * controller thread then waiting the reset out at PASSIVE_LEVEL), so
+     * this wait is what covers the PASSIVE-level starts and resumes that can
+     * meet a reset firmware or a power transition left running. Settled on
+     * the first read in the ordinary case.
      */
     if (!XhciWaitForBits(ext,
                          ext->HcInfo.OperationalOffset + XHCI_OP_USBSTS,
@@ -1053,6 +1096,14 @@ static ULONG xhciReset(PXHCI_EXTENSION ext)
     if (!xhciWriteUsbCmd(ext, XHCI_USBCMD_HCRST)) {
         return 0;
     }
+    /* Task 49.35: from here until this reset is seen complete, a refusal on
+     * the recovery path leaves the reset owed to the controller thread. */
+    if (ext->InitBelowPassive) {
+        ext->RecoverResetOwed = 1;
+    }
+#if defined(XHCI_FLAVOUR_QEMU)
+    HcdInjResetWritten(ext);
+#endif
 
     /*
      * No register access for 1 ms after the HCRST write. Intel controllers -
@@ -1091,6 +1142,7 @@ static ULONG xhciReset(PXHCI_EXTENSION ext)
      * this driver having written either. The ISR's decline gates may rely on it
      * for the rest of the sequence, which programs the controller with the
      * enables deliberately masked. */
+    ext->RecoverResetOwed = 0;
     ext->InterruptDeliverySuppressed = 1;
     return 1;
 }
@@ -4040,17 +4092,50 @@ MPSTATUS XhciResumeController(PXHCI_EXTENSION ext)
  *
  * IRQL: DISPATCH_LEVEL, no usbport lock held.
  */
+static ULONG xhciRecoverOnce(PXHCI_EXTENSION ext);
+
+/* See the contract in src/xhci_hw.h. A proven reset (RecoverResetProven)
+ * is for the one call it was set for, whatever that call's outcome
+ * (task 49.35). */
 ULONG XhciRecoverController(PXHCI_EXTENSION ext)
+{
+    ULONG outcome;
+
+    if (ext == NULL || ext->Signature != XHCI_EXTENSION_SIGNATURE) {
+        return XHCI_RECOVER_REFUSED;
+    }
+    outcome = xhciRecoverOnce(ext);
+    ext->RecoverResetProven = 0;
+    return outcome;
+}
+
+/* See the contract in src/xhci_hw.h (task 49.35). */
+VOID XhciRecoverCharge(PXHCI_EXTENSION ext, ULONG step, ULONG status)
+{
+    KIRQL oldIrql;
+
+    if (ext == NULL || ext->Signature != XHCI_EXTENSION_SIGNATURE) {
+        return;
+    }
+    ext->InitStep = step;
+    ext->InitStatus = status;
+    ext->RecoveryFailures++;
+    ext->RecoveryFailuresConsecutive++;
+    ext->RecoveryLastStep = step;
+    ext->RecoveryLastStatus = status;
+    XhciControllerLockAcquire(ext, &oldIrql);
+    ext->ControllerFailed = 1;
+    XhciControllerLockRelease(ext, oldIrql);
+    XhciLogNote(ext, "ctrl.recover.refused", step);
+}
+
+static ULONG xhciRecoverOnce(PXHCI_EXTENSION ext)
 {
     MPSTATUS status;
     ULONG usbsts;
     ULONG usbcmd;
     ULONG halted;
     KIRQL oldIrql;
-
-    if (ext == NULL || ext->Signature != XHCI_EXTENSION_SIGNATURE) {
-        return 0;
-    }
     /*
      * Nothing was ever decoded, so there is no register to reprogram and no
      * mapping to reprogram it through - the shape of a controller whose start
@@ -4077,7 +4162,7 @@ ULONG XhciRecoverController(PXHCI_EXTENSION ext)
         ext->RecoveryLastStep = XHCI_INIT_STEP_NONE;
         ext->RecoveryLastStatus = ext->HcInfoStatus;
         XhciLogNote(ext, "ctrl.recover.nohw", ext->HcInfoStatus);
-        return 0;
+        return XHCI_RECOVER_REFUSED;
     }
 
     ext->RecoveryAttempts++;
@@ -4093,8 +4178,12 @@ ULONG XhciRecoverController(PXHCI_EXTENSION ext)
      * to mask INTE - so the check that xhciReset makes ahead of its HCRST is
      * made here ahead of the quiesce, as the same refusal at the same step
      * with the same evidence. Nothing is done and nothing is undone: the
-     * controller is left exactly as found, the latch stands, and the retry
-     * is the next poll's (reviewed and revised 2026-09-17).
+     * controller is left exactly as found and the latch stands (reviewed and
+     * revised 2026-09-17). Since task 49.35 the refusal is not charged: it
+     * is XHCI_RECOVER_RESET_BUSY, and the controller thread waits the reset
+     * out at PASSIVE_LEVEL and runs the same recovery again (hcdRecover);
+     * until then the next attempt came on the next thread pass, charged,
+     * and an ASM1042 spent all three inside one tick.
      */
     /*
      * **And HCRST, which is the other half of "the reset is over" and not
@@ -4111,19 +4200,21 @@ ULONG XhciRecoverController(PXHCI_EXTENSION ext)
      */
     usbsts = XhciReadOp(ext, XHCI_OP_USBSTS);
     usbcmd = XhciReadOp(ext, XHCI_OP_USBCMD);
-    if ((usbsts != 0xFFFFFFFFUL && (usbsts & XHCI_USBSTS_CNR) != 0) ||
-        (usbcmd != 0xFFFFFFFFUL && (usbcmd & XHCI_USBCMD_HCRST) != 0)) {
+#if defined(XHCI_FLAVOUR_QEMU)
+    usbsts = HcdInjResetAnswer(ext, XHCI_OP_USBSTS, usbsts);
+    usbcmd = HcdInjResetAnswer(ext, XHCI_OP_USBCMD, usbcmd);
+#endif
+    if (XhciTolResetRunning(usbcmd, usbsts)) {
         (VOID)xhciInitFailed(ext, XHCI_INIT_STEP_RESET, usbsts,
                              MP_STATUS_HW_ERROR);
-        ext->RecoveryFailures++;
-        ext->RecoveryFailuresConsecutive++;
         ext->RecoveryLastStep = ext->InitStep;
         ext->RecoveryLastStatus = ext->InitStatus;
-        XhciLogNote(ext, "ctrl.recover.refused", ext->InitStep);
+        ext->Tol.Stats.ResetBusy++;
+        XhciLogNote(ext, "ctrl.recover.resetbusy", usbsts);
         XHCI_DBG_VALUE("recover: the previous reset is still running - "
                        "refusing before touching a register, USBSTS", usbsts);
         XHCI_DBG_VALUE("recover: ... and USBCMD", usbcmd);
-        return 0;
+        return XHCI_RECOVER_RESET_BUSY;
     }
 
     /*
@@ -4172,14 +4263,45 @@ ULONG XhciRecoverController(PXHCI_EXTENSION ext)
     ext->RecoveryLastStatus = ext->InitStatus;
 
     if (status != MP_STATUS_SUCCESS) {
+        ULONG outcome;
+
         /*
          * `XhciInitController` has already put `XHCI_EXT_FLAG_INITIALIZED` down
          * and left the latch alone on every refusal before the HCRST, and its
          * two late exits stop the controller. So the state here is the one the
          * latch describes and there is nothing to undo - only to record.
+         *
+         * Task 49.35: two refusals the controller thread can finish are not
+         * charged here. A refusal at the reset with a reset still running -
+         * the HCRST this sequence wrote outlasting its 10 ms stall
+         * (RecoverResetOwed), or one found running - is RESET_BUSY; one at
+         * the Bus Master Enable restore, the bit this driver cleared still to
+         * put back, which needs PASSIVE_LEVEL, is BME_RESTORE (until 49.35
+         * charged here and then run again by hcdRecover, so one recovery
+         * could cost two). hcdRecover charges either once if it cannot
+         * finish it (XhciRecoverCharge).
          */
-        ext->RecoveryFailures++;
-        ext->RecoveryFailuresConsecutive++;
+        outcome = XHCI_RECOVER_REFUSED;
+        if (ext->InitStep == XHCI_INIT_STEP_RESET) {
+            usbsts = XhciReadOp(ext, XHCI_OP_USBSTS);
+            usbcmd = XhciReadOp(ext, XHCI_OP_USBCMD);
+#if defined(XHCI_FLAVOUR_QEMU)
+            usbsts = HcdInjResetAnswer(ext, XHCI_OP_USBSTS, usbsts);
+            usbcmd = HcdInjResetAnswer(ext, XHCI_OP_USBCMD, usbcmd);
+#endif
+            if (ext->RecoverResetOwed ||
+                XhciTolResetRunning(usbcmd, usbsts)) {
+                outcome = XHCI_RECOVER_RESET_BUSY;
+                ext->Tol.Stats.ResetBusy++;
+            }
+        } else if (ext->InitStep == XHCI_INIT_STEP_BUS_MASTER_RESTORE &&
+                   ext->BusMasterCleared) {
+            outcome = XHCI_RECOVER_BME_RESTORE;
+        }
+        if (outcome == XHCI_RECOVER_REFUSED) {
+            ext->RecoveryFailures++;
+            ext->RecoveryFailuresConsecutive++;
+        }
         /*
          * **Re-latch, and this is not bookkeeping.** `XhciInitController`
          * releases `ControllerFailed` once HCRST has completed, because from
@@ -4196,10 +4318,16 @@ ULONG XhciRecoverController(PXHCI_EXTENSION ext)
         XhciControllerLockAcquire(ext, &oldIrql);
         ext->ControllerFailed = 1;
         XhciControllerLockRelease(ext, oldIrql);
-        XhciLogNote(ext, "ctrl.recover.refused", ext->InitStep);
+        if (outcome == XHCI_RECOVER_REFUSED) {
+            XhciLogNote(ext, "ctrl.recover.refused", ext->InitStep);
+        } else if (outcome == XHCI_RECOVER_RESET_BUSY) {
+            XhciLogNote(ext, "ctrl.recover.resetbusy", ext->InitStatus);
+        } else {
+            XhciLogNote(ext, "ctrl.recover.bme", ext->InitStep);
+        }
         XHCI_DBG_VALUE_CHANGED("recover: reinitialization refused at step",
                                ext->InitStep);
-        return 0;
+        return outcome;
     }
 
     /*
@@ -4272,7 +4400,7 @@ ULONG XhciRecoverController(PXHCI_EXTENSION ext)
      */
     ext->RecoveryFailuresConsecutive = 0;
     XhciLogNote(ext, "ctrl.recovered", ext->RecoveryAttempts);
-    return 1;
+    return XHCI_RECOVER_RECOVERED;
 }
 
 /* See the contract in src/xhci_hw.h (task 38.10, design record 20 section
@@ -4605,6 +4733,115 @@ ULONG XhciStopController(PXHCI_EXTENSION ext)
 
 /* ------------------------------------------------------------------ */
 /* The sequence                                                        */
+/*
+ * Steps 0c and 5 (early) of XhciInitController: the capability sanity
+ * check and the whole decode with its validation, HcInfo kept. Shared with
+ * XhciQuietController (mode 4, design record 15 section 4.5.3), whose result
+ * the later XhciInitController keeps instead of decoding again. Reads only.
+ * Returns 0, or the step that refused with its status in *failStatus.
+ * IRQL: any.
+ */
+static ULONG xhciInitDecode(PXHCI_EXTENSION ext, PULONG failStatus)
+{
+    ULONG status;
+    ULONG value;
+
+    *failStatus = 0;
+    /* Step 0c: MMIO sanity, before any register that has a side effect. */
+    ext->InitStep = XHCI_INIT_STEP_CAP_SANITY;
+    value = XhciRead32(ext, XHCI_CAP_CAPLENGTH);
+    XHCI_DBG_VALUE("CAPLENGTH/HCIVERSION dword", value);
+    /*
+     * Task 38.11 (design record 17 section 4.14.7): the version recorded
+     * before it is checked, so a refused start's counter dump and notes say
+     * what was refused - the register's own and, under the qemu flavour's
+     * override, the one decoded in its place.
+     */
+    {
+        ULONG effective;
+
+        effective = xhciEffectiveCapDword0(ext, value);
+        ext->HciVersionRegister = XHCI_HCIVERSION_OF(value);
+        ext->HciVersionEffective = XHCI_HCIVERSION_OF(effective);
+        ext->HciOverrideApplied = (effective != value) ? 1UL : 0UL;
+        ext->HciTdSizeForm = 0;
+        ext->HciVersionRead = 1;
+        XhciLogNote(ext, "hc.version", ext->HciVersionEffective);
+        if (ext->HciOverrideApplied) {
+            XhciLogNote(ext, "qemu.hciversion", ext->HciVersionEffective);
+            XhciLogNote(ext, "hc.version.register", ext->HciVersionRegister);
+        }
+        value = effective;
+    }
+    status = XhciCheckCapDword0(value, ext->IoSpaceLength, ext->HciFloor,
+                                NULL, NULL);
+    if (status != XHCI_HC_OK) {
+        *failStatus = status;
+        return XHCI_INIT_STEP_CAP_SANITY;
+    }
+    ext->HciTdSizeForm = XhciTdSizeFormOf(ext->HciVersionEffective);
+
+    /* Step 5, early: the handoff needs HCCPARAMS1.xECP, so the whole
+     * capability set is decoded now and re-decoded after the reset. */
+    ext->InitStep = XHCI_INIT_STEP_CAP_DECODE;
+    status = XhciDeriveControllerInfo(ext, &ext->HcInfo);
+    if (status != XHCI_HC_OK) {
+        *failStatus = status;
+        return XHCI_INIT_STEP_CAP_DECODE;
+    }
+    ext->HcInfoStatus = XHCI_HC_OK;
+    return 0;
+}
+
+/*
+ * Mode 4's quiet step (design record 15 section 4.5.3; roadmap-usb4 task
+ * 49.24): before a message is claimed or connected, the controller's
+ * causes are proven off. The start's decode and validation (the same
+ * routine XhciInitController uses, its result kept), the firmware handoff
+ * (the same routine; the later call finds the controller owned), then
+ * USBCMD.INTE and interrupter 0's IMAN.IE cleared and both read back clear.
+ * Nothing else is written; no reset is made. Returns 0, or the step that
+ * refused (XHCI_INIT_STEP_*, the mask's as XHCI_INIT_STEP_INTERRUPT) with
+ * its status in *failStatus. ext->ResourceBase and IoSpaceLength set.
+ * IRQL: PASSIVE_LEVEL (the handoff waits).
+ */
+ULONG XhciQuietController(PXHCI_EXTENSION ext, PULONG failStatus)
+{
+    ULONG step;
+    ULONG status;
+    ULONG usbcmd;
+    ULONG iman;
+
+    *failStatus = 0;
+    ext->QuietDecoded = 0;
+    ext->HcInfoStatus = XHCI_HC_BAD_PARAM;
+    if (ext->ResourceBase == 0 ||
+        ext->IoSpaceLength < XHCI_CAP_REGISTERS_BYTES) {
+        *failStatus = ext->IoSpaceLength;
+        return XHCI_INIT_STEP_RESOURCES;
+    }
+    step = xhciInitDecode(ext, &status);
+    if (step != 0) {
+        *failStatus = status;
+        return step;
+    }
+    ext->QuietDecoded = 1;
+    status = xhciBiosHandoff(ext);
+    if (status != XHCI_CAPS_OK) {
+        *failStatus = status;
+        return XHCI_INIT_STEP_HANDOFF;
+    }
+    XhciMaskInterrupts(ext);
+    usbcmd = XhciReadOp(ext, XHCI_OP_USBCMD);
+    iman = XhciReadIr0(ext, XHCI_IR_IMAN);
+    if (usbcmd == 0xFFFFFFFFUL || iman == 0xFFFFFFFFUL ||
+        (usbcmd & XHCI_USBCMD_INTE) != 0 || (iman & XHCI_IMAN_IE) != 0) {
+        *failStatus = (usbcmd & XHCI_USBCMD_INTE) | (iman & XHCI_IMAN_IE);
+        return XHCI_INIT_STEP_INTERRUPT;
+    }
+    return 0;
+}
+
 /* ------------------------------------------------------------------ */
 
 static MPSTATUS xhciInitFailed(PXHCI_EXTENSION ext,
@@ -4689,14 +4926,18 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
     /*
      * Under a poll delivery (design record 15 section 4) no interrupt is
      * connected, and only the memory window is required; the interrupt bit
-     * is the line delivery's gate alone.
+     * is the line delivery's gate alone. Mode 4's message connected on a
+     * claimed IRQ is not the device's resource either
+     * (design record 15 section 4.5.2): it waives it too.
      */
     if (((resources != NULL ? resources->ResourcesTypes
                             : ext->ResourcesTypes) &
-         ((ext->EventDelivery == XHCI_POLL_DELIVERY_POLL)
+         ((ext->EventDelivery == XHCI_POLL_DELIVERY_POLL ||
+          ext->Msg4NoLine)
               ? (XhciResourcesRequired & ~(ULONG)USBPORT_RESOURCES_INTERRUPT)
               : XhciResourcesRequired)) !=
-        ((ext->EventDelivery == XHCI_POLL_DELIVERY_POLL)
+        ((ext->EventDelivery == XHCI_POLL_DELIVERY_POLL ||
+          ext->Msg4NoLine)
              ? (XhciResourcesRequired & ~(ULONG)USBPORT_RESOURCES_INTERRUPT)
              : XhciResourcesRequired)) {
         return xhciInitFailed(ext, XHCI_INIT_STEP_RESOURCES,
@@ -4809,49 +5050,19 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
         XhciLogNote(ext, "gate.busmaster.command", value);
     }
 
-    /* Step 0c: MMIO sanity, before any register that has a side effect. */
-    ext->InitStep = XHCI_INIT_STEP_CAP_SANITY;
-    value = XhciRead32(ext, XHCI_CAP_CAPLENGTH);
-    XHCI_DBG_VALUE("CAPLENGTH/HCIVERSION dword", value);
-    /*
-     * Task 38.11 (design record 17 section 4.14.7): the version recorded
-     * before it is checked, so a refused start's counter dump and notes say
-     * what was refused - the register's own and, under the qemu flavour's
-     * override, the one decoded in its place.
-     */
-    {
-        ULONG effective;
-
-        effective = xhciEffectiveCapDword0(ext, value);
-        ext->HciVersionRegister = XHCI_HCIVERSION_OF(value);
-        ext->HciVersionEffective = XHCI_HCIVERSION_OF(effective);
-        ext->HciOverrideApplied = (effective != value) ? 1UL : 0UL;
-        ext->HciTdSizeForm = 0;
-        ext->HciVersionRead = 1;
-        XhciLogNote(ext, "hc.version", ext->HciVersionEffective);
-        if (ext->HciOverrideApplied) {
-            XhciLogNote(ext, "qemu.hciversion", ext->HciVersionEffective);
-            XhciLogNote(ext, "hc.version.register", ext->HciVersionRegister);
+    /* Steps 0c and 5 (early), unless mode 4's quiet step decoded already
+     * (XhciQuietController): its HcInfo is this start's, validated. */
+    if (!ext->QuietDecoded) {
+        value = xhciInitDecode(ext, &status);
+        if (value != 0) {
+            return xhciInitFailed(ext, value, status, MP_STATUS_HW_ERROR);
         }
-        value = effective;
+    } else {
+        /* The top of this function marked it unvalidated. */
+        ext->HcInfoStatus = XHCI_HC_OK;
     }
-    status = XhciCheckCapDword0(value, ext->IoSpaceLength, ext->HciFloor,
-                                NULL, NULL);
-    if (status != XHCI_HC_OK) {
-        return xhciInitFailed(ext, XHCI_INIT_STEP_CAP_SANITY, status,
-                              MP_STATUS_HW_ERROR);
-    }
-    ext->HciTdSizeForm = XhciTdSizeFormOf(ext->HciVersionEffective);
-
-    /* Step 5, early: the handoff needs HCCPARAMS1.xECP, so the whole
-     * capability set is decoded now and re-decoded after the reset. */
-    ext->InitStep = XHCI_INIT_STEP_CAP_DECODE;
-    status = XhciDeriveControllerInfo(ext, &ext->HcInfo);
-    if (status != XHCI_HC_OK) {
-        return xhciInitFailed(ext, XHCI_INIT_STEP_CAP_DECODE, status,
-                              MP_STATUS_HW_ERROR);
-    }
-    ext->HcInfoStatus = XHCI_HC_OK;
+    /* Once: a resume's or a recovery's reinitialization decodes again. */
+    ext->QuietDecoded = 0;
     XHCI_DBG_VALUE("HCIVERSION", ext->HcInfo.HciVersion);
     XHCI_DBG_VALUE("CAPLENGTH", ext->HcInfo.CapLength);
     XHCI_DBG_VALUE("MaxSlots", ext->HcInfo.MaxSlots);

@@ -302,6 +302,7 @@ NTSTATUS UasPdoPnp(PUAS_PDO pdo, PIRP irp)
     NTSTATUS status;
     BOOLEAN deleteIt;
     PDEVICE_OBJECT self;
+    KIRQL irql;
 
     stack = IoGetCurrentIrpStackLocation(irp);
     status = irp->IoStatus.Status;
@@ -315,6 +316,9 @@ NTSTATUS UasPdoPnp(PUAS_PDO pdo, PIRP irp)
         }
         pdo->Started = TRUE;
         pdo->Removed = FALSE;
+        KeAcquireSpinLock(&pdo->Fdo->Lock, &irql);
+        pdo->AtaRefused = 0;
+        KeReleaseSpinLock(&pdo->Fdo->Lock, irql);
         UasEngineOpenLun(pdo->Fdo, pdo);
         status = STATUS_SUCCESS;
         break;
@@ -475,14 +479,36 @@ static BOOLEAN uasNoAta(PUAS_FDO fdo)
     return on;
 }
 
+/* Task 49.39 (design record 13 section 16.16): whether the drive has
+ * refused this ATA PASS-THROUGH (by its CDB's operation code) for this LUN
+ * since the PDO's start. <= DISPATCH_LEVEL, no lock held. */
+static BOOLEAN uasAtaReplay(PUAS_PDO pdo, PUAS_FDO fdo, const UCHAR *cdb,
+                            ULONG cdbLength)
+{
+    ULONG bit;
+    BOOLEAN on;
+    KIRQL irql;
+
+    bit = UasAtaBit(cdb, cdbLength);
+    if (bit == 0) {
+        return FALSE;
+    }
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    on = (BOOLEAN)((pdo->AtaRefused & bit) != 0);
+    KeReleaseSpinLock(&fdo->Lock, irql);
+    return on;
+}
+
 /*
  * Issue 26: an SRB carrying ATA PASS-THROUGH (12) or (16) for a device
  * whose XhciUasNoAtaPassThrough is set, answered without reaching the
  * device: CHECK CONDITION, ILLEGAL REQUEST, INVALID FIELD IN CDB, as
- * Linux's uas.c answers it under US_FL_NO_ATA_1X; nothing moved. The
- * autosense as the SRB allows it. <= DISPATCH_LEVEL.
+ * Linux's uas.c answers it under US_FL_NO_ATA_1X; with replay (task 49.39)
+ * INVALID COMMAND OPERATION CODE, the drive's own earlier answer to it.
+ * Nothing moved. The autosense as the SRB allows it. <= DISPATCH_LEVEL.
  */
-static NTSTATUS uasSrbNoAta(PIRP irp, PSCSI_REQUEST_BLOCK srb)
+static NTSTATUS uasSrbNoAta(PIRP irp, PSCSI_REQUEST_BLOCK srb,
+                            BOOLEAN replay)
 {
     UCHAR st;
     ULONG n;
@@ -492,8 +518,10 @@ static NTSTATUS uasSrbNoAta(PIRP irp, PSCSI_REQUEST_BLOCK srb)
     srb->DataTransferLength = 0;
     if (srb->SenseInfoBuffer != NULL && srb->SenseInfoBufferLength != 0 &&
         (srb->SrbFlags & SRB_FLAGS_DISABLE_AUTOSENSE) == 0) {
-        n = UasInvalidCdbSense((PUCHAR)srb->SenseInfoBuffer,
-                               srb->SenseInfoBufferLength);
+        n = replay ? UasInvalidOpcodeSense((PUCHAR)srb->SenseInfoBuffer,
+                                           srb->SenseInfoBufferLength)
+                   : UasInvalidCdbSense((PUCHAR)srb->SenseInfoBuffer,
+                                        srb->SenseInfoBufferLength);
         srb->SenseInfoBufferLength = (UCHAR)n;
         st |= SRB_STATUS_AUTOSENSE_VALID;
     }
@@ -560,7 +588,12 @@ static NTSTATUS uasPdoScsiInside(PUAS_PDO pdo, PUAS_FDO fdo, PIRP irp,
         if (UasNoAtaCdb(srb->Cdb, srb->CdbLength) && uasNoAta(fdo)) {
             UasEngineNoteLocal(fdo, srb->Cdb, XHCI98_FAIL_O_CLASS,
                                srb->DataTransferLength);
-            return uasSrbNoAta(irp, srb);
+            return uasSrbNoAta(irp, srb, FALSE);
+        }
+        if (uasAtaReplay(pdo, fdo, srb->Cdb, srb->CdbLength)) {
+            UasEngineNoteReplay(fdo, srb->Cdb, XHCI98_FAIL_O_CLASS,
+                                srb->DataTransferLength);
+            return uasSrbNoAta(irp, srb, TRUE);
         }
         return UasEngineSubmit(fdo, pdo, irp, srb);
 
@@ -901,14 +934,16 @@ static VOID uasSiocReply(PUCHAR buf, ULONG returnCode, ULONG length);
 /*
  * Issue 26: a pass-through or SMART request for a device whose
  * XhciUasNoAtaPassThrough is set, answered here from the sense a device
- * gives a command it does not know (5/24/00, UasInvalidCdbSense), by the
+ * gives a command it does not know (5/24/00, UasInvalidCdbSense) - or, with
+ * replay (task 49.39, design record 13 section 16.16), from the drive's own
+ * earlier refusal of that operation (5/20/00, UasInvalidOpcodeSense) - by the
  * same writers as an answer that came from it: the SCSI forms CHECK
  * CONDITION with that sense, the ATA forms Error 04h and Status 51h, SMART
  * STATUS_NOT_SUPPORTED (design record 13 section 16.8 and 16.9's shapes for
  * a drive with no SAT). Called before any buffer is locked or allocated:
  * the record is freed and the IRP completed here.
  */
-static NTSTATUS uasPassLocal(PUAS_PCMD pc)
+static NTSTATUS uasPassLocal(PUAS_PCMD pc, BOOLEAN replay)
 {
     UCHAR sense[UAS_INVALID_CDB_SENSE];
     PIRP irp;
@@ -922,7 +957,8 @@ static NTSTATUS uasPassLocal(PUAS_PCMD pc)
 
     irp = pc->Irp;
     buf = (PUCHAR)irp->AssociatedIrp.SystemBuffer;
-    n = UasInvalidCdbSense(sense, sizeof(sense));
+    n = replay ? UasInvalidOpcodeSense(sense, sizeof(sense))
+               : UasInvalidCdbSense(sense, sizeof(sense));
     information = 0;
     if (pc->Form == UAS_PCMD_PT) {
         result = UasPtResult(&pc->Plan, buf, pc->OutLength, UAS_SRB_ERROR,
@@ -998,7 +1034,12 @@ static NTSTATUS uasPassThrough(PUAS_PDO pdo, PIRP irp, ULONG kind,
     if (UasNoAtaCdb(pc->Plan.Cdb, pc->Plan.CdbLength) && uasNoAta(fdo)) {
         UasEngineNoteLocal(fdo, pc->Plan.Cdb, XHCI98_FAIL_O_PROGRAM,
                            pc->Plan.DataLength);
-        return uasPassLocal(pc);
+        return uasPassLocal(pc, FALSE);
+    }
+    if (uasAtaReplay(pdo, fdo, pc->Plan.Cdb, pc->Plan.CdbLength)) {
+        UasEngineNoteReplay(fdo, pc->Plan.Cdb, XHCI98_FAIL_O_PROGRAM,
+                            pc->Plan.DataLength);
+        return uasPassLocal(pc, TRUE);
     }
     data = NULL;
     if (pc->Plan.DataLength != 0 && direct) {
@@ -1122,7 +1163,12 @@ static NTSTATUS uasMiniport(PUAS_PDO pdo, PIRP irp, ULONG inLength,
     if (uasNoAta(fdo)) {
         UasEngineNoteLocal(fdo, pc->Smart.Cdb, XHCI98_FAIL_O_PROGRAM,
                            pc->Smart.DataLength);
-        return uasPassLocal(pc);
+        return uasPassLocal(pc, FALSE);
+    }
+    if (uasAtaReplay(pdo, fdo, pc->Smart.Cdb, 16)) {
+        UasEngineNoteReplay(fdo, pc->Smart.Cdb, XHCI98_FAIL_O_PROGRAM,
+                            pc->Smart.DataLength);
+        return uasPassLocal(pc, TRUE);
     }
     if (pc->Smart.DataLength != 0) {
         pc->Data = (PUCHAR)UasAlloc(pc->Smart.DataLength);

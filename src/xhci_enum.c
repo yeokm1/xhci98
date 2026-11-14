@@ -566,10 +566,28 @@ ULONG XhciEnumResumeKeep(ULONG on, ULONG flags)
     if ((flags & XHCI_RKEEP_F_ISOCH) != 0) {
         return XHCI_RKEEP_WHY_ISOCH;
     }
-    if ((flags & XHCI_RKEEP_F_STORAGE) != 0) {
-        if ((flags & XHCI_RKEEP_F_UAS) == 0) {
+    if ((flags & XHCI_RKEEP_F_STORAGE) != 0 &&
+        (flags & XHCI_RKEEP_F_UAS) == 0) {
+        /* Design record 20 section 4.3.4 (task 49.34): with the switch off
+         * for this sleep, the drop as before, by the same reason. */
+        if ((flags & XHCI_RKEEP_F_BOT_ON) == 0) {
             return XHCI_RKEEP_WHY_BULK_ONLY;
         }
+        if ((flags & XHCI_RKEEP_F_BOT) == 0) {
+            return XHCI_RKEEP_WHY_BOT_SHAPE;
+        }
+        if ((flags & XHCI_RKEEP_F_SERIAL) == 0) {
+            return XHCI_RKEEP_WHY_NO_SERIAL;
+        }
+        if ((flags & XHCI_RKEEP_F_BUSY) != 0) {
+            return XHCI_RKEEP_WHY_BUSY;
+        }
+        if ((flags & XHCI_RKEEP_F_BOT_SYNC) == 0) {
+            return XHCI_RKEEP_WHY_BOT_STATE;
+        }
+        return XHCI_RKEEP_KEEP;
+    }
+    if ((flags & XHCI_RKEEP_F_STORAGE) != 0) {
         if ((flags & XHCI_RKEEP_F_SERIAL) == 0) {
             return XHCI_RKEEP_WHY_NO_SERIAL;
         }
@@ -584,6 +602,11 @@ ULONG XhciEnumResumeKeep(ULONG on, ULONG flags)
         }
     }
     return XHCI_RKEEP_KEEP;
+}
+
+ULONG XhciEnumKeepSerial(ULONG readOk, ULONG recordId, ULONG twin)
+{
+    return (readOk && recordId && !twin) ? 1UL : 0UL;
 }
 
 ULONG XhciEnumLinkKeep(ULONG on, ULONG flags, ULONG recent)

@@ -1,7 +1,7 @@
 @echo off
-rem XHPOLL.CMD - the release matrix's poller on Windows 2000 to 7
+rem XHPOLL.CMD - the release matrix's poller on Windows 2000 to 10
 rem (build-and-test.md, "Faster emulator legs"). XHSETUP.CMD copies it to
-rem C:\XHLEG and starts it at every logon (elevated on Vista and 7). It says
+rem C:\XHLEG and starts it at every logon (elevated on Vista, 7 and 10). It says
 rem BOOT on COM1, then waits for a CD whose root holds XHLEG.CMD and runs it
 rem once, with the CD's drive letter. The host reads COM1; nothing here decides.
 setlocal

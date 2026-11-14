@@ -15,6 +15,9 @@
 # SE's export table of that module first (a run-time lookup, GetProcAddress,
 # needs no row); a new amd64 row needs it in XP x64's. COMCTL32's import
 # library binds InitCommonControls by ordinal, listed as #17.
+# ADVAPI32's RegEnumValueA (task 49.38, the eject's read of Stor98's
+# StorFind values) is in 98 SE's and XP x64's ADVAPI32 and in the
+# installer's rows already.
 #
 # arch  module        function
 
@@ -23,6 +26,7 @@ x86    ADVAPI32.DLL  GetUserNameA
 x86    ADVAPI32.DLL  RegCloseKey
 x86    ADVAPI32.DLL  RegCreateKeyExA
 x86    ADVAPI32.DLL  RegDeleteValueA
+x86    ADVAPI32.DLL  RegEnumValueA
 x86    ADVAPI32.DLL  RegEnumKeyExA
 x86    ADVAPI32.DLL  RegOpenKeyExA
 x86    ADVAPI32.DLL  RegQueryValueExA
@@ -185,6 +189,7 @@ x86    USER32.DLL    GetMessageA
 x86    USER32.DLL    GetSubMenu
 x86    USER32.DLL    GetSysColor
 x86    USER32.DLL    GetSystemMetrics
+x86    USER32.DLL    GetWindowLongA
 x86    USER32.DLL    GetWindowPlacement
 x86    USER32.DLL    GetWindowRect
 x86    USER32.DLL    IntersectRect
@@ -225,6 +230,7 @@ x86    USER32.DLL    SetForegroundWindow
 x86    USER32.DLL    SetMenuDefaultItem
 x86    USER32.DLL    SetRect
 x86    USER32.DLL    SetTimer
+x86    USER32.DLL    SetWindowLongA
 x86    USER32.DLL    SetWindowPos
 x86    USER32.DLL    SetWindowRgn
 x86    USER32.DLL    SetWindowTextA
@@ -241,6 +247,7 @@ amd64  ADVAPI32.DLL  GetUserNameA
 amd64  ADVAPI32.DLL  RegCloseKey
 amd64  ADVAPI32.DLL  RegCreateKeyExA
 amd64  ADVAPI32.DLL  RegDeleteValueA
+amd64  ADVAPI32.DLL  RegEnumValueA
 amd64  ADVAPI32.DLL  RegEnumKeyExA
 amd64  ADVAPI32.DLL  RegOpenKeyExA
 amd64  ADVAPI32.DLL  RegQueryValueExA
@@ -426,6 +433,7 @@ amd64  USER32.DLL    GetMessageA
 amd64  USER32.DLL    GetSubMenu
 amd64  USER32.DLL    GetSysColor
 amd64  USER32.DLL    GetSystemMetrics
+amd64  USER32.DLL    GetWindowLongA
 amd64  USER32.DLL    GetWindowPlacement
 amd64  USER32.DLL    GetWindowRect
 amd64  USER32.DLL    IntersectRect
@@ -466,6 +474,7 @@ amd64  USER32.DLL    SetForegroundWindow
 amd64  USER32.DLL    SetMenuDefaultItem
 amd64  USER32.DLL    SetRect
 amd64  USER32.DLL    SetTimer
+amd64  USER32.DLL    SetWindowLongA
 amd64  USER32.DLL    SetWindowPos
 amd64  USER32.DLL    SetWindowRgn
 amd64  USER32.DLL    SetWindowTextA

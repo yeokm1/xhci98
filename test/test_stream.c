@@ -597,8 +597,76 @@ static void test_ring_pad(void)
              XHCI_STREAM_BAD_PARAM, "one that would wrap 32 bits");
 }
 
+/* Task 49.39 (design record 17 section 4.12.8): a restart inside c1's
+ * repair. */
+static void test_resend_after(void)
+{
+    CHECK_EQ(XhciStreamResendAfter(XHCI_CC_SUCCESS, XHCI_EP_STATE_STOPPED),
+             XHCI_STREAM_RS_AGAIN, "Success: read back again");
+    CHECK_EQ(XhciStreamResendAfter(XHCI_CC_SUCCESS, XHCI_EP_STATE_RUNNING),
+             XHCI_STREAM_RS_AGAIN, "Success: the read-back reads the state");
+    CHECK_EQ(XhciStreamResendAfter(XHCI_CC_CONTEXT_STATE_ERROR,
+                                   XHCI_EP_STATE_RUNNING),
+             XHCI_STREAM_RS_RESTARTED,
+             "refused, the endpoint restarted: stop and place, no cycle");
+    CHECK_EQ(XhciStreamResendAfter(XHCI_CC_CONTEXT_STATE_ERROR,
+                                   XHCI_EP_STATE_STOPPED),
+             XHCI_STREAM_RS_GIVEUP, "refused while Stopped: given up");
+    CHECK_EQ(XhciStreamResendAfter(XHCI_CC_CONTEXT_STATE_ERROR,
+                                   XHCI_EP_STATE_HALTED),
+             XHCI_STREAM_RS_GIVEUP, "refused, Halted: given up");
+    CHECK_EQ(XhciStreamResendAfter(XHCI_CC_CONTEXT_STATE_ERROR,
+                                   XHCI_EP_STATE_ERROR),
+             XHCI_STREAM_RS_GIVEUP, "refused, Error: given up");
+    CHECK_EQ(XhciStreamResendAfter(XHCI_CC_TRB_ERROR, XHCI_EP_STATE_RUNNING),
+             XHCI_STREAM_RS_GIVEUP, "another code: given up");
+    CHECK_EQ(XhciStreamResendAfter(0, XHCI_EP_STATE_RUNNING),
+             XHCI_STREAM_RS_GIVEUP, "no command built: given up");
+    CHECK_EQ(XhciStreamAfterRestop(XHCI_EP_STATE_STOPPED), 1,
+             "stopped again: the stream may be placed");
+    CHECK_EQ(XhciStreamAfterRestop(XHCI_EP_STATE_RUNNING), 0,
+             "the stop did not hold: given up");
+    CHECK_EQ(XhciStreamAfterRestop(XHCI_EP_STATE_HALTED), 0,
+             "Halted after the stop: given up, not placed");
+    CHECK_EQ(XhciStreamAfterRestop(XHCI_EP_STATE_ERROR), 0,
+             "Error after the stop: given up, not placed");
+    CHECK_EQ(XhciStreamMayResend(0, XHCI_EP_STATE_STOPPED), 1,
+             "no TD of the driver's, Stopped: the resend may go");
+    CHECK_EQ(XhciStreamMayResend(1, XHCI_EP_STATE_STOPPED), 0,
+             "a TD queued: a run could move it, given up instead");
+    CHECK_EQ(XhciStreamMayResend(0, XHCI_EP_STATE_RUNNING), 0,
+             "restarted: the Running branch, no resend");
+    CHECK_EQ(XhciStreamMayResend(0, XHCI_EP_STATE_HALTED), 0,
+             "Halted: no resend");
+}
+
+/* Task 49.39 (design record 17 section 4.12.8, c1). */
+static void test_read_back(void)
+{
+    CHECK_EQ(XhciStreamReadBack(0x12345673UL, 0, 0x12345670UL, 1),
+             XHCI_STREAM_RB_EQUAL, "pointer, DCS 1 and SCT 1 as sent");
+    CHECK_EQ(XhciStreamReadBack(0x12345672UL, 0, 0x12345670UL, 0),
+             XHCI_STREAM_RB_EQUAL, "DCS 0 as sent");
+    CHECK_EQ(XhciStreamReadBack(0x12345683UL, 0, 0x12345670UL, 1),
+             XHCI_STREAM_RB_DIFFER, "one TRB further on");
+    CHECK_EQ(XhciStreamReadBack(0x12345663UL, 0, 0x12345670UL, 1),
+             XHCI_STREAM_RB_DIFFER, "one TRB back: the stale position");
+    CHECK_EQ(XhciStreamReadBack(0x12345672UL, 0, 0x12345670UL, 1),
+             XHCI_STREAM_RB_DIFFER, "the DCS flipped");
+    CHECK_EQ(XhciStreamReadBack(0x12345673UL, 1, 0x12345670UL, 1),
+             XHCI_STREAM_RB_DIFFER, "a high word above 4 GiB");
+    CHECK_EQ(XhciStreamReadBack(0x12345671UL, 0, 0x12345670UL, 1),
+             XHCI_STREAM_RB_BAD_SCT, "SCT 0: a secondary ring");
+    CHECK_EQ(XhciStreamReadBack(0x12345675UL, 0, 0x12345670UL, 1),
+             XHCI_STREAM_RB_BAD_SCT, "SCT 2: a secondary array");
+    CHECK_EQ(XhciStreamReadBack(0x00000000UL, 0, 0x12345670UL, 1),
+             XHCI_STREAM_RB_DIFFER, "a zeroed context");
+}
+
 int main(void)
 {
+    test_read_back();
+    test_resend_after();
     test_ring_pad();
     test_hc_entries();
     test_layout_placed();

@@ -9,6 +9,13 @@
  * that fails, a lost interrupt or a storm leaves the activation polling as
  * it did before, with the idle period unchanged (owner, Q4).
  *
+ * THE MESSAGE (sections 4.5.12 and 4.5.14, task 49.27). With
+ * XhciCmRingInterrupt 2 on 2000, XP and XP x64 the same cause is delivered
+ * by a message msi4nt connects on a claimed IRQ (cm_rirqnt.c). Its routine
+ * is this file's, gated by Reach; the connection is kept across a sleep
+ * and re-armed at the next Up, and ended at a stop, a fall back and a
+ * containment. On 98 SE and ME the value is not tried (CmRirqHow).
+ *
  * THE THREE CONTEXTS (section 4.5.3). The service routine (DIRQL, the
  * interrupt object's lock held) reads the status, claims and acknowledges
  * this function's cause, stops a storm by masking the cause itself, and
@@ -65,6 +72,7 @@ typedef struct _CM_RIRQ_SYNC {
 static VOID cmRirqDataOpened(PCM_NHI nhi, ULONG how);
 static ULONG cmRirqDataTry(PCM_NHI nhi);
 static BOOLEAN cmRirqDataShut(PCM_NHI nhi, BOOLEAN lost);
+static VOID cmRirqMsgDown(PCM_NHI nhi, ULONG why, BOOLEAN proven);
 
 static ULONG cmRirqRd(PCM_NHI nhi, ULONG offset)
 {
@@ -207,21 +215,24 @@ static BOOLEAN cmRirqMaskNow(PCM_NHI nhi, BOOLEAN open, PULONG imrOut)
 }
 
 /*
- * The service routine (section 4.5.3). IRQL: DIRQL, the interrupt object's
- * lock held; the line may be shared.
+ * The service routine (section 4.5.3), the line's and the message's
+ * (section 4.5.14, cm_rirqnt.c). IRQL: DIRQL, the interrupt object's lock
+ * held, the line maybe shared; for the message nothing is touched while
+ * Reach is clear.
  */
-static BOOLEAN NTAPI cmRirqIsr(PKINTERRUPT Interrupt, PVOID Context)
+BOOLEAN CmRirqIsrBody(PCM_NHI nhi)
 {
-    PCM_NHI nhi;
     CM_RIRQ_DRV *r;
     ULONG v[CM_RIRQ_MAX_DWORDS];
     ULONG causes;
 
-    UNREFERENCED_PARAMETER(Interrupt);
-
-    nhi = (PCM_NHI)Context;
     r = &nhi->Rirq;
-    if (!r->Connected || nhi->BarVa == NULL || r->Geom.Dwords == 0) {
+    /* Section 4.5.18: the hardware gate first - nothing is read of a
+     * function leaving or out of D0, stopped or gone. */
+    if (!CmRirqIsrAdmits((BOOLEAN)(r->Connected != 0),
+                         (BOOLEAN)(r->Message != 0), (BOOLEAN)(r->Reach != 0),
+                         (ULONG)r->HwGate, (BOOLEAN)(nhi->BarVa != NULL),
+                         r->Geom.Dwords)) {
         return FALSE;
     }
     v[0] = 0;
@@ -285,6 +296,24 @@ static BOOLEAN NTAPI cmRirqIsr(PKINTERRUPT Interrupt, PVOID Context)
     return TRUE;
 }
 
+static BOOLEAN NTAPI cmRirqIsr(PKINTERRUPT Interrupt, PVOID Context)
+{
+    UNREFERENCED_PARAMETER(Interrupt);
+
+    return CmRirqIsrBody((PCM_NHI)Context);
+}
+
+/*
+ * Every synchronize routine below, under the routine's exclusion:
+ * KeSynchronizeExecution on the connection's interrupt object. IRQL:
+ * <= DIRQL, never from the routine.
+ */
+static BOOLEAN cmRirqSync(PCM_NHI nhi, PKSYNCHRONIZE_ROUTINE routine,
+                          PVOID context)
+{
+    return KeSynchronizeExecution(nhi->Rirq.Object, routine, context);
+}
+
 /* The DPC (section 4.5.3). IRQL: DISPATCH_LEVEL. It never touches the
  * interrupt object; the count's decrement is its last access. */
 static VOID NTAPI cmRirqDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
@@ -337,11 +366,19 @@ static BOOLEAN NTAPI cmRirqSyncArm(PVOID Context)
     CmRirqBurstReset(&nhi->Rirq.Burst, nhi->Rirq.DpcSeq);
     nhi->Rirq.StormMasked = 0;
     nhi->Rirq.DataOpen = 0;
+    /* The message's routine reads the function from here (section
+     * 4.5.12): the function in D0, BAR0 mapped, the cause being armed. */
+    nhi->Rirq.Reach = 1;
     nhi->Rirq.Armed = 1;
     s->Proven = cmRirqMaskNow(nhi, TRUE, &s->Imr);
     if (!s->Proven) {
         nhi->Rirq.Armed = 0;
-        (VOID)cmRirqMaskNow(nhi, FALSE, &imr);
+        /* Reach cleared only once the cause is proven masked again
+         * (section 4.5.16): a cause that may be open keeps being
+         * acknowledged rather than answered FALSE on a shared vector. */
+        if (cmRirqMaskNow(nhi, FALSE, &imr)) {
+            nhi->Rirq.Reach = 0;
+        }
         return FALSE;
     }
     /* The data ring's cause is opened by the thread after the self-test
@@ -420,6 +457,8 @@ static BOOLEAN NTAPI cmRirqSyncDisarm(PVOID Context)
         }
         cmRirqStatus(nhi, v, TRUE);
     }
+    /* The causes masked before Reach is cleared (section 4.5.14). */
+    nhi->Rirq.Reach = 0;
     return s->Proven;
 }
 
@@ -457,7 +496,73 @@ static VOID cmRirqSleep1(PCM_NHI nhi)
 VOID CmRirqInit(PCM_NHI nhi)
 {
     CmZero(&nhi->Rirq, sizeof(nhi->Rirq));
+    nhi->Rirq.HwGate = (LONG)(CM_RIRQ_GATE_POWER | CM_RIRQ_GATE_GONE);
     KeInitializeDpc(&nhi->Rirq.Dpc, cmRirqDpc, nhi);
+}
+
+/* ---------------------------------------------------------------------- */
+/* The routine's hardware gate (section 4.5.18)                           */
+/* ---------------------------------------------------------------------- */
+
+VOID CmRirqHwGateCloseLocked(PCM_NHI nhi, ULONG why)
+{
+    nhi->Rirq.HwGate = (LONG)CmRirqGateClose((ULONG)nhi->Rirq.HwGate, why);
+}
+
+VOID CmRirqHwGateClose(PCM_NHI nhi, ULONG why)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&nhi->WorkLock, &irql);
+    CmRirqHwGateCloseLocked(nhi, why);
+    KeReleaseSpinLock(&nhi->WorkLock, irql);
+}
+
+/* Nothing but the exclusion itself: no routine that read the gate open is
+ * still running when it returns. IRQL: DIRQL. */
+static BOOLEAN NTAPI cmRirqSyncFence(PVOID Context)
+{
+    UNREFERENCED_PARAMETER(Context);
+    return TRUE;
+}
+
+/* A closing reason added, then the fence where a connection exists. The
+ * thread alone (it connects and disconnects: the interrupt object stays
+ * while used), never with WorkLock held. PASSIVE_LEVEL. */
+static VOID cmRirqGateShut(PCM_NHI nhi, ULONG why)
+{
+    CM_RIRQ_SYNC s;
+
+    CmRirqHwGateClose(nhi, why);
+    if (!nhi->Rirq.Connected) {
+        return;
+    }
+    CmZero(&s, sizeof(s));
+    s.Nhi = nhi;
+    (VOID)cmRirqSync(nhi, cmRirqSyncFence, &s);
+}
+
+VOID CmRirqHwGateOpen(PCM_NHI nhi)
+{
+    KIRQL irql;
+    LONG was;
+
+    if (((ULONG)nhi->Rirq.HwGate & CM_RIRQ_GATE_POWER) == 0) {
+        return;
+    }
+    KeAcquireSpinLock(&nhi->WorkLock, &irql);
+    was = nhi->Rirq.HwGate;
+    if (CmRirqGateMayOpen((BOOLEAN)(nhi->DevicePower == PowerDeviceD0),
+                          (BOOLEAN)(nhi->BarVa != NULL),
+                          (BOOLEAN)(nhi->Suspended != 0),
+                          (BOOLEAN)(nhi->SystemPower == PowerSystemWorking),
+                          (BOOLEAN)(nhi->Live.Revoked != 0))) {
+        nhi->Rirq.HwGate = (LONG)CmRirqGateOpenPower((ULONG)was);
+    }
+    KeReleaseSpinLock(&nhi->WorkLock, irql);
+    if (nhi->Rirq.HwGate != was) {
+        CmLogNote(nhi, "cm.irq.gate", (ULONG)nhi->Rirq.HwGate);
+    }
 }
 
 VOID CmRirqStart(PCM_NHI nhi, PCM_PARTIAL_RESOURCE_LIST translated)
@@ -467,10 +572,31 @@ VOID CmRirqStart(PCM_NHI nhi, PCM_PARTIAL_RESOURCE_LIST translated)
     ULONG i;
 
     r = &nhi->Rirq;
+    /* Section 4.5.18: nothing connected yet; GONE cleared by a start
+     * alone, POWER unless the function is in D0 with BAR0 mapped. */
+    {
+        KIRQL irql;
+
+        KeAcquireSpinLock(&nhi->WorkLock, &irql);
+        r->HwGate = (LONG)CmRirqGateAtStart(
+            (BOOLEAN)(nhi->DevicePower == PowerDeviceD0),
+            (BOOLEAN)(nhi->BarVa != NULL));
+        KeReleaseSpinLock(&nhi->WorkLock, irql);
+    }
     r->HaveLine = 0;
     r->HaveMessage = 0;
     r->Value = nhi->Values.RingIrq;
+    /* Section 4.5.14: which library serves value 2, if any. */
+    r->Sys = !IoIsWdmVersionAvailable(1, 0x10)
+                 ? CM_RIRQ_SYS_9X
+                 : (IoIsWdmVersionAvailable(6, 0) ? CM_RIRQ_SYS_NT6
+                                                  : CM_RIRQ_SYS_NT5);
+    r->Yield = (r->Sys == CM_RIRQ_SYS_NT5 &&
+                nhi->Values.UsbInterruptMode == 4UL)
+                   ? 1UL
+                   : 0UL;
     r->Failed = 0;
+    r->Why = CM_Q_IRQ_WHY_NONE;
     r->SelfTestOwed = 1;
     r->IrqMode = CM_RIRQ_MODE_POLL;
     r->Intel = 0;
@@ -500,6 +626,28 @@ VOID CmRirqStart(PCM_NHI nhi, PCM_PARTIAL_RESOURCE_LIST translated)
     r->Unretired = 0;
     r->Disconnects = 0;
     r->DpcSlow = 0;
+    /* Section 4.5.12. Every stop ends a message connection, so none is
+     * left from the last activation. */
+    r->Message = 0;
+    r->MsgInfo = NULL;
+    r->ReArmOwed = 0;
+    r->MsgBdf = CM_RIRQ_NO_BDF;
+    r->MsgVector = 0;
+    r->Reach = 0;
+    r->MsgConnects = 0;
+    r->MsgConnectFailures = 0;
+    r->MsgRearms = 0;
+    r->MsgRearmFailures = 0;
+    r->MsgForced = 0;
+    r->MsgHandoffFailures = 0;
+    r->MsgStatus = 0;
+    r->MsgMaskWatch = 0;
+    r->MsgBraked = 0;
+    r->MsgClaimHeld = 0;
+    r->MsgIrq = 0;
+    r->Removal = 0;
+    r->MsgIdSet = 0;
+    r->ProofRead = 0;
     for (i = 0; translated != NULL && i < translated->Count; i++) {
         d = &translated->PartialDescriptors[i];
         if (d->Type != CmResourceTypeInterrupt) {
@@ -527,18 +675,37 @@ VOID CmRirqStart(PCM_NHI nhi, PCM_PARTIAL_RESOURCE_LIST translated)
               (r->HaveLine ? 1UL : 0UL) | (r->HaveMessage ? 2UL : 0UL) |
                   ((ULONG)r->Irql << 8) | (r->Shared ? 0x10000UL : 0UL) |
                   (r->Mode == Latched ? 0x20000UL : 0UL));
+    r->How = CmRirqHow(r->Value, r->Sys, (BOOLEAN)(r->Yield != 0),
+                       (BOOLEAN)(r->HaveLine != 0), FALSE);
+    if (r->Value == CM_RIRQ_VALUE_MESSAGE && r->How != CM_RIRQ_HOW_MESSAGE) {
+        /* Section 4.5.14: 2 runs as 1 on Vista and later, and on 2000 and
+         * XP yielding to a machine-wide mode 4; on 98 SE and ME it is not
+         * tried. */
+        CmLogNote(nhi, r->Yield ? "cm.irq.msg.yield" : "cm.irq.msg.system",
+                  (r->Sys << 8) | r->How);
+    }
+}
+
+/* How this activation tries the interrupt, the latch read now. */
+static ULONG cmRirqHowNow(PCM_NHI nhi)
+{
+    return CmRirqHow(nhi->Rirq.Value, nhi->Rirq.Sys,
+                     (BOOLEAN)(nhi->Rirq.Yield != 0),
+                     (BOOLEAN)(nhi->Rirq.HaveLine != 0),
+                     (BOOLEAN)(nhi->Rirq.Failed != 0));
 }
 
 static BOOLEAN cmRirqWanted(PCM_NHI nhi)
 {
-    return CmRirqWanted(nhi->Rirq.Value,
-                        (BOOLEAN)(nhi->Rirq.HaveLine != 0),
-                        (BOOLEAN)(nhi->Rirq.Failed != 0));
+    return (BOOLEAN)(cmRirqHowNow(nhi) != CM_RIRQ_HOW_NONE);
 }
 
 VOID CmRirqIntent(PCM_NHI nhi)
 {
-    if (nhi->Rirq.Connected && !nhi->Rirq.Retained) {
+    if (nhi->Rirq.Connected && !nhi->Rirq.Retained &&
+        !(nhi->Rirq.Message && nhi->Rirq.ReArmOwed && !nhi->Rirq.Armed)) {
+        /* (A message kept across a sleep, disarmed and masked, waits for
+         * its re-arm at the pass's Up: section 4.5.12.) */
         /* Every ring start masks every cause (TbtRingStartEx): an armed
          * interrupt is taken down first - a full recovery can run and
          * return to polling inside one pass - so the pass's Up re-arms
@@ -602,7 +769,22 @@ static VOID cmRirqIntxRestore(PCM_NHI nhi)
  * where the end asks for it. RX descriptors are posted without IE from
  * here. PASSIVE_LEVEL, the thread.
  */
+static VOID cmRirqDownBody(PCM_NHI nhi, ULONG why);
+
+/* The order down, then section 4.5.18's gate for a D3 (POWER) or a stop
+ * (GONE), whatever the order down's outcome: a connection kept or held
+ * answers "not mine" from here with nothing read. */
 VOID CmRirqDown(PCM_NHI nhi, ULONG why)
+{
+    cmRirqDownBody(nhi, why);
+    if (why == CM_RIRQ_DOWN_D3) {
+        cmRirqGateShut(nhi, CM_RIRQ_GATE_POWER);
+    } else if (why == CM_RIRQ_DOWN_STOP) {
+        cmRirqGateShut(nhi, CM_RIRQ_GATE_GONE);
+    }
+}
+
+static VOID cmRirqDownBody(PCM_NHI nhi, ULONG why)
 {
     CM_RIRQ_DRV *r;
     CM_RIRQ_SYNC s;
@@ -634,7 +816,9 @@ VOID CmRirqDown(PCM_NHI nhi, ULONG why)
     s.Open = FALSE;
     s.Proven = FALSE;
     s.Imr = 0;
-    (VOID)KeSynchronizeExecution(r->Object, cmRirqSyncDisarm, &s);
+    s.Ring = 0;
+    s.How = 0;
+    (VOID)cmRirqSync(nhi, cmRirqSyncDisarm, &s);
     proven = s.Proven;
     /* 2: the DPCs queued before the disarm, drained while the interrupt
      * is still connected; no new one can be queued now. */
@@ -651,9 +835,15 @@ VOID CmRirqDown(PCM_NHI nhi, ULONG why)
     /* 3 and 4: a mask refused (the gate) or not read back. */
     if (!proven && why == CM_RIRQ_DOWN_D3 && cmRirqMayRetire(nhi)) {
         s.Write = TRUE;
-        (VOID)KeSynchronizeExecution(r->Object, cmRirqSyncDisarm, &s);
+        (VOID)cmRirqSync(nhi, cmRirqSyncDisarm, &s);
         proven = s.Proven;
         CmLogNote(nhi, "cm.irq.emergency-mask", proven ? 1UL : 0UL);
+    }
+    if (r->Message) {
+        /* Section 4.5.14: Interrupt Disable suppresses no message; the
+         * library's disconnect is this connection's retirement. */
+        cmRirqMsgDown(nhi, why, proven);
+        return;
     }
     if (!proven && r->Mode == LevelSensitive && cmRirqMayRetire(nhi)) {
         wasOurs = r->IntxOurs;
@@ -685,6 +875,530 @@ VOID CmRirqDown(PCM_NHI nhi, ULONG why)
     r->IrqMode = CM_RIRQ_MODE_POLL;
     if (CmRirqDownFails(why, end)) {
         r->Failed = 1;
+        if (why != CM_RIRQ_DOWN_FALLBACK) {
+            /* Section 4.5.17: an order down that could not prove the
+             * function silent; a fall back's caller said why. */
+            r->Why = CM_Q_IRQ_WHY_TEARDOWN;
+        }
+    }
+}
+
+/* ---------------------------------------------------------------------- */
+/* The message (sections 4.5.12 and 4.5.14, task 49.27)                  */
+/* ---------------------------------------------------------------------- */
+
+/* PCI 3.0 6.8: the MSI and MSI-X capability ids, and the Enable bit of
+ * each one's Message Control word. */
+#define CM_CAP_MSI          0x05UL
+#define CM_CAP_MSIX         0x11UL
+#define CM_MSI_ENABLE       0x0001UL
+#define CM_MSIX_ENABLE      0x8000UL
+
+/*
+ * The handoff check through this driver's own configuration route: the
+ * capability list from 34h, no pointer below 40h, at most 48 entries, an
+ * all-ones read unknown; MSI-X Enable (and, unless `msixOnly`, MSI Enable)
+ * looked at. With `write` (only on a function the library has just
+ * connected for this driver, section 4.5.12 step 5) one found set is
+ * cleared and read back; without it nothing is written, since another
+ * connection could own the function. TRUE when every such Enable reads
+ * clear; *found the Enables found set (1 MSI, 2 MSI-X). PASSIVE_LEVEL,
+ * the thread.
+ */
+static BOOLEAN cmRirqHandoff(PCM_NHI nhi, BOOLEAN msixOnly, BOOLEAN write,
+                             PULONG found)
+{
+    ULONG v;
+    ULONG ptr;
+    ULONG hdr;
+    ULONG bit;
+    ULONG guard;
+
+    *found = 0;
+    v = CmCfgRead32(nhi, CM_PCI_COMMAND);
+    if (v == 0xFFFFFFFFUL) {
+        return FALSE;
+    }
+    if ((v & (0x10UL << 16)) == 0) {
+        return TRUE;                    /* no capability list: no MSI */
+    }
+    ptr = CmCfgRead32(nhi, 0x34);
+    if (ptr == 0xFFFFFFFFUL) {
+        return FALSE;
+    }
+    ptr &= 0xFCUL;
+    for (guard = 0;; guard++) {
+        if (ptr == 0) {
+            return TRUE;
+        }
+        if (ptr < 0x40UL || guard >= 48UL) {
+            return FALSE;
+        }
+        hdr = CmCfgRead32(nhi, ptr);
+        if (hdr == 0xFFFFFFFFUL) {
+            return FALSE;
+        }
+        bit = 0;
+        if ((hdr & 0xFFUL) == CM_CAP_MSI && !msixOnly) {
+            bit = CM_MSI_ENABLE;
+        } else if ((hdr & 0xFFUL) == CM_CAP_MSIX) {
+            bit = CM_MSIX_ENABLE;
+        }
+        if (bit != 0 && ((hdr >> 16) & bit) != 0) {
+            *found |= (bit == CM_MSI_ENABLE) ? 1UL : 2UL;
+            if (!write) {
+                return FALSE;
+            }
+            if (!CmCfgWrite16(nhi, ptr + 2,
+                              (USHORT)(((hdr >> 16) & 0xFFFFUL) & ~bit))) {
+                return FALSE;
+            }
+            hdr = CmCfgRead32(nhi, ptr);
+            if (hdr == 0xFFFFFFFFUL || ((hdr >> 16) & bit) != 0) {
+                return FALSE;
+            }
+        }
+        ptr = (hdr >> 8) & 0xFCUL;
+    }
+}
+
+/* Every Interrupt Mask DW read back 0 (all 3N causes masked, none all
+ * ones): TRUE. IRQL: PASSIVE_LEVEL, the thread. */
+static BOOLEAN cmRirqMasksZero(PCM_NHI nhi, PULONG first)
+{
+    ULONG i;
+    ULONG n;
+    ULONG v;
+
+    *first = 0;
+    n = TBT_HI_IMR_DWORDS(nhi->Ring.Paths);
+    if (nhi->Ring.Paths == 0 || n > CM_RIRQ_MAX_DWORDS) {
+        return FALSE;
+    }
+    for (i = 0; i < n; i++) {
+        v = nhi->Host.Read32(nhi->Host.Context, TBT_HI_IMR + 4UL * i);
+        if (v != 0) {
+            *first = v;
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+/*
+ * "When the library says no" (section 4.5.12): the activation runs polled
+ * with every cause masked, proven by the mask read back; where it does not
+ * read back masked the masks are written once more by the host's contract
+ * (section 4.3) and read again, and the read-back is then repeated once a
+ * pass (MsgMaskWatch). PASSIVE_LEVEL, the thread.
+ */
+static VOID cmRirqMsgSilent(PCM_NHI nhi)
+{
+    CM_RIRQ_DRV *r;
+    ULONG first;
+    ULONG i;
+    ULONG n;
+    BOOLEAN intel;
+
+    r = &nhi->Rirq;
+    if (cmRirqMasksZero(nhi, &first)) {
+        CmLogNote(nhi, "cm.irq.msg.masked", 1);
+        return;
+    }
+    if (cmRirqMayWrite(nhi) && nhi->Ring.Paths != 0) {
+        n = TBT_HI_IMR_DWORDS(nhi->Ring.Paths);
+        intel = (BOOLEAN)(nhi->Hw != NULL &&
+                          (nhi->Hw->Flags & TBT_HW_INTEL_INTERRUPTS) != 0);
+        for (i = 0; i < n && i < CM_RIRQ_MAX_DWORDS; i++) {
+            nhi->Host.Write32(nhi->Host.Context,
+                              (intel ? TBT_HI_IMR : TBT_HI_IMC) + 4UL * i,
+                              intel ? 0UL : 0xFFFFFFFFUL);
+        }
+        if (cmRirqMasksZero(nhi, &first)) {
+            CmLogNote(nhi, "cm.irq.msg.masked", 2);
+            return;
+        }
+    }
+    r->MsgMaskWatch = first | 1UL;
+    CmLogNote(nhi, "cm.irq.msg.unmasked", first);
+}
+
+/* No message for this activation, nothing registered: the latch, then
+ * the handoff check the contract asks of a client that falls back, read
+ * only (the library may not have checked who owns the function), and where
+ * it does not read both Enables clear the masks proven. PASSIVE_LEVEL,
+ * the thread. */
+static VOID cmRirqMsgNone(PCM_NHI nhi, BOOLEAN handoff)
+{
+    CM_RIRQ_DRV *r;
+    ULONG found;
+
+    r = &nhi->Rirq;
+    CmRirqDown(nhi, CM_RIRQ_DOWN_FALLBACK);
+    found = 0;
+    if (handoff && cmRirqHandoff(nhi, FALSE, FALSE, &found)) {
+        if (found != 0) {
+            CmLogNote(nhi, "cm.irq.msg.handoff", found);
+        }
+        return;
+    }
+    if (handoff) {
+        r->MsgHandoffFailures++;
+        CmLogNote(nhi, "cm.irq.msg.handoff", 0x80000000UL | found);
+    }
+    cmRirqMsgSilent(nhi);
+}
+
+/* A claim the library kept (CLAIM_KEPT, from the claim or a release;
+ * section 4.5.14 item 2): the function refused until the restart (the
+ * image is resident since before the claim). */
+static VOID cmRirqMsgKept(PCM_NHI nhi, ULONG status)
+{
+    if (status == CM_MN_CLAIM_KEPT) {
+        nhi->Rirq.Failed = 1;
+        nhi->Rirq.Why = CM_Q_IRQ_WHY_REFUSED;
+        CmLogNote(nhi, CmRirqRefuse(nhi, nhi->Rirq.MsgBdf)
+                           ? "cm.irq.msg.kept"
+                           : "cm.irq.msg.table-full",
+                  nhi->Rirq.MsgBdf);
+    } else if (status != CM_MB_OK) {
+        CmLogNote(nhi, "cm.irq.msg.release", status);
+    }
+}
+
+/* NT's location (section 4.5.14 item 1): the PDO's bus number and
+ * address, the function's identity DW read through its own route and
+ * matched with the start's. One found, or none. */
+static VOID cmRirqNtWhere(PCM_NHI nhi, PULONG found, PULONG at,
+                          PBOOLEAN busKnown, PULONG bus)
+{
+    ULONG b;
+    ULONG address;
+    ULONG bytes;
+    ULONG id;
+
+    *found = 0;
+    *at = CM_RIRQ_NO_BDF;
+    *busKnown = FALSE;
+    *bus = 0;
+    b = 0;
+    address = 0;
+    if (!NT_SUCCESS(IoGetDeviceProperty(nhi->Common.Pdo,
+                                        DevicePropertyBusNumber, sizeof(b),
+                                        &b, &bytes)) ||
+        b > 0xFFUL ||
+        !NT_SUCCESS(IoGetDeviceProperty(nhi->Common.Pdo,
+                                        DevicePropertyAddress,
+                                        sizeof(address), &address, &bytes)) ||
+        (address >> 16) > 0x1FUL || (address & 0xFFFFUL) > 7UL) {
+        return;
+    }
+    id = CmCfgRead32(nhi, 0);
+    if (id != ((nhi->Device << 16) | nhi->Vendor)) {
+        return;
+    }
+    *found = 1;
+    *at = XHCI_TBT_BDF(b, address >> 16, address & 0xFFFFUL);
+    *busKnown = TRUE;
+    *bus = b;
+}
+
+/* The Bus Master bit cleared and read back before an NT quarantine
+ * (msi4nt's contract; hcd_msgnt.c's order), through the narrow
+ * retirement class that passes the gate's recoverable states. The
+ * quarantine is made whatever this proves - the connection must end
+ * before the extension it points at goes - and an unproven clear is
+ * logged as what it is (section 4.5.14 item 4's residual). */
+static VOID cmRirqMsgBusMasterOff(PCM_NHI nhi)
+{
+    BOOLEAN proven;
+
+    proven = CmCfgBusMasterRetire(nhi);
+    CmLogNote(nhi, proven ? "cm.irq.msg.bm" : "cm.irq.msg.bm.unproven",
+              nhi->Live.State);
+}
+
+/* A braked connection (section 4.5.16; msi4nt's MSGIRQ_STATUS_BRAKED): never connected again in this boot - the
+ * function entered in the image's refusal table - then the caller's
+ * disconnect, the causes masked, and the poll. */
+static VOID cmRirqMsgBraked(PCM_NHI nhi, ULONG status)
+{
+    if (status == CM_MB_BRAKED) {
+        nhi->Rirq.MsgBraked++;
+        nhi->Rirq.Why = CM_Q_IRQ_WHY_BRAKED;
+        CmLogNote(nhi, CmRirqRefuse(nhi, nhi->Rirq.MsgBdf)
+                           ? "cm.irq.msg.braked"
+                           : "cm.irq.msg.table-full",
+                  nhi->Rirq.MsgBdf);
+    }
+}
+
+/*
+ * The connection (section 4.5.12 steps 1 to 6). TRUE when connected with
+ * MSI-X Enable proven clear; otherwise the activation is polling, latched,
+ * every connection ended. PASSIVE_LEVEL, the thread, nothing connected.
+ */
+static BOOLEAN cmRirqMsgConnect(PCM_NHI nhi)
+{
+    CM_RIRQ_DRV *r;
+    ULONG st;
+    ULONG found;
+    ULONG at;
+    ULONG bus;
+    ULONG bdf;
+    ULONG data;
+    BOOLEAN busKnown;
+
+    r = &nhi->Rirq;
+    st = CmRirqNtInit(nhi);
+    if (st != CM_MB_OK) {
+        r->MsgStatus = st;
+        r->MsgConnectFailures++;
+        r->Why = CmRirqWhyOfStatus(st);
+        CmLogNote(nhi, "cm.irq.msg.init", st);
+        cmRirqMsgNone(nhi, TRUE);
+        return FALSE;
+    }
+    cmRirqNtWhere(nhi, &found, &at, &busKnown, &bus);
+    bdf = CmRirqMsgWhere(found, at, busKnown, bus);
+    if (bdf == CM_RIRQ_NO_BDF) {
+        r->MsgConnectFailures++;
+        CmLogNote(nhi, "cm.irq.msg.where",
+                  0x80000000UL | (found << 16) | (busKnown ? 0x100UL : 0) |
+                      (bus & 0xFFUL));
+        /* Nothing was asked of the library: the function as the ring start
+         * left it, every cause masked. */
+        r->Why = CM_Q_IRQ_WHY_NO_MSI;
+        CmRirqDown(nhi, CM_RIRQ_DOWN_FALLBACK);
+        return FALSE;
+    }
+    CmLogNote(nhi, "cm.irq.msg.where", bdf);
+    if (CmRirqRefused(nhi, bdf)) {
+        CmLogNote(nhi, "cm.irq.msg.refused", bdf);
+        r->Why = CM_Q_IRQ_WHY_REFUSED;
+        CmRirqDown(nhi, CM_RIRQ_DOWN_FALLBACK);
+        return FALSE;
+    }
+    r->MsgBdf = bdf;
+    /* Section 4.5.14: resident before the first claim, so no path to a
+     * kept claim can unload the image. */
+    CmDriverObject->DriverUnload = NULL;
+    st = CmRirqNtClaim(nhi, &r->MsgIrq);
+    CmLogNote(nhi, "cm.irq.msg.claim", (r->MsgIrq << 16) | st);
+    if (st != CM_MB_OK) {
+        r->MsgStatus = st;
+        r->MsgConnectFailures++;
+        r->Why = CmRirqWhyOfStatus(st);
+        cmRirqMsgKept(nhi, st);
+        cmRirqMsgNone(nhi, TRUE);
+        return FALSE;
+    }
+    r->Reach = 0;
+    r->Message = 1;
+    r->Connected = 1;
+    st = CmRirqNtConnect(nhi);
+    r->MsgStatus = st;
+    if (st == CM_MB_OK) {
+        if (!cmRirqHandoff(nhi, TRUE, TRUE, &found)) {
+            r->MsgHandoffFailures++;
+            CmLogNote(nhi, "cm.irq.msg.handoff", 0x80000000UL | found);
+            r->Why = CM_Q_IRQ_WHY_HANDOFF;
+            CmRirqDown(nhi, CM_RIRQ_DOWN_FALLBACK);
+            cmRirqMsgSilent(nhi);
+            return FALSE;
+        }
+        if (found != 0) {
+            CmLogNote(nhi, "cm.irq.msg.handoff", found);
+        }
+        r->MsgConnects++;
+        r->Connects++;
+        /* Section 4.5.6: resident until the restart once an interrupt was
+         * connected; the refusal table lives as long. */
+        CmDriverObject->DriverUnload = NULL;
+        /* The absence proof's condition (section 4.5.14 item 4): Interrupt
+         * Disable as the library's arm left it. */
+        data = CmCfgRead32(nhi, CM_PCI_COMMAND);
+        r->MsgIdSet = (data != 0xFFFFFFFFUL &&
+                       (data & CM_PCI_COMMAND_INTX_DISABLE) != 0)
+                          ? 1UL
+                          : 0UL;
+        r->MsgVector = CmRirqNtVector(nhi, &data);
+        CmLogNote(nhi, "cm.irq.msg.connected",
+                  (r->MsgVector & 0xFFFFUL) | ((data & 0xFFUL) << 16));
+        return TRUE;
+    }
+    r->MsgConnectFailures++;
+    r->Why = CmRirqWhyOfStatus(st);
+    CmLogNote(nhi, "cm.irq.msg.connect.fail", st);
+    if (r->MsgInfo != NULL) {
+        /* CONFIG_ACCESS with a live block: ended as a fall back ends it
+         * (the rings keep running polled). */
+        CmRirqDown(nhi, CM_RIRQ_DOWN_FALLBACK);
+        r->Failed = 1;
+        cmRirqMsgSilent(nhi);
+        return FALSE;
+    }
+    r->Connected = 0;
+    r->Message = 0;
+    r->Object = NULL;
+    cmRirqMsgKept(nhi, CmRirqNtRelease(nhi));
+    if (st == CM_MB_IN_USE || st == CM_MB_CONFIG_ACCESS) {
+        /* No fallback in the contract's sense: polled, the masks proven. */
+        CmRirqDown(nhi, CM_RIRQ_DOWN_FALLBACK);
+        cmRirqMsgSilent(nhi);
+        return FALSE;
+    }
+    cmRirqMsgNone(nhi, TRUE);
+    return FALSE;
+}
+
+/* A connection kept across a sleep, re-armed before the arm: the re-arm,
+ * once more after 10 ms on a status neither OK nor BRAKED (as mode 4's,
+ * record 15 section 4.5.17), then MSI-X Enable proven clear. Either failing
+ * ends it as at a stop, latches the activation and proves the masks.
+ * PASSIVE_LEVEL, the thread, every cause masked. */
+static BOOLEAN cmRirqMsgReArm(PCM_NHI nhi)
+{
+    CM_RIRQ_DRV *r;
+    ULONG st;
+    ULONG st2;
+    ULONG found;
+
+    r = &nhi->Rirq;
+    st = CmRirqNtReArm(nhi);
+    st2 = st;
+    if (st != CM_MB_OK && st != CM_MB_BRAKED) {
+        nhi->Host.Sleep(nhi->Host.Context, 10);
+        st2 = CmRirqNtReArm(nhi);
+    }
+    r->MsgRearms++;
+    r->MsgStatus = st2;
+    found = 0;
+    CmLogNote(nhi, "cm.irq.msg.rearm", st | (st2 << 8));
+    if (st2 == CM_MB_OK && cmRirqHandoff(nhi, TRUE, TRUE, &found)) {
+        r->ReArmOwed = 0;
+        if (found != 0) {
+            CmLogNote(nhi, "cm.irq.msg.handoff", found);
+        }
+        return TRUE;
+    }
+    r->MsgRearmFailures++;
+    /* Section 4.5.17: the general cause, then the particular one. */
+    r->Why = CM_Q_IRQ_WHY_REARM;
+    if (st2 == CM_MB_OK) {
+        r->MsgHandoffFailures++;
+        CmLogNote(nhi, "cm.irq.msg.handoff", 0x80000000UL | found);
+        r->Why = CM_Q_IRQ_WHY_HANDOFF;
+    }
+    cmRirqMsgBraked(nhi, st2);
+    r->ReArmOwed = 0;
+    CmRirqDown(nhi, CM_RIRQ_DOWN_FALLBACK);
+    r->Failed = 1;
+    /* The disconnect clears MSI Enable alone: the masks proven. */
+    cmRirqMsgSilent(nhi);
+    return FALSE;
+}
+
+/*
+ * The message's end of the order down, after its steps 1 and 2 (section
+ * 4.5.12, "The lifetime"): kept across a sleep; otherwise the library's
+ * disconnect, once more after 10 ms, then the absence proof at a removal
+ * or the quarantine (and the refusal table but at a shutdown), or kept
+ * masked where the function is in D0 and the mask was proven.
+ * PASSIVE_LEVEL, the thread.
+ */
+static VOID cmRirqMsgDown(PCM_NHI nhi, ULONG why, BOOLEAN proven)
+{
+    CM_RIRQ_DRV *r;
+    BOOLEAN shutdown;
+    ULONG st;
+    ULONG st2;
+    ULONG end;
+    ULONG form;
+    BOOLEAN absent;
+    ULONG asked;
+
+    r = &nhi->Rirq;
+    shutdown = (BOOLEAN)(nhi->SystemPower == PowerSystemShutdown);
+    r->IrqMode = CM_RIRQ_MODE_POLL;
+    asked = why;
+    if (why == CM_RIRQ_DOWN_D3 && !shutdown && !proven) {
+        /* Section 4.5.16: a sleep keeps a connection only with its causes
+         * proven masked; otherwise it ends as a fall back does, MSI Enable
+         * cleared by the disconnect being the proof. */
+        why = CM_RIRQ_DOWN_FALLBACK;
+    }
+    if (CmRirqMsgEnd(why, shutdown, FALSE) == CM_RIRQ_MSG_KEEP) {
+        r->ReArmOwed = 1;
+        CmLogNote(nhi, "cm.irq.down", (why << 8) | (CM_RIRQ_MSG_KEEP << 4) |
+                                          (proven ? 1UL : 0UL));
+        return;
+    }
+    form = 0;
+    st = CmRirqNtDisconnect(nhi, 0);
+    st2 = st;
+    if (st == CM_MB_CONFIG_ACCESS) {
+        nhi->Host.Sleep(nhi->Host.Context, 10);
+        st2 = CmRirqNtDisconnect(nhi, 0);
+        form = 1;
+    }
+    absent = FALSE;
+    if (st2 != CM_MB_OK && r->Removal && r->MsgIdSet &&
+        (why == CM_RIRQ_DOWN_STOP || why == CM_RIRQ_DOWN_D3)) {
+        /* Section 4.5.14 item 4: the absence proof at a removal Windows
+         * reported, the route admitting its reads at offset 0 alone. */
+        r->ProofRead = 1;
+        st2 = CmRirqNtDisconnect(nhi, 1);
+        r->ProofRead = 0;
+        absent = (BOOLEAN)(st2 == CM_MB_OK);
+        form = 4;
+    }
+    end = CmRirqMsgEnd(why, shutdown, (BOOLEAN)(st2 == CM_MB_OK));
+    /* A quarantine needs Bus Master off first (section 4.5.14 item 4a). */
+    if (end == CM_RIRQ_MSG_FORCE) {
+        cmRirqMsgBusMasterOff(nhi);
+        (VOID)CmRirqNtDisconnect(nhi, 2);
+        r->MsgForced++;
+        form = 2;
+        if (CmRirqMsgRefuse(end, shutdown) && r->MsgBdf != CM_RIRQ_NO_BDF) {
+            CmLogNote(nhi, CmRirqRefuse(nhi, r->MsgBdf)
+                               ? "cm.irq.msg.quarantine"
+                               : "cm.irq.msg.table-full",
+                      r->MsgBdf);
+        }
+    }
+    if (end != CM_RIRQ_MSG_HOLD) {
+        /* The claim given back (a quarantined one is the library's). */
+        cmRirqMsgKept(nhi, CmRirqNtRelease(nhi));
+    }
+    UNREFERENCED_PARAMETER(absent);
+    r->MsgStatus = st2;
+    if (end == CM_RIRQ_MSG_HOLD) {
+        form = 3;
+        r->Retained = 1;
+        r->Unretired++;
+        r->RetryDue = cmRirqNow(nhi) +
+                      CmNvlinkIdleMs(nhi->Values.Value[CM_VAL_POLL_IDLE_MS]);
+        CmLogNote(nhi, "cm.irq.unretired", why);
+    } else {
+        r->Connected = 0;
+        r->Message = 0;
+        r->Object = NULL;
+        r->Retained = 0;
+        r->ReArmOwed = 0;
+        r->Reach = 0;
+        r->Disconnects++;
+    }
+    CmLogNote(nhi, "cm.irq.msg.disconnect", form | (st << 8) | (st2 << 16));
+    CmLogNote(nhi, "cm.irq.down", (why << 8) | (end << 4) |
+                                      (proven ? 1UL : 0UL));
+    if (CmRirqMsgFails(why, end)) {
+        r->Failed = 1;
+        if (asked != CM_RIRQ_DOWN_FALLBACK) {
+            /* Section 4.5.17: a D3 whose mask was not proven, or an
+             * order down whose disconnect held or was forced. */
+            r->Why = CM_Q_IRQ_WHY_TEARDOWN;
+        }
     }
 }
 
@@ -742,14 +1456,18 @@ static VOID cmRirqUp(PCM_NHI nhi)
     CM_RIRQ_SYNC s;
     NTSTATUS status;
     ULONG v;
+    BOOLEAN message;
 
     r = &nhi->Rirq;
+    /* Section 4.5.14: XhciCmRingInterrupt 2 on 2000, XP and XP x64. */
+    message = (BOOLEAN)(cmRirqHowNow(nhi) == CM_RIRQ_HOW_MESSAGE);
     /* Everything the service routine reads is computed here and published
      * either before the connection or, for a retained interrupt that is
      * live meanwhile, inside the arm's synchronize routine (record 05
      * section 4: the routine must never see a half-written geometry). */
     if (!CmRirqGeometry(nhi->Ring.Paths, &s.Geom)) {
         CmLogNote(nhi, "cm.irq.none", 0x100UL | nhi->Ring.Paths);
+        r->Why = CM_Q_IRQ_WHY_RINGS;
         CmRirqDown(nhi, CM_RIRQ_DOWN_FALLBACK);
         return;
     }
@@ -761,13 +1479,15 @@ static VOID cmRirqUp(PCM_NHI nhi)
         s.Geom.DataDw = r->Geom.DataDw;
         s.Geom.DataBit = r->Geom.DataBit;
     }
-    if (!r->CommandRead) {
+    if (!message && !r->CommandRead) {
         /* Section 4.5.6.1: bit 10 found set is never cleared here, and
-         * INTx cannot be delivered under it: polling. */
+         * INTx cannot be delivered under it: polling. A message is not
+         * suppressed by it (section 4.5.12). */
         v = CmCfgRead32(nhi, CM_PCI_COMMAND);
         if (v == 0xFFFFFFFFUL ||
             (v & CM_PCI_COMMAND_INTX_DISABLE) != 0) {
             CmLogNote(nhi, "cm.irq.intx.found", v);
+            r->Why = CM_Q_IRQ_WHY_INTX;
             CmRirqDown(nhi, CM_RIRQ_DOWN_FALLBACK);
             return;
         }
@@ -783,7 +1503,20 @@ static VOID cmRirqUp(PCM_NHI nhi)
                          ? 1UL
                          : 0UL;
     CmLogNote(nhi, "cm.irq.hi-control", v);
-    if (!r->Connected) {
+    if (!r->Connected && message) {
+        /* Nothing is connected: no routine can read these yet (and the
+         * message's reads nothing until Reach is set by the arm). */
+        r->Geom = s.Geom;
+        r->Intel = s.Intel;
+        r->AutoClearOff = s.AutoClearOff;
+        if (!cmRirqMsgConnect(nhi)) {
+            return;
+        }
+    } else if (r->Connected && r->Message && r->ReArmOwed) {
+        if (!cmRirqMsgReArm(nhi)) {
+            return;
+        }
+    } else if (!r->Connected) {
         /* Nothing is connected: no routine can read these yet. */
         r->Geom = s.Geom;
         r->Intel = s.Intel;
@@ -797,6 +1530,7 @@ static VOID cmRirqUp(PCM_NHI nhi)
             r->Object = NULL;
             r->ConnectFailures++;
             CmLogNote(nhi, "cm.irq.connect.fail", (ULONG)status);
+            r->Why = CM_Q_IRQ_WHY_CONNECT;
             CmRirqDown(nhi, CM_RIRQ_DOWN_FALLBACK);
             return;
         }
@@ -807,7 +1541,9 @@ static VOID cmRirqUp(PCM_NHI nhi)
         CmLogNote(nhi, "cm.irq.connected", r->Vector);
     }
     r->Retained = 0;
-    cmRirqIntxRestore(nhi);
+    if (!r->Message) {
+        cmRirqIntxRestore(nhi);
+    }
     s.Nhi = nhi;
     s.Write = TRUE;
     s.Open = TRUE;
@@ -815,15 +1551,16 @@ static VOID cmRirqUp(PCM_NHI nhi)
     s.Imr = 0;
     s.Ring = 0;
     s.How = 0;
-    if (!cmRirqMayWrite(nhi) ||
-        !KeSynchronizeExecution(r->Object, cmRirqSyncArm, &s)) {
+    if (!cmRirqMayWrite(nhi) || !cmRirqSync(nhi, cmRirqSyncArm, &s)) {
         r->ArmFailures++;
         CmLogNote(nhi, "cm.irq.arm.fail", s.Imr);
+        r->Why = CM_Q_IRQ_WHY_ARM;
         CmRirqDown(nhi, CM_RIRQ_DOWN_FALLBACK);
         return;
     }
     nhi->Ring.RxIe = TRUE;
-    r->IrqMode = CM_RIRQ_MODE_LINE;
+    r->IrqMode = r->Message ? CM_RIRQ_MODE_MESSAGE : CM_RIRQ_MODE_LINE;
+    r->Why = CM_Q_IRQ_WHY_NONE;
     r->MaintOwed = 1;
     CmRirqWatchStart(&r->Watch, (ULONG)r->Claims0, nhi->Ring.Counters.Rx);
     CmLogNote(nhi, "cm.irq.armed", s.Imr);
@@ -832,6 +1569,7 @@ static VOID cmRirqUp(PCM_NHI nhi)
     (VOID)CmThrQueue(nhi, CM_WORK_RING, NULL);
     if (r->SelfTestOwed) {
         if (!cmRirqSelfTest(nhi)) {
+            r->Why = CM_Q_IRQ_WHY_SELFTEST;
             CmRirqDown(nhi, CM_RIRQ_DOWN_FALLBACK);
             return;
         }
@@ -847,6 +1585,8 @@ VOID CmRirqBeforeMaint(PCM_NHI nhi)
 {
     CM_RIRQ_DRV *r;
     ULONG act;
+    ULONG dataRing;
+    BOOLEAN dataWas;
 
     r = &nhi->Rirq;
     if (!r->Armed) {
@@ -860,31 +1600,43 @@ VOID CmRirqBeforeMaint(PCM_NHI nhi)
         r->Storms++;
         r->DataStorms++;
         CmLogNote(nhi, "cm.irq.storm", 0x80000000UL | (ULONG)r->ClaimsData);
+        r->Why = CM_Q_IRQ_WHY_STORM;
         CmRirqDown(nhi, CM_RIRQ_DOWN_FALLBACK);
         return;
     }
     if (act == CM_RIRQ_WATCH_STORM) {
         r->Storms++;
         CmLogNote(nhi, "cm.irq.storm", (ULONG)r->Claims0);
+        r->Why = CM_Q_IRQ_WHY_STORM;
         CmRirqDown(nhi, CM_RIRQ_DOWN_FALLBACK);
         return;
     }
     if (act == CM_RIRQ_WATCH_SELFTEST) {
         r->Suspects++;
         CmLogNote(nhi, "cm.irq.suspect", (ULONG)r->Claims);
+        /* Whether the data cause was open before the test's shut, which
+         * clears DataOpen: a lost interrupt latches it too (record 35
+         * section 5.5), and CmRirqDown's note no longer sees it. */
+        dataWas = (BOOLEAN)(r->DataOpen != 0);
+        dataRing = r->Geom.DataRing;
         /* The data cause masked for the test, so only ring 0's own
          * interrupt can pass it, then opened again (record 35 5.5). */
         if (r->DataOpen) {
             CmRirqWatchDataStart(&r->Watch, FALSE, 0, 0);
             if (!cmRirqDataShut(nhi, FALSE)) {
                 CmLogNote(nhi, "cm.net.irq.unmasked", r->Geom.DataRing);
+                r->Why = CM_Q_IRQ_WHY_ARM;
                 CmRirqDown(nhi, CM_RIRQ_DOWN_FALLBACK);
                 return;
             }
         }
         if (!cmRirqSelfTest(nhi)) {
+            r->Why = CM_Q_IRQ_WHY_LOST;
             r->Lost++;
             CmLogNote(nhi, "cm.irq.lost", r->Lost);
+            if (dataWas) {
+                CmLogNote(nhi, "cm.net.irq.latched", dataRing);
+            }
             CmRirqDown(nhi, CM_RIRQ_DOWN_FALLBACK);
             return;
         }
@@ -934,12 +1686,28 @@ VOID CmRirqWake(PCM_NHI nhi)
 VOID CmRirqService(PCM_NHI nhi, BOOLEAN polling, ULONG periodMs)
 {
     CM_RIRQ_DRV *r;
+    ULONG first;
 
     r = &nhi->Rirq;
+    /* Section 4.5.18: the gate opened again once the function is in D0
+     * with BAR0 mapped in a working system. */
+    CmRirqHwGateOpen(nhi);
+    if (r->MsgMaskWatch && !r->Connected && polling) {
+        /* Section 4.5.12, "When the library says no": the masks read back
+         * once a pass, logged when the reading changes. */
+        if (cmRirqMasksZero(nhi, &first)) {
+            r->MsgMaskWatch = 0;
+            CmLogNote(nhi, "cm.irq.msg.masked", 3);
+        } else if ((first | 1UL) != r->MsgMaskWatch) {
+            r->MsgMaskWatch = first | 1UL;
+            CmLogNote(nhi, "cm.irq.msg.unmasked", first);
+        }
+    }
     if (r->Connected && r->StormMasked) {
         r->Storms++;
         CmLogNote(nhi, "cm.irq.storm", (ULONG)r->Claims);
         r->StormMasked = 0;
+        r->Why = CM_Q_IRQ_WHY_STORM;
         CmRirqDown(nhi, CM_RIRQ_DOWN_FALLBACK);
         return;
     }
@@ -964,13 +1732,29 @@ VOID CmRirqService(PCM_NHI nhi, BOOLEAN polling, ULONG periodMs)
         return;
     }
     if (!cmRirqWanted(nhi)) {
-        if (r->Value == CM_RIRQ_VALUE_LINE && !r->Failed && !r->HaveLine) {
+        if (r->Value != CM_RIRQ_VALUE_OFF && !r->Failed &&
+            r->How == CM_RIRQ_HOW_NONE && !r->HaveLine) {
             r->Failed = 1;
             CmLogNote(nhi, "cm.irq.none", r->HaveMessage);
         }
         return;
     }
     cmRirqUp(nhi);
+}
+
+/* CM_Q_RM_IRQ's word (section 4.5.17), at each query build on the
+ * thread; each field one aligned word. */
+ULONG CmRirqQueryWord(PCM_NHI nhi)
+{
+    CM_RIRQ_DRV *r;
+    BOOLEAN nt;
+
+    r = &nhi->Rirq;
+    nt = (BOOLEAN)(r->Sys == CM_RIRQ_SYS_NT5);
+    return CmRirqShowWord(r->Value, (BOOLEAN)(nhi->Values.RingIrqRefused != 0),
+                          r->Sys, (BOOLEAN)(r->Yield != 0),
+                          (BOOLEAN)(r->HaveLine != 0), r->IrqMode, r->Why,
+                          nt ? r->MsgIrq : r->MsgVector, nt);
 }
 
 VOID CmRirqLogCounters(PCM_NHI nhi)
@@ -1007,6 +1791,19 @@ VOID CmRirqLogCounters(PCM_NHI nhi)
     CmLogNote(nhi, "cm.net.irq.opens", r->DataOpens);
     CmLogNote(nhi, "cm.net.irq.unproven.n", r->DataUnproven);
     CmLogNote(nhi, "cm.net.irq.storms", r->DataStorms);
+    if (r->Value == CM_RIRQ_VALUE_MESSAGE) {
+        /* Section 4.5.12. */
+        CmLogNote(nhi, "cm.irq.msg.connects", r->MsgConnects);
+        CmLogNote(nhi, "cm.irq.msg.connect-failures", r->MsgConnectFailures);
+        CmLogNote(nhi, "cm.irq.msg.rearms", r->MsgRearms);
+        CmLogNote(nhi, "cm.irq.msg.rearm-failures", r->MsgRearmFailures);
+        CmLogNote(nhi, "cm.irq.msg.forced", r->MsgForced);
+        CmLogNote(nhi, "cm.irq.msg.handoff-failures", r->MsgHandoffFailures);
+        CmLogNote(nhi, "cm.irq.msg.status", r->MsgStatus);
+        CmLogNote(nhi, "cm.irq.msg.vector", r->MsgVector);
+        CmLogNote(nhi, "cm.irq.msg.irq", r->MsgIrq);
+        CmLogNote(nhi, "cm.irq.msg.braked-count", r->MsgBraked);
+    }
 }
 
 /* ---------------------------------------------------------------------- */
@@ -1055,13 +1852,14 @@ static ULONG cmRirqDataTry(PCM_NHI nhi)
     s.Imr = 0;
     s.Ring = r->DataWant;
     s.How = CM_RIRQ_DATA_POLL;
-    (VOID)KeSynchronizeExecution(r->Object, cmRirqSyncDataOpen, &s);
+    (VOID)cmRirqSync(nhi, cmRirqSyncDataOpen, &s);
     if (s.How == CM_RIRQ_DATA_POLL) {
         return CM_RIRQ_DATA_POLL;
     }
     cmRirqDataOpened(nhi, s.How);
     if (s.How == CM_RIRQ_DATA_LIVE) {
         CmLogNote(nhi, "cm.net.irq.unmasked", s.Ring);
+        r->Why = CM_Q_IRQ_WHY_ARM;
         CmRirqDown(nhi, CM_RIRQ_DOWN_FALLBACK);
         return CM_RIRQ_DATA_UNPROVEN;
     }
@@ -1087,7 +1885,7 @@ static BOOLEAN cmRirqDataShut(PCM_NHI nhi, BOOLEAN lost)
     s.Imr = 0;
     s.Ring = 0;
     s.How = 0;
-    return KeSynchronizeExecution(r->Object, cmRirqSyncDataClose, &s);
+    return cmRirqSync(nhi, cmRirqSyncDataClose, &s);
 }
 
 ULONG CmRirqDataOpen(PCM_NHI nhi, ULONG ring, BOOLEAN lost)
@@ -1108,6 +1906,8 @@ BOOLEAN CmRirqDataClose(PCM_NHI nhi, BOOLEAN lost)
     CmRirqWatchDataStart(&r->Watch, FALSE, 0, 0);
     if (!cmRirqDataShut(nhi, lost)) {
         CmLogNote(nhi, "cm.net.irq.unmasked", r->Geom.DataRing);
+        /* Section 4.5.17: the caller's fall back (cm_net.c) says no more. */
+        r->Why = CM_Q_IRQ_WHY_ARM;
         return FALSE;
     }
     return TRUE;
@@ -1121,7 +1921,7 @@ ULONG CmRirqDataState(PCM_NHI nhi)
     if (r->DataOpen) {
         return 1;
     }
-    if (r->DataWant != 0 && r->Value == CM_RIRQ_VALUE_LINE && r->Failed) {
+    if (r->DataWant != 0 && r->Value != CM_RIRQ_VALUE_OFF && r->Failed) {
         return 2;
     }
     return 0;

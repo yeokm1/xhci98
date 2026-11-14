@@ -672,6 +672,757 @@ static void test_release(void)
              "any nonzero mark counts");
 }
 
+/* ---- the settle wait before a resume is published (record 22 11.1.14) - */
+
+static void test_settle(void)
+{
+    ULONG start;
+    ULONG now;
+
+    CHECK(CmPortsSettleAgain(0, 1, 0, CM_PORTS_SETTLE_MS),
+          "the first reading, the function not back: read again");
+    CHECK(!CmPortsSettleAgain(1, 1, 0, CM_PORTS_SETTLE_MS),
+          "the function back at the first reading: no wait");
+    CHECK(CmPortsSettleAgain(0, 1, 1700, CM_PORTS_SETTLE_MS),
+          "the emulator's late endpoint (1.7 s): still read");
+    CHECK(!CmPortsSettleAgain(1, 1, 1750, CM_PORTS_SETTLE_MS),
+          "back at 1.75 s: the wait ends");
+    CHECK(CmPortsSettleAgain(0, 1, CM_PORTS_SETTLE_MS - 1, CM_PORTS_SETTLE_MS),
+          "1 ms before the bound: read again");
+    CHECK(!CmPortsSettleAgain(0, 1, CM_PORTS_SETTLE_MS, CM_PORTS_SETTLE_MS),
+          "at the bound: the release follows, the function not back");
+    CHECK(!CmPortsSettleAgain(0, 1, 0xFFFFFFF0UL, CM_PORTS_SETTLE_MS),
+          "long past the bound: no further reading");
+    CHECK(CmPortsSettleAgain(1, 2, 300, CM_PORTS_SETTLE_MS),
+          "one member of two back: the other is still waited for");
+    CHECK(!CmPortsSettleAgain(2, 2, 300, CM_PORTS_SETTLE_MS),
+          "both back: the wait ends");
+    CHECK(!CmPortsSettleAgain(0, 0, 0, CM_PORTS_SETTLE_MS),
+          "no member waited for: no reading");
+    start = 0xFFFFFF00UL;
+    now = start + 1700UL;
+    CHECK(CmPortsSettleAgain(0, 1, now - start, CM_PORTS_SETTLE_MS),
+          "the clock wrapped during the wait: 1.7 s, still read");
+    now = start + CM_PORTS_SETTLE_MS;
+    CHECK(!CmPortsSettleAgain(0, 1, now - start, CM_PORTS_SETTLE_MS),
+          "the clock wrapped: the bound still ends the wait");
+    CHECK_EQ(CM_PORTS_SETTLE_MS, 5000, "the bound is 5 s");
+
+    CHECK_EQ(CmPortsDeferredExpose(0, 1, 1, 0), CM_PORTS_DX_EXPOSE,
+             "a successful resume's deferred release: exposed first");
+    CHECK_EQ(CmPortsDeferredExpose(0, 1, 1, 1), CM_PORTS_DX_OWE,
+             "a loss and a recovery while the gate stood, the barrier up: owed");
+    CHECK_EQ(CmPortsDeferredExpose(1, 1, 1, 0), CM_PORTS_DX_NONE,
+             "a failed resume's release: no exposure, as before");
+    CHECK_EQ(CmPortsDeferredExpose(1, 1, 1, 1), CM_PORTS_DX_NONE,
+             "failed and barred: nothing owed by this release");
+    CHECK_EQ(CmPortsDeferredExpose(0, 1, 0, 0), CM_PORTS_DX_NONE,
+             "the host interface not there: nothing");
+    CHECK_EQ(CmPortsDeferredExpose(0, 1, 0, 1), CM_PORTS_DX_NONE,
+             "no transport, barred: nothing");
+    CHECK_EQ(CmPortsDeferredExpose(0, 0, 1, 0), CM_PORTS_DX_NONE,
+             "the CONFIGMG route: unchanged");
+    CHECK_EQ(CmPortsDeferredExpose(0, 0, 1, 1), CM_PORTS_DX_NONE,
+             "the CONFIGMG route, barred: unchanged");
+}
+
+/* ---- the header put back from the suspend's copy (record 21 6.1.4) ---- */
+
+static void test_hdr_restore(void)
+{
+    ULONG hdr[CM_PORTS_HDR_DWORDS];
+    ULONG k;
+    ULONG seen;
+
+    /* The S.1 bridge (QEMU's 1b36:0001 at 00:05.0) as read at a suspend. */
+    for (k = 0; k < CM_PORTS_HDR_DWORDS; k++) {
+        hdr[k] = 0;
+    }
+    hdr[0x00 / 4] = 0x00011B36UL;
+    hdr[0x04 / 4] = 0x02B00107UL;
+    hdr[0x0C / 4] = 0x00010000UL;
+    hdr[0x10 / 4] = 0xFEBF1000UL;
+    hdr[0x18 / 4] = 0x00010100UL;
+    hdr[0x1C / 4] = 0x2280C0C0UL;
+    hdr[0x20 / 4] = 0xFE80FE80UL;
+    hdr[0x24 / 4] = 0xFFF1FFF1UL;
+    hdr[0x3C / 4] = 0x0003010AUL;
+    CHECK(CmPortsHdrCopyValid(hdr, CM_PORTS_HDR_DWORDS),
+          "the bridge read whole at the suspend: a copy");
+    CHECK(!CmPortsHdrCopyValid(hdr, CM_PORTS_HDR_DWORDS - 1),
+          "one dword did not read: no copy");
+    CHECK(!CmPortsHdrCopyValid(NULL, CM_PORTS_HDR_DWORDS), "no buffer: no copy");
+    hdr[0x3C / 4] = 0x0043010AUL;
+    CHECK(!CmPortsHdrCopyValid(hdr, CM_PORTS_HDR_DWORDS),
+          "Secondary Bus Reset set at the suspend: no copy");
+    hdr[0x3C / 4] = 0x0003010AUL;
+    hdr[0x0C / 4] = 0x00000000UL;
+    CHECK(!CmPortsHdrCopyValid(hdr, CM_PORTS_HDR_DWORDS),
+          "header type 0 (not a bridge): no copy");
+    hdr[0x0C / 4] = 0x00810000UL;
+    CHECK(CmPortsHdrCopyValid(hdr, CM_PORTS_HDR_DWORDS),
+          "header type 1 with the multi-function bit: a copy");
+    hdr[0x18 / 4] = 0x00000000UL;
+    CHECK(!CmPortsHdrCopyValid(hdr, CM_PORTS_HDR_DWORDS),
+          "no secondary bus at the suspend: no copy");
+    hdr[0x18 / 4] = 0x00020202UL;
+    CHECK(!CmPortsHdrCopyValid(hdr, CM_PORTS_HDR_DWORDS),
+          "secondary equal to the primary: no copy");
+    hdr[0x18 / 4] = 0x00010200UL;
+    CHECK(!CmPortsHdrCopyValid(hdr, CM_PORTS_HDR_DWORDS),
+          "subordinate below the secondary: no copy");
+    hdr[0x18 / 4] = 0x00010100UL;
+    hdr[0x00 / 4] = 0xFFFFFFFFUL;
+    CHECK(!CmPortsHdrCopyValid(hdr, CM_PORTS_HDR_DWORDS), "all ones: no copy");
+    hdr[0x00 / 4] = 0x00010000UL;
+    CHECK(!CmPortsHdrCopyValid(hdr, CM_PORTS_HDR_DWORDS), "vendor 0000h: no copy");
+    hdr[0x00 / 4] = 0x0001FFFFUL;
+    CHECK(!CmPortsHdrCopyValid(hdr, CM_PORTS_HDR_DWORDS), "vendor FFFFh: no copy");
+    hdr[0x00 / 4] = 0x00010001UL;
+    CHECK(!CmPortsHdrCopyValid(hdr, CM_PORTS_HDR_DWORDS),
+          "vendor 0001h (retry status): no copy");
+    hdr[0x00 / 4] = 0x00011B36UL;
+
+    CHECK(CmPortsHdrEligible(0x00100000UL, 0x00000000UL),
+          "the S.1 bridge after the wake (all reset): eligible");
+    CHECK(!CmPortsHdrEligible(0x00100002UL, 0x00000000UL),
+          "memory decode already enabled (Windows at work): nothing written");
+    CHECK(!CmPortsHdrEligible(0x00100004UL, 0x00000000UL),
+          "bus master already enabled: nothing written");
+    CHECK(!CmPortsHdrEligible(0x00100001UL, 0x00000000UL),
+          "I/O decode already enabled: nothing written");
+    CHECK(!CmPortsHdrEligible(0x00100000UL, 0x00010000UL),
+          "a subordinate bus already set: nothing written");
+    CHECK(CmPortsHdrEligible(0x00100000UL, 0x00000000UL | 0x40000000UL),
+          "the secondary latency timer alone (31:24) does not count");
+    CHECK(!CmPortsHdrEligible(0xFFFFFFFFUL, 0x00000000UL), "all ones: no");
+    CHECK(!CmPortsHdrEligible(0x00100000UL, 0xFFFFFFFFUL), "all ones: no");
+
+    CHECK(!CmPortsRwRestoreDue(CM_PORTS_RW_WAIT, 0, 0),
+          "at the resume: Windows first");
+    CHECK(!CmPortsRwRestoreDue(CM_PORTS_RW_WAIT, 0, CM_PORTS_RW_GRACE_MS - 1),
+          "1 ms before the grace ends: nothing written");
+    CHECK(CmPortsRwRestoreDue(CM_PORTS_RW_WAIT, 0, CM_PORTS_RW_GRACE_MS),
+          "the grace over, still reset: written back");
+    CHECK(!CmPortsRwRestoreDue(CM_PORTS_RW_WAIT, 1, CM_PORTS_RW_GRACE_MS + 400),
+          "once per resume");
+    CHECK(!CmPortsRwRestoreDue(CM_PORTS_RW_RESTORED, 0, CM_PORTS_RW_GRACE_MS),
+          "restored by Windows: nothing written");
+    CHECK(!CmPortsRwRestoreDue(CM_PORTS_RW_UNREAD, 0, CM_PORTS_RW_GRACE_MS),
+          "unread: nothing written");
+    CHECK(!CmPortsRwRestoreDue(CM_PORTS_RW_TIMEOUT, 0, CM_PORTS_RW_BOUND_MS),
+          "past the bound: nothing written");
+    CHECK_EQ(CM_PORTS_RW_GRACE_MS, 2000, "the grace is 2 s");
+    CHECK(CM_PORTS_RW_GRACE_MS < CM_PORTS_RW_BOUND_MS, "inside the 20 s bound");
+
+    CHECK_EQ(CM_PORTS_HDR_ORDER[0], 0x18, "the bus numbers first");
+    seen = 0;
+    for (k = 0; k < CM_PORTS_HDR_WRITES; k++) {
+        CHECK((CM_PORTS_HDR_ORDER[k] & 3) == 0 && CM_PORTS_HDR_ORDER[k] <= 0x3C,
+              "each write a dword of the type 1 header");
+        CHECK(CM_PORTS_HDR_ORDER[k] != 0x00 && CM_PORTS_HDR_ORDER[k] != 0x04 &&
+                  CM_PORTS_HDR_ORDER[k] != 0x08 && CM_PORTS_HDR_ORDER[k] != 0x34 &&
+                  CM_PORTS_HDR_ORDER[k] != 0x38,
+              "never the id, the command (it is last, apart), class, capability pointer or ROM");
+        seen |= 1UL << (CM_PORTS_HDR_ORDER[k] / 4);
+    }
+    CHECK_EQ(seen, (1UL << 3) | (1UL << 4) | (1UL << 5) | (1UL << 6) |
+                       (1UL << 7) | (1UL << 8) | (1UL << 9) | (1UL << 10) |
+                       (1UL << 11) | (1UL << 12) | (1UL << 15),
+             "each of 0Ch, 10h to 30h and 3Ch once");
+    CHECK_EQ(CmPortsHdrRestoreValue(0x04, 0x02B00107UL, 0x02B00000UL),
+             0x00000107UL, "command: the status half written as zero");
+    CHECK_EQ(CmPortsHdrRestoreValue(0x1C, 0x2280C0C0UL, 0x22800000UL),
+             0x0000C0C0UL, "I/O base and limit: the secondary status as zero");
+    CHECK_EQ(CmPortsHdrRestoreValue(0x0C, 0x00010010UL, 0x40810000UL),
+             0x00810010UL, "cache line and latency from the copy, type as now, BIST Start zero");
+    CHECK_EQ(CmPortsHdrRestoreValue(0x18, 0x00010100UL, 0), 0x00010100UL,
+             "bus numbers as copied");
+    CHECK_EQ(CmPortsHdrRestoreValue(0x20, 0xFE80FE80UL, 0), 0xFE80FE80UL,
+             "the memory window as copied");
+    CHECK_EQ(CmPortsHdrRestoreValue(0x10, 0xFEBF1000UL, 0), 0xFEBF1000UL,
+             "the bridge's own BAR as copied");
+    CHECK_EQ(CmPortsHdrRestoreValue(0x3C, 0x0403010AUL, 0x00000100UL),
+             0x0003010AUL, "bridge control as copied, Discard Timer Status zero");
+
+    CHECK(CmPortsHdrVerify(0x18, 0x00010100UL, 0x40010100UL),
+          "bus numbers back (the latency timer not judged)");
+    CHECK(!CmPortsHdrVerify(0x18, 0x00010100UL, 0x00000000UL),
+          "bus numbers still 0: failed");
+    CHECK(CmPortsHdrVerify(0x1C, 0x2280C0C0UL, 0x0280C0C0UL),
+          "I/O window back (the status half not judged)");
+    CHECK(!CmPortsHdrVerify(0x20, 0xFE80FE80UL, 0x00000000UL),
+          "memory window not taken: failed");
+    CHECK(CmPortsHdrVerify(0x04, 0x02B00107UL, 0x00100007UL),
+          "command's enables back");
+    CHECK(!CmPortsHdrVerify(0x04, 0x02B00107UL, 0x00100005UL),
+          "memory decode not taken: failed");
+    CHECK(CmPortsHdrVerify(0x0C, 0x00010010UL, 0x00010000UL),
+          "0Ch not judged (a read-only cache line size)");
+    CHECK(CmPortsHdrVerify(0x3C, 0x0003010AUL, 0x00000000UL),
+          "3Ch not judged");
+}
+
+static void test_ep_restore(void)
+{
+    ULONG bars[6];
+    ULONG k;
+
+    CHECK(CmPortsEpCopyValid(0x00101B36UL, 0x00000000UL),
+          "the emulator's NVMe (1b36:0010), header type 0: a copy");
+    CHECK(CmPortsEpCopyValid(0x24641B21UL, 0x00800000UL),
+          "type 0 with the multi-function bit: a copy");
+    CHECK(!CmPortsEpCopyValid(0x00011B36UL, 0x00010000UL),
+          "a bridge (type 1): not an endpoint copy");
+    CHECK(!CmPortsEpCopyValid(0xFFFFFFFFUL, 0), "nothing answering: no copy");
+    CHECK(!CmPortsEpCopyValid(0x00100001UL, 0), "retry status: no copy");
+    CHECK(!CmPortsEpCopyValid(0x00100000UL, 0), "vendor 0000h: no copy");
+    CHECK_EQ(CM_PORTS_EP_OFFSET[0], 0x00, "the id first");
+    CHECK_EQ(CM_PORTS_EP_OFFSET[1], 0x04, "the command");
+    CHECK_EQ(CM_PORTS_EP_OFFSET[2], 0x0C, "the header type dword");
+    for (k = 0; k < 6; k++) {
+        CHECK_EQ(CM_PORTS_EP_OFFSET[3 + k], 0x10 + k * 4, "the six BARs in order");
+    }
+    CHECK_EQ(CM_PORTS_EP_OFFSET[CM_PORTS_EP_DWORDS - 1], 0x3C, "the interrupt line last");
+
+    for (k = 0; k < 6; k++) {
+        bars[k] = 0;
+    }
+    bars[0] = 0x00000004UL;
+    CHECK(CmPortsEpReset(0x00100000UL, bars),
+          "the NVMe after the wake: a 64-bit BAR type, no address, no decode: from reset");
+    CHECK(!CmPortsEpReset(0x00100002UL, bars), "memory decode on: not from reset");
+    bars[0] = 0xFE800004UL;
+    CHECK(!CmPortsEpReset(0x00100000UL, bars), "a BAR address set: not from reset");
+    bars[0] = 0x00000004UL;
+    bars[5] = 0x0000C001UL;
+    CHECK(!CmPortsEpReset(0x00100000UL, bars), "an I/O BAR address set: not from reset");
+    bars[5] = 0x00000001UL;
+    CHECK(CmPortsEpReset(0x00100000UL, bars), "an I/O BAR type with no address: from reset");
+    bars[5] = 0xFFFFFFFFUL;
+    CHECK(!CmPortsEpReset(0x00100000UL, bars), "a BAR reading all ones: no");
+    bars[5] = 0;
+    CHECK(!CmPortsEpReset(0xFFFFFFFFUL, bars), "the command reading all ones: no");
+    CHECK(!CmPortsEpReset(0x00100000UL, NULL), "no BARs: no");
+    for (k = 0; k < 6; k++) {
+        bars[k] = 0;
+    }
+    bars[0] = 0x00000004UL;
+    bars[1] = 0x00000001UL;
+    CHECK(!CmPortsEpReset(0x00100000UL, bars),
+          "a 64-bit BAR assigned at 4 GB (upper half 1): not from reset");
+    bars[1] = 0x00000004UL;
+    CHECK(!CmPortsEpReset(0x00100000UL, bars),
+          "an upper half of 4 is address, not a BAR type: not from reset");
+    bars[1] = 0;
+    CHECK(CmPortsEpReset(0x00100000UL, bars), "upper half 0: from reset");
+    bars[5] = 0x00000004UL;
+    CHECK(!CmPortsEpReset(0x00100000UL, bars),
+          "a 64-bit BAR in the last slot (no upper half): no");
+
+    {
+        ULONG snap[CM_PORTS_EP_DWORDS];
+
+        for (k = 0; k < CM_PORTS_EP_DWORDS; k++) {
+            snap[k] = 0;
+        }
+        snap[0] = 0x00101B36UL;
+        snap[1] = 0x00100107UL;
+        snap[3] = 0xFE800004UL;
+        snap[9] = 0x0000010AUL;
+        CHECK(CmPortsEpSnapValid(snap, 0x00101B36UL), "the NVMe at the suspend: a copy");
+        CHECK(!CmPortsEpSnapValid(snap, 0xFFFFFFFFUL), "gone before the id was read again: no copy");
+        CHECK(!CmPortsEpSnapValid(snap, 0x00111B36UL), "another id after it: no copy");
+        snap[3] = 0xFFFFFFFFUL;
+        CHECK(!CmPortsEpSnapValid(snap, 0x00101B36UL), "a BAR reading all ones: no copy");
+        snap[3] = 0xFE800004UL;
+        snap[1] = 0xFFFFFFFFUL;
+        CHECK(!CmPortsEpSnapValid(snap, 0x00101B36UL), "the command all ones: no copy");
+        snap[1] = 0x00100107UL;
+        snap[9] = 0xFFFFFFFFUL;
+        CHECK(!CmPortsEpSnapValid(snap, 0x00101B36UL), "3Ch all ones: no copy");
+        snap[9] = 0x0000010AUL;
+        snap[2] = 0x00010000UL;
+        CHECK(!CmPortsEpSnapValid(snap, 0x00101B36UL), "a type 1 header: no copy");
+        CHECK(!CmPortsEpSnapValid(NULL, 0x00101B36UL), "no buffer: no copy");
+    }
+    CHECK(CmPortsEpVerify(0xFE800004UL, 0xFE800004UL), "the BAR back");
+    CHECK(CmPortsEpVerify(0xFE80000CUL, 0xFE800004UL),
+          "the type bits not judged (prefetchable read differently)");
+    CHECK(!CmPortsEpVerify(0xFE800004UL, 0x00000004UL), "the address not taken");
+    CHECK(CmPortsEpVerify(0x0000C001UL, 0x0000C001UL), "an I/O BAR back");
+    CHECK(!CmPortsEpVerify(0x0000C001UL, 0x00000001UL), "an I/O BAR not taken");
+    CHECK(!CmPortsEpVerify(0xFFFFFFFFUL, 0xFFFFFFFFUL), "all ones read back: not taken");
+}
+
+/* ---- the resume's wait for Windows' restore (record 21 section 6.1.3) - */
+
+static void test_resume_wait(void)
+{
+    /* At the suspend: only a bridge that reads a secondary bus waits. */
+    CHECK_EQ(CmPortsResumeWaitWanted(TRUE, 0x00010100UL), TRUE,
+             "suspend: primary 0, secondary 1, subordinate 1: the member waits");
+    CHECK_EQ(CmPortsResumeWaitWanted(TRUE, 0x00000000UL), FALSE,
+             "suspend: secondary 0 (never numbered): nothing to restore, no wait");
+    CHECK_EQ(CmPortsResumeWaitWanted(TRUE, 0x00FF0000UL), FALSE,
+             "suspend: subordinate only, secondary 0: no wait");
+    CHECK_EQ(CmPortsResumeWaitWanted(TRUE, 0xFFFFFFFFUL), FALSE,
+             "suspend: all ones (the bridge silent): no wait");
+    CHECK_EQ(CmPortsResumeWaitWanted(FALSE, 0x00010100UL), FALSE,
+             "suspend: the read refused: no wait, whatever the buffer held");
+    CHECK_EQ(CmPortsResumeWaitWanted(TRUE, 0x00282800UL), TRUE,
+             "suspend: a deeper secondary bus waits too");
+    /* At the operation. */
+    CHECK_EQ(CmPortsResumeWait(TRUE, 0x00000000UL, 0, CM_PORTS_RW_BOUND_MS),
+             CM_PORTS_RW_WAIT, "resume: the header reads reset at once: wait");
+    CHECK_EQ(CmPortsResumeWait(TRUE, 0x00000000UL, CM_PORTS_RW_BOUND_MS - 1,
+                               CM_PORTS_RW_BOUND_MS),
+             CM_PORTS_RW_WAIT, "resume: reset, 1 ms before the bound: still wait");
+    CHECK_EQ(CmPortsResumeWait(TRUE, 0x00000000UL, CM_PORTS_RW_BOUND_MS,
+                               CM_PORTS_RW_BOUND_MS),
+             CM_PORTS_RW_TIMEOUT, "resume: reset at the bound: timeout, today's behaviour");
+    CHECK_EQ(CmPortsResumeWait(TRUE, 0x00000000UL, 0xFFFFFFFFUL,
+                               CM_PORTS_RW_BOUND_MS),
+             CM_PORTS_RW_TIMEOUT, "resume: reset long past the bound: timeout");
+    CHECK_EQ(CmPortsResumeWait(TRUE, 0x00010100UL, 0, CM_PORTS_RW_BOUND_MS),
+             CM_PORTS_RW_RESTORED, "resume: a secondary bus at once (ME, a sleep that did not happen): restored");
+    CHECK_EQ(CmPortsResumeWait(TRUE, 0x00010100UL, CM_PORTS_RW_BOUND_MS + 5,
+                               CM_PORTS_RW_BOUND_MS),
+             CM_PORTS_RW_RESTORED, "resume: restored wins over a passed bound");
+    CHECK_EQ(CmPortsResumeWait(TRUE, 0x00020200UL, 300, CM_PORTS_RW_BOUND_MS),
+             CM_PORTS_RW_RESTORED, "resume: another secondary bus than at the suspend still counts (Windows' choice)");
+    CHECK_EQ(CmPortsResumeWait(TRUE, 0xFFFFFFFFUL, 0, CM_PORTS_RW_BOUND_MS),
+             CM_PORTS_RW_UNREAD, "resume: all ones (the bridge gone): no wait");
+    CHECK_EQ(CmPortsResumeWait(FALSE, 0x00000000UL, 0, CM_PORTS_RW_BOUND_MS),
+             CM_PORTS_RW_UNREAD, "resume: the read refused: no wait");
+    CHECK_EQ(CmPortsResumeWait(TRUE, 0x00FF0000UL, 100, CM_PORTS_RW_BOUND_MS),
+             CM_PORTS_RW_WAIT, "resume: a subordinate without a secondary is still reset");
+    CHECK_EQ(CmPortsResumeWait(TRUE, 0x00000000UL, 0, 0),
+             CM_PORTS_RW_TIMEOUT, "a bound of 0 never waits");
+}
+
+/* ---- record 21 section 6.1.5 (task 49.30): a switch behind the tunnel
+ * port that came back reset - the note, the reading, the step. */
+
+#define SUB_ALL (CM_PORTS_SUB_R_ID | CM_PORTS_SUB_R_TYPE | \
+                 CM_PORTS_SUB_R_CMD | CM_PORTS_SUB_R_BUSES)
+#define SUB_ID      0x8232104CUL    /* the dock's upstream port           */
+#define SUB_T1      0x00010000UL    /* 0Ch: header type 1                 */
+#define SUB_T1MF    0x00810000UL    /* ... multi-function                 */
+#define SUB_T0      0x00000000UL
+
+static void test_sub_lost(void)
+{
+    CM_PORTS_SUB note;
+    CM_PORTS_SUB fresh;
+    ULONG e[4];
+    ULONG k;
+
+    /* The note at the suspend. */
+    CHECK_EQ(CmPortsSubNoted(SUB_ID, SUB_T1, 0x00060201UL), TRUE,
+             "note: a type 1 function with a secondary bus is noted");
+    CHECK_EQ(CmPortsSubNoted(SUB_ID, SUB_T1MF, 0x00060201UL), TRUE,
+             "note: the multi-function bit does not matter");
+    CHECK_EQ(CmPortsSubNoted(SUB_ID, SUB_T1, 0x00000001UL), FALSE,
+             "note: a bridge with no secondary bus (a refused numbering) is not noted");
+    CHECK_EQ(CmPortsSubNoted(SUB_ID, SUB_T1, 0x00060001UL), FALSE,
+             "note: a subordinate without a secondary is not configured");
+    CHECK_EQ(CmPortsSubNoted(SUB_ID, SUB_T0, 0x00060201UL), FALSE,
+             "note: a type 0 function is not noted (item 6's)");
+    CHECK_EQ(CmPortsSubNoted(SUB_ID, SUB_T1, 0xFFFFFFFFUL), FALSE,
+             "note: all-ones bus numbers are not a secondary bus");
+    CHECK_EQ(CmPortsSubNoted(SUB_ID, 0xFFFFFFFFUL, 0x00060201UL), FALSE,
+             "note: an all-ones header is no type 1");
+    CHECK_EQ(CmPortsSubNoted(0xFFFFFFFFUL, SUB_T1, 0x00060201UL), FALSE,
+             "note: nothing answering is not noted");
+    CHECK_EQ(CmPortsSubNoted(0x82320001UL, SUB_T1, 0x00060201UL), FALSE,
+             "note: Retry Status is not noted");
+    CHECK_EQ(CmPortsSubNoted(0x82320000UL, SUB_T1, 0x00060201UL), FALSE,
+             "note: vendor 0000h is not noted");
+
+    /* The merge: fresh entries first, pending ones kept at other places. */
+    note.Count = 0;
+    fresh.Count = 1;
+    fresh.DevFn[0] = 0x00;
+    fresh.Id[0] = SUB_ID;
+    CmPortsSubMerge(&note, &fresh);
+    CHECK(note.Count == 1 && note.DevFn[0] == 0x00 && note.Id[0] == SUB_ID,
+          "merge: an empty note takes the fresh entry");
+    fresh.Count = 0;
+    CmPortsSubMerge(&note, &fresh);
+    CHECK(note.Count == 1 && note.Id[0] == SUB_ID,
+          "merge: a suspend that reads no configured bridge keeps the pending entry (the second standby)");
+    fresh.Count = 1;
+    fresh.DevFn[0] = 0x00;
+    fresh.Id[0] = 0x15EF8086UL;
+    CmPortsSubMerge(&note, &fresh);
+    CHECK(note.Count == 1 && note.Id[0] == 0x15EF8086UL,
+          "merge: the same place read configured again replaces the pending entry");
+    fresh.Count = 1;
+    fresh.DevFn[0] = 0x08;
+    fresh.Id[0] = SUB_ID;
+    CmPortsSubMerge(&note, &fresh);
+    CHECK(note.Count == 2 && note.DevFn[0] == 0x08 && note.DevFn[1] == 0x00 &&
+              note.Id[1] == 0x15EF8086UL,
+          "merge: another place is added, the pending one kept after it");
+    fresh.Count = CM_PORTS_SUB_MAX;
+    for (k = 0; k < CM_PORTS_SUB_MAX; k++) {
+        fresh.DevFn[k] = 0x80 + k;
+        fresh.Id[k] = SUB_ID + k;
+    }
+    CmPortsSubMerge(&note, &fresh);
+    CHECK(note.Count == CM_PORTS_SUB_MAX && note.DevFn[0] == 0x80 &&
+              note.DevFn[CM_PORTS_SUB_MAX - 1] == 0x80 + CM_PORTS_SUB_MAX - 1,
+          "merge: a full fresh note leaves no room for pending entries");
+    fresh.Count = CM_PORTS_SUB_MAX + 5;
+    note.Count = CM_PORTS_SUB_MAX + 9;
+    CmPortsSubMerge(&note, &fresh);
+    CHECK(note.Count == CM_PORTS_SUB_MAX, "merge: counts past the capacity are bounded");
+
+    /* The reading, in its order. */
+    CHECK_EQ(CmPortsSubRead(SUB_ID, 0, SUB_ID, SUB_T1, 0, 0, 9000),
+             CM_PORTS_SUB_UNDECIDED, "read: the id read refused: undecided, whatever the buffers hold");
+    CHECK_EQ(CmPortsSubRead(SUB_ID, SUB_ALL, 0xFFFFFFFFUL, SUB_T1, 0, 0, 0),
+             CM_PORTS_SUB_UNDECIDED, "read: nothing answering right after the resume: undecided");
+    CHECK_EQ(CmPortsSubRead(SUB_ID, SUB_ALL, 0xFFFFFFFFUL, SUB_T1, 0, 0,
+                            CM_PORTS_SUB_ABSENT_MS - 1),
+             CM_PORTS_SUB_UNDECIDED, "read: nothing answering 1 ms before the absent time: undecided");
+    CHECK_EQ(CmPortsSubRead(SUB_ID, SUB_ALL, 0xFFFFFFFFUL, SUB_T1, 0, 0,
+                            CM_PORTS_SUB_ABSENT_MS),
+             CM_PORTS_SUB_ABSENT, "read: nothing answering at the absent time: absent");
+    CHECK_EQ(CmPortsSubRead(SUB_ID, CM_PORTS_SUB_R_ID, 0x1234FFFFUL, 0, 0, 0,
+                            CM_PORTS_SUB_ABSENT_MS),
+             CM_PORTS_SUB_ABSENT, "read: vendor FFFFh is nothing answering");
+    CHECK_EQ(CmPortsSubRead(SUB_ID, SUB_ALL, 0x82320001UL, SUB_T1, 0, 0, 9000),
+             CM_PORTS_SUB_UNDECIDED, "read: Retry Status: undecided, however late");
+    CHECK_EQ(CmPortsSubRead(SUB_ID, SUB_ALL, 0x82320000UL, SUB_T1, 0, 0, 9000),
+             CM_PORTS_SUB_UNDECIDED, "read: vendor 0000h: undecided");
+    CHECK_EQ(CmPortsSubRead(SUB_ID, SUB_ALL, 0x15EF8086UL, SUB_T1, 0, 0, 100),
+             CM_PORTS_SUB_OTHER, "read: another id: other (a reset bridge of another device is not the noted one)");
+    CHECK_EQ(CmPortsSubRead(SUB_ID, CM_PORTS_SUB_R_ID, 0x15EF8086UL, 0xFFFFFFFFUL,
+                            0xFFFFFFFFUL, 0xFFFFFFFFUL, 100),
+             CM_PORTS_SUB_OTHER, "read: another id is other whatever else read");
+    CHECK_EQ(CmPortsSubRead(SUB_ID, SUB_ALL & ~CM_PORTS_SUB_R_TYPE, SUB_ID, SUB_T1,
+                            0, 0, 100),
+             CM_PORTS_SUB_UNDECIDED, "read: the noted id, the header read refused: undecided");
+    CHECK_EQ(CmPortsSubRead(SUB_ID, SUB_ALL & ~CM_PORTS_SUB_R_CMD, SUB_ID, SUB_T1,
+                            0, 0, 100),
+             CM_PORTS_SUB_UNDECIDED, "read: the noted id, the command read refused: undecided");
+    CHECK_EQ(CmPortsSubRead(SUB_ID, SUB_ALL & ~CM_PORTS_SUB_R_BUSES, SUB_ID, SUB_T1,
+                            0, 0, 100),
+             CM_PORTS_SUB_UNDECIDED, "read: the noted id, the bus numbers read refused: undecided");
+    CHECK_EQ(CmPortsSubRead(SUB_ID, SUB_ALL, SUB_ID, 0xFFFFFFFFUL, 0, 0, 100),
+             CM_PORTS_SUB_UNDECIDED, "read: the noted id, an all-ones header: undecided, never other");
+    CHECK_EQ(CmPortsSubRead(SUB_ID, SUB_ALL, SUB_ID, SUB_T1, 0xFFFFFFFFUL, 0, 100),
+             CM_PORTS_SUB_UNDECIDED, "read: the noted id, an all-ones command: undecided");
+    CHECK_EQ(CmPortsSubRead(SUB_ID, SUB_ALL, SUB_ID, SUB_T1, 0x00100007UL,
+                            0xFFFFFFFFUL, 100),
+             CM_PORTS_SUB_UNDECIDED, "read: the noted id, all-ones bus numbers: undecided, never configured");
+    CHECK_EQ(CmPortsSubRead(SUB_ID, SUB_ALL, SUB_ID, SUB_T0, 0, 0, 100),
+             CM_PORTS_SUB_OTHER, "read: the noted id with a type 0 header: other");
+    CHECK_EQ(CmPortsSubRead(SUB_ID, SUB_ALL, SUB_ID, SUB_T1, 0x00100000UL,
+                            0x00000000UL, 100),
+             CM_PORTS_SUB_LOST, "read: the noted id, type 1, reset as a whole: lost");
+    CHECK_EQ(CmPortsSubRead(SUB_ID, SUB_ALL, SUB_ID, SUB_T1MF, 0x00100000UL,
+                            0x00000001UL, 100),
+             CM_PORTS_SUB_LOST, "read: a primary bus alone is still reset as a whole");
+    CHECK_EQ(CmPortsSubRead(SUB_ID, SUB_ALL, SUB_ID, SUB_T1, 0x00100007UL,
+                            0x00060201UL, 100),
+             CM_PORTS_SUB_CONFIGURED, "read: the noted id, type 1, a secondary bus: configured");
+    CHECK_EQ(CmPortsSubRead(SUB_ID, SUB_ALL, SUB_ID, SUB_T1, 0x00100000UL,
+                            0x00060201UL, 100),
+             CM_PORTS_SUB_CONFIGURED, "read: bus numbers back, decode still off (Windows at work): configured, not lost");
+    CHECK_EQ(CmPortsSubRead(SUB_ID, SUB_ALL, SUB_ID, SUB_T1, 0x00100006UL,
+                            0x00000000UL, 100),
+             CM_PORTS_SUB_UNDECIDED, "read: decode on with no bus numbers (part-configured): undecided");
+    CHECK_EQ(CmPortsSubRead(SUB_ID, SUB_ALL, SUB_ID, SUB_T1, 0x00100000UL,
+                            0x00060000UL, 100),
+             CM_PORTS_SUB_UNDECIDED, "read: a subordinate without a secondary: undecided");
+
+    /* The member's verdict. */
+    CHECK_EQ(CmPortsSubVerdict(e, 0), CM_PORTS_SUBV_SETTLED, "verdict: no entry is settled");
+    e[0] = CM_PORTS_SUB_CONFIGURED;
+    e[1] = CM_PORTS_SUB_OTHER;
+    e[2] = CM_PORTS_SUB_ABSENT;
+    CHECK_EQ(CmPortsSubVerdict(e, 3), CM_PORTS_SUBV_SETTLED,
+             "verdict: configured, other and absent are settled");
+    e[1] = CM_PORTS_SUB_UNDECIDED;
+    CHECK_EQ(CmPortsSubVerdict(e, 3), CM_PORTS_SUBV_UNDECIDED,
+             "verdict: one undecided entry keeps the member undecided");
+    e[2] = CM_PORTS_SUB_LOST;
+    CHECK_EQ(CmPortsSubVerdict(e, 3), CM_PORTS_SUBV_LOST,
+             "verdict: lost wins over undecided");
+    e[0] = CM_PORTS_SUB_LOST;
+    CHECK_EQ(CmPortsSubVerdict(e, 1), CM_PORTS_SUBV_LOST, "verdict: one lost entry");
+
+    /* The step. */
+    CHECK_EQ(CmPortsLostStep(CM_PORTS_RW_RESTORED, CM_PORTS_SUBV_SETTLED, 300, FALSE, 0),
+             CM_PORTS_LOST_END, "step: settled (ME restored the switch): the wait ends, the note emptied");
+    CHECK_EQ(CmPortsLostStep(CM_PORTS_RW_RESTORED_HERE, CM_PORTS_SUBV_SETTLED,
+                             CM_PORTS_RW_BOUND_MS + 1, TRUE, 0),
+             CM_PORTS_LOST_END, "step: settled ends whatever the time");
+    CHECK_EQ(CmPortsLostStep(CM_PORTS_RW_RESTORED, CM_PORTS_SUBV_UNDECIDED, 300, FALSE, 0),
+             CM_PORTS_LOST_WAIT, "step: undecided: parked");
+    CHECK_EQ(CmPortsLostStep(CM_PORTS_RW_RESTORED, CM_PORTS_SUBV_UNDECIDED,
+                             CM_PORTS_RW_BOUND_MS - 1, FALSE, 0),
+             CM_PORTS_LOST_WAIT, "step: undecided 1 ms before the bound: parked");
+    CHECK_EQ(CmPortsLostStep(CM_PORTS_RW_RESTORED, CM_PORTS_SUBV_UNDECIDED,
+                             CM_PORTS_RW_BOUND_MS, FALSE, 0),
+             CM_PORTS_LOST_END_KEEP, "step: undecided at the bound: the wait ends, the note kept");
+    CHECK_EQ(CmPortsLostStep(CM_PORTS_RW_RESTORED, CM_PORTS_SUBV_LOST, 300, FALSE, 0),
+             CM_PORTS_LOST_WAIT, "step: lost inside the grace, the member restored by Windows: Windows first");
+    CHECK_EQ(CmPortsLostStep(CM_PORTS_RW_RESTORED, CM_PORTS_SUBV_LOST,
+                             CM_PORTS_RW_GRACE_MS - 1, FALSE, 0),
+             CM_PORTS_LOST_WAIT, "step: lost 1 ms before the grace ends: parked");
+    CHECK_EQ(CmPortsLostStep(CM_PORTS_RW_RESTORED, CM_PORTS_SUBV_LOST,
+                             CM_PORTS_RW_GRACE_MS, FALSE, 0),
+             CM_PORTS_LOST_REMOVE, "step: lost at the grace: the recovery");
+    CHECK_EQ(CmPortsLostStep(CM_PORTS_RW_RESTORED_HERE, CM_PORTS_SUBV_LOST, 2045, FALSE, 0),
+             CM_PORTS_LOST_REMOVE, "step: lost behind a member this driver restored (98 SE): the recovery at once");
+    CHECK_EQ(CmPortsLostStep(CM_PORTS_RW_RESTORED_HERE, CM_PORTS_SUBV_LOST, 100, FALSE, 0),
+             CM_PORTS_LOST_REMOVE, "step: the grace is Windows' only; a member restored here was past it");
+    CHECK_EQ(CmPortsLostStep(CM_PORTS_RW_RESTORED_HERE, CM_PORTS_SUBV_LOST, 3000, TRUE,
+                             CM_PORTS_SUB_RETRY_MS - 1),
+             CM_PORTS_LOST_WAIT, "step: an attempt made less than the retry time ago: parked");
+    CHECK_EQ(CmPortsLostStep(CM_PORTS_RW_RESTORED_HERE, CM_PORTS_SUBV_LOST, 5000, TRUE,
+                             CM_PORTS_SUB_RETRY_MS),
+             CM_PORTS_LOST_REMOVE, "step: the retry time passed: the next attempt");
+    CHECK_EQ(CmPortsLostStep(CM_PORTS_RW_RESTORED_HERE, CM_PORTS_SUBV_LOST, 5000, FALSE,
+                             0),
+             CM_PORTS_LOST_REMOVE, "step: never tried: the since-attempt time is not read");
+    CHECK_EQ(CmPortsLostStep(CM_PORTS_RW_RESTORED_HERE, CM_PORTS_SUBV_LOST,
+                             CM_PORTS_RW_BOUND_MS - 1, TRUE, CM_PORTS_SUB_RETRY_MS),
+             CM_PORTS_LOST_REMOVE, "step: 1 ms before the bound an attempt is still made");
+    CHECK_EQ(CmPortsLostStep(CM_PORTS_RW_RESTORED_HERE, CM_PORTS_SUBV_LOST,
+                             CM_PORTS_RW_BOUND_MS, TRUE, CM_PORTS_SUB_RETRY_MS),
+             CM_PORTS_LOST_KEPT, "step: lost at the bound: lost, not removed");
+    CHECK_EQ(CmPortsLostStep(CM_PORTS_RW_RESTORED, CM_PORTS_SUBV_LOST,
+                             CM_PORTS_RW_BOUND_MS + 7, FALSE, 0),
+             CM_PORTS_LOST_KEPT, "step: lost past the bound, never tried (gated all along): no attempt after the bound");
+    CHECK(CM_PORTS_RW_LOST_REMOVED == 7UL && CM_PORTS_RW_LOST_KEPT == 8UL,
+          "the new outcomes keep their logged numbers");
+    CHECK(CM_PORTS_SUB_ABSENT_MS > CM_PORTS_RW_GRACE_MS &&
+              CM_PORTS_SUB_ABSENT_MS < CM_PORTS_RW_BOUND_MS,
+          "the absent time lies between the grace and the bound");
+}
+
+/* ---- the resume marks against a later standby, and the no-IRQ admission
+ * (record 21 section 6.1.3): interleavings of the worker's check with the
+ * NHI's suspend and resume, step by step as the locks order them. */
+
+/* Record 21 section 6.1.5 item 7: the re-enumeration guard answers proven
+ * safe, proven reset or unknown, and unknown holds (task 49.30, after the
+ * merge review: an identity or child-list read that fails after a
+ * refused removal must not let the member be re-enumerated through the
+ * reset switch). */
+static void test_reset_guard(void)
+{
+    const char *kept = "PCI\\VEN_104C&DEV_8232\\BUS_02&DEV_00&FUNC_00";
+    const char *keptp = "PCI\\VEN_104C&DEV_8232\\0000083000";
+    const char *other = "PCI\\VEN_104C&DEV_8232\\BUS_02&DEV_01&FUNC_00";
+    const char *nvme = "PCI\\VEN_1B36&DEV_0010\\BUS_02&DEV_00&FUNC_00";
+    const char *noplace = "PCI\\VEN_104C&DEV_8232\\ZZ";
+    ULONG at = 0x0200UL;    /* 02:00.0, bus 15:8, device 7:3, function 2:0 */
+    ULONG acc;
+    ULONG v;
+
+    /* One function as read now. */
+    CHECK_EQ(CmPortsResetFn(SUB_ALL, SUB_ID, SUB_T1, 0x00000000UL), CM_PORTS_RF_BUS0,
+             "fn: the switch reset as a whole (a refused removal) reads bus 0");
+    CHECK_EQ(CmPortsResetFn(SUB_ALL, SUB_ID, SUB_T1, 0x00050001UL), CM_PORTS_RF_BUS0,
+             "fn: part-configured with secondary bus 0 is bus 0 too");
+    CHECK_EQ(CmPortsResetFn(SUB_ALL, SUB_ID, SUB_T1, 0x00060201UL), CM_PORTS_RF_SAFE,
+             "fn: a secondary bus other than 0 is configured: safe");
+    CHECK_EQ(CmPortsResetFn(SUB_ALL, 0x00101B36UL, SUB_T0, 0xFFFFFFFFUL), CM_PORTS_RF_SAFE,
+             "fn: a type 0 header is safe whatever its 18h");
+    CHECK_EQ(CmPortsResetFn(SUB_ALL, 0xFFFFFFFFUL, 0, 0), CM_PORTS_RF_ABSENT,
+             "fn: nothing answering is absent");
+    CHECK_EQ(CmPortsResetFn(SUB_ALL, 0x1234FFFFUL, 0, 0), CM_PORTS_RF_ABSENT,
+             "fn: vendor FFFFh is absent");
+    CHECK_EQ(CmPortsResetFn(0, 0, 0, 0), CM_PORTS_RF_UNKNOWN,
+             "fn: the id not read is unknown");
+    CHECK_EQ(CmPortsResetFn(SUB_ALL, 0x82320001UL, SUB_T1, 0), CM_PORTS_RF_UNKNOWN,
+             "fn: Configuration Request Retry Status is unknown");
+    CHECK_EQ(CmPortsResetFn(SUB_ALL, 0x82320000UL, SUB_T1, 0), CM_PORTS_RF_UNKNOWN,
+             "fn: vendor 0000h is unknown");
+    CHECK_EQ(CmPortsResetFn(CM_PORTS_SUB_R_ID | CM_PORTS_SUB_R_BUSES, SUB_ID, 0, 0),
+             CM_PORTS_RF_UNKNOWN, "fn: the header type not read is unknown");
+    CHECK_EQ(CmPortsResetFn(SUB_ALL, SUB_ID, 0xFFFFFFFFUL, 0), CM_PORTS_RF_UNKNOWN,
+             "fn: the header type all ones is unknown");
+    CHECK_EQ(CmPortsResetFn(CM_PORTS_SUB_R_ID | CM_PORTS_SUB_R_TYPE, SUB_ID, SUB_T1, 0),
+             CM_PORTS_RF_UNKNOWN, "fn: a type 1 header's bus numbers not read is unknown");
+    CHECK_EQ(CmPortsResetFn(SUB_ALL, SUB_ID, SUB_T1, 0xFFFFFFFFUL), CM_PORTS_RF_UNKNOWN,
+             "fn: a type 1 header's bus numbers all ones is unknown");
+
+    /* One child devnode against the bus 0 function at 02:00.0. */
+    CHECK_EQ(CmPortsResetChildOf(kept, 64, SUB_ID, at, 0x00), CM_PORTS_RC_MATCH,
+             "child: the switch's own devnode by location");
+    CHECK_EQ(CmPortsResetChildOf(keptp, 64, SUB_ID, at, 0x00), CM_PORTS_RC_MATCH,
+             "child: the switch's own devnode by its path's leaf");
+    CHECK_EQ(CmPortsResetChildOf(other, 64, SUB_ID, at, 0x00), CM_PORTS_RC_NOMATCH,
+             "child: the same ids at another place is not its");
+    CHECK_EQ(CmPortsResetChildOf(nvme, 64, SUB_ID, at, 0x00), CM_PORTS_RC_NOMATCH,
+             "child: another vendor and device is not its");
+    CHECK_EQ(CmPortsResetChildOf(NULL, 0, SUB_ID, at, 0x00), CM_PORTS_RC_UNREAD,
+             "child: an identity not read is unread");
+    CHECK_EQ(CmPortsResetChildOf(noplace, 64, SUB_ID, at, 0x00), CM_PORTS_RC_UNREAD,
+             "child: its vendor and device with no place that parses is unread");
+
+    /* The walk. */
+    acc = CmPortsResetChildAdd(CM_PORTS_RCL_NONE, CM_PORTS_RC_NOMATCH);
+    CHECK_EQ(CmPortsResetChildEnd(acc, TRUE), CM_PORTS_RCL_NONE,
+             "walk: a complete list with no match is none");
+    CHECK_EQ(CmPortsResetChildEnd(CM_PORTS_RCL_NONE, TRUE), CM_PORTS_RCL_NONE,
+             "walk: a complete empty list (the devnode removed) is none");
+    CHECK_EQ(CmPortsResetChildEnd(acc, FALSE), CM_PORTS_RCL_UNKNOWN,
+             "walk: a list not read to its end is unknown");
+    acc = CmPortsResetChildAdd(CM_PORTS_RCL_NONE, CM_PORTS_RC_UNREAD);
+    CHECK_EQ(CmPortsResetChildEnd(CmPortsResetChildAdd(acc, CM_PORTS_RC_NOMATCH), TRUE),
+             CM_PORTS_RCL_UNKNOWN, "walk: a child not read stays unknown to the end");
+    CHECK_EQ(CmPortsResetChildEnd(CmPortsResetChildAdd(acc, CM_PORTS_RC_MATCH), FALSE),
+             CM_PORTS_RCL_FOUND, "walk: a match found wins over an unread child and an incomplete list");
+
+    /* The bus. */
+    CHECK_EQ(CmPortsResetJoin(CM_PORTS_RU_SAFE, CM_PORTS_RF_BUS0, CM_PORTS_RCL_FOUND),
+             CM_PORTS_RU_RESET, "bus: a bus 0 bridge under its devnode is reset");
+    CHECK_EQ(CmPortsResetJoin(CM_PORTS_RU_SAFE, CM_PORTS_RF_BUS0, CM_PORTS_RCL_NONE),
+             CM_PORTS_RU_SAFE, "bus: a bus 0 bridge with no devnode of its own is safe");
+    CHECK_EQ(CmPortsResetJoin(CM_PORTS_RU_SAFE, CM_PORTS_RF_SAFE, CM_PORTS_RCL_NONE),
+             CM_PORTS_RU_SAFE, "bus: a configured bridge is safe");
+    CHECK_EQ(CmPortsResetJoin(CM_PORTS_RU_SAFE, CM_PORTS_RF_ABSENT, CM_PORTS_RCL_NONE),
+             CM_PORTS_RU_SAFE, "bus: an absent function is safe");
+    CHECK_EQ(CmPortsResetJoin(CM_PORTS_RU_SAFE, CM_PORTS_RF_UNKNOWN, CM_PORTS_RCL_NONE),
+             CM_PORTS_RU_UNKNOWN, "bus: a function not read is unknown");
+    CHECK_EQ(CmPortsResetJoin(CM_PORTS_RU_UNKNOWN, CM_PORTS_RF_SAFE, CM_PORTS_RCL_NONE),
+             CM_PORTS_RU_UNKNOWN, "bus: unknown is not undone by a later safe function");
+    CHECK_EQ(CmPortsResetJoin(CM_PORTS_RU_UNKNOWN, CM_PORTS_RF_BUS0, CM_PORTS_RCL_FOUND),
+             CM_PORTS_RU_RESET, "bus: reset wins over an earlier unknown");
+
+    /* After a refused removal: the switch still reads reset as a whole
+     * under the member (02:00.0) and its devnode stays. */
+    v = CmPortsResetFn(SUB_ALL, SUB_ID, SUB_T1, 0x00000000UL);
+    /* The switch's identity read fails: */
+    acc = CmPortsResetChildEnd(CmPortsResetChildAdd(CM_PORTS_RCL_NONE,
+                                                    CmPortsResetChildOf(NULL, 0, SUB_ID, at, 0x00)),
+                               TRUE);
+    CHECK_EQ(CmPortsResetJoin(CM_PORTS_RU_SAFE, v, acc), CM_PORTS_RU_UNKNOWN,
+             "veto: the reset switch's identity not read holds the re-enumeration");
+    /* The child list fails before the switch's devnode is reached: */
+    acc = CmPortsResetChildEnd(CM_PORTS_RCL_NONE, FALSE);
+    CHECK_EQ(CmPortsResetJoin(CM_PORTS_RU_SAFE, v, acc), CM_PORTS_RU_UNKNOWN,
+             "veto: the child list not read holds the re-enumeration");
+    /* A sibling read, then the list fails: */
+    acc = CmPortsResetChildEnd(CmPortsResetChildAdd(CM_PORTS_RCL_NONE,
+                                                    CmPortsResetChildOf(nvme, 64, SUB_ID, at, 0x00)),
+                               FALSE);
+    CHECK_EQ(CmPortsResetJoin(CM_PORTS_RU_SAFE, v, acc), CM_PORTS_RU_UNKNOWN,
+             "veto: a sibling read and the list failing after it holds too");
+    /* Read in full: */
+    acc = CmPortsResetChildEnd(CmPortsResetChildAdd(CM_PORTS_RCL_NONE,
+                                                    CmPortsResetChildOf(kept, 64, SUB_ID, at, 0x00)),
+                               TRUE);
+    CHECK_EQ(CmPortsResetJoin(CM_PORTS_RU_SAFE, v, acc), CM_PORTS_RU_RESET,
+             "veto: the switch's devnode read is proven reset (held)");
+    /* The hold ends only on proof: the devnode gone on a complete list, */
+    CHECK_EQ(CmPortsResetJoin(CM_PORTS_RU_SAFE, v, CmPortsResetChildEnd(CM_PORTS_RCL_NONE, TRUE)),
+             CM_PORTS_RU_SAFE, "veto: a complete list without its devnode ends the hold");
+    /* or the switch read configured. */
+    CHECK_EQ(CmPortsResetJoin(CM_PORTS_RU_SAFE,
+                              CmPortsResetFn(SUB_ALL, SUB_ID, SUB_T1, 0x00060201UL),
+                              CM_PORTS_RCL_NONE),
+             CM_PORTS_RU_SAFE, "veto: the switch read configured ends the hold");
+
+    /* A bridge whose secondary bus is not read (no-configuration mode, or
+     * its own secondary bus 0): only an empty complete child list is safe. */
+    CHECK_EQ(CmPortsResetBare(TRUE, 0), CM_PORTS_RU_SAFE,
+             "bare: no child devnode on a complete list is safe");
+    CHECK_EQ(CmPortsResetBare(TRUE, 1), CM_PORTS_RU_UNKNOWN,
+             "bare: a child devnode left (a vetoed removal) holds");
+    CHECK_EQ(CmPortsResetBare(FALSE, 0), CM_PORTS_RU_UNKNOWN,
+             "bare: the child list not read holds");
+    CHECK_EQ(CmPortsResetBare(FALSE, 1), CM_PORTS_RU_UNKNOWN,
+             "bare: a child and the list not read to its end holds");
+}
+
+static void test_resume_race(void)
+{
+    CM_PORTS_RWS s;
+    ULONG epoch;
+
+    /* The plain run: suspend, resume, a check that clears. */
+    memset(&s, 0, sizeof(s));
+    CmPortsRwSuspend(&s, 0x1UL);
+    CHECK_EQ(s.Wait, 0x1UL, "plain: marked");
+    CHECK_EQ(s.Asleep, 1UL, "plain: asleep");
+    CHECK_EQ(CmPortsRwResumed(&s, 1000UL), TRUE, "plain: the resume ends the sleep");
+    CHECK_EQ(s.From, 1000UL, "plain: the bound from the resume");
+    CHECK_EQ(CmPortsRwResumed(&s, 2000UL), FALSE, "plain: a second resume end changes nothing");
+    CHECK_EQ(s.From, 1000UL, "plain: the bound kept");
+    epoch = s.Epoch;
+    CHECK_EQ(CmPortsRwClear(&s, 0x1UL, epoch), TRUE, "plain: restored, the mark cleared");
+    CHECK_EQ(s.Wait, 0UL, "plain: no mark left");
+
+    /* The check snapshots, drops the lock for its read; another standby's
+     * suspend marks the member again before the check clears: the new mark
+     * stays (an unconditional clear lost it). */
+    memset(&s, 0, sizeof(s));
+    CmPortsRwSuspend(&s, 0x1UL);
+    (void)CmPortsRwResumed(&s, 1000UL);
+    epoch = s.Epoch;                    /* the check's snapshot */
+    CmPortsRwSuspend(&s, 0x1UL);        /* a later standby, during the read */
+    CHECK_EQ(CmPortsRwClear(&s, 0x1UL, epoch), FALSE,
+             "race: a suspend during the check's read keeps the new mark");
+    CHECK_EQ(s.Wait, 0x1UL, "race: still marked");
+    CHECK_EQ(s.Asleep, 1UL, "race: still asleep");
+    /* ... and once that standby resumes, the snapshot is still stale. */
+    (void)CmPortsRwResumed(&s, 5000UL);
+    CHECK_EQ(CmPortsRwClear(&s, 0x1UL, epoch), FALSE,
+             "race: the suspend and its resume both during the read: kept");
+    CHECK_EQ(s.Wait, 0x1UL, "race: marked for the new bound");
+    CHECK_EQ(s.From, 5000UL, "race: the new bound from the new resume");
+    epoch = s.Epoch;                    /* the next check, after both */
+    CHECK_EQ(CmPortsRwClear(&s, 0x1UL, epoch), TRUE, "race: the next check clears");
+    CHECK_EQ(s.Wait, 0UL, "race: cleared");
+
+    /* A check whose snapshot was taken asleep never clears. */
+    memset(&s, 0, sizeof(s));
+    CmPortsRwSuspend(&s, 0x3UL);
+    epoch = s.Epoch;
+    CHECK_EQ(CmPortsRwClear(&s, 0x1UL, epoch), FALSE, "asleep: kept");
+    /* A later suspend that does not mark the member: nothing to keep. */
+    (void)CmPortsRwResumed(&s, 100UL);
+    epoch = s.Epoch;
+    CmPortsRwSuspend(&s, 0x2UL);
+    CHECK_EQ(CmPortsRwClear(&s, 0x1UL, epoch), TRUE,
+             "unmarked by the later suspend: nothing held");
+    CHECK_EQ(s.Wait, 0x2UL, "the other member's new mark untouched");
+    /* One member's clear leaves the other's mark. */
+    (void)CmPortsRwResumed(&s, 200UL);
+    s.Wait = 0x3UL;
+    epoch = s.Epoch;
+    CHECK_EQ(CmPortsRwClear(&s, 0x1UL, epoch), TRUE, "two: the first cleared");
+    CHECK_EQ(s.Wait, 0x2UL, "two: the second still marked");
+    /* An empty suspend: awake, and the epoch still moves. */
+    epoch = s.Epoch;
+    CmPortsRwSuspend(&s, 0UL);
+    CHECK_EQ(s.Asleep, 0UL, "empty: not asleep");
+    CHECK(s.Epoch != epoch, "empty: the epoch moved");
+    CHECK_EQ(CmPortsRwResumed(&s, 300UL), FALSE, "empty: its resume ends no sleep");
+
+    /* The no-IRQ admission: the pass checked the mark (clear), then the
+     * suspend marked the member before the admission. */
+    CHECK_EQ(CmPortsNiAdmit(TRUE, 0UL, 0x1UL), CM_PORTS_NI_GO,
+             "admit: open, unmarked: made");
+    CHECK_EQ(CmPortsNiAdmit(TRUE, 0x1UL, 0x1UL), CM_PORTS_NI_HELD,
+             "admit: a suspend between the pass's check and the admission: held, not failed");
+    CHECK_EQ(CmPortsNiAdmit(TRUE, 0x2UL, 0x1UL), CM_PORTS_NI_GO,
+             "admit: another member's mark does not hold this one");
+    CHECK_EQ(CmPortsNiAdmit(FALSE, 0UL, 0x1UL), CM_PORTS_NI_CLOSED,
+             "admit: the gate shut: a failure, as before");
+    CHECK_EQ(CmPortsNiAdmit(FALSE, 0x1UL, 0x1UL), CM_PORTS_NI_CLOSED,
+             "admit: the gate shut while marked: the failure wins");
+}
+
 /* ---- the tunnel id (design record 31 sections 3 and 4) ----------------- */
 
 static USHORT tidIn[CM_TID_MAX_CHARS + 64];
@@ -1238,6 +1989,245 @@ static void test_kept_orders(void)
     CHECK_EQ(m.Uses, 0, "uninstall: no use after");
 }
 
+/* Task 49.46 (design record 21 section 6.3.1): the wake power-up's rules. */
+static void wpuBase(CM_WPU_IN *in)
+{
+    memset(in, 0, sizeof(*in));
+    in->Epoch = 3;
+    in->FailEpoch = 3;
+    in->Consumed = 2;
+    in->Switch = 1;
+    in->Released = 1;
+    in->Elapsed = CM_WPU_DELAY_MS;
+    in->Owner = CM_WPU_OWN_STOR98;
+    in->Units = 1;
+    in->Slots = CM_WPU_SLOTS;
+}
+
+static void test_wpu(void)
+{
+    CM_WPU_IN in;
+    ULONG why;
+
+    printf("test_wpu\n");
+    CHECK_EQ(CmPortsWpuArm(3, 3, 2, 1), 1, "a failed D0 of this epoch arms");
+    CHECK_EQ(CmPortsWpuArm(3, 3, 2, 0), 0, "a successful D0 never arms");
+    CHECK_EQ(CmPortsWpuArm(2, 3, 2, 1), 0,
+             "a D0 dispatched before the sleep and failing after it is stale");
+    CHECK_EQ(CmPortsWpuArm(3, 3, 3, 1), 0,
+             "a second failure in a consumed epoch never re-arms");
+    CHECK_EQ(CmPortsWpuArm(0, 0, 0, 1), 0, "no sleep yet: no arm");
+
+    wpuBase(&in);
+    CHECK_EQ(CmPortsWpuStep(&in, &why), CM_WPU_V_ASK, "armed, due, Stor98's, a unit");
+    in.Elapsed = CM_WPU_DELAY_MS - 1;
+    CHECK_EQ(CmPortsWpuStep(&in, &why), CM_WPU_V_WAIT, "not yet 5 s after the release");
+    wpuBase(&in);
+    in.Released = 0;
+    in.Elapsed = 100000;
+    CHECK_EQ(CmPortsWpuStep(&in, &why), CM_WPU_V_WAIT,
+             "suspended, stopped or no release this epoch: waits, nothing consumed");
+    wpuBase(&in);
+    in.Consumed = 3;
+    CHECK_EQ(CmPortsWpuStep(&in, &why), CM_WPU_V_IDLE, "once per epoch");
+    wpuBase(&in);
+    in.FailEpoch = 2;
+    CHECK_EQ(CmPortsWpuStep(&in, &why), CM_WPU_V_IDLE, "an arm of an older sleep is dead");
+    wpuBase(&in);
+    in.Switch = 0;
+    CHECK(CmPortsWpuStep(&in, &why) == CM_WPU_V_SKIP && why == CM_WPU_WHY_OFF,
+          "the switch 0: skipped");
+    wpuBase(&in);
+    in.Closed = 1;
+    CHECK(CmPortsWpuStep(&in, &why) == CM_WPU_V_SKIP && why == CM_WPU_WHY_REMOVED,
+          "a removal seen: skipped");
+    wpuBase(&in);
+    in.Owner = CM_WPU_OWN_OTHER;
+    CHECK(CmPortsWpuStep(&in, &why) == CM_WPU_V_SKIP && why == CM_WPU_WHY_NOT_STOR98,
+          "another driver (Windows' own NVMe driver): never asked");
+    wpuBase(&in);
+    in.Owner = CM_WPU_OWN_UNKNOWN;
+    CHECK_EQ(CmPortsWpuStep(&in, &why), CM_WPU_V_WAIT, "the owner unknown yet: waits");
+    in.Elapsed = CM_WPU_WINDOW_MS + 1;
+    CHECK(CmPortsWpuStep(&in, &why) == CM_WPU_V_SKIP && why == CM_WPU_WHY_NOT_STOR98,
+          "the owner never shown: fails closed at the window's end");
+    wpuBase(&in);
+    in.Units = 0;
+    CHECK_EQ(CmPortsWpuStep(&in, &why), CM_WPU_V_WAIT, "no unit yet: retried");
+    in.Elapsed = CM_WPU_WINDOW_MS + 1;
+    CHECK_EQ(CmPortsWpuStep(&in, &why), CM_WPU_V_NONE, "no unit by the window's end");
+    wpuBase(&in);
+    in.Units = 3;
+    in.Slots = 2;
+    CHECK_EQ(CmPortsWpuStep(&in, &why), CM_WPU_V_WAIT, "too few slots: retried");
+    in.Elapsed = CM_WPU_WINDOW_MS + 1;
+    CHECK(CmPortsWpuStep(&in, &why) == CM_WPU_V_SKIP && why == CM_WPU_WHY_BUSY,
+          "too few slots by the window's end: skipped");
+    wpuBase(&in);
+    in.Epoch = 0;
+    CHECK_EQ(CmPortsWpuStep(&in, &why), CM_WPU_V_IDLE, "never slept: idle");
+    wpuBase(&in);
+    in.Outstanding = 1;
+    CHECK(CmPortsWpuStep(&in, &why) == CM_WPU_V_SKIP && why == CM_WPU_WHY_OUTSTANDING,
+          "a request still out from an earlier wake: no second one");
+}
+
+/* Task 49.46: the install section's names (7 x86 records Stor98_Inst, 10 x86
+ * Stor98_Inst.NTx86). */
+static ULONG wpuInf(const char *s)
+{
+    WCHAR w[40];
+    ULONG n;
+
+    for (n = 0; s[n] != 0 && n < 40; n++) {
+        w[n] = (WCHAR)(UCHAR)s[n];
+    }
+    return CmPortsWpuInfSection(w, n);
+}
+
+static void test_wpu_inf(void)
+{
+    printf("test_wpu_inf\n");
+    CHECK_EQ(wpuInf("Stor98_Inst"), CM_WPU_OWN_STOR98, "the undecorated section (7 x86)");
+    CHECK_EQ(wpuInf("Stor98_Inst.NTx86"), CM_WPU_OWN_STOR98, "the x86 decoration (10 x86)");
+    CHECK_EQ(wpuInf("stor98_inst.ntamd64"), CM_WPU_OWN_STOR98, "the x64 decoration, any case");
+    CHECK_EQ(wpuInf("Stor98_Inst.NT"), CM_WPU_OWN_OTHER, "a decoration Stor98's INFs do not have");
+    CHECK_EQ(wpuInf("Stor98_Inst.NTx86.HW"), CM_WPU_OWN_OTHER, "a longer name");
+    CHECK_EQ(wpuInf("Stor98_Ins"), CM_WPU_OWN_OTHER, "a shorter name");
+    CHECK_EQ(wpuInf("Stor98_InstX"), CM_WPU_OWN_OTHER, "one more character");
+    CHECK_EQ(wpuInf("Stor98_Inst.NTarm64"), CM_WPU_OWN_OTHER, "another platform's decoration");
+    CHECK_EQ(wpuInf("StorNVMe_Inst"), CM_WPU_OWN_OTHER, "Windows' own NVMe driver");
+    CHECK_EQ(wpuInf(""), CM_WPU_OWN_OTHER, "empty");
+    CHECK_EQ(CmPortsWpuInfSection(NULL, 11), CM_WPU_OWN_OTHER, "no text");
+}
+
+/* Task 49.46: the owner from its two readings, every combination. */
+static void test_wpu_owner(void)
+{
+    static const ULONG want[3][3] = {
+        /* top:      unknown             stor98              other */
+        { CM_WPU_OWN_UNKNOWN, CM_WPU_OWN_UNKNOWN, CM_WPU_OWN_OTHER },  /* inf unknown */
+        { CM_WPU_OWN_UNKNOWN, CM_WPU_OWN_STOR98,  CM_WPU_OWN_OTHER },  /* inf stor98  */
+        { CM_WPU_OWN_OTHER,   CM_WPU_OWN_OTHER,   CM_WPU_OWN_OTHER }   /* inf other   */
+    };
+    ULONG a;
+    ULONG b;
+
+    printf("test_wpu_owner\n");
+    for (a = 0; a < 3; a++) {
+        for (b = 0; b < 3; b++) {
+            CHECK_EQ(CmPortsWpuOwner(a, b), want[a][b], "the owner of two readings");
+        }
+    }
+    CHECK_EQ(CmPortsWpuOwner(CM_WPU_OWN_STOR98, CM_WPU_OWN_UNKNOWN), CM_WPU_OWN_UNKNOWN,
+             "the label alone is not enough (the top not read)");
+    CHECK_EQ(CmPortsWpuOwner(CM_WPU_OWN_STOR98, CM_WPU_OWN_OTHER), CM_WPU_OWN_OTHER,
+             "another driver at the top (an upper filter included) is never overturned by the label");
+    CHECK_EQ(CmPortsWpuOwner(CM_WPU_OWN_OTHER, CM_WPU_OWN_STOR98), CM_WPU_OWN_OTHER,
+             "another install section is never overturned by the top");
+}
+
+/* Task 49.46: the gate across domains and sleeps. */
+static void test_wpu_gate(void)
+{
+    CM_WPU_SYS s;
+    CM_WPU_DOM a;
+    CM_WPU_DOM b;
+    ULONG e;
+
+    printf("test_wpu_gate\n");
+    memset(&s, 0, sizeof(s));
+    memset(&a, 0, sizeof(a));
+    memset(&b, 0, sizeof(b));
+    CmPortsWpuDomStart(&a);
+    CmPortsWpuDomStart(&b);
+    /* One sleep for both domains: one epoch. */
+    CmPortsWpuSysPower(&s, 0, 1);
+    CmPortsWpuSysPower(&s, 1, 1);
+    CmPortsWpuSysPower(&s, 1, 1);
+    CHECK_EQ(s.Epoch, 1, "a sleep with two domains advances the epoch once");
+    CmPortsWpuSysPower(&s, 1, 0);
+    CmPortsWpuDomResumeBegin(&s, &a);
+    CmPortsWpuDomResumeBegin(&s, &b);
+    e = s.Epoch;
+    CHECK_EQ(CmPortsWpuDomOpen(&s, &a, e), 0, "closed until a release");
+    /* A query-stopped while B releases late: B reopens the system's sleep
+     * halt, never A's latch. */
+    CmPortsWpuDomStop(&a);
+    CHECK_EQ(CmPortsWpuDomRelease(&s, &a), 0, "a latched domain's release is refused");
+    CHECK_EQ(CmPortsWpuDomRelease(&s, &b), 1, "B's own release is taken");
+    CHECK_EQ(CmPortsWpuDomOpen(&s, &b, e), 1, "B open after its release");
+    CHECK_EQ(CmPortsWpuDomOpen(&s, &a, e), 0, "A stays closed: B's release never clears A's latch");
+    CmPortsWpuDomCancel(&a);
+    CHECK_EQ(CmPortsWpuDomOpen(&s, &a, 0), 0, "A, cancelled, still needs its own release in this epoch");
+    CHECK_EQ(CmPortsWpuDomRelease(&s, &a), 1, "A's own release after its cancel is taken");
+    CHECK_EQ(CmPortsWpuDomOpen(&s, &a, e), 1, "A open after its own release");
+    /* A release that began before a second sleep and arrives after it:
+     * never stamped with the newer epoch. */
+    CmPortsWpuDomResumeBegin(&s, &b);
+    CmPortsWpuSysPower(&s, 0, 1);
+    CmPortsWpuSysPower(&s, 1, 1);
+    CHECK_EQ(s.Epoch, 2, "the second sleep");
+    CHECK_EQ(CmPortsWpuDomRelease(&s, &b), 0,
+             "a release whose resume began before the newer sleep is refused");
+    CHECK_EQ(CmPortsWpuDomOpen(&s, &b, e), 0, "and the old stamp does not open the new epoch");
+    CmPortsWpuSysPower(&s, 1, 0);
+    CmPortsWpuDomResumeBegin(&s, &b);
+    CHECK_EQ(CmPortsWpuDomRelease(&s, &b), 1, "the new resume's release is taken");
+    CHECK_EQ(CmPortsWpuDomOpen(&s, &b, s.Epoch), 1, "open in the new epoch");
+    /* A sleep query after a resume began: that release does not reopen. */
+    CmPortsWpuDomResumeBegin(&s, &a);
+    CmPortsWpuSysPower(&s, 0, 1);
+    CHECK_EQ(CmPortsWpuDomRelease(&s, &a), 0, "a query since the resume began: refused");
+    CHECK_EQ(CmPortsWpuDomOpen(&s, &b, s.Epoch), 0, "the query halts every domain");
+    /* The NHI's own power-down and its own start. */
+    memset(&s, 0, sizeof(s));
+    CmPortsWpuDomStart(&a);
+    CmPortsWpuSysPower(&s, 1, 1);
+    CmPortsWpuSysPower(&s, 1, 0);
+    CmPortsWpuDomResumeBegin(&s, &a);
+    CmPortsWpuDomPowerDown(&a);
+    CHECK_EQ(CmPortsWpuDomOpen(&s, &a, s.Epoch), 0, "a power-down closes");
+    CHECK_EQ(CmPortsWpuDomRelease(&s, &a), 1, "its own release in the epoch is taken");
+    CHECK_EQ(CmPortsWpuDomOpen(&s, &a, s.Epoch), 1, "and reopens it");
+    CmPortsWpuDomStop(&a);
+    CmPortsWpuDomStart(&a);
+    CHECK_EQ(a.StopLatch | a.Resuming, 0, "its own start clears the latch and the owed release");
+    CHECK_EQ(CmPortsWpuDomRelease(&s, &a), 0, "no release taken without a resume after the start");
+    /* A device power-down anywhere after the releases: every domain closed
+     * until its own next release; one domain's release opens only itself. */
+    memset(&s, 0, sizeof(s));
+    CmPortsWpuDomStart(&a);
+    CmPortsWpuDomStart(&b);
+    CmPortsWpuSysPower(&s, 1, 1);
+    CmPortsWpuSysPower(&s, 1, 0);
+    CmPortsWpuDomResumeBegin(&s, &a);
+    CmPortsWpuDomResumeBegin(&s, &b);
+    CHECK_EQ(CmPortsWpuDomRelease(&s, &a), 1, "A released");
+    CHECK_EQ(CmPortsWpuDomRelease(&s, &b), 1, "B released");
+    CmPortsWpuSysDown(&s);
+    CHECK_EQ(CmPortsWpuDomOpen(&s, &a, s.Epoch), 0, "a power-down after A's release closes A");
+    CHECK_EQ(CmPortsWpuDomOpen(&s, &b, s.Epoch), 0, "and B");
+    CHECK_EQ(CmPortsWpuDomRelease(&s, &b), 1, "B released again in its resume");
+    CHECK_EQ(CmPortsWpuDomOpen(&s, &b, s.Epoch), 1, "B open after its own release");
+    CHECK_EQ(CmPortsWpuDomOpen(&s, &a, s.Epoch), 0, "A still closed: B's release never opens A");
+    /* A releases; a sleep query comes (no sleep follows); B's delayed
+     * resume begins after the query and releases: A stays closed. */
+    memset(&s, 0, sizeof(s));
+    CmPortsWpuDomStart(&a);
+    CmPortsWpuDomStart(&b);
+    CmPortsWpuSysPower(&s, 1, 1);
+    CmPortsWpuSysPower(&s, 1, 0);
+    CmPortsWpuDomResumeBegin(&s, &a);
+    CHECK_EQ(CmPortsWpuDomRelease(&s, &a), 1, "A released");
+    CmPortsWpuSysPower(&s, 0, 1);
+    CHECK_EQ(s.Epoch, 1, "a query alone makes no epoch");
+    CmPortsWpuDomResumeBegin(&s, &b);
+    CHECK_EQ(CmPortsWpuDomRelease(&s, &b), 1, "B's resume begun after the query releases");
+    CHECK_EQ(CmPortsWpuDomOpen(&s, &b, s.Epoch), 1, "B open");
+    CHECK_EQ(CmPortsWpuDomOpen(&s, &a, s.Epoch), 0, "A, released before the query, stays closed");
+}
+
 int main(void)
 {
     test_families();
@@ -1249,6 +2239,13 @@ int main(void)
     test_bound();
     test_watchdog();
     test_release();
+    test_settle();
+    test_resume_wait();
+    test_hdr_restore();
+    test_ep_restore();
+    test_sub_lost();
+    test_reset_guard();
+    test_resume_race();
     test_keep_present();
     test_tunnel_ids();
     test_chain_depth();
@@ -1256,6 +2253,10 @@ int main(void)
     test_kept_os();
     test_kept_step();
     test_kept_orders();
+    test_wpu();
+    test_wpu_gate();
+    test_wpu_owner();
+    test_wpu_inf();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

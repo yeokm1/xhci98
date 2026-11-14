@@ -33,13 +33,17 @@
 
 #include "../xhci_compat.h"
 #include "tbt_regs.h"
+#include "cm_query.h"
 
-/* XhciCmRingInterrupt (record 21 section 4.5.4; cm_vals.h): 0 polling only,
- * as before; 1 the line interrupt where granted and proven, polling
- * otherwise. 2 and above are reserved (the message step) and refused. */
+/* XhciCmRingInterrupt (record 21 sections 4.5.4 and 4.5.14; cm_vals.h): 0
+ * polling only, as before; 1 the line interrupt where granted and proven,
+ * polling otherwise; 2 (task 49.27) on 2000, XP and XP x64 a message
+ * through msi4nt, on Vista and later as 1, on 98 SE and ME polling. 3 and
+ * above are refused. */
 #define CM_RIRQ_VALUE_OFF        0UL
 #define CM_RIRQ_VALUE_LINE       1UL
-#define CM_RIRQ_VALUE_MAX        1UL
+#define CM_RIRQ_VALUE_MESSAGE    2UL
+#define CM_RIRQ_VALUE_MAX        2UL
 #define CM_RIRQ_VALUE_DEFAULT    CM_RIRQ_VALUE_OFF
 
 /* IrqMode, the counter: what the activation runs on. */
@@ -223,6 +227,92 @@ BOOLEAN CmRirqDownFails(ULONG why, ULONG end);
  * resource, and the failure latch clear - on every system, 98 SE and ME
  * included since their route was read (section 4.5.4; task 48.26). */
 BOOLEAN CmRirqWanted(ULONG value, BOOLEAN line, BOOLEAN failed);
+
+/*
+ * How the activation tries it (section 4.5.14, task 49.27): the value 1
+ * the line where the start was given one; 2 the message on CM_RIRQ_SYS_NT5
+ * (2000, XP, Server 2003, XP x64) through msi4nt, whatever the start was
+ * given, never the line; 2 on Vista and later (CM_RIRQ_SYS_NT6), and on
+ * NT 5 where the NHI yields to a machine-wide XhciInterruptMode 4
+ * (`yield`), as 1; 2 on 98 SE and ME (CM_RIRQ_SYS_9X) nothing. Nothing
+ * with the failure latch set, the value 0 or one out of range.
+ */
+#define CM_RIRQ_HOW_NONE         0UL
+#define CM_RIRQ_HOW_LINE         1UL
+#define CM_RIRQ_HOW_MESSAGE      2UL
+#define CM_RIRQ_SYS_9X           0UL
+#define CM_RIRQ_SYS_NT5          1UL
+#define CM_RIRQ_SYS_NT6          2UL
+ULONG CmRirqHow(ULONG value, ULONG sys, BOOLEAN yield, BOOLEAN line,
+                BOOLEAN failed);
+
+/*
+ * The message's order down after its steps 1 and 2 (section 4.5.12, "The
+ * lifetime"): how it ends for `why`, at a system shutdown or not
+ * (`shutdown`), the plain disconnect having succeeded (`gone`, after its
+ * retry) or not. CM_RIRQ_MSG_KEEP: kept for the re-arm (a sleep's D3; no
+ * disconnect tried); _GONE: disconnected and retired; _FORCE: ended by
+ * the quarantine; _HOLD: kept
+ * masked, the function in D0, the disconnect tried again later.
+ * CmRirqMsgRefuse: whether that end enters the function in the image's
+ * refusal table (a forced end that is not a shutdown's). CmRirqMsgFails:
+ * whether it sets the activation's failure latch (a fall back, every end
+ * that leaves a connection kept masked, and every forced end, so that a
+ * function the refusal table could not take is not connected again in
+ * the same activation).
+ */
+#define CM_RIRQ_MSG_KEEP         1UL
+#define CM_RIRQ_MSG_GONE         2UL
+#define CM_RIRQ_MSG_FORCE        3UL
+#define CM_RIRQ_MSG_HOLD         4UL
+ULONG CmRirqMsgEnd(ULONG why, BOOLEAN shutdown, BOOLEAN gone);
+BOOLEAN CmRirqMsgRefuse(ULONG end, BOOLEAN shutdown);
+BOOLEAN CmRirqMsgFails(ULONG why, ULONG end);
+
+/*
+ * The message's location (section 4.5.12 step 3): the walk's count of
+ * functions matching the NHI and the last match (bus << 8 | device << 3 |
+ * function), and the bus the PDO answered where it did (`busKnown`). The
+ * location where exactly one matched and the bus, where known, agrees;
+ * CM_RIRQ_NO_BDF otherwise.
+ */
+#define CM_RIRQ_NO_BDF           0xFFFFFFFFUL
+ULONG CmRirqMsgWhere(ULONG found, ULONG at, BOOLEAN busKnown, ULONG bus);
+
+/*
+ * What the USB Tree is told (section 4.5.17). CmRirqWhyOfStatus: the
+ * CM_Q_IRQ_WHY_* of a library status that ends an activation in polling,
+ * msi4nt's numbers. CmRirqShowWord: CM_Q_RM_IRQ's word from the start's
+ * value (`refused`: it was out of range, 0 standing; 2 on 98 SE and ME
+ * CM_Q_IRQ_WHY_NOT_9X), the system, the yield, the line the start was given, the
+ * mode in force (CM_RIRQ_MODE_*), the cause recorded (0 none), and for a
+ * message its number - the vector, or with `isIrq` the ISA IRQ claimed.
+ */
+ULONG CmRirqWhyOfStatus(ULONG status);
+
+/*
+ * The routine's hardware gate (section 4.5.18): a word of closing reasons,
+ * the routine touching the function's registers only while it is 0.
+ * CmRirqIsrAdmits: whether the routine may read at all - connected, BAR0
+ * mapped, a geometry, the gate open, and for a message Reach set.
+ * CmRirqGateClose: the word with a reason added; CmRirqGateOpenPower: with
+ * POWER alone taken away (GONE stays: only a start clears it);
+ * CmRirqGateMayOpen: the thread's opening rule (D0 recorded, BAR0 mapped,
+ * no client suspended, the system working, not revoked);
+ * CmRirqGateAtStart: the word a start begins with.
+ */
+#define CM_RIRQ_GATE_POWER       0x1UL
+#define CM_RIRQ_GATE_GONE        0x2UL
+BOOLEAN CmRirqIsrAdmits(BOOLEAN connected, BOOLEAN message, BOOLEAN reach,
+                        ULONG gate, BOOLEAN bar, ULONG dwords);
+ULONG CmRirqGateClose(ULONG gate, ULONG why);
+ULONG CmRirqGateOpenPower(ULONG gate);
+BOOLEAN CmRirqGateMayOpen(BOOLEAN d0, BOOLEAN bar, BOOLEAN suspended,
+                          BOOLEAN working, BOOLEAN revoked);
+ULONG CmRirqGateAtStart(BOOLEAN d0, BOOLEAN bar);
+ULONG CmRirqShowWord(ULONG value, BOOLEAN refused, ULONG sys, BOOLEAN yield,
+                     BOOLEAN line, ULONG mode, ULONG why, ULONG number,
+                     BOOLEAN isIrq);
 
 /* The wait to an absolute deadline `due` on a millisecond clock that may
  * wrap: 0 when due, else what is left, at most `limit`. CmRirqDue: the

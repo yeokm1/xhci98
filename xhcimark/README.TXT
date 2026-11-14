@@ -62,6 +62,8 @@ What it does
     Thunderbolt or USB4 port, for at most one and a half seconds. This
     reduces the risk of losing a file if the drive is missing after the
     resume; it does not remove it. Each drive's result is in the log.
+  - While Setup installs, updates or removes drivers, the service waits,
+    and goes on when Setup ends.
 
 Stor98 on a drive Windows left without it (Windows 2000 to 8.1)
 ---------------------------------------------------------------
@@ -81,7 +83,7 @@ is stopped (as Device Manager's Disable does), given Stor98 and started
 again, since 8.1's stornvme holds a write for good when such a drive is
 unplugged without Safely Remove. Windows 10 keeps its own stornvme, and
 the service gives Stor98 to nothing there. An internal NVMe drive is
-never touched, nor a drive with another maker's driver. A drive with a
+never touched, nor a drive with another manufacturer's driver. A drive with a
 file open, a paging file or Windows itself on it refuses the stop and
 stays on stornvme. A drive given Stor98 is never given it again by the
 service, so a driver you choose later for it stays. While Windows' own

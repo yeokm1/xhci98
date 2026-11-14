@@ -8,8 +8,8 @@ rem   (none)  the release image: obj\XHCIPFW.VXD
 rem   qemu    the qemu flavour's image, which writes to QEMU's debug console
 rem           (port 0E9h): obj\qemu\XHCIPFW.VXD
 rem
-rem Exit 0 built, 1 failed, 2 not built (no Open Watcom or no Windows 98 SE
-rem DDK on this host), as src\vsd\build.cmd answers.
+rem Exit 0 built, 1 failed, 2 not built (no Open Watcom, no Windows 98 SE
+rem DDK or no Python that runs on this host), as src\vsd\build.cmd answers.
 rem
 rem The toolchain and its checks are S98VSD.VXD's (design record 30 section
 rem 6.1): Open Watcom 2.0 wcc386, the Windows 98 SE DDK's LINK 5.12 /VXD
@@ -51,6 +51,12 @@ if not defined PY (
     echo XHCIPFW.VXD was not built: no Python on PATH for its link checks.
     exit /b 2
 )
+rem The Microsoft Store's python.exe alias is found on PATH too, and runs
+rem nothing (exit 9009): that is no Python, not a failed link check.
+"%PY%" -I -c "import sys" >nul 2>&1 && goto pyok
+echo XHCIPFW.VXD was not built: %PY% on PATH does not run Python.
+exit /b 2
+:pyok
 set "V=..\vsd"
 if not exist obj mkdir obj
 powershell -NoProfile -ExecutionPolicy Bypass -File %V%\stage-ddk.ps1 >obj\stage.log 2>&1

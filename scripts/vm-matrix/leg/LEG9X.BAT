@@ -100,7 +100,29 @@ echo XHLEG CHECK stick-seen FAIL no drive with TESTDATA.BIN in 240 s>COM1
 goto unin
 :gots
 echo XHLEG CHECK stick-seen PASS %XS%:>COM1
+rem COMMAND.COM gives no exit code to rely on for its own COPY, nor FC.EXE
+rem here, so the file compared must be one this copy made: a RAND.BIN there
+rem from before (a stick image may hold it, with the same bytes) is removed
+rem first, its attributes cleared so neither read-only nor hidden keeps it,
+rem and must be gone, the copy must leave one, and FC must say "no
+rem differences" (FIND's exit code is reliable). A folder of that name is
+rem left alone: DEL would ask whether to empty it.
+if exist %XS%:\RAND.BIN\NUL goto cpdir
+attrib -r -h -s %XS%:\RAND.BIN>NUL
+if not exist %XS%:\RAND.BIN goto cpnew
+del %XS%:\RAND.BIN
+if not exist %XS%:\RAND.BIN goto cpnew
+echo XHLEG CHECK stick-copy FAIL on %XS%: RAND.BIN from before cannot be removed>COM1
+goto unplug
+:cpdir
+echo XHLEG CHECK stick-copy FAIL on %XS%: RAND.BIN from before is a folder>COM1
+goto unplug
+:cpnew
 copy %XC%:\XHDATA\RAND.BIN %XS%:\RAND.BIN>NUL
+if exist %XS%:\RAND.BIN goto cpfc
+echo XHLEG CHECK stick-copy FAIL on %XS%: no RAND.BIN after the copy>COM1
+goto unplug
+:cpfc
 fc /b %XC%:\XHDATA\RAND.BIN %XS%:\RAND.BIN>C:\XHLEG\FC.TXT
 find "no differences" C:\XHLEG\FC.TXT>NUL
 if errorlevel 1 goto fcfail

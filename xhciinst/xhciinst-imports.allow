@@ -6,7 +6,11 @@
 # Windows 98 SE.
 #
 # Where the rows come from: the 3.4.1.0 release images' import tables, read
-# with check-imports.ps1 -List (this tree's images import the same). The
+# with check-imports.ps1 -List, and the one function this tree's console
+# and window images import beyond them, KERNEL32's OpenEventA (the mark
+# service's idle event, design record 21 section 7.8.4), which XHCITR.EXE
+# and XHCITR64.EXE of that cycle import too (xhcitr\xhcitr-imports.allow's
+# x86 and amd64 rows; XHCITR.EXE started and ran on 98 SE). The
 # x86 rows are the Windows 98 SE baseline: the 32-bit window, console tool
 # and SETUP.EXE of that cycle started and ran on 98 SE (runs/run-46.md).
 # The amd64 rows are the x64 pair's, whose ceiling is XP x64. A new x86
@@ -106,6 +110,7 @@ console  x86    KERNEL32.DLL  LeaveCriticalSection
 console  x86    KERNEL32.DLL  LoadLibraryA
 console  x86    KERNEL32.DLL  MoveFileA
 console  x86    KERNEL32.DLL  MultiByteToWideChar
+console  x86    KERNEL32.DLL  OpenEventA
 console  x86    KERNEL32.DLL  OpenMutexA
 console  x86    KERNEL32.DLL  OpenProcess
 console  x86    KERNEL32.DLL  ReadFile
@@ -230,6 +235,7 @@ window   x86    KERNEL32.DLL  LoadLibraryA
 window   x86    KERNEL32.DLL  lstrcmpiA
 window   x86    KERNEL32.DLL  MoveFileA
 window   x86    KERNEL32.DLL  MultiByteToWideChar
+window   x86    KERNEL32.DLL  OpenEventA
 window   x86    KERNEL32.DLL  OpenMutexA
 window   x86    KERNEL32.DLL  OpenProcess
 window   x86    KERNEL32.DLL  ReadFile
@@ -461,6 +467,7 @@ console  amd64  KERNEL32.DLL  LoadLibraryA
 console  amd64  KERNEL32.DLL  LoadLibraryExW
 console  amd64  KERNEL32.DLL  MoveFileA
 console  amd64  KERNEL32.DLL  MultiByteToWideChar
+console  amd64  KERNEL32.DLL  OpenEventA
 console  amd64  KERNEL32.DLL  OpenMutexA
 console  amd64  KERNEL32.DLL  OpenProcess
 console  amd64  KERNEL32.DLL  OutputDebugStringA
@@ -601,6 +608,7 @@ window   amd64  KERNEL32.DLL  LoadLibraryExW
 window   amd64  KERNEL32.DLL  lstrcmpiA
 window   amd64  KERNEL32.DLL  MoveFileA
 window   amd64  KERNEL32.DLL  MultiByteToWideChar
+window   amd64  KERNEL32.DLL  OpenEventA
 window   amd64  KERNEL32.DLL  OpenMutexA
 window   amd64  KERNEL32.DLL  OpenProcess
 window   amd64  KERNEL32.DLL  OutputDebugStringA

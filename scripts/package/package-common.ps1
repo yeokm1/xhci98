@@ -1561,106 +1561,13 @@ function Get-TestSignCertificate {
     }
 }
 
-# --- the port switchover's two batch files (roadmap-hcd task 36.56) ------
-#
-# portsw-on.bat and portsw-off.bat, published in tools\portsw\, are run by
-# COMMAND.COM on Windows 98 SE and ME and by cmd.exe elsewhere (design
-# record 16 section 5a). Every line is held to a short list of the commands
-# both interpreters run, rather than searched for constructs one of them
-# lacks: a list of forbidden words misses the one nobody listed (four such
-# escapes were found that way). The only lines outside that list are the
-# split's: the OS test, and the cd /d that only cmd.exe reaches. Here since
-# task 44.1, so scripts\check-text.ps1 holds the files to it before any
-# build as test-package.ps1 does.
-function Get-PswBatchFaults {
-    param([string]$Text, [string]$Value)
-    $faults = @()
-    if ($Text -match '[^\x20-\x7E\r\n]') { $faults += "a byte outside printable ASCII, CR and LF" }
-    if ($Text -match "(?<!`r)`n" -or $Text -match "`r(?!`n)") { $faults += "a line not ended by CRLF" }
-    if (-not $Text.EndsWith("`r`n")) { $faults += "no CRLF after the last line, so COMMAND.COM may not run it"; return $faults }
-    $lines = @($Text.Substring(0, $Text.Length - 2) -split "`r`n")
-    if ($lines[0] -cne "@echo off") { $faults += "line 1 is not @echo off" }
-    if ($lines[$lines.Count - 1] -cne "pause") { $faults += "the last line is not pause" }
-    $code = @()
-    for ($i = 1; $i -lt $lines.Count; $i++) {
-        if ($lines[$i] -cnotmatch '^rem( |$)') { $code += $i }
-    }
-    $split = @('if "%OS%"=="Windows_NT" goto nt', 'goto run', ':nt', 'cd /d "%~dp0"', ':run')
-    for ($k = 0; $k -lt $split.Count; $k++) {
-        if ($code.Count -le $k -or $lines[$code[$k]] -cne $split[$k]) {
-            $faults += ("command " + ($k + 1) + " after @echo off is not '" + $split[$k] + "'")
-        }
-    }
-    $osLine = -1
-    $ntLine = -1
-    if ($code.Count -gt 0) { $osLine = $code[0] }
-    if ($code.Count -gt 3) { $ntLine = $code[3] }
-    $allowed = @('^rem( [ -~]*)?$', '^echo( [ -~]*|\.)$', '^:[a-z]+$', '^goto [a-z]+$', '^pause$',
-                 '^if not exist portsw\.vbs goto [a-z]+$', '^if errorlevel [0-9] goto [a-z]+$',
-                 '^if not "%OS%"=="Windows_NT" goto [a-z]+$', '^cscript //nologo portsw\.vbs (show|[0-9])$')
-    $labels = @{}
-    $gotos = @()
-    for ($i = 1; $i -lt $lines.Count; $i++) {
-        $line = $lines[$i]
-        if ($line.Length -gt 127) { $faults += "line $($i + 1) is past COMMAND.COM's 127 characters" }
-        if ($i -ne $osLine -and $i -ne $ntLine) {
-            $ok = $false
-            foreach ($p in $allowed) { if ($line -cmatch $p) { $ok = $true; break } }
-            if (-not $ok) { $faults += "line $($i + 1) is not one of the commands both interpreters run: $line" }
-        }
-        if ($line -cmatch '^(rem|echo)\b' -and $line -match '[<>|&%^]') {
-            $faults += "line $($i + 1) has a redirection, pipe or percent character on an echo or rem line: $line"
-        }
-        if ($line -match '^echo +(on|off) *$') { $faults += "line $($i + 1) is an echo COMMAND.COM reads as a switch: $line" }
-        if ($line -cmatch '^:([a-z]+)$') {
-            if ($labels.ContainsKey($Matches[1])) { $faults += "label $($Matches[1]) twice" }
-            $labels[$Matches[1]] = $i
-        }
-        if ($line -cmatch '^(if .* )?goto ([a-z]+)$') { $gotos += , @($i, $Matches[2]) }
-    }
-    foreach ($g in $gotos) {
-        if (-not $labels.ContainsKey($g[1])) { $faults += "line $($g[0] + 1) jumps to a label the file does not have: $($g[1])" }
-        if ($g[1] -ceq "nt" -and $g[0] -ne $osLine) { $faults += "line $($g[0] + 1) is a goto nt that COMMAND.COM could take" }
-    }
-    $sets = @($lines | Where-Object { $_ -cmatch '^cscript //nologo portsw\.vbs [0-9]$' })
-    if ($sets.Count -ne 1 -or $sets[0] -cne ('cscript //nologo portsw.vbs ' + $Value)) {
-        $faults += "it does not set exactly one value, $Value (2 is a hand edit)"
-    }
-    $last = -1
-    foreach ($pin in @('if not exist portsw.vbs goto nofile', 'cscript //nologo portsw.vbs show',
-                       'if errorlevel 1 goto end', ('cscript //nologo portsw.vbs ' + $Value),
-                       'if errorlevel 3 goto elevate', 'if errorlevel 1 goto refused')) {
-        $at = [Array]::IndexOf($lines, $pin)
-        if ($at -le $last) { $faults += "'$pin' is missing or out of order" } else { $last = $at }
-    }
-    foreach ($needle in @('Vista and 7: right-click it', 'choose Run as administrator')) {
-        if (-not $Text.Contains($needle)) { $faults += "it no longer says '$needle'" }
-    }
-    # portsw.vbs says to restart after a set; an echo of its own printed it twice (task 38.6).
-    if ($Text.Contains('echo RESTART WINDOWS')) { $faults += "it echoes 'RESTART WINDOWS', which portsw.vbs already prints" }
-    return $faults
-}
-
-function Get-PlainScriptFaults {
-    # A script a 1998-era host reads as text (src\portsw.vbs, which Windows
-    # 98's Script Host runs): a byte outside printable ASCII, TAB, CR and LF,
-    # or a line not ended by CRLF. Read as bytes.
-    param([byte[]]$Bytes)
-    $faults = @()
-    if (@($Bytes | Where-Object { $_ -ge 0x80 -or ($_ -lt 0x20 -and $_ -ne 9 -and $_ -ne 10 -and $_ -ne 13) }).Count -gt 0) {
-        $faults += "a byte outside printable ASCII, TAB, CR and LF"
-    }
-    $text = [System.Text.Encoding]::GetEncoding(28591).GetString($Bytes)
-    if ($text -match "(?<!`r)`n") { $faults += "a line not ended by CRLF" }
-    return $faults
-}
-
-# How src\silent.vbs and src\portsw.vbs know this driver's controller
-# (roadmap-usb4 task 44.75): by the DriverDesc of its class key, through one
-# function, IsXhciDesc, which both carry word for word. 3.3.0.0's INF gave
+# How src\silent.vbs knows this driver's controller (roadmap-usb4 task
+# 44.75): by the DriverDesc of its class key, through one function,
+# IsXhciDesc (src\portsw.vbs carried it word for word too until task 49.47
+# removed it). 3.3.0.0's INF gave
 # each controller it lists a name of its own (task 44.55), and the two
 # scripts, which took the plain name and the pre-3.2.0.0 one alone, found
-# none of those controllers. Get-ControllerDescFaults holds both scripts to
+# none of those controllers. Get-ControllerDescFaults holds the script to
 # the pinned function and runs Test-XhciDesc, its rule in PowerShell, over
 # every name the two INFs give a controller (each must be taken), the names
 # earlier releases gave it, which a machine keeps until it is updated (each
@@ -1726,7 +1633,7 @@ function Get-ControllerDescFaults {
     $faults = @()
     $plain = $null
     $old = $null
-    foreach ($rel in @("src\silent.vbs", "src\portsw.vbs")) {
+    foreach ($rel in @("src\silent.vbs")) {
         $path = Join-Path $Root $rel
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { $faults += "$rel is missing; the cut publishes it."; continue }
         $text = $latin1.GetString([System.IO.File]::ReadAllBytes($path))
@@ -1766,7 +1673,7 @@ function Get-ControllerDescFaults {
             if ($isController) { $controllers++ }
             $taken = Test-XhciDesc -Desc $m.Name -Plain $plain -Old $old
             if ($isController -and -not $taken) {
-                $faults += "${rel}: the controller's name '$($m.Name)' (%$($m.Key)%) is refused by IsXhciDesc in src\silent.vbs and src\portsw.vbs, so they would find no controller of that model."
+                $faults += "${rel}: the controller's name '$($m.Name)' (%$($m.Key)%) is refused by IsXhciDesc in src\silent.vbs, so it would find no controller of that model."
             } elseif (-not $isController -and $taken) {
                 $faults += "${rel}: '$($m.Name)' (%$($m.Key)%, $($m.Section)) is not the controller and IsXhciDesc takes it."
             }
@@ -1779,7 +1686,8 @@ function Get-ControllerDescFaults {
 # The field reports' batch files (roadmap-hcd task 38.1): QUALREP.BAT beside
 # XHCIQUAL.EXE, run by MS-DOS's COMMAND.COM alone, so it carries no split. A
 # Win spec (run by COMMAND.COM on Windows 98 SE and ME and by cmd.exe from
-# 2000 to 7) carries portsw-on.bat's pinned split: none is published since
+# 2000 to 7) carries the pinned split the port switchover's batches had until
+# task 49.47 and the silent install's still have: none is published since
 # task 42-A.4 retired SNAPON, SNAPGET and SNAPOFF.BAT for XHCITR's /setlevel
 # and /snapshot, and the rule stays for the next. One definition of what each
 # must say, read by test-package.ps1 against the repository's sources and by
@@ -1976,7 +1884,8 @@ function Get-ReportBatchFaults {
 # repository's sources to, and what make-release.ps1 holds a staged or
 # published tools\silent\ to (Assert-SilentInstallContent; task 38.2). The
 # batches are run by COMMAND.COM on Windows 98 SE and
-# ME and by cmd.exe elsewhere, so they are held as portsw-on.bat's are:
+# ME and by cmd.exe elsewhere, so they are held as the port switchover's were
+# until task 49.47:
 # every line from a short list both interpreters run, and a pinned split
 # whose cmd.exe branch only says it changed nothing. silent-on.bat merges
 # SILENT.REG before it sets 1, and silent-off.bat never merges it.
@@ -2460,6 +2369,54 @@ function Get-GitTreeState {
     }
     if (-not $ok) { return @{ Head = "none"; Dirty = $true } }
     return @{ Head = $head; Dirty = ($status -ne "" -or $hidden.Count -gt 0) }
+}
+
+# ------------------------------------------------------------------
+# The x86 package's three small images and what each is built from
+# ------------------------------------------------------------------
+#
+# S98VSD.VXD (src\vsd\build.cmd), XHCIPFW.VXD (src\pfw\build.cmd) and
+# XHCIPFW.SYS (src\pfw\nt\build.cmd) are built outside the DDK's build and
+# carry no source stamp, so an image is held to its inputs by time: one older
+# than any of them was built before a change and is not this tree's. The
+# lists were make-release.ps1's (the cut's checks); make-package.ps1 holds a
+# package to them too since task 49.34, when gated builds whose PATH had no
+# Python went on without both VxDs. The images are the same for both
+# flavours' folders (obj\ and obj\qemu\, objfre and objfre_qemu).
+function Get-VsdImageInputs {
+    param([string]$Repo)
+    return @(@(Get-ChildItem -LiteralPath (Join-Path $Repo "src\vsd") -File |
+               Where-Object { $_.Extension -in @(".c", ".h", ".def", ".cmd", ".ps1", ".py", ".allow") }) +
+             @(Get-Item -LiteralPath (Join-Path $Repo "src\xhci_version.h")))
+}
+
+function Get-PfwVxdImageInputs {
+    # src\vsd's link guards and DDK staging included: src\pfw\build.cmd runs
+    # them (design record 30 section 6.1).
+    param([string]$Repo)
+    return @(@(Get-ChildItem -LiteralPath (Join-Path $Repo "src\pfw") -File |
+               Where-Object { $_.Extension -in @(".c", ".h", ".def", ".cmd", ".ps1", ".allow") }) +
+             @(Get-ChildItem -LiteralPath (Join-Path $Repo "src\vsd") -File |
+               Where-Object { $_.Extension -eq ".py" -or $_.Name -eq "stage-ddk.ps1" }) +
+             @(Get-Item -LiteralPath (Join-Path $Repo "src\xhci_version.h")))
+}
+
+function Get-PfwSysImageInputs {
+    param([string]$Repo)
+    return @(@(Get-ChildItem -LiteralPath (Join-Path $Repo "src\pfw\nt") -File |
+               Where-Object { $_.Extension -in @(".c", ".h", ".rc", ".cmd", ".ps1", ".allow") -or $_.Name -in @("sources", "makefile") }) +
+             @(Get-ChildItem -LiteralPath (Join-Path $Repo "src\pfw") -File |
+               Where-Object { $_.Name -in @("pfw_scan.c", "pfw_scan.h", "pfw_ntdec.c", "pfw_ntdec.h") }) +
+             @(Get-Item -LiteralPath (Join-Path $Repo "src\xhci_version.h")))
+}
+
+function Get-ImageNewerInputs {
+    # The inputs written after $Image (LastWriteTimeUtc), by name; none, an
+    # empty list. A file restored with an old time can hide a change; a
+    # comment-only edit still asks for a rebuild.
+    param([string]$Image, [object[]]$Inputs)
+    $t = (Get-Item -LiteralPath $Image).LastWriteTimeUtc
+    return @($Inputs | Where-Object { $_.LastWriteTimeUtc -gt $t } | ForEach-Object { $_.Name })
 }
 
 # ------------------------------------------------------------------
@@ -3917,21 +3874,29 @@ $script:NonFreeFolder = "USBDRV\NONFREE"
 $script:NonFreePrefix = "non-free"
 $script:NonFreeExtras = @("NOTICE.md", "README.md", "STAGE.TXT")
 $script:NonFreePin = [pscustomobject]@{
-    Tag        = "v1.3.0"
-    Commit     = "d2f7a26987fb9e074f6c5c4e974b6cad80c96c46"
+    Tag        = "v1.4.0"
+    Commit     = "5ba92a162d331b965f9d2f4d56c4dd0d663b1fe2"
     # The SHA-256 of the pack's own SHA256.TXT blob at that commit.
-    PackSums   = "ADF5AB70CB6BBF52CED63038F5F327CD1E2E466D71CDEC61354537F0E75888F7"
+    PackSums   = "B4B0F51543E69AE491AB623B2C10CF577980258E9FF791956D4A90F850A9960A"
 }
 # The folders of non-free/ that download 3 leaves out, and their STAGE.TXT
 # lines with them. The owner, 2026-10-28: the Wi-Fi drivers stay in
 # usb-wdm-nonfree and its own release, where people get them; download 3
 # keeps the Ethernet, HID and serial drivers, from v1.2.0 (owner,
 # 2026-11-02) the audio driver, TASCAM's US-122, and from v1.3.0 (owner,
-# 2026-11-08) Microsoft's USB smart card reader driver, copied only.
+# 2026-11-08) Microsoft's USB smart card reader driver, copied only, and
+# from v1.4.0 (owner, 2026-11-11) Realtek's RTL8157 and RTL8159 INFs with six
+# lines enabled (ethernet/rtl8157/, unsigned) and Realtek's 8 and 8.1 driver
+# (ethernet/rtl815x/w8/), both copied only.
 $script:NonFreeExcluded = @("wifi")
 $script:WdmFreeFolder = "USBDRV\FREE"
 $script:WdmFreePrefix = "free"
 $script:WdmFreeExtras = @("LICENSE", "NOTICE.md", "STAGE.TXT")
+# The licence of the release's Markdown files, which its LICENSE names
+# (usb-wdm-free v0.1.10 on; owner, 2026-11-11): pinned and carried at the
+# set's top whenever the pinned tag has it, and refused when the pin and the
+# tag disagree; a release without it (v0.1.9 and before) carries none.
+$script:WdmFreeDocsLicence = "LICENSE-docs.md"
 # The release's tools (owner, 2026-10-24): free/tools/<name>/, pinned by a
 # "Tool:" line each, carried at USBDRV\FREE\tools\<name>\. Not driver
 # packages: no INF and no STAGE.TXT line. The readme's words for each.
@@ -4298,7 +4263,7 @@ function Export-WdmFreeSet {
     # exactly the files the pin lists under it with their pinned bytes, at
     # WDMFREE\<class>\<package>\; each pinned tool's free/tools/<name>/ the
     # same way, at WDMFREE\tools\<name>\, with no INF; the release's LICENSE
-    # and NOTICE.md; a
+    # and NOTICE.md, and its LICENSE-docs.md where it has one; a
     # STAGE.TXT of the release's lines for those packages' INFs, every one
     # of them on exactly one line; a READ.TXT of the systems each package's
     # legs passed on; and the folder's SHA256.TXT.
@@ -4358,9 +4323,15 @@ function Export-WdmFreeSet {
     $thumb = ""
     if ($Pin.PSObject.Properties.Name -contains "Thumbprint") { $thumb = [string]$Pin.Thumbprint }
     if ($thumb -ne "") { $claimed[$script:WdmFreeCer] = $true }
+    $docsInRel = ((Invoke-DriverPackGit -Root $Root -Arguments @("ls-tree", $rev, "--", $script:WdmFreeDocsLicence)).Trim() -ne "")
+    $docsPinned = $Pin.Files.Contains($script:WdmFreeDocsLicence)
+    if ($docsInRel -ne $docsPinned) {
+        throw "usb-wdm-free $($Pin.Tag) $(if ($docsInRel) { 'has' } else { 'has no' }) $($script:WdmFreeDocsLicence) and the pin $(if ($docsPinned) { 'lists' } else { 'does not list' }) it: the two go together."
+    }
+    if ($docsPinned) { $claimed[$script:WdmFreeDocsLicence] = $true }
     $stray = @($Pin.Files.Keys | Where-Object { -not $claimed.ContainsKey($_) })
     if ($stray.Count -gt 0) { throw "the usb-wdm-free pin lists files of no pinned package or tool: $(@($stray | Select-Object -First 5) -join ', ')." }
-    foreach ($x in @("LICENSE", "NOTICE.md")) {
+    foreach ($x in (@("LICENSE", "NOTICE.md") + @($script:WdmFreeDocsLicence | Where-Object { $docsPinned }))) {
         $h = Get-OtherSetBlob -Root $Root -Rev $rev -Path $x -OutFile (Join-Path $Dest $x)
         if ($h -ne $Pin.Files[$x]) { throw "usb-wdm-free $($Pin.Tag)'s $x is $h, not the pinned $($Pin.Files[$x])." }
         $files[$x] = $h
@@ -4413,7 +4384,7 @@ function Export-WdmFreeSet {
     $own = Write-OtherSetSums -Dir $Dest -Files $files
     $files[$script:OtherSums] = $own
     return [pscustomobject]@{ Kind = "free"; Folder = $script:WdmFreeFolder; Root = $Root; Tag = $Pin.Tag; Revision = $rev; FullStage = $stageText;
-                              Dir = $Dest; Sums = $own; Files = $files; Tools = $tools }
+                              Dir = $Dest; Sums = $own; Files = $files; Tools = $tools; DocsLicence = $docsPinned }
 }
 
 # ---- The other sets' cut-side checks (design record 26 section 6.7.11) ----
@@ -5607,8 +5578,8 @@ Microsoft files are in this download in two places. The first is the seven
 Windows 98 SE storage files of section 3, in a folder of their own, copied
 unmodified from NUSB 3.3 (Microsoft's, apart from USBU2A.SYS, a third
 party's). The second is the KMDF co-installers WdfCoInstaller01007.dll and
-WdfCoInstaller01009.dll. Makers ship them with some of their USB Ethernet
-drivers, and they are in several of those drivers' folders in
+WdfCoInstaller01009.dll. Manufacturers ship them with some of their USB
+Ethernet drivers, and they are in several of those drivers' folders in
 USBDRV\NONFREE\, unmodified. None of them is this project's work. No
 licence to redistribute them has been established, nothing here grants you
 any right in them, and the NOTICE.md beside each says whose they are. The
@@ -5689,10 +5660,10 @@ function Get-ReadmeDownloadText {
             if ($FreeTag -ne "") {
                 $L += Format-ReadmeWrap -Text ("This is ${z3}: $z2 (the base download with the free USB " +
                                               "class drivers of usb-wdm-free $FreeTag in USBDRV\FREE\), with " +
-                                              "the makers' Ethernet, HID, serial and audio drivers of usb-wdm-nonfree " +
+                                              "the manufacturers' Ethernet, HID, serial and audio drivers of usb-wdm-nonfree " +
                                               "$NonFreeTag added in USBDRV\NONFREE\.")
             } else {
-                $L += Format-ReadmeWrap -Text ("This is ${z3}: the base download, $z1, with the makers' " +
+                $L += Format-ReadmeWrap -Text ("This is ${z3}: the base download, $z1, with the manufacturers' " +
                                               "Ethernet, HID, serial and audio drivers of usb-wdm-nonfree $NonFreeTag " +
                                               "added in USBDRV\NONFREE\.")
             }
@@ -5729,18 +5700,18 @@ function Get-ReadmeDownloadText {
     if ($Kind -eq "nonfree") {
         $L += ""
         $L += "USBDRV\NONFREE\ holds other manufacturers' drivers (USB Ethernet, serial"
-        $L += "and game pad drivers), unmodified, as their manufacturers released them."
-        $L += "They are not this project's work. USBDRV\NONFREE\NOTICE.md says whose"
-        $L += "each one is, and quotes what some of their manufacturers said about"
-        $L += "passing them on; apart from that, no licence to redistribute them has"
-        $L += "been found."
+        $L += "and game pad drivers), as their manufacturers released them, apart from"
+        $L += "the files its README.md says were changed. They are not this project's"
+        $L += "work. USBDRV\NONFREE\NOTICE.md says whose each one is, and quotes what"
+        $L += "some of their manufacturers said about passing them on; apart from that,"
+        $L += "no licence to redistribute them has been found."
     }
     return ($L -join "`r`n")
 }
 
 function Get-ReadmeOtherContentsText {
     # The readme's "What is in this directory" lines for the other drivers.
-    param([string]$Kind, [string]$FreeTag, [string]$NonFreeTag, [string[]]$FreeTools = @())
+    param([string]$Kind, [string]$FreeTag, [string]$NonFreeTag, [string[]]$FreeTools = @(), [bool]$FreeDocsLicence = $false)
     $L = @()
     if ($Kind -eq "base" -or ($Kind -eq "nonfree" -and $FreeTag -eq "")) {
         if ($Kind -eq "base") {
@@ -5752,6 +5723,7 @@ function Get-ReadmeOtherContentsText {
                   -Text "the free USB class drivers (experimental), from usb-wdm-free $FreeTag"
         $L += ""
         $L += "      LICENSE      their licence, the GNU GPL v2"
+        if ($FreeDocsLicence) { $L += "      LICENSE-docs.md  the licence of the .md files, CC BY 4.0" }
         $L += "      NOTICE.md    the code in them adapted from other projects"
         $L += "      READ.TXT     the systems each driver was tested on"
         $L += "      SHA256.TXT   every file's hash"
@@ -5779,13 +5751,13 @@ function ConvertTo-DownloadReadme {
     # of the three parts, which must be there exactly once as download 1's,
     # replaced by -Kind's.
     param([string]$Text, [string]$Version, [string]$Kind, [string[]]$Kinds, [string]$FreeTag, [string]$NonFreeTag,
-          [bool]$DriverPackIncluded, [string]$Label, [string[]]$FreeTools = @())
+          [bool]$DriverPackIncluded, [string]$Label, [string[]]$FreeTools = @(), [bool]$FreeDocsLicence = $false)
     if ($Kind -eq "base") { return $Text }
     $pairs = @(
         @((Get-ReadmeDownloadText -Version $Version -Kind "base" -Kinds $Kinds -FreeTag $FreeTag -NonFreeTag $NonFreeTag -DriverPackIncluded $DriverPackIncluded),
           (Get-ReadmeDownloadText -Version $Version -Kind $Kind -Kinds $Kinds -FreeTag $FreeTag -NonFreeTag $NonFreeTag -DriverPackIncluded $DriverPackIncluded)),
         @((Get-ReadmeOtherContentsText -Kind "base" -FreeTag $FreeTag -NonFreeTag $NonFreeTag),
-          (Get-ReadmeOtherContentsText -Kind $Kind -FreeTag $FreeTag -NonFreeTag $NonFreeTag -FreeTools $FreeTools)),
+          (Get-ReadmeOtherContentsText -Kind $Kind -FreeTag $FreeTag -NonFreeTag $NonFreeTag -FreeTools $FreeTools -FreeDocsLicence $FreeDocsLicence)),
         @((Get-ReadmeMsFilesText -DriverPackIncluded $DriverPackIncluded -Kind "base"),
           (Get-ReadmeMsFilesText -DriverPackIncluded $DriverPackIncluded -Kind $Kind))
     )

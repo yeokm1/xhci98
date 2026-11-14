@@ -80,6 +80,26 @@ keeps its default of 50, measured against 500 by the legs (section
 7.2.6a). **The code, 2026-10-14**: section 7.2.14, as built; its legs
 are owed.
 
+**Revision 10, 2026-11-11 (roadmap-usb4 task 49.24, designed before
+code; a design only).** Section 4.5: `XhciInterruptMode` 4, the
+controller's events through a message-signalled interrupt on the systems
+that have none of their own - through the MSI stability improvements on
+2000, XP and XP x64 - with the owner's decisions of 2026-11-10 and
+2026-11-11 (section 12, decision 10). The 98 SE and ME message path is
+not part of `3.5.0.0` (owner, 2026-11-13). Nothing of it is built: the value 4 still runs as 0,
+and sections 3 and 8 describe the driver as it is. The helper's part is
+record 18 section 15.16. Built and merged since (sections 4.5.16 to
+4.5.18). Since 2026-11-13 the 98 SE and ME code is out of the tree: there
+a stored `4` runs as `0` (automatic), as a reserved value does.
+
+**Revision 11, 2026-11-11 (task 49.24, the design carried on; still a
+design only).** The owner's answers of that afternoon to section
+4.5.13's eleven open points are written into the sections they touch
+(section 4.5.13 now lists them as decided), and section 4.5.15 is new.
+The owner's answers
+to the nine points that revision first left open are in as well
+(section 4.5.13, second table).
+
 ## 1. What is asked, and what is not
 
 A registry switch chooses how the bus learns that the controller has written
@@ -215,6 +235,11 @@ from a value never found. The **effective mode** is what the rules below
 act on: 0 for a value of 0 or 4 and above, else the value (1, 2 or 3;
 3 read as 0 from 2026-10-09 to 2026-10-11). Every rule
 in this record that says "mode 0" means the effective mode 0.
+
+Value 4 is section 4.5's (task 49.24): a message-signalled interrupt on
+2000, XP and XP x64. On 98 SE and ME it runs as 0, as a reserved value
+does: the 98 SE and ME message path is not part of `3.5.0.0` (owner,
+2026-11-13), and its code left the tree.
 
 Owner's decisions of 2026-10-05 (section 12): the values, their names and
 defaults, the numbering, that neither period may be 0, and the 5000 ms
@@ -1002,6 +1027,1496 @@ the `qemu` flavour's debug console before the storm 45.33 read (the line
 connected, as before); without the holder, "none" with the functions
 read; on 2000 or later, "not looked for"; on each, the start's elapsed
 time with and without a holder.
+
+### 4.5 Mode 4: a message through the MSI stability improvements (2000, XP, XP x64) (revision 10, 2026-11-11; roadmap-usb4 task 49.24; a design, not built)
+
+**Status.** This section is the design, written before the code and
+before the interface it uses is final (the roadmap takes
+the MSI tasks last: 49.22 and 49.23 first, then this). Nothing of it is
+in the driver: `XhciInterruptMode` `4` still runs as `0` (section 3), no
+INF writes its values, and `docs/using/tuning.md` does not describe it.
+Every statement about the interface is pinned to the state read
+(the MSI header's branch `xirq-2` in its state A; section 4.5.11
+lists what it depends on),
+and is read again when the header is taken in; the code is built against
+the MSI header's version 1 (read 2026-11-12), and section
+4.5.16 (revision 12) says what that changes. It replaces the design
+the parked branch `w48-mode4` carries as its section 4.5 (2000 and XP
+only, the line borrowed only); section 4.5.12 says what of that branch
+stands.
+
+**What it is for.** Windows 2000, XP, Server 2003 and XP x64 have no
+message-signalled interrupts of their own, so a controller there has
+its line or a poll (sections 4 to 4.2). The MSI stability improvements,
+one header compiled into the driver (below, the library), give a driver
+a message on those systems. `XhciInterruptMode` `4` asks for the
+message through it. The 98 SE and ME message path is not part of
+`3.5.0.0` (owner, 2026-11-13).
+
+#### 4.5.1 The decisions as they stand
+
+The owner's, 2026-11-10 and 2026-11-11 (section 12, decision 10):
+
+1. **Opt-in.** Mode 0 never picks 4, on any system; the INF keeps
+   writing 0.
+2. **No fallback**, as modes 1 and 3. A connection that fails or is
+   refused fails the controller's start (Code 10), with the reason
+   recorded (section 4.5.9). A connection lost while running - a tripped
+   brake, a message that stops arriving, a re-arm that fails - fails the
+   controller, logged; it never carries on by the line or by a poll.
+3. **`XhciMsiStrategy`** says where the vector comes from on 2000, XP and
+   XP x64, and no value turns into another: `0`, the default, claims a
+   free ISA interrupt for the controller; `1` borrows the controller's
+   own line, as the user's assertion that the line is private, with this
+   driver's veto when it sees another device on the interrupt. `1` is
+   never the default. A third source once numbered 2 is parked in
+   the library and is not a value here.
+4. **`XhciMsiIsaIrq`** forces the IRQ strategy 0 claims. The installer
+   offers it beside mode 4 when strategy 0 is chosen: automatic, the
+   default, or one of the seven IRQs (section 4.5.10).
+5. **A shared claim** (two controllers of this driver on one claimed
+   interrupt) is a user value, **`XhciMsiShare`**: `0` off, `2` to `8`
+   on with that many controllers to a claim at most. Its default is on,
+   at `2`, but only once the emulator legs and the owner's bench have
+   passed; until then it is written `0`. The policy is "an interrupt of
+   its own first, then share": a controller shares only when no
+   interrupt of its own is left. Only this driver's own controllers
+   share. **Superseded 2026-11-13** (the owner; section 4.5.19): sharing
+   on by default, one IRQ filled up to `XhciMsiShare` controllers (1 to
+   16, absent 8) before another is taken.
+6. **`XhciMsiAvoid`** (design record 20 section 4.1) is obeyed: a
+   controller it applies to is refused under mode 4. Mode 3 keeps its
+   override.
+7. **The quarantine.** A message that cannot be proven off at a teardown
+   keeps its vector held and `xhci98.sys` loaded until Windows restarts,
+   and that controller is refused at every later start, under any mode,
+   until then. A controller that was unplugged and is plugged in again
+   is admitted on 2000, XP and XP x64 when the library proved the
+   function absent at its removal.
+8. **98 SE and ME.** The 98 SE and ME message path is not part of
+   `3.5.0.0` (owner, 2026-11-13).
+9. **Licence and the signature.** The MSI header is MIT, and every
+   client image carries the library's author-and-version signature
+   string, with no macro to leave it out (section 4.5.10).
+10. **The brake's numbers.** The library's own defaults stay 1000 unclaimed
+    entries and a 500 ms listen; this driver passes its own values
+    explicitly: 256 unclaimed entries, for the library's brake and for
+    the count this driver keeps itself under strategy 1, and a 500 ms
+    listen. The bench reading may move them.
+11. **The watchdog and the No Op.** The stranded-event watchdog is the
+    existing lost-interrupt backstop with a judge added, not a timer of
+    its own: eight stranded events within 60 s fail the controller. The
+    start's No Op is waited for by interrupt for 500 ms, on every system
+    (section 4.5.6).
+12. **A message lost while running** is reported to Windows as a failed
+    device on 2000, XP and XP x64; which code Device Manager then shows
+    is read on a leg, and it need not be Code 10 (section 4.5.4).
+13. **The header is taken in once.** The MSI header is vendored only
+    when its two lines (`dev-1` and `xirq-2`) are one (section
+    4.5.11, item 2).
+14. **Windows 2000, strategy 1:** no exclusive-device request is tried
+    in the requirements filter. Strategy 0 is the path for a line that
+    is shared.
+
+Mode 4 is marked experimental wherever a user meets it (the owner,
+2026-11-10). Recovery for the user: set `XhciInterruptMode` to another
+value, then disable and enable the controller or restart; Last Known
+Good on 2000 and XP if a start hangs.
+
+#### 4.5.2 The values and the decision
+
+| Value | Read | Meaning | Out of range |
+|---|---|---|---|
+| `XhciInterruptMode` `4` | each start (section 3) | the message of this section, on 2000, XP, Server 2003 and XP x64 (the 98 SE and ME message path is not part of `3.5.0.0`, owner, 2026-11-13) | `5` and above run as `0`, the value read recorded; on 98 SE and ME `4` runs as `0` as well (the system class is taken first) |
+| `XhciMsiStrategy` | each start under mode 4, on 2000, XP and XP x64 | `0` a claimed ISA interrupt; `1` the controller's line borrowed | any other value refuses the start, reason 30 |
+| `XhciMsiIsaIrq` | each start under mode 4 and strategy 0 | `0` the library's choice; `3` to `7`, `10` or `11` that IRQ and no other | any other value refuses the start, reason 30 (the library would refuse it as well; the driver decides first so the reason is its own) |
+| `XhciMsiShare` (the sharing switch and the member cap in one value; since 2026-11-13 section 4.5.19's meaning) | each start under mode 4 and strategy 0 | the most controllers on one claimed IRQ before another is taken: `1` every controller an IRQ of its own; `2` to `16` that many on one IRQ, the fullest line joined first; absent `8` | `0` (not offered) runs as `1`, above `16` as `16`, the value read recorded |
+| `XhciMsiAvoid` | each start (record 20) | a matched controller is refused under mode 4 | as record 20 |
+
+Under the registry rule each
+value is written by both INFs on every install path at its default with
+the don't-overwrite flag, with its INF-gate row and its `tuning.md` row,
+when the code lands; `XhciMsiShare` was written at `0` until decision 5's
+condition was met, and since 2026-11-13 is written at `8` (section
+4.5.19). The values of the second
+claim pool (section 4.5.11, item 11), which now exists, are section
+4.5.16 item 1's: read on 32-bit 2000 and XP only, written by the x86 INF
+at their defaults, the pool off unless a user sets it.
+
+**The decision** (pure, `XhciPollDecideEx` and a mode-4 step of its own,
+host vectors). Under the effective mode 4, in this order, the first row
+that applies:
+
+| Inputs | Delivery | Reason |
+|---|---|---|
+| Vista or later (`IoIsWdmVersionAvailable(6, 0)`) | none | 22 `MSG4_NO_SYSTEM` |
+| this function entered in the image's refusal table this boot (section 4.5.4) | none | 27 `MSG4_QUARANTINED` |
+| `XhciMsiAvoid` applies | none | 24 `MSG4_AVOIDED` |
+| 2000, XP, XP x64: `XhciMsiStrategy` neither 0 nor 1, or under strategy 0 an `XhciMsiIsaIrq` outside its set | none | 30 `MSG4_VALUE_INVALID` |
+| strategy 1: no interrupt resource, a message resource, or Interrupt Pin read 0 | none | 23 `MSG4_NO_LINE`, "no line to borrow" |
+| otherwise | a message, its capability not read yet (`XHCI_POLL_DELIVERY_MESSAGE`) | 21 `FORCED_MSG4` |
+
+The second row is not mode 4's alone: it stands at every start on these
+systems, whatever the mode (section 4.5.4, "The refusal table"). The
+connection then either stands (the delivery becomes
+`XHCI_POLL_DELIVERY_MSI` or `_MSIX`, reason 21 kept) or refuses the
+start with one of:
+
+| Reason | When |
+|---|---|
+| 25 `MSG4_SHARED` | strategy 1: the veto found another device on the interrupt, or could not tell |
+| 26 `MSG4_REFUSED` | the connect returned anything but `OK` (the library's status kept in `MsiConnectStatus`), the library could not be initialised (x86: the helper's routine absent), or the function's PCI location could not be established |
+| 31 `MSG4_NO_INTERRUPT` | connected, but the start's No Op did not complete through the message (section 4.5.6) |
+| 32 (reserved) | not produced: it was the 98 SE and ME path's, which is not part of `3.5.0.0` (owner, 2026-11-13); the number is kept, as 28 and 29 are |
+| 33 `MSG4_NO_IRQ` | strategy 0: the claim ended with `MSGIRQ_STATUS_NO_VECTORS` - no free ISA interrupt, the forced one refused, or with sharing on every claim that could be joined full |
+| 34 `MSG4_CLAIM_REFUSED` | strategy 0: the claim returned any other status (kept in `MsiConnectStatus`) |
+
+Reasons 28 and 29 belonged to builds of the parked branch (a build with
+no strategy, and "strategy 0 not available"); they were never released
+and are not produced. These are
+the start's reasons only: what ends a delivery after the start is
+recorded apart (`Msg4Lost`, section 4.5.9), so a snapshot still says how
+the start was decided. An unreadable Interrupt Pin is let through under
+strategy 1: a configuration space that cannot be read fails the connect
+with its own status. On Windows 2000 on the boards of record 18 section
+16.4 (`hc->NoRouteStrip`) no interrupt is asked for, so strategy 1
+refuses there (reason 23) and strategy 0 does not need one.
+
+**The requirements filters** (record 18 sections 4.2 and 16). Under
+strategy 1 mode 4 asks for what mode 1 asks: the line. Under strategy 0
+the start needs no interrupt resource at all - the
+message's vector is not the device's resource - so the filter does what
+it does under mode 0 on that system, and a line Windows assigns anyway
+is left unconnected. The core's own gate follows: today
+`XhciInitController` waives the interrupt resource for a poll delivery
+alone (the test on `ResourcesTypes` against `XhciResourcesRequired`),
+and it waives it as well for a message connected under mode 4 by
+strategy 0. The resource mask itself stays what Windows
+gave - no interrupt bit is set for a resource that was not there. On
+Vista and later the question does not arise: the start refuses.
+
+#### 4.5.3 2000, XP and XP x64: the connection through the MSI stability improvements
+
+At `IRP_MN_START_DEVICE` after the lower drivers, from `hcdConnect`,
+where mode 1 would connect the line, with the readiness flag clear
+(section 4.5.5) and the controller's causes off. That last is
+established, not assumed: `hcdConnect` runs before `XhciInitController`,
+whose firmware handoff and HCRST have therefore not happened, and a
+controller the firmware still runs need not be masked. So mode 4, on
+every system, takes a step of its own before the claim, the listen and
+the connect (**the quiet step**). Nothing of the controller is decoded
+at that point - the start has just zeroed the extension - so the step
+begins with the capability decode and its validation that
+`XhciInitController` makes at its own beginning (the same routine, its
+result kept; the later call does not decode twice): the handoff needs
+the extended-capability offset and the mask needs the operational and
+runtime offsets, and neither is attempted on offsets not validated.
+Then the firmware handoff that `XhciInitController` makes is made (the
+same routine; the later call finds the controller owned), then
+`USBCMD.INTE` and interrupter 0's `IMAN.IE` are cleared and read back
+clear. A decode that is refused, a handoff that fails or a mask that
+does not read back refuses the start (reason 26, a status of this
+driver's own) with nothing claimed or connected.
+The start's HCRST comes later and enables nothing. The seam is one
+file,
+`hcd_msgnt.c` (section 4.5.16 item 6), the only one that compiles the
+header's implementation.
+In order, the first refusal ending the start:
+
+1. **The library, once per image, at the first start that can resolve.**
+   The library asks for `MsgIrqInitialize` once from `DriverEntry`. This
+   driver cannot call it there, and says so as a deliberate exception:
+   in state A the call marks the library initialised before it
+   resolves its routines, and every later call returns at once, so a
+   call made before the resolver can answer would leave the library
+   without its routines for the image's life; and on x86 the resolver is
+   the helper's routine, which a first install has only from the next
+   boot (record 18 section 15.16). So the call is made exactly once per
+   image, under a driver-global event, at the first mode-4 start on
+   these systems at which the resolver is in hand - on x86 after the
+   one-shot look of record 18 section 15.16 returned the routine, on
+   amd64 always. Without the routine the start is refused (reason 26,
+   the status recorded as `MSGIRQ_STATUS_UNSUPPORTED`, this driver's
+   own) and the library is left uninitialised; nothing latches, so a
+   later start looks again. The host table: `Allocate` and `Free` are
+   `hcd_pool.c`'s non-paged site; `Resolve` is `HcdMsiFindRoutine`
+   (`hcd_msi86.c`), whose context is the kernel's own
+   `MmGetSystemRoutineAddress` and needs no reference to the helper
+   after the look. A name the kernel does not answer leaves the library
+   feature that needs it unsupported for the boot (the claim then
+   refuses, reason 34). Once the call has run the image is kept for the
+   boot (`DriverUnload` cleared under the boot ledger's lock, as a
+   quarantine does): the library maps the local APIC for the image's
+   life and has no call to end it.
+2. **The library's mode.** `MSGIRQ_MODE_FAKE_IRQ` goes on; `NONE` is
+   left to the claim's or the connect's status, which names why
+   (`MSGIRQ_STATUS_HAL_UNSUPPORTED`: a PIC-mode HAL, or a local APIC in
+   x2APIC mode).
+3. **The vector's source**, by `XhciMsiStrategy`.
+
+   **Strategy 0, the claim** (the library's design record 05 sections
+   2.2 to 2.5 and 8). `MsgIrqIsaClaim(&Params, &Options, &Result)` in the PnP
+   IRP's thread, with `Params` carrying the function's bus, device and
+   function, and `Options`: `Size`; `DriverObject` this driver's;
+   `Flags` `MSGIRQ_ISA_FLAG_OVERRIDE` with `CandidateCount` 1 and the
+   one candidate when `XhciMsiIsaIrq` is not 0, and
+   `MSGIRQ_ISA_FLAG_SHARE` when `XhciMsiShare` is not 0;
+   `QuietMilliseconds` 500 and `BrakeEntries` 256, this driver's own
+   numbers (decision 10); `Exclude` 0; `MaxMembers` the value of
+   `XhciMsiShare` as it runs (2 to 8; 2 when it is 0, where the library
+   wants a number in its range and no claim is joined; since 2026-11-13
+   section 4.5.19's: `SHARE` with `JOIN_FIRST`, the cap 2 to 16, and with
+   sharing off no flag and a cap of 0, the library's default). `Result` is logged
+   whole whatever the status (section 4.5.9). The library picks, in its
+   order 10, 11, 5, 7, 6, 3, 4, the first IRQ that no source of its
+   picker excludes, that the PnP manager's arbiter grants and that stays
+   quiet for the listen; with the flag and no IRQ of its own left it
+   joins a claim another controller of this driver made with the flag,
+   on an IRQ its own picker found nothing against but the arbiter's
+   conflict, with room under both caps. The listen holds the start for
+   up to the listen time per candidate tried (seven candidates at
+   most; with the second pool chosen the upper inputs in scope are tried
+   too, after the ISA IRQs and before a join, section 4.5.16 item 1). `OK`
+   goes on to the connect with
+   `MSGIRQ_CONNECT_FLAG_ISA_LINE` and an all-zero `LineInterrupt`;
+   `NO_VECTORS` refuses with reason 33; `CLAIM_KEPT` refuses with reason
+   34 and enters the function in the refusal table; any other status
+   refuses with reason 34. The controller's own line, where it has one,
+   is not connected and not asked about.
+
+   **Strategy 1, the line borrowed.** The veto first: the PnP manager's
+   resource map (`\Registry\Machine\HARDWARE\RESOURCEMAP\PnP
+   Manager\PnpManager`, every `.Translated` value but this controller's
+   own, walked by the bounded pure `XhciMsg4ShareScan`) and, when the
+   map is clear, every present PCI function read through
+   `HalGetBusData` (`HcdCtlLineShared`: Interrupt Pin 1 to 4, Interrupt
+   Disable clear, Interrupt Line this controller's). Another device on
+   the interrupt, a map or a walk that cannot be read, or a line
+   register of this controller's that reads 0 or 255 refuses, reason 25:
+   the veto does not pass by default. Then the connect with
+   `MSGIRQ_CONNECT_FLAG_PIN_PRIVATE` and `LineInterrupt` from the
+   translated descriptor (`Vector`, `Level`, `Affinity`, the mode from
+   `Flags`, and its `ShareDisposition` as given). The veto's limits are
+   the parked design's and stand: it does not see a device whose
+   firmware routes it to the line under another Interrupt Line value,
+   nor one assigned the interrupt after this start.
+4. **The connect.** `MSGIRQ_CONNECT_PARAMS`: the PDO; `Bus`, `Dev`,
+   `Func` from `IoGetDeviceProperty(DevicePropertyBusNumber,
+   DevicePropertyAddress)`; `ConfigAccess` over `HcdSvcConfigBytes`
+   (`hcd_svc.c`: the `IRP_MN_READ_CONFIG` and `IRP_MN_WRITE_CONFIG`
+   route, `PASSIVE_LEVEL`, answering the bytes the PCI driver reports
+   moved); `MSGIRQ_MESSAGE_ANY`, one message; the flag of step 3 and no
+   other (the library refuses the two together); the mode-4 ISR of
+   section 4.5.5 (`__stdcall`) with the controller as its context;
+   `SpinLock` NULL (so a quarantine keeps no lock of this driver's
+   alive), `SynchronizeIrql` 0, `FloatingSave` `FALSE`.
+
+**The outcome.** `MSGIRQ_STATUS_OK`: the info block is kept
+(`hc->Msg4Info`); `hc->Interrupt` is its `MessageInfo[0].InterruptObject`,
+so every `KeSynchronizeExecution` caller has a real interrupt object;
+the delivery becomes the capability read from configuration space as for
+mode 3; `IntDelivery` becomes the message's (so task 36.3's route repair
+leaves it alone); the readiness flag is set and the interrupter enabled
+at the end of the start as for a message, with no write of this driver's
+to the Command register (below); then the No Op of section 4.5.6. The
+poller is not opened: no watcher under a message (section 4.1). Any
+other status refuses the start, reason 26, the status kept.
+
+**What a failed start holds, and how it is given back.** The claim and
+the connection are held apart, and `hcdRelease` knows three states - a
+claim with no connection, a live connection, neither - so each failure
+has one way out:
+
+| The start failed at | Held | Given back by |
+|---|---|---|
+| the decision, the library, the veto, or a claim that returned `NO_VECTORS`, `HAL_UNSUPPORTED`, `UNSUPPORTED`, `NO_MEMORY` or `INVALID_PARAMETER` | nothing | - |
+| a claim that returned `CLAIM_KEPT` (an earlier claim of the function's kept, or this claim's own withdrawal failed) | a kept claim, the library's for the boot | nothing: no release and no second try; the function entered in the refusal table, the image kept |
+| a claim that returned `IN_USE` | whatever this driver already held for the function: its record is left as it was, not overwritten | the release that record's own lifetime runs; the start fails as a fault of this driver's (reason 34) |
+| the connect, no info block returned | strategy 0: the claim | `MsgIrqIsaRelease`; `CLAIM_KEPT` from it enters the function in the refusal table and keeps the image |
+| the connect, `MSGIRQ_STATUS_CONFIG_ACCESS` with an info block (a live connection whose MSI could not be confirmed off) | the connection, and under strategy 0 the claim | the release of section 4.5.4, before the start returns: disconnect, once more, then the claim's release; or the quarantine, which keeps the claim with its vector |
+| the No Op by interrupt, or any later step of the start | the connection, and under strategy 0 the claim | `hcdStopBody`, as a failed thread start is stopped: the same release |
+
+**The Command register is the library's while a connection stands.** In
+state A the arm (at connect and at every re-arm) sets Bus Master
+Enable where it reads clear, sets Interrupt Disable where the function
+implements it, reads the register back, and fails
+(`MSGIRQ_STATUS_CONFIG_ACCESS`) when Bus Master Enable reads clear or
+Interrupt Disable reads clear on a function that has it; the disarm
+clears Interrupt Disable again. So between a successful connect or
+re-arm and the disconnect this driver writes neither bit - no
+`hcdIntxEnable`, no route repair, no resume step that restores an older
+Command value after the re-arm - with one exception, the quiesce's clear
+of Bus Master Enable before a quarantine. A start on the line after a
+clean disconnect finds Interrupt Disable clear, as the library left it
+(in state A; in the one line the bit stays set and the later start
+clears it, section 4.5.16 item 5).
+And because a disconnect gives the line back, **the interrupter stays
+off from before every disconnect until a connection stands again** (the
+bar on re-enabling, section 4.5.4): an interrupter enabled in between
+could raise INTx on a line nobody serves.
+
+#### 4.5.4 2000, XP and XP x64: the lifetime
+
+**The claim's lifetime is not the connection's** (strategy 0). The claim
+is made at the start, kept across a query-stop and its cancel, and
+released at the stop itself and at a removal, each time only after the
+disconnect returned `OK`. Claim and release run in the PnP IRP's thread:
+the library requires the system process's context for both, and the
+start, stop and removal IRPs arrive in it (the library's record 05
+section 2.6; section 4.5.11, item 6).
+
+**A start on a started controller.** The library's template for this case
+(keep the claim and the connection, re-arm) is not taken. The HCD's own
+rule is kept deliberately (`hcd_pnp.c`, `hcdStart`): such a start is not
+served; the running lifetime is stopped as a surprise removal stops it
+and the start fails, unforwarded. Under mode 4 that stop is the release
+below, quarantine admitted, so no second claim is ever made over a live
+one (`MSGIRQ_STATUS_IN_USE` from a claim is therefore a fault of this
+driver's and refuses, reason 34).
+
+**The bar on re-enabling, and the mask's proof.** Two things are kept
+apart. The proof is the hardware's: `InterruptDeliverySuppressed`, set
+only when a mask's read-back shows the interrupter off, and never
+written on any other ground. The bar is this driver's own state
+(`hc->Msg4Barred`, with `XHCI_EXT_FLAG_INTERRUPTS` cleared), set under
+the controller lock by whoever takes delivery away for a mode-4
+transition, and lifted only by the step that has a connection standing
+and armed again. While the bar stands: the drain re-arms no interrupter
+(the DPC calls `XhciEventDpc` with its re-arm off, as under a poll); no
+submission's path and no resume enables one; and the in-place recovery
+is deferred, left requested and not charged. An ordinary disconnect -
+one that turns the message off and gives the line back - needs both,
+the bar and the controller proven silent: the mask's proof, or a
+controller that `XhciStopController` read back halted. The quarantine
+is the exception, because it writes nothing to the device and gives no
+line back. The bar stands from the query-stop's mask to the
+cancel's reconnect or the stop, from a failed re-arm on, and for good
+once the connection is lost - there whether or not a mask could be
+written or proven.
+
+**The release (`hcdRelease`).** Every final teardown - the stop that
+follows no released query, the surprise removal, the removal that found
+the controller started, a refused start after the connect, the stop of a
+controller started twice - runs after the controller thread has been
+stopped and joined, after `XhciDisableInterrupts` and
+`XhciStopController` where the start reached them (the causes masked)
+and after the readiness flag is cleared, and before the DPC drain:
+
+1. Only with the controller proven silent (the mask's proof, or the
+   stop read back as halted): `MsgIrqDisconnect(Info, 0)`. `OK`: the
+   connection is gone. Without that proof - an unplugged controller
+   gives none, and a present one whose mask did not take could raise
+   INTx once the message is off - no plain disconnect is made. **At a
+   surprise removal and at a removal, and only there** (decision 7),
+   and only for a function this driver itself read as implementing
+   Interrupt Disable (the Command register read back with the bit set
+   after the connect's arm, noted then), the
+   call is `MsgIrqDisconnect(Info, MSGIRQ_DISCONNECT_ABSENT_OK)`
+   instead: `OK` from it means the library either confirmed the message
+   off or proved the function absent, and the connection is gone with
+   nothing held - no quarantine, no entry in the refusal table, the
+   claim released by step 4 - so the same controller plugged in again
+   starts. At any other teardown without the proof, and at a removal of
+   a function without Interrupt Disable, steps 1 and 2 are skipped and
+   step 3 is taken directly.
+2. `MSGIRQ_STATUS_CONFIG_ACCESS`: a requested 10 ms wait, and once more
+   (with the same flag where step 1 passed it).
+3. Still not: Bus Master Enable cleared through the same configuration
+   route (read, clear bit 2, write; a failure noted, not fatal), then
+   `MsgIrqDisconnect(Info, MSGIRQ_DISCONNECT_QUARANTINE)`, which always
+   returns `OK`; the function entered in the refusal table; the image
+   kept; the event logged and counted. A function the library could
+   not prove absent ends here: one whose configuration space merely
+   reads all ones is not proven silent.
+
+   The absence flag is the library's branch `dev-1`'s and is not in
+   state A (section 4.5.11, item 2). Because the header is vendored
+   only once the two lines are one (decision 13), no build of this
+   driver exists without it, and the code is written once, with the
+   flag. Passing it for a function that is in fact present and not
+   proven masked lets the library turn that function's message off
+   (in state B the flag does not stop the ordinary disarm of a
+   function that answers). What such a function could then raise on
+   its line is answered in `dev-1` by Interrupt Disable kept set at the
+   disable - but only where the function has the bit, which the
+   library does not require; hence this driver's own condition above.
+   A function without the bit, unplugged or not, is quarantined at its
+   removal as before decision 7, and is refused until the restart.
+   Whether the one line keeps Interrupt Disable set is one of the two
+   things read again when the lines are one; if it does not, the
+   condition cannot be met and every such removal quarantines.
+4. Strategy 0, with a claim held and no quarantine in step 3:
+   `MsgIrqIsaRelease`. `OK`: the IRQ is free again (or, on a shared
+   claim, the membership ended; the claim goes with its last member).
+   `CLAIM_KEPT` - the claim was kept by a quarantine of another member,
+   or its release failed: the function entered in the refusal table and
+   the image kept. After a quarantine in step 3 no release is called:
+   the claim is kept with its vector.
+
+`hc->Interrupt` and `hc->Msg4Info` are NULL after either. The DPC drain
+that follows waits out what the ISR queued before the disconnect.
+
+**The refusal table.** A table of the image's own (eight functions by
+bus, device and function, under its event; a full table, or a location
+never read, sets a latch that refuses every start on these systems for
+the boot). A function is entered when its connection was quarantined or
+its claim kept, and the image is kept with it, so the table outlives the
+function's device object. The check runs **at every start, whatever the
+mode**, right after the resources are parsed and before anything is
+mapped or connected: the function's MSI was never proven off and an
+HCRST does not clear configuration space, so no mode may start it again
+this boot - not 0, whose line connect would meet the held vector and
+fall back to a poll, not 1 or 2. The delivery is then none with reason
+27. The table is empty unless a quarantine happened, so the location is
+read only then. This is decision 7.
+
+**The stop and its query** (the library's integration notes for WDM
+drivers and for this driver). A stop must release the interrupt, and a
+release that cannot prove the MSI off may not be quarantined there (the
+PnP manager would hand the resources on), so under a connected mode 4
+the release moves to `IRP_MN_QUERY_STOP_DEVICE`, where it can still be
+refused (`HcdMsg4QueryStop`). The query and the cancel each hold the
+power gate (`HcdPowerGateEnter`) across the mask, the library's calls
+and the state they publish, so no suspend, resume or recovery runs
+between them. A query that finds the connection lost (below) is
+refused (`STATUS_UNSUCCESSFUL`, completed here): a stop may only follow
+a query that released the interrupt, a lost connection is still a
+connected one whose message was never proven off, and the removal that
+the failure report brings is where it is released or quarantined.
+
+1. The bar set and the causes masked (`XhciDisableInterrupts` at
+   `DISPATCH_LEVEL`). Only when the mask's read-back proves it
+   (`InterruptDeliverySuppressed`) is the readiness flag cleared and the
+   next step taken. A mask that is not proven disconnects nothing: the
+   bar is lifted, the connection stays as it was, the interrupter is
+   asked on again as after a drain, and the query fails
+   (`STATUS_UNSUCCESSFUL`, completed here). It is not a lost
+   connection: the message still arrives.
+2. `MsgIrqDisconnect(Info, 0)`, retried once after 10 ms on
+   `MSGIRQ_STATUS_CONFIG_ACCESS`. `OK`: `hc->Msg4Info` and
+   `hc->Interrupt` NULL, `hc->Msg4QueryReleased` set. **The claim is
+   kept.** The DPC is not closed; until the stop or the cancel the ring
+   is drained only by the watchdog's detector (section 4.5.6), whose
+   drains in this state are not counted against the controller. The
+   query is then sent down **and waited for**: if a lower driver fails
+   it, the reconnect below is made at once, before the query's failure
+   is returned, and the cancel Windows may still send finds a connection
+   standing and does nothing.
+3. Still `MSGIRQ_STATUS_CONFIG_ACCESS`: never quarantined here. The
+   connection stays live; `MsgIrqReArm`; on `OK` the flag is set, the
+   bar lifted and the interrupter turned on again; on failure
+   the connection is lost (below). Either way the query fails,
+   `STATUS_UNSUCCESSFUL`, completed here and not passed down.
+
+`IRP_MN_CANCEL_STOP_DEVICE` after a query that released the connection
+connects again as at start with this start's resources - strategy 0 on
+the claim it still holds, with `MSGIRQ_CONNECT_FLAG_ISA_LINE` and no new
+claim; strategy 1 with the veto again - and then, in this order, sets
+the flag, lifts the bar and turns the interrupter on, and only
+then issues a fresh No Op and waits for it by interrupt (section
+4.5.6); `hc->Msg4QueryReleased` is cleared. A refusal is no fallback
+case: the connection is lost (below), and a refusal that returned a
+live connection keeps it in `hc->Msg4Info` for the release. The cancel
+itself succeeds, as Windows requires. `IRP_MN_STOP_DEVICE` after a
+released query has no connection left: `hcdRelease` finds `hc->Msg4Info`
+NULL and, under strategy 0, releases the claim (step 4 above). A
+query-remove and its cancel change nothing: the removal releases, and
+may quarantine, since a removed device's resources are not handed on
+while its vector is held.
+
+**Surprise removal.** The readiness flag is cleared first, under the
+interrupt object's lock and without touching the controller (on a shared
+claim the ISR is still entered for the other member's messages while
+this controller's registers are gone); then the release above.
+
+**Power.** Before the controller leaves D0 the causes are masked (the
+suspend does it) and the readiness flag cleared. `XhciResumeController`
+turns the interrupter on itself, on its restore path and on its
+reinitialisation path alike, and only under `XHCI_EXT_FLAG_INTERRUPTS`.
+So every path that reaches `hcdResume` with a live mode-4 connection -
+the device D0's completion, the direct transition, and the clear of a
+suspend that left the function in D0 (`hc->SuspendedInD0`) - first runs
+one step, at `PASSIVE_LEVEL` under the power gate, in the power work
+item: `hcdD0Done` defers the D0 to it whenever a mode-4 connection is
+live, even at `PASSIVE_LEVEL` (the library binds and reverts the calling
+thread's affinity, which a borrowed completion thread must not see).
+The step: whatever this driver restores of the function's configuration
+space on a resume, first; then `MsgIrqReArm`, once more on a failure;
+`OK` - the flag set, then the resume, which enables the interrupter.
+Still failing - `XHCI_EXT_FLAG_INTERRUPTS` cleared first, the resume
+still run (it is what clears `XHCI_EXT_FLAG_SUSPENDED`), and the
+connection lost (below). The suspend that left the function in D0
+re-arms as well: the call is idempotent, and the flag was cleared on the
+way down. `MSGIRQ_STATUS_BRAKED` from a re-arm writes nothing and is
+the brake's case (section 4.5.6). Members of a shared claim resume in
+whatever order Windows powers them; each re-arms its own function and
+opens its own flag, and none waits for another. A shutdown changes
+nothing on these systems: the D3 suspends and the connection is left as
+it is. The in-place recovery's HCRST does not touch configuration space
+and needs no re-arm of its own.
+
+**A connection lost while running** (decision 2). Four things end
+delivery on a started controller: a tripped brake, the watchdog's limit
+(both section 4.5.6), a re-arm that failed twice (at D0, or at a refused
+query), and a reconnect refused at a cancel. One routine serves all
+four, `HcdMsg4Lost(cause)`, in two halves, acting once:
+
+1. **The latch**, callable up to `DISPATCH_LEVEL` (the drain's brake
+   latch and the watchdog's judge run in DPCs). Under the controller
+   lock, in one hold: `hc->Msg4Lost` takes the cause and
+   `ControllerFailed` is set with it, so the existing admissions that
+   read that field (the drain's, the enumeration's) close at the same
+   moment; no recovery is requested; the bar on re-enabling is set.
+   Where the controller is reachable - started, in D0, not suspended,
+   its registers mapped - the interrupter is masked as well, and the
+   proof is whatever the read-back gives; where it is not (a brake
+   found tripped after the controller went to D3), no register is
+   touched and the bar alone stands. This half takes no interrupt
+   object and makes no library call, so a DPC still in flight when a
+   disconnect runs meets nothing that the disconnect frees.
+2. **The rest, on the controller thread**, which the latch wakes: at
+   `PASSIVE_LEVEL` under the power gate, with the connection read under
+   it, the readiness flag is cleared under the ISR's exclusion (until
+   then the routine may still claim an event and queue a drain, which
+   re-arms nothing under the bar); then step 5. A stop or a removal
+   that joins the thread first loses nothing: the release clears the
+   flag itself.
+3. The cause logged with its counters (section 4.5.9).
+4. **Terminal at once.** The latch is an input of the terminal verdict
+   (`XhciTolTerminal`, and `XhciTolTerminalRelease` admits the new
+   verdict beside its two), so the thread's next pass runs the terminal
+   release (`hcdTerminalRelease`) with no recovery sequence run. That
+   release keeps its own rule: where the controller cannot be proven to
+   have stopped mastering, transfers and their mappings are retained,
+   not completed. While the latch stands the recovery's admission
+   refuses, uncharged; every D0 path re-arms nothing and enables nothing; a query-stop is
+   refused and a cancel reconnects nothing. Nothing opens the
+   poller. The parked design's exception - the recovery's gate trying
+   the re-arm again - is dropped: a re-arm that failed twice is a lost
+   connection like the others.
+5. **Windows is told.** `IoInvalidateDeviceState` on the PDO, and the
+   FDO answers `IRP_MN_QUERY_PNP_DEVICE_STATE` with `PNP_DEVICE_FAILED`
+   while the latch stands. The removal Windows then sends runs the
+   ordinary release in the PnP IRP's thread: the disconnect, the claim's
+   release, or the quarantine. The routine is not imported today; on
+   x86 it is resolved by name through the helper's routine (2000 and XP
+   only, which mode 4 needs there anyway), on amd64 at the image's one
+   `MmGetSystemRoutineAddress` site, in both at the start, before the
+   connection is made: a start that cannot resolve it is refused
+   (reason 26), so no mode-4 lifetime runs without its way to report a
+   failure. Until that removal the connection
+   and the claim stand, masked: the library's calls stay in the PnP
+   IRPs' threads.
+
+That report is the owner's decision for 2000, XP and XP x64 (decision
+12). What Device Manager then shows for a controller that failed after
+its start is not Code 10's case in Windows' own terms: the code is read
+on a leg and recorded, and no text of this project promises Code 10
+for it. The next start of that controller is not refused on this ground
+(the option of refusing it until a restart was not taken). A later start of the same controller - the
+user's disable and enable - is a fresh start: the latch is the
+lifetime's, not the boot's, and only the refusal table outlives it.
+
+#### 4.5.5 The ISR and its readiness flag
+
+A claim made with the sharing flag is connected shareable from its first
+member on, so the message routine is
+entered for interrupts that are not this controller's, at any time
+between its connect and its disconnect - before the start has finished,
+in D3, between a resume and the re-arm, after a surprise removal. So
+under mode 4, on every system and under either strategy, the routine is
+gated:
+
+- **The flag** (`hc->Msg4Ready`) says "the controller's registers are
+  reachable and its message is armed". It is written only under the
+  ISR's own exclusion: `KeSynchronizeExecution` on the connection's
+  interrupt object; and only at `PASSIVE_LEVEL` by a path serialised with the
+  disconnect (a PnP IRP's thread, the power work item, or the controller
+  thread under the power gate), never from a DPC, so no writer can hold
+  an interrupt object that a disconnect is freeing.
+- **The order is this driver's to keep.** Clear before the connect is
+  called (the routine can be entered before the connect returns). Set
+  after a successful connect or re-arm, with the controller in D0 and
+  its registers mapped, and only then are the causes unmasked. Before
+  the registers stop being reachable - a stop, a query-stop's release, a
+  removal, the way to D3 - the causes are
+  masked, then the flag cleared, and only then is the controller let
+  go. A start or a re-arm that fails leaves it clear. At a surprise
+  removal it is cleared first, with no register access.
+- **The routine** (`hcdMsg4Isr`, message 0 only): flag clear - `FALSE`,
+  nothing touched. Flag set: `USBSTS` read; all ones (a controller that
+  vanished before any notice) - `FALSE`; else the line ISR's body, which
+  claims on `USBSTS.EINT`, acknowledges, queues the DPC and returns
+  `TRUE`, or returns `FALSE` with nothing of its own pending. It
+  touches the controller's registers, its own non-paged state by
+  interlocked operations, and `KeInsertQueueDpc`, and nothing else.
+
+Under a message `IMAN.IP` clears itself when the message write completes
+(xHCI 1.2c 4.17.5), so the claim is `USBSTS.EINT`'s, as the line's is:
+an entry that finds `EINT` clear is "nothing of mine", which is what the
+library's brake counts on a claimed interrupt and what ends the kernel's
+pass on a shared one.
+
+#### 4.5.6 The brake, the watchdog and the No Op by interrupt
+
+**The brake.** Whose brake it is follows from who can tell a stray entry
+from a neighbour's:
+
+- **Strategy 0: the library's** (its record 05 section 2.7), per
+  claim. It counts the run of entries no member claimed and trips at
+  `BrakeEntries` times the members; once tripped it stops calling every
+  member, writes nothing, schedules nothing and tells nobody. A trip
+  can come with no event of this controller's standing, so this driver
+  looks for it on its own clock: the controller thread calls
+  `MsgIrqIsaQuery` (`Size` the grown structure's, so the member's own
+  counts come back) when a second has passed since its last look, by
+  the tolerance clock and not by a count of passes, and at once after a
+  stranded event - the backstop's DPC cannot make the call itself, so
+  it marks the look owed and wakes the thread. The look is admitted as
+  the backstop is (started, in D0, not suspended, no transition under
+  way); one owed while the controller is out of D0 is made after the
+  next re-arm. It holds the power gate and reads `hc->Msg4Info` under
+  it; the block is consumed only
+  under the same gate (the query-stop's release) or after the thread is
+  joined (the final release), so no look meets a freed block. `Braked` set is a connection lost (cause 1), the claim's
+  and the member's counters logged; so is `MSGIRQ_STATUS_BRAKED` from a
+  re-arm. On a shared claim one trip stops both members, and each fails
+  by its own look. This driver keeps no stray count of its own here: on
+  a shared vector an unclaimed entry is the ordinary case.
+- **Strategy 1: this driver's own**, as the parked design has it (a
+  borrowed line has no claim and so no library brake): an entry not
+  claimed that finds no event at the ring's dequeue position is a stray
+  one; `XHCI_MSG4_STRAY_LIMIT`, 256 (decision 10: the number passed to
+  the library as well), in a row (`XhciMsg4StrayStep`, pure) trip
+  it, latched in the drain, which calls `HcdMsg4Lost` (cause 1). The
+  line is exclusive, so every entry is this controller's or nobody's.
+
+A brake bounds the work per stray entry; it does not silence a source,
+and a source fast enough to hold the processor at the device's IRQL is
+answered by nothing in the library or here (its record 05 section 2.7,
+"What the brake does not do").
+
+**The watchdog for a stranded event.** An event standing on the ring
+with no interrupt after it is what every failure of the message looks
+like from the controller's side: a tripped brake, a message lost between
+two members' edges. The detector exists:
+the lost-interrupt backstop of record 17 section 4.1, per controller, in
+the tolerance clock's DPC, which queues the drain for an event that has
+stood unserved for its interval (100 ms, in practice 300 to 400 ms after
+the event) and counts `BackstopDrains`. Mode 4 adds the judge, not a
+second timer:
+
+- **It does not depend on `XhciTolerance`.** Today the backstop's step
+  is off when that value is 0. Under a connected mode 4 the caller
+  passes it as on, and the tolerance clock runs for the controller
+  whatever the value says: a user who turned the tolerance off has not
+  asked for an unwatched message.
+- Each backstop drain under a connected mode 4 with the flag set is a
+  **stranded event**: counted (`Msg4Stranded`), noted with the time, and
+  under strategy 0 followed by the brake look above.
+- **The backstop is not the only drain that could hide a dead message.**
+  A command's wait and a control transfer's wait drain the ring
+  themselves (`hcd_enum.c`, through `hcd_ctl.c`'s drain for a waiter),
+  sooner than the backstop's interval, and each drain restarts the
+  backstop's observation; with the message dead, control traffic could
+  go on that way and never strand an event for 100 ms. A single such
+  drain proves nothing - the routine may have claimed the event already
+  and its own drain be waiting for the lock the waiter's took first -
+  so these are judged as a run, not one by one: drains queued by
+  something other than the message routine that took at least one
+  event are counted in a row, and any claimed entry of the routine
+  (`InterruptsClaimed` moving) ends the run. A message that works
+  claims again and again - at every new event the controller sends one,
+  and the routine claims on `USBSTS.EINT`, which a software drain does
+  not clear - so a run cannot grow under it; a dead one never claims.
+  The drain that brings a run to `XHCI_MSG4_STRANDED_LIMIT` fixes a
+  deadline one tolerance tick ahead; further unclaimed drains do not
+  move it, so traffic that keeps draining cannot put the verdict off.
+  A claimed entry before the deadline cancels the run and the deadline
+  with it; the deadline reached with the run unbroken is a trip of the
+  same judge (cause 2).
+- `XhciMsg4StrandedStep` (pure, host vectors) trips when
+  `XHCI_MSG4_STRANDED_LIMIT` stranded events of the backstop's fall
+  within `XHCI_MSG4_STRANDED_WINDOW` (eight within 60 s, decision 11;
+  constants, not registry values, confirmed or moved by the bench
+  reading), whatever was claimed between them: an event that stood 100 ms
+  unserved is evidence by itself, and a message that fails only now and
+  then must not settle into being served late. A
+  trip is a connection lost (cause 2), logged with the count and the
+  window. It is never a mode: the backstop serves the events it finds
+  until the trip, as it does for a line, and the trip ends the
+  lifetime's delivery instead of settling into it.
+- The count and the window start afresh at each start, each in-place
+  recovery (the start generation), each successful re-arm at D0 and
+  each reconnect at a cancel; the detector's own standing observation
+  is dropped at the same points, so an event that stood through a
+  released query is timed from the reconnect.
+- Not counted: drains while the query-stop has released the connection
+  (the backstop is the only drain there by design), while the flag is
+  clear, and during the start before the No Op below has passed.
+
+The rate is low by construction - one look a tolerance tick, one cached
+read when nothing stands - and the same on every system.
+
+**The No Op by interrupt.** The start's No Op is submitted with the
+interrupter masked (`XhciInitController`). Under mode 4, once the flag
+is set and the interrupter enabled, the start waits up to 500 ms (the
+same on every system, decision 11) for
+the No Op's witness (`NoOpWitnessFired`) together with at least one
+claimed entry of the message routine (`InterruptsClaimed`): the
+completion was announced through the message. The backstop may drain
+the ring meanwhile (it has run in the tolerance clock's DPC since
+36.55), which fires the witness but claims nothing, so the claimed entry
+is what decides. Otherwise the start is refused, reason 31, `msg4.noop`
+the wait and the claims, and stopped as a failed thread start is
+(`hcdStopBody`), which releases the connection and the claim. A
+cancel-stop's reconnect is tested the same way with evidence of its
+own: the witness is cumulative, so after the interrupter is on a new No
+Op is issued and both counts must move past what they read before it;
+a failure there is a connection lost (cause 4). That controller is
+running, and the command engine takes one command at a time
+(`XHCI_CMD_BUSY`), so the test has an admission of its own: the No Op
+is offered for up to 500 ms, and the 500 ms for its evidence starts
+only when the engine has taken it. A No Op the engine never took in
+that time proves nothing either way: the test is recorded as not made
+(`msg4.noop`), the connection stands, and the watchdog is what judges
+it. A return to D0 runs none: the re-arm's status and the
+watchdog cover it.
+
+#### 4.5.7 98 SE and ME
+
+The 98 SE and ME message path is not part of `3.5.0.0` (owner, 2026-11-13).
+Its code left the tree the same day: on 98 SE and ME the start takes the
+system class first and runs a stored `4` as `0` (automatic), as a reserved
+value does, instead of failing the start; the decision answers "no
+system" (22) for every system but NT 5; reason 32 is kept as a number and
+not produced. Setup and the USB Tree offer `4` on 2000, XP and XP x64
+alone, and read a stored `4` on 98 SE and ME as the driver runs it.
+
+#### 4.5.8 IRQL, thread and lock rules
+
+| Call or step | IRQL and thread | Held | Excluded from |
+|---|---|---|---|
+| `MsgIrqInitialize` | `PASSIVE_LEVEL`, the start's thread | the driver-global event | each other and every other controller's start |
+| `MsgIrqIsaClaim`, `MsgIrqIsaRelease` | `PASSIVE_LEVEL`, a PnP IRP's thread (the system process), no affinity of this driver's | the PnP manager's serialisation of the device | the controller thread's look (it reads the connection, never the claim) |
+| `MsgIrqConnect` | `PASSIVE_LEVEL`, the start's thread or the cancel's | at a cancel, the power gate | every other library call on the controller |
+| `MsgIrqReArm` | `PASSIVE_LEVEL`, the power work item (or the query-stop's thread) | the power gate | suspend, resume, recovery, the look |
+| `MsgIrqDisconnect` | `PASSIVE_LEVEL`, a PnP IRP's thread, or the shutdown step | at a query-stop and at the shutdown step the power gate; at a final release nothing, the thread joined and the controller stopped | as above |
+| `MsgIrqIsaQuery` (the brake look) | `PASSIVE_LEVEL`, the controller thread, woken by the backstop's DPC or by its own deadline | the power gate | the query-stop's release; the final release by the join |
+| the readiness flag's write | `PASSIVE_LEVEL`: a PnP IRP's thread, the power work item, or the controller thread | the ISR's exclusion (`KeSynchronizeExecution`); on the power work item and the thread, the power gate | the routine; every disconnect |
+| `HcdMsg4Lost`, the latch | up to `DISPATCH_LEVEL` | the controller lock; no interrupt object, no library call | itself (the latch is taken once) |
+| `HcdMsg4Lost`, the rest (the flag, `IoInvalidateDeviceState`) | `PASSIVE_LEVEL`, the controller thread | the power gate | the query-stop's release; the final release by the join |
+| the routine (`hcdMsg4Isr`) | the connection's IRQL, under its interrupt object's lock | nothing of this driver's | - |
+| the watchdog's detector | `DISPATCH_LEVEL`, the tolerance clock's DPC | the controller lock for the peek and the count | - |
+
+The library's calls on one controller are never concurrent: the PnP
+manager serialises the start, the stop, the query, the cancel and the
+removal of a device; the power gate serialises those against the D0
+step, the shutdown step and the thread's look; and the final release
+runs after the thread is joined. The lock order gains nothing: the
+ISR's exclusion is innermost and is never held across a call that takes
+the controller lock, and no library call is made under the controller
+lock.
+
+#### 4.5.9 What is recorded and shown
+
+**The codes.** `IntrReason` 21 to 27 and 30 to 34 (section 4.5.2), the
+start's decision only. `MsiRoutines` gains the routine value 4 (the
+library). `MsiConnectStatus` holds the library's status under that
+routine value - 0 to 10, 12 `CLAIM_KEPT` and 13 `BRAKED` - and for a
+refused claim the claim's status. `MsiMessages` the count, 1.
+`MsiCapability` the capability read.
+
+**New counter words**, appended after the block's last word as section 8
+has it, written by the start, the look and `HcdMsg4Lost`:
+
+| Word | Holds |
+|---|---|
+| `Msg4Strategy`, `Msg4IsaIrq`, `Msg4Share` | the three values as read (`FFFFFFFFh` not found) |
+| `Msg4Irq` | the IRQ claimed or joined, 0 none |
+| `Msg4Members` | the functions on the claim after this start's claim |
+| `Msg4ClaimStatus` | the claim's status |
+| `Msg4Sci`, `Msg4Sources` | the claim's `Sci` and `Sources` |
+| `Msg4IrqReason` (four words) | the picker's reason for each IRQ 0 to 15, a byte each |
+| `Msg4Vector` | the system vector |
+| `Msg4Stranded` | stranded events counted this lifetime |
+| `Msg4Lost` | 0 none; 1 braked; 2 the stranded limit; 3 a re-arm failed; 4 a reconnect refused |
+| `Msg4BrakeEntries`, `Msg4BrakeStray`, `Msg4BrakeRun` | the claim's counts at the last look |
+| `Msg4MemberEntries`, `Msg4MemberStray` | this controller's own counts at the last look |
+| `Msg4Refused` | functions in the image's refusal table |
+
+**The notes**: `msg4.system` (which system), `msg4.mode` (the
+library's mode), `msg4.strategy.read`, `msg4.isairq.read`,
+`msg4.share.read`, `msg4.claim` (the status), `msg4.claim.irq` (the IRQ
+and the members), `msg4.claim.reason` (one per IRQ with a reason other
+than "not tried": the IRQ, the reason, the detail), `msg4.status`,
+`msg4.vector`, `msg4.data` (the message data, the IDT vector in its low
+byte), `msg4.bdf` (the location), `msg4.shared`, `msg4.shared.pci`, `msg4.line`, `msg4.noop`,
+`msg4.rearm`, `msg4.disconnect`, `msg4.release` (the claim's release),
+`msg4.querystop`, `msg4.cancelstop`, `msg4.quarantine`, `msg4.refused`
+(a start the table refused), `msg4.stranded`, `msg4.brake` (the
+counters) and `msg4.lost` (the cause). A refused start records itself
+and flushes as section 8's "A start the delivery refuses" has it, so the
+reason is in DebugView beside the Code 10.
+
+**`XHCITR`'s report**, under "event delivery": the mode and reason by
+name (the new texts are the owner's to word); the library's status by
+name; under strategy 0 the IRQ, whether it
+is the controller's own or shared and with how many, and for a refused
+claim each IRQ's reason in words ("never claimed", "the ACPI interrupt",
+"level-triggered", "used by a device", "heard during the listen",
+"excluded", "full" and so on); the vector; the stranded count; the
+brake's counts; and, when the delivery was lost, the cause as a line of
+its own. A block from a driver before these words prints none of it.
+
+#### 4.5.10 Build, licence and signature
+
+- **The MSI header** is vendored under `src/` (the same text with CRLF
+  line endings, its row in `legal-provenance.md` section 2a naming the
+  commit and both hashes), never edited here, and compiled in once, in
+  `hcd_msg4.c`, with its implementation switch; every file that
+  includes it defines the same hosted, no-native and ISA-line switches
+  alike. This driver keeps its own message path on Vista and later
+  (mode 3), so the library's native path is compiled out.
+- **The licence.** The header's own SPDX line reads MIT at the commits
+  read; the row records that line and the notice kept in the file.
+- **When the MSI header is taken in** (decision 13): only from the
+  commit at which its branches `dev-1` and `xirq-2` are one line, so
+  that the teardown is coded once (section 4.5.11, item 2). Until then
+  nothing of mode 4 is built for 2000 and XP.
+- **The signature.** The MSI header in state A defines, in the one file
+  that compiles its implementation, a signature string (the name, the
+  version and the copyright holder) in read-only data, with no macro to
+  leave it out; both images that compile it carry it. A packaging or
+  import-gate check that each built image holds the string keeps a
+  later build change from dropping it.
+- **Imports.** The hosted set is on both allowlists already; the
+  routines the claim needs are resolved by name (record 18 section
+  15.16), not imported.
+- **The installer** offers mode 4 as a tick, marked experimental (the
+  owner, 2026-11-11). This record says what each control does and what
+  its text must convey; the texts are the owner's to word, and the
+  pages, the console's questions and the switches are record 23's and
+  record 26's to design. A text in quotation marks here is a draft.
+  - *Two ticks, never one for both.* The message has two users in this
+    package, with different consequences, so each tick names its
+    hardware and what follows from it. **The controllers' tick**, in
+    the installer's USB part, is this section's: the USB 3 controllers
+    (`xhci98.sys`, mode 4) **require** the message - experimental, no
+    fallback: a controller that cannot connect does not start, and a
+    keyboard, a mouse or a disk on it is lost until the setting is
+    changed. Draft: "USB 3 controllers: require MSI (experimental; no
+    fallback)". **The host's tick**, in the Thunderbolt part, is
+    roadmap task 49.27's: the Thunderbolt and USB4 host (`xhcicm.sys`)
+    **tries** the message for its ring - experimental, and it stays on
+    its polled ring when the message cannot be connected. Draft:
+    "Thunderbolt / USB4 host: try MSI for the ring (experimental;
+    falls back to polling)". It is not a networking setting:
+    `XhciCmRingInterrupt` and `XhciCmNetInterrupt` keep their own
+    roles, and what the host's value is and how it stands to those two
+    is 49.27's design. The host's tick exists only once 49.27 is built
+    - on 2000 and XP only if that task's first
+    reading shows the host needs it there - and it then sits on the
+    Thunderbolt settings (record 26 section 5.5). Neither tick sets or
+    implies the other, each says so, no text offers "MSI" for the
+    package as a whole, and a release that adds the host's tick leaves
+    it off on a machine where the controllers' tick is on.
+  - *The component chosen is respected.* The host's tick is disabled,
+    with the reason shown (draft: "Requires Thunderbolt / USB4
+    support"), when that support is not selected for the run; and no
+    setting of a component left out of the run is written or changed,
+    even where that component is installed. The same holds for the
+    controllers' tick in a run that leaves the USB drivers out (the
+    connection manager alone).
+  - *The controllers' tick and the mode.* Ticked, it writes
+    `XhciInterruptMode` `4`; it shows ticked when 4 is the mode in
+    force. It and the mode's existing list (record 26 section 5.4) are
+    one setting, so they cannot disagree: either the list has no entry
+    for 4 and is disabled while the tick is set, or it has one and
+    follows the tick - record 26's choice. Unticking a tick that was
+    set writes `0`, automatic. It is offered on 2000, XP, Server 2003
+    and XP x64, and nowhere else (the driver refuses mode 4 on Vista and
+    later).
+  - *Its scope is every controller.* The installer writes the
+    machine-wide value (`HKLM\System\CurrentControlSet\Services\USB`,
+    record 26 section 5.4), and the driver's rule (`hcdReadDword`,
+    `hcd_ctl.c`) is: a value of that name in the machine-wide key, of
+    any type, stands for every controller, and a controller's own
+    driver key is read only when the machine-wide key has none (one of
+    another type there gives the default, not the controller's own).
+    So the tick means **every USB 3 controller this driver runs,
+    those that arrive later included** - a card added next month, a
+    dock's controller - and the page says so. A controller's own value
+    is never rewritten or deleted by the tick: it is kept, and is
+    simply not read while the machine-wide one exists; where
+    controllers hold different values and no machine-wide one is set,
+    the row shows the mixed state and writes nothing until the user
+    chooses (record 26 section 5.4, unchanged). The installer offers
+    mode 4 for all controllers only (the owner, 2026-11-11): one
+    controller and not another is set by hand in the controllers' own
+    keys with no machine-wide value, which `tuning.md` describes.
+  - *On 2000, XP and XP x64 the tick installs nothing* - the library is
+    compiled into the driver. Beside it, enabled only while it is set:
+    the strategy (`0` claim a free ISA IRQ, the default; `1` borrow the
+    controller's line), and, shown only while "claim a free ISA IRQ" is
+    the strategy chosen, a list for `XhciMsiIsaIrq` with eight entries -
+    Automatic (writes `0`, the default), 3, 4, 5, 6, 7, 10 and 11 (each
+    writes its number). With the other strategy the list is not offered
+    and the value is left as it is; the driver does not read it then.
+    `XhciMsiShare` is not offered by the installer while its default is
+    `0` (the owner, 2026-11-11): it is a registry value, described in
+    `tuning.md`. (Since 2026-11-13 its default is `8`, sharing on; Setup's
+    and the USB Tree's advanced settings rows take 1 to 16 and refuse 0,
+    section 4.5.19.)
+  - *What the page can and cannot know about free IRQs.* Under strategy
+    0 (strategy 1 claims nothing: it borrows the controller's own line)
+    each user of a
+    message needs a claimed IRQ of its own: every controller this
+    driver runs, and, if the host's tick comes to these systems, the
+    host as well - which cannot share a controller's claim at any
+    `XhciMsiShare`, because a claim is joined only by the same driver
+    object, in its own copy of the library (section 4.5.11, item 3),
+    and `xhcicm.sys` carries its own and claims without sharing. Which IRQs are free is decided
+    in the kernel at the start: the library's picker reads the
+    interrupt controllers' own state and the firmware's tables, asks
+    the PnP manager's arbiter, and listens on the candidate (section
+    4.5.3). The installer cannot run it and does not imitate it. What
+    it can show instead, and no more: **how many** users of a message
+    the choices on its pages make (the controllers it found bound or
+    about to be bound to this driver, plus the host when its tick is
+    set), against the seven IRQs that can ever be claimed; which of
+    those seven Windows reports **assigned to a device now** (the
+    devices' allocated resources, through the configuration manager's
+    documented routines), marked in the list as in use - never the
+    rest as free, since an IRQ no device holds can still be refused as
+    level-triggered, as the ACPI interrupt, by a firmware override or
+    by the listen; and, where two or more users are chosen, that each
+    needs its own IRQ, that controllers beyond the IRQs left fail to
+    start unless `XhciMsiShare` is turned on, and that the report says
+    afterwards which IRQ each took or why none (section 4.5.9). (Since
+    2026-11-13 sharing is on by default and controllers fill one IRQ
+    first, section 4.5.19.)
+  - *A forced IRQ is one value for the machine*, by the same scope
+    rule: with two controllers the second joins the same claim (the
+    default `8`; section 4.5.19), and with `XhciMsiShare` `1` it finds
+    it taken and fails (reason 33). So
+    with more than one controller present the list's entries other
+    than Automatic carry that warning, and a different IRQ for each
+    controller stays a matter of the controllers' own keys with no
+    machine-wide value, by hand (`tuning.md`). The host's forced IRQ,
+    if 49.27 has one, is a value of its own.
+  - *On 98 SE and ME*: the 98 SE and ME message path is not part of
+    `3.5.0.0` (owner, 2026-11-13).
+  - *The console's switches mirror the ticks.* An explicit enable and
+    an explicit disable for the controllers' tick, `/usbmsi` and
+    `/nousbmsi`; the same pair for the host's when 49.27 brings it,
+    `/tbmsi` and `/notbmsi`; and no switch that turns on more than one
+    of them. Each is refused wherever its tick would not be shown. `/set XhciInterruptMode=4` stays what it
+    is, the same write as the enable. On an update a switch that is
+    not given keeps the setting as it is, and an experiment the
+    release newly brings stays off. The names are the owner's choice
+    of 2026-11-11; their rows are record 23's to write.
+  - *The log* says, for each of the two users, in every run: the
+    setting asked for (the tick or the switch, or "kept"); its scope
+    (the machine-wide value, and the controllers it then stands for,
+    with any controller's own value it overrides); and, read from the
+    driver's snapshot where one is there, how each controller's events
+    are in fact delivered now and the reason for a refusal or, for the
+    host, for the fall back to its poll.
+
+#### 4.5.11 What this depends on in the siblings
+
+Each item is a statement of this section that holds only as long as the
+header's source says what it said in the state read. The list is read
+again, item by item, when a header is vendored.
+
+The MSI header, branch `xirq-2` in state A.
+
+The states of the MSI header this record names were read before its
+publication and are named here by letter, each with the date read and
+the SHA-256 of the header: A, the ISA IRQ claim's line (`xirq-2`), read 2026-11-11,
+`32f42da97a9fd4ab50d5a94773ef68fe0ed1d42faca9608ddc981b3446edb99f`; B, the
+other line (`dev-1`), read 2026-11-10,
+`7aeb5ce060b5cb25a4dc8c9f3cbe7226934d9c98e9e3481cb073c679093c4ec3`; C, the
+two lines' first merge on its `main`, read 2026-11-11,
+`1642af5e9df2038d961d1059576c764afe316f756685c2fe93e4d2f96be042bd`; D,
+`dev-1` merged into `xirq-2`, read 2026-11-11,
+`630be29f68ba6a7dd7abaff2736afe9c9497b1e2f763748b68b1692e8e3712d1`; E,
+`main` with one 32-bit access to the MSI-X table and the local APIC, read
+2026-11-11, `799e7acb20397ce0c7d1414349696f36523edcc972c1fb9b5705ce2caf2fbaf0`;
+F, `main` with the ISA listen's timeout in 32 bits, read 2026-11-12,
+`65df3cbb196f946bbb6eb69c6d6a8e5bf596e2d8349b38dffc31c1922007eca2`; G, `main`
+with the published state, read 2026-11-12,
+`f06e6fb903247f69442ceb34f77e77991dca5591cbc1a48c8a2995d94fd572e2`. What this
+tree vendors at last is the header's version 1 (`legal-provenance.md`
+section 2a). In state A:
+
+1. The header's licence line (MIT), its version 1, and the
+   signature string defined with the implementation.
+2. **No proof of absence.** `MSGIRQ_DISCONNECT_ABSENT_OK`, which the
+   owner accepted on 2026-11-10 and the parked branch passes at a
+   reported removal, exists only on the header's branch `dev-1` (in
+   state B), which state A does not contain; `dev-1` also keeps
+   Interrupt Disable set at a teardown, where state A clears it. The
+   owner's decisions (2026-11-11; decisions 7 and 13): the header is
+   vendored only once the two lines are one, and a controller proven
+   absent may be plugged in again. So the release of section 4.5.4
+   passes the flag at a surprise removal and a removal only, a function
+   proven absent is not entered in the refusal table, and two things
+   are read again at that commit before the code is written: the flag's
+   meaning as section 4.5.4 uses it (`OK` for a message confirmed off
+   or a function proven absent), and section 4.5.3's sentence on
+   Interrupt Disable after a disconnect, which follows whichever of the
+   two behaviours the one line keeps.
+3. The claim's interface: `MsgIrqIsaClaim`, `MsgIrqIsaRelease`,
+   `MsgIrqIsaQuery`, `MSGIRQ_CONNECT_FLAG_ISA_LINE` (refused together
+   with `PIN_PRIVATE`); `MSGIRQ_ISA_PARAMS` with `Exclude` and
+   `MaxMembers` (2 to 8, default 2) and its ranges for the listen (25 to
+   5000 ms) and the brake (16 to 1000000); `MSGIRQ_ISA_FLAG_SHARE`
+   meaning "may be joined, and joins only when no IRQ of its own is
+   left", within one driver's copy; the picker's order and never-set;
+   the reasons through `JOINED` 13, `FULL` 14 and `EXCLUDED` 15;
+   `MSGIRQ_ISA_STATE` grown by the member's two counts behind `Size`;
+   the statuses `CLAIM_KEPT` 12 and `BRAKED` 13.
+4. The arm's read-back of Bus Master Enable and Interrupt Disable, and
+   the disarm's clear of Interrupt Disable (section 4.5.3).
+5. `MsgIrqInitialize` marking itself done before it resolves, and a
+   first call from a start routine at `PASSIVE_LEVEL` being admitted
+   although the documents ask for `DriverEntry`.
+6. Claim and release enforcing the system process's context, and the
+   statement that the PnP manager's start, stop and removal IRPs arrive
+   in it. The legs read it for Device Manager's disable and for the
+   installer's device restart; an IRP found elsewhere moves the two
+   calls to a waited work item.
+7. The names resolved through the client's resolver (record 18 section
+   15.16).
+8. The brake: per claim, the threshold times the members, final, with
+   no notice to the client, and `MsgIrqIsaQuery` callable at
+   `PASSIVE_LEVEL` beside a running routine.
+9. The shared chain on a latched vector (the kernel calling every
+   routine and repeating the pass): the library's own measurements, with
+   its test devices in the emulator, on XP, 2000 and XP x64. None is a
+   reading of this driver's, whose legs are owed (section 4.5.14).
+10. `IoInvalidateDeviceState` as the report of a failed controller
+    (the library's integration notes). That text also names this driver's dead-line
+    watcher as what finds a braked interrupt silent; the watcher does
+    not run under a message (section 4.1), and the detector is the
+    backstop (section 4.5.6).
+11. **Pending, not decided and not built: a second claim pool.** (Built
+    since, in the header's `main` in state C, kept in state E; what
+    this driver does with
+    it is section 4.5.16 item 1.)
+    The library's record 05 section 2.9 designs a pool of I/O APIC inputs
+    beyond the ISA ones, opt-in per claim by a further flag
+    (`MSGIRQ_ISA_FLAG_HIGH` in that design) and tried after the ISA
+    pool and before a join; an experiment on inputs above 23 is running,
+    and the owner wants the client to be able to choose the range of
+    inputs scanned and which pools are scanned - the ISA IRQs only, the
+    inputs above 23 only, or both (owner, 2026-11-11). Nothing of it is
+    in state A and this section designs none of it. If it is built,
+    mode 4 gains three values beside `XhciMsiStrategy` and
+    `XhciMsiIsaIrq`, read with them under strategy 0 only, written by
+    the install at their defaults under the registry rule with their
+    gate and `tuning.md` rows: which pools are scanned (default the ISA
+    IRQs only, until the pool is decided), and the lowest and the
+    highest input the claim may consider. The names are decided (the
+    owner, 2026-11-11): **`XhciMsiPools`** (`0` the ISA IRQs only, the
+    default; `1` the inputs above 23 only; `2` both, the ISA IRQs
+    first), **`XhciMsiInputFirst`** and **`XhciMsiInputLast`** (the
+    lowest and the highest input considered; their defaults and ranges
+    the library's). The pool would be enabled by the pools
+    value, which makes a strategy-0 claim pass the library's flag or
+    parameters for it - not by a new `XhciMsiStrategy` number: strategy
+    0 already means "a claimed interrupt", and where it is looked for is
+    a setting of that claim. The forced value stays `XhciMsiIsaIrq`,
+    with a wider set: it then takes an input number as well, since only
+    one forced value can be in force. A forced IRQ or input outside the
+    pools chosen, or outside the range, refuses the start (reason 30),
+    as an `XhciMsiIsaIrq` outside its set does today, and the
+    installer's list for it (section 4.5.10) follows the set.
+    `Msg4Irq` would then hold an input above 15,
+    and the report says which pool. **Nothing of this is written, read
+    or offered until the pool exists**: no INF row, no gate row, no
+    `tuning.md` row and no installer control.
+
+12. 98 SE and ME: the 98 SE and ME message path is not part of
+    `3.5.0.0` (owner, 2026-11-13).
+
+#### 4.5.12 The parked branch `w48-mode4`: what is kept and what is done again
+
+The branch (tip `a80be3621`, the rebase of `441d9839`, on the `3.4.3.0`
+commit `4b15fe696`; unbuilt beyond its host suites, with no legs) built
+the line-borrowing strategy for 2000 and XP against the MSI header's `dev-1`
+in state B. Its sibling `w48-mode4-borrow` is the same tree as that
+branch's commit `6735b8d54` and holds nothing more. Against this
+section:
+
+| File or area | Kept | Done again |
+|---|---|---|
+| `docs/contributing/design/15-...md`, its section 4.5 and 13.8 | the veto's two walks, the query-stop and cancel order, the quarantine and its table, the D0 re-arm's placement, the No Op by interrupt | replaced by this section: strategy 0 built instead of refused (reason 29 gone), the claim's lifetime, the readiness flag, the brake split, the watchdog, the lost connection replacing the recovery gate's re-arm, the reasons 32 to 34, the counter words (it added none) |
+| `docs/contributing/design/18-...md`, its section 15.16 | the one-shot look and `XhciHlprAcceptRoutine` | the names resolved (the claim's, and `IoInvalidateDeviceState`); the look made before the library's initialisation |
+| `docs/contributing/design/20-...md`, section 4.1 | the sentence that the quirk refuses under mode 4 | - |
+| `docs/using/tuning.md` | the mode's place in the table and list, "experimental", the borrowing warning and how to check, the recovery paragraph | strategy 0 as available and the default, with how it picks, what a wrong IRQ looks like and `XhciMsiIsaIrq`'s set (the library's record 05 section 8 lists what the text must say); `XhciMsiShare` |
+| `docs/contributing/build-and-test.md`, the values table | the two rows' form | the meanings (0 no longer refused, the IRQ's set), `XhciMsiShare`'s row |
+| `docs/contributing/legal-provenance.md`, section 2a | the row's form | the state read, both hashes and the licence line (MIT in state A; the branch recorded the earlier line) |
+| `docs/contributing/source-files.md` | the rows for `xhci_msg4.c`, `hcd_msg4.c`, the MSI header, `test_msg4.c` | their texts |
+| the MSI header under `src/` | - | vendored afresh from the state its two lines settle on (2084 lines in state B, 3860 in state A) |
+| `src/hcd_msg4.c` | the host table and the configuration routines; the refusal table's use; the strategy step's shape; the borrowed line's veto and connect; the release's order and the quarantine; the query-stop and the cancel; the No Op wait | the library's initialisation after the look; strategy 0's claim, connect and release and the three held states; `MSGIRQ_DISCONNECT_ABSENT_OK` (not in state A: item 2 above) and `hc->Msg4Removal` with it; the statuses 12 and 13; the readiness flag at every transition; the bar on re-enabling apart from the mask's proof; the query forwarded and waited for; the brake look; `HcdMsg4Lost` in place of `hc->Msg4Unarmed` and the recovery gate's re-arm; the Command-register rule (the branch relies on Interrupt Disable left set) |
+| `src/xhci_msg4.c`, `src/xhci_msg4.h`, `test/test_msg4.c` | the resource-map walk, the value-name suffix, the table, the stray step and their vectors | the IRQ value's check, `XhciMsiShare`'s reading, the stranded judge, the packing of the claim's reasons, and vectors for each |
+| `src/xhci_poll.c`, `src/xhci_poll.h`, `test/test_poll.c` | mode 4 in `XhciPollValues`; the PCI-line walk's `Sharing` switch; reasons 21 to 27, 30 and 31 by number | the decision's inputs (the system as three classes, the IRQ value) and order; the names (`MSGNT` to `MSG4`); reasons 32 to 34; 28 and 29 dropped |
+| `src/hcd.h` | the mode-4 fields and prototypes, the routine value 4's name, the two value names | the claim's state, `Msg4Ready`, `Msg4Lost`, `XhciMsiShare`'s name |
+| `src/hcd_ctl.c` | the values read in `hcdParseResources` and settled in `hcdSettleDelivery`; `HcdCtlLineShared`; the connect's branch in `hcdConnect`; the release's branch; the No Op in `hcdStartBody` | `hcdMsgIsr`'s hook (the gate first; the stray count under strategy 1 only); the DPC's re-arm under the bar; the brake's latch through `HcdMsg4Lost`; the recovery's admission (the latch, no re-arm); the terminal verdict's input; the backstop's caller (on whatever `XhciTolerance` says, the stranded count); the thread's brake look |
+| `src/hcd_pnp.c` | the query-stop and cancel hooks | the removal mark (with item 2); the query waited for; `IRP_MN_QUERY_PNP_DEVICE_STATE` |
+| `src/hcd_power.c` | the D0 deferred to the work item, the re-arm before the resume | the flag; the suspended-in-D0 path; the lost connection |
+| `src/hcd_msi86.c` | `HcdMsiFindRoutine` and its look | the filter under strategy 0 (as mode 0's); the further names |
+| `src/hcd_quirk.c`, `src/hcd_svc.c`, `src/hcd_svc.h`, `src/hcd_dma.c`, `src/hcd_entry.c` | all of it (`XhciMsiAvoid` under mode 4, `HcdSvcConfigBytes`, the image kept under the ledger's lock, the globals' initialisation) | - |
+| `src/xhci98.inf`, `src/xhci98-amd64.inf` | `XhciMsiStrategy` and `XhciMsiIsaIrq` at `0`, don't-overwrite, on every path | `XhciMsiShare`'s row, at `0` |
+| `scripts/inf-gate/` (the rules, both footprints, the self-tests) | the two values' rows | `XhciMsiShare`'s rows |
+| `scripts/import-gate/check-imports.ps1` | the guard that the MSI header is only ever compiled hosted | its ISA-line switch in the guard's set; the signature check of section 4.5.10; the amd64 row for `IoInvalidateDeviceState` if it is imported there |
+| `xhcitr/tr_snap.c` | the texts for reasons 21 to 27, 30 and 31, the routine value 4, the statuses 0 to 10 | the texts for 22 and 30 (their meanings moved), 32 to 34, the statuses 12 and 13, the new words' lines; `SNAP_POLL_REASONS` 35 |
+
+**"Task 48.41"** is cited in the branch's record 15 (the section's
+heading and 13.8), record 18 section 15.16, record 20 section 4.1,
+`source-files.md`, `legal-provenance.md`'s Task column, and comments in
+the code, the import gate, the host tests and `XHCITR`. Every one becomes "task 49.24";
+the owner's decisions keep their dates. Nothing in the branch cites
+48.39 or 48.40.
+
+The branch is 28 commits behind `3.5.0.0` as this is written; of the
+files it changed they touch one, `build-and-test.md`.
+
+#### 4.5.13 The owner's decisions on the open points
+
+Revision 10 left eleven points to the owner, each with its options and
+a recommendation. The owner answered them on 2026-11-11; the sections
+named carry each answer, and the options not taken are kept here only
+as far as they explain the answer.
+
+| Point | Decided (the owner, 2026-11-11) | Carried in |
+|---|---|---|
+| 1. The sharing value and the member cap | One value, `XhciMsiShare`: `0` off, `2` to `8` on with that many controllers to a claim at most. (Not two values, and not a cap fixed in the code.) Superseded 2026-11-13: section 4.5.19. | 4.5.1 decision 5, 4.5.2, 4.5.3, 4.5.19 |
+| 2. `XhciMsiIsaIrq`: registry only, or in the installer | Offered by the installer, beside mode 4 when "claim a free ISA IRQ" is the strategy chosen: a list Automatic, 3, 4, 5, 6, 7, 10, 11, Automatic the default. The texts are the owner's to word. | 4.5.1 decision 4, 4.5.10 |
+| 3. The brake's number and the listen | 256 unclaimed entries, for the library's brake and for the driver's own count under strategy 1; the listen 500 ms. The bench reading may move them. | 4.5.1 decision 10, 4.5.3, 4.5.6 |
+| 4. The watchdog's period and limit | The existing lost-interrupt backstop as the detector; eight stranded events within 60 s fail the controller; constants, not registry values. | 4.5.1 decision 11, 4.5.6 |
+| 5. The No Op's wait | 500 ms on every system. | 4.5.1 decision 11, 4.5.6 |
+| 6. What a controller that lost its message shows | On 2000, XP and XP x64 Windows is told the device failed (`IoInvalidateDeviceState`, `PNP_DEVICE_FAILED`); the code Device Manager shows is read on a leg and may not be Code 10. The next start is not refused on this ground. | 4.5.1 decision 12, 4.5.4 |
+| 7. A controller unplugged under mode 4, plugged in again | Admitted on 2000, XP and XP x64 when the library proved the function absent at the removal. | 4.5.1 decision 7, 4.5.4, 4.5.11 item 2 |
+| 8. Which line of the MSI header is vendored | None until `dev-1` and `xirq-2` are one line; the header is taken in once. | 4.5.1 decision 13, 4.5.10, 4.5.11 item 2 |
+| 9. If the second claim pool is built | `XhciMsiPools` (`0` the ISA IRQs only, `1` the inputs above 23 only, `2` both), `XhciMsiInputFirst`, `XhciMsiInputLast`; the forced value stays `XhciMsiIsaIrq` with a wider set; nothing written until the pool exists. | 4.5.2, 4.5.11 item 11 |
+| 10. 98 SE and ME | The 98 SE and ME message path is not part of `3.5.0.0` (owner, 2026-11-13). | 4.5.1 decision 8, 4.5.15 |
+| 11. Strategy 1 on Windows 2000: an exclusive-device request in the requirements filter | Not tried. | 4.5.1 decision 14 |
+
+**Revision 11 first left nine further points open**, all but the first
+from section 4.5.15. The owner answered them the same day:
+
+| Point | Decided (the owner, 2026-11-11) | Carried in |
+|---|---|---|
+| 1. `XhciMsiShare` in the installer | Not offered while its default is off: a registry value, described in `tuning.md`. (Since 2026-11-13 the default is on, `8`; section 4.5.19.) | 4.5.10, 4.5.19 |
+| 2. A check after the restart that reports, or sets the mode back | The 98 SE and ME message path is not part of `3.5.0.0` (owner, 2026-11-13). | 4.5.15 |
+| 3. A mode 4 the installer knows cannot work, or cannot confirm | The 98 SE and ME message path is not part of `3.5.0.0` (owner, 2026-11-13). | 4.5.15 |
+| 4. The switches' names | `/usbmsi` and `/nousbmsi`; `/tbmsi` and `/notbmsi` with 49.27. | 4.5.10 |
+| 5. A recovery file in the install directory | The 98 SE and ME message path is not part of `3.5.0.0` (owner, 2026-11-13). | 4.5.15 |
+| 6. 98 SE and ME: the uninstall | The 98 SE and ME message path is not part of `3.5.0.0` (owner, 2026-11-13). | 4.5.15 |
+| 7. 98 SE and ME: what the installer can read | The 98 SE and ME message path is not part of `3.5.0.0` (owner, 2026-11-13). | 4.5.15 |
+| 8. Mode 4 for one controller and not another, in the installer | No: for all controllers only, machine-wide. One controller is set by hand, as `tuning.md` describes. | 4.5.10 |
+| 9. The only keyboard and mouse behind a controller, and the one run | The 98 SE and ME message path is not part of `3.5.0.0` (owner, 2026-11-13). | 4.5.15 |
+
+Nothing of section 4.5 is open with the owner as this is written. What
+is still not known is a dependency (section 4.5.11) or a reading owed
+(section 4.5.14).
+
+#### 4.5.14 Legs (owed)
+
+None has run for this design. In the emulator, with its xHCI as the
+controller: 2000 SP4 and XP SP3 on an ACPI multiprocessor HAL, and XP
+x64 - strategy 0 connecting, the IRQ in the report, a stick copied and
+compared, a mouse, audio, sustained storage; `XhciMsiIsaIrq` forced onto
+a free IRQ and onto one in use, each from the installer's list as well
+as from the registry; no IRQ left (reason 33); two
+controllers with two IRQs free (each takes its own, `XhciMsiShare` `0`
+and `2` alike); two controllers with one IRQ eligible, `XhciMsiShare`
+`0` (the second refused, reason 33) and `2` (the second joins; both
+orders of leaving, standby and hibernation with either resuming first,
+one quarantined); three with one IRQ eligible and `XhciMsiShare` `2`
+(the third refused, "full") and `3` (the third joins);
+strategy 1 on a private line and its refusals; the Standard PC HAL;
+`XhciMsiAvoid` 2; the helper absent on x86; Vista ("no system"); the
+brake by a driven input, at 256 entries for the library and for
+strategy 1's own count; the stranded limit (eight within 60 s) and the
+lost re-arm by `qemu`-flavour injections, and **which code Device
+Manager then shows** (decision 12), with the controller's next disable
+and enable starting it again; repeated
+disable and enable; the query-stop refused and its cancel; removal;
+a controller unplugged and plugged in again, admitted where the library
+proved it absent and refused where it did not (decision 7);
+shutdown; the quarantine and a start under mode 0 after it. Mode 0
+unchanged on each. Then the
+roadmap's gates for 49.24 on real hardware.
+
+#### 4.5.16 Revision 12: what the code is built against (2026-11-11, before the code)
+
+The code of this section is written against the MSI header's `main` in
+state C (section 4.5.11 names the states; the merge of `xirq-2`, the same
+tree; `dev-1` merged into `xirq-2` in state D, so the two lines are one),
+and the header is vendored from `main` in state E (the merge of `xirq-2`,
+the same tree), whose one change to the header over
+state C that a client sees is that every MSI-X table and local APIC
+register is read and written through one aligned 32-bit access (a
+Visual C++ 6.0 test of a volatile register's bit was narrowed to one
+byte); no structure, value or call changed. It is vendored again from
+`main` in state G (the merge of `xirq-2`, the same
+tree), which adds the published state (item 9 below) and changes no
+structure, value or call a client uses; and again from `main` in
+state F, whose ISA listen computes its timeout in 32 bits (no
+`_allmul` import on x86); and again from its version 1, read
+2026-11-12 (the header's SHA-256 `d5b4f45d7dda00eea11e7d85af80b12292c6e87db31686e379b6a1de986a5ac0`;
+item 10 below); and again from its version 1 as read 2026-11-13, whose
+member cap of one claimed IRQ is 16 and whose claim can ask for the
+shared line first (SHA-256
+`eaace8e6bda90cf0c62a95c0a3d10f48c90ba7ca387d94a6317b5c2b3e06be0c` with
+LF endings, `b8bdded716cddd99f8750f5e84f60259a96164f7d0e895deae413acc2a812f73`
+for this tree's CRLF copy; section 4.5.19). Where this section differs
+from sections 4.5.1 to 4.5.14, this section stands; each point below
+names what it changes.
+
+1. **The second claim pool exists** (the decisions rows "the readings
+   of the night of 2026-11-11" and the one on the second pool after it
+   was built; the library's API notes, "The second pool"). Section
+   4.5.11 item 11's "nothing of this is written, read or offered until
+   the pool exists" no longer holds. On 32-bit 2000 and XP, under
+   strategy 0, the driver reads four values beside the three of section
+   4.5.2:
+
+   | Value | Meaning | Out of range |
+   |---|---|---|
+   | `XhciMsiPools` | `0` the ISA IRQs only, the default; `1` the I/O APIC inputs above 23 only; `2` both, the ISA IRQs first (the library's `MSGIRQ_POOL_ISA`, `_HIGH` and both) | any other value refuses the start, reason 30 |
+   | `XhciMsiInputFirst`, `XhciMsiInputLast` | the lowest and the highest upper input considered; both `0` the library's 24 to 255 | read only with the upper pool; outside 24 <= first <= last <= 255, or one of them 0, refuses, reason 30 |
+   | `XhciMsiInputBudget` | how many different upper inputs this driver may have translated in one boot; `0` the library's 16, else 1 to 32 (the name the library's integration notes use; accepted by the owner 2026-11-12) | read only with the upper pool; above 32 refuses, reason 30 |
+
+   The forced `XhciMsiIsaIrq` then takes an upper input as well: with
+   the upper pool chosen, 24 to 255 within the range; an IRQ or input
+   outside the pools chosen or the range refuses (reason 30), as
+   section 4.5.11 item 11 had it. With the upper pool the claim passes
+   `RegistryPath`, the copy of the path `DriverEntry` received that the
+   image keeps (the library keeps the boot's charges in its registry
+   state under the service's name), and the result's
+   `HighBudget`, `HighNew` and `HighSpent` are logged. Without the upper
+   pool none of its fields is set and `RegistryPath` is NULL, as the
+   library requires. **Not on XP x64** (the owner: "this driver does not
+   offer the pool there", where an edge on a claimed upper input reaches
+   no routine): the amd64 image reads none of the four values, claims
+   from the ISA IRQs alone, and its INF writes none of them. **The pool
+   stays off unless a user sets it**: the x86 INF writes `XhciMsiPools`
+   `0`, nothing offers it, and turning it on by default or in the
+   installer waits for the emulator reading the decisions row names (a
+   claim made before a device appears on the same upper input). Whether
+   that row's "before this driver may turn the pool on" also bars a value
+   a user sets by hand is **not decided**: it is put to the owner, and the
+   code honours a hand-set value until the answer (the task's instruction
+   of 2026-11-11), a single test in the decision that the answer can
+   change.
+   Section 4.5.2's sentence that no value of a second pool is read or
+   written is replaced by this table, and section 4.5.10's installer
+   offers none of them.
+2. **The claim's structures grew**, each judged by its own `Size`,
+   which in states C and E must be exactly the earlier size
+   or at least the
+   present one (any size between is `MSGIRQ_STATUS_INVALID_PARAMETER`
+   with the result untouched). The driver zeroes the whole
+   `MSGIRQ_ISA_PARAMS` and the whole `MSGIRQ_ISA_RESULT` and sets each
+   `Size` to the present `sizeof`. Section 4.5.3 step 3's options gain
+   `Pools`, `HighFirst`, `HighLast`, `HighBudget` and `RegistryPath`
+   (the last four only with the upper pool); `HighIoApics` and
+   `HighExclude` are never set.
+3. **What is recorded of the upper pool** (section 4.5.9). New counter
+   words: `Msg4Pools`, `Msg4InputFirst`, `Msg4InputLast`, `Msg4Budget`
+   (as read; `FFFFFFFFh` not found, not read on XP x64);
+   `Msg4PoolsScanned`, `Msg4HighFirst`, `Msg4HighLast`, `Msg4HighIoApics`,
+   `Msg4HighIoApicCount`, `Msg4HighEnd`, `Msg4HighLastInput`, `Msg4HighDetail`, `Msg4HighBudget`,
+   `Msg4HighNew`, `Msg4HighSpent` (the result's upper half);
+   `Msg4HighBudgetRefused` (upper inputs refused for the budget) and
+   `Msg4HighFirstRefused` (the first upper input refused in scope, the
+   input in 15:8 and its reason in 7:0). New notes: `msg4.pools.read`,
+   `msg4.input.read` (first and last), `msg4.budget.read`,
+   `msg4.claim.high` (the scope and the budget's use) and
+   `msg4.claim.high.reason` (the upper inputs with a reason other than
+   "not tried", as runs: one note per run of consecutive inputs with the
+   same reason, the first input in 23:16, the last in 15:8, the reason in
+   7:0). The status `MSGIRQ_STATUS_NO_INPUTS`
+   (14) from a claim refuses with reason 33, the status kept, and
+   `MsiConnectStatus` holds 14 under routine value 4. `XHCITR` names
+   the reason `MSGIRQ_ISA_BUDGET` (16) and the meanings the library's API notes give
+   `MSGIRQ_STATUS_UNSUPPORTED` (with `HighDetail` a status: the
+   charges' record not opened, read or written) and
+   `MSGIRQ_STATUS_HAL_UNSUPPORTED` (the HAL's answer for the claim's
+   interrupt changed, or its vector and IRQL disagree) from a claim or
+   a connect.
+4. **Two names more**, for the upper pool's charges: `ZwCreateKey` and
+   `ZwSetValueKey`, resolved through the same routine as the others
+   (record 18 section 15.16), never imported. Without them a claim that
+   chooses the upper pool is refused (reason 34) and the ISA pool is
+   unaffected.
+5. **Interrupt Disable stays set after a disconnect** (the header's
+   `dev-1`, in the one line; the library's API notes, "Interrupt Disable
+   stays set after a disconnect"). Section 4.5.3's last paragraph - the disarm
+   clears Interrupt Disable again, and a start on the line after a clean
+   disconnect finds it clear - is replaced: the library leaves the bit
+   set, and a later start of the same function under mode 0 or 1 clears
+   it before its line's interrupts are enabled, as every start with a
+   line delivery already does (`hcd_ctl.c`, `hcdIntxEnable`). Section
+   4.5.11 item 2's two readings are made: `MSGIRQ_DISCONNECT_ABSENT_OK`
+   returns `OK` for a message confirmed off or for a function proven
+   absent (three reads of its vendor and device ID, 10 ms apart, each
+   succeeding with `FFFFFFFFh`), and the disable keeps Interrupt Disable
+   set where the function has it, so section 4.5.4 step 1's condition
+   can be met.
+6. **The seams are two files.** So that the common lifetime is built
+   before and apart from the library's seam, `hcd_msg4.c` holds what is common (the decision's glue, the
+   quiet step's call, the readiness flag's one wrapper, the gated
+   routine, the No Op by interrupt, the watchdog's judge, `HcdMsg4Lost`,
+   the refusal table and the image kept, the notes and words);
+   `hcd_msgnt.c` is the library's seam and the only file that includes
+   the MSI header (with its implementation switch). Sections 4.5.3,
+   4.5.10 and 4.5.12 read with these names.
+7. **98 SE and ME.** The 98 SE and ME message path is not part of `3.5.0.0` (owner, 2026-11-13).
+8. **98 SE and ME.** The 98 SE and ME message path is not part of `3.5.0.0` (owner, 2026-11-13).
+9. **The published state** (the header in state G; the library's API
+   notes, "The published state"; its record 07). The library writes one
+   snapshot per PCI function in its registry state, a volatile key, at
+   the claim, the connect, the
+   re-arm, the disconnect and the release, at `PASSIVE_LEVEL`, and counts two
+   things in its interrupt trampoline; the client is asked for nothing.
+   This driver builds it on (the switch that leaves it out is not
+   defined), so a test program shows each controller of this driver that mode 4 connects on
+   2000, XP and XP x64: its claim (the IRQ or input, the members), its
+   connection (vector, message), the last call and its status. Nothing
+   is published under any other mode: the library is initialised only
+   by a mode-4 start. The
+   cost is the library's few registry writes at each of those calls of
+   a mode-4 start, stop, query-stop, cancel, removal and resume (the
+   re-arm publishes too). The hosted x86 build resolves the names
+   it needs through this driver's resolver (`ZwCreateKey`,
+   `ZwSetValueKey`, `ZwClose`, `KeQuerySystemTime`; record 18 section
+   15.16), so the image imports nothing new; without one of the three
+   registry routines nothing is published and the connection is the
+   same, and without `KeQuerySystemTime` only the snapshot's load time
+   is zero.
+10. **The event history and the power-state guard** (the header's
+   version 1, read 2026-11-12; its records 08, 04 section 7 and 01
+   section 2; the library's integration notes for this driver). Three
+   changes, none to a structure, value or call this driver uses. The
+   library keeps a ring of its events per copy and copies it into the
+   published state's key as a `History` value, which the test program
+   reads; it is on
+   by default and asks nothing of the client. Its time stamp comes from
+   `KeQueryInterruptTime`: the hosted x86 build resolves it by name
+   through this driver's resolver (record 18 section 15.16), and on
+   amd64 it is inline, so neither image imports anything new; without
+   the name the events have no time. The MSI-X table is touched only
+   with Memory Space Enable set, the function in D0 and after a
+   complete capability walk: a disconnect out of D0 disables MSI-X
+   through configuration space alone, and a connect or re-arm out of D0
+   returns `MSGIRQ_STATUS_CONFIG_ACCESS`; this driver connects at the
+   start and re-arms on the return to D0 (`HcdMsg4Resume`) and after a
+   query-stop's failed disconnect, all in D0, so neither arises. A
+   malformed capability list (a loop, a pointer into the header) is now
+   `MSGIRQ_STATUS_CONFIG_ACCESS` at the connect, before any write: the
+   start is refused (reason 26) where the walk used to use what it had
+   found. `MSGIRQ_DISCONNECT_ABSENT_ONLY` is for a client that cannot
+   quiet its function before a removal's disconnect; this driver halts
+   the interrupter first and keeps `MSGIRQ_DISCONNECT_ABSENT_OK`.
+
+#### 4.5.15 98 SE and ME (revision 11, 2026-11-11)
+
+The 98 SE and ME message path is not part of `3.5.0.0` (owner, 2026-11-13).
+
+#### 4.5.17 98 SE and ME (revision 13, 2026-11-12; roadmap-usb4 task 49.24)
+
+The 98 SE and ME message path is not part of `3.5.0.0` (owner, 2026-11-13).
+
+#### 4.5.18 The owner's decision of 2026-11-12: a hidden beta
+
+Mode 4 ships as a hidden beta for testers. The installer
+never mentions mode 4 and offers it on no Windows (nothing in `scripts\package` or `xhciinst` refers to it). Only the Advanced settings rows of
+Setup and of the USB Tree show the value. `docs/using/tuning.md` keeps the values in its table, each marked as an
+unsupported test feature, and has no set-up section; the set-up text and
+where the legs passed are in `build-and-test.md`, "Mode 4 for testers". The driver's behaviour is unchanged.
+
+#### 4.5.19 Sharing by default: `XhciMsiShare` fills one IRQ first (the owner's decisions of 2026-11-13)
+
+The owner's decisions of 2026-11-13, after the legs below: sharing is
+on by default; `XhciMsiShare` keeps its name and changes its meaning (no
+second value); the member cap is 16; a claim asks for the shared line
+first, the fullest one; `0` is not offered. They supersede section
+4.5.1 decision 5 (sharing on by default only after the emulator legs and
+the owner's bench, "an interrupt of its own first, then share") and
+every rule of sections 4.5.2, 4.5.3, 4.5.10 and 4.5.13 built on it; the
+bench reading that decision waited for was dropped.
+
+**The value, as every reader takes it** (`XhciMsg4ShareValue`, Setup and
+the USB Tree): the most controllers on one claimed IRQ before another
+IRQ is taken.
+
+| `XhciMsiShare` | Runs as |
+|---|---|
+| absent | `8` |
+| `0` (not offered by Setup or the USB Tree) | `1` |
+| `1` | no sharing: every controller an IRQ of its own; one that finds none left does not start (reason 33), as before |
+| `2` to `16` | controllers fill one IRQ up to that many, and the next takes a fresh IRQ |
+| above `16` | `16` |
+
+Both INFs write `8` on every install path under the don't-overwrite
+rule, so a value a user set survives an update. As every value of this
+section, the machine-wide value wins over a controller's own.
+
+**The claim** (`hcd_msgnt.c`): with sharing on (a value of 2 or more as
+it runs) the claim passes `MSGIRQ_ISA_FLAG_SHARE` with
+`MSGIRQ_ISA_FLAG_JOIN_FIRST`, and `MaxMembers` the value as it runs, held
+to the library's own maximum (16), since a cap above it would refuse
+every claim, the first controller's too. The library then joins the
+fullest claim of this driver's with room before it claims a fresh IRQ;
+a controller that stops and starts again (a disable and enable, a
+restart of its stack) rejoins the fullest line with room, and takes a
+fresh IRQ only if its line is full. With sharing off no flag is passed
+and no claim is joined. Sharing is of the ISA pool alone: a forced ISA
+IRQ (`XhciMsiIsaIrq` 3 to 7, 10 or 11) is joined as any other ISA claim
+when the value runs as 2 or more, and with 1 (or a stored 0) a second
+controller on the same forced IRQ does not start; an input above 23
+(the second pool, section 4.5.16 item 1) is never joinable, whatever the
+flag (the library's upper-pool report makes its claim record unshared),
+so a forced upper input set machine-wide leaves every controller after
+the first not started. Only `xhci98.sys`'s own controllers share: the
+Thunderbolt and USB4 host's ring-interrupt claim (record 21 section
+4.5.14) is exclusive (no sharing flag, `cm_rirqnt.c`, `CmRirqNtClaim`)
+and is made by another image, under another driver object, with its own
+copy of the library, so it never joins this driver's shared line. When
+`XhciInterruptMode` 4 is set machine-wide, as Setup sets it, the host's
+`XhciCmRingInterrupt` 2 yields and uses its line instead (`cm_reg.c`
+reads the machine-wide value alone; `cm_rirqos.c`'s yield; the USB
+Tree's "on, by the line (2 works as 1 here)", read on XP x86, 2000 and
+XP x64). So the two compete for an IRQ only when mode 4 is set in a
+controller's own key and the host has 2: then whichever starts first
+holds the IRQ, a host that loses polls its ring (record 21 section
+4.5.14: after a failed message the ring is polled, never the line), and
+controllers that lose do not start. The vendored header's version 1 as read 2026-11-13 carries
+the cap of 16 and the join-first flag (section 4.5.16's head, and
+`legal-provenance.md` section 2a).
+
+**Legs** (2026-11-13, a 32-bit XP SP3 guest in the emulator, nine
+controllers in mode 4, three free ISA IRQs): at the default, eight
+controllers on IRQ 7 and the ninth on IRQ 6, IRQ 3 untouched; a stick
+on each of the nine, 9 of 9 clean; a disable and enable rejoins; a
+hibernation keeps the claims; with `XhciMsiShare` `1`, and with a stored
+`0`, three controllers each on its own IRQ and the other six refused
+cleanly (Code 10); the shutdown 9 s. The same guest and build with
+sixteen controllers: at the default `8`, eight on IRQ 7 and eight on
+IRQ 6, IRQ 3 untouched, all sixteen running; with `XhciMsiShare` `16`,
+all sixteen on IRQ 7, a stick copy on each 16 of 16 clean, the power-off
+in 9 s. Not covered: Windows 2000 and XP x64 with more than eight on one
+IRQ, more than sixteen controllers, standby (only hibernation was read,
+on XP), real hardware, the USB4 host beside mode-4 controllers in a
+guest, and a user's own per-controller value surviving an update (only
+the INF's `8` and the machine-wide value were read).
 
 ## 5. The poller's lifecycle
 
@@ -2713,6 +4228,34 @@ Taken by the owner on 2026-10-05, each from options with a recommendation:
    7.2.4); T5, an update keeps an existing value. The helper's H1 to H5
    are design record 18 section 15.13's.
 
+10. (2026-11-10 and 2026-11-11; task 49.24; revision 10; a design, not
+    built) `XhciInterruptMode` 4, a message-signalled interrupt on 2000,
+    XP and XP x64 through the MSI stability improvements: never chosen
+    by 0; no fallback - a connection failed, refused or lost fails the
+    start or the controller, logged; `XhciMsiStrategy` 0 a claimed ISA
+    interrupt (the default), 1 the controller's own line borrowed on the
+    user's assertion with the driver's veto; `XhciMsiIsaIrq` the forced
+    IRQ; a shared claim a user value, on by default only after the legs
+    and the owner's bench, an interrupt of the controller's own first,
+    this driver's controllers only, with a member cap; `XhciMsiAvoid`
+    obeyed; a quarantine keeps the driver loaded and refuses that
+    controller's every later start until restart; the header MIT, each
+    client image carrying the library's signature
+    string. Section 4.5.1 has them in full, section 4.5.13 what is still
+    the owner's to decide. **Amended 2026-11-11 (revision 11):** the
+    eleven points revision 10 left open are answered (section 4.5.13's
+    table: `XhciMsiShare`; `XhciMsiIsaIrq` in the installer; 256 and
+    500 ms; the backstop as the watchdog, eight in 60 s; the No Op's
+    500 ms; the lost message reported on 2000 and XP only; the replug;
+    the header taken in once; the pool's names; no exclusive-device
+    request), and the installer offers the message as two separate ticks
+    (the USB 3 controllers now, the Thunderbolt and USB4 host with task
+    49.27; section 4.5.10). The 98 SE and ME message path is not part of
+    `3.5.0.0` (owner, 2026-11-13). **Amended 2026-11-13:** sharing on by
+    default; `XhciMsiShare` repurposed, no second value: the most
+    controllers on one IRQ before another is taken, 1 to 16, absent 8, 0
+    not offered; the shared line first, the fullest one (section 4.5.19).
+
 ## 13. The revisions
 
 ### 13.1 Revision 1
@@ -2916,6 +4459,43 @@ out of the tree (`runs/run-45.md`, "45.33"), without the move to
 polling, and neither step 1 (this controller's own Interrupt Disable
 before the connection) nor step 3 (the storm detector), which 45.33
 read not to work.
+
+### 13.8 Revision 10 (task 49.24)
+
+Section 4.5, 2026-11-11, reviewed and revised: `XhciInterruptMode` 4
+designed before its code, from the owner's
+decisions of 2026-11-10 and 2026-11-11, against the MSI header in state A
+(section 4.5.11 lists every dependency on it), with what stands of the parked branch `w48-mode4` (section
+4.5.12) and the points left to the owner (section 4.5.13). A design
+only: no value, INF row, gate row or user text follows from it yet.
+
+### 13.9 Revision 11 (task 49.24, carried on)
+
+(With the owner's answers of the same day to the nine points it first
+left open: section 4.5.13's second table.)
+
+Sections 4.5.1 to 4.5.14 and the new 4.5.15, 2026-11-11, reviewed and
+revised: the owner's answers to revision 10's open points written into
+the sections they touch; the installer's two ticks (section 4.5.10);
+and section 4.5.15. Still a design only.
+
+### 13.10 Revision 12 (task 49.24, the code)
+
+Section 4.5.16, 2026-11-11, reviewed and revised, before the code: what
+the code is built against (the MSI header's `main` in state C) and what that changes in sections 4.5.1 to 4.5.14 - the
+second claim pool's four values on 32-bit 2000 and XP and what is
+recorded of it, the grown structures, two names more, Interrupt Disable
+kept set after a disconnect, and the seam files.
+
+### 13.11 Revision 14 (task 49.24, 2026-11-13)
+
+Section 4.5.19: the owner's decisions of 2026-11-13 on sharing (on by
+default; `XhciMsiShare` the most controllers on one IRQ before another is
+taken, 1 to 16, absent 8, 0 not offered; the shared line first, the
+fullest one), the header's new copy, and the legs on XP behind them; the
+places of sections 4.5.1 to 4.5.13 that described the old rule marked
+as superseded. The 98 SE and ME code's removal of the same day is
+recorded in sections 3 and 4.5.7.
 
 ## 14. What changes in the documents
 

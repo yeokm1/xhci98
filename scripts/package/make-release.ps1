@@ -54,6 +54,9 @@ version root holds only the flavour directories, the readme and the licence;
 a version published before 2.4.0.0 keeps its tools at its root (portsw\ only
 in 2.3.1.0; 2.3.0.0 has the scripts per flavour, older none), and the upload
 assembly reads each tree at the layout its version was published with.
+From 3.5.0.0 (roadmap-usb4 task 49.47) a cut publishes no `portsw\`: the
+xHCI98 USB Tree's Settings window and `XHCITR /set` set the value; a
+release published before it keeps its `tools\portsw\`.
 
 **Only the executable and its MAP go out**, not the numbered `.BAT` wrappers.
 Those drive the staged active tests - which take ownership of the controller,
@@ -425,8 +428,8 @@ which -UploadSetOnly rebuilds them.
 Make no download 2, and no USBDRV\FREE\ in download 3. While
 scripts\package\wdmfree-pin.txt names no usb-wdm-free release that is what
 every cut does; 3.2.0.0's named v0.1.0, 3.3.0.0's v0.1.4, 3.4.0.0's
-v0.1.7 (v0.1.5 until task 45.44), 3.4.1.0's v0.1.8, and from 3.4.2.0 it
-names v0.1.9.
+v0.1.7 (v0.1.5 until task 45.44), 3.4.1.0's v0.1.8, 3.4.2.0's and
+3.4.3.0's v0.1.9, and from 3.5.0.0 it names v0.1.10.
 
 .PARAMETER WdmFreeRoot
 The usb-wdm-free checkout, overriding scripts\local\usb-wdm-free
@@ -914,8 +917,11 @@ $netPublishable = @("xhcinet.inf", "xhcinet.sys", "xhcinet6.sys")
 # none and 2.3.0.0 has them at the root of each flavour directory, and a
 # published release is never rewritten, so the upload assembly accepts a
 # tree with no portsw\ in the layout its version was published with
-# (Assert-PortSwitchLayout -PublishedVersion).
+# (Assert-PortSwitchLayout -PublishedVersion). From 3.5.0.0 (roadmap-usb4
+# task 49.47) a cut publishes none of them, the xHCI98 USB Tree doing what
+# they did; the names stay, for the published trees and to refuse a copy.
 $pswPublishable = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")
+$pswRetiredVersion = [version]"3.5.0.0"
 
 # The release's tools in tools\ (roadmap-hcd task 38.9): a cut publishes
 # xhciqual\, portsw\ and the rest under <version>\tools\, so the version
@@ -934,13 +940,16 @@ $pswPublishable = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")
 # xhcicln\, the cleanup tool of task 38.8, was published from 2.4.0.0 to
 # 3.2.0.0, only ever under tools\, and dropped in 3.3.0.0 (task 44.82).
 # $retiredToolNames admits it the same way.
+# portsw\ was published from 2.4.0.0 to 3.4.3.0 under tools\ (2.3.1.0 at the
+# root) and dropped in 3.5.0.0 (task 49.47); $retiredToolNames admits it the
+# same way, and $toolDirFiles keeps its three names for those trees.
 # xhcimark\, the mark service of task 42-A.5, is first published in 3.1.0.0.
 # xhciperf\, the disk benchmark of task 43.50, is a developer tool in the source
 # tree and is not published (owner, 2026-10-23: dropped from 3.2.0.0).
 $toolsDirName = "tools"
 $toolsLayoutVersion = [version]"2.4.0.0"
-$toolNames = @("xhciqual", "portsw", "silent", "xhciinst", "xhcitr", "xhcimark")
-$retiredToolNames = @{ "xhcisnap" = [version]"3.1.0.0"; "xhcicln" = [version]"3.3.0.0" }
+$toolNames = @("xhciqual", "silent", "xhciinst", "xhcitr", "xhcimark")
+$retiredToolNames = @{ "xhcisnap" = [version]"3.1.0.0"; "xhcicln" = [version]"3.3.0.0"; "portsw" = $pswRetiredVersion }
 
 # The silent install's list and its switch's scripts (roadmap-hcd task 38.2,
 # design record 13 section 6.11.8): copied once from src\ into tools\silent\
@@ -1068,25 +1077,6 @@ function Assert-UploadSetEntries {
         throw ("{0} holds what the cut does not stage. Do not upload it:`n  - {1}" -f $What, ($faults -join "`n  - "))
     }
 }
-function Publish-PortSwitchScripts {
-    # Copies the scripts from SourceDir into <DestRoot>\<DirName>\ and returns
-    # that directory. Together or not at all: a missing one is refused before
-    # anything is copied, as make-package.ps1 refused it when it staged them.
-    param([string]$SourceDir, [string]$DestRoot, [string[]]$Names, [string]$DirName)
-    $missing = @($Names | Where-Object {
-        -not (Test-Path -LiteralPath (Join-Path $SourceDir $_) -PathType Leaf) })
-    if ($missing.Count -gt 0) {
-        throw ("'{0}' has no {1}: the port switchover's scripts are published together or not at all (roadmap-hcd tasks 36.42, 36.56 and 37.5)." -f `
-               $SourceDir, ($missing -join ", "))
-    }
-    $dir = Join-Path $DestRoot $DirName
-    Ensure-Directory $dir
-    foreach ($name in $Names) {
-        Copy-Item -LiteralPath (Join-Path $SourceDir $name) -Destination (Join-Path $dir $name) -Force
-    }
-    return $dir
-}
-
 function Assert-PortSwitchLayout {
     # The layout of task 37.5 in a version tree: <Root>\<DirName>\ holds the
     # scripts and nothing else, and no other directory of the tree, a flavour
@@ -1100,6 +1090,8 @@ function Assert-PortSwitchLayout {
     # the scripts anywhere; 2.3.0.0 all three at the root of every flavour
     # directory (one holding <InfName>) and nowhere else; after 2.3.0.0 no
     # other layout at all, since every such version is cut by this script.
+    # From $pswRetiredVersion (task 49.47), and at the cut, the reverse: no
+    # <DirName>\ and no copy of a script anywhere in the tree.
     param([string]$Root, [string[]]$Names, [string]$DirName, [string]$What,
           [string]$PublishedVersion = "", [string]$InfName = "xhci98.inf")
     $keys = @($Names | ForEach-Object { $_.ToLowerInvariant() })
@@ -1108,7 +1100,13 @@ function Assert-PortSwitchLayout {
     $copies = @(Get-ChildItem -LiteralPath $rootFull -File -Recurse -Force |
                 Where-Object { $_.Name.ToLowerInvariant() -in $keys })
     $faults = @()
-    if (Test-Path -LiteralPath $dir -PathType Container) {
+    if ($PublishedVersion -eq "" -or [version]$PublishedVersion -ge $pswRetiredVersion) {
+        if (Test-Path -LiteralPath $dir) {
+            $faults += "$DirName\ is there, but no cut publishes the port switchover's scripts from $pswRetiredVersion on (task 49.47)"
+        }
+        $allowedDirs = @()
+        $layout = "absent, as from $pswRetiredVersion"
+    } elseif (Test-Path -LiteralPath $dir -PathType Container) {
         foreach ($name in $Names) {
             if (-not (Test-Path -LiteralPath (Join-Path $dir $name) -PathType Leaf)) { $faults += "$DirName\$name is missing" }
         }
@@ -1119,8 +1117,7 @@ function Assert-PortSwitchLayout {
         }
         $allowedDirs = @($dir)
         $layout = "in $DirName\ alone"
-    } elseif ($PublishedVersion -eq "" -or ([version]$PublishedVersion -gt [version]"2.3.0.0") -or
-              (Test-Path -LiteralPath $dir)) {
+    } elseif (([version]$PublishedVersion -gt [version]"2.3.0.0") -or (Test-Path -LiteralPath $dir)) {
         throw "$What has no $DirName\ directory, where the port switchover's scripts are published (roadmap-hcd task 37.5)."
     } elseif ([version]$PublishedVersion -eq [version]"2.3.0.0") {
         $allowedDirs = @(Get-ChildItem -LiteralPath $rootFull -Directory -Force |
@@ -2557,6 +2554,7 @@ function New-UploadSet {
                      -FreeTag $(if ($null -ne $WdmFreeSet) { $WdmFreeSet.Tag } else { "" }) `
                      -NonFreeTag $(if ($null -ne $NonFreeSet) { $NonFreeSet.Tag } else { "" }) `
                      -FreeTools $(if ($null -ne $WdmFreeSet) { @($WdmFreeSet.Tools) } else { @() }) `
+                     -FreeDocsLicence ($null -ne $WdmFreeSet -and $WdmFreeSet.PSObject.Properties.Name -contains "DocsLicence" -and [bool]$WdmFreeSet.DocsLicence) `
                      -DriverPackIncluded ($null -ne $DriverPack) -Label "'$rdPath'"
         [System.IO.File]::WriteAllText($rdPath, $rdNew, (New-Object System.Text.ASCIIEncoding))
         Write-Ok ("readme.txt is {0}'s" -f (Get-DownloadZipName -Version $Version -Kind $Kind))
@@ -3042,8 +3040,13 @@ $gateOut
     Assert-ToolsLayout -Root $uploadRoot -What "the upload set '$uploadRoot'" -PublishedVersion $Version
     # A tree with tools\ is cut in task 38.9's layout, so it is held to the
     # cut's port switchover layout too, whatever its version: the legacy
-    # layouts -PublishedVersion admits belong to trees without tools\.
-    $pswVersion = if (Test-Path -LiteralPath (Join-Path $uploadRoot $toolsDirName)) { "" } else { $Version }
+    # layouts -PublishedVersion admits belong to trees without tools\. But a
+    # published tree that -UploadSetOnly reads is held to its own version's
+    # (2.4.0.0 at the least, the first with tools\): tools\portsw\ up to
+    # 3.4.3.0, none from 3.5.0.0 (task 49.47), while this cut's own tree,
+    # which may still carry the older version's stamp before the bump, is
+    # held to the cut's.
+    $pswVersion = if (-not (Test-Path -LiteralPath (Join-Path $uploadRoot $toolsDirName))) { $Version } elseif (-not $UploadSetOnly) { "" } elseif ([version]$Version -lt $toolsLayoutVersion) { [string]$toolsLayoutVersion } else { $Version }
     Assert-PortSwitchLayout -Root $uploadRoot -Names $pswPublishable `
                             -DirName (Get-ToolDirName -Name "portsw" -Root $uploadRoot) `
                             -What "the upload set '$uploadRoot'" -PublishedVersion $pswVersion
@@ -3179,6 +3182,7 @@ $downloadKinds = @("base")
 $stagedUploads = @()
 $readmeFreeTag = ""
 $readmeFreeTools = @()
+$readmeFreeDocs = $false
 $readmeNonFreeTag = ""
 
 try {
@@ -3337,9 +3341,7 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
                     # is held below), so an image built before a source change
                     # cannot be cut.
                     $vsdTime = (Get-Item -LiteralPath $vsdImage).LastWriteTimeUtc
-                    $vsdInputs = @(Get-ChildItem -LiteralPath (Join-Path $repo "src\vsd") -File |
-                                   Where-Object { $_.Extension -in @(".c", ".h", ".def", ".cmd", ".ps1", ".py", ".allow") }) +
-                                 @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_version.h"))
+                    $vsdInputs = @(Get-VsdImageInputs -Repo $repo)
                     $vsdNewer = @($vsdInputs | Where-Object { $_.LastWriteTimeUtc -gt $vsdTime })
                     if ($vsdNewer.Count -gt 0) {
                         Stop-CutCheck ("S98VSD.VXD is older than {0}: rebuild it (src\vsd\build.cmd, or scripts\build-driver.cmd)." -f (($vsdNewer | ForEach-Object { $_.Name }) -join ", "))
@@ -3465,7 +3467,7 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
             }
         }
         $downloadKinds = @("base")
-        if ($null -ne $wdmFreeSet) { $downloadKinds += "free"; $readmeFreeTag = $wdmFreeSet.Tag; $readmeFreeTools = @($wdmFreeSet.Tools) }
+        if ($null -ne $wdmFreeSet) { $downloadKinds += "free"; $readmeFreeTag = $wdmFreeSet.Tag; $readmeFreeTools = @($wdmFreeSet.Tools); $readmeFreeDocs = [bool]$wdmFreeSet.DocsLicence }
         if ($null -ne $nonFreeSet) { $downloadKinds += "nonfree"; $readmeNonFreeTag = $nonFreeSet.Tag }
 
         # The other sets' checks (design record 26 section 6.7.11): the 98 SE
@@ -4074,11 +4076,7 @@ the result in place of the marker, then cut again. The first:
                 # src\vsd's link guards and DDK staging included: its build runs
                 # them (design record 30 section 6.1).
                 $pfwTime = (Get-Item -LiteralPath $pfwImage).LastWriteTimeUtc
-                $pfwInputs = @(Get-ChildItem -LiteralPath (Join-Path $repo "src\pfw") -File |
-                               Where-Object { $_.Extension -in @(".c", ".h", ".def", ".cmd", ".ps1", ".allow") }) +
-                             @(Get-ChildItem -LiteralPath (Join-Path $repo "src\vsd") -File |
-                               Where-Object { $_.Extension -eq ".py" -or $_.Name -eq "stage-ddk.ps1" }) +
-                             @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_version.h"))
+                $pfwInputs = @(Get-PfwVxdImageInputs -Repo $repo)
                 $pfwNewer = @($pfwInputs | Where-Object { $_.LastWriteTimeUtc -gt $pfwTime })
                 if ($pfwNewer.Count -gt 0) {
                     Stop-CutCheck ("XHCIPFW.VXD is older than {0}: rebuild it (src\pfw\build.cmd, or scripts\build-driver.cmd)." -f (($pfwNewer | ForEach-Object { $_.Name }) -join ", "))
@@ -4102,11 +4100,7 @@ the result in place of the marker, then cut again. The first:
             if ($LASTEXITCODE -ne 0) { Stop-CutCheck ("XHCIPFW.SYS failed its gate:`n" + (($out | Out-String).TrimEnd())) }
             else {
                 $pfwSysTime = (Get-Item -LiteralPath $pfwSysImage).LastWriteTimeUtc
-                $pfwSysInputs = @(Get-ChildItem -LiteralPath (Join-Path $repo "src\pfw\nt") -File |
-                                  Where-Object { $_.Extension -in @(".c", ".h", ".rc", ".cmd", ".ps1", ".allow") -or $_.Name -in @("sources", "makefile") }) +
-                                @(Get-ChildItem -LiteralPath (Join-Path $repo "src\pfw") -File |
-                                  Where-Object { $_.Name -in @("pfw_scan.c", "pfw_scan.h", "pfw_ntdec.c", "pfw_ntdec.h") }) +
-                                @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_version.h"))
+                $pfwSysInputs = @(Get-PfwSysImageInputs -Repo $repo)
                 $pfwSysNewer = @($pfwSysInputs | Where-Object { $_.LastWriteTimeUtc -gt $pfwSysTime })
                 if ($pfwSysNewer.Count -gt 0) {
                     Stop-CutCheck ("XHCIPFW.SYS is older than {0}: rebuild it (src\pfw\nt\build.cmd, or scripts\build-driver.cmd)." -f (($pfwSysNewer | ForEach-Object { $_.Name }) -join ", "))
@@ -4801,6 +4795,8 @@ cuts without the tool on a host that cannot build it.
             @(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_ejask.h")) +
             @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_psw.c")) +
             @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_psw.h")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_pirq.c")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_pirq.h")) +
             @(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_oscp.c")) +
             @(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_oscp.h")))
         foreach ($name in ($instExes + $rootExes)) {
@@ -5006,16 +5002,10 @@ helper (xhciinst\di\build.cmd).
 
     # --- the port switchover's scripts ---------------------------------------
     #
-    # Once, into tools\portsw\ beside the other tools' directories (roadmap-hcd
-    # tasks 37.5 and 38.9), from src\ rather than from a package: the packages no longer
-    # carry them, and the four flavour directories once held four
-    # byte-identical copies of files that are neither architecture- nor
-    # flavour-specific. No readme.txt of their own: the release notes'
-    # XhciIntelPortSwitch is where they are explained, and each script says
-    # what it does when run.
-    Write-Step "port switchover scripts"
-    $pswStaged = Publish-PortSwitchScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot -Names $pswPublishable -DirName (Get-ToolDirName -Name "portsw")
-    Write-Ok ("{0} published once, in {1}\" -f ($pswPublishable -join ", "), (Get-ToolDirName -Name "portsw"))
+    # Published once, in tools\portsw\, from roadmap-hcd task 37.5 to
+    # 3.4.3.0; from 3.5.0.0 (roadmap-usb4 task 49.47) none: the xHCI98 USB
+    # Tree's Settings window and XHCITR /set set XhciIntelPortSwitch, and
+    # Assert-PortSwitchLayout below refuses a copy anywhere in the tree.
 
     # The silent install's list and its switch's scripts (task 38.2), once,
     # from src\, into tools\silent\ under their published names. The
@@ -5233,17 +5223,6 @@ helper (xhciinst\di\build.cmd).
         $contents += "      choose another) and starts it at each login"
         $contents += "      (section 2). Its File > Save Report writes what a"
         $contents += "      bug report asks for (section 4)."
-        $contents += ""
-    }
-    if ($null -ne $pswStaged) {
-        $contents += "  TOOLS\PORTSW\  - the Intel port switchover's switch (the release notes)"
-        $contents += ""
-        $contents += "      portsw.vbs     shows XhciIntelPortSwitch, and sets it on or off"
-        $contents += "      portsw-on.bat  turns it on in one double-click"
-        $contents += "      portsw-off.bat turns it off in one double-click"
-        $contents += ""
-        $contents += "      One copy for every driver directory above. Run them from"
-        $contents += "      this directory."
         $contents += ""
     }
     if ($null -ne $silentStaged) {
@@ -5501,7 +5480,8 @@ It also installs the xHCI98 USB Tree (XHCITR), which shows every USB and
 Thunderbolt or USB4 device and removes a Thunderbolt or USB4 device
 safely from its icon by the clock. To uninstall, use Remove in
 Add/Remove Programs (Programs and Features on Vista and later). Every run
-adds to XHCIINST.LOG at the root of the system drive.
+adds to XHCIINST.LOG at the root of the system drive, or, on 98 SE and ME,
+in the temp folder if that file cannot be written; Setup shows the path.
 
 BY HAND, without SETUP.EXE: in Device Manager find the unrecognised xHCI
 controller (a yellow mark, usually under "Other devices"), then
@@ -5560,13 +5540,14 @@ and attach:
   - The driver's report: set the logging level to 2 (the default; View >
     Logging level in the xHCI98 USB Tree) and restart if you changed it;
     make the problem happen, then use File > Save Report (or XHCITR
-    /report <file>) and attach the .TXT. At level 4 the report leaves the
-    log out, as it holds internal addresses.
+    /report <file>) and attach the .TXT. At level 4 the report includes
+    the log with the memory addresses it holds.
   - The driver's snapshot: right after the report, File > Save Snapshot
-    (or XHCITR /snapshot; XHCITR64 on 64-bit Windows), and attach the four
-    files it writes (.DEV, .TXT, .BIN and .PSC).
+    (or XHCITR /snapshot; XHCITR64 on 64-bit Windows), and attach every
+    file it writes: four for each controller, and two for each
+    Thunderbolt or USB4 controller, named from the date and time.
   - For a problem with the install, XHCIINST.LOG from the root of the
-    system drive.
+    system drive (or from the path Setup showed).
   - The DOS report, if a maintainer asks for it: run QUALREP.BAT from real
     DOS in TOOLS\XHCIQUAL\ and attach the .LOG it names (read-only).
 
@@ -5820,7 +5801,7 @@ is replaced by its reading. The first:
     foreach ($dk in @($downloadKinds | Where-Object { $_ -ne "base" })) {
         $variant = ConvertTo-DownloadReadme -Text $readme -Version $Version -Kind $dk -Kinds $downloadKinds `
                        -FreeTag $readmeFreeTag -NonFreeTag $readmeNonFreeTag -DriverPackIncluded $driverPackIncluded `
-                       -FreeTools $readmeFreeTools -Label "the rendered readme.txt"
+                       -FreeTools $readmeFreeTools -FreeDocsLicence $readmeFreeDocs -Label "the rendered readme.txt"
         $variantPath = Join-Path ([System.IO.Path]::GetTempPath()) ("readme-" + $dk + "-" + [System.IO.Path]::GetRandomFileName() + ".txt")
         try {
             Write-GeneratedText -Path $variantPath -Lines ($variant -split "`r?`n")

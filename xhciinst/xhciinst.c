@@ -170,6 +170,10 @@ int main(int argc, char **argv)
     if (o->SelfTest) {
         return inst_eng_selftest();
     }
+    if (o->SetShow) {
+        /* Task 49.38: the listing alone, nothing else run. */
+        return inst_eng_set_show();
+    }
     outMirror = inst_out_mirror(std_is_console(STD_OUTPUT_HANDLE),
                                 std_is_console(STD_ERROR_HANDLE),
                                 std_is_console(STD_INPUT_HANDLE));

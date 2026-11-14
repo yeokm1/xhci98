@@ -1962,6 +1962,181 @@ static void test_fast_reset(void)
     CHECK_EQ(XHCI98_FAIL_E_FAST_RESET, 7, "the ring's event 7");
 }
 
+/* Task 49.39 (design record 13 section 16.15): a timeout with the status
+ * in. (final, dataOutstanding, finalAge) at the command's own deadline. */
+static void test_final_timeout(void)
+{
+    CHECK_EQ(UasFinalTimeoutDue(1, 1, 30), UAS_FINAL_TIMEOUT_RESET,
+             "final GOOD long in, data still busy: the device reset");
+    CHECK_EQ(UasFinalTimeoutDue(1, 1, 2), UAS_FINAL_TIMEOUT_RESET,
+             "final IU two ticks old, data outstanding: reset");
+    CHECK_EQ(UasFinalTimeoutDue(1, 1, 1), UAS_FINAL_TIMEOUT_WAIT,
+             "final IU one tick old: held, the data may follow");
+    CHECK_EQ(UasFinalTimeoutDue(1, 1, 0), UAS_FINAL_TIMEOUT_WAIT,
+             "final IU at the deadline: held");
+    CHECK_EQ(UasFinalTimeoutDue(1, 0, 30), UAS_FINAL_TIMEOUT_NONE,
+             "final IU in and the data back: not this rule");
+    CHECK_EQ(UasFinalTimeoutDue(1, 0, 0), UAS_FINAL_TIMEOUT_NONE,
+             "status then data inside the timeout: nothing outstanding");
+    CHECK_EQ(UasFinalTimeoutDue(0, 1, 30), UAS_FINAL_TIMEOUT_NONE,
+             "no final IU (a READ still streaming): ABORT TASK");
+    CHECK_EQ(UasFinalTimeoutDue(0, 0, 0), UAS_FINAL_TIMEOUT_NONE,
+             "neither: the ordinary timeout");
+    CHECK_EQ(UasFinalTimeoutDue(1, 1, 0xFFFFFFFFUL),
+             UAS_FINAL_TIMEOUT_RESET,
+             "the age is a difference of seconds: any large one resets");
+    CHECK_EQ(XHCI98_FAIL_E_FINAL_TIMEOUT, 8, "the ring's event 8");
+}
+
+/* Task 49.39 (design record 13 section 16.17): a drive a reset does not
+ * bring back, given up. */
+static void test_final_giveup(void)
+{
+    CHECK_EQ(UasFinalGiveUpDue(0), 0, "no reset yet: the first is taken");
+    CHECK_EQ(UasFinalGiveUpDue(1), 0, "one reset: the second is taken");
+    CHECK_EQ(UasFinalGiveUpDue(2), 0, "two resets: the third is taken");
+    CHECK_EQ(UasFinalGiveUpDue(3), 1, "three: no fourth, given up");
+    CHECK_EQ(UasFinalGiveUpDue(4), 1, "past the limit: given up");
+    CHECK_EQ(UasFinalGiveUpDue(0xFFFFFFFFUL), 1, "any large count");
+    CHECK_EQ(UAS_FINAL_RESET_LIMIT, 3, "the limit is three");
+    CHECK_EQ(UasDataDelivered(1, 512), 1, "data delivered clears");
+    CHECK_EQ(UasDataDelivered(1, 1), 1, "a short transfer with a byte");
+    CHECK_EQ(UasDataDelivered(1, 0), 0,
+             "no byte (a GOOD with no data phase): not cleared");
+    CHECK_EQ(UasDataDelivered(0, 512), 0, "a failed transfer: not cleared");
+    CHECK_EQ(XHCI98_FAIL_E_GIVEN_UP, 10, "the ring's event 10");
+    {
+        ULONG c[UAS_FINAL_DIRS];
+
+        /* Two read resets, one write reset, a good write: the reads'
+         * count survives, and the third read reset is the give-up. */
+        c[0] = 0;
+        c[1] = 0;
+        UasFinalCount(c, UAS_FINAL_DIR_IN);
+        UasFinalCount(c, UAS_FINAL_DIR_IN);
+        UasFinalCount(c, UAS_FINAL_DIR_OUT);
+        UasFinalClear(c, UAS_FINAL_DIR_OUT);
+        CHECK_EQ(c[0], 2, "the write's data leaves the reads' count");
+        CHECK_EQ(c[1], 0, "and clears the writes' own");
+        CHECK_EQ(UasFinalDue(c, UAS_FINAL_DIR_IN), 0,
+                 "a third read reset is still taken");
+        UasFinalCount(c, UAS_FINAL_DIR_IN);
+        CHECK_EQ(UasFinalDue(c, UAS_FINAL_DIR_IN), 1,
+                 "three read resets: the next read's is the give-up");
+        CHECK_EQ(UasFinalDue(c, UAS_FINAL_DIR_OUT), 0,
+                 "a write's reset is counted by writes alone");
+        UasFinalClear(c, UAS_FINAL_DIR_OUT);
+        UasFinalCount(c, UAS_FINAL_DIR_OUT);
+        UasFinalClear(c, UAS_FINAL_DIR_OUT);
+        CHECK_EQ(UasFinalDue(c, UAS_FINAL_DIR_IN), 1,
+                 "whatever the writes do, the reads stay given up");
+        /* The mirror: write resets, reads delivered. */
+        c[0] = 0;
+        c[1] = 0;
+        UasFinalCount(c, UAS_FINAL_DIR_OUT);
+        UasFinalCount(c, UAS_FINAL_DIR_OUT);
+        UasFinalCount(c, UAS_FINAL_DIR_IN);
+        UasFinalClear(c, UAS_FINAL_DIR_IN);
+        CHECK_EQ(c[1], 2, "a read's data leaves the writes' count");
+        UasFinalCount(c, UAS_FINAL_DIR_OUT);
+        CHECK_EQ(UasFinalDue(c, UAS_FINAL_DIR_OUT), 1,
+                 "three write resets: the next write's is the give-up");
+        CHECK_EQ(UasFinalDue(c, UAS_FINAL_DIR_IN), 0,
+                 "and a read's reset is still taken");
+        /* One reset for both directions at once counts each. */
+        c[0] = 0;
+        c[1] = 0;
+        UasFinalCount(c, UAS_FINAL_DIR_IN | UAS_FINAL_DIR_OUT);
+        CHECK_EQ(c[0] == 1 && c[1] == 1, 1, "a reset for both counts both");
+        UasFinalClear(c, UAS_FINAL_DIR_IN);
+        CHECK_EQ(c[0] == 0 && c[1] == 1, 1, "data in clears in alone");
+        UasFinalClear(c, UAS_FINAL_DIR_IN | UAS_FINAL_DIR_OUT);
+        CHECK_EQ(c[0] == 0 && c[1] == 0, 1, "a replug (start) clears both");
+        c[0] = 2;
+        c[1] = 3;
+        CHECK_EQ(UasFinalDue(c, UAS_FINAL_DIR_IN | UAS_FINAL_DIR_OUT), 1,
+                 "a reset for both: either direction at the limit");
+        c[0] = 0xFFFFFFFFUL;
+        UasFinalCount(c, UAS_FINAL_DIR_IN);
+        CHECK_EQ(c[0], 0xFFFFFFFFUL, "the count saturates");
+        CHECK_EQ(UasFinalDue(c, 0), 0, "no direction asking: no give-up");
+    }
+}
+
+/* Task 49.39 (design record 13 section 16.16): the drive's own refusal of
+ * ATA PASS-THROUGH, replayed per operation code. */
+static void test_ata_replay(void)
+{
+    UCHAR a1[12];
+    UCHAR c85[16];
+    UCHAR rd10[10];
+    UCHAR fixed[18];
+    UCHAR desc[8];
+    UCHAR out[18];
+    ULONG n;
+
+    memset(a1, 0, sizeof(a1));
+    a1[0] = 0xA1;
+    memset(c85, 0, sizeof(c85));
+    c85[0] = 0x85;
+    memset(rd10, 0, sizeof(rd10));
+    rd10[0] = 0x28;
+    memset(fixed, 0, sizeof(fixed));
+    fixed[0] = 0x70;
+    fixed[2] = 0x05;
+    fixed[7] = 10;
+    fixed[12] = 0x20;
+    memset(desc, 0, sizeof(desc));
+    desc[0] = 0x72;
+    desc[1] = 0x05;
+    desc[2] = 0x20;
+
+    CHECK_EQ(UasAtaBit(a1, 12), UAS_ATA_REFUSED_12, "A1h is (12)");
+    CHECK_EQ(UasAtaBit(c85, 16), UAS_ATA_REFUSED_16, "85h is (16)");
+    CHECK_EQ(UasAtaBit(rd10, 10), 0, "READ (10) is neither");
+    CHECK_EQ(UasAtaBit(NULL, 0), 0, "no CDB");
+
+    CHECK_EQ(UasAtaRefusal(a1, 12, UAS_SCSI_CHECK_CONDITION, fixed, 18),
+             UAS_ATA_REFUSED_12, "(12) refused 5/20/00, fixed sense: latch");
+    CHECK_EQ(UasAtaRefusal(c85, 16, UAS_SCSI_CHECK_CONDITION, desc, 8),
+             UAS_ATA_REFUSED_16, "(16) refused, descriptor sense: latch");
+    CHECK_EQ(UasAtaRefusal(a1, 12, 0, fixed, 18), 0,
+             "GOOD never latches");
+    CHECK_EQ(UasAtaRefusal(rd10, 10, UAS_SCSI_CHECK_CONDITION, fixed, 18),
+             0, "another command's 5/20/00 is not this");
+    fixed[12] = 0x24;
+    CHECK_EQ(UasAtaRefusal(a1, 12, UAS_SCSI_CHECK_CONDITION, fixed, 18), 0,
+             "5/24/00 (a field) does not latch");
+    fixed[12] = 0x20;
+    fixed[13] = 0x01;
+    CHECK_EQ(UasAtaRefusal(a1, 12, UAS_SCSI_CHECK_CONDITION, fixed, 18), 0,
+             "5/20/01 does not latch");
+    fixed[13] = 0x00;
+    fixed[2] = 0x06;
+    CHECK_EQ(UasAtaRefusal(a1, 12, UAS_SCSI_CHECK_CONDITION, fixed, 18), 0,
+             "another sense key does not latch");
+    fixed[2] = 0x05;
+    CHECK_EQ(UasAtaRefusal(a1, 12, UAS_SCSI_CHECK_CONDITION, fixed, 13), 0,
+             "fixed sense too short to hold ASCQ");
+    CHECK_EQ(UasAtaRefusal(a1, 12, UAS_SCSI_CHECK_CONDITION, NULL, 0), 0,
+             "no sense");
+    CHECK_EQ(UasAtaRefusal(a1, 12, UAS_SCSI_CHECK_CONDITION, desc, 3), 0,
+             "descriptor sense too short");
+
+    memset(out, 0xEE, sizeof(out));
+    n = UasInvalidOpcodeSense(out, sizeof(out));
+    CHECK_EQ(n, UAS_INVALID_CDB_SENSE, "the whole fixed sense");
+    CHECK_EQ(UasAtaRefusal(a1, 12, UAS_SCSI_CHECK_CONDITION, out, n),
+             UAS_ATA_REFUSED_12, "the replayed answer is the refusal");
+    CHECK_EQ(out[7], UAS_INVALID_CDB_SENSE - 8, "its additional length");
+    memset(out, 0xEE, sizeof(out));
+    n = UasInvalidOpcodeSense(out, 5);
+    CHECK_EQ(n, 5, "held to the room");
+    CHECK_EQ(out[5], 0xEE, "nothing past the room");
+    CHECK_EQ(UasInvalidOpcodeSense(NULL, 18), 0, "no buffer");
+    CHECK_EQ(XHCI98_FAIL_E_REPLAYED, 9, "the ring's event 9");
+}
+
 int main(void)
 {
     test_tags();
@@ -1994,6 +2169,9 @@ int main(void)
     test_no_ata();
     test_fail_pack();
     test_fast_reset();
+    test_final_timeout();
+    test_final_giveup();
+    test_ata_replay();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

@@ -136,9 +136,11 @@ BEGIN
     LTEXT           "Applies &to:", IDC_S_SCOPE_L, 8, 44, 40, 10
     COMBOBOX        IDC_S_SCOPE, 50, 42, 274, 100, CBS_DROPDOWNLIST |
                     WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Fi&nd:", IDC_S_FIND_L, 8, 59, 40, 10
+    EDITTEXT        IDC_S_FIND, 50, 57, 274, 12, ES_AUTOHSCROLL | WS_TABSTOP
     CONTROL         "", IDC_S_LIST, "SysListView32", LVS_REPORT |
                     LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER |
-                    WS_TABSTOP, 8, 58, 316, 112
+                    WS_TABSTOP, 8, 72, 316, 98
     AUTOCHECKBOX    "Show &advanced settings", IDC_S_ADV, 8, 175, 150, 10
     PUSHBUTTON      "&Logging level...", IDC_S_LEVEL, 244, 173, 80, 14
     EDITTEXT        IDC_S_NOTE, 8, 190, 316, 28, ES_MULTILINE | ES_READONLY |

@@ -74,7 +74,8 @@ static void test_layout(void)
     CHECK_EQ(CM_Q_BUILD_MAX, 64 + 32 + 3200 + 768 + 200, "the largest answer");
     CHECK_EQ(CM_Q_REC_AT, 96, "version 2: the record after the block");
     CHECK_EQ(CM_Q_RM_LOST + 4, CM_Q_RM_DRIVER, "the driver word after LOST");
-    CHECK_EQ(CM_Q_RM_DRIVER + 4 + 12, CM_Q_RM_BYTES, "12 bytes reserved");
+    CHECK_EQ(CM_Q_RM_DRIVER + 4, CM_Q_RM_IRQ, "the ring interrupt after it");
+    CHECK_EQ(CM_Q_RM_IRQ + 4 + 8, CM_Q_RM_BYTES, "8 bytes reserved");
 }
 
 /* The USB4 connection manager: two host ports, one read within its
@@ -156,6 +157,14 @@ static void test_u4(void)
     CHECK_EQ(get32(built, 64 + CM_Q_RM_MEMBER), CM_Q_UNKNOWN, "no member");
     CHECK_EQ(get32(built, 64 + CM_Q_RM_DRIVER), XHCI_VER_PACKED,
              "the running driver's version (44.8)");
+    CHECK_EQ(get32(built, 64 + CM_Q_RM_IRQ), 0, "no ring-interrupt word given");
+    q.RingIrq = CM_Q_IRQ_PRESENT | (CM_Q_IRQ_WHY_NOT_9X << 8);
+    (void)CmQueryBuild(built, &q);
+    CHECK_EQ(get32(built, 64 + CM_Q_RM_IRQ),
+             CM_Q_IRQ_PRESENT | (CM_Q_IRQ_WHY_NOT_9X << 8),
+             "the ring-interrupt word as given (49.27)");
+    q.RingIrq = 0;
+    bytes = CmQueryBuild(built, &q);
     CHECK_EQ(get32(built, CM_Q_O_BYTES), bytes, "size");
     CHECK_EQ(get32(built, CM_Q_O_PASS), 0, "no pass in the build");
     CHECK_EQ(get32(built, CM_Q_O_PASS_AGE_MS), CM_Q_UNKNOWN, "no age");
@@ -776,6 +785,31 @@ static void test_log_text(void)
                             28), "the id-changed devnode");
     CHECK(!CmQueryLogAddress((const UCHAR *)"cm.reenum.9x.gone", 17),
           "the count beside them is no address");
+    /* Level 3 withholds as 2 does; level 4 (3.5.0.0, the owner's decision
+     * of 2026-11-13) serves every value as recorded, with the same bounds
+     * and replacement, and no CM_QL_F_WITHHELD. */
+    in.Verbosity = 3;
+    (VOID)CmQueryLogAnswer(logOut, sizeof(logOut), &in, &info);
+    CHECK(get32(logOut, CM_QL_O_FLAGS) & CM_QL_F_WITHHELD, "level 3: withheld");
+    in.Verbosity = 4;
+    (VOID)CmQueryLogAnswer(logOut, sizeof(logOut), &in, &info);
+    CHECK(memcmp(logOut + 64, "cm.live.state=00000101\r\n"
+                              "cm.live.bar-changed=E0000004\r\n"
+                              "cm.reenum.9x.gone.superseded=C1234560\r\n"
+                              "cm.reenum.9x.gone.id-changed=C1234570\r\n"
+                              "cm.live.bar-changed.x=00000002\r\n", used) == 0,
+          "level 4: the address records as recorded");
+    CHECK(!(get32(logOut, CM_QL_O_FLAGS) & CM_QL_F_WITHHELD),
+          "level 4: no withheld flag");
+    CHECK_EQ(get32(logOut, CM_QL_O_LOG_BYTES), used, "level 4: same length");
+    CHECK_EQ(get32(logOut, CM_QL_O_VERBOSITY), 4, "level 4 said");
+    head = used = dropped = 0;
+    ring_put(&head, &used, &dropped, "a\tb\x01\x7F\x80=E0000004\r\n");
+    log_in(&in, head, used, dropped);
+    in.Verbosity = 4;
+    (VOID)CmQueryLogAnswer(logOut, sizeof(logOut), &in, &info);
+    CHECK(memcmp(logOut + 64, "a.b...=E0000004\r\n", 17) == 0,
+          "level 4: bytes replaced as at 2");
 
     /* Wrapped: the ring full, bytes dropped; the oldest bytes are a tail
      * ("...ar-changed=E0000004") whose label was overwritten - cut. */
@@ -1036,6 +1070,15 @@ static void test_log_stamps_head(void)
     CHECK(memcmp(t + hu + 22, "cm.ms=00000009\r\n", 16) == 0, "the ring");
     CHECK_EQ(get32(logOut, CM_QL_O_FLAGS) & (CM_QL_F_HEAD | CM_QL_F_LOG_CUT),
              CM_QL_F_HEAD, "the head flag, no cut");
+    /* At level 4 (3.5.0.0) the head's address as recorded too. */
+    in.Verbosity = 4;
+    (VOID)CmQueryLogAnswer(logOut, sizeof(logOut), &in, &info);
+    CHECK(memcmp(t, "cm.ms=00000007\r\nu4.connect=00010001\r\n"
+                    "cm.live.bar-changed=E0000004\r\n", hu) == 0,
+          "level 4: the head's address as recorded");
+    CHECK(!(get32(logOut, CM_QL_O_FLAGS) & CM_QL_F_WITHHELD),
+          "level 4: the head, nothing withheld");
+    in.Verbosity = 2;
 
     /* A full head and a full, wrapped ring stamped as cm_log.c stamps it:
      * the answer within CM_QL_LOG_MAX, the tail at a record boundary and

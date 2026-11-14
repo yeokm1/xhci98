@@ -945,11 +945,13 @@ static NTSTATUS hcdPdoNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     }
     pdo->SerialId[0] = 0;
     pdo->ReadSerialId[0] = 0;
+    pdo->KeepSerialId[0] = 0;
     pdo->SerialUnread = (dev->SerialState == HCD_SERIAL_FAILED) ? 1 : 0;
     if (dev->SerialState == HCD_SERIAL_OK) {
         for (i = 0; i < sizeof(pdo->SerialId); i++) {
             pdo->SerialId[i] = dev->SerialId[i];
             pdo->ReadSerialId[i] = dev->SerialId[i];
+            pdo->KeepSerialId[i] = dev->SerialId[i];
         }
     }
     pdo->Group = serial;
@@ -1431,6 +1433,78 @@ static ULONG hcdSerialTakenElsewhere(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
 }
 
 /*
+ * Task 49.34 (design record 20 section 4.3.4, M4): a twin of `dev` among
+ * `other`'s listed PDO groups, present or dormant: the same vendor and
+ * product id and the same serial, as its device record read it at this
+ * enumeration (SerialId, which the duplicate rule never empties and a
+ * revival does not leave stale) or as its PDO kept it (KeepSerialId,
+ * refreshed at each revival) -
+ * either source counts. `other`'s PdoListLock held, which keeps a record
+ * its PDO names alive.
+ */
+static ULONG hcdSerialTwinLocked(PHCD_CONTROLLER other, PHCD_USB_DEVICE dev)
+{
+    PHCD_DEVICE_PDO pdo;
+    PHCD_USB_DEVICE holder;
+
+    for (pdo = other->DevicePdos; pdo != NULL; pdo = pdo->Next) {
+        if (pdo->Group != pdo->Serial) {
+            continue;
+        }
+        holder = pdo->Device;
+        if (holder == dev) {
+            continue;
+        }
+        /* Either source counts, so neither a record mid-reread (its
+         * SerialId emptied by HcdThreadSameIdentity's read) nor a PDO
+         * whose serial was unread at its creation hides a twin. */
+        if (holder != NULL && holder->SerialState == HCD_SERIAL_OK &&
+            hcdBytesEqual(holder->DeviceDesc + 8, dev->DeviceDesc + 8, 4) &&
+            XhciFuncSerialSame(holder->SerialId, dev->SerialId)) {
+            return 1;
+        }
+        if ((holder != NULL || pdo->Dormant) &&
+            hcdBytesEqual(pdo->DeviceDesc + 8, dev->DeviceDesc + 8, 4) &&
+            XhciFuncSerialSame(pdo->KeepSerialId, dev->SerialId)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+ULONG HcdSerialHold(PHCD_USB_DEVICE dev, PKIRQL serialIrql)
+{
+    PHCD_CONTROLLER other;
+    KIRQL oldIrql;
+    ULONG twin;
+
+    twin = 0;
+    KeAcquireSpinLock(&hcdSerialLock, serialIrql);
+    for (other = hcdSerialControllers; other != NULL && !twin;
+         other = other->SerialNext) {
+        KeAcquireSpinLock(&other->PdoListLock, &oldIrql);
+        twin = hcdSerialTwinLocked(other, dev);
+        KeReleaseSpinLock(&other->PdoListLock, oldIrql);
+    }
+    return twin ? 0UL : 1UL;
+}
+
+VOID HcdSerialUnhold(KIRQL serialIrql)
+{
+    KeReleaseSpinLock(&hcdSerialLock, serialIrql);
+}
+
+ULONG HcdSerialUnique(PHCD_USB_DEVICE dev)
+{
+    KIRQL serialIrql;
+    ULONG unique;
+
+    unique = HcdSerialHold(dev, &serialIrql);
+    HcdSerialUnhold(serialIrql);
+    return unique;
+}
+
+/*
  * Task 45.40 (design record 13 section 10.7, "Identity across a
  * re-enumeration"): every listing or revival writes the identity it
  * answers to the log - the location, the read's outcome (HCD_SERIAL_*),
@@ -1617,6 +1691,7 @@ static ULONG hcdDormantRevive(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     KIRQL oldIrql;
     ULONG clear;
     ULONG same;
+    ULONG k;
 
     KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
     old = hcdDormantChooseLocked(hc, first, takenElsewhere, &clear);
@@ -1631,6 +1706,13 @@ static ULONG hcdDormantRevive(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         for (a = old, b = first; a != NULL && b != NULL;
              a = a->Sibling, b = b->Sibling) {
             a->Device = dev;
+            /* Task 49.34: the twin check's serial is the reviving device's
+             * as read, whatever identity the group keeps. */
+            if (dev->SerialState == HCD_SERIAL_OK) {
+                for (k = 0; k < sizeof(a->KeepSerialId); k++) {
+                    a->KeepSerialId[k] = dev->SerialId[k];
+                }
+            }
             a->Port = dev->Location;
             a->RootPort = dev->Port;
             a->Route = dev->Route;
@@ -2613,6 +2695,7 @@ ULONG HcdDevicePdoRepresentFunctions(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         for (k = 0; k < sizeof(nu->SerialId); k++) {
             nu->SerialId[k] = olds[i]->SerialId[k];
             nu->ReadSerialId[k] = olds[i]->ReadSerialId[k];
+            nu->KeepSerialId[k] = olds[i]->KeepSerialId[k];
         }
         for (k = 0; k < XHCI_TEXT_WCHARS; k++) {
             nu->Text[k] = olds[i]->Text[k];
@@ -3193,6 +3276,76 @@ static VOID hcdQueryInterfaceTrace(PIO_STACK_LOCATION stack)
 }
 
 /*
+ * Task 49.45 (design record 13 section 6.13.11): a QUERY_INTERFACE this
+ * device PDO does not answer, in the shipping log (level 2) once per GUID
+ * per PDO, its first XHCI_USBDX_NOTE_QI_SLOTS GUIDs: pdo.qi with the GUID's
+ * Data1, pdo.qi.vs with the location, version and size (XhciUsbdxNoteQiVs).
+ * Every one is counted. The IRP is answered as before, with the status it
+ * came with. A slot is claimed by the interlocked count, so a race can at
+ * worst note one GUID twice and never more than the table's room. Zeroed
+ * at the PDO's REMOVE (hcdPdoNotesReset). The pair under one hold of the
+ * controller lock, so no other note falls between them. IRQL:
+ * PASSIVE_LEVEL; called with no lock held.
+ */
+static VOID hcdQueryInterfaceNote(PHCD_DEVICE_PDO pdo,
+                                  PIO_STACK_LOCATION stack)
+{
+    PHCD_CONTROLLER hc;
+    KIRQL oldIrql;
+    ULONG data1;
+    ULONG vs;
+    LONG slot;
+
+    hc = pdo->Controller;
+    if (hc == NULL || pdo->Deleted || pdo->DeletePending ||
+        stack->Parameters.QueryInterface.InterfaceType == NULL) {
+        return;
+    }
+    (VOID)InterlockedIncrement((PLONG)&hc->Counters.PdoQiUnanswered);
+    data1 = stack->Parameters.QueryInterface.InterfaceType->Data1;
+    if (XhciUsbdxNoteSeen(pdo->NoteQi, (ULONG)pdo->NoteQiUsed,
+                          XHCI_USBDX_NOTE_QI_SLOTS, data1) ||
+        pdo->NoteQiUsed >= (LONG)XHCI_USBDX_NOTE_QI_SLOTS) {
+        return;
+    }
+    slot = InterlockedIncrement(&pdo->NoteQiUsed) - 1;
+    if (slot < 0 || slot >= (LONG)XHCI_USBDX_NOTE_QI_SLOTS) {
+        return;
+    }
+    pdo->NoteQi[slot] = data1;
+    vs = XhciUsbdxNoteQiVs(pdo->Port, stack->Parameters.QueryInterface.Version,
+                           stack->Parameters.QueryInterface.Size);
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    XhciLogNoteLocked(&hc->Hc, "pdo.qi", data1);
+    XhciLogNoteLocked(&hc->Hc, "pdo.qi.vs", vs);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+}
+
+/* Task 49.45: the notes' per-PDO bounds start again for the next driver
+ * loaded on the device (each count and table of hcd.h's NoteQi group, and
+ * OwnClient). At IRP_MN_REMOVE_DEVICE, which no other request of the PDO
+ * overlaps in the PnP manager's order; a request a racing client sends
+ * still only notes within the table's room. IRQL: PASSIVE_LEVEL. */
+static VOID hcdPdoNotesReset(PHCD_DEVICE_PDO pdo)
+{
+    ULONG i;
+
+    for (i = 0; i < XHCI_USBDX_NOTE_QI_SLOTS; i++) {
+        pdo->NoteQi[i] = 0;
+    }
+    for (i = 0; i < XHCI_USBDX_NOTE_IOCTL_SLOTS; i++) {
+        pdo->NoteIoctl[i] = 0;
+    }
+    (VOID)InterlockedExchange(&pdo->NoteQiUsed, 0);
+    (VOID)InterlockedExchange(&pdo->NoteIoctlUsed, 0);
+    (VOID)InterlockedExchange(&pdo->NoteV1, 0);
+    (VOID)InterlockedExchange(&pdo->NoteCap, 0);
+    (VOID)InterlockedExchange(&pdo->NoteStreams, 0);
+    (VOID)InterlockedExchange(&pdo->NoteUrbs, 0);
+    (VOID)InterlockedExchange(&pdo->OwnClient, 0);
+}
+
+/*
  * Roadmap-usb4 42-A.16: a stop, query-remove, remove, cancel or surprise
  * removal a device PDO receives goes into the shipping log (level 2), so a
  * Save Report taken after a Safely Remove shows which devices the PnP
@@ -3335,6 +3488,7 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
         pdo->Common.PnpState = HCD_PNP_REMOVED;
         HcdDoorDeviceStop(pdo, 0);
         hcdPdoQuiesce(pdo, 1);
+        hcdPdoNotesReset(pdo);
         pdo->Ghost = 0;
         HcdSuspPdoRundown(pdo);
         hcdPdoFunctionRelease(pdo);
@@ -3427,6 +3581,7 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
             return HcdUrbQueryUsbdx(pdo, irp);
         }
         hcdQueryInterfaceTrace(stack);
+        hcdQueryInterfaceNote(pdo, stack);
         return HcdCompleteIrp(irp, irp->IoStatus.Status,
                               irp->IoStatus.Information);
 

@@ -1208,6 +1208,96 @@ static void test_parse(void)
 
 /* ---- the bounded poll -------------------------------------------------- */
 
+/* Record 22 section 11.1.14 (task 49.11): the function behind a member. */
+static void test_function_read(void)
+{
+    MODEL_FN *br;
+    MODEL_FN *ep;
+    ULONG bdf = XHCI_TBT_BDF(0, 5, 0);
+
+    mreset();
+    ioreset();
+    br = mbridge(0, 5, 0, 0x1B36, 0x0001, 1, 1);
+    CHECK_EQ(XhciTbtFunctionRead(&io, bdf), XHCI_TBT_FN_ABSENT,
+             "the S.1 bridge, its endpoint not back yet: absent");
+    ep = mdev(1, 0, 0, 0x1B21, 0x2464, 0x010802UL);
+    CHECK_EQ(XhciTbtFunctionRead(&io, bdf), XHCI_TBT_FN_PRESENT,
+             "the endpoint back: present");
+    put16(ep, 0x00, 0x0001);
+    CHECK_EQ(XhciTbtFunctionRead(&io, bdf), XHCI_TBT_FN_NOT_READY,
+             "vendor 0001h (retry status): not ready");
+    put16(ep, 0x00, 0x0000);
+    CHECK_EQ(XhciTbtFunctionRead(&io, bdf), XHCI_TBT_FN_ABSENT,
+             "vendor 0000h: absent");
+    put16(ep, 0x00, 0xFFFF);
+    CHECK_EQ(XhciTbtFunctionRead(&io, bdf), XHCI_TBT_FN_ABSENT,
+             "vendor FFFFh: absent");
+    put16(ep, 0x00, 0x1B21);
+    br->Cfg[0x19] = 0;
+    br->Cfg[0x1A] = 0;
+    CHECK_EQ(XhciTbtFunctionRead(&io, bdf), XHCI_TBT_FN_UNREAD,
+             "the bridge's header reset (secondary 0): unread");
+    br->Cfg[0x19] = 0xFF;
+    br->Cfg[0x1A] = 0xFF;
+    CHECK_EQ(XhciTbtFunctionRead(&io, bdf), XHCI_TBT_FN_UNREAD,
+             "secondary 0xFF: unread");
+    br->Cfg[0x18] = 2;
+    br->Cfg[0x19] = 1;
+    br->Cfg[0x1A] = 1;
+    CHECK_EQ(XhciTbtFunctionRead(&io, bdf), XHCI_TBT_FN_UNREAD,
+             "secondary below the primary: unread");
+    br->Cfg[0x18] = 1;
+    CHECK_EQ(XhciTbtFunctionRead(&io, bdf), XHCI_TBT_FN_UNREAD,
+             "secondary equal to the primary: unread");
+    br->Cfg[0x18] = 0;
+    br->Cfg[0x19] = 2;
+    br->Cfg[0x1A] = 1;
+    CHECK_EQ(XhciTbtFunctionRead(&io, bdf), XHCI_TBT_FN_UNREAD,
+             "subordinate below the secondary: unread");
+    br->Cfg[0x19] = 1;
+    CHECK_EQ(XhciTbtFunctionRead(&io, bdf), XHCI_TBT_FN_PRESENT,
+             "valid again: present");
+    model.FailBdf = bdf;
+    model.FailOffset = XHCI_TBT_CFG_BUSES;
+    CHECK_EQ(XhciTbtFunctionRead(&io, bdf), XHCI_TBT_FN_UNREAD,
+             "the bus number read fails: unread");
+    model.FailBdf = XHCI_TBT_BDF(1, 0, 0);
+    model.FailOffset = XHCI_TBT_CFG_ID;
+    CHECK_EQ(XhciTbtFunctionRead(&io, bdf), XHCI_TBT_FN_UNREAD,
+             "the id read fails: unread");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    put32(br, 0x18, 0xFFFFFFFFUL);
+    CHECK_EQ(XhciTbtFunctionRead(&io, bdf), XHCI_TBT_FN_UNREAD,
+             "the bridge reads all-ones: unread");
+    CHECK_EQ(XhciTbtFunctionRead(NULL, bdf), XHCI_TBT_FN_UNREAD,
+             "no accessor: unread");
+    CHECK_EQ(XhciTbtFunctionRead(&io, 0x10000UL), XHCI_TBT_FN_UNREAD,
+             "a bdf out of range: unread");
+    CHECK_EQ(model.Writes, 0, "reads only");
+
+    /* The S.1 layout itself: the SHPC slot's card at device 1. */
+    mreset();
+    ioreset();
+    mbridge(0, 5, 0, 0x1B36, 0x0001, 1, 1);
+    CHECK_EQ(XhciTbtFunctionRead(&io, bdf), XHCI_TBT_FN_ABSENT,
+             "the slot empty: absent after all 32 device numbers");
+    ep = mdev(1, 1, 0, 0x1B36, 0x0010, 0x010802UL);
+    CHECK_EQ(XhciTbtFunctionRead(&io, bdf), XHCI_TBT_FN_PRESENT,
+             "the card at device 1 (the emulator's SHPC slot 0): present");
+    put16(ep, 0x00, 0x0001);
+    CHECK_EQ(XhciTbtFunctionRead(&io, bdf), XHCI_TBT_FN_NOT_READY,
+             "device 1 in retry status, nothing else: not ready");
+    mdev(1, 3, 0, 0x8086, 0x1234, 0x020000UL);
+    CHECK_EQ(XhciTbtFunctionRead(&io, bdf), XHCI_TBT_FN_PRESENT,
+             "another device answering beside the retry: present");
+    model.FailBdf = XHCI_TBT_BDF(1, 2, 0);
+    model.FailOffset = XHCI_TBT_CFG_ID;
+    CHECK_EQ(XhciTbtFunctionRead(&io, bdf), XHCI_TBT_FN_UNREAD,
+             "a failed read at device 2, before the one at 3: unread");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    CHECK_EQ(model.Writes, 0, "reads only");
+}
+
 static void test_poll(void)
 {
     XHCI_TBT_POLL p;
@@ -4852,8 +4942,9 @@ static void test_alone(void)
 
     /* The emulator's i440FX SHPC tunnel bridge, its NVMe at 01:01.0: the
      * slot is read only through an accessor that can write DWORD Select;
-     * the driver's learning reads with none, so there is no evidence and
-     * the endpoint is refused; with one, learned. */
+     * with none (Windows 98 SE and ME, and any bridge record 22 section
+     * 7.6.5 does not admit) there is no evidence and the endpoint is
+     * refused; with one, learned. */
     mreset();
     ioreset();
     mdev(0, 4, 0, 0x1B36, 0x00F4, 0x0C0340UL);
@@ -4882,6 +4973,256 @@ static void test_alone(void)
     CHECK_EQ(model.StrayWrites, 0, "shpc: DWORD Select alone written");
 }
 
+/* The emulator's i440FX host and SHPC tunnel bridge, as test_alone's
+ * last vector sets them: the bridge 00:05.0 with bus 1, a member by its
+ * SHPC source. */
+static MODEL_FN *shpc_machine(VOID)
+{
+    MODEL_FN *f;
+
+    mreset();
+    ioreset();
+    mdev(0, 4, 0, 0x1B36, 0x00F4, 0x0C0340UL);
+    f = mbridge(0, 5, 0, 0x1B36, 0x0001, 1, 1);
+    mshpc(f, 0x48, 31, 0);
+    mslotid(f, 0x40);
+    CHECK_EQ(find(B(0, 4, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_SET,
+             "shpc owed: the SHPC bridge a member");
+    XhciTbtBindsInit(&binds);
+    return f;
+}
+
+/* Record 22 section 7.6.5 (task 49.18): the set's eligibility, the owed
+ * members, the refresh that keeps the baseline, and its schedule. */
+static void test_shpc_owed(void)
+{
+    MODEL_FN *f;
+    XHCI_TBT_BINDS was;
+    ULONG rec[XHCI_TBT_MAX_TUNNELS];
+    ULONG at[XHCI_TBT_MAX_TUNNELS];
+    ULONG i;
+
+    /* The eligibility: every member SHPC, and at least one. */
+    f = shpc_machine();
+    CHECK_EQ(XhciTbtShpcSet(&topo), 1, "shpc set: one SHPC member");
+    CHECK_EQ(XhciTbtShpcSet(NULL), 0, "shpc set: no topo");
+    topo.Source[0] = XHCI_TBT_SRC_SWITCH;
+    CHECK_EQ(XhciTbtShpcSet(&topo), 0, "shpc set: a switch's port refused");
+    topo.Source[0] = XHCI_TBT_SRC_ROOTPORT;
+    CHECK_EQ(XhciTbtShpcSet(&topo), 0, "shpc set: a listed port refused");
+    topo.Source[0] = XHCI_TBT_SRC_ROUTER;
+    CHECK_EQ(XhciTbtShpcSet(&topo), 0, "shpc set: router-named refused");
+    topo.Source[0] = XHCI_TBT_SRC_ACPI;
+    CHECK_EQ(XhciTbtShpcSet(&topo), 0, "shpc set: ACPI-named refused");
+    topo.Source[0] = XHCI_TBT_SRC_OVERRIDE;
+    CHECK_EQ(XhciTbtShpcSet(&topo), 0, "shpc set: the override refused");
+    topo.Source[0] = XHCI_TBT_SRC_SHPC;
+    topo.Tunnels = 2;
+    topo.Set[1] = B(0, 7, 0);
+    topo.Source[1] = XHCI_TBT_SRC_SWITCH;
+    CHECK_EQ(XhciTbtShpcSet(&topo), 0, "shpc set: one member not SHPC");
+    topo.Source[1] = XHCI_TBT_SRC_SHPC;
+    CHECK_EQ(XhciTbtShpcSet(&topo), 1, "shpc set: two SHPC members");
+    topo.Tunnels = 0;
+    CHECK_EQ(XhciTbtShpcSet(&topo), 0, "shpc set: an empty set refused");
+    topo.Tunnels = XHCI_TBT_MAX_TUNNELS + 1;
+    CHECK_EQ(XhciTbtShpcSet(&topo), 0, "shpc set: past the set's room");
+
+    /* The writer fails at the arm (no filter yet): no evidence, owed;
+     * the refresh with the writer working reads the slot empty; the
+     * endpoint is then learned. */
+    f = shpc_machine();
+    CHECK_EQ(XhciTbtLearnOwed(&topo, &binds), 0, "owed: nothing unarmed");
+    model.FailWrites = 1;
+    CHECK_EQ(arm(), 0, "owed: armed, the writer failing");
+    CHECK_EQ(binds.BaseDown, 0, "owed: no evidence");
+    CHECK_EQ(XhciTbtLearnOwed(&topo, &binds), 1, "owed: the member owed");
+    CHECK_EQ(XhciTbtLearnEvidence(&io, &topo, &binds), 1,
+             "owed: the refresh's writer failing too, still owed");
+    CHECK(binds.Armed == 1 && binds.BaseDown == 0,
+          "owed: armed as before, no bit");
+    model.FailWrites = 0;
+    CHECK_EQ(XhciTbtLearnEvidence(&io, &topo, &binds), 0,
+             "owed: the refresh reads the slot empty");
+    CHECK(binds.Armed == 1 && binds.BaseDown == 1 && binds.BaseHeld == 0,
+          "owed: the bit set, the baseline kept");
+    CHECK_EQ(XhciTbtLearnOwed(&topo, &binds), 0, "owed: nothing owed now");
+    CHECK_EQ(f->Cfg[0x48 + XHCI_TBT_SHPC_SELECT], 0,
+             "owed: DWORD Select put back");
+    up(1);
+    dev_at(1, 1, 1);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_LEARNED,
+             "owed: the endpoint learned on the refresh's evidence");
+    CHECK_EQ(model.StrayWrites, 0, "owed: DWORD Select alone written");
+
+    /* The slot still occupied just after a tunnel down, nothing
+     * answering: owed; emptied, the refresh takes the evidence; a second
+     * plug is learned. */
+    f = shpc_machine();
+    f->Shpc[XHCI_TBT_SHPC_SLOT0] = SHPC_CARD;
+    CHECK_EQ(arm(), 0, "late slot: armed");
+    CHECK(binds.BaseDown == 0 && XhciTbtLearnOwed(&topo, &binds) == 1,
+          "late slot: occupied with nothing answering, owed");
+    CHECK_EQ(XhciTbtLearnEvidence(&io, &topo, &binds), 1,
+             "late slot: still occupied, still owed");
+    f->Shpc[XHCI_TBT_SHPC_SLOT0] = SHPC_EMPTY;
+    CHECK_EQ(XhciTbtLearnEvidence(&io, &topo, &binds), 0,
+             "late slot: emptied, the evidence taken");
+    up(1);
+    dev_at(1, 1, 1);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_LEARNED,
+             "late slot: the plug after it learned");
+
+    /* A card in the slot at every reading is never learned. */
+    f = shpc_machine();
+    f->Shpc[XHCI_TBT_SHPC_SLOT0] = SHPC_CARD;
+    CHECK_EQ(arm(), 0, "card: armed");
+    CHECK_EQ(XhciTbtLearnEvidence(&io, &topo, &binds), 1, "card: owed");
+    up(1);
+    put16(mdev(1, 1, 0, 0x144D, 0xA808, 0x010802UL), 0x00, 0x144D);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_SHAPE,
+             "card: answering with no slot change, refused");
+    CHECK_EQ(binds.Count, 0, "card: nothing bound");
+
+    /* A refresh whose occupancy read fails changes nothing: the baseline
+     * stays armed, and a far end is then learned as it always was. */
+    f = shpc_machine();
+    model.FailWrites = 1;
+    CHECK_EQ(arm(), 0, "failed refresh: armed, owed");
+    was = binds;
+    model.FailBdf = B(1, 3, 0);
+    model.FailOffset = XHCI_TBT_CFG_ID;
+    CHECK_EQ(XhciTbtLearnEvidence(&io, &topo, &binds), 1,
+             "failed refresh: a device number unread, still owed");
+    CHECK(binds.Armed == 1 && binds.BaseDown == was.BaseDown &&
+          binds.BaseHeld == was.BaseHeld && binds.BaseCount == was.BaseCount &&
+          binds.BaseBus[0] == was.BaseBus[0] &&
+          binds.BaseSeen[0] == was.BaseSeen[0],
+          "failed refresh: the baseline as it was, armed");
+    model.FailBdf = B(0, 5, 0);
+    model.FailOffset = XHCI_TBT_CFG_BUSES;
+    CHECK_EQ(XhciTbtLearnEvidence(&io, &topo, &binds), 1,
+             "failed refresh: the bridge unread, still owed");
+    CHECK_EQ(binds.Armed, 1, "failed refresh: still armed");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    up(1);
+    usp_on(1);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_LEARNED,
+             "failed refresh: a far end learned all the same");
+
+    /* A refresh that finds a device answering sets no bit and moves
+     * nothing; the device is then refused at its attempt. */
+    f = shpc_machine();
+    model.FailWrites = 1;
+    CHECK_EQ(arm(), 0, "seen: armed, owed");
+    model.FailWrites = 0;
+    dev_at(1, 1, 1);
+    CHECK_EQ(XhciTbtLearnEvidence(&io, &topo, &binds), 1,
+             "seen: a device answering, no evidence taken");
+    CHECK(binds.BaseDown == 0 && binds.BaseSeen[0] == 0,
+          "seen: no bit, the baseline not moved");
+    up(1);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_SHAPE,
+             "seen: the device refused at its attempt");
+    CHECK_EQ(binds.Count, 0, "seen: nothing bound");
+    /* The same with the slot still reading empty while it answers. */
+    f = shpc_machine();
+    model.FailWrites = 1;
+    CHECK_EQ(arm(), 0, "seen quiet: armed, owed");
+    model.FailWrites = 0;
+    put16(mdev(1, 1, 0, 0x144D, 0xA808, 0x010802UL), 0x00, 0x144D);
+    CHECK_EQ(XhciTbtLearnEvidence(&io, &topo, &binds), 1,
+             "seen quiet: answering behind an empty slot, no evidence");
+    CHECK_EQ(binds.BaseDown, 0, "seen quiet: no bit");
+
+    /* The secondary bus moved since the baseline: not this refresh's. */
+    f = shpc_machine();
+    model.FailWrites = 1;
+    CHECK_EQ(arm(), 0, "bus moved: armed, owed");
+    model.FailWrites = 0;
+    f->Cfg[0x19] = 2;
+    f->Cfg[0x1A] = 2;
+    CHECK_EQ(XhciTbtLearnEvidence(&io, &topo, &binds), 1,
+             "bus moved: no evidence against another bus");
+    CHECK_EQ(binds.BaseDown, 0, "bus moved: no bit");
+
+    /* Nothing of an unarmed baseline, of one over another set, or with
+     * no reader; a read-only accessor takes no SHPC evidence. */
+    f = shpc_machine();
+    CHECK_EQ(XhciTbtLearnEvidence(&io, &topo, &binds), 0,
+             "unarmed: nothing owed, nothing read");
+    CHECK_EQ(binds.Armed, 0, "unarmed: not armed by a refresh");
+    model.FailWrites = 1;
+    CHECK_EQ(arm(), 0, "other set: armed, owed");
+    model.FailWrites = 0;
+    CHECK_EQ(XhciTbtLearnEvidence(NULL, &topo, &binds), 1,
+             "no reader: owed, nothing done");
+    io.Write = NULL;
+    CHECK_EQ(XhciTbtLearnEvidence(&io, &topo, &binds), 1,
+             "read-only: no slot reading, still owed");
+    ioreset();
+    binds.BaseBdf[0] = B(0, 9, 0);
+    CHECK_EQ(XhciTbtLearnOwed(&topo, &binds), 0,
+             "other set: a baseline over another set owes nothing");
+    CHECK_EQ(XhciTbtLearnEvidence(&io, &topo, &binds), 0,
+             "other set: nothing read");
+    CHECK_EQ(binds.BaseDown, 0, "other set: no bit");
+
+    /* An occupied member, or one with its bit, is not owed. */
+    f = shpc_machine();
+    dev_at(1, 1, 1);
+    CHECK_EQ(arm(), 0, "occupied: armed");
+    CHECK_EQ(XhciTbtLearnOwed(&topo, &binds), 0, "occupied: not owed");
+    dev_at(1, 1, 0);
+    CHECK_EQ(arm(), 0, "empty: armed with the writer");
+    CHECK(binds.BaseDown == 1 && XhciTbtLearnOwed(&topo, &binds) == 0,
+          "empty: the bit taken at the arm, not owed");
+
+    /* The schedule. */
+    for (i = 0; i < XHCI_TBT_MAX_TUNNELS; i++) {
+        rec[i] = 0;
+        at[i] = 0;
+    }
+    CHECK_EQ(XhciTbtEvidenceDue(0, 0, 1000, 1001, rec, at, 4), 0,
+             "due: nothing owed");
+    CHECK_EQ(XhciTbtEvidenceDue(1, 1, 1000, 1001, rec, at, 4), 0,
+             "due: never with a port pending");
+    CHECK_EQ(XhciTbtEvidenceDue(1, 0, 1000, 1000, rec, at, 4), 1,
+             "due: at the arm's own pass");
+    CHECK_EQ(XhciTbtEvidenceDue(1, 0, 1000, 2999, rec, at, 4), 1,
+             "due: inside the 2 s");
+    CHECK_EQ(XhciTbtEvidenceDue(1, 0, 1000, 3000, rec, at, 4), 0,
+             "due: at 2 s, no record changed");
+    CHECK_EQ(XhciTbtEvidenceDue(1, 0, 0xFFFFFF00UL, 0x00000100UL, rec, at,
+                                4), 1, "due: inside the 2 s across a wrap");
+    CHECK_EQ(XhciTbtEvidenceDue(1, 0, 0xFFFFFF00UL, 0x00000800UL, rec, at,
+                                4), 0, "due: past the 2 s across a wrap");
+    rec[0] = 7;
+    CHECK_EQ(XhciTbtEvidenceDue(1, 0, 1000, 90000, rec, at, 4), 1,
+             "due: a filter published since");
+    at[0] = 7;
+    CHECK_EQ(XhciTbtEvidenceDue(1, 0, 1000, 90000, rec, at, 4), 0,
+             "due: that publication already tried");
+    /* Ownership lost on one member and a serial moved on another, the
+     * sum the same: still a change. */
+    at[0] = 10;
+    at[1] = 20;
+    rec[0] = 0;
+    rec[1] = 30;
+    CHECK_EQ(XhciTbtEvidenceDue(1, 0, 1000, 90000, rec, at, 4), 1,
+             "due: an equal sum is still a change");
+    CHECK_EQ(XhciTbtEvidenceDue(1, 0, 1000, 90000, rec, at, 1), 1,
+             "due: the first member alone compared");
+    rec[0] = 10;
+    CHECK_EQ(XhciTbtEvidenceDue(1, 0, 1000, 90000, rec, at, 1), 0,
+             "due: a change past the count not seen");
+    CHECK_EQ(XhciTbtEvidenceDue(1, 0, 1000, 90000, NULL, at, 4), 0,
+             "due: no record, past the 2 s");
+    CHECK_EQ(XhciTbtEvidenceDue(1, 0, 1000, 1500, NULL, NULL, 4), 1,
+             "due: no record, inside the 2 s");
+}
+
 int main(void)
 {
     test_decoders();
@@ -4898,6 +5239,7 @@ int main(void)
     test_sets();
     test_failures();
     test_poll();
+    test_function_read();
     test_named();
     test_acpi();
     test_learned();
@@ -4909,6 +5251,7 @@ int main(void)
     test_infer();
     test_narrowed();
     test_alone();
+    test_shpc_owed();
     printf("test_tbt_topo: %d checks, %d failures\n", checks, failures);
     return failures;
 }

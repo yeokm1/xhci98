@@ -32,13 +32,14 @@
 
 #include "xhci_compat.h"
 
-/* The three values (record 15 section 3). Modes 1 and 3 name one
+/* The three values (record 15 section 3). Modes 1, 3 and 4 name one
  * delivery each and fail the start without it (revision 7, owner
- * 2026-10-11); 4 and above run as 0. */
+ * 2026-10-11; mode 4 task 49.24); 5 and above run as 0. */
 #define XHCI_POLL_MODE_AUTO             0UL
 #define XHCI_POLL_MODE_LINE             1UL     /* the line only           */
 #define XHCI_POLL_MODE_POLL             2UL
 #define XHCI_POLL_MODE_MESSAGE          3UL     /* a message only          */
+#define XHCI_POLL_MODE_MSG4             4UL     /* msi4nt only (NT 5)      */
 #define XHCI_POLL_IDLE_DEFAULT_MS       50UL
 #define XHCI_POLL_IDLE_MAX_MS           5000UL
 #define XHCI_POLL_ACTIVE_DEFAULT_MS     1UL
@@ -94,6 +95,22 @@
 /* Task 47.33, part 2: 2000, XP and XP x64, mode 0, a line granted that
  * IoConnectInterrupt refused: polled instead of a failed start. */
 #define XHCI_POLL_R_AUTO_LINE_NOT_CONNECTED     20UL
+/* Task 49.24, mode 4 (record 15 section 4.5): a message through msi4nt on
+ * 2000, XP and XP x64 (on 98 SE and ME mode 4 runs as 0). Each but 21
+ * fails the start. 28, 29 and 32 belonged to unreleased builds and are not
+ * produced. 27 is given under any mode. */
+#define XHCI_POLL_R_FORCED_MSG4                 21UL    /* 4, connected    */
+#define XHCI_POLL_R_MSG4_NO_SYSTEM              22UL    /* 4, Vista+       */
+#define XHCI_POLL_R_MSG4_NO_LINE                23UL    /* 4, strategy 1   */
+#define XHCI_POLL_R_MSG4_AVOIDED                24UL    /* 4, XhciMsiAvoid */
+#define XHCI_POLL_R_MSG4_SHARED                 25UL    /* 4, the veto     */
+#define XHCI_POLL_R_MSG4_REFUSED                26UL    /* 4, the connect  */
+#define XHCI_POLL_R_MSG4_QUARANTINED            27UL    /* any, this boot  */
+#define XHCI_POLL_R_MSG4_VALUE_INVALID          30UL    /* 4, a value      */
+#define XHCI_POLL_R_MSG4_NO_INTERRUPT           31UL    /* 4, No Op unseen */
+#define XHCI_POLL_R_MSG4_RESERVED32             32UL    /* not produced    */
+#define XHCI_POLL_R_MSG4_NO_IRQ                 33UL    /* 4, no IRQ left  */
+#define XHCI_POLL_R_MSG4_CLAIM_REFUSED          34UL    /* 4, the claim    */
 
 /* The pin's read. */
 #define XHCI_POLL_PIN_NOT_READ          0UL
@@ -136,7 +153,7 @@
 
 typedef struct _XHCI_POLL_VALUES {
     ULONG ModeRead;         /* as read, XHCI_POLL_NOT_FOUND if not          */
-    ULONG Mode;             /* the effective mode: 0, 1, 2 or 3             */
+    ULONG Mode;             /* the effective mode: 0 to 4                   */
     ULONG IdleRead;
     ULONG IdleMs;
     ULONG ActiveRead;
@@ -402,13 +419,30 @@ typedef struct _XHCI_POLL_HELD_IN {
     ULONG From;             /* the first function considered, encoded as
                              * XHCI_POLL_HELD_OUT.Bdf: a walk resumed past
                              * a candidate not confirmed                    */
+    /* XHCI_POLL_WALK_*: what the walk looks for (mode 4, record 15
+     * sections 4.5.3 and 4.5.7, task 49.24). HELD is section 4.4's.
+     * SHARING (strategy 1's veto): any function but this controller whose
+     * Interrupt Pin is 1 to 4, whose Command has Interrupt Disable clear
+     * and whose Interrupt Line is Irq or, when non-zero, Irq2, asserting or
+     * not; the first ends the walk. MATCH (98 SE and ME): every function
+     * whose id, BAR0, BAR1, subsystem and class code (OwnClass, bits 31:8
+     * of the dword at 08h) are this controller's, the whole bus walked;
+     * FOUND with its location only when exactly one does (Matches). */
+    ULONG Kind;
+    ULONG Irq2;
+    ULONG OwnClass;
 } XHCI_POLL_HELD_IN, *PXHCI_POLL_HELD_IN;
+
+#define XHCI_POLL_WALK_HELD             0UL
+#define XHCI_POLL_WALK_SHARING          1UL
+#define XHCI_POLL_WALK_MATCH            2UL
 
 typedef struct _XHCI_POLL_HELD_OUT {
     ULONG Result;           /* XHCI_POLL_HELD_NONE, _FOUND or _FAILED       */
     ULONG Functions;        /* functions read in this walk                  */
     ULONG Bdf;              /* bus 15:8, device 7:3, function 2:0           */
     ULONG Id;               /* vendor 15:0, device 31:16                    */
+    ULONG Matches;          /* MATCH: the functions that matched            */
 } XHCI_POLL_HELD_OUT, *PXHCI_POLL_HELD_OUT;
 
 VOID XhciPollHeldScan(const XHCI_POLL_HELD_IN *in, PXHCI_POLL_HELD_OUT out);

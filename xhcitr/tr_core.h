@@ -181,6 +181,7 @@ int tr_wide_name(const unsigned char *b, size_t n, size_t offset, char *out,
 /* USB_CONNECTION_STATUS. */
 #define TR_CS_NONE              0UL
 #define TR_CS_CONNECTED         1UL
+#define TR_CS_FAILED            2UL     /* DeviceFailedEnumeration */
 
 typedef struct _TR_CONN {
     TR_U32 Port;
@@ -270,6 +271,8 @@ typedef struct _TR_QUERY {
     TR_U32 RmLost;
     TR_U32 RmDriver;            /* CM_Q_RM_DRIVER: 0 before 3.3.0.0 and in
                                    version 1                                */
+    TR_U32 RmIrq;               /* CM_Q_RM_IRQ: 0 before 3.5.0.0 and in
+                                   version 1 (record 21 section 4.5.17)     */
 } TR_QUERY;
 
 /* An answer of n bytes (no more than the call returned), version 1 or
@@ -461,6 +464,25 @@ void tr_ver_text(TR_U32 packed, char *out, size_t cap);
 void tr_ver_line(int state, TR_U32 running, const TR_U32 *file, char *out,
                  size_t cap);
 
+/* A DriverVersion value as the INFs write it, "3.4.3.0" (each field 0 to
+ * 255, decimal; spaces around it allowed): 1 and *packed in tr_ver_state's
+ * form; 0 for anything else. */
+int tr_ver_parse(const char *s, TR_U32 *packed);
+
+/* The mixed-install note of a Device Manager entry (owner, 2026-11-13):
+ * `installed` its DriverVersion (tr_ver_parse), `running` the version the
+ * running driver said (haveRunning, running as tr_ver_state takes them).
+ * 1 and the sentence in out when the entry was installed from an older
+ * version's files than the running driver's: "This entry was installed
+ * from another version's files (2.2.0.1) than the driver that is running
+ * (3.4.3.0): run SETUP.EXE to update it." 0, out empty, when either
+ * version is not known, when they are equal, and when the entry is newer
+ * (an update waiting for its restart, which the "Driver version:" line
+ * already says). A running 0 (a driver before 3.3.0.0) is older than any
+ * entry from 3.3.0.0 on, and not compared with an older one. */
+int tr_ver_mixed(TR_U32 installed, int haveRunning, TR_U32 running,
+                 char *out, size_t cap);
+
 /* PendingFileRenameOperations (a REG_MULTI_SZ of `bytes` bytes, pairs of
  * source and target, a target "" for a delete, "!" before a target to
  * replace it, "\??\" before either): the source of the last pair whose
@@ -564,6 +586,14 @@ int tr_live_lost(TR_U32 live);
  * start", "not watched on this system", "not reported by this driver". */
 void tr_removal_text(const TR_QUERY *q, char *out, size_t cap);
 
+/* The NHI details' "Ring interrupt:" line (record 21 section 4.5.17)
+ * from CM_Q_RM_IRQ's word: what is in force ("on, by message (vector
+ * 45h)", "on, by the line") or why it is polled ("polled - set to 0");
+ * `nt` picks the 2000 / XP wording where the two differ.
+ * Each text at most 50 characters. 0, and out empty, for a word without
+ * CM_Q_IRQ_PRESENT (a driver before it): no line. */
+int tr_ring_irq_text(TR_U32 word, int nt, char *out, size_t cap);
+
 /* The balloon's text and title for an event. */
 void tr_event_text(const TR_EVENT *e, char *out, size_t cap);
 const char *tr_event_title(int kind);
@@ -622,6 +652,7 @@ typedef struct _TR_OPTS {
                                  * or -1 for not asked                      */
     int Set;                    /* /set (record 25 section 22)             */
     int SetShow;                /* /set /show                              */
+    char SetFind[TR_SET_ARG_CHARS]; /* /set /show <text>: the search (49.38) */
     int SetRequest;             /* /set /request: the window's elevated run */
     int SetCount;
     char SetArg[TR_SET_ARGS][TR_SET_ARG_CHARS]; /* each Name=Value as given */
@@ -765,6 +796,19 @@ int tr_w2k_code24(int w2k, int stoppedHere, int atPort, unsigned int config);
  * state in which the device may be unplugged. */
 int tr_stopped_text(TR_U32 problem, int w2k, char *tag, size_t tagCap,
                     char *sentence, size_t sentenceCap);
+
+/* Which reason refuses the stop of a unit first (record 24 section 7.6):
+ * on 98 SE and ME the BIOS-held verdict is read before every other reason,
+ * "not started" included, so a unit whose own NVMe function is at Code 10
+ * because Stor98 left it to the BIOS is refused with the BIOS texts.
+ * behindPort: the unit is behind a Thunderbolt port; biosRefuses: the
+ * verdict is HELD or UNSURE; whyNone: no other reason. Safely Remove is
+ * offered for every answer but TR_EF_WHY, so the BIOS reason is shown when
+ * it is chosen. */
+#define TR_EF_GO                0   /* no reason: on to the confirmation  */
+#define TR_EF_BIOS              1   /* the BIOS-held or cannot-tell text  */
+#define TR_EF_WHY               2   /* the other reason (not started, ...) */
+int tr_eject_first(int behindPort, int biosRefuses, int whyNone);
 
 /* What a walk right after an accepted stop reads (section 6.5 step 5):
  * TR_UA_UNPLUG for the walk whole and the device gone, or held for eject
@@ -1679,6 +1723,49 @@ const char *tr_eject_end_text(int kind, int unbound);
 int tr_snap_named(const char *head, char *name, size_t cap);
 void tr_snap_saved(int rc, const char *folder, const char *name,
                    const char *head, char *out, size_t cap);
+
+/*
+ * Every controller's snapshot (task 49.35; record 25 section 15 item 12).
+ * tr_snap_kchar: the one character a controller's door number k gives its
+ * files' extensions, '0'-'9' then 'A'-'Z'; 0 above 35. tr_snap_pick_base:
+ * the run's BASE into out (9 bytes) - `given` when not NULL, else the
+ * clock's mDDhhmmS with the first letter whose whole set is free - where a
+ * set is BASE.DEV/.TXT/.BIN/.PSC (and their .TMP), and BASE.D?/.T?/.B?/.P?
+ * for every k; `exists` says whether a name is taken. Returns
+ * TR_PICK_OK, TR_PICK_TAKEN (the given name's set, or all 26 letters),
+ * TR_PICK_CLOCK (the clock out of range), TR_PICK_NAME (a given name
+ * that is not an 8.3 base the engine takes: 1 to 8 letters, digits, _
+ * and -, not - first, no DOS device name). tr_snap_saved_all: the message
+ * for `n` controllers' records and the run's exit: 0 every set complete
+ * and moved, 9 a move failed, else the highest child exit (-1, not ended,
+ * reads as 2).
+ */
+#define TR_PICK_OK      0
+#define TR_PICK_TAKEN   1
+#define TR_PICK_CLOCK   2
+#define TR_PICK_NAME    3       /* the given NAME is not one /snapshot takes */
+#define TR_SNAP_FILES   4       /* .D, .T, .B, .P                         */
+#define TR_SNAP_LINES   8       /* controller lines before "and N more"   */
+/* Room for the message: eight lines, each with a scratch path, and the
+ * folder (tr_snap_saved_all never writes more than this). */
+#define TR_SNAP_MSG_BYTES 4608
+typedef int (*TR_NAME_EXISTS)(const char *name, void *context);
+typedef struct _TR_SNAP_ONE {
+    int Hcd;                    /* the door number                         */
+    char Door[16];              /* "XHCI98HC1", "HCD1"                     */
+    int Rc;                     /* the child's exit; -1 not ended in time,
+                                   -2 not ended even when terminated      */
+    int Have[TR_SNAP_FILES];    /* the child wrote it                      */
+    int Moved[TR_SNAP_FILES];   /* the parent moved it into the folder     */
+    char Scratch[260];          /* where an unmoved file stays             */
+} TR_SNAP_ONE;
+char tr_snap_kchar(int k);
+int tr_snap_name_ok(const char *name);
+int tr_snap_pick_base(const char *given, unsigned month, unsigned day,
+                      unsigned hour, unsigned minute, TR_NAME_EXISTS exists,
+                      void *context, char *out);
+int tr_snap_saved_all(const char *folder, const char *base,
+                      const TR_SNAP_ONE *one, int n, char *out, size_t cap);
 
 /* Task 47.30 (design record 13 section 11.10, Part B, point 2): the
  * driver's `at` notes and the isochronous table's times are the system

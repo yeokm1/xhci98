@@ -17,7 +17,10 @@ The later sections drive the runner's own decisions the same way, through the
 functions lib\fresh.ps1 holds for the purpose: the snapshot reader against a
 stand-in qemu-img, the target split of the two kinds of run, the writable-image
 refusal, the two-leg row loop, the target verdict, the report file, and
-prepare-image.ps1's clone and stamp refusals.  The count printed at the end is
+prepare-image.ps1's clone and stamp refusals.  The last section does the same
+for the release legs (lib\legvm.ps1): the accelerator a leg runs on, the
+refusal where WHPX cannot run it, and the verdict of a leg with the
+controller sequence.  The count printed at the end is
 the number of checks this file currently makes; nothing else states it.
 
 The complementary test is `-Matrix scripts\vm-matrix\matrix.broken.psd1` against
@@ -1407,6 +1410,313 @@ Write-Host "--- an empty bus is an answer, not a missing reply (28-V.1 pre-read)
     $script:fakeReply = $null
     Assert "no reply at all is still null"                $null (Get-MonitorText -Port 1 -Command "info usb")
     Assert "...and leaves the departure unknown"          $null (Test-UsbDeviceListed -Port 1 -Id "dut1")
+}
+
+Write-Host "--- the release legs' accelerator: the leg's own, forced TCG, and no fallback (roadmap-usb4 49.4) ---"
+& {
+    . (Join-Path $PSScriptRoot "lib\legvm.ps1")
+    $gx = @{ Id = 'gx'; Cpu = 'pentium3'; Smp = 1; Memory = 512; Machine = 'q35'; DiskBus = 'piix' }
+    $g2 = @{ Id = 'g2'; Cpu = 'qemu64'; Smp = 2; Memory = 2048; Machine = 'q35'; DiskBus = 'ahci'; Extra = @('-L', 'X:\share') }
+
+    $a = Resolve-LegAccel @{ Id = 'l1' } $false
+    Assert "a leg that names no accelerator is a TCG leg"      "tcg/tcg/False"   ("{0}/{1}/{2}" -f $a.Own, $a.Use, $a.Forced)
+    $a = Resolve-LegAccel @{ Id = 'l1' } $true
+    Assert "...and -ForceTcg forces nothing on it"             "tcg/tcg/False"   ("{0}/{1}/{2}" -f $a.Own, $a.Use, $a.Forced)
+    $a = Resolve-LegAccel @{ Id = 'l2'; Accel = 'whpx' } $false
+    Assert "a WHPX leg runs on WHPX"                           "whpx/whpx/False" ("{0}/{1}/{2}" -f $a.Own, $a.Use, $a.Forced)
+    $a = Resolve-LegAccel @{ Id = 'l2'; Accel = 'whpx' } $true
+    Assert "...and on TCG only when forced, and says so"       "whpx/tcg/True"   ("{0}/{1}/{2}" -f $a.Own, $a.Use, $a.Forced)
+    foreach ($bad in 'kvm', 'WHPX', 'whpx,kernel-irqchip=off', 'tcg:whpx', 'whpx:tcg') {
+        $threw = ""
+        try { $null = Resolve-LegAccel @{ Id = 'l3'; Accel = $bad } $false } catch { $threw = $_.Exception.Message }
+        Assert "a leg's Accel '$bad' is refused"               $true ($threw -match 'Accel is tcg or whpx')
+    }
+
+    Assert "TCG's value for one processor"                     "tcg"              (Get-LegAccelArg $gx 'tcg')
+    Assert "TCG's value for two"                               "tcg,thread=multi" (Get-LegAccelArg $g2 'tcg')
+    Assert "WHPX's value is plain whpx"                        "whpx"             (Get-LegAccelArg $g2 'whpx')
+    $gw = $g2.Clone(); $gw.Whpx = 'whpx,kernel-irqchip=off'
+    Assert "...or the guest's own on a host that needs one"    "whpx,kernel-irqchip=off" (Get-LegAccelArg $gw 'whpx')
+    Assert "...which leaves its TCG value alone"               "tcg,thread=multi" (Get-LegAccelArg $gw 'tcg')
+    $threw = ""
+    try { $null = Get-LegAccelArg $g2 'kvm' } catch { $threw = $_.Exception.Message }
+    Assert "no value for another accelerator"                  $true ($threw -match 'tcg or whpx')
+    Assert "the family of a value with options"                "whpx" (Get-LegAccelKind 'whpx,kernel-irqchip=off')
+    Assert "the family of TCG's"                               "tcg"  (Get-LegAccelKind 'tcg,thread=multi')
+
+    # The machine line every starting point was saved under, held to the
+    # text and hashes it had before the accelerator became a choice: a
+    # change here makes every saved starting point stale.
+    $line = (Get-LegHardwareArgs $gx) -join ' '
+    Assert "the TCG machine line is the one starting points were saved under" `
+        "-machine q35 -accel tcg -cpu pentium3 -smp 1 -m 512 -vga std -nic none -rtc base=localtime -global ICH9-LPC.acpi-pci-hotplug-with-bridge-support=off -device piix3-ide,id=pide,bus=pcie.0,addr=0x1e -device ide-hd,drive=hd0,bus=pide.0,unit=0,bootindex=0,lcyls=1024,lheads=255,lsecs=63 -device ide-cd,id=cd,drive=cdd,bus=pide.1,unit=0 -device isa-debugcon,iobase=0xe9,chardev=dbg -device pcie-root-port,id=rpx,bus=pcie.0,addr=0x1c.0,chassis=20,slot=20 -device qemu-xhci,id=xh,p2=4,p3=4,bus=rpx" $line
+    Assert "...and so is its hash"                             "c9b4b2d7fbdf426aeee3541af333e0fc4150ee618c2c9dd35cc8bdd89795f7ba" (Get-LegHardwareHash $gx 'QEMU emulator version 11.1.2')
+    Assert "...for a guest with two processors too"            "f0e21f13292fd85647078b7fc7a80ab211a3f4ccca1dde245a7e1c7537fd4334" (Get-LegHardwareHash $g2 'QEMU emulator version 11.1.2')
+    Assert "a guest's Whpx does not move its starting point"   "f0e21f13292fd85647078b7fc7a80ab211a3f4ccca1dde245a7e1c7537fd4334" (Get-LegHardwareHash $gw 'QEMU emulator version 11.1.2')
+    $w = Get-LegHardwareArgs $g2 -Accel 'whpx'
+    $t = Get-LegHardwareArgs $g2
+    Assert "the WHPX line differs from the TCG line"           $false (($w -join ' ') -eq ($t -join ' '))
+    Assert "...in the -accel value only"                       (($t -join ' ') -replace '-accel tcg,thread=multi', '-accel whpx') ($w -join ' ')
+
+    # One accelerator in the command line QEMU gets, the one asked for.
+    $threw = ""; try { Assert-LegOneAccel $w 'whpx' } catch { $threw = $_.Exception.Message }
+    Assert "a line with the leg's one -accel is taken"         "" $threw
+    $threw = ""; try { Assert-LegOneAccel ($w + @('-accel', 'tcg')) 'whpx' } catch { $threw = $_.Exception.Message }
+    Assert "a second -accel (QEMU's own fallback) is refused"  $true ($threw -match "other than the leg's 'whpx'")
+    $threw = ""; try { Assert-LegOneAccel ($w + @('-accel', 'whpx')) 'whpx' } catch { $threw = $_.Exception.Message }
+    Assert "...even the same one twice"                        $true ($threw -match 'holds 2 -accel options')
+    $threw = ""; try { Assert-LegOneAccel $t 'whpx' } catch { $threw = $_.Exception.Message }
+    Assert "a TCG line under a WHPX leg's name is refused"     $true ($threw -match "other than the leg's 'whpx'")
+    $threw = ""; try { Assert-LegOneAccel @('-machine', 'q35,accel=tcg', '-accel', 'whpx') 'whpx' } catch { $threw = $_.Exception.Message }
+    Assert "-machine accel= beside it is refused"              $true ($threw -match 'in -machine')
+    $threw = ""; try { Assert-LegOneAccel @('-machine', 'q35', '-accel', 'whpx', '-enable-kvm') 'whpx' } catch { $threw = $_.Exception.Message }
+    Assert "-enable-kvm beside it is refused"                  $true ($threw -match '-enable-kvm')
+    $threw = ""; try { Assert-LegOneAccel @('-machine', 'q35') 'tcg' } catch { $threw = $_.Exception.Message }
+    Assert "a line with no -accel is refused"                  $true ($threw -match 'holds 0 -accel options')
+    $ge = $g2.Clone(); $ge.Extra = @('-L', 'X:\share', '-accel', 'tcg')
+    $threw = ""; try { Assert-LegOneAccel (Get-LegHardwareArgs $ge -Accel 'whpx') 'whpx' } catch { $threw = $_.Exception.Message }
+    Assert "an -accel in a guest's Extra is caught"            $true ($threw -match "Extra")
+
+    # A saved state is TCG's: no restore under WHPX. Refused before QEMU.
+    $threw = ""
+    try { $null = Start-LegQemu -Config @{ QemuExe = 'X:\none\qemu.exe'; WorkDir = 'X:\none' } -Guest $g2 -Ports @{ Qmp = 1; Vnc = 5901; Mig = 2 } -Disk 'd' -Iso 'i' -RunDir 'X:\none' -Tag 'b1' -Incoming -Accel 'whpx' } catch { $threw = $_.Exception.Message }
+    Assert "a restore under WHPX is refused before QEMU starts" $true ($threw -match 'restored under TCG only')
+
+    Assert "-accel help that lists whpx"                       $true  (Test-LegAccelListed @('Accelerators supported in QEMU binary:', 'tcg', 'whpx') 'whpx')
+    Assert "-accel help that does not"                         $false (Test-LegAccelListed @('Accelerators supported in QEMU binary:', 'tcg') 'whpx')
+    Assert "...and a word that only contains it is not it"     $false (Test-LegAccelListed @('Accelerators supported in QEMU binary:', 'tcg', 'whpx2') 'whpx')
+
+    $pa = (Get-LegWhpxProbeArgs $gw 48601) -join ' '
+    Assert "the probe is the guest's machine under its WHPX value, stopped, with no disk" `
+        "-name xhleg-whpx-probe -machine q35 -accel whpx,kernel-irqchip=off -cpu qemu64 -smp 2 -m 2048 -nodefaults -display none -S -qmp tcp:127.0.0.1:48601,server=on,wait=off -L X:\share" $pa
+
+    # The refusal itself, against stand-in QEMUs: one that does not list
+    # WHPX, and one that lists it and cannot start it (the hypervisor
+    # platform off): both stop the leg with QEMU's own words, and neither
+    # leaves a process.
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ("xhci98-selftest-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
+    New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+    try {
+        $noWhpx = Join-Path $tmp 'qemu-nowhpx.cmd'
+        Set-Content -LiteralPath $noWhpx -Encoding ascii -Value @('@echo off', 'if "%1"=="-accel" if "%2"=="help" (', '  echo Accelerators supported in QEMU binary:', '  echo tcg', '  exit /b 0', ')', 'exit /b 1')
+        $deadWhpx = Join-Path $tmp 'qemu-deadwhpx.cmd'
+        Set-Content -LiteralPath $deadWhpx -Encoding ascii -Value @('@echo off', 'if "%1"=="-accel" if "%2"=="help" (', '  echo Accelerators supported in QEMU binary:', '  echo tcg', '  echo whpx', '  exit /b 0', ')', 'echo WHPX: No accelerator found, hr=00000000 1>&2', 'echo failed to initialize whpx: No space left on device 1>&2', 'exit /b 1')
+        # A free port for the probe that nothing listens on.
+        $l = New-Object System.Net.Sockets.TcpListener ([System.Net.IPAddress]::Loopback), 0
+        $l.Start(); $freePort = $l.LocalEndpoint.Port; $l.Stop()
+        $ports = @{ Qmp = $freePort; Vnc = $freePort; Mig = $freePort }
+        $threw = ""
+        try { $null = Assert-LegWhpx -Config @{ QemuExe = $noWhpx; WorkDir = $tmp } -Guest $g2 -Ports $ports -What 'leg t1' -Dir (Join-Path $tmp 'p1') } catch { $threw = $_.Exception.Message }
+        Assert "a QEMU without WHPX refuses the leg by name"   $true ($threw -match '^leg t1: .* has no WHPX')
+        Assert "...and says nothing was started and how TCG is asked for" $true ($threw -match 'Nothing was started\. A WHPX leg does not fall back to TCG; -ForceTcg')
+        Assert "...and started no probe"                       $false (Test-Path -LiteralPath (Join-Path $tmp 'pids.txt'))
+        $threw = ""
+        try { $null = Assert-LegWhpx -Config @{ QemuExe = $deadWhpx; WorkDir = $tmp } -Guest $g2 -Ports $ports -What 'leg t2' -Dir (Join-Path $tmp 'p2') } catch { $threw = $_.Exception.Message }
+        Assert "a QEMU that lists WHPX and cannot start it refuses too" $true ($threw -match '^leg t2: WHPX cannot run this guest here \(-accel whpx\)')
+        Assert "...with QEMU's own message"                    $true ($threw -match 'failed to initialize whpx')
+        Assert "...and no fallback"                            $true ($threw -match 'does not fall back to TCG')
+        $pl = @(Get-Content -LiteralPath (Join-Path $tmp 'pids.txt'))
+        Assert "...its probe logged as started and ended"      "started,ended" ((@($pl | ForEach-Object { if ($_ -match ' (started|ended) xhleg-whpx-probe') { $Matches[1] } })) -join ',')
+        # A probe whose log line cannot be written is still ended: the
+        # work directory does not exist. The stand-in spins inside cmd.exe
+        # itself: a child of it (ping, timeout) would outlive it and keep
+        # every handle it inherited, this run's own log among them.
+        $slow = Join-Path $tmp 'qemu-slow.cmd'
+        Set-Content -LiteralPath $slow -Encoding ascii -Value @('@echo off', 'if "%1"=="-accel" if "%2"=="help" (', '  echo Accelerators supported in QEMU binary:', '  echo tcg', '  echo whpx', '  exit /b 0', ')', 'for /l %%i in (1,1,2000000000) do rem', 'exit /b 1')
+        $before = @(Get-CimInstance Win32_Process -Filter "Name = 'cmd.exe'" | Where-Object { $_.CommandLine -like "*qemu-slow.cmd*" }).Count
+        $threw = ""
+        try { $null = Assert-LegWhpx -Config @{ QemuExe = $slow; WorkDir = (Join-Path $tmp 'no-such-dir') } -Guest $g2 -Ports $ports -What 'leg t4' -Dir (Join-Path $tmp 'p4') } catch { $threw = $_.Exception.Message }
+        Assert "a probe whose start cannot be logged throws"   $true ($threw -ne '')
+        Assert "...and leaves no probe behind"                 $before (@(Get-CimInstance Win32_Process -Filter "Name = 'cmd.exe'" | Where-Object { $_.CommandLine -like "*qemu-slow.cmd*" }).Count)
+        # A port already taken stops the probe before it starts.
+        $l = New-Object System.Net.Sockets.TcpListener ([System.Net.IPAddress]::Loopback), 0
+        $l.Start()
+        try {
+            $busy = $l.LocalEndpoint.Port
+            $threw = ""
+            try { $null = Assert-LegWhpx -Config @{ QemuExe = $deadWhpx; WorkDir = $tmp } -Guest $g2 -Ports @{ Qmp = $busy; Vnc = $busy; Mig = $busy } -What 'leg t3' -Dir (Join-Path $tmp 'p3') } catch { $threw = $_.Exception.Message }
+            Assert "a taken port stops the probe before it starts" $true ($threw -match "^leg t3: port $busy is in use")
+            Assert "...with no third probe logged"             2 (@(Get-Content -LiteralPath (Join-Path $tmp 'pids.txt'))).Count
+        } finally { $l.Stop() }
+    } finally {
+        Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    # The tracked legs: only the two Windows 10 legs are WHPX legs, both
+    # start cold under either accelerator, carry TCG deadlines for the
+    # cross-check, and run the controller sequence.
+    $legs = (Import-PowerShellDataFile -LiteralPath (Join-Path $PSScriptRoot 'release-legs.psd1')).Legs
+    $wl = @($legs | Where-Object { (Resolve-LegAccel $_ $false).Use -eq 'whpx' })
+    Assert "the WHPX legs are the two Windows 10 legs"         "w10x64-console,w10x86-console" ((@($wl | ForEach-Object { $_.Id }) | Sort-Object) -join ',')
+    Assert "...on the two Windows 10 guests"                   "w10x64,w10x86" ((@($wl | ForEach-Object { $_.Guest }) | Sort-Object) -join ',')
+    Assert "...each cold under TCG too"                        2 (@($wl | Where-Object { $_.Cold -eq $true })).Count
+    Assert "...each with TCG deadlines for the cross-check"    2 (@($wl | Where-Object { [int]$_.TcgMinutes -gt [int]$_.Minutes -and [int]$_.TcgStallSeconds -gt 900 })).Count
+    Assert "...each with the controller sequence"              2 (@($wl | Where-Object { $_.Devices -eq $true })).Count
+    Assert "no leg forced to TCG stays on WHPX"                0 (@($legs | Where-Object { (Resolve-LegAccel $_ $true).Use -ne 'tcg' })).Count
+    Assert "every other leg is a TCG leg"                      ($legs.Count - 2) (@($legs | Where-Object { (Resolve-LegAccel $_ $false).Own -eq 'tcg' })).Count
+    $sample = Import-PowerShellDataFile -LiteralPath (Join-Path $PSScriptRoot 'release.config.sample.psd1')
+    Assert "the sample configuration has both Windows 10 guests" 2 (@($sample.Guests | Where-Object { $_.Id -in 'w10x86', 'w10x64' })).Count
+    Assert "...and no guest's Extra names an accelerator"      0 (@($sample.Guests | Where-Object { @($_.Extra) -contains '-accel' })).Count
+
+    # The plumbing, read off the scripts themselves: every QEMU a leg starts
+    # is given the leg's accelerator, and the matrix hands -ForceTcg down.
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'run-leg.ps1'), [ref]$null, [ref]$null)
+    $starts = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Start-LegQemu' }, $true))
+    Assert "run-leg.ps1 starts QEMU in four places"            4 $starts.Count
+    Assert "...each with the leg's accelerator"                4 (@($starts | Where-Object { $_.Extent.Text -match '-Accel \$accelArg(\s|$)' })).Count
+    Assert "...and only one of them restores a state"          1 (@($starts | Where-Object { $_.Extent.Text -match '-Incoming' })).Count
+    $rl = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'run-leg.ps1')
+    Assert "a WHPX leg is made cold before any start"          $true ($rl -match "\`$acc\.Use -ne 'tcg'\) \{ \`$Cold = \[switch\]\`$true \}")
+    Assert "the WHPX refusal comes before the leg's record"    $true ($rl.IndexOf('Assert-LegWhpx -Config') -gt 0 -and $rl.IndexOf('Assert-LegWhpx -Config') -lt $rl.IndexOf('$rec = [ordered]@{'))
+    $rm = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'release-matrix.ps1')
+    Assert "the matrix hands -ForceTcg to each leg"            $true ($rm -match "if \(\`$ForceTcg\) \{ \`$la \+= '-ForceTcg' \}")
+    Assert "the matrix probes WHPX before its first leg"       $true ($rm.IndexOf('Assert-LegWhpx -Config') -gt 0 -and $rm.IndexOf('Assert-LegWhpx -Config') -lt $rm.IndexOf('while ($todo.Count -gt 0'))
+    Assert "the table's accelerator is the leg's own record's" $true ($rm -match '\$ja = \[string\]\$j\.accel')
+    $ms = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'make-start.ps1'), [ref]$null, [ref]$null)
+    $mstarts = @($ms.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Start-LegQemu' }, $true))
+    Assert "make-start.ps1 names no accelerator: starting points are TCG's" 0 (@($mstarts | Where-Object { $_.Extent.Text -match '-Accel' })).Count
+
+    # The verdict of a leg with the controller sequence.
+    $defD = @{ Id = 'd'; Exits = @{ install = @(3); list = @(0); uninstall = @(3, 4); 'uninstall-again' = @(3); 'list-final' = @(0) } }
+    function New-LegRec {
+        param([string]$Uninstall = '3', [string]$Remove = 'done', [string[]]$Drop = @(), [hashtable]$More = @{}, [hashtable]$MoreExits = @{})
+        $c = [ordered]@{}
+        foreach ($k in 'driver-file', 'list-current', 'stick-seen', 'stick-copy', 'ctrl-disable', 'ctrl-enable', 'stick-copy-enable', 'ctrl-remove', 'ctrl-rescan', 'stick-copy-rescan', 'list-removed') {
+            if ($Drop -notcontains $k) { $c[$k] = 'PASS' }
+        }
+        foreach ($k in $More.Keys) { $c[$k] = $More[$k] }
+        $x = [ordered]@{ install = '3'; list = '0'; uninstall = $Uninstall; 'list-final' = '0' }
+        foreach ($k in $MoreExits.Keys) { $x[$k] = $MoreExits[$k] }
+        return [ordered]@{ checks = $c; exits = $x; steps = @(); ctrlRemove = $Remove }
+    }
+    function Get-Why { param($Rec) return ((Get-LegVerdictReasons -Def $defD -Rec $Rec -Ended $true -Audio $false -Devices $true -Trust $false) -join ' | ') }
+    Assert "a full sequence, the remove done: no reason"       "" (Get-Why (New-LegRec))
+    Assert "the remove asking for a restart is no reason either" "" (Get-Why (New-LegRec -Remove 'restart asked'))
+    Assert "a remove that gave no answer is one"               "the remove step did not say whether Windows asked for a restart" (Get-Why (New-LegRec -Remove ''))
+    Assert "a guest that skipped the sequence cannot pass"     $true ((Get-Why (New-LegRec -Drop 'ctrl-disable', 'ctrl-enable', 'stick-copy-enable', 'ctrl-remove', 'ctrl-rescan', 'stick-copy-rescan' -Remove '')) -match 'check ctrl-disable not reported.*check stick-copy-rescan not reported.*did not say')
+    Assert "one missing sequence check is named"               "check ctrl-rescan not reported" (Get-Why (New-LegRec -Drop 'ctrl-rescan'))
+    Assert "a failed copy after the rescan fails the leg"      "check stick-copy-rescan FAIL on E:" (Get-Why (New-LegRec -More @{ 'stick-copy-rescan' = 'FAIL on E:' }))
+    Assert "exit 4 from the uninstall alone is not a pending restart" `
+        "no exit code for uninstall-again | check uninstall-pending not reported (the uninstall ended with exit 4) | no exit code for uninstall-again (the uninstall ended with exit 4)" (Get-Why (New-LegRec -Uninstall '4'))
+    Assert "exit 4 for another reason fails uninstall-pending" $true ((Get-Why (New-LegRec -Uninstall '4' -More @{ 'uninstall-pending' = 'FAIL exit 4 and no removal waiting for a restart in the log' } -MoreExits @{ 'uninstall-again' = '3' })) -match '^check uninstall-pending FAIL')
+    Assert "a pending restart read and the uninstall run again passes" "" (Get-Why (New-LegRec -Uninstall '4' -Remove 'restart asked' -More @{ 'uninstall-pending' = 'PASS' } -MoreExits @{ 'uninstall-again' = '3' }))
+    Assert "...unless the second uninstall stops again"        "exit uninstall-again 4, allowed 3" (Get-Why (New-LegRec -Uninstall '4' -Remove 'restart asked' -More @{ 'uninstall-pending' = 'PASS' } -MoreExits @{ 'uninstall-again' = '4' }))
+    Assert "an uninstall that ended 3 needs no second one"     "" (Get-Why (New-LegRec -Uninstall '3'))
+    Assert "a leg without the sequence is judged as before"    "" ((Get-LegVerdictReasons -Def @{ Id = 'p'; Exits = @{ install = @(3); uninstall = @(3) } } -Rec ([ordered]@{ checks = [ordered]@{ 'driver-file' = 'PASS'; 'list-current' = 'PASS'; 'stick-seen' = 'PASS E:'; 'stick-copy' = 'PASS on E:'; 'list-removed' = 'PASS' }; exits = [ordered]@{ install = '3'; uninstall = '3' }; steps = @() }) -Ended $true -Audio $false -Devices $false -Trust $false) -join ' | ')
+    Assert "...and its exit 4 is a plain refusal"              "exit uninstall 4, allowed 3" ((Get-LegVerdictReasons -Def @{ Id = 'p'; Exits = @{ uninstall = @(3) } } -Rec ([ordered]@{ checks = [ordered]@{ 'driver-file' = 'PASS'; 'list-current' = 'PASS'; 'stick-seen' = 'PASS'; 'stick-copy' = 'PASS'; 'list-removed' = 'PASS' }; exits = [ordered]@{ uninstall = '4' }; steps = @() }) -Ended $true -Audio $false -Devices $false -Trust $false) -join ' | ')
+    Assert "a leg with TrustCert needs both of its checks"     "check cert-trust not reported | check test-signing not reported" ((Get-LegVerdictReasons -Def @{ Id = 'p' } -Rec ([ordered]@{ checks = [ordered]@{ 'driver-file' = 'PASS'; 'list-current' = 'PASS'; 'stick-seen' = 'PASS'; 'stick-copy' = 'PASS'; 'list-removed' = 'PASS' }; exits = [ordered]@{}; steps = @() }) -Ended $true -Audio $false -Devices $false -Trust $true) -join ' | ')
+    Assert "a guest that never said END is the first reason"   $true (((Get-LegVerdictReasons -Def $defD -Rec (New-LegRec) -Ended $false -Audio $false -Devices $true -Trust $false) -join ' | ') -eq 'the guest never said END')
+
+    $warn = "X:\q\qemu-system-x86_64.exe: warning: Ignoring request for interrupt vector 0`r`n"
+    Assert "WHPX's own start warning is no reason against a WHPX leg" "" (Get-LegStderrReason $warn 'whpx')
+    Assert "...nor with the host's WHPX options"               "" (Get-LegStderrReason $warn 'whpx,kernel-irqchip=off')
+    Assert "...but it is one against a TCG leg, which never prints it" $true ((Get-LegStderrReason $warn 'tcg,thread=multi') -match 'interrupt vector 0')
+    Assert "anything else QEMU says under WHPX is still a reason" "qemu: WHPX: Unexpected VP exit code 4" (Get-LegStderrReason ($warn + "qemu: WHPX: Unexpected VP exit code 4`r`n") 'whpx')
+    Assert "...and another vector's warning too"               $true ((Get-LegStderrReason "q.exe: warning: Ignoring request for interrupt vector 01`r`n" 'whpx') -ne '')
+    Assert "an empty stderr is none"                           "" (Get-LegStderrReason "`r`n" 'tcg')
+
+    Assert "the remove's line under TCG is a reading"          "remove: done under tcg" (Get-LegRemoveNote 'done' 'tcg')
+    Assert "...under WHPX it is recorded and claims no TCG reading" $true ((Get-LegRemoveNote 'restart asked' 'whpx') -match '^remove: restart asked under whpx; recorded only: this step keeps a TCG reading, which this leg with -ForceTcg')
+}
+
+Write-Host "--- the legs' copy check: exit codes and a destination from before (roadmap-usb4 49.4) ---"
+& {
+    # leg\XHCOPY.CMD itself, run by cmd.exe on files in a temporary folder
+    # only. Its /verdict entry is the same judgment the copy uses, given
+    # exit codes and fc output: a copy that failed must fail the check even
+    # where fc found no differences (old data with the same bytes).
+    $legDir = Join-Path $PSScriptRoot 'leg'
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ("xhci98-selftest-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
+    New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+    try {
+        $script:xhN = 0
+        function Invoke-XhCopy {
+            param([string[]]$A)
+            $script:xhN++
+            $h = Join-Path $tmp ("h{0}.cmd" -f $script:xhN)
+            $q = @($A | ForEach-Object { '"' + $_ + '"' }) -join ' '
+            Set-Content -LiteralPath $h -Encoding ascii -Value @('@echo off', 'set "XR=unset"', 'set "XOK=unset"', ('call "{0}" {1}' -f (Join-Path $legDir 'XHCOPY.CMD'), $q), 'echo XR=[%XR%]', 'echo XOK=[%XOK%]')
+            $o = @(& $env:ComSpec /d /c $h 2>&1 | ForEach-Object { "$_" })
+            $r = @{ XR = '(none)'; XOK = '(none)' }
+            foreach ($l in $o) { if ($l -match '^(XR|XOK)=\[(.*)\]$') { $r[$Matches[1]] = $Matches[2] } }
+            return $r
+        }
+        $same = Join-Path $tmp 'fc-same.txt'
+        Set-Content -LiteralPath $same -Encoding ascii -Value @('Comparing files A.BIN and B.BIN', 'FC: no differences encountered', '')
+        $diff = Join-Path $tmp 'fc-diff.txt'
+        Set-Content -LiteralPath $diff -Encoding ascii -Value @('Comparing files A.BIN and B.BIN', '00000000: 00 01', 'FC: A.BIN longer than B.BIN')
+        $r = Invoke-XhCopy @('/verdict', '1', '0', $same)
+        Assert "a copy that failed fails, though fc found no differences" "FAIL on X: copy exit 1, fc exit 0" $r.XR
+        Assert "...and says no PASS"                           "" $r.XOK
+        $r = Invoke-XhCopy @('/verdict', '0', '0', $same)
+        Assert "copy and fc exit 0 with no differences pass"   "PASS on X:|1" ($r.XR + '|' + $r.XOK)
+        $r = Invoke-XhCopy @('/verdict', '0', '1', $diff)
+        Assert "fc exit 1 (the files differ) fails"            "FAIL on X: copy exit 0, fc exit 1|" ($r.XR + '|' + $r.XOK)
+        $r = Invoke-XhCopy @('/verdict', '0', '2', $same)
+        Assert "fc exit 2 (it could not compare) fails"        "FAIL on X: copy exit 0, fc exit 2|" ($r.XR + '|' + $r.XOK)
+        $r = Invoke-XhCopy @('/verdict', '0', '0', $diff)
+        Assert "exit codes 0 without fc's no differences fail" "FAIL on X: copy exit 0, fc exit 0|" ($r.XR + '|' + $r.XOK)
+
+        # The whole check on real files.
+        $drv = ([IO.Path]::GetPathRoot($tmp)).TrimEnd('\')
+        $src = Join-Path $tmp 'RAND.BIN'
+        $bytes = New-Object byte[] 65536
+        (New-Object System.Random 4312).NextBytes($bytes)
+        [IO.File]::WriteAllBytes($src, $bytes)
+        $d = Join-Path $tmp 'stick'
+        New-Item -ItemType Directory -Path $d -Force | Out-Null
+        $dst = Join-Path $d 'R2.BIN'
+        $lg = Join-Path $tmp 'R2'
+        $r = Invoke-XhCopy @($src, $dst, $lg)
+        Assert "a new destination is copied and compared"      "PASS on $drv|1" ($r.XR + '|' + $r.XOK)
+        Assert "...and holds the source's bytes"               $true ([Convert]::ToBase64String([IO.File]::ReadAllBytes($dst)) -eq [Convert]::ToBase64String($bytes))
+
+        # A destination there from before with the same bytes, read-only:
+        # a copy over it fails, and fc alone would pass it. It is removed.
+        Set-ItemProperty -LiteralPath $dst -Name IsReadOnly -Value $true
+        $r = Invoke-XhCopy @($src, $dst, $lg)
+        Assert "a read-only destination from before is removed, then copied" "PASS on $drv, an earlier R2.BIN removed|1" ($r.XR + '|' + $r.XOK)
+        Assert "...and the new file is not the old one (not read-only)" $false ((Get-Item -LiteralPath $dst).IsReadOnly)
+        # The same, held open by a reader that shares delete but not write:
+        # overwriting it fails, removing it does not. A removal that leaves
+        # the name until the reader closes (older delete semantics) fails
+        # the check as "cannot be removed"; an overwrite would fail as a
+        # copy exit. Either way no PASS without the removal.
+        $fs = New-Object System.IO.FileStream($dst, [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]::Read -bor [IO.FileShare]::Delete))
+        try { $r = Invoke-XhCopy @($src, $dst, $lg) } finally { $fs.Dispose() }
+        Assert "a destination held open is removed, never overwritten" $true (($r.XR -match ', an earlier R2\.BIN removed$' -and $r.XOK -eq '1') -or ($r.XR -match 'R2\.BIN from before cannot be removed$' -and $r.XOK -eq ''))
+
+        # A folder of that name is left alone and fails the check.
+        $fd = Join-Path $d 'R3.BIN'
+        New-Item -ItemType Directory -Path $fd -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $fd 'KEEP.TXT') -Encoding ascii -Value 'keep'
+        $r = Invoke-XhCopy @($src, $fd, (Join-Path $tmp 'R3'))
+        Assert "a folder in the destination's place fails"     "FAIL on $drv R3.BIN from before is a folder|" ($r.XR + '|' + $r.XOK)
+        Assert "...and what is in it is untouched"             $true (Test-Path -LiteralPath (Join-Path $fd 'KEEP.TXT'))
+        $fe = Join-Path $d 'R4.BIN'
+        New-Item -ItemType Directory -Path $fe -Force | Out-Null
+        $r = Invoke-XhCopy @($src, $fe, (Join-Path $tmp 'R4'))
+        Assert "...an empty folder too"                        "FAIL on $drv R4.BIN from before is a folder|" ($r.XR + '|' + $r.XOK)
+
+        # A copy that cannot run: copy's own exit code is read.
+        $r = Invoke-XhCopy @((Join-Path $tmp 'NOSUCH.BIN'), (Join-Path $d 'R5.BIN'), (Join-Path $tmp 'R5'))
+        Assert "a copy with no source fails on copy's exit code" $true ($r.XR -match '^FAIL on [A-Z]: copy exit [1-9]' -and $r.XOK -eq '')
+    } finally {
+        Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    # Every copy check of the NT leg goes through XHCOPY.CMD, which the CD
+    # carries; the 9x leg removes before it copies.
+    $nt = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'leg\LEGNT.CMD')
+    Assert "LEGNT.CMD's three copy checks all go through :dcopy" 3 ([regex]::Matches($nt, '(?m)^call :dcopy ')).Count
+    Assert "...and :dcopy through XHCOPY.CMD"              1 ([regex]::Matches($nt, '(?m)^call %XC%:\\XHCOPY\.CMD ')).Count
+    Assert "...with no copy or compare of its own"         0 ([regex]::Matches($nt, '(?im)^\s*(copy|fc) .*RAND\.BIN')).Count
+    $rl = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'run-leg.ps1')
+    Assert "the NT leg's CD carries XHCOPY.CMD"            $true ($rl -match "Copy-Item -LiteralPath \(Join-Path \`$legDir 'XHCOPY\.CMD'\) -Destination \`$cd")
+    $nine = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'leg\LEG9X.BAT')
+    $iDel = $nine.IndexOf('del %XS%:\RAND.BIN'); $iGone = $nine.IndexOf('if not exist %XS%:\RAND.BIN goto cpnew', $iDel); $iCopy = $nine.IndexOf('copy %XC%:\XHDATA\RAND.BIN')
+    Assert "LEG9X.BAT removes RAND.BIN and checks it is gone before the copy" $true ($iDel -gt 0 -and $iGone -gt $iDel -and $iCopy -gt $iGone)
+    Assert "...after the folder check"                     $true ($nine.IndexOf('if exist %XS%:\RAND.BIN\NUL goto cpdir') -gt 0 -and $nine.IndexOf('if exist %XS%:\RAND.BIN\NUL goto cpdir') -lt $iDel)
 }
 
 Write-Host ""

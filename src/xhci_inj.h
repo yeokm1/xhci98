@@ -124,7 +124,33 @@
  * Intel 7 Series controller showed, which in 3.4.1.0 left a cancel's
  * endpoint paused for good. */
 #define XHCI_INJ_STOP_RACE       26UL
-#define XHCI_INJ_LAST_BUILT      26UL
+/* Task 49.35 (design record 17 section 4.6.1), hex 1B: every HCRST this
+ * driver writes from now on takes `arg` x 10 ms (255 for ever) until CLEAR:
+ * while the hold runs, the reads the reset waits make answer HCRST set in
+ * USBCMD (`port` 0) or CNR set in USBSTS (`port` 1). QEMU completes a reset
+ * at once, so this is how a guest meets a controller whose reset outlasts
+ * the recovery's 10 ms stall - an ASMedia ASM1042 read at more than 11 ms.
+ * Hex 1C: one Host Controller Event, completion code `arg`, handed to the
+ * drain, which fails the controller as a real one does. */
+#define XHCI_INJ_RESET_SLOW      27UL
+#define XHCI_INJ_HC_EVENT        28UL
+/* Task 49.39 (design record 17 section 4.12.8), hex 1D and 1E. 1D: the
+ * next `arg` (0 one) stream Set TR Dequeues a cancel sends after taking its
+ * head TD off go out for real with that TD's first TRB and its cycle in
+ * place of the driver's position - a deliberately stale hardware dequeue,
+ * which the read-back meets. 1E: the next `arg` (0 one) times a stream's
+ * Set TR Dequeue is about to be sent, a doorbell is first rung for another
+ * stream of the endpoint holding a TD, so the endpoint may run before the
+ * command lands. */
+#define XHCI_INJ_STALE_DEQUEUE   29UL
+#define XHCI_INJ_RESTART_RACE    30UL
+/* Task 49.39 (record 17 4.12.8), hex 1F: the next `arg` (0 one) times c1
+ * is about to resend a stream's Set TR Dequeue after a difference, a
+ * doorbell is first rung for another stream of the endpoint - one holding a
+ * TD, else any other - so the endpoint runs between the difference and the
+ * resend. */
+#define XHCI_INJ_REPAIR_RACE     31UL
+#define XHCI_INJ_LAST_BUILT      31UL
 #define XHCI_INJ_CLEAR           0xFFUL  /* every injection ended            */
 
 /* XhciInjTake's verdicts. */
@@ -350,6 +376,18 @@ VOID XhciInjTransferEvent(XHCI_TRB *ev, ULONG pa, ULONG residual, ULONG cc,
 
 /* Every field of the endpoint off: a start. */
 VOID XhciInjEpClear(PXHCI_INJ_EP e);
+
+/* Task 49.35: XHCI_INJ_RESET_SLOW's hold in ms for `arg` (255 for ever:
+ * 0xFFFFFFFF), and whether a reset written `elapsedMs` ago is still held;
+ * XhciInjResetAnswer is the register value a read at that moment answers
+ * (`opOffset` USBCMD or USBSTS, `cnr` the port byte's choice), any other
+ * register, an all-ones read or a hold run out passing unchanged. A Host
+ * Controller Event as a controller writes one: completion code `cc`, the
+ * cycle bit 0, which no handler reads. */
+ULONG XhciInjResetHoldMs(ULONG arg);
+ULONG XhciInjResetHeld(ULONG holdMs, ULONG elapsedMs);
+ULONG XhciInjResetAnswer(ULONG opOffset, ULONG value, ULONG held, ULONG cnr);
+VOID XhciInjHostControllerEvent(XHCI_TRB *ev, ULONG cc);
 
 /* The answers end - endpoint, state, block, hold and watch - leaving the
  * counts, a pending event and the EP0 arming. */

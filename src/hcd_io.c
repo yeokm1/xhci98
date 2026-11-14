@@ -343,6 +343,11 @@ static VOID hcdWideDoorbell(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
     }
     XhciWriteDoorbell(&hc->Hc, pipe->Device->SlotId,
                       XhciStreamDoorbell(pipe->Dci, pipe->StreamId));
+    if (pipe->StreamId != 0) {
+        HcdTraceLocked(hc, XHCI_TRACE_K_DOORBELL, pipe->Device->SlotId,
+                       pipe->Dci, pipe->StreamId,
+                       XhciStreamDoorbell(pipe->Dci, pipe->StreamId), 2);
+    }
 }
 
 /*
@@ -1956,6 +1961,13 @@ NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
          * parked off EP0 voids the function's quiet declaration. */
         dev->QuietMark = 0;
     }
+    /* Task 49.34 (section 4.3.4, M4): any admission ends a Bulk-Only keep
+     * in progress; a Bulk-Only pipe's submission feeds its machine. */
+    if (pipe != NULL) {
+        HcdBotAdmitLocked(dev, pipe, req);
+    } else {
+        dev->BotLatch = 0;
+    }
     if (unreadable) {
         /* Only compared later, never dereferenced (hcdAbortedLocked). The
          * handle is resolved even on a Gone device, whose pipes stay
@@ -2188,6 +2200,10 @@ VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
         slot = dev->SlotId;
         dci = XhciStreamDoorbell(pipe->Dci, pipe->StreamId);
         XhciWriteDoorbell(&hc->Hc, slot, dci);
+        if (pipe->StreamId != 0) {
+            HcdTraceLocked(hc, XHCI_TRACE_K_DOORBELL, slot, pipe->Dci,
+                           pipe->StreamId, dci, 3);
+        }
         if (hcdIsData(x)) {
             hcdChunkPublished(hc, pipe, x, &entered);
         }
@@ -2351,6 +2367,55 @@ VOID HcdIoPipePause(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
         p->Paused++;
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
+}
+
+/* hcd.h (task 49.34). */
+static ULONG hcdIoPipeIdleLocked(PHCD_PIPE pipe)
+{
+    ULONG i;
+
+    if (pipe == NULL) {
+        return 1;
+    }
+    if (!IsListEmpty(&pipe->Waiting)) {
+        return 0;
+    }
+    for (i = 0; i < pipe->XferCount; i++) {
+        if (pipe->Xfers[i].State != HCD_XFER_FREE) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+ULONG HcdIoDeviceIdleLocked(PHCD_USB_DEVICE dev)
+{
+    ULONG dci;
+
+    if (!hcdIoPipeIdleLocked(&dev->Ep0Pipe)) {
+        return 0;
+    }
+    for (dci = 2; dci < 32; dci++) {
+        if (!hcdIoPipeIdleLocked(dev->Pipes[dci])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+VOID HcdIoPipeUnpauseLocked(PHCD_PIPE pipe)
+{
+    PHCD_PIPE p;
+    ULONG id;
+
+    if (pipe->Paused != 0) {
+        pipe->Paused--;
+    }
+    for (id = 1; (p = hcdStreamAt(pipe, id)) != NULL; id++) {
+        if (p->Paused != 0) {
+            p->Paused--;
+        }
+    }
 }
 
 VOID HcdIoPipeResume(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
@@ -2732,6 +2797,76 @@ VOID HcdIoRemoved(PHCD_CONTROLLER hc, PXHCI_TRANSFER t)
  * freed if this driver built it, the record freed under the lock, and the
  * device reference returned last. IRQL: <= DISPATCH_LEVEL, no lock held.
  */
+/*
+ * Task 49.45 (design record 13 section 6.13.11): a URB's end in the log,
+ * read before its status is written into it; nothing is changed.
+ *   - xfer.short.err / xfer.short.len: a bulk or interrupt IN transfer that
+ *     ended short and is completed as USBD_STATUS_ERROR_SHORT_TRANSFER for
+ *     want of USBD_SHORT_TRANSFER_OK - slot, DCI, stream and the pipe's
+ *     count of them; requested and actual bytes. Level 2, the first
+ *     XHCI_USBDX_NOTE_SHORT_MAX per pipe (a stream is a pipe of its own),
+ *     every one counted in XferShortRefused.
+ *   - uas.urb / uas.urb.len / uas.urb.st: at level 3 only, the first
+ *     XHCI_USBDX_NOTE_URB_MAX bulk or interrupt URBs of a PDO whose
+ *     interface the bus runs as UAS and whose client is not this package's
+ *     own UAS driver (OwnClient) - slot, DCI, stream and the TransferFlags'
+ *     low byte; requested and actual bytes; the USBD status.
+ * Each group is written under one hold of the controller lock (the Locked
+ * form), so another completion's notes never fall inside it. The record
+ * and its pipe are not released yet, so both are alive. IRQL:
+ * DISPATCH_LEVEL or below; called with the controller lock not held.
+ */
+static VOID hcdXferNotes(PHCD_CONTROLLER hc, PHCD_XFER x,
+                         PHCD_USB_DEVICE dev, LONG status)
+{
+    PHCD_DEVICE_PDO pdo;
+    PURB urb;
+    KIRQL oldIrql;
+    ULONG flags;
+    ULONG stream;
+    ULONG count;
+
+    urb = (PURB)x->Urb;
+    if (x->Control || x->Isoch || urb == NULL ||
+        urb->UrbHeader.Function != URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER) {
+        return;
+    }
+    stream = x->Pipe->StreamId;
+    if (status == HCD_USBD_ERROR_SHORT_TRANSFER && x->In) {
+        (VOID)InterlockedIncrement((PLONG)&hc->Counters.XferShortRefused);
+        count = (ULONG)InterlockedIncrement(&x->Pipe->ShortRefused);
+        if (XhciUsbdxNoteWanted(count, XHCI_USBDX_NOTE_SHORT_MAX)) {
+            /* One hold for the pair, so another completion's notes never
+             * fall between them. */
+            XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+            XhciLogNoteLocked(&hc->Hc, "xfer.short.err",
+                              XhciUsbdxNoteXfer(dev->SlotId, x->Pipe->Dci,
+                                                stream, count));
+            XhciLogNoteLocked(&hc->Hc, "xfer.short.len",
+                              XhciUsbdxNoteLengths(x->Length, x->Offset));
+            XhciControllerLockRelease(&hc->Hc, oldIrql);
+        }
+    }
+    pdo = x->Pdo;
+    if (pdo == NULL || pdo->OwnClient ||
+        pdo->Xport.Transport != XHCI_XPORT_UAS ||
+        hc->Hc.Log.Verbosity < XHCI_LOG_VERBOSITY_PORTSC ||
+        pdo->NoteUrbs >= (LONG)XHCI_USBDX_NOTE_URB_MAX ||
+        !XhciUsbdxNoteWanted((ULONG)InterlockedIncrement(&pdo->NoteUrbs),
+                             XHCI_USBDX_NOTE_URB_MAX)) {
+        return;
+    }
+    flags = urb->UrbBulkOrInterruptTransfer.TransferFlags;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    XhciLogNoteLocked(&hc->Hc, "uas.urb",
+                      XhciUsbdxNoteXfer(dev->SlotId, x->Pipe->Dci, stream,
+                                        flags));
+    XhciLogNoteLocked(&hc->Hc, "uas.urb.len",
+                      XhciUsbdxNoteLengths(x->Length, x->Offset));
+    XhciLogNoteLocked(&hc->Hc, "uas.urb.st", (ULONG)status);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+}
+
 VOID HcdIoDeferred(PHCD_CONTROLLER hc)
 {
     PLIST_ENTRY entry;
@@ -2854,6 +2989,13 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
             }
         }
 
+        /* Task 49.45 (design record 13 section 6.13.11): the end, in the
+         * log, where it asks for it; the status and the URB as they are. */
+        hcdXferNotes(hc, x, dev, status);
+
+        /* Task 49.34: a Bulk-Only drive's machine sees the end before the
+         * client does, its buffer still described. */
+        HcdBotXferEnd(hc, x, status);
         urb = (PURB)x->Urb;
         irp = x->Irp;
         pdo = x->Pdo;
@@ -2954,6 +3096,7 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
             irp->IoStatus.Status =
                 (NTSTATUS)XhciPipeNtStatus((ULONG)status);
             irp->IoStatus.Information = 0;
+            HCD_QEMU_URB_OUT(irp);
             IoCompleteRequest(irp, IO_NO_INCREMENT);
         }
         if (!parked) {
@@ -3022,6 +3165,10 @@ static VOID hcdDrainOne(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd)
             /* A hub's status-change record carries no IRP (hcd_hub.c). */
             t->UsbdStatus = usbd;
             HcdHubXferRetired(hc, pipe->Device);
+        } else if (t == &pipe->Device->BotXfer) {
+            /* Task 49.34: the medium check's own, no IRP (hcd_bot.c). */
+            t->UsbdStatus = usbd;
+            HcdBotXferRetired(hc, pipe->Device);
         } else if (t != &pipe->Device->Ep0Xfer) {
             t->UsbdStatus = usbd;
             hc->Counters.TransfersCancelled++;
@@ -3136,7 +3283,10 @@ ULONG HcdIoDeviceDrain(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         /* XhciDmaStaging 0, as in 3.4.2.0: the controller could not be
          * proven to have stopped mastering and its rings still name the
          * clients' buffers, so none goes back. The URBs stay pending and
-         * the record stays allocated (batch (c)). */
+         * the record stays allocated (batch (c)). Its queued commands name
+         * no client page and no failed controller serves them: completed
+         * with an error (task 49.16; record 17 section 4.13.9). */
+        HcdCfgFailDevice(hc, dev);
         return 0;
     }
     HcdCfgFlushDevice(hc, dev);
@@ -3479,6 +3629,7 @@ static VOID hcdParkedComplete(PHCD_DEVICE_PDO pdo, PIRP irp)
         ->UrbHeader.Status = HCD_USBD_CANCELED;
     irp->IoStatus.Status = STATUS_CANCELLED;
     irp->IoStatus.Information = 0;
+    HCD_QEMU_URB_OUT(irp);
     IoCompleteRequest(irp, IO_NO_INCREMENT);
     (VOID)InterlockedDecrement(&pdo->UrbsPending);
 }
@@ -3744,6 +3895,7 @@ static VOID hcdRefusedCancel(PDEVICE_OBJECT obj, PIRP irp)
         ->UrbHeader.Status = HCD_USBD_CANCELED;
     irp->IoStatus.Status = STATUS_CANCELLED;
     irp->IoStatus.Information = 0;
+    HCD_QEMU_URB_OUT(irp);
     IoCompleteRequest(irp, IO_NO_INCREMENT);
     (VOID)InterlockedDecrement(&pdo->RefusedPending);
 }
@@ -3805,6 +3957,7 @@ static VOID hcdRefusedDpc(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2)
         }
         irp->IoStatus.Status = status;
         irp->IoStatus.Information = 0;
+        HCD_QEMU_URB_OUT(irp);
         IoCompleteRequest(irp, IO_NO_INCREMENT);
         (VOID)InterlockedDecrement(&pdo->RefusedPending);
     }

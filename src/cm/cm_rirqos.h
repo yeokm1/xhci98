@@ -14,7 +14,9 @@
  *
  * Every system connects the line its start was given, 98 SE and ME
  * through NTKERN's IoConnectInterrupt as on NT (section 4.5.4; task
- * 48.26, after their route was read in task 45.22).
+ * 48.26, after their route was read in task 45.22). XhciCmRingInterrupt 2
+ * is a message on 2000, XP and XP x64 alone (section 4.5.14, task 49.27;
+ * cm_rirqnt.c); on 98 SE and ME it is not tried (CmRirqHow).
  */
 
 #ifndef CM_RIRQOS_H
@@ -37,6 +39,9 @@ typedef struct _CM_RIRQ_DRV {
     /* This activation (reset at each start). */
     ULONG Value;            /* XhciCmRingInterrupt as run with             */
     ULONG Failed;           /* IrqFailed: polling until the next start     */
+    ULONG Why;              /* CM_Q_IRQ_WHY_*: why polled (section 4.5.17) */
+    volatile LONG HwGate;   /* CM_RIRQ_GATE_*: closing reasons, written
+                               under WorkLock (section 4.5.18)            */
     ULONG SelfTestOwed;     /* the activation's self-test not yet passed   */
     ULONG IrqMode;          /* CM_RIRQ_MODE_*                              */
     ULONG Intel;            /* the mask register written directly          */
@@ -99,9 +104,95 @@ typedef struct _CM_RIRQ_DRV {
     ULONG Unretired;
     ULONG Disconnects;
     ULONG DpcSlow;
+
+    /*
+     * The message (record 21 section 4.5.14, task 49.27), the thread's but
+     * Reach: How this activation's CM_RIRQ_HOW_*; Message 1 while the
+     * connection is msi4nt's; MsgInfo the library's block; ReArmOwed a
+     * connection kept across a sleep; MsgBdf the location connected.
+     * Reach, written only inside the connection's exclusion or with
+     * nothing connected, is "the function in D0, BAR0 mapped, the cause
+     * armed or being armed": the routine touches nothing while it is
+     * clear.
+     */
+    ULONG How;
+    ULONG Sys;              /* CM_RIRQ_SYS_*, taken at each start          */
+    ULONG Yield;            /* NT 5: a machine-wide XhciInterruptMode 4    */
+    ULONG Message;
+    PVOID MsgInfo;
+    ULONG ReArmOwed;
+    ULONG MsgBdf;
+    ULONG MsgVector;
+    volatile LONG Reach;
+    ULONG MsgConnects;
+    ULONG MsgConnectFailures;
+    ULONG MsgRearms;
+    ULONG MsgRearmFailures;
+    ULONG MsgForced;
+    ULONG MsgHandoffFailures;
+    ULONG MsgStatus;
+    /* "When the library says no": the masks not read back 0 (the first DW
+     * read, low bit set), read again once a pass; 0 when proven. */
+    ULONG MsgMaskWatch;
+    /* NT (section 4.5.14): msi4nt's claim held, its IRQ; the stop's
+     * removal (a surprise removal or a removal Windows reported);
+     * Interrupt Disable read set after the connect (the absence proof's
+     * condition); ProofRead the one call during which the configuration
+     * route admits reads at offset 0 after a revocation. */
+    ULONG MsgClaimHeld;
+    ULONG MsgIrq;
+    ULONG Removal;
+    ULONG MsgIdSet;
+    volatile LONG ProofRead;
+    ULONG MsgBraked;        /* connections the library braked             */
 } CM_RIRQ_DRV;
 
 struct _CM_NHI;
+
+/* msi4nt's statuses this driver names (msi4nt.h's MSGIRQ_STATUS_*;
+ * cm_rirqnt.c holds them equal). */
+#define CM_MB_OK                 0UL
+#define CM_MB_IN_USE             6UL
+#define CM_MB_INVALID            9UL
+#define CM_MB_CONFIG_ACCESS      10UL
+#define CM_MN_CLAIM_KEPT         12UL   /* msi4nt's MSGIRQ_STATUS_CLAIM_KEPT */
+#define CM_MB_BRAKED             13UL
+#define CM_MN_NO_VECTORS         4UL
+/* The networking report's interrupt kind beyond IrqMode's (task 49.27):
+ * the line, with value 2 yielding to a machine-wide mode 4. */
+#define CM_RIRQ_KIND_LINE_YIELD  3UL
+
+/* The service routine's body (section 4.5.3), shared by the line's routine
+ * and the message's (cm_rirqnt.c). IRQL: DIRQL. */
+BOOLEAN CmRirqIsrBody(struct _CM_NHI *nhi);
+
+/* cm_rirqnt.c, both images: the image-wide gate and the refusal table
+ * (section 4.5.14). PASSIVE_LEVEL on the threads. */
+VOID CmRirqGateEnter(struct _CM_NHI *nhi);
+VOID CmRirqGateLeave(VOID);
+BOOLEAN CmRirqRefused(struct _CM_NHI *nhi, ULONG bdf);
+BOOLEAN CmRirqRefuse(struct _CM_NHI *nhi, ULONG bdf);
+
+/*
+ * cm_rirqnt.c, the msi4nt seam (section 4.5.14; 2000, XP, Server 2003 and
+ * XP x64; the one file compiling ..\msi4nt.h's implementation, hosted):
+ * the library once per image, the ISA claim with the library's defaults
+ * (its candidates reversed) and its release, the connect, the re-arm, the
+ * disconnect (`how` 0 plain, 1 with the absence proof, 2 the quarantine),
+ * the vector. MSGIRQ_STATUS_* values. PASSIVE_LEVEL, the thread.
+ */
+ULONG CmRirqNtInit(struct _CM_NHI *nhi);
+ULONG CmRirqNtClaim(struct _CM_NHI *nhi, PULONG irq);
+ULONG CmRirqNtRelease(struct _CM_NHI *nhi);
+ULONG CmRirqNtConnect(struct _CM_NHI *nhi);
+ULONG CmRirqNtReArm(struct _CM_NHI *nhi);
+ULONG CmRirqNtDisconnect(struct _CM_NHI *nhi, ULONG how);
+ULONG CmRirqNtVector(struct _CM_NHI *nhi, PULONG data);
+/* cm_thr.c: `length` bytes of configuration space at `offset` through the
+ * NHI's own route, the liveness gate's rules (with the absence proof's
+ * one admission, ProofRead): the bytes moved, 0 when refused. */
+ULONG CmCfgBytes(struct _CM_NHI *nhi, BOOLEAN read, PVOID buffer,
+                 ULONG offset, ULONG length);
 
 /* The NHI's AddDevice: the DPC. PASSIVE_LEVEL. */
 VOID CmRirqInit(struct _CM_NHI *nhi);
@@ -139,6 +230,20 @@ VOID CmRirqService(struct _CM_NHI *nhi, BOOLEAN polling, ULONG periodMs);
 /* The order down of section 4.5.6 for `why` (CM_RIRQ_DOWN_*): before the
  * ring stop of a D3 or a stop. Nothing when nothing is connected. */
 VOID CmRirqDown(struct _CM_NHI *nhi, ULONG why);
+
+/* CM_Q_RM_IRQ's word for the query answer (record 21 section 4.5.17).
+ * The thread. */
+ULONG CmRirqQueryWord(struct _CM_NHI *nhi);
+
+/* The routine's hardware gate (record 21 section 4.5.18).
+ * CmRirqHwGateCloseLocked: a closing reason added, the caller holding
+ * WorkLock (CmNhiRevoke). CmRirqHwGateClose: the same, taking WorkLock,
+ * no fence (any IRQL <= DISPATCH_LEVEL; the detached shutdown).
+ * CmRirqHwGateOpen: POWER taken away where CmRirqGateMayOpen admits it,
+ * the test and the clear in one WorkLock hold; the thread alone. */
+VOID CmRirqHwGateCloseLocked(struct _CM_NHI *nhi, ULONG why);
+VOID CmRirqHwGateClose(struct _CM_NHI *nhi, ULONG why);
+VOID CmRirqHwGateOpen(struct _CM_NHI *nhi);
 /* The counters as cm.irq.* lines, at the stop. */
 VOID CmRirqLogCounters(struct _CM_NHI *nhi);
 
@@ -169,5 +274,8 @@ ULONG CmRirqDataState(struct _CM_NHI *nhi);
  * PASSIVE_LEVEL, the thread.
  */
 BOOLEAN CmCfgIntxRetire(struct _CM_NHI *nhi, PULONG ours);
+/* The same class for Bus Master Enable, cleared before an NT quarantine
+ * (record 21 section 4.5.14 item 4): TRUE when it reads clear. */
+BOOLEAN CmCfgBusMasterRetire(struct _CM_NHI *nhi);
 
 #endif /* CM_RIRQOS_H */

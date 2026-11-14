@@ -1182,7 +1182,7 @@ try {
     # the interval, so the anchor carries them; $tailFor9x and $tailForNt are
     # the same block ending in each path's own successor line, which keeps
     # the two paths apart.
-    $tolRows   = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`nHKR,,XhciIntelNoRouteIrq,0x00010003,1`r`nHKR,,XhciTolerance,0x00010003,1`r`nHKR,,XhciIntervalCap,0x00010003,1`r`nHKR,,XhciAvgTrbEsit,0x00010003,0`r`nHKR,,XhciMaxTransferKB,0x00010003,1024`r`nHKR,,XhciInterruptMode,0x00010003,0`r`nHKR,,XhciPollIdleMs,0x00010003,50`r`nHKR,,XhciPollActiveMs,0x00010003,1`r`nHKR,,XhciPollFineTimer,0x00010003,0`r`nHKR,,XhciWideMap,0x00010003,0`r`nHKR,,XhciSelectiveSuspend,0x00010003,0`r`nHKR,,XhciSilentInstall,0x00010003,0`r`nHKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`nHKR,,XhciAccept096,0x00010003,1`r`nHKR,,XhciCommandCheck,0x00010003,1`r`nHKR,,XhciAcpiTables,0x00010003,1`r`n; The BOS read at High and Full Speed (design record 13 section 8.4.1), a`r`n; device kept across a resume's re-initialization (task 45.23) and across`r`n; its SuperSpeed link's recovery (task 45.41): on is each one's default`r`n; (absent, or anything but a DWORD 0, is on; src\hcd_ctl.c), written since`r`n; task 45.50 so that every value is in the key, ready to change.`r`nHKR,,XhciUsb2Bos,0x00010003,1`r`nHKR,,XhciResumeKeep,0x00010003,1`r`nHKR,,XhciLinkKeep,0x00010003,1`r`n; A SuperSpeed link that keeps failing sent to USB 2.0 (issue 29, design`r`n; record 13 section 21): 1, the default, sends it; 0 gives it up after the`r`n; same count. Absent, or anything but a DWORD 0, is 1 (src\hcd_ctl.c).`r`nHKR,,XhciSsFlapFallback,0x00010003,1`r`n; The event ring's size (task 47.30; design record 13 section 11.10): 1024`r`n; the larger ring, 256 the one-page ring of the releases before it.`r`n; Absent, or any other value, is 1024 (src\hcd_ctl.c).`r`nHKR,,XhciEventRingTrbs,0x00010003,1024`r`n; The Bulk-Only form's own instance id (roadmap-usb4 UASBOT.1; design record`r`n; 13 section 10.7): 1 gives a drive that offers UAS too a devnode of its own`r`n; where the bus offers it as Bulk-Only; 0 the one devnode of the releases`r`n; before. Absent, or anything but a DWORD 0, is 1 (src\hcd_ctl.c).`r`nHKR,,XhciBulkOnlyOwnId,0x00010003,1`r`n; The staging pool's budget in KiB (task 48.33; design record 13 section`r`n; 11.11.1), from 256 to 16384: every transfer's data passes through`r`n; buffers of the driver's own. Absent reads as 2048 (src\hcd_ctl.c).`r`nHKR,,XhciStagePoolKiB,0x00010003,2048`r`n; Every transfer's data staged through buffers of the driver's own (task`r`n; 48.33; design record 13 section 11.11): 1; 0, the default, maps the`r`n; programs' own buffers for the controller, as 3.4.2.0 did. Absent reads`r`n; as 0, any other DWORD as 1 (src\hcd_ctl.c).`r`nHKR,,XhciDmaStaging,0x00010003,0`r`n; Linux's xHCI controller quirks (roadmap-hcd task 38.10; design record 20`r`n; section 6.1): 0 off, 1 Linux's listed controllers, 2 every controller`r`n; where the record offers it. Absent reads as the default written here.`r`nHKR,,XhciMsiAvoid,0x00010003,1`r`nHKR,,XhciStreamsOff,0x00010003,1`r`nHKR,,XhciResumeReinit,0x00010003,1`r`nHKR,,XhciIntelShutdownToEhci,0x00010003,1`r`nHKR,,XhciShutdownReset,0x00010003,0`r`nHKR,,XhciSuspendHaltDelay,0x00010003,1`r`nHKR,,XhciSuspendHaltTimeout,0x00010003,1`r`nHKR,,XhciAsmediaFlowControl,0x00010003,1`r`nHKR,,XhciTiIntervalCap,0x00010003,1`r`nHKR,,XhciStuckLinkReset,0x00010003,1`r`nHKR,,XhciStreamRingPad,0x00010003,1`r`nHKR,,XhciControlLinkNoOp,0x00010003,1`r`nHKR,,XhciIsochSpuriousSuccess,0x00010003,1`r`nHKR,,XhciAmdSuspendBitClear,0x00010003,1`r`n"
+    $tolRows   = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`nHKR,,XhciIntelNoRouteIrq,0x00010003,1`r`nHKR,,XhciTolerance,0x00010003,1`r`nHKR,,XhciIntervalCap,0x00010003,1`r`nHKR,,XhciAvgTrbEsit,0x00010003,0`r`nHKR,,XhciMaxTransferKB,0x00010003,1024`r`nHKR,,XhciInterruptMode,0x00010003,0`r`nHKR,,XhciMsiStrategy,0x00010003,0`r`nHKR,,XhciMsiIsaIrq,0x00010003,0`r`nHKR,,XhciMsiShare,0x00010003,8`r`nHKR,,XhciMsiPools,0x00010003,0`r`nHKR,,XhciMsiInputFirst,0x00010003,0`r`nHKR,,XhciMsiInputLast,0x00010003,0`r`nHKR,,XhciMsiInputBudget,0x00010003,0`r`nHKR,,XhciPollIdleMs,0x00010003,50`r`nHKR,,XhciPollActiveMs,0x00010003,1`r`nHKR,,XhciPollFineTimer,0x00010003,0`r`nHKR,,XhciWideMap,0x00010003,0`r`nHKR,,XhciSelectiveSuspend,0x00010003,0`r`nHKR,,XhciSilentInstall,0x00010003,0`r`nHKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`nHKR,,XhciAccept096,0x00010003,1`r`nHKR,,XhciCommandCheck,0x00010003,1`r`nHKR,,XhciStreamDequeueRepair,0x00010003,1`r`nHKR,,XhciAcpiTables,0x00010003,1`r`n; The BOS read at High and Full Speed (design record 13 section 8.4.1), a`r`n; device kept across a resume's re-initialization (task 45.23) and across`r`n; its SuperSpeed link's recovery (task 45.41): on is each one's default`r`n; (absent, or anything but a DWORD 0, is on; src\hcd_ctl.c), written since`r`n; task 45.50 so that every value is in the key, ready to change.`r`n; XhciResumeKeepBot (task 49.34, design record 20 section 4.3.4, M18) is`r`n; the one value the driver reads that no section here writes: its default`r`n; is not the same on every Windows (a Bulk-Only drive kept after a`r`n; hibernation on 2000, on no other Windows), 2000 and XP install from the`r`n; same sections, and the driver gives that default when the value is`r`n; absent (src\xhci_bot.c, XhciBotKeepDefault; the gate's VAL-BOTABSENT).`r`nHKR,,XhciUsb2Bos,0x00010003,1`r`nHKR,,XhciResumeKeep,0x00010003,1`r`nHKR,,XhciLinkKeep,0x00010003,1`r`n; A SuperSpeed link that keeps failing sent to USB 2.0 (issue 29, design`r`n; record 13 section 21): 1, the default, sends it; 0 gives it up after the`r`n; same count. Absent, or anything but a DWORD 0, is 1 (src\hcd_ctl.c).`r`nHKR,,XhciSsFlapFallback,0x00010003,1`r`n; The event ring's size (task 47.30; design record 13 sections 11.10 and`r`n; 11.10.1): 256 the one-page ring, written by a fresh install from 3.5.0.0`r`n; (an update keeps a 1024 an earlier release wrote); any other value the`r`n; larger ring. Absent is 256; a controller below xHCI 1.0 always uses 256.`r`nHKR,,XhciEventRingTrbs,0x00010003,256`r`n; The Bulk-Only form's own instance id (roadmap-usb4 UASBOT.1; design record`r`n; 13 section 10.7): 1 gives a drive that offers UAS too a devnode of its own`r`n; where the bus offers it as Bulk-Only; 0 the one devnode of the releases`r`n; before. Absent, or anything but a DWORD 0, is 1 (src\hcd_ctl.c).`r`nHKR,,XhciBulkOnlyOwnId,0x00010003,1`r`n; The staging pool's budget in KiB (task 48.33; design record 13 section`r`n; 11.11.1), from 256 to 16384: every transfer's data passes through`r`n; buffers of the driver's own. Absent reads as 2048 (src\hcd_ctl.c).`r`nHKR,,XhciStagePoolKiB,0x00010003,2048`r`n; Every transfer's data staged through buffers of the driver's own (task`r`n; 48.33; design record 13 section 11.11): 1; 0, the default, maps the`r`n; programs' own buffers for the controller, as 3.4.2.0 did. Absent reads`r`n; as 0, any other DWORD as 1 (src\hcd_ctl.c).`r`nHKR,,XhciDmaStaging,0x00010003,0`r`n; Linux's xHCI controller quirks (roadmap-hcd task 38.10; design record 20`r`n; section 6.1): 0 off, 1 Linux's listed controllers, 2 every controller`r`n; where the record offers it. Absent reads as the default written here.`r`nHKR,,XhciMsiAvoid,0x00010003,1`r`nHKR,,XhciStreamsOff,0x00010003,1`r`nHKR,,XhciResumeReinit,0x00010003,1`r`nHKR,,XhciIntelShutdownToEhci,0x00010003,1`r`nHKR,,XhciShutdownReset,0x00010003,0`r`nHKR,,XhciSuspendHaltDelay,0x00010003,1`r`nHKR,,XhciSuspendHaltTimeout,0x00010003,1`r`nHKR,,XhciAsmediaFlowControl,0x00010003,1`r`nHKR,,XhciTiIntervalCap,0x00010003,1`r`nHKR,,XhciStuckLinkReset,0x00010003,1`r`nHKR,,XhciStreamRingPad,0x00010003,1`r`nHKR,,XhciControlLinkNoOp,0x00010003,1`r`nHKR,,XhciIsochSpuriousSuccess,0x00010003,1`r`nHKR,,XhciAmdSuspendBitClear,0x00010003,1`r`n"
     $tailFor9x = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]"
     $tailForNt = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32"
     Write-Step "the Intel port switchover's switch, on both paths"
@@ -1236,6 +1236,13 @@ try {
         @{ Key = "intcap";    Row = "HKR,,XhciIntervalCap,0x00010003,1`r`n"; Wrong = "HKR,,XhciIntervalCap,0x00010003,0`r`n"; Clob = "HKR,,XhciIntervalCap,0x00010001,1`r`n" },
         @{ Key = "avgtrb";    Row = "HKR,,XhciAvgTrbEsit,0x00010003,0`r`n";  Wrong = "HKR,,XhciAvgTrbEsit,0x00010003,1`r`n";  Clob = "HKR,,XhciAvgTrbEsit,0x00010001,0`r`n" },
         @{ Key = "intrmode";  Row = "HKR,,XhciInterruptMode,0x00010003,0`r`n"; Wrong = "HKR,,XhciInterruptMode,0x00010003,2`r`n"; Clob = "HKR,,XhciInterruptMode,0x00010001,0`r`n" },
+        @{ Key = "msistrat"; Row = "HKR,,XhciMsiStrategy,0x00010003,0`r`n"; Wrong = "HKR,,XhciMsiStrategy,0x00010003,1`r`n"; Clob = "HKR,,XhciMsiStrategy,0x00010001,0`r`n" },
+        @{ Key = "msiisairq"; Row = "HKR,,XhciMsiIsaIrq,0x00010003,0`r`n"; Wrong = "HKR,,XhciMsiIsaIrq,0x00010003,5`r`n"; Clob = "HKR,,XhciMsiIsaIrq,0x00010001,0`r`n" },
+        @{ Key = "msishare"; Row = "HKR,,XhciMsiShare,0x00010003,8`r`n"; Wrong = "HKR,,XhciMsiShare,0x00010003,2`r`n"; Clob = "HKR,,XhciMsiShare,0x00010001,8`r`n" },
+        @{ Key = "msipools"; Row = "HKR,,XhciMsiPools,0x00010003,0`r`n"; Wrong = "HKR,,XhciMsiPools,0x00010003,2`r`n"; Clob = "HKR,,XhciMsiPools,0x00010001,0`r`n" },
+        @{ Key = "msiinfirst"; Row = "HKR,,XhciMsiInputFirst,0x00010003,0`r`n"; Wrong = "HKR,,XhciMsiInputFirst,0x00010003,24`r`n"; Clob = "HKR,,XhciMsiInputFirst,0x00010001,0`r`n" },
+        @{ Key = "msiinlast"; Row = "HKR,,XhciMsiInputLast,0x00010003,0`r`n"; Wrong = "HKR,,XhciMsiInputLast,0x00010003,255`r`n"; Clob = "HKR,,XhciMsiInputLast,0x00010001,0`r`n" },
+        @{ Key = "msibudget"; Row = "HKR,,XhciMsiInputBudget,0x00010003,0`r`n"; Wrong = "HKR,,XhciMsiInputBudget,0x00010003,16`r`n"; Clob = "HKR,,XhciMsiInputBudget,0x00010001,0`r`n" },
         @{ Key = "pollidle";  Row = "HKR,,XhciPollIdleMs,0x00010003,50`r`n"; Wrong = "HKR,,XhciPollIdleMs,0x00010003,5000`r`n"; Clob = "HKR,,XhciPollIdleMs,0x00010001,50`r`n" },
         @{ Key = "pollactive"; Row = "HKR,,XhciPollActiveMs,0x00010003,1`r`n"; Wrong = "HKR,,XhciPollActiveMs,0x00010003,0`r`n"; Clob = "HKR,,XhciPollActiveMs,0x00010001,1`r`n" },
         @{ Key = "finetimer"; Row = "HKR,,XhciPollFineTimer,0x00010003,0`r`n"; Wrong = "HKR,,XhciPollFineTimer,0x00010003,1`r`n"; Clob = "HKR,,XhciPollFineTimer,0x00010001,0`r`n" },
@@ -1245,12 +1252,13 @@ try {
         @{ Key = "hubspeed";  Row = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`n"; Wrong = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,0`r`n"; Clob = "HKR,,XhciUsb2HubSpeedFallback,0x00010001,1`r`n" },
         @{ Key = "accept096"; Row = "HKR,,XhciAccept096,0x00010003,1`r`n"; Wrong = "HKR,,XhciAccept096,0x00010003,0`r`n"; Clob = "HKR,,XhciAccept096,0x00010001,1`r`n" },
         @{ Key = "cmdcheck"; Row = "HKR,,XhciCommandCheck,0x00010003,1`r`n"; Wrong = "HKR,,XhciCommandCheck,0x00010003,0`r`n"; Clob = "HKR,,XhciCommandCheck,0x00010001,1`r`n" },
+        @{ Key = "deqrepair"; Row = "HKR,,XhciStreamDequeueRepair,0x00010003,1`r`n"; Wrong = "HKR,,XhciStreamDequeueRepair,0x00010003,0`r`n"; Clob = "HKR,,XhciStreamDequeueRepair,0x00010001,1`r`n" },
         @{ Key = "acpitables"; Row = "HKR,,XhciAcpiTables,0x00010003,1`r`n"; Wrong = "HKR,,XhciAcpiTables,0x00010003,0`r`n"; Clob = "HKR,,XhciAcpiTables,0x00010001,1`r`n" },
         @{ Key = "usb2bos"; Row = "HKR,,XhciUsb2Bos,0x00010003,1`r`n"; Wrong = "HKR,,XhciUsb2Bos,0x00010003,0`r`n"; Clob = "HKR,,XhciUsb2Bos,0x00010001,1`r`n" },
         @{ Key = "resumekeep"; Row = "HKR,,XhciResumeKeep,0x00010003,1`r`n"; Wrong = "HKR,,XhciResumeKeep,0x00010003,0`r`n"; Clob = "HKR,,XhciResumeKeep,0x00010001,1`r`n" },
         @{ Key = "linkkeep"; Row = "HKR,,XhciLinkKeep,0x00010003,1`r`n"; Wrong = "HKR,,XhciLinkKeep,0x00010003,0`r`n"; Clob = "HKR,,XhciLinkKeep,0x00010001,1`r`n" },
         @{ Key = "ssflap"; Row = "HKR,,XhciSsFlapFallback,0x00010003,1`r`n"; Wrong = "HKR,,XhciSsFlapFallback,0x00010003,0`r`n"; Clob = "HKR,,XhciSsFlapFallback,0x00010001,1`r`n" },
-        @{ Key = "evtring"; Row = "HKR,,XhciEventRingTrbs,0x00010003,1024`r`n"; Wrong = "HKR,,XhciEventRingTrbs,0x00010003,256`r`n"; Clob = "HKR,,XhciEventRingTrbs,0x00010001,1024`r`n" },
+        @{ Key = "evtring"; Row = "HKR,,XhciEventRingTrbs,0x00010003,256`r`n"; Wrong = "HKR,,XhciEventRingTrbs,0x00010003,1024`r`n"; Clob = "HKR,,XhciEventRingTrbs,0x00010001,256`r`n" },
         @{ Key = "botownid"; Row = "HKR,,XhciBulkOnlyOwnId,0x00010003,1`r`n"; Wrong = "HKR,,XhciBulkOnlyOwnId,0x00010003,0`r`n"; Clob = "HKR,,XhciBulkOnlyOwnId,0x00010001,1`r`n" },
         @{ Key = "stagepool"; Row = "HKR,,XhciStagePoolKiB,0x00010003,2048`r`n"; Wrong = "HKR,,XhciStagePoolKiB,0x00010003,1024`r`n"; Clob = "HKR,,XhciStagePoolKiB,0x00010001,2048`r`n" },
         @{ Key = "dmastaging"; Row = "HKR,,XhciDmaStaging,0x00010003,0`r`n"; Wrong = "HKR,,XhciDmaStaging,0x00010003,1`r`n"; Clob = "HKR,,XhciDmaStaging,0x00010001,0`r`n" },
@@ -1269,6 +1277,19 @@ try {
         @{ Key = "isochspur"; Row = "HKR,,XhciIsochSpuriousSuccess,0x00010003,1`r`n"; Wrong = "HKR,,XhciIsochSpuriousSuccess,0x00010003,0`r`n"; Clob = "HKR,,XhciIsochSpuriousSuccess,0x00010001,1`r`n" },
         @{ Key = "amdbitclr"; Row = "HKR,,XhciAmdSuspendBitClear,0x00010003,1`r`n"; Wrong = "HKR,,XhciAmdSuspendBitClear,0x00010003,0`r`n"; Clob = "HKR,,XhciAmdSuspendBitClear,0x00010001,1`r`n" }
     )
+    # Task 49.34 (design record 20 section 4.3.4, M18): XhciResumeKeepBot is
+    # written by no path; a line writing it at either number, on either
+    # path, is refused.
+    Write-Step "XhciResumeKeepBot absent on every path"
+    Assert-RuleFires "resumekeepbot-written-9x" "VAL-BOTABSENT" {
+        param($t) $t.Replace($tailFor9x, $tailFor9x.Replace("HKR,,XhciResumeKeep,0x00010003,1`r`n", "HKR,,XhciResumeKeep,0x00010003,1`r`nHKR,,XhciResumeKeepBot,0x00010003,0`r`n"))
+    }
+    Assert-RuleFires "resumekeepbot-written-hklm" "VAL-BOTABSENT" {
+        param($t) $t.Replace($tailForNt, $tailForNt.Replace("HKR,,XhciResumeKeep,0x00010003,1`r`n", "HKR,,XhciResumeKeep,0x00010003,1`r`nHKLM,System\CurrentControlSet\Services\USB,XhciResumeKeepBot,0x00010003,1`r`n"))
+    }
+    Assert-RuleFires "resumekeepbot-written-nt" "VAL-BOTABSENT" {
+        param($t) $t.Replace($tailForNt, $tailForNt.Replace("HKR,,XhciResumeKeep,0x00010003,1`r`n", "HKR,,XhciResumeKeep,0x00010003,1`r`nHKR,,XhciResumeKeepBot,0x00010003,1`r`n"))
+    }
     for ($tvi = 0; $tvi -lt $tvList.Count; $tvi++) {
         $tv = $tvList[$tvi]
         if ($tvi % 7 -eq 0) {
@@ -2948,6 +2969,11 @@ try {
     Assert-RuleFires "amd64-logverbosity-default" "VAL-DEFAULT" {
         param($t) $t.Replace("HKR,,XhciLogVerbosity,0x00010003,2", "HKR,,XhciLogVerbosity,0x00010003,1")
     } -Source $prodInfAmd64 -Arch amd64
+    # Task 49.24: the 64-bit file writes none of the second pool's values
+    # (design record 15 section 4.5.16).
+    Assert-RuleFires "amd64-msg4-pool" "VAL-MSG4POOL" {
+        param($t) $t.Replace("HKR,,XhciMsiShare,0x00010003,8`r`n", "HKR,,XhciMsiShare,0x00010003,8`r`nHKR,,XhciMsiPools,0x00010003,0`r`n")
+    } -Source $prodInfAmd64 -Arch amd64
     Assert-RuleFires "amd64-imod-missing" "VAL-MISSING" {
         param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010003,160`r`n", "")
     } -Source $prodInfAmd64 -Arch amd64
@@ -2969,6 +2995,9 @@ try {
         @{ Key = "avgtrb";    Row = "HKR,,XhciAvgTrbEsit,0x00010003,0`r`n";  Wrong = "HKR,,XhciAvgTrbEsit,0x00010003,1`r`n" },
         @{ Key = "maxxfer";   Row = "HKR,,XhciMaxTransferKB,0x00010003,1024`r`n"; Wrong = "HKR,,XhciMaxTransferKB,0x00010003,64`r`n" },
         @{ Key = "intrmode";  Row = "HKR,,XhciInterruptMode,0x00010003,0`r`n"; Wrong = "HKR,,XhciInterruptMode,0x00010003,2`r`n" },
+        @{ Key = "msistrat"; Row = "HKR,,XhciMsiStrategy,0x00010003,0`r`n"; Wrong = "HKR,,XhciMsiStrategy,0x00010003,1`r`n" },
+        @{ Key = "msiisairq"; Row = "HKR,,XhciMsiIsaIrq,0x00010003,0`r`n"; Wrong = "HKR,,XhciMsiIsaIrq,0x00010003,5`r`n" },
+        @{ Key = "msishare"; Row = "HKR,,XhciMsiShare,0x00010003,8`r`n"; Wrong = "HKR,,XhciMsiShare,0x00010003,2`r`n" },
         @{ Key = "pollidle";  Row = "HKR,,XhciPollIdleMs,0x00010003,50`r`n"; Wrong = "HKR,,XhciPollIdleMs,0x00010003,5000`r`n" },
         @{ Key = "pollactive"; Row = "HKR,,XhciPollActiveMs,0x00010003,1`r`n"; Wrong = "HKR,,XhciPollActiveMs,0x00010003,0`r`n" },
         @{ Key = "finetimer"; Row = "HKR,,XhciPollFineTimer,0x00010003,0`r`n"; Wrong = "HKR,,XhciPollFineTimer,0x00010003,1`r`n" },
@@ -2978,12 +3007,13 @@ try {
         @{ Key = "hubspeed";  Row = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`n"; Wrong = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,0`r`n" },
         @{ Key = "accept096"; Row = "HKR,,XhciAccept096,0x00010003,1`r`n"; Wrong = "HKR,,XhciAccept096,0x00010003,0`r`n" },
         @{ Key = "cmdcheck"; Row = "HKR,,XhciCommandCheck,0x00010003,1`r`n"; Wrong = "HKR,,XhciCommandCheck,0x00010003,0`r`n" },
+        @{ Key = "deqrepair"; Row = "HKR,,XhciStreamDequeueRepair,0x00010003,1`r`n"; Wrong = "HKR,,XhciStreamDequeueRepair,0x00010003,0`r`n" },
         @{ Key = "acpitables"; Row = "HKR,,XhciAcpiTables,0x00010003,1`r`n"; Wrong = "HKR,,XhciAcpiTables,0x00010003,0`r`n" },
         @{ Key = "usb2bos"; Row = "HKR,,XhciUsb2Bos,0x00010003,1`r`n"; Wrong = "HKR,,XhciUsb2Bos,0x00010003,0`r`n" },
         @{ Key = "resumekeep"; Row = "HKR,,XhciResumeKeep,0x00010003,1`r`n"; Wrong = "HKR,,XhciResumeKeep,0x00010003,0`r`n" },
         @{ Key = "linkkeep"; Row = "HKR,,XhciLinkKeep,0x00010003,1`r`n"; Wrong = "HKR,,XhciLinkKeep,0x00010003,0`r`n" },
         @{ Key = "ssflap"; Row = "HKR,,XhciSsFlapFallback,0x00010003,1`r`n"; Wrong = "HKR,,XhciSsFlapFallback,0x00010003,0`r`n" },
-        @{ Key = "evtring"; Row = "HKR,,XhciEventRingTrbs,0x00010003,1024`r`n"; Wrong = "HKR,,XhciEventRingTrbs,0x00010003,256`r`n" },
+        @{ Key = "evtring"; Row = "HKR,,XhciEventRingTrbs,0x00010003,256`r`n"; Wrong = "HKR,,XhciEventRingTrbs,0x00010003,1024`r`n" },
         @{ Key = "botownid"; Row = "HKR,,XhciBulkOnlyOwnId,0x00010003,1`r`n"; Wrong = "HKR,,XhciBulkOnlyOwnId,0x00010003,0`r`n" },
         @{ Key = "stagepool"; Row = "HKR,,XhciStagePoolKiB,0x00010003,2048`r`n"; Wrong = "HKR,,XhciStagePoolKiB,0x00010003,1024`r`n" },
         @{ Key = "dmastaging"; Row = "HKR,,XhciDmaStaging,0x00010003,0`r`n"; Wrong = "HKR,,XhciDmaStaging,0x00010003,1`r`n" },
@@ -3009,6 +3039,9 @@ try {
             param($t) $t.Replace($tv.Row, $tv.Wrong)
         } -Source $prodInfAmd64 -Arch amd64
     }
+    Assert-RuleFires "amd64-resumekeepbot-written" "VAL-BOTABSENT" {
+        param($t) $t.Replace("HKR,,XhciResumeKeep,0x00010003,1`r`n", "HKR,,XhciResumeKeep,0x00010003,1`r`nHKR,,XhciResumeKeepBot,0x00010003,0`r`n")
+    } -Source $prodInfAmd64 -Arch amd64
     #
     # **The version tie reaches the 64-bit file too**, and proving that needs
     # the header staged beside the mutated copy: the cross-check skips silently
@@ -3082,9 +3115,11 @@ try {
     }
 
     function Assert-InfsAgree {
-        param([string]$Section, [string]$Why, [string[]]$Only = @(), [string[]]$Except = @())
+        param([string]$Section, [string]$Why, [string[]]$Only = @(), [string[]]$Except = @(), [string]$ExceptRow32 = "")
         $a = @(Get-InfSection -Path $prodInf -Name $Section)
         $b = @(Get-InfSection -Path $prodInfAmd64 -Name $Section)
+        # Rows the 32-bit file alone writes, by a pattern over the whole row.
+        if ($ExceptRow32 -ne "") { $a = @($a | Where-Object { $_ -notmatch $ExceptRow32 }) }
         if ($Except.Count -gt 0) {
             $drop = { param($rows) @($rows | Where-Object { $r = $_; @($Except | Where-Object { $r -imatch ('^\s*' + [regex]::Escape($_) + '\s*=') }).Count -eq 0 }) }
             $a = & $drop $a
@@ -3109,7 +3144,11 @@ try {
         -Why "The two packages are one release cut from one src\xhci_version.h, and they install into the same device class through the same LayoutFile route."
     Assert-InfsAgree -Section "Xhci.AddService" `
         -Why "One package creates one service. A driver that is demand-start on one architecture and boot-start on the other is two products."
-    Assert-InfsAgree -Section "Xhci.AddReg.NT" `
+    # **One difference admitted, by name** (task 49.24; design record 15
+    # section 4.5.16): the second claim pool's four values, which the 64-bit
+    # driver does not read (the pool is not offered on XP x64), are the
+    # 32-bit file's alone; VAL-MSG4POOL refuses them in the 64-bit one.
+    Assert-InfsAgree -Section "Xhci.AddReg.NT" -ExceptRow32 '^HKR,,(XhciMsiPools|XhciMsiInputFirst|XhciMsiInputLast|XhciMsiInputBudget),' `
         -Why "These are the values the driver reads at run time. A default that drifted on one architecture is a diagnostic door open on machines whose owner never asked for one."
     # [Xhci.AddReg.Global] was compared here until 1.1.0.0 removed it from both
     # files. What replaced it is not comparable this way: the flag lived in

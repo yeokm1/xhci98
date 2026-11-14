@@ -594,6 +594,41 @@ ULONG XhciTbtLearnArm(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
                       PXHCI_TBT_BINDS binds);
 
 /*
+ * Record 22 section 7.6.5 (task 49.18): an SHPC member's evidence that an
+ * arm could not take, read again without an arm.
+ *
+ * XhciTbtShpcSet: 1 when the set has members and every one is of source
+ * SHPC, the first condition for giving the learning an accessor that
+ * writes DWORD Select (the driver half checks each bridge itself).
+ *
+ * XhciTbtLearnOwed: bit i for each member i of an armed baseline over this
+ * set that is empty there and has no BaseDown bit; 0 for a baseline not
+ * armed or taken over another set.
+ *
+ * XhciTbtLearnEvidence: for each owed member alone, its occupancy read
+ * again; where that read is whole, the secondary bus is the baseline's,
+ * nothing answers and the port then reads DOWN, its BaseDown bit is set.
+ * Anything else leaves the member owed. Sets bits only: the baseline, the
+ * armed mark, BaseHeld and every other bit stand, whatever fails. Returns
+ * the members still owed. The caller makes it only while no port is
+ * pending.
+ *
+ * XhciTbtEvidenceDue: 1 when a refresh is due at an idle pass: something
+ * owed, no port pending, and either less than XHCI_TBT_POLL_BUDGET_MS
+ * since `armMs` (the instance's millisecond clock, unsigned elapsed time)
+ * or a member's record (`count` entries: 0 for no published filter owned
+ * by the domain, else that publication's serial) differing from the one
+ * taken before the last reading.
+ */
+ULONG XhciTbtShpcSet(const XHCI_TBT_TOPO *topo);
+ULONG XhciTbtLearnOwed(const XHCI_TBT_TOPO *topo, const XHCI_TBT_BINDS *binds);
+ULONG XhciTbtLearnEvidence(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
+                           PXHCI_TBT_BINDS binds);
+ULONG XhciTbtEvidenceDue(ULONG owed, ULONG pending, ULONG armMs, ULONG nowMs,
+                         const ULONG *record, const ULONG *recordAt,
+                         ULONG count);
+
+/*
  * The tunnels not yet attributed. The driver half calls XhciTbtLearnUp for
  * EVERY TBT_U4_ACT_TUNNEL_UP of a drained batch before it calls
  * XhciTbtLearn for any of them (a port already bound is not recorded; a
@@ -832,6 +867,24 @@ ULONG XhciTbtInfer(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
 #define XHCI_TBT_RB_OPEN            2UL
 #define XHCI_TBT_RB_UNREAD          3UL
 ULONG XhciTbtInferReadBack(PXHCI_TBT_CFG io, ULONG bdf, ULONG buses);
+
+/*
+ * Whether the function behind the member at `bdf` answers (record 22
+ * section 11.1.14, task 49.11): the bridge's bus number register read,
+ * its secondary bus valid only when nonzero, not 0xFF, above the primary
+ * and not above the subordinate; then the id at function 0 of each device
+ * number of that bus (a PCI Express link has device 0 alone; a PCI
+ * bridge's slot puts its card at the slot's device number). PRESENT at
+ * the first vendor id other than 0000h, FFFFh and 0001h; else NOT_READY
+ * where one read 0001h (a Configuration Request Retry Status as software
+ * sees it); else ABSENT (every one 0000h or FFFFh); UNREAD for bus numbers
+ * not valid or a failed read. Reads only.
+ */
+#define XHCI_TBT_FN_PRESENT         1UL
+#define XHCI_TBT_FN_ABSENT          2UL
+#define XHCI_TBT_FN_NOT_READY       3UL
+#define XHCI_TBT_FN_UNREAD          4UL
+ULONG XhciTbtFunctionRead(PXHCI_TBT_CFG io, ULONG bdf);
 
 /* ---- the port reading (record 21 section 6.5) -------------------------- */
 

@@ -48,8 +48,9 @@ typedef struct _XHCI_QRY_IN {
 /*
  * The answer into out (room bytes). What it serves follows the level, as
  * xhcicm's log answer does: the counters from level 1, the ring from level
- * 2 to 3 (at level 4 it can hold kernel addresses and is withheld,
- * XHQ_F_WITHHELD), the PCI configuration at every level. The ring is
+ * 2 (at level 4 it holds kernel addresses and is served as it is, with
+ * XHQ_F_ADDRESSES and XHQ_F_WITHHELD, the owner's decision of
+ * 2026-11-13), the PCI configuration at every level. The ring is
  * written as text, oldest byte first, a byte outside 0x20..0x7E, CR and LF
  * as '.'; XHQ_F_FAILED at every level from Terminal; when the oldest
  * bytes may be a record's tail (Dropped != 0, or

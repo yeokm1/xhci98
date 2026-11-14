@@ -34,6 +34,7 @@
  */
 
 #include "cm.h"
+#include "cm_ports.h"
 #include "../xhci_regsrc.h"
 
 /* Relative to RTL_REGISTRY_SERVICES (hcd_ctl.c's HCD_MACHINE_KEY). */
@@ -76,6 +77,7 @@ static const PCWSTR cmValueNames[CM_VAL_COUNT] = {
 #define CM_VALUE_USB4_V2 L"XhciCmUsb4V2"
 #define CM_VALUE_GEN4_ELR L"XhciCmGen4LinkRecovery"
 #define CM_VALUE_SLEEP_ENTRY L"XhciCmSleepEntry"
+#define CM_VALUE_WAKE_POWER_UP L"XhciCmWakePowerUp"
 /* Record 33 section 9.1: absent is 1, as the NT 5.x install paths write it
  * since task 45.50; read on NT 5.x alone. XhciCmRingInterrupt: absent is
  * 0, as the NT install paths write it. */
@@ -274,6 +276,34 @@ VOID CmReadIrqGate(VOID)
     CmIrqGate = std;
 }
 
+/*
+ * The wake power-up's owner test (design record 21 section 6.3.1, task
+ * 49.46): whether the driver Windows installed on `pdo` is Stor98's, read
+ * from the device's driver key (IoOpenDeviceRegistryKey,
+ * PLUGPLAY_REGKEY_DRIVER) as the install section that put it there
+ * (InfSection): "Stor98_Inst" in all three of Stor98's INFs. 1 Stor98's,
+ * 2 another driver's, 0 not read (CM_WPU_OWN_*, cm_ports.h). PASSIVE_LEVEL,
+ * from the member's start (never during a wake).
+ */
+ULONG CmRegWpuOwner(PDEVICE_OBJECT pdo)
+{
+    HANDLE key;
+    CM_TAKE take;
+
+    if (!NT_SUCCESS(IoOpenDeviceRegistryKey(pdo, PLUGPLAY_REGKEY_DRIVER,
+                                            KEY_READ, &key))) {
+        return 0;
+    }
+    cmQueryAt(RTL_REGISTRY_HANDLE, (PWSTR)key, L"InfSection", &take, 1);
+    ZwClose(key);
+    if (!take.Found) {
+        return 0;
+    }
+    /* Stor98_Inst, or with its .NTx86 or .NTamd64 decoration
+     * (cm_ports.c, host-tested). */
+    return CmPortsWpuInfSection(take.Text, take.TextChars);
+}
+
 VOID CmReadValues(PCM_NHI nhi)
 {
     HANDLE key;
@@ -313,6 +343,11 @@ VOID CmReadValues(PCM_NHI nhi)
     CmValuesTakeAsmPcie7(&nhi->Values, take.Found, take.Dword);
     cmQuery(key, CM_VALUE_RING_IRQ, &take, 0);
     CmValuesTakeRingIrq(&nhi->Values, take.Found, take.Dword);
+    /* Record 21 section 4.5.14: xhci98.sys's mode, machine-wide only (the
+     * yield sees no controller's own key: a restriction in tuning.md). */
+    cmQueryAt(RTL_REGISTRY_SERVICES, (PWSTR)CM_MACHINE_KEY,
+              L"XhciInterruptMode", &take, 0);
+    nhi->Values.UsbInterruptMode = take.Found ? take.Dword : 0UL;
     /* The platform's USB4 handover's values (record 32 sections 12.8.6,
      * 12.8.15.10 and 12.8.15.17): the master switch and the structural
      * tier on every target (on NT the tier applies to the read path
@@ -338,6 +373,8 @@ VOID CmReadValues(PCM_NHI nhi)
     nhi->QemuOscNoClear = take.Found ? take.Dword : 0;
     cmQuery(key, L"XhciCmQemuEcamFault", &take, 0);
     nhi->QemuEcamFault = take.Found ? take.Dword : 0;
+    cmQuery(key, L"XhciCmQemuWakePowerUpForce", &take, 0);
+    nhi->QemuWpuForce = take.Found ? take.Dword : 0;
 #endif
     cmQuery(key, CM_VALUE_USB4_V2, &take, 0);
     CmValuesTakeUsb4V2(&nhi->Values, take.Found, take.Dword);
@@ -345,6 +382,8 @@ VOID CmReadValues(PCM_NHI nhi)
     CmValuesTakeGen4Elr(&nhi->Values, take.Found, take.Dword);
     cmQuery(key, CM_VALUE_SLEEP_ENTRY, &take, 0);
     CmValuesTakeSleepEntry(&nhi->Values, take.Found, take.Dword);
+    cmQuery(key, CM_VALUE_WAKE_POWER_UP, &take, 0);
+    CmValuesTakeWakePowerUp(&nhi->Values, take.Found, take.Dword);
     if (CmBreqGate != 0) {
         cmQuery(key, CM_VALUE_BRIDGE_REQ, &take, 0);
         CmValuesTakeBridgeReq(&nhi->Values, take.Found, take.Dword);

@@ -76,6 +76,11 @@
 #include "cm_call.h"
 #include "cm_iso.h"
 
+/* The wake power-up (design record 21 section 6.3.1, task 49.46), at this
+ * file's tail. */
+static VOID cmWpuService(PCM_NHI nhi);
+static VOID cmWpuPortReleased(PCM_NHI nhi, ULONG i);
+
 /* The USB4 profile's actions reach the seam with this bit in Why (cm_nhi.c,
  * cmU4ToIcm); its stor98 statement is made at the core's upcall, not here. */
 #ifndef CM_U4_WHY_BASE
@@ -925,6 +930,7 @@ static NTSTATUS cmChildCreate(PCM_FILTER parent, PDEVICE_OBJECT pdo,
 
     KeInitializeSpinLock(&child->Lock);
     KeInitializeEvent(&child->Drained, NotificationEvent, FALSE);
+    CmWpuChildInit(child);
     CmRegFilterInit(child);
     if (CmKeptOn) {
         /* Design record 31 section 4.10: kept, before the attach, after
@@ -4129,6 +4135,25 @@ BOOLEAN CmRegConfigWrite(PCM_NHI nhi, ULONG bdf, ULONG offset, ULONG width,
     return (BOOLEAN)(NT_SUCCESS(status) && written == width);
 }
 
+VOID CmRegMemberRecords(PCM_NHI nhi, PULONG record)
+{
+    PCM_FILTER f;
+    KIRQL irql;
+    ULONG i;
+
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    for (i = 0; i < XHCI_TBT_MAX_TUNNELS; i++) {
+        record[i] = 0;
+        if (i < nhi->Reenum.Members) {
+            f = cmRegFind(nhi->Reenum.Port[i].Bdf);
+            if (f != NULL && f->Owner == nhi) {
+                record[i] = f->Serial;
+            }
+        }
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+}
+
 /* ---- both routes ------------------------------------------------------ */
 
 static VOID cmReleaseHeld(PCM_NHI nhi, BOOLEAN fail, ULONG mask);
@@ -4547,10 +4572,27 @@ static VOID cmDiscover(PCM_NHI nhi)
 VOID CmReenumStart(PCM_NHI nhi)
 {
     PCM_REENUM r;
+    KIRQL irql;
     ULONG i;
 
     r = &nhi->Reenum;
     r->Starts++;
+    /* Record 21 section 6.3.1: no release of an earlier start is waited
+     * for, then the domain opened. */
+    KeInitializeEvent(&r->WpuSendDone, NotificationEvent, TRUE);
+    r->WpuSending = 0;
+    r->WpuArmed = 0;
+    r->WpuAsked = 0;
+    r->WpuOk = 0;
+    r->WpuFailed = 0;
+    r->WpuNone = 0;
+    for (i = 0; i < XHCI_TBT_MAX_TUNNELS; i++) {
+        r->Port[i].WpuRelEpoch = 0;
+        r->Port[i].WpuRelAt = 0;
+    }
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    r->WpuClosed = 0;
+    KeReleaseSpinLock(&cmRegLock, irql);
     CmEjectReset(nhi);
     r->Route = CM_ROUTE_NONE;
     r->Why = CM_NOROUTE_NONE;
@@ -5513,6 +5555,10 @@ VOID CmReenumService(PCM_NHI nhi)
     /* The stor98 acknowledgement waits, stepped once per pass whatever
      * else the pass does (task 42-A.12). */
     CmNvlinkStep(nhi);
+    if (r->Route == CM_ROUTE_FILTER) {
+        /* Record 21 section 6.3.1 (task 49.46). */
+        cmWpuService(nhi);
+    }
     /* Owed chain actions, tried again each pass (task 45.13). */
     cmChainService(nhi);
     /* The stor98 channel's per-pass work: on 98 SE and ME the rescan of a
@@ -5681,6 +5727,27 @@ VOID CmReenumService(PCM_NHI nhi)
                   ((held & 0xFFUL) << 24) | ((act & 0xFFUL) << 16) |
                       (r->Port[i].Bdf & 0xFFFFUL));
         if (act & CM_HELD_DO_RELEASE) {
+            /* Record 22 section 11.1.14: a successful resume's release
+             * deferred behind the gate exposes first (cm_nvlink.h,
+             * obligation 1), since the take's UP was refused while the
+             * gate stood; an entry already UP keeps its generation.
+             * Behind section 7.7's retirement barrier the exposure is
+             * owed until the barrier lifts, as a held call is. */
+            switch (CmPortsDeferredExpose(
+                (act & CM_HELD_DO_FAIL) != 0,
+                r->Route == CM_ROUTE_FILTER, cmTransport(nhi),
+                (nhi->RecBarred & (1UL << i)) != 0)) {
+            case CM_PORTS_DX_EXPOSE:
+                (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, TRUE,
+                                     CM_NVLINK_TUNNEL_NONE);
+                break;
+            case CM_PORTS_DX_OWE:
+                r->Port[i].Missed = 1;
+                r->Port[i].MissedExpose |= 1UL;
+                break;
+            default:
+                break;
+            }
             cmReleaseHeld(nhi, (BOOLEAN)((act & CM_HELD_DO_FAIL) != 0),
                           1UL << i);
         }
@@ -5850,19 +5917,124 @@ VOID CmReenumSuspend(PCM_NHI nhi)
         }
     }
     CmLogNote(nhi, "cm.reenum.hold.bound-ms", r->HoldBoundMs);
+    if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL) {
+        /* Record 21 section 6.1.3: the members whose bridge Windows 98 SE
+         * and ME must restore before their next operation touches them. */
+        CmCfgwkSuspend(r->Wk);
+    }
     if (r->Route != CM_ROUTE_FILTER) {
         return;
     }
     KeAcquireSpinLock(&cmRegLock, &irql);
     for (i = 0; i < r->Members; i++) {
         f = cmRegFind(r->Port[i].Bdf);
+        /* Record 22 section 11.1.14: a member that reported a PDO now
+         * has its function waited for at the resume (latched here: the
+         * snapshot moves with every answer while it is held). */
+        r->Port[i].SettleWant = 0;
         if (f != NULL && f->Owner == nhi && f->Active) {
             f->Held = 1;
             f->HeldBy = nhi;
             r->Port[i].Flags |= CM_PORT_HELD;
+            r->Port[i].SettleWant = (ULONG)(f->SnapCount != 0);
         }
     }
     KeReleaseSpinLock(&cmRegLock, irql);
+}
+
+/*
+ * Record 22 section 11.1.14 (task 49.11): before a successful resume is
+ * published, the function behind each member held at the suspend whose
+ * bridge last reported a PDO is read until it answers again, all within
+ * one CM_PORTS_SETTLE_MS from the first reading. A PCIe tunnel rebuilt by
+ * the resume may bring its function back later than the tunnel itself,
+ * and a BusRelations answer taken before then reports the bridge empty,
+ * which PnP takes as a removal. The members are copied under the list's
+ * lock; the reads and sleeps hold no lock. The bound passing changes
+ * nothing but the log: the take, the release and the drain follow. The
+ * thread, PASSIVE_LEVEL.
+ */
+/* The settle wait goes on only while the host interface is reachable and
+ * no stop or exit is asked (the liveness probe after it judges a loss). */
+static BOOLEAN cmSettleLive(PCM_NHI nhi)
+{
+    KIRQL irql;
+    BOOLEAN live;
+
+    if (!CmNhiHwAccess(nhi)) {
+        return FALSE;
+    }
+    KeAcquireSpinLock(&nhi->WorkLock, &irql);
+    live = (BOOLEAN)(!nhi->Live.Revoked && !nhi->PnpStopPending &&
+                     (nhi->WorkBits & (CM_WORK_STOP | CM_WORK_EXIT)) == 0);
+    KeReleaseSpinLock(&nhi->WorkLock, irql);
+    return live;
+}
+
+VOID CmReenumResumeSettle(PCM_NHI nhi)
+{
+    PCM_REENUM r;
+    PCM_FILTER f;
+    KIRQL irql;
+    ULONG bdf[XHCI_TBT_MAX_TUNNELS];
+    ULONG last[XHCI_TBT_MAX_TUNNELS];
+    ULONG n;
+    ULONG i;
+    ULONG shown;
+    ULONG start;
+    ULONG elapsed;
+    ULONG wait;
+
+    r = &nhi->Reenum;
+    if (r->Route != CM_ROUTE_FILTER) {
+        return;
+    }
+    n = 0;
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    for (i = 0; i < r->Members && i < XHCI_TBT_MAX_TUNNELS; i++) {
+        f = cmRegFind(r->Port[i].Bdf);
+        if (r->Port[i].SettleWant && f != NULL && f->Held &&
+            f->HeldBy == nhi) {
+            bdf[n] = r->Port[i].Bdf;
+            last[n] = XHCI_TBT_FN_UNREAD;
+            n++;
+        }
+        r->Port[i].SettleWant = 0;
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    if (n == 0) {
+        return;
+    }
+    start = cmNow(nhi);
+    for (;;) {
+        shown = 0;
+        for (i = 0; i < n; i++) {
+            if (last[i] != XHCI_TBT_FN_PRESENT) {
+                last[i] = XhciTbtFunctionRead(&r->Cfg, bdf[i]);
+            }
+            if (last[i] == XHCI_TBT_FN_PRESENT) {
+                shown++;
+            }
+        }
+        elapsed = cmNow(nhi) - start;
+        if (!CmPortsSettleAgain(shown, n, elapsed, CM_PORTS_SETTLE_MS) ||
+            !cmSettleLive(nhi)) {
+            break;
+        }
+        CmNhiWaitService(nhi);
+        wait = CM_PORTS_SETTLE_MS - elapsed;
+        cmSleep(nhi, wait < XHCI_TBT_POLL_STEP_MS ? wait
+                                                  : XHCI_TBT_POLL_STEP_MS);
+    }
+    CmLogNote(nhi, "cm.reenum.resume.settle",
+              ((n & 0xFFUL) << 24) | ((shown & 0xFFUL) << 16) |
+                  (elapsed > 0xFFFFUL ? 0xFFFFUL : elapsed));
+    for (i = 0; i < n; i++) {
+        if (last[i] != XHCI_TBT_FN_PRESENT) {
+            CmLogNote(nhi, "cm.reenum.resume.settle.late",
+                      ((bdf[i] & 0xFFFFUL) << 8) | (last[i] & 0xFFUL));
+        }
+    }
 }
 
 /*
@@ -5906,14 +6078,28 @@ static VOID cmReleaseHeld(PCM_NHI nhi, BOOLEAN fail, ULONG mask)
                                 : "cm.reenum.hold.released",
                       r->Port[i].Bdf);
         }
+        /* Record 21 section 6.3.1: the release a wake power-up waits for
+         * (none at a stop, whose domain is closed first). */
+        cmWpuPortReleased(nhi, i);
         if (act & CM_PORTS_REL_INVALIDATE) {
             (VOID)cmInvalidate(nhi, i, FALSE);
         }
     }
 }
 
+/* Record 21 section 6.1.3: every end of the NHI's resume ends the CONFIGMG
+ * worker's sleep, so the operations it parked are taken again and wait
+ * for Windows' restore of their bridges. <= DISPATCH_LEVEL. */
+static VOID cmResumeWk(PCM_NHI nhi)
+{
+    if (nhi->Reenum.Route == CM_ROUTE_CONFIGMG && nhi->Reenum.Wk != NULL) {
+        CmCfgwkResumed(nhi->Reenum.Wk);
+    }
+}
+
 VOID CmReenumResumeFailed(PCM_NHI nhi)
 {
+    cmResumeWk(nhi);
     nhi->Reenum.ResumeFailures++;
     CmLogNote(nhi, "cm.reenum.resume-failed", nhi->Reenum.Members);
     cmReleaseHeld(nhi, TRUE, 0xFFFFFFFFUL);
@@ -5926,6 +6112,7 @@ VOID CmReenumResumed(PCM_NHI nhi, BOOLEAN ok)
     ULONG i;
 
     r = &nhi->Reenum;
+    cmResumeWk(nhi);
     if (ok) {
         r->Resumes++;
     } else {
@@ -5963,6 +6150,22 @@ VOID CmReenumStop(PCM_NHI nhi)
     ULONG i;
 
     r = &nhi->Reenum;
+    /* Record 21 section 6.3.1: no ask admitted from here on; one being
+     * sent (from another thread than this one) waited for, bounded. */
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    r->WpuClosed = 1;
+    passed = r->WpuSending;
+    KeReleaseSpinLock(&cmRegLock, irql);
+    if (passed) {
+        (VOID)CmWaitEventMs(&r->WpuSendDone, 2000UL);
+    }
+
+    if (r->WpuArmed != 0 || r->WpuAsked != 0) {
+        CmLogNote(nhi, "cm.wakepowerup.counts",
+                  ((r->WpuArmed & 0xFFUL) << 24) | ((r->WpuAsked & 0xFFUL) << 16) |
+                      ((r->WpuOk & 0xFFUL) << 8) | ((r->WpuFailed & 0xFUL) << 4) |
+                      (r->WpuNone & 0xFUL));
+    }
     CmNvlinkStop(nhi);
     r->RediscoverLeft = 0;
     r->AcpiNameLen = 0;
@@ -6355,4 +6558,2020 @@ BOOLEAN CmReenumSourcesHold(PCM_NHI nhi)
         }
     }
     return TRUE;
+}
+
+/* ======================================================================
+ * The wake power-up (design record 21 section 6.3.1, task 49.46). After a
+ * standby or hibernation, a drive Stor98 runs behind a tunnel can wake
+ * before its tunnel is back: the PCI driver fails its D0, and the
+ * resume's re-enumeration powers the adapter up again but nothing asks
+ * its logical units for D0 again, so they stay in D3 with their requests
+ * held and Plug and Play waits on them for ever. Once its port is
+ * released by the resume, the thread asks each such unit for D0 once
+ * (PoRequestPowerIrp), only where the member's own wake D0 was seen to
+ * fail by its child filter and only for a drive Stor98 runs. The units
+ * are found by public means alone: the member's BusRelations answer read
+ * by the child filter (route R1, cmUnitRelations in cm_filt.c). A second
+ * route, the disks' interface arrivals matched to the member by their
+ * DEVPKEY_Device_Parent property on Vista and later (route R2, on a system
+ * work item), is not built in this release (CM_WPU_R2_BUILT). With
+ * XhciCmWakePowerUp 0 nothing of this runs but the cleanup of a request
+ * already outstanding. Locks: cmRegLock, then a filter's Lock, then
+ * cmWpuQLock. IRQL: each function says.
+ * ====================================================================== */
+
+XHCI_C_ASSERT(cm_wpu_units, CM_WPU_UNITS == 4UL);
+
+#define CM_WPU_CAND         32UL    /* filters looked at per pass (more are
+                                       logged as over)                       */
+#define CM_WPU_PASS_MS      500UL   /* the thread's step at most this often */
+#define CM_WPU_LINKS        32UL
+#define CM_WPU_LINK_CHARS   256UL
+#define CM_WPU_QUEUE        8UL
+#define CM_WPU_PROP_CHARS   260UL
+
+/* Route R2 (record 21 section 6.3.1): 0, none of its code is compiled in
+ * any flavour - no disk notification registered, no work item queued, no
+ * disk opened. */
+#define CM_WPU_R2_BUILT     0
+
+#define CM_WPU_SEND_WAIT_MS 2000UL  /* a removal's wait for a request    */
+#define CM_WPU_STUCK_MS     60000UL /* a work item's lookup out longer    */
+
+/* The system's gate (cm_ports.h CM_WPU_SYS): the epoch, system sleeps
+ * begun, 0 none yet, advanced once per sleep at the first system
+ * SET_POWER below S0 any NHI or filter of this driver receives (Claim,
+ * cleared by the next S0); Halt, set at the dispatch of any sleep query,
+ * sleep or shutdown, cleared by a domain's accepted release; DownSeq, the
+ * device power-downs. Each domain's own part is in its CM_REENUM. The
+ * closing hooks, the release and every send check change or read both
+ * under cmWpuGateLock (a zeroed static spin lock, an initialised one;
+ * taken last, never held across a call out). */
+static CM_WPU_SYS cmWpuSys;
+static KSPIN_LOCK cmWpuGateLock;
+/* NHIs started whose XhciCmWakePowerUp is 1; NHIs added whose value is
+ * not read yet; whether any NHI was ever added (CmWpuAdded, CmWpuCount). */
+static LONG cmWpuOnCount;
+static LONG cmWpuPending;
+static LONG cmWpuAnyAdded;
+#if CM_WPU_R2_BUILT
+/* Quiet: see route R2 below; cleared at once by every closing hook. */
+static volatile ULONG cmWpuQuiet;
+static ULONG cmWpuLastRelTick;      /* the last release, by the kernel's
+                                       tick count (one clock for every NHI) */
+static ULONG cmWpuReleased;
+#endif
+static ULONG cmWpuSendTimeouts;     /* bounded removal waits that expired */
+static ULONG cmWpuLoggedTimeouts;
+
+/* The requests in flight, driver-wide static data, so a late callback
+ * writes valid memory after any NHI's removal; the image is resident from
+ * the first request on (DriverUnload cleared). Busy is the thread's; the
+ * callback writes Status, then Done. */
+typedef struct _CM_WPU_SLOT {
+    ULONG Busy;
+    LONG Done;
+    volatile ULONG Status;
+    ULONG Bdf;
+    ULONG StartAt;          /* NowMs at the request                        */
+    ULONG Overdue;          /* logged as overdue                           */
+    PDEVICE_OBJECT Unit;    /* the request's own reference                */
+} CM_WPU_SLOT;
+
+/* Every NHI has its own thread: the slots are reserved, read and freed
+ * under cmWpuSlotLock (a zeroed static spin lock, an initialised one),
+ * never held across PoRequestPowerIrp; the callback takes no lock. */
+static CM_WPU_SLOT cmWpuSlot[CM_WPU_SLOTS];
+static KSPIN_LOCK cmWpuSlotLock;
+static LONG cmWpuR2Claim;           /* the one thread that starts route R2 */
+static ULONG cmWpuOver;             /* passes that found more than CAND    */
+static ULONG cmWpuLoggedOver;
+
+ULONG CmWpuEpochNow(VOID)
+{
+    return *(volatile ULONG *)&cmWpuSys.Epoch;
+}
+
+BOOLEAN CmWpuOn(VOID)
+{
+    return (BOOLEAN)(*(volatile LONG *)&cmWpuAnyAdded == 0 ||
+                     *(volatile LONG *)&cmWpuPending > 0 ||
+                     *(volatile LONG *)&cmWpuOnCount > 0);
+}
+
+/* The NHI's AddDevice. PASSIVE_LEVEL. */
+VOID CmWpuAdded(PCM_NHI nhi)
+{
+    if (!nhi->Reenum.WpuPendCounted) {
+        nhi->Reenum.WpuPendCounted = 1;
+        (VOID)InterlockedIncrement(&cmWpuPending);
+        /* An aligned LONG store (no InterlockedExchange: an x86 import
+         * the gate does not admit); it only ever goes from 0 to 1. */
+        *(volatile LONG *)&cmWpuAnyAdded = 1;
+    }
+}
+
+/* The NHI's PnP dispatch: `on` at its start once the values are read
+ * (counted when the value is 1), else at its stop, surprise removal or
+ * removal. The count is raised before the pending one is lowered, so a
+ * start with the value 1 never turns the filters' half off in between.
+ * PASSIVE_LEVEL. */
+VOID CmWpuCount(PCM_NHI nhi, BOOLEAN on)
+{
+    PCM_REENUM r;
+
+    r = &nhi->Reenum;
+    if (on && nhi->Values.WakePowerUp != 0 && !r->WpuOnCounted) {
+        r->WpuOnCounted = 1;
+        (VOID)InterlockedIncrement(&cmWpuOnCount);
+    } else if (!on && r->WpuOnCounted) {
+        r->WpuOnCounted = 0;
+        (VOID)InterlockedDecrement(&cmWpuOnCount);
+    }
+    if (r->WpuPendCounted) {
+        /* Read at this start, or gone without one. */
+        r->WpuPendCounted = 0;
+        (VOID)InterlockedDecrement(&cmWpuPending);
+    }
+}
+
+/* A domain's gate copied out of and back into its CM_REENUM; under the
+ * gate lock. */
+static VOID cmWpuDomLoad(const CM_REENUM *r, CM_WPU_DOM *d)
+{
+    d->StopLatch = r->WpuStopLatch;
+    d->PowerDown = r->WpuPowerDown;
+    d->ResumeEpoch = r->WpuResumeEpoch;
+    d->ResumeHaltSeq = r->WpuResumeHaltSeq;
+    d->Resuming = r->WpuResuming;
+    d->RelDownSeq = r->WpuRelDownSeq;
+    d->RelHaltSeq = r->WpuRelHaltSeq;
+}
+
+static VOID cmWpuDomStore(CM_REENUM *r, const CM_WPU_DOM *d)
+{
+    r->WpuStopLatch = d->StopLatch;
+    r->WpuPowerDown = d->PowerDown;
+    r->WpuResumeEpoch = d->ResumeEpoch;
+    r->WpuResumeHaltSeq = d->ResumeHaltSeq;
+    r->WpuResuming = d->Resuming;
+    r->WpuRelDownSeq = d->RelDownSeq;
+    r->WpuRelHaltSeq = d->RelHaltSeq;
+}
+
+#define CM_WPU_DOM_STOP     1UL
+#define CM_WPU_DOM_CANCEL   2UL
+#define CM_WPU_DOM_START    3UL
+#define CM_WPU_DOM_DOWN     4UL
+#define CM_WPU_DOM_RESUME   5UL
+
+/* IRQL: <= DISPATCH_LEVEL. */
+static VOID cmWpuDomEvent(PCM_NHI nhi, ULONG what)
+{
+    CM_WPU_DOM d;
+    KIRQL irql;
+
+    KeAcquireSpinLock(&cmWpuGateLock, &irql);
+    cmWpuDomLoad(&nhi->Reenum, &d);
+    switch (what) {
+    case CM_WPU_DOM_STOP:
+        CmPortsWpuDomStop(&d);
+        break;
+    case CM_WPU_DOM_CANCEL:
+        CmPortsWpuDomCancel(&d);
+        break;
+    case CM_WPU_DOM_START:
+        CmPortsWpuDomStart(&d);
+        break;
+    case CM_WPU_DOM_DOWN:
+        CmPortsWpuDomPowerDown(&d);
+        break;
+    default:
+        CmPortsWpuDomResumeBegin(&cmWpuSys, &d);
+        break;
+    }
+    cmWpuDomStore(&nhi->Reenum, &d);
+#if CM_WPU_R2_BUILT
+    if (what != CM_WPU_DOM_CANCEL && what != CM_WPU_DOM_START) {
+        cmWpuQuiet = 0;
+    }
+#endif
+    KeReleaseSpinLock(&cmWpuGateLock, irql);
+}
+
+VOID CmWpuDomStop(PCM_NHI nhi)
+{
+    cmWpuDomEvent(nhi, CM_WPU_DOM_STOP);
+}
+
+VOID CmWpuDomCancel(PCM_NHI nhi)
+{
+    cmWpuDomEvent(nhi, CM_WPU_DOM_CANCEL);
+}
+
+VOID CmWpuDomStart(PCM_NHI nhi)
+{
+    cmWpuDomEvent(nhi, CM_WPU_DOM_START);
+}
+
+VOID CmWpuResumeBegin(PCM_NHI nhi)
+{
+    cmWpuDomEvent(nhi, CM_WPU_DOM_RESUME);
+}
+
+/* IRQL: <= DISPATCH_LEVEL (a power dispatch). */
+VOID CmWpuPowerSeen(UCHAR minor, ULONG type, ULONG state)
+{
+    KIRQL irql;
+
+    if (minor != IRP_MN_SET_POWER && minor != IRP_MN_QUERY_POWER) {
+        return;
+    }
+    KeAcquireSpinLock(&cmWpuGateLock, &irql);
+    if (type == (ULONG)SystemPowerState) {
+        CmPortsWpuSysPower(&cmWpuSys, (ULONG)(minor == IRP_MN_SET_POWER),
+                           (ULONG)(state != (ULONG)PowerSystemWorking));
+#if CM_WPU_R2_BUILT
+        if (state != (ULONG)PowerSystemWorking) {
+            cmWpuQuiet = 0;
+        }
+#endif
+    } else if (type == (ULONG)DevicePowerState && minor == IRP_MN_SET_POWER &&
+               state != (ULONG)PowerDeviceD0) {
+        CmPortsWpuSysDown(&cmWpuSys);
+#if CM_WPU_R2_BUILT
+        cmWpuQuiet = 0;
+#endif
+    }
+    KeReleaseSpinLock(&cmWpuGateLock, irql);
+}
+
+/* An NHI's: the same, and its own device power-down latched in its
+ * domain until its own release. IRQL: <= DISPATCH_LEVEL. */
+VOID CmWpuNhiPowerSeen(PCM_NHI nhi, UCHAR minor, ULONG type, ULONG state)
+{
+    CmWpuPowerSeen(minor, type, state);
+    if (type == (ULONG)DevicePowerState && minor == IRP_MN_SET_POWER &&
+        state != (ULONG)PowerDeviceD0) {
+        cmWpuDomEvent(nhi, CM_WPU_DOM_DOWN);
+    }
+}
+
+#if CM_WPU_R2_BUILT
+static ULONG cmWpuTick(VOID);
+static ULONG cmWpuWindowTicks(VOID);
+
+/* Quiet, computed and published under the gate lock by whoever asks (the
+ * work item before each lookup, the thread for its hand-back): no sleep,
+ * shutdown, power-down or stop received since the last release, and that
+ * release (if any) older than the window, by the kernel's one tick count.
+ * <= DISPATCH_LEVEL. */
+static BOOLEAN cmWpuQuietNow(VOID)
+{
+    KIRQL irql;
+    BOOLEAN quiet;
+    ULONG window;
+
+    window = cmWpuWindowTicks();
+    KeAcquireSpinLock(&cmWpuGateLock, &irql);
+    quiet = (BOOLEAN)(cmWpuSys.Halt == 0 &&
+                      (!cmWpuReleased ||
+                       cmWpuTick() - cmWpuLastRelTick > window));
+    cmWpuQuiet = quiet ? 1UL : 0UL;
+    KeReleaseSpinLock(&cmWpuGateLock, irql);
+    return quiet;
+}
+#endif
+
+/* TRUE while, since the domain's accepted release in `epoch`, no sleep
+ * query, sleep, shutdown or device power-down was received and the domain
+ * is not latched by a stop or query (CmPortsWpuDomOpen): read under the
+ * gate lock, at the admission and again immediately before each request.
+ * A closing dispatch that comes between that last check and the call
+ * meets a request already handed to the power manager, which orders it
+ * with its own IRPs for the device; nothing narrower is possible without
+ * holding a lock across the call. <= DISPATCH_LEVEL. */
+static BOOLEAN cmWpuOpen(PCM_NHI nhi, ULONG epoch)
+{
+    CM_WPU_DOM d;
+    KIRQL irql;
+    BOOLEAN open;
+
+    KeAcquireSpinLock(&cmWpuGateLock, &irql);
+    cmWpuDomLoad(&nhi->Reenum, &d);
+    open = (BOOLEAN)(CmPortsWpuDomOpen(&cmWpuSys, &d, epoch) != 0);
+    KeReleaseSpinLock(&cmWpuGateLock, irql);
+    return open;
+}
+
+/* The epoch in bits 31:8, the start count's low byte in 7:0. */
+PVOID CmWpuD0Context(PCM_FILTER child)
+{
+    return (PVOID)(ULONG_PTR)((CmWpuEpochNow() << 8) |
+                              (child->WpuStartGen & 0xFFUL));
+}
+
+/* ---- the child filter's half (cm_filt.c) ---- */
+
+#if CM_WPU_R2_BUILT
+static VOID cmWpuKick(ULONG rescan);
+#endif
+
+VOID CmWpuChildInit(PCM_FILTER child)
+{
+    KeInitializeEvent(&child->WpuSendDone, NotificationEvent, TRUE);
+}
+
+/* IRQL: <= DISPATCH_LEVEL (the D0's completion). `context` is
+ * CmWpuD0Context's at the dispatch: a completion of an earlier start or
+ * epoch arms nothing. Only STATUS_NO_SUCH_DEVICE arms (the status read on
+ * every parked wake); any other failure is kept for the log alone. */
+VOID CmWpuD0Seen(PCM_FILTER child, ULONG context, NTSTATUS status)
+{
+    KIRQL irql;
+    ULONG epoch;
+
+    if (!CmWpuOn()) {
+        return;
+    }
+    epoch = context >> 8;
+    KeAcquireSpinLock(&child->Lock, &irql);
+    if ((context & 0xFFUL) == (child->WpuStartGen & 0xFFUL) &&
+        epoch == CmWpuEpochNow()) {
+        if (CmPortsWpuArm(epoch, CmWpuEpochNow(), child->WpuConsumed,
+                          (ULONG)(status == STATUS_NO_SUCH_DEVICE)) &&
+            child->WpuFailEpoch != epoch) {
+            child->WpuFailEpoch = epoch;
+            child->WpuFailStatus = (ULONG)status;
+        } else if (!NT_SUCCESS(status) && status != STATUS_NO_SUCH_DEVICE &&
+                   child->WpuOtherEpoch != epoch) {
+            child->WpuOtherEpoch = epoch;
+            child->WpuOtherStatus = (ULONG)status;
+        }
+    }
+    KeReleaseSpinLock(&child->Lock, irql);
+}
+
+static VOID cmWpuDeref(PDEVICE_OBJECT *list, ULONG n)
+{
+    ULONG i;
+
+    for (i = 0; i < n; i++) {
+        if (list[i] != NULL) {
+            ObDereferenceObject(list[i]);
+        }
+    }
+}
+
+/* An answer on its way back: the units of disk type it carries, at most
+ * CM_WPU_UNITS, referenced; the earlier list dropped. PASSIVE_LEVEL. */
+VOID CmWpuRelations(PCM_FILTER child, const DEVICE_RELATIONS *rel)
+{
+    PDEVICE_OBJECT add[CM_WPU_UNITS];
+    PDEVICE_OBJECT old[CM_WPU_UNITS];
+    PDEVICE_OBJECT d;
+    KIRQL irql;
+    ULONG n;
+    ULONG nOld;
+    ULONG i;
+
+    if (!CmWpuOn()) {
+        /* Off: no discovery; a list an earlier start kept goes at the
+         * next start or removal. */
+        return;
+    }
+    n = 0;
+    for (i = 0; rel != NULL && i < rel->Count && n < CM_WPU_UNITS; i++) {
+        d = rel->Objects[i];
+        if (d != NULL && (d->DeviceType == FILE_DEVICE_DISK ||
+                          d->DeviceType == FILE_DEVICE_MASS_STORAGE)) {
+            ObReferenceObject(d);
+            add[n++] = d;
+        }
+    }
+    KeAcquireSpinLock(&child->Lock, &irql);
+    nOld = child->WpuRelCount;
+    for (i = 0; i < nOld; i++) {
+        old[i] = child->WpuRel[i];
+    }
+    for (i = 0; i < n; i++) {
+        child->WpuRel[i] = add[i];
+    }
+    child->WpuRelCount = n;
+    child->WpuRelAnswers++;
+    KeReleaseSpinLock(&child->Lock, irql);
+    cmWpuDeref(old, nOld);
+}
+
+/* Takes both lists out of `child`; under its lock. */
+static ULONG cmWpuTakeLists(PCM_FILTER child, PDEVICE_OBJECT *out)
+{
+    ULONG n;
+    ULONG i;
+
+    n = 0;
+    for (i = 0; i < child->WpuRelCount; i++) {
+        out[n++] = child->WpuRel[i];
+        child->WpuRel[i] = NULL;
+    }
+    for (i = 0; i < child->WpuDiskCount; i++) {
+        out[n++] = child->WpuDisk[i];
+        child->WpuDisk[i] = NULL;
+    }
+    child->WpuRelCount = 0;
+    child->WpuDiskCount = 0;
+    return n;
+}
+
+/* A successful start below the child: reopened, its units read afresh,
+ * its arm and owner forgotten; the owner is read by the thread
+ * (cmWpuOwnerRead), only while the recovery is on, so a value of 0 reads
+ * nothing. PASSIVE_LEVEL. */
+VOID CmWpuStarted(PCM_FILTER child)
+{
+    PDEVICE_OBJECT old[2 * CM_WPU_UNITS];
+    KIRQL irql;
+    ULONG n;
+
+    KeAcquireSpinLock(&child->Lock, &irql);
+    n = cmWpuTakeLists(child, old);
+    child->WpuClosed = 0;
+    child->WpuFailEpoch = 0;
+    child->WpuStartGen++;
+    child->WpuRelAnswers = 0;
+    child->WpuRelLogged = 0;
+    child->WpuOwner = CM_WPU_OWN_UNKNOWN;
+    child->WpuOwnerOwed = 1;
+    child->WpuOwnerWhy = 0;
+    KeReleaseSpinLock(&child->Lock, irql);
+    cmWpuDeref(old, n);
+#if CM_WPU_R2_BUILT
+    /* Route R2: the present disks matched again, and the owner read. */
+    cmWpuKick(1);
+#endif
+}
+
+/* Before a removal, stop or query-remove is forwarded: no request from
+ * here on; one being sent is waited for before the units go. PASSIVE_LEVEL. */
+VOID CmWpuClose(PCM_FILTER child, BOOLEAN drop)
+{
+    PDEVICE_OBJECT old[2 * CM_WPU_UNITS];
+    KIRQL irql;
+    ULONG n;
+    ULONG sending;
+
+    n = 0;
+    KeAcquireSpinLock(&child->Lock, &irql);
+    child->WpuClosed = 1;
+    sending = child->WpuSending;
+    if (drop) {
+        n = cmWpuTakeLists(child, old);
+    }
+    KeReleaseSpinLock(&child->Lock, irql);
+    if (sending && !CmWaitEventMs(&child->WpuSendDone, CM_WPU_SEND_WAIT_MS)) {
+        /* PoRequestPowerIrp has no documented bound: the removal goes on
+         * after a bounded wait, and the request then meets the removal in
+         * the storage stack, which handles power IRPs during one. The
+         * references stay valid: the thread holds its own. */
+        cmWpuSendTimeouts++;
+    }
+    cmWpuDeref(old, n);
+}
+
+/* A cancelled query-remove, once the drivers below cancelled it: open
+ * again with the units it kept. PASSIVE_LEVEL. */
+VOID CmWpuReopen(PCM_FILTER child)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&child->Lock, &irql);
+    child->WpuClosed = 0;
+    KeReleaseSpinLock(&child->Lock, irql);
+}
+
+/* ---- counted strings ---- */
+
+static WCHAR cmWpuUp(WCHAR c)
+{
+    return (WCHAR)((c >= 'a' && c <= 'z') ? c - ('a' - 'A') : c);
+}
+
+/* Two counted strings equal but for ASCII case. */
+static BOOLEAN cmWpuEqi(const WCHAR *a, ULONG aChars, const WCHAR *b,
+                        ULONG bChars)
+{
+    ULONG i;
+
+    if (aChars != bChars) {
+        return FALSE;
+    }
+    for (i = 0; i < aChars; i++) {
+        if (cmWpuUp(a[i]) != cmWpuUp(b[i])) {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+static ULONG cmWpuChars(const WCHAR *s, ULONG room)
+{
+    ULONG n;
+
+    n = 0;
+    while (n < room && s[n] != 0) {
+        n++;
+    }
+    return n;
+}
+
+/* ---- route R2: the disks' arrivals (Vista and later; not built) ---- */
+
+#if CM_WPU_R2_BUILT
+
+typedef struct _CM_WPU_PROPKEY {
+    GUID Fmtid;
+    ULONG Pid;
+} CM_WPU_PROPKEY;
+
+typedef NTSTATUS (NTAPI *CM_WPU_GETPROP)(PDEVICE_OBJECT pdo,
+                                         const CM_WPU_PROPKEY *key,
+                                         ULONG lcid, ULONG flags, ULONG size,
+                                         PVOID data, PULONG required,
+                                         PULONG type);
+
+/* The value of WDK 7.1's devpkey.h. */
+static const CM_WPU_PROPKEY cmWpuKeyService = { { 0xa45c254eUL, 0xdf1c,
+    0x4efd, { 0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0 } }, 6 };
+
+static const WCHAR cmWpuStor98[] = { 's', 't', 'o', 'r', '9', '8', 0 };
+
+static CM_WPU_GETPROP cmWpuGetProp;
+
+/* One string property, terminated; its length in characters, or
+ * 0xFFFFFFFF when it was not read. PASSIVE_LEVEL, no lock held. */
+static ULONG cmWpuProp(PDEVICE_OBJECT pdo, const CM_WPU_PROPKEY *key,
+                       WCHAR *buf)
+{
+    ULONG req;
+    ULONG type;
+    ULONG chars;
+
+    req = 0;
+    type = 0;
+    buf[0] = 0;
+    if (!NT_SUCCESS(cmWpuGetProp(pdo, key, 0, 0,
+                                 (CM_WPU_PROP_CHARS - 1) * sizeof(WCHAR), buf,
+                                 &req, &type))) {
+        return 0xFFFFFFFFUL;
+    }
+    /* A string (DEVPROP_TYPE_STRING, 0x12) of whole characters that fits
+     * and is terminated within what was written. */
+    if (type != 0x12UL || (req & 1UL) != 0 || req < sizeof(WCHAR) ||
+        req > (CM_WPU_PROP_CHARS - 1) * sizeof(WCHAR)) {
+        return 0xFFFFFFFFUL;
+    }
+    buf[CM_WPU_PROP_CHARS - 1] = 0;
+    chars = cmWpuChars(buf, req / sizeof(WCHAR));
+    if (chars >= req / sizeof(WCHAR)) {
+        return 0xFFFFFFFFUL;
+    }
+    return chars;
+}
+
+
+typedef NTSTATUS (NTAPI *CM_WPU_REGPNP)(IO_NOTIFICATION_EVENT_CATEGORY cat,
+                                        ULONG flags, PVOID data,
+                                        PDRIVER_OBJECT driver,
+                                        PDRIVER_NOTIFICATION_CALLBACK_ROUTINE cb,
+                                        PVOID context, PVOID *entry);
+typedef PDEVICE_OBJECT (NTAPI *CM_WPU_BASEREF)(PDEVICE_OBJECT device);
+typedef NTSTATUS (NTAPI *CM_WPU_IFACES)(const GUID *guid, PDEVICE_OBJECT pdo,
+                                        ULONG flags, PWSTR *list);
+typedef NTSTATUS (NTAPI *CM_WPU_OPEN)(PUNICODE_STRING name, ACCESS_MASK access,
+                                      PFILE_OBJECT *file,
+                                      PDEVICE_OBJECT *device);
+
+/* The values of WDK 7.1's devpkey.h, ntddstor.h and wdmguid.h. */
+static const GUID cmWpuDiskGuid = { 0x53f56307UL, 0xb6bf, 0x11d0,
+    { 0x94, 0xf2, 0x00, 0xa0, 0xc9, 0x1e, 0xfb, 0x8b } };
+static const GUID cmWpuArrival = { 0xcb3a4004UL, 0x46f0, 0x11d0,
+    { 0xb0, 0x8f, 0x00, 0x60, 0x97, 0x13, 0x05, 0x3f } };
+static const GUID cmWpuRemoval = { 0xcb3a4005UL, 0x46f0, 0x11d0,
+    { 0xb0, 0x8f, 0x00, 0x60, 0x97, 0x13, 0x05, 0x3f } };
+static const CM_WPU_PROPKEY cmWpuKeyParent = { { 0x4340a6c5UL, 0x93fa,
+    0x4706, { 0x97, 0x2c, 0x7b, 0x64, 0x80, 0x08, 0xa5, 0xa7 } }, 8 };
+static const CM_WPU_PROPKEY cmWpuKeyInst = { { 0x78c34fc8UL, 0x104a,
+    0x4aca, { 0x9e, 0xa4, 0x52, 0x4d, 0x52, 0x99, 0x6e, 0x57 } }, 256 };
+static CM_WPU_BASEREF cmWpuBaseRef;
+static CM_WPU_IFACES cmWpuIfaces;
+static CM_WPU_REGPNP cmWpuRegPnp;
+static CM_WPU_OPEN cmWpuOpenPtr;    /* IoGetDeviceObjectPointer, looked up:
+                                       its import row admits cm_oscnt.obj */
+static ULONG cmWpuR2;           /* 0 not tried, 1 to register, 2 on, 3 off */
+static PVOID cmWpuEntry;
+
+/* The links and the queue, under cmWpuQLock (a zeroed static spin lock
+ * is an initialised one). A link's token changes at each arrival and
+ * removal; a unit matched through it is current while it holds the
+ * link's present token. */
+static KSPIN_LOCK cmWpuQLock;
+static WCHAR cmWpuLinkName[CM_WPU_LINKS][CM_WPU_LINK_CHARS];
+static USHORT cmWpuLinkBytes[CM_WPU_LINKS];
+static ULONG cmWpuLinkTok[CM_WPU_LINKS];
+static ULONG cmWpuLinkUsed[CM_WPU_LINKS];
+static ULONG cmWpuLinkRemovedAt[CM_WPU_LINKS];  /* its last removal's seq */
+static ULONG cmWpuTokSeq;
+static ULONG cmWpuRemovalSeq;
+static ULONG cmWpuQIdx[CM_WPU_QUEUE];
+static ULONG cmWpuQTok[CM_WPU_QUEUE];
+static ULONG cmWpuQHead;
+static ULONG cmWpuQCount;
+static ULONG cmWpuRescan;
+static ULONG cmWpuWkQueued;
+static WORK_QUEUE_ITEM cmWpuWork;
+/* Quiet: set by the thread while no wake is in progress (no sleep or
+ * stop received since the last release, and that release more than
+ * CM_WPU_WINDOW_MS ago); the work item opens no disk otherwise, since a
+ * parked disk's open could block, and leaves its queue for the thread to
+ * hand back (Deferred). Lookups begun and ended, for the stuck note. */
+static ULONG cmWpuDeferred;
+static LONG cmWpuLookBegun;
+static LONG cmWpuLookEnded;
+static ULONG cmWpuStuckFrom;
+static ULONG cmWpuStuckSeen;
+static ULONG cmWpuStuckLogged;
+
+/* The work item's tallies, for the thread's notes: each lookup's furthest
+ * point (cm.wakepowerup.r2.why: opens failed, no base PDO, parent not read,
+ * members snapshotted, instance ids not read, ids that differed, matches
+ * refused at the commit), so a lookup that finds nothing says why. */
+static ULONG cmWpuWhy[7];
+static ULONG cmWpuLoggedWhy[7];
+static ULONG cmWpuSeen;
+static ULONG cmWpuMatched;
+static ULONG cmWpuLoggedSeen;
+static ULONG cmWpuLoggedMatched;
+static ULONG cmWpuLoggedR2;
+
+static BOOLEAN cmWpuGuidEq(const GUID *a, const GUID *b)
+{
+    ULONG i;
+
+    if (a->Data1 != b->Data1 || a->Data2 != b->Data2 ||
+        a->Data3 != b->Data3) {
+        return FALSE;
+    }
+    for (i = 0; i < 8; i++) {
+        if (a->Data4[i] != b->Data4[i]) {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+/* A link's entry, found or made, with a fresh token; CM_WPU_LINKS when
+ * the name cannot be held, or (guard nonzero) when the link's last
+ * removal is numbered `guard` or above (a replay's listing older than
+ * that removal never makes it current again). Under cmWpuQLock. */
+static ULONG cmWpuEnterEx(const WCHAR *name, ULONG bytes, PULONG tok,
+                          ULONG guard, BOOLEAN keep);
+
+static ULONG cmWpuEnter(const WCHAR *name, ULONG bytes, PULONG tok,
+                        ULONG guard)
+{
+    return cmWpuEnterEx(name, bytes, tok, guard, FALSE);
+}
+
+static ULONG cmWpuEnterEx(const WCHAR *name, ULONG bytes, PULONG tok,
+                          ULONG guard, BOOLEAN keep)
+{
+    ULONG i;
+    ULONG pick;
+
+    if (bytes == 0 || bytes > (CM_WPU_LINK_CHARS - 1) * sizeof(WCHAR)) {
+        return CM_WPU_LINKS;
+    }
+    pick = CM_WPU_LINKS;
+    for (i = 0; i < CM_WPU_LINKS; i++) {
+        if (cmWpuLinkBytes[i] == bytes &&
+            cmWpuEqi(cmWpuLinkName[i], bytes / sizeof(WCHAR), name,
+                     bytes / sizeof(WCHAR))) {
+            pick = i;
+            break;
+        }
+    }
+    if (pick != CM_WPU_LINKS && guard != 0 &&
+        cmWpuLinkRemovedAt[pick] >= guard) {
+        return CM_WPU_LINKS;
+    }
+    if (pick != CM_WPU_LINKS && keep && cmWpuLinkRemovedAt[pick] == 0) {
+        /* A replay of a link already current: its token kept, so a unit
+         * it matched stays current if this lookup fails or stalls. */
+        *tok = cmWpuLinkTok[pick];
+        return pick;
+    }
+    if (pick == CM_WPU_LINKS) {
+        /* An unused entry, else the least recently entered; a unit still
+         * carrying the old token of a reused entry is never asked. */
+        pick = 0;
+        for (i = 0; i < CM_WPU_LINKS; i++) {
+            if (cmWpuLinkBytes[i] == 0) {
+                pick = i;
+                break;
+            }
+            if (cmWpuLinkUsed[i] < cmWpuLinkUsed[pick]) {
+                pick = i;
+            }
+        }
+        RtlCopyMemory(cmWpuLinkName[pick], name, bytes);
+        cmWpuLinkName[pick][bytes / sizeof(WCHAR)] = 0;
+        cmWpuLinkBytes[pick] = (USHORT)bytes;
+        cmWpuLinkRemovedAt[pick] = 0;
+    }
+    cmWpuTokSeq++;
+    cmWpuLinkTok[pick] = cmWpuTokSeq;
+    cmWpuLinkUsed[pick] = cmWpuTokSeq;
+    *tok = cmWpuTokSeq;
+    return pick;
+}
+
+static VOID cmWpuWorker(PVOID context);
+
+/* Marks the work item queued if it is not already. Under cmWpuQLock;
+ * TRUE when the caller must queue it once the lock is released. */
+static BOOLEAN cmWpuNeedWork(VOID)
+{
+    if (cmWpuWkQueued) {
+        return FALSE;
+    }
+    cmWpuWkQueued = 1;
+    return TRUE;
+}
+
+/* A START (rescan 1): the present disks matched again by the work item.
+ * PASSIVE_LEVEL. */
+static VOID cmWpuKick(ULONG rescan)
+{
+    KIRQL irql;
+    BOOLEAN queue;
+
+    if (cmWpuR2 != 2) {
+        return;
+    }
+    /* Any queue still owed comes with it. */
+    KeAcquireSpinLock(&cmWpuQLock, &irql);
+    cmWpuRescan |= rescan;
+    cmWpuDeferred = 0;
+    queue = cmWpuNeedWork();
+    KeReleaseSpinLock(&cmWpuQLock, irql);
+    if (queue) {
+        ExQueueWorkItem(&cmWpuWork, DelayedWorkQueue);
+    }
+}
+
+/* PnP's interface notification: the link recorded and queued; nothing is
+ * opened here (the work item does it). PASSIVE_LEVEL. */
+static NTSTATUS cmWpuNotify(PVOID notification, PVOID context)
+{
+    PDEVICE_INTERFACE_CHANGE_NOTIFICATION n;
+    KIRQL irql;
+    ULONG idx;
+    ULONG tok;
+    ULONG i;
+    BOOLEAN arrival;
+    BOOLEAN queue;
+
+    UNREFERENCED_PARAMETER(context);
+    n = (PDEVICE_INTERFACE_CHANGE_NOTIFICATION)notification;
+    if (n == NULL || n->SymbolicLinkName == NULL ||
+        n->SymbolicLinkName->Buffer == NULL) {
+        return STATUS_SUCCESS;
+    }
+    arrival = cmWpuGuidEq(&n->Event, &cmWpuArrival);
+    if (!arrival && !cmWpuGuidEq(&n->Event, &cmWpuRemoval)) {
+        return STATUS_SUCCESS;
+    }
+    queue = FALSE;
+    KeAcquireSpinLock(&cmWpuQLock, &irql);
+    if (!arrival) {
+        /* Never dropped: the link's entry (made for it if it had none, a
+         * tombstone a replay respects) takes a fresh token no lookup
+         * carries, so every unit matched through it stops being current,
+         * and the removal's number. */
+        idx = cmWpuEnter(n->SymbolicLinkName->Buffer,
+                         n->SymbolicLinkName->Length, &tok, 0);
+        if (idx < CM_WPU_LINKS) {
+            cmWpuRemovalSeq++;
+            cmWpuLinkRemovedAt[idx] = cmWpuRemovalSeq;
+        }
+    } else {
+        idx = cmWpuEnter(n->SymbolicLinkName->Buffer,
+                         n->SymbolicLinkName->Length, &tok, 0);
+        if (idx < CM_WPU_LINKS) {
+            cmWpuLinkRemovedAt[idx] = 0;
+            if (cmWpuQCount < CM_WPU_QUEUE) {
+                i = (cmWpuQHead + cmWpuQCount) % CM_WPU_QUEUE;
+                cmWpuQIdx[i] = idx;
+                cmWpuQTok[i] = tok;
+                cmWpuQCount++;
+            } else {
+                /* Overflow: the present disks replayed once drained. */
+                cmWpuRescan = 1;
+            }
+            queue = cmWpuNeedWork();
+        }
+    }
+    KeReleaseSpinLock(&cmWpuQLock, irql);
+    if (queue) {
+        ExQueueWorkItem(&cmWpuWork, DelayedWorkQueue);
+    }
+    return STATUS_SUCCESS;
+}
+
+/* The member filters, as references the work item owns: each admitted
+ * through CmFilterTryHold under cmRegLock (which takes the PDO's
+ * reference under the filter's lock, where a kept child's detachment
+ * claims Removing), its PDO referenced again, its own stamp and start
+ * count recorded, the hold released after the list's lock. PASSIVE_LEVEL. */
+typedef struct _CM_WPU_SNAP {
+    PDEVICE_OBJECT Pdo;
+    ULONG AttSeq;
+    ULONG StartGen;
+} CM_WPU_SNAP;
+
+static ULONG cmWpuSnapshot(CM_WPU_SNAP *s, ULONG room)
+{
+    PCM_FILTER held[CM_WPU_CAND];
+    PLIST_ENTRY e;
+    PCM_FILTER g;
+    KIRQL irql;
+    ULONG n;
+    ULONG i;
+
+    n = 0;
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    for (e = cmRegAtts.Flink; e != &cmRegAtts; e = e->Flink) {
+        g = CONTAINING_RECORD(e, CM_FILTER, AttLink);
+        if (g->Common.Kind != CM_KIND_CHILD || !g->AttListed ||
+            !g->Started || g->ChainKind == CM_CHAIN_BRIDGE) {
+            continue;
+        }
+        if (n >= room || n >= CM_WPU_CAND) {
+            cmWpuOver++;
+            break;
+        }
+        if (CmFilterTryHold(g)) {
+            ObReferenceObject(g->Common.Pdo);
+            s[n].Pdo = g->Common.Pdo;
+            s[n].AttSeq = g->AttSeq;
+            s[n].StartGen = g->WpuStartGen;
+            held[n] = g;
+            n++;
+        }
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    for (i = 0; i < n; i++) {
+        CmFilterUnhold(held[i]);
+    }
+    return n;
+}
+
+/* The commit: the filter found again by its PDO and its own stamp, held,
+ * and changed only while it is open and its start count unchanged, and a
+ * unit only while its link's token is current. PASSIVE_LEVEL. */
+static VOID cmWpuCommit(const CM_WPU_SNAP *s, ULONG owner,
+                        PDEVICE_OBJECT unit, ULONG idx, ULONG tok)
+{
+    PDEVICE_OBJECT stale[CM_WPU_UNITS];
+    PLIST_ENTRY e;
+    PCM_FILTER g;
+    PCM_FILTER held;
+    KIRQL irql;
+    KIRQL qirql;
+    ULONG i;
+    ULONG k;
+    ULONG nStale;
+    BOOLEAN current;
+
+    held = NULL;
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    for (e = cmRegAtts.Flink; e != &cmRegAtts; e = e->Flink) {
+        g = CONTAINING_RECORD(e, CM_FILTER, AttLink);
+        if (g->AttListed && g->AttSeq == s->AttSeq &&
+            g->Common.Pdo == s->Pdo && CmFilterTryHold(g)) {
+            held = g;
+            break;
+        }
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    if (held == NULL) {
+        return;
+    }
+    nStale = 0;
+    KeAcquireSpinLock(&held->Lock, &irql);
+    if (!held->WpuClosed && held->WpuStartGen == s->StartGen) {
+        if (owner != CM_WPU_OWN_UNKNOWN &&
+            held->WpuOwner == CM_WPU_OWN_UNKNOWN) {
+            /* Only where the start's own reading found nothing. */
+            held->WpuOwner = owner;
+        }
+        /* Entries whose link's token moved on (a removal, or the entry
+         * reused) are pruned first, so they never crowd out a current
+         * unit; their references are dropped after the lock. */
+        KeAcquireSpinLock(&cmWpuQLock, &qirql);
+        for (i = 0, k = 0; i < held->WpuDiskCount; i++) {
+            if (held->WpuDiskLink[i] < CM_WPU_LINKS &&
+                cmWpuLinkTok[held->WpuDiskLink[i]] == held->WpuDiskTok[i]) {
+                held->WpuDisk[k] = held->WpuDisk[i];
+                held->WpuDiskLink[k] = held->WpuDiskLink[i];
+                held->WpuDiskTok[k] = held->WpuDiskTok[i];
+                k++;
+            } else {
+                stale[nStale++] = held->WpuDisk[i];
+            }
+        }
+        held->WpuDiskCount = k;
+        KeReleaseSpinLock(&cmWpuQLock, qirql);
+        if (unit != NULL) {
+            KeAcquireSpinLock(&cmWpuQLock, &qirql);
+            current = (BOOLEAN)(idx < CM_WPU_LINKS &&
+                                cmWpuLinkTok[idx] == tok);
+            KeReleaseSpinLock(&cmWpuQLock, qirql);
+            for (i = 0; current && i < held->WpuDiskCount; i++) {
+                if (held->WpuDisk[i] == unit) {
+                    held->WpuDiskLink[i] = idx;
+                    held->WpuDiskTok[i] = tok;
+                    current = FALSE;
+                }
+            }
+            if (!current) {
+                cmWpuWhy[6]++;
+            }
+            if (current && held->WpuDiskCount < CM_WPU_UNITS) {
+                ObReferenceObject(unit);
+                i = held->WpuDiskCount++;
+                held->WpuDisk[i] = unit;
+                held->WpuDiskLink[i] = idx;
+                held->WpuDiskTok[i] = tok;
+                cmWpuMatched++;
+            }
+        }
+    }
+    KeReleaseSpinLock(&held->Lock, irql);
+    cmWpuDeref(stale, nStale);
+    CmFilterUnhold(held);
+}
+
+
+/* Every member's owner read and committed, and the disk `unit` (whose
+ * parent is `parent`; NULL for none) installed on the member it names.
+ * PASSIVE_LEVEL, no lock held. */
+static VOID cmWpuMatch(PDEVICE_OBJECT unit, const WCHAR *parent,
+                       ULONG parentChars, ULONG idx, ULONG tok)
+{
+    CM_WPU_SNAP s[CM_WPU_CAND];
+    WCHAR prop[CM_WPU_PROP_CHARS];
+    ULONG n;
+    ULONG i;
+    ULONG c;
+    ULONG owner;
+    BOOLEAN match;
+
+    n = cmWpuSnapshot(s, CM_WPU_CAND);
+    if (unit != NULL) {
+        cmWpuWhy[3] += n;
+    }
+    for (i = 0; i < n; i++) {
+        owner = CM_WPU_OWN_UNKNOWN;
+        c = cmWpuProp(s[i].Pdo, &cmWpuKeyService, prop);
+        if (c != 0xFFFFFFFFUL) {
+            owner = cmWpuEqi(prop, c, cmWpuStor98, 6) ? CM_WPU_OWN_STOR98
+                                                      : CM_WPU_OWN_OTHER;
+        }
+        match = FALSE;
+        if (unit != NULL) {
+            c = cmWpuProp(s[i].Pdo, &cmWpuKeyInst, prop);
+            match = (BOOLEAN)(c != 0xFFFFFFFFUL &&
+                              cmWpuEqi(prop, c, parent, parentChars));
+            if (c == 0xFFFFFFFFUL) {
+                cmWpuWhy[4]++;
+            } else if (!match) {
+                cmWpuWhy[5]++;
+            }
+        }
+        cmWpuCommit(&s[i], owner, match ? unit : NULL, idx, tok);
+        ObDereferenceObject(s[i].Pdo);
+    }
+}
+
+/* One disk link: opened for its PDO (a shared open and close of the
+ * disk), its parent read, matched. PASSIVE_LEVEL, the work item. */
+static VOID cmWpuLookup(WCHAR *name, ULONG bytes, ULONG idx, ULONG tok)
+{
+    UNICODE_STRING us;
+    PFILE_OBJECT fo;
+    PDEVICE_OBJECT top;
+    PDEVICE_OBJECT base;
+    WCHAR parent[CM_WPU_PROP_CHARS];
+    ULONG c;
+
+    cmWpuSeen++;
+    (VOID)InterlockedIncrement(&cmWpuLookBegun);
+    us.Buffer = name;
+    us.Length = (USHORT)bytes;
+    us.MaximumLength = (USHORT)(bytes + sizeof(WCHAR));
+    if (NT_SUCCESS(cmWpuOpenPtr(&us, FILE_READ_ATTRIBUTES, &fo, &top))) {
+        /* The base PDO's own reference first, then the open given back. */
+        base = cmWpuBaseRef(top);
+        ObDereferenceObject(fo);
+        if (base != NULL) {
+            c = cmWpuProp(base, &cmWpuKeyParent, parent);
+            if (c != 0xFFFFFFFFUL && c != 0) {
+                cmWpuMatch(base, parent, c, idx, tok);
+            } else {
+                cmWpuWhy[2]++;
+            }
+            ObDereferenceObject(base);
+        } else {
+            cmWpuWhy[1]++;
+        }
+    } else {
+        cmWpuWhy[0]++;
+    }
+    (VOID)InterlockedIncrement(&cmWpuLookEnded);
+}
+
+/* The present disks, each as an arrival with a fresh token, then every
+ * member's owner. PASSIVE_LEVEL, the work item. */
+static VOID cmWpuReplay(VOID)
+{
+    PWSTR list;
+    PWSTR p;
+    WCHAR name[CM_WPU_LINK_CHARS];
+    KIRQL irql;
+    ULONG chars;
+    ULONG idx;
+    ULONG tok;
+    ULONG guard;
+
+    KeAcquireSpinLock(&cmWpuQLock, &irql);
+    guard = cmWpuRemovalSeq;
+    KeReleaseSpinLock(&cmWpuQLock, irql);
+    list = NULL;
+    if (NT_SUCCESS(cmWpuIfaces(&cmWpuDiskGuid, NULL, 0, &list)) &&
+        list != NULL) {
+        for (p = list; *p != 0; p += chars + 1) {
+            chars = cmWpuChars(p, 0xFFFFUL);
+            if (!cmWpuQuietNow()) {
+                /* A wake began: no more opens; the replay is owed again
+                 * and the thread hands it back once quiet. */
+                KeAcquireSpinLock(&cmWpuQLock, &irql);
+                cmWpuRescan = 1;
+                cmWpuDeferred = 1;
+                KeReleaseSpinLock(&cmWpuQLock, irql);
+                break;
+            }
+            if (chars >= CM_WPU_LINK_CHARS) {
+                continue;
+            }
+            KeAcquireSpinLock(&cmWpuQLock, &irql);
+            /* A link removed after the listing began (a removal numbered
+             * above guard) is not made current again. */
+            idx = cmWpuEnterEx(p, chars * (ULONG)sizeof(WCHAR), &tok,
+                               guard + 1, TRUE);
+            KeReleaseSpinLock(&cmWpuQLock, irql);
+            if (idx < CM_WPU_LINKS) {
+                RtlCopyMemory(name, p, chars * sizeof(WCHAR));
+                name[chars] = 0;
+                cmWpuLookup(name, chars * (ULONG)sizeof(WCHAR), idx, tok);
+            }
+        }
+        /* The list is the I/O manager's pool: freed at the one site the
+         * import allowlist admits for ExFreePool (cm_pool.c). */
+        CmFree(list);
+    }
+    cmWpuMatch(NULL, NULL, 0, CM_WPU_LINKS, 0);
+}
+
+/* The work item: the registration first, then each queued link, then a
+ * replay where one is owed. Never on the connection-manager thread.
+ * PASSIVE_LEVEL. */
+static VOID cmWpuWorker(PVOID context)
+{
+    WCHAR name[CM_WPU_LINK_CHARS];
+    KIRQL irql;
+    ULONG have;
+    ULONG idx;
+    ULONG tok;
+    ULONG bytes;
+    NTSTATUS status;
+
+    UNREFERENCED_PARAMETER(context);
+    if (cmWpuR2 == 1) {
+        status = cmWpuRegPnp(
+            EventCategoryDeviceInterfaceChange,
+            PNPNOTIFY_DEVICE_INTERFACE_INCLUDE_EXISTING_INTERFACES,
+            (PVOID)&cmWpuDiskGuid, CmDriverObject,
+            (PDRIVER_NOTIFICATION_CALLBACK_ROUTINE)cmWpuNotify, NULL,
+            &cmWpuEntry);
+        cmWpuR2 = NT_SUCCESS(status) ? 2UL : 3UL;
+    }
+    for (;;) {
+        idx = CM_WPU_LINKS;
+        tok = 0;
+        bytes = 0;
+        KeAcquireSpinLock(&cmWpuQLock, &irql);
+        if ((cmWpuQCount != 0 || cmWpuRescan) && !cmWpuQuietNow()) {
+            /* A wake in progress: nothing opened; the thread hands the
+             * queue back once quiet. */
+            cmWpuDeferred = 1;
+            cmWpuWkQueued = 0;
+            have = 0;
+        } else if (cmWpuQCount != 0) {
+            idx = cmWpuQIdx[cmWpuQHead];
+            tok = cmWpuQTok[cmWpuQHead];
+            cmWpuQHead = (cmWpuQHead + 1) % CM_WPU_QUEUE;
+            cmWpuQCount--;
+            /* Stale (the link removed or its entry reused since it was
+             * queued): skipped. */
+            have = 3;
+            if (cmWpuLinkTok[idx] == tok) {
+                bytes = cmWpuLinkBytes[idx];
+                RtlCopyMemory(name, cmWpuLinkName[idx], bytes);
+                name[bytes / sizeof(WCHAR)] = 0;
+                have = 1;
+            }
+        } else if (cmWpuRescan) {
+            cmWpuRescan = 0;
+            have = 2;
+        } else {
+            cmWpuWkQueued = 0;
+            have = 0;
+        }
+        KeReleaseSpinLock(&cmWpuQLock, irql);
+        if (have == 0) {
+            break;
+        }
+        if (have == 1) {
+            cmWpuLookup(name, bytes, idx, tok);
+        } else if (have == 2 && cmWpuR2 == 2) {
+            cmWpuReplay();
+        }
+    }
+}
+
+/* Route R2's start, from the thread: the routines looked up (CmRoutine,
+ * no import), and where they exist the registration handed to the work
+ * item. The image is made resident first: the callback and the work item
+ * are this image's code. PASSIVE_LEVEL. */
+static VOID cmWpuR2Start(PCM_NHI nhi)
+{
+    KIRQL irql;
+    BOOLEAN queue;
+
+    if (cmWpuR2 != 0 || InterlockedIncrement(&cmWpuR2Claim) != 1) {
+        return;
+    }
+    cmWpuGetProp = (CM_WPU_GETPROP)CmRoutine(L"IoGetDevicePropertyData");
+    cmWpuBaseRef = (CM_WPU_BASEREF)CmRoutine(L"IoGetDeviceAttachmentBaseRef");
+    cmWpuIfaces = (CM_WPU_IFACES)CmRoutine(L"IoGetDeviceInterfaces");
+    cmWpuRegPnp = (CM_WPU_REGPNP)CmRoutine(L"IoRegisterPlugPlayNotification");
+    cmWpuOpenPtr = (CM_WPU_OPEN)CmRoutine(L"IoGetDeviceObjectPointer");
+    if (cmWpuGetProp == NULL || cmWpuBaseRef == NULL || cmWpuIfaces == NULL ||
+        cmWpuRegPnp == NULL || cmWpuOpenPtr == NULL) {
+        cmWpuR2 = 3;
+        CmLogNote(nhi, "cm.wakepowerup.r2.routines",
+                  (cmWpuGetProp != NULL ? 1UL : 0UL) |
+                      (cmWpuBaseRef != NULL ? 2UL : 0UL) |
+                      (cmWpuIfaces != NULL ? 4UL : 0UL) |
+                      (cmWpuRegPnp != NULL ? 8UL : 0UL) |
+                      (cmWpuOpenPtr != NULL ? 16UL : 0UL));
+        return;
+    }
+    CmDriverObject->DriverUnload = NULL;
+    ExInitializeWorkItem(&cmWpuWork, cmWpuWorker, NULL);
+    cmWpuR2 = 1;
+    KeAcquireSpinLock(&cmWpuQLock, &irql);
+    queue = cmWpuNeedWork();
+    KeReleaseSpinLock(&cmWpuQLock, irql);
+    if (queue) {
+        ExQueueWorkItem(&cmWpuWork, DelayedWorkQueue);
+    }
+}
+#endif /* CM_WPU_R2_BUILT */
+
+/* ---- the thread's half ---- */
+
+/* The kernel's tick count (one clock for every NHI's thread), and the
+ * window in ticks: CM_WPU_WINDOW_MS * 10000 stays below 2^32, so no 64-bit
+ * arithmetic is needed (as cmRegPreTrustOpen). Route R2's alone. */
+#if CM_WPU_R2_BUILT
+static ULONG cmWpuTick(VOID)
+{
+    LARGE_INTEGER now;
+
+    KeQueryTickCount(&now);
+    return now.LowPart;
+}
+
+static ULONG cmWpuWindowTicks(VOID)
+{
+    ULONG incr;
+
+    incr = KeQueryTimeIncrement();
+    if (incr == 0) {
+        incr = 1;
+    }
+    return (CM_WPU_WINDOW_MS * 10000UL) / incr;
+}
+#endif
+
+/* A tunnel port of `nhi` released by a resume (cmReleaseHeld, never at a
+ * stop): accepted only as the release of this domain's own resume, with
+ * no sleep query, sleep or shutdown since that resume began
+ * (CmWpuResumeBegin) and the domain not latched by a stop or query
+ * (CmPortsWpuDomRelease); then its epoch and time recorded and the
+ * system's halt cleared, never another domain's latch. The thread,
+ * PASSIVE_LEVEL. */
+static VOID cmWpuPortReleased(PCM_NHI nhi, ULONG i)
+{
+    CM_WPU_DOM d;
+    PCM_REENUM r;
+    KIRQL irql;
+    ULONG ok;
+    ULONG epoch;
+
+    r = &nhi->Reenum;
+    if (r->WpuClosed || nhi->Values.WakePowerUp == 0 ||
+        (r->Port[i].Flags & (CM_PORT_ACTIVE | CM_PORT_EXCLUSIVE)) !=
+            (CM_PORT_ACTIVE | CM_PORT_EXCLUSIVE)) {
+        /* Only a port this domain owns alone (an active, exclusive member)
+         * authorises a wake power-up behind it; off, nothing recorded. */
+        return;
+    }
+    KeAcquireSpinLock(&cmWpuGateLock, &irql);
+    cmWpuDomLoad(r, &d);
+    ok = CmPortsWpuDomRelease(&cmWpuSys, &d);
+    cmWpuDomStore(r, &d);
+    epoch = cmWpuSys.Epoch;
+    if (ok) {
+        r->Port[i].WpuRelEpoch = epoch;
+#if CM_WPU_R2_BUILT
+        cmWpuLastRelTick = cmWpuTick();
+        cmWpuReleased = 1;
+        cmWpuQuiet = 0;
+#endif
+    }
+    KeReleaseSpinLock(&cmWpuGateLock, irql);
+    if (ok) {
+        r->Port[i].WpuRelAt = cmNow(nhi);
+    } else {
+        /* A release of an earlier resume, or of a latched domain: no ask
+         * behind it (counted; the first of each epoch logged). */
+        if (r->WpuRelRefused != epoch) {
+            r->WpuRelRefused = epoch;
+            CmLogNote(nhi, "cm.wakepowerup.release.refused",
+                      (epoch << 8) | (i & 0xFFUL));
+        }
+    }
+}
+
+/* The power manager's callback. IRQL: <= DISPATCH_LEVEL. */
+static VOID NTAPI cmWpuDone(PDEVICE_OBJECT DeviceObject, UCHAR MinorFunction,
+                            POWER_STATE PowerState, PVOID Context,
+                            PIO_STATUS_BLOCK IoStatus)
+{
+    CM_WPU_SLOT *s;
+    PDEVICE_OBJECT unit;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+    UNREFERENCED_PARAMETER(MinorFunction);
+    UNREFERENCED_PARAMETER(PowerState);
+    s = (CM_WPU_SLOT *)Context;
+    unit = s->Unit;
+    s->Status = (ULONG)IoStatus->Status;
+    /* Published last (a full barrier): the thread reuses the slot only
+     * after it reads Done. */
+    (VOID)InterlockedIncrement(&s->Done);
+    ObDereferenceObject(unit);
+}
+
+static VOID cmWpuLogSlots(PCM_NHI nhi)
+{
+    CM_WPU_SLOT *s;
+    KIRQL irql;
+    ULONG now;
+    ULONG i;
+    ULONG bdf;
+    ULONG status;
+    BOOLEAN overdue;
+    BOOLEAN done;
+
+    now = cmNow(nhi);
+    for (i = 0; i < CM_WPU_SLOTS; i++) {
+        s = &cmWpuSlot[i];
+        overdue = FALSE;
+        done = FALSE;
+        bdf = 0;
+        status = 0;
+        KeAcquireSpinLock(&cmWpuSlotLock, &irql);
+        if (s->Busy && s->Done == 0 && !s->Overdue &&
+            now - s->StartAt > CM_WPU_OVERDUE_MS) {
+            /* Detected, never cancelled (a power IRP has no cancel): the
+             * slot and its reference stay until the callback, and no
+             * second request is made for the unit meanwhile. */
+            s->Overdue = 1;
+            overdue = TRUE;
+            bdf = s->Bdf;
+        } else if (s->Busy && s->Done != 0) {
+            bdf = s->Bdf;
+            status = s->Status;
+            s->Unit = NULL;
+            s->Done = 0;
+            s->Busy = 0;
+            done = TRUE;
+        }
+        KeReleaseSpinLock(&cmWpuSlotLock, irql);
+        if (overdue) {
+            CmLogNote(nhi, "cm.wakepowerup.overdue", (i << 24) | (bdf & 0xFFFFUL));
+        }
+        if (done) {
+            CmLogNote(nhi, "cm.wakepowerup.done", (i << 24) | (bdf & 0xFFFFUL));
+            CmLogNote(nhi, "cm.wakepowerup.done.status", status);
+            if (NT_SUCCESS((NTSTATUS)status)) {
+                nhi->Reenum.WpuOk++;
+            } else {
+                nhi->Reenum.WpuFailed++;
+            }
+        }
+    }
+}
+
+static ULONG cmWpuSlotsFree(VOID)
+{
+    KIRQL irql;
+    ULONG i;
+    ULONG n;
+
+    n = 0;
+    KeAcquireSpinLock(&cmWpuSlotLock, &irql);
+    for (i = 0; i < CM_WPU_SLOTS; i++) {
+        if (!cmWpuSlot[i].Busy) {
+            n++;
+        }
+    }
+    KeReleaseSpinLock(&cmWpuSlotLock, irql);
+    return n;
+}
+
+/* Every unit's slot reserved at once under the slots' lock, or none:
+ * TRUE with out[i] the slot of units[i], each holding its unit (the
+ * caller's reference passes to it). The callback's context and reference
+ * never change after this. */
+static BOOLEAN cmWpuReserve(PCM_NHI nhi, PDEVICE_OBJECT *units, ULONG n,
+                            ULONG bdf, CM_WPU_SLOT **out)
+{
+    KIRQL irql;
+    ULONG now;
+    ULONG i;
+    ULONG k;
+    ULONG free;
+
+    now = cmNow(nhi);
+    KeAcquireSpinLock(&cmWpuSlotLock, &irql);
+    free = 0;
+    for (i = 0; i < CM_WPU_SLOTS; i++) {
+        if (!cmWpuSlot[i].Busy) {
+            free++;
+            continue;
+        }
+        for (k = 0; k < n; k++) {
+            if (cmWpuSlot[i].Unit == units[k]) {
+                /* A request for this unit is still out (one at most per
+                 * unit, whatever the wake): nothing reserved. */
+                free = 0;
+                i = CM_WPU_SLOTS;
+                break;
+            }
+        }
+    }
+    if (free < n) {
+        KeReleaseSpinLock(&cmWpuSlotLock, irql);
+        return FALSE;
+    }
+    k = 0;
+    for (i = 0; i < CM_WPU_SLOTS && k < n; i++) {
+        if (!cmWpuSlot[i].Busy) {
+            cmWpuSlot[i].Busy = 1;
+            cmWpuSlot[i].Done = 0;
+            cmWpuSlot[i].Status = 0;
+            cmWpuSlot[i].Overdue = 0;
+            cmWpuSlot[i].StartAt = now;
+            cmWpuSlot[i].Bdf = bdf;
+            cmWpuSlot[i].Unit = units[k];
+            out[k] = &cmWpuSlot[i];
+            k++;
+        }
+    }
+    KeReleaseSpinLock(&cmWpuSlotLock, irql);
+    return TRUE;
+}
+
+/* A reserved slot given back unused, its reference with it. */
+static VOID cmWpuRelease(CM_WPU_SLOT *s)
+{
+    KIRQL irql;
+    PDEVICE_OBJECT unit;
+
+    KeAcquireSpinLock(&cmWpuSlotLock, &irql);
+    unit = s->Unit;
+    s->Unit = NULL;
+    s->Busy = 0;
+    KeReleaseSpinLock(&cmWpuSlotLock, irql);
+    if (unit != NULL) {
+        ObDereferenceObject(unit);
+    }
+}
+
+/* The request on a reserved slot (which holds the unit's reference). */
+static VOID cmWpuRequest(PCM_NHI nhi, CM_WPU_SLOT *s)
+{
+    POWER_STATE ps;
+    NTSTATUS status;
+    KIRQL irql;
+    PDEVICE_OBJECT unit;
+
+    unit = s->Unit;
+    ps.DeviceState = PowerDeviceD0;
+    /* No returned IRP is asked for (NULL); the callback may run before
+     * the call returns, and touches nothing but the slot, already set. */
+    status = PoRequestPowerIrp(unit, IRP_MN_SET_POWER, ps, cmWpuDone, s,
+                               NULL);
+    if (!NT_SUCCESS(status)) {
+        /* No IRP and no callback (as cm_power.c's own caller handles):
+         * the slot and the reference given back here. */
+        CmLogNote(nhi, "cm.wakepowerup.done.status", (ULONG)status);
+        nhi->Reenum.WpuFailed++;
+        KeAcquireSpinLock(&cmWpuSlotLock, &irql);
+        s->Unit = NULL;
+        s->Busy = 0;
+        KeReleaseSpinLock(&cmWpuSlotLock, irql);
+        ObDereferenceObject(unit);
+    }
+}
+
+/* A request for one of `units` still out (overdue or not). */
+static ULONG cmWpuOutstanding(PDEVICE_OBJECT *units, ULONG n)
+{
+    KIRQL irql;
+    ULONG i;
+    ULONG j;
+    ULONG out;
+
+    out = 0;
+    KeAcquireSpinLock(&cmWpuSlotLock, &irql);
+    for (i = 0; i < CM_WPU_SLOTS && !out; i++) {
+        if (!cmWpuSlot[i].Busy) {
+            continue;
+        }
+        for (j = 0; j < n; j++) {
+            if (cmWpuSlot[i].Unit == units[j]) {
+                out = 1;
+            }
+        }
+    }
+    KeReleaseSpinLock(&cmWpuSlotLock, irql);
+    return out;
+}
+
+/* Adds `d` to `set` once and within its room: TRUE when added. */
+static BOOLEAN cmWpuAddUnit(PDEVICE_OBJECT *set, PULONG n, PDEVICE_OBJECT d)
+{
+    ULONG i;
+
+    for (i = 0; i < *n; i++) {
+        if (set[i] == d) {
+            return FALSE;
+        }
+    }
+    if (*n >= CM_WPU_UNITS) {
+        return FALSE;
+    }
+    set[(*n)++] = d;
+    return TRUE;
+}
+
+/* The filter's current units, both routes, into `set` (each once);
+ * `ref` references each one added. Under the filter's lock. */
+static VOID cmWpuUnitsOf(PCM_FILTER f, PDEVICE_OBJECT *set, PULONG n,
+                         BOOLEAN ref)
+{
+#if CM_WPU_R2_BUILT
+    KIRQL qirql;
+    BOOLEAN current;
+#endif
+    ULONG i;
+
+    for (i = 0; i < f->WpuRelCount; i++) {
+        if (cmWpuAddUnit(set, n, f->WpuRel[i]) && ref) {
+            ObReferenceObject(f->WpuRel[i]);
+        }
+    }
+#if CM_WPU_R2_BUILT
+    for (i = 0; i < f->WpuDiskCount; i++) {
+        KeAcquireSpinLock(&cmWpuQLock, &qirql);
+        current = (BOOLEAN)(f->WpuDiskLink[i] < CM_WPU_LINKS &&
+                            cmWpuLinkTok[f->WpuDiskLink[i]] ==
+                                f->WpuDiskTok[i]);
+        KeReleaseSpinLock(&cmWpuQLock, qirql);
+        if (current && cmWpuAddUnit(set, n, f->WpuDisk[i]) && ref) {
+            ObReferenceObject(f->WpuDisk[i]);
+        }
+    }
+#endif
+}
+
+typedef PDEVICE_OBJECT (NTAPI *CM_WPU_ATTREF)(PDEVICE_OBJECT device);
+
+static CM_WPU_ATTREF cmWpuAttRef;
+static LONG cmWpuAttRefClaim;       /* the lookup made once (the thread)  */
+
+/* The driver at the top of the member's own stack, the device
+ * IoGetAttachedDeviceReference returns for its PDO (looked up at run
+ * time): CM_WPU_OWN_STOR98 when its driver object is named
+ * \Driver\stor98 (in any case, the length checked), CM_WPU_OWN_OTHER for
+ * any other driver - an upper filter above Stor98's device included: the
+ * stack is not walked - and CM_WPU_OWN_UNKNOWN when it is not read. The
+ * name is DRIVER_OBJECT's DriverName, a documented member (the
+ * \Driver\<service> name), read only, under the top device's reference,
+ * which is dropped at once. It says which driver runs the top of the stack
+ * now; it proves nothing of the stack's later topology (record 21 section
+ * 6.3.1; ObQueryNameString on the driver object is a possible later
+ * alternative). The thread, PASSIVE_LEVEL. */
+static ULONG cmWpuTopOwner(PDEVICE_OBJECT pdo)
+{
+    static const WCHAR name[] = { '\\', 'D', 'r', 'i', 'v', 'e', 'r', '\\',
+                                  's', 't', 'o', 'r', '9', '8' };
+    PDEVICE_OBJECT top;
+    PDRIVER_OBJECT drv;
+    ULONG v;
+
+    if (cmWpuAttRef == NULL && InterlockedIncrement(&cmWpuAttRefClaim) == 1) {
+        cmWpuAttRef = (CM_WPU_ATTREF)CmRoutine(L"IoGetAttachedDeviceReference");
+    }
+    if (cmWpuAttRef == NULL) {
+        return CM_WPU_OWN_UNKNOWN;
+    }
+    top = cmWpuAttRef(pdo);
+    if (top == NULL) {
+        return CM_WPU_OWN_UNKNOWN;
+    }
+    v = CM_WPU_OWN_UNKNOWN;
+    drv = top->DriverObject;
+    if (drv != NULL && drv->DriverName.Buffer != NULL &&
+        (drv->DriverName.Length & 1U) == 0 &&
+        drv->DriverName.Length <= drv->DriverName.MaximumLength) {
+        v = cmWpuEqi(drv->DriverName.Buffer,
+                     drv->DriverName.Length / (ULONG)sizeof(WCHAR), name, 14)
+                ? CM_WPU_OWN_STOR98
+                : CM_WPU_OWN_OTHER;
+    }
+    ObDereferenceObject(top);
+    return v;
+}
+
+/* A held child's owner, owed since its start, from its two readings
+ * (CmPortsWpuOwner): the driver key's install section (cm_reg.c) and the
+ * driver at the top of the member's stack. Read at a healthy moment - never while a
+ * sleep is in progress or once its wake D0 has failed in this epoch, when
+ * its stack may be held - and kept only if the start it was owed for is
+ * still the current one; logged once a start (cm.wakepowerup.owner). The
+ * thread, PASSIVE_LEVEL, the recovery on. */
+static VOID cmWpuOwnerRead(PCM_NHI nhi, PCM_FILTER g)
+{
+    KIRQL irql;
+    ULONG gen;
+    ULONG owner;
+    ULONG inf;
+    ULONG top;
+    ULONG epoch;
+    ULONG bdf;
+    BOOLEAN owed;
+    BOOLEAN kept;
+
+    epoch = CmWpuEpochNow();
+    KeAcquireSpinLock(&g->Lock, &irql);
+    owed = (BOOLEAN)(g->WpuOwnerOwed && !g->WpuClosed &&
+                     (epoch == 0 || g->WpuFailEpoch != epoch));
+    gen = g->WpuStartGen;
+    KeReleaseSpinLock(&g->Lock, irql);
+    if (!owed) {
+        return;
+    }
+    KeAcquireSpinLock(&cmWpuGateLock, &irql);
+    owed = (BOOLEAN)(cmWpuSys.Halt == 0);
+    KeReleaseSpinLock(&cmWpuGateLock, irql);
+    if (!owed) {
+        return;
+    }
+    bdf = XHCI_TBT_BDF(g->LocBus, g->LocAddress >> 16,
+                       g->LocAddress & 0xFFFFUL) & 0xFFFFUL;
+    inf = CmRegWpuOwner(g->Common.Pdo);
+    top = cmWpuTopOwner(g->Common.Pdo);
+    owner = CmPortsWpuOwner(inf, top);
+    kept = FALSE;
+    KeAcquireSpinLock(&g->Lock, &irql);
+    if (g->WpuOwnerOwed && g->WpuStartGen == gen) {
+        g->WpuOwnerOwed = 0;
+        g->WpuOwner = owner;
+        g->WpuOwnerWhy = (inf & 0xFUL) | ((top & 0xFUL) << 4);
+        kept = TRUE;
+    }
+    KeReleaseSpinLock(&g->Lock, irql);
+    if (kept) {
+        /* Bits 3:0 the install section, 7:4 the top of the stack, each
+         * CM_WPU_OWN_* (0 not read, 1 stor98's, 2 another's). */
+        CmLogNote(nhi, "cm.wakepowerup.owner", (bdf << 8) | (top << 4) | inf);
+    }
+}
+
+/* One member: its filters f[0..n-1] (held), behind a tunnel port released
+ * at `relAt` in this epoch when `released`. PASSIVE_LEVEL, the thread. */
+static VOID cmWpuMember(PCM_NHI nhi, PCM_FILTER *f, ULONG n,
+                        BOOLEAN released, ULONG relAt)
+{
+    PCM_REENUM r;
+    CM_WPU_IN in;
+    PDEVICE_OBJECT units[CM_WPU_UNITS];
+    PDEVICE_OBJECT ask[CM_WPU_UNITS];
+    CM_WPU_SLOT *slots[CM_WPU_UNITS];
+    ULONG gens[CM_WPU_CAND];
+    KIRQL irql;
+    BOOLEAN reserved;
+    ULONG nUnits;
+    ULONG nAsk;
+    ULONG epoch;
+    ULONG bdf;
+    ULONG why;
+    ULONG verdict;
+    ULONG failStatus;
+    ULONG relCount;
+    ULONG i;
+    ULONG otherStatus;
+    BOOLEAN logFail;
+    BOOLEAN logOther;
+    BOOLEAN relLog;
+    BOOLEAN admitted;
+
+    r = &nhi->Reenum;
+    epoch = CmWpuEpochNow();
+    bdf = XHCI_TBT_BDF(f[0]->LocBus, f[0]->LocAddress >> 16,
+                       f[0]->LocAddress & 0xFFFFUL) & 0xFFFFUL;
+    CmZero(&in, sizeof(in));
+    in.Epoch = epoch;
+    in.Switch = nhi->Values.WakePowerUp;
+    /* Released: the port's release in this epoch, and since then no sleep,
+     * shutdown, power-down or stop received, the NHI in D0. */
+    in.Released = (released && cmWpuOpen(nhi, epoch) && !nhi->Suspended &&
+                   nhi->DevicePower == PowerDeviceD0)
+                      ? 1UL
+                      : 0UL;
+    in.Elapsed = cmNow(nhi) - relAt;
+    in.Slots = cmWpuSlotsFree();
+    nUnits = 0;
+    failStatus = 0;
+    relCount = 0;
+    logFail = FALSE;
+    logOther = FALSE;
+    otherStatus = 0;
+    relLog = FALSE;
+    for (i = 0; i < n; i++) {
+        KeAcquireSpinLock(&f[i]->Lock, &irql);
+        /* The start this reading is of: admission refuses a later one. */
+        gens[i] = f[i]->WpuStartGen;
+#if defined(XHCI_FLAVOUR_QEMU)
+        if (nhi->QemuWpuForce != 0 && released && epoch != 0 &&
+            f[i]->WpuConsumed != epoch && f[i]->WpuFailEpoch != epoch) {
+            /* The legs' forced trigger: armed as if the D0 had failed. */
+            f[i]->WpuFailEpoch = epoch;
+            f[i]->WpuFailStatus = 0xE0000049UL;
+        }
+#endif
+        if (epoch != 0 && f[i]->WpuFailEpoch == epoch) {
+            in.FailEpoch = epoch;
+            failStatus = f[i]->WpuFailStatus;
+            if (f[i]->WpuFailLogged != epoch) {
+                f[i]->WpuFailLogged = epoch;
+                logFail = TRUE;
+            }
+        }
+        if (epoch != 0 && f[i]->WpuOtherEpoch == epoch &&
+            f[i]->WpuOtherLogged != epoch) {
+            f[i]->WpuOtherLogged = epoch;
+            otherStatus = f[i]->WpuOtherStatus;
+            logOther = TRUE;
+        }
+        if (f[i]->WpuConsumed == epoch) {
+            in.Consumed = epoch;
+        }
+        if (f[i]->WpuClosed) {
+            in.Closed = 1;
+        }
+        if (f[i]->WpuOwner == CM_WPU_OWN_OTHER) {
+            in.Owner = CM_WPU_OWN_OTHER;
+        } else if (in.Owner == CM_WPU_OWN_UNKNOWN &&
+                   f[i]->WpuOwner == CM_WPU_OWN_STOR98) {
+            in.Owner = CM_WPU_OWN_STOR98;
+        }
+        cmWpuUnitsOf(f[i], units, &nUnits, FALSE);
+        if (f[i]->WpuRelAnswers != 0 &&
+            f[i]->WpuRelLogged != f[i]->WpuRelCount + 1) {
+            f[i]->WpuRelLogged = f[i]->WpuRelCount + 1;
+            relCount = f[i]->WpuRelCount;
+            relLog = TRUE;
+        }
+        KeReleaseSpinLock(&f[i]->Lock, irql);
+    }
+    if (relLog) {
+        CmLogNote(nhi, "cm.wakepowerup.rel", (bdf << 8) | (relCount & 0xFFUL));
+    }
+    if (logFail) {
+        r->WpuArmed++;
+        CmLogNote(nhi, "cm.wakepowerup.fail", bdf);
+        CmLogNote(nhi, "cm.wakepowerup.fail.status", failStatus);
+    }
+    if (logOther) {
+        /* Never armed on: counted, so widening is decided on evidence. */
+        CmLogNote(nhi, "cm.wakepowerup.fail.other", bdf);
+        CmLogNote(nhi, "cm.wakepowerup.fail.other.status", otherStatus);
+    }
+    in.Units = nUnits;
+    in.Outstanding = cmWpuOutstanding(units, nUnits);
+    verdict = CmPortsWpuStep(&in, &why);
+    if (verdict == CM_WPU_V_IDLE || verdict == CM_WPU_V_WAIT) {
+        return;
+    }
+    if (verdict != CM_WPU_V_ASK) {
+        for (i = 0; i < n; i++) {
+            KeAcquireSpinLock(&f[i]->Lock, &irql);
+            f[i]->WpuConsumed = epoch;
+            KeReleaseSpinLock(&f[i]->Lock, irql);
+        }
+        if (verdict == CM_WPU_V_NONE) {
+            r->WpuNone++;
+            CmLogNote(nhi, "cm.wakepowerup.none", bdf);
+        } else {
+            CmLogNote(nhi, "cm.wakepowerup.skip", (why << 16) | bdf);
+        }
+        return;
+    }
+    /* Admission, the one point where the ask becomes requests: the domain
+     * and every filter of the member still open, each marked Sending and
+     * consumed, the units referenced under the filters' locks. */
+    nAsk = 0;
+    admitted = FALSE;
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    if (!r->WpuClosed && cmWpuOpen(nhi, epoch) && !nhi->Suspended &&
+        nhi->DevicePower == PowerDeviceD0) {
+        r->WpuSending = 1;
+        KeClearEvent(&r->WpuSendDone);
+        admitted = TRUE;
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    for (i = 0; admitted && i < n; i++) {
+        KeAcquireSpinLock(&f[i]->Lock, &irql);
+        if (f[i]->WpuClosed || f[i]->WpuConsumed == epoch ||
+            f[i]->WpuStartGen != gens[i] || f[i]->WpuSending) {
+            /* Closed, consumed, or restarted since this pass read its
+             * arm, owner and units: nothing sent now; the next pass reads
+             * the member afresh. */
+            admitted = FALSE;
+        } else {
+            f[i]->WpuSending = 1;
+            KeClearEvent(&f[i]->WpuSendDone);
+            cmWpuUnitsOf(f[i], ask, &nAsk, TRUE);
+        }
+        KeReleaseSpinLock(&f[i]->Lock, irql);
+    }
+    reserved = (BOOLEAN)(admitted && nAsk != 0 &&
+                         cmWpuReserve(nhi, ask, nAsk, bdf, slots));
+    if (reserved) {
+        /* Consumed only now that every unit has its slot; the Sending
+         * marks keep every removal waiting until the requests are out. */
+        for (i = 0; i < n; i++) {
+            KeAcquireSpinLock(&f[i]->Lock, &irql);
+            f[i]->WpuConsumed = epoch;
+            KeReleaseSpinLock(&f[i]->Lock, irql);
+        }
+        /* The image resident from the first request on: the callback is
+         * this image's code. */
+        CmDriverObject->DriverUnload = NULL;
+        r->WpuAsked++;
+        CmLogNote(nhi, "cm.wakepowerup.ask", (bdf << 8) | nAsk);
+        for (i = 0; i < nAsk; i++) {
+            if (cmWpuOpen(nhi, epoch)) {
+                cmWpuRequest(nhi, slots[i]);
+            } else {
+                /* Closed since the admission: this one not sent. */
+                cmWpuRelease(slots[i]);
+                CmLogNote(nhi, "cm.wakepowerup.skip",
+                          (CM_WPU_WHY_CLOSED << 16) | bdf);
+            }
+        }
+        nAsk = 0;
+    } else {
+        /* Not logged: a retry each pass until the window ends, whose own
+         * outcome is logged. */
+    }
+    /* Not reserved (the slots taken meanwhile by another controller's
+     * thread): nothing consumed, the next pass tries again within the
+     * window; the references are dropped below. */
+    /* Every mark this admission made is released, whether it completed or
+     * stopped half-way; the references of a refused one dropped. */
+    for (i = 0; i < n; i++) {
+        KeAcquireSpinLock(&f[i]->Lock, &irql);
+        if (f[i]->WpuSending) {
+            f[i]->WpuSending = 0;
+            (VOID)KeSetEvent(&f[i]->WpuSendDone, IO_NO_INCREMENT, FALSE);
+        }
+        KeReleaseSpinLock(&f[i]->Lock, irql);
+    }
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    if (r->WpuSending) {
+        r->WpuSending = 0;
+        (VOID)KeSetEvent(&r->WpuSendDone, IO_NO_INCREMENT, FALSE);
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    cmWpuDeref(ask, nAsk);
+}
+
+/* The thread's step, from CmReenumService on the filter route, at most
+ * every CM_WPU_PASS_MS. PASSIVE_LEVEL. */
+static VOID cmWpuService(PCM_NHI nhi)
+{
+    PCM_REENUM r;
+    PCM_FILTER held[CM_WPU_CAND];
+    PCM_FILTER group[CM_WPU_CAND];
+    ULONG port[CM_WPU_CAND];
+    ULONG done[CM_WPU_CAND];
+    ULONG lo[XHCI_TBT_MAX_TUNNELS];
+    ULONG hi[XHCI_TBT_MAX_TUNNELS];
+    PLIST_ENTRY e;
+    PCM_FILTER g;
+    KIRQL irql;
+    ULONG now;
+    ULONG epoch;
+    ULONG members;
+    ULONG n;
+    ULONG m;
+    ULONG i;
+    ULONG j;
+    ULONG v;
+    BOOLEAN own;
+
+    r = &nhi->Reenum;
+    now = cmNow(nhi);
+    if (r->WpuPassed && now - r->WpuLastPass < CM_WPU_PASS_MS) {
+        return;
+    }
+    r->WpuPassed = 1;
+    r->WpuLastPass = now;
+    /* A request already outstanding finished and freed, whatever the
+     * value; off, nothing else. */
+    cmWpuLogSlots(nhi);
+    if (cmWpuLoggedTimeouts != cmWpuSendTimeouts) {
+        cmWpuLoggedTimeouts = cmWpuSendTimeouts;
+        CmLogNote(nhi, "cm.wakepowerup.sendwait", cmWpuSendTimeouts);
+    }
+    if (nhi->Values.WakePowerUp == 0) {
+        return;
+    }
+#if CM_WPU_R2_BUILT
+    if (SharedUserData->NtMajorVersion >= 6) {
+        cmWpuR2Start(nhi);
+    } else if (cmWpuR2 == 0 && InterlockedIncrement(&cmWpuR2Claim) == 1) {
+        cmWpuR2 = 3;
+    }
+    /* Quiet: no sleep or stop received since the last release, and that
+     * release (if any) older than the window: R2 may open disks. A queue
+     * the work item left (Deferred) is handed back then. */
+    if (cmWpuDeferred && cmWpuR2 == 2 && cmWpuQuietNow()) {
+        cmWpuKick(0);
+    }
+    if (cmWpuLookBegun != cmWpuLookEnded) {
+        /* One lookup's open or property read has not returned: the queue
+         * waits behind it (a delayed worker thread held); logged once. */
+        if (!cmWpuStuckSeen || cmWpuStuckFrom != (ULONG)cmWpuLookBegun) {
+            cmWpuStuckSeen = 1;
+            cmWpuStuckFrom = (ULONG)cmWpuLookBegun;
+            cmWpuStuckLogged = now;
+        } else if (cmWpuStuckLogged != 0 &&
+                   now - cmWpuStuckLogged > CM_WPU_STUCK_MS) {
+            cmWpuStuckLogged = 0;
+            CmLogNote(nhi, "cm.wakepowerup.r2.stuck", cmWpuStuckFrom);
+        }
+    } else {
+        cmWpuStuckSeen = 0;
+    }
+    for (i = 0; i < 7; i++) {
+        if (cmWpuLoggedWhy[i] != cmWpuWhy[i]) {
+            cmWpuLoggedWhy[i] = cmWpuWhy[i];
+            CmLogNote(nhi, "cm.wakepowerup.r2.why", (i << 24) | (cmWpuWhy[i] & 0xFFFFFFUL));
+        }
+    }
+    if (cmWpuLoggedR2 != cmWpuR2 || cmWpuLoggedSeen != cmWpuSeen ||
+        cmWpuLoggedMatched != cmWpuMatched) {
+        cmWpuLoggedR2 = cmWpuR2;
+        cmWpuLoggedSeen = cmWpuSeen;
+        cmWpuLoggedMatched = cmWpuMatched;
+        CmLogNote(nhi, "cm.wakepowerup.r2",
+                  (cmWpuR2 << 24) | ((cmWpuMatched & 0xFFFUL) << 12) |
+                      (cmWpuSeen & 0xFFFUL));
+    }
+#endif
+    if (nhi->Suspended) {
+        return;
+    }
+    epoch = CmWpuEpochNow();
+    members = r->Members < XHCI_TBT_MAX_TUNNELS ? r->Members
+                                                : XHCI_TBT_MAX_TUNNELS;
+    for (i = 0; i < members; i++) {
+        lo[i] = 0;
+        hi[i] = 0;
+        v = 0;
+        KeAcquireSpinLock(&cmRegLock, &irql);
+        own = (BOOLEAN)((r->Port[i].Flags & (CM_PORT_ACTIVE | CM_PORT_EXCLUSIVE)) ==
+                        (CM_PORT_ACTIVE | CM_PORT_EXCLUSIVE));
+        KeReleaseSpinLock(&cmRegLock, irql);
+        if (!own) {
+            /* Not this domain's alone: nothing behind it is looked at. */
+            continue;
+        }
+        if (cmCfgRead(NULL, r->Port[i].Bdf, 0x18UL, &v) != 0 &&
+            ((v >> 8) & 0xFFUL) != 0 &&
+            ((v >> 16) & 0xFFUL) >= ((v >> 8) & 0xFFUL)) {
+            lo[i] = (v >> 8) & 0xFFUL;
+            hi[i] = (v >> 16) & 0xFFUL;
+        }
+    }
+    n = 0;
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    if (r->WpuClosed) {
+        KeReleaseSpinLock(&cmRegLock, irql);
+        return;
+    }
+    for (e = cmRegAtts.Flink; e != &cmRegAtts; e = e->Flink) {
+        g = CONTAINING_RECORD(e, CM_FILTER, AttLink);
+        if (g->Common.Kind != CM_KIND_CHILD || !g->AttListed ||
+            !g->Located || !g->Started || g->ChainKind == CM_CHAIN_BRIDGE) {
+            continue;
+        }
+        for (i = 0; i < members; i++) {
+            if (lo[i] != 0 && g->LocBus >= lo[i] && g->LocBus <= hi[i] &&
+                (r->Port[i].Flags & (CM_PORT_ACTIVE | CM_PORT_EXCLUSIVE)) ==
+                    (CM_PORT_ACTIVE | CM_PORT_EXCLUSIVE)) {
+                break;
+            }
+        }
+        if (i >= members) {
+            continue;
+        }
+        if (n >= CM_WPU_CAND) {
+            cmWpuOver++;
+            break;
+        }
+        if (CmFilterTryHold(g)) {
+            held[n] = g;
+            port[n] = i;
+            done[n] = 0;
+            n++;
+        }
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    if (cmWpuLoggedOver != cmWpuOver) {
+        cmWpuLoggedOver = cmWpuOver;
+        CmLogNote(nhi, "cm.wakepowerup.over", cmWpuOver);
+    }
+    for (i = 0; i < n; i++) {
+        cmWpuOwnerRead(nhi, held[i]);
+    }
+    for (i = 0; i < n; i++) {
+        if (done[i]) {
+            continue;
+        }
+        m = 0;
+        for (j = i; j < n; j++) {
+            if (!done[j] && held[j]->Common.Pdo == held[i]->Common.Pdo) {
+                group[m++] = held[j];
+                done[j] = 1;
+            }
+        }
+        cmWpuMember(nhi, group, m,
+                    (BOOLEAN)(epoch != 0 &&
+                              r->Port[port[i]].WpuRelEpoch == epoch),
+                    r->Port[port[i]].WpuRelAt);
+    }
+    for (i = 0; i < n; i++) {
+        CmFilterUnhold(held[i]);
+    }
 }

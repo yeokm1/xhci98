@@ -546,6 +546,84 @@ static void test_alias(void)
     CHECK_EQ(XhciUsbdxIoctlAlias(0x00220FB7UL), 0x00220FB7UL, "a neighbour");
 }
 
+/* Task 49.45: the notes' packing and bounds, worked by hand from section
+ * 6.13.11's table. */
+static void test_notes(void)
+{
+    ULONG table[4];
+    ULONG i;
+
+    table[0] = 0x496B8280UL;
+    table[1] = 0x70211B0EUL;
+    table[2] = 0;
+    table[3] = 0;
+    CHECK_EQ(XhciUsbdxNoteSeen(table, 2, 4, 0x496B8280UL), 1, "seen, first");
+    CHECK_EQ(XhciUsbdxNoteSeen(table, 2, 4, 0x70211B0EUL), 1, "seen, second");
+    CHECK_EQ(XhciUsbdxNoteSeen(table, 2, 4, 0xDEEE98EAUL), 0, "not seen");
+    CHECK_EQ(XhciUsbdxNoteSeen(table, 1, 4, 0x70211B0EUL), 0,
+             "past the used count is not read");
+    CHECK_EQ(XhciUsbdxNoteSeen(table, 9, 4, 0), 1,
+             "a used count past the slots reads the slots only");
+    CHECK_EQ(XhciUsbdxNoteSeen(NULL, 2, 4, 0), 0, "no table");
+    CHECK_EQ(XhciUsbdxNoteSeen(table, 0, 4, 0x496B8280UL), 0, "empty");
+
+    CHECK_EQ(XhciUsbdxNoteWanted(0, 16), 0, "claim 0 is no claim");
+    CHECK_EQ(XhciUsbdxNoteWanted(1, 16), 1, "the first");
+    CHECK_EQ(XhciUsbdxNoteWanted(16, 16), 1, "the sixteenth");
+    CHECK_EQ(XhciUsbdxNoteWanted(17, 16), 0, "the seventeenth");
+    CHECK_EQ(XhciUsbdxNoteWanted(0xFFFFFFFFUL, 16), 0, "a wrapped count");
+    for (i = 1; i <= 40; i++) {
+        CHECK_EQ(XhciUsbdxNoteWanted(i, XHCI_USBDX_NOTE_SHORT_MAX),
+                 i <= 8 ? 1UL : 0UL, "eight short notes a pipe");
+    }
+
+    /* BUS_INTERFACE_STANDARD at root port 4: version 1, size 0x20. */
+    CHECK_EQ(XhciUsbdxNoteQiVs(4, 1, 0x20), 0x04001020UL, "pdo.qi.vs");
+    CHECK_EQ(XhciUsbdxNoteQiVs(0x1FF, 0x602, 0x98), 0xFF602098UL,
+             "location saturated, V1's version kept");
+    CHECK_EQ(XhciUsbdxNoteQiVs(1, 0x10000, 0x10000), 0x01FFFFFFUL,
+             "version and size saturated");
+
+    CHECK_EQ(XhciUsbdxNoteV1(XHCI_USBDX_V1_ANSWERED, 0x602, 0x58),
+             0x00060258UL, "usbdx.v1 answered, x86");
+    CHECK_EQ(XhciUsbdxNoteV1(XHCI_USBDX_V1_NOT_OURS, 0x600, 0x98),
+             0x01060098UL, "usbdx.v1 not ours");
+    CHECK_EQ(XhciUsbdxNoteV1(XHCI_USBDX_V1_NO_SLOT, 0x10000, 0x100),
+             0x04FFFFFFUL, "usbdx.v1 saturated");
+
+    CHECK_EQ(XhciUsbdxNoteCap(XHCI_USBDX_CAP_STATIC_STREAMS, XHCI_USBDX_OK,
+                              31),
+             0x0300001FUL, "usbdx.cap streams, 31");
+    CHECK_EQ(XhciUsbdxNoteCap(XHCI_USBDX_CAP_UNKNOWN,
+                              XHCI_USBDX_NOT_SUPPORTED, 0),
+             0x00030000UL, "usbdx.cap unknown, refused");
+    CHECK_EQ(XhciUsbdxNoteCap(XHCI_USBDX_CAP_UNKNOWN,
+                              XHCI_USBDX_CAP_NO_DEVICE, 0x12345),
+             0x0004FFFFUL, "usbdx.cap no device, count saturated");
+
+    CHECK_EQ(XhciUsbdxNoteStreams(0x83, XHCI_USBDX_SA_SUCCESS, 4, 4),
+             0x83000404UL, "usbdx.open EP3 IN, 4 granted");
+    CHECK_EQ(XhciUsbdxNoteStreams(0x03, XHCI_USBDX_SA_INVALID_REQUEST, 31,
+                                  0),
+             0x03041F00UL, "usbdx.open refused, 31 asked");
+    CHECK_EQ(XhciUsbdxNoteStreams(0, XHCI_USBDX_STREAMS_AT_DISPATCH, 0x1000,
+                                  0),
+             0x00FEFF00UL, "usbdx.open at dispatch, requested saturated");
+
+    CHECK_EQ(XhciUsbdxNoteXfer(1, 6, 3, 0x03), 0x01060303UL,
+             "uas.urb slot 1 DCI 6 stream 3, IN and SHORT_OK");
+    CHECK_EQ(XhciUsbdxNoteXfer(1, 7, 0, 0x1234), 0x01070034UL,
+             "the flags' low byte only");
+    CHECK_EQ(XhciUsbdxNoteXfer(300, 32, 0x100, 9), 0xFF20FF09UL,
+             "slot and stream saturated");
+
+    CHECK_EQ(XhciUsbdxNoteLengths(0x60, 0x10), 0x00600010UL,
+             "a status IU: 96 asked, 16 came");
+    CHECK_EQ(XhciUsbdxNoteLengths(0x100000, 0x24), 0xFFFF0024UL,
+             "1 MiB asked, saturated");
+    CHECK_EQ(XhciUsbdxNoteLengths(0, 0), 0, "empty");
+}
+
 int main(void)
 {
     test_sizes();
@@ -562,6 +640,7 @@ int main(void)
     test_grant();
     test_answers();
     test_alias();
+    test_notes();
     printf("test_usbdx: %d checks, %d failures\n", checks, failures);
     return failures;
 }

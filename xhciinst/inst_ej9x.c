@@ -241,9 +241,15 @@ int inst_ej_rejected(INST_U32 reason, const char **text)
         *text = "The Thunderbolt driver cannot remove devices now.";
         return INST_EJ_UNSUPPORTED;
     case CM_EJ_WHY_NO_CHANNEL:
+        /* Also a drive connected before Windows started: on 98 SE and ME,
+         * under the USB4 software connection manager, no exposure comes
+         * at the start for a tunnel the pre-boot connection manager left
+         * up, so the channel does not name it until a later exposure
+         * reaches its member (record 21 sections 7.2 and 7.4). */
         *text = "The drive cannot be asked to stop cleanly (Stor98 is not "
-                "running it), so it is not\nejected from here. Shut down "
-                "Windows before you unplug it.";
+                "running it, or it was\nconnected before Windows started), "
+                "so it is not ejected from here.\nShut down Windows before "
+                "you unplug it.";
         return INST_EJ_UNSUPPORTED;
     default:
         *text = "The Thunderbolt driver refused the request.";

@@ -563,13 +563,13 @@ the owner, 2026-11-08, after the `3.4.2.0` cut refused a stale Stor98 and a
 stale `xhciqual.exe` that another worktree had built):
 
 ```
-powershell -ExecutionPolicy Bypass -File scripts\package\pre-cut.ps1 [-WdmFreeRoot <usb-wdm-free checkout>]
+powershell -ExecutionPolicy Bypass -File scripts\package\pre-cut.ps1 -TwoTrees [-WdmFreeRoot <usb-wdm-free checkout>]
 ```
 
 After the version bump is committed it rebuilds in this tree every input
 the cut reads - the text checks, `XHCIPFW`, `XHCIQUAL`, the mark service,
-the installer and its helper, then both gated builds here, one after the
-other (`-TwoTrees` runs `cut-builds.ps1` instead) - and runs `-CheckOnly`,
+the installer and its helper, then both gated builds - and runs
+`-CheckOnly`,
 stopping at the first failure, and prints the cut's command. It refuses
 before building anything unless the tree is clean, the version has no
 directory here yet, no gated build lock is held, and the pinned
@@ -577,6 +577,13 @@ usb-wdm-free release is reachable: `-WdmFreeRoot`, or
 `scripts\local\usb-wdm-free` (a clone, or a junction to one:
 `mklink /J scripts\local\usb-wdm-free <checkout>`). `-Plan` checks and
 lists the steps without running one.
+
+**Run it with `-TwoTrees`** (the owner, 2026-11-14, after the `3.5.0.0`
+pre-cut ran the two gated builds one after the other): `-TwoTrees` runs
+`cut-builds.ps1`, the two builds at once in two worktrees ("The two builds
+run at once", below), instead of one after the other in this tree.
+Leave the switch out only on a machine short of memory or disk for a
+second tree.
 
 **The text checks come before the builds** (roadmap-usb4 task 44.1):
 `scripts\check-text.ps1` runs in seconds every text check of the gated

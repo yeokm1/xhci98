@@ -357,6 +357,7 @@ VOID CmValuesDefault(PCM_VALUES v)
     v->Usb4V2 = CM_USB4_V2_DEFAULT;
     v->Gen4Elr = CM_GEN4_ELR_DEFAULT;
     v->SleepEntry = CM_SLEEP_ENTRY_DEFAULT;
+    v->WakePowerUp = CM_WAKE_POWER_UP_DEFAULT;
     v->BridgeReq = CM_BRIDGE_REQ_DEFAULT;
     v->RingIrq = CM_RING_IRQ_DEFAULT;
 }
@@ -467,6 +468,24 @@ VOID CmValuesTakeSleepEntry(PCM_VALUES v, ULONG found, ULONG raw)
         return;
     }
     v->SleepEntry = raw;
+}
+
+VOID CmValuesTakeWakePowerUp(PCM_VALUES v, ULONG found, ULONG raw)
+{
+    v->WakePowerUp = CM_WAKE_POWER_UP_DEFAULT;
+    v->WakePowerUpFound = 0;
+    v->WakePowerUpRaw = 0;
+    v->WakePowerUpRefused = 0;
+    if (!found) {
+        return;
+    }
+    v->WakePowerUpFound = 1;
+    v->WakePowerUpRaw = raw;
+    if (raw > 1) {
+        v->WakePowerUpRefused = 1;
+        return;
+    }
+    v->WakePowerUp = raw;
 }
 
 /* XhciCmAsm4242Handover (cm_vals.h): 0 or 1, else the default. */

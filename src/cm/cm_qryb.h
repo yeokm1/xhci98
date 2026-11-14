@@ -47,6 +47,7 @@ typedef struct _CM_QUERY_IN {
     ULONG IdBytes;
     const UCHAR *Removal;   /* the removal block, CM_Q_RM_BYTES; NULL: not
                                watched, none counted                       */
+    ULONG RingIrq;          /* CM_Q_RM_IRQ's word (CmRirqShowWord)         */
 } CM_QUERY_IN, *PCM_QUERY_IN;
 
 /*
@@ -209,8 +210,11 @@ ULONG CmLogHeadPut(UCHAR *head, ULONG cap, PULONG used, PULONG full,
  * the ring's Used bytes oldest first: a byte outside 0x20..0x7E, CR and LF
  * written '.'; when the oldest bytes may be a record's tail (Dropped != 0,
  * or CM_QL_F_EMITTED: a drain) the text starts after the first LF
- * (CM_QL_F_LOG_CUT); the value of a record CmQueryLogAddress names is
- * written "--------" (CM_QL_F_WITHHELD). The age is CM_Q_UNKNOWN until
+ * (CM_QL_F_LOG_CUT); below Verbosity 4 the value of a record
+ * CmQueryLogAddress names is written "--------" (CM_QL_F_WITHHELD), and
+ * at 4 it is served as recorded (from 3.5.0.0, the owner's decision of
+ * 2026-11-13; a driver before it withheld it at 4 too). The age is
+ * CM_Q_UNKNOWN until
  * CmQueryLogSetAge. With a head (HeadBytes not 0, task 46.13): the head,
  * the marker, the last stamp the ring holds in the CM_LOG_STAMP_LOOK
  * before the tail's first record when there is one, then the ring's

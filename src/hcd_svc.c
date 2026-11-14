@@ -114,8 +114,8 @@ static NTSTATUS NTAPI hcdConfigDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
  * recovery runs at DISPATCH_LEVEL and keeps this service out of its sequence
  * (ext->InitBelowPassive).
  */
-MPSTATUS HcdSvcConfigSpace(PXHCI_EXTENSION ext, BOOLEAN read, PVOID buffer,
-                           ULONG offset, ULONG length)
+static MPSTATUS hcdConfigIrp(PXHCI_EXTENSION ext, BOOLEAN read, PVOID buffer,
+                             ULONG offset, ULONG length, PULONG moved)
 {
     PHCD_CONTROLLER hc;
     PIO_STACK_LOCATION next;
@@ -161,10 +161,37 @@ MPSTATUS HcdSvcConfigSpace(PXHCI_EXTENSION ext, BOOLEAN read, PVOID buffer,
     }
     status = irp->IoStatus.Status;
     hc->ConfigLastInformation = (ULONG)irp->IoStatus.Information;
+    *moved = NT_SUCCESS(status) ? (ULONG)irp->IoStatus.Information : 0UL;
     IoFreeIrp(irp);
 
     hc->ConfigLastStatus = (ULONG)status;
     return NT_SUCCESS(status) ? MP_STATUS_SUCCESS : MP_STATUS_FAILURE;
+}
+
+MPSTATUS HcdSvcConfigSpace(PXHCI_EXTENSION ext, BOOLEAN read, PVOID buffer,
+                           ULONG offset, ULONG length)
+{
+    ULONG moved;
+
+    return hcdConfigIrp(ext, read, buffer, offset, length, &moved);
+}
+
+/* Mode 4's (hcd_msgnt.c, task 49.24): msi4nt takes a transfer as made only
+ * when every byte was, so a short one is a failed one there, never a
+ * success with a zero-filled tail. The Information count is read on NT
+ * 5.x, where the PCI driver reports it. The IRP is always sent, also after
+ * a surprise removal: an answer of all ones is the bus's, never this
+ * driver's (msi4nt's absence proof rests on it). IRQL: PASSIVE_LEVEL. */
+ULONG HcdSvcConfigBytes(PXHCI_EXTENSION ext, BOOLEAN read, PVOID buffer,
+                        ULONG offset, ULONG length)
+{
+    ULONG moved;
+
+    if (hcdConfigIrp(ext, read, buffer, offset, length, &moved) !=
+        MP_STATUS_SUCCESS) {
+        return 0;
+    }
+    return moved;
 }
 
 /* --------------------------------------------------------------------- */

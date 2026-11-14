@@ -9,9 +9,15 @@ scripts\build-driver.cmd runs its text checks first and then hands this
 script the block that needs no DDK: the import gate's self-tests, the INF,
 UAS, CM, Stor98 and txtsetup.oem gates with their self-tests, the
 packager's, the QEMU launchers' and the VM matrix's self-tests, the Stor98
-header check, on the x86 run XHCITR and XHCIPERF rebuilt and their
+header check, Python on PATH and then the connection manager snapshot's
+field tables, on the x86 run XHCITR and XHCIPERF rebuilt and their
 self-tests, the XHCIINST, XHCIMARK and XHCIDI self-tests when their EXEs
-are there, the host suite and on the x86 run Stor98's unit suite.
+are there, the host suite and on the x86 run Stor98's unit suite. With
+-All (build-driver.cmd's "all" run) the tools are rebuilt first on both
+architectures - XHCIMARK, XHCIINST, then XHCIDI on its own (its build's
+exit 2, no Open Watcom, a failure there), and on amd64 XHCITR and XHCIPERF
+as well - and a tool self-test whose EXE is still not there fails instead
+of being passed over.
 
 Each step is a process of its own with its own TEMP and TMP
 (out\steps-<arch>\tmp\<step>\) and its own log (out\steps-<arch>\
@@ -30,6 +36,12 @@ freshly linked EXE blocked, not a test failure).
 The build's architecture, x86 or amd64: the x86 run alone rebuilds XHCITR
 and XHCIPERF and runs Stor98's unit suite.
 
+.PARAMETER All
+build-driver.cmd's "all" run: every tool whose self-test the block runs is
+built in it first, and a self-test whose EXE is missing fails, naming the
+build to run (task 49.26). Without it such a step is passed over
+("absent") and listed in absent.txt.
+
 .PARAMETER Stor98Only
 build-driver.cmd's Stor98-only run (stor98 in place of the flavour,
 roadmap-usb4 task 48.9): only the steps Stor98's images and INFs need,
@@ -47,6 +59,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build-steps.ps1 -Arch x86
 param(
     [ValidateSet("x86", "amd64")]
     [string]$Arch = "x86",
+    [switch]$All,
     [switch]$Stor98Only,
     [switch]$SelfTest
 )
@@ -63,11 +76,14 @@ function New-Step {
     # cmd.exe runs. After: the ids that must pass first. IfExists: a path,
     # under the repository, that must be there when the step is due, or the
     # step is passed over. Inconclusive: an exit code read as inconclusive.
+    # Builder: the build that makes IfExists, named when a run that requires
+    # it (Invoke-BuildSteps -RequireExe) finds it missing.
     param([string]$Id, [string]$Title, [string]$Run, [string]$Hint,
-          [string[]]$After = @(), [string]$IfExists = "", [int]$Inconclusive = -1)
+          [string[]]$After = @(), [string]$IfExists = "", [int]$Inconclusive = -1,
+          [string]$Builder = "")
     return [pscustomobject]@{
         Id = $Id; Title = $Title; Run = $Run; Hint = $Hint; After = @($After)
-        IfExists = $IfExists; Inconclusive = $Inconclusive
+        IfExists = $IfExists; Inconclusive = $Inconclusive; Builder = $Builder
         State = "pending"; Code = $null; Elapsed = [TimeSpan]::Zero
         Process = $null; Watch = $null; Log = ""
     }
@@ -87,10 +103,15 @@ function Get-CmdRun {
     return $line
 }
 
+$script:PythonHint = "no Python runs from PATH (none there, or only the Microsoft Store's python.exe alias, which installs nothing and exits 9009). A gated build needs it on both architectures: scripts\gen-cm-snap.py's check, and on the x86 run the link checks of S98VSD.VXD and XHCIPFW.VXD. Put Python's folder on PATH (a .cmd wrapper that sets its own PATH must add it) and run again (task 49.7)."
+# The first python.exe on PATH, run; it names itself in the step's log.
+$script:PythonProbe = 'python -I -c "import sys; print(sys.executable)"'
+
 function Get-BuildSteps {
     # The block: the five longest first, then the rest in build-driver.cmd's
-    # old order. The hints are its old failure labels' texts.
-    param([string]$Arch)
+    # old order. The hints are its old failure labels' texts. -All: the
+    # tools rebuilt first on both architectures (task 49.26).
+    param([string]$Arch, [switch]$All)
     $infFail = "failed the setup-engine gate. Do not install it - Win98's setup engine has no log, and a Win2000 install that creates no service looks the same in Device Manager as a driver that loaded and failed."
     $infTest = "the INF gate's own self-tests failed, so its verdict on the INFs cannot be trusted either. Fix the gate first."
     $gateTest = "the import gate's self-tests failed."
@@ -127,28 +148,52 @@ function Get-BuildSteps {
     $s += New-Step "precut-selftest" "pre-cut.ps1 self-tests" (Get-PsRun "scripts\package\pre-cut.ps1" "-SelfTest") "pre-cut.ps1's self-tests failed, so its refusals and its steps before a cut cannot be trusted (task 48.10)."
     $s += New-Step "stor98-header-selftest" "Stor98 interface header: self-tests" (Get-PsRun "scripts\check-stor98-header.ps1" "-SelfTest") $hdrFail
     $s += New-Step "stor98-header" "Stor98 interface header" (Get-PsRun "scripts\check-stor98-header.ps1") $hdrFail @("stor98-header-selftest")
+    # Python is asked for once, by a step of its own, so a PATH without it
+    # (a .cmd wrapper that set its own) fails naming Python, not as the
+    # field tables' mismatch; the x86 run's VxD builds need it next.
+    $s += New-Step "python" "Python on PATH" $script:PythonProbe $script:PythonHint
+    $s += New-Step "cm-snap-fields" "connection manager snapshot: the field tables" ('python "' + (Join-Path $repo "scripts\gen-cm-snap.py") + '" "' + $repo + '" -Check') "src\cm\cm_snapf.c or cm_snapn.h is not what the structures give: run scripts\gen-cm-snap.py <repo> and review the change (record 21 section 8.4)." @("python")
     $toolFail = "xhcitr\build.cmd or xhciperf\build.cmd failed: XHCITR, which compiles the installer's pure half, or XHCIPERF is not current."
     $trAfter = @()
     $perfAfter = @()
-    if ($Arch -eq "x86") {
+    $instAfter = @()
+    $markAfter = @()
+    if ($Arch -eq "x86" -or $All) {
         $s += New-Step "xhcitr-build" "xhcitr, rebuilt" (Get-CmdRun "xhcitr\build.cmd") $toolFail
         $s += New-Step "xhciperf-build" "xhciperf, rebuilt" (Get-CmdRun "xhciperf\build.cmd") $toolFail
         $trAfter = @("xhcitr-build")
         $perfAfter = @("xhciperf-build")
     }
-    $s += New-Step "xhciinst-selftest" "xhciinst self-test" (Get-CmdRun "xhciinst\selftest.cmd") "xhciinst's self-test failed: its switches, its decisions or its import table cannot be trusted (xhciinst\selftest.cmd)." @() "xhciinst\XHCIINST.EXE"
-    $s += New-Step "xhcitr-selftest" "xhcitr self-test" (Get-CmdRun "xhcitr\selftest.cmd") "xhcitr's self-test failed: its switches, its pure half or its import table cannot be trusted (xhcitr\selftest.cmd)." $trAfter "xhcitr\XHCITR.EXE"
-    $s += New-Step "xhcitr-snaptest" "xhcitr snapshot self-test" (Get-CmdRun "xhcitr\snaptest.cmd") "xhcitr's snapshot self-test failed, so a dump's ""send this"" line cannot be trusted to mean the report was written in full." @("xhcitr-selftest") "xhcitr\XHCITR.EXE"
-    $s += New-Step "xhciperf-selftest" "xhciperf self-test" (Get-CmdRun "xhciperf\selftest.cmd") "xhciperf's self-test failed: its import table, its source rule or its pure half cannot be trusted (xhciperf\selftest.cmd)." $perfAfter "xhciperf\XHCIPERF.EXE"
-    $s += New-Step "xhcimark-selftest" "xhcimark self-test" (Get-CmdRun "xhcimark\selftest.cmd") "xhcimark's self-test failed: its pure half, its switches or its import table cannot be trusted (xhcimark\selftest.cmd)." @() "xhcimark\XHCIMARK.EXE"
-    $s += New-Step "xhcidi-selftest" "xhcidi self-test" (Get-CmdRun "xhciinst\di\selftest.cmd") "xhcidi's self-test failed: its import table, the gate over it or its version stamp cannot be trusted (xhciinst\di\selftest.cmd)." @() "xhciinst\di\xhcidi.exe"
-    $s += New-Step "host-tests" "host tests" (Get-CmdRun "test\run-host-tests.cmd") "the host suite failed - see its output." @() "" 2
+    $diAfter = @()
+    if ($All) {
+        # XHCIDI: xhciinst\build.cmd builds it too as its last part, but turns
+        # di\build.cmd's exit 2 (no Open Watcom) into success and leaves an
+        # older xhcidi.exe in place; so it is built again by a step of its own
+        # whose exit 2 fails the run, after the installer's build (the two
+        # never run side by side on its files). Its self-test waits for that.
+        $s += New-Step "xhciinst-build" "xhciinst, rebuilt" (Get-CmdRun "xhciinst\build.cmd") "xhciinst\build.cmd failed: XHCIINST, XHCIWIZ, SETUP or the x64 pair is not current."
+        $s += New-Step "xhcidi-build" "xhcidi, rebuilt" (Get-CmdRun "xhciinst\di\build.cmd") "xhciinst\di\build.cmd did not build XHCIDI (exit 2: no Open Watcom 16-bit compiler under WATCOM): an all build requires it, so an older xhcidi.exe is not self-tested in its place." @("xhciinst-build")
+        $s += New-Step "xhcimark-build" "xhcimark, rebuilt" (Get-CmdRun "xhcimark\build.cmd") "xhcimark\build.cmd failed: XHCIMARK and XHCIMK64 are not current."
+        $instAfter = @("xhciinst-build")
+        $diAfter = @("xhcidi-build")
+        $markAfter = @("xhcimark-build")
+    }
+    $s += New-Step "xhciinst-selftest" "xhciinst self-test" (Get-CmdRun "xhciinst\selftest.cmd") "xhciinst's self-test failed: its switches, its decisions or its import table cannot be trusted (xhciinst\selftest.cmd)." $instAfter "xhciinst\XHCIINST.EXE" -1 "xhciinst\build.cmd"
+    $s += New-Step "xhcitr-selftest" "xhcitr self-test" (Get-CmdRun "xhcitr\selftest.cmd") "xhcitr's self-test failed: its switches, its pure half or its import table cannot be trusted (xhcitr\selftest.cmd)." $trAfter "xhcitr\XHCITR.EXE" -1 "xhcitr\build.cmd"
+    $s += New-Step "xhcitr-snaptest" "xhcitr snapshot self-test" (Get-CmdRun "xhcitr\snaptest.cmd") "xhcitr's snapshot self-test failed, so a dump's ""send this"" line cannot be trusted to mean the report was written in full." @("xhcitr-selftest") "xhcitr\XHCITR.EXE" -1 "xhcitr\build.cmd"
+    $s += New-Step "xhciperf-selftest" "xhciperf self-test" (Get-CmdRun "xhciperf\selftest.cmd") "xhciperf's self-test failed: its import table, its source rule or its pure half cannot be trusted (xhciperf\selftest.cmd)." $perfAfter "xhciperf\XHCIPERF.EXE" -1 "xhciperf\build.cmd"
+    $s += New-Step "xhcimark-selftest" "xhcimark self-test" (Get-CmdRun "xhcimark\selftest.cmd") "xhcimark's self-test failed: its pure half, its switches or its import table cannot be trusted (xhcimark\selftest.cmd)." $markAfter "xhcimark\XHCIMARK.EXE" -1 "xhcimark\build.cmd"
+    $s += New-Step "xhcidi-selftest" "xhcidi self-test" (Get-CmdRun "xhciinst\di\selftest.cmd") "xhcidi's self-test failed: its import table, the gate over it or its version stamp cannot be trusted (xhciinst\di\selftest.cmd)." $diAfter "xhciinst\di\xhcidi.exe" -1 "xhciinst\di\build.cmd (Open Watcom)"
+    # In a gated build the host suite's amd64 legs are not optional: without
+    # WDK 7.1's amd64 compiler (its own WDK71, not the build's WDKROOT) the
+    # suite fails rather than passing "x86 only" (task 49.34).
+    $s += New-Step "host-tests" "host tests" ('set "XHCI98_HOST_AMD64_REQUIRED=1" & ' + (Get-CmdRun "test\run-host-tests.cmd")) "the host suite failed - see its output." @() "" 2
     if ($Arch -eq "x86") {
         $s += New-Step "stor98-unit" "Stor98 unit tests" (Get-CmdRun "src\stor98\tests\unit\build.cmd") "Stor98's unit suite failed - see its output."
     }
     # The longest first, so the short ones fill in beside them: the
     # packager's self-tests alone took 20 minutes on 2026-10-29.
-    $long = @("packager", "host-tests", "xhcitr-build", "xhciperf-build", "stor98-unit")
+    $long = @("packager", "host-tests", "xhciinst-build", "xhcitr-build", "xhciperf-build", "xhcimark-build", "stor98-unit")
     $first = @()
     foreach ($id in $long) { $first += @($s | Where-Object { $_.Id -eq $id }) }
     return @($first + @($s | Where-Object { $long -notcontains $_.Id }))
@@ -198,7 +243,10 @@ function Invoke-BuildSteps {
     # temporary folder under -LogDir; -Write takes each line printed.
     # Returns the exit code (0, 1 or 2) and leaves each step's State
     # (passed, failed, inconclusive, absent, not run), Code and Elapsed.
-    param([object[]]$Steps, [int]$Max, [string]$LogDir, [string]$Root, [scriptblock]$Write)
+    # -RequireExe (an "all" run): a step whose IfExists is not there fails,
+    # naming its Builder, instead of being passed over.
+    param([object[]]$Steps, [int]$Max, [string]$LogDir, [string]$Root, [scriptblock]$Write,
+          [switch]$RequireExe)
     if ($Max -lt 1) { $Max = 1 }
     New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
     $byId = @{}
@@ -251,6 +299,16 @@ function Invoke-BuildSteps {
             }
             if (-not $ready) { continue }
             if ($s.IfExists -ne "" -and -not (Test-Path -LiteralPath (Join-Path $Root $s.IfExists) -PathType Leaf)) {
+                if ($RequireExe) {
+                    $b = if ($s.Builder -ne "") { $s.Builder } else { "the build that makes it" }
+                    $s.State = "failed"
+                    $s.Code = -1
+                    $s.Hint = ("{0} is not built: run {1}. An all build runs that build before this step, so it did not make the EXE (see its log). {2}" -f $s.IfExists, $b, $s.Hint)
+                    $stop = $true
+                    & $Write ""
+                    & $Write ("--- {0}: failed, no {1}" -f $s.Title, $s.IfExists)
+                    break
+                }
                 $s.State = "absent"
                 & $Write ""
                 & $Write ("--- {0}: not run, no {1}" -f $s.Title, $s.IfExists)
@@ -276,7 +334,9 @@ function Invoke-BuildSteps {
         # stopped them: each waits, through the table, for itself. A check
         # left unrun is a failure, not a pass.
         $running = @($Steps | Where-Object { $_.State -eq "running" })
-        if ($running.Count -eq 0) {
+        # (After a failure the pending steps are marked not run at the loop's
+        # top, not here.)
+        if ($running.Count -eq 0 -and -not $stop) {
             foreach ($s in @($Steps | Where-Object { $_.State -eq "pending" })) {
                 $s.State = "failed"
                 $s.Code = -1
@@ -382,6 +442,28 @@ function Invoke-RunnerSelfTest {
         Assert-True ($rc -eq 0 -and $s[0].State -eq "absent" -and $s[1].State -eq "passed") ("an absent step: rc {0}, {1} {2}" -f $rc, $s[0].State, $s[1].State)
         Assert-True (($script:lines -join "`n").Contains("--- M: not run, no no-such.exe")) "an absent step was not said."
 
+        Write-Step "with -RequireExe (an all build) an absent EXE fails, names its build, and stops the rest"
+        $script:lines.Clear()
+        $s = @((New-Step "m2" "M2" "exit /b 0" "hint m2" @() "no-such.exe" -1 "tool\build.cmd"), (New-Step "n2" "N2" "exit /b 0" "hint n2" @("m2")))
+        $rc = Invoke-BuildSteps -Steps $s -Max 2 -LogDir (Join-Path $work "l6b") -Root $work -Write $collect -RequireExe
+        $text = $script:lines -join "`n"
+        Assert-True ($rc -eq 1 -and $s[0].State -eq "failed" -and $s[1].State -eq "not run") ("an absent step under -RequireExe: rc {0}, {1} {2}" -f $rc, $s[0].State, $s[1].State)
+        Assert-True ($text.Contains("--- M2: failed, no no-such.exe") -and $text.Contains("ERROR: M2: no-such.exe is not built") -and $text.Contains("run tool\build.cmd")) "an absent step under -RequireExe did not say its EXE and its build."
+        $s = @((New-Step "m3" "M3" "exit /b 0" "hint m3" @() "wait.cmd" -1 "tool\build.cmd"))
+        $rc = Invoke-BuildSteps -Steps $s -Max 1 -LogDir (Join-Path $work "l6c") -Root $work -Write $collect -RequireExe
+        Assert-True ($rc -eq 0 -and $s[0].State -eq "passed") ("a present EXE under -RequireExe: rc {0}, {1}" -f $rc, $s[0].State)
+
+        Write-Step "an all build with an older helper image there and no Open Watcom fails: the builder's exit 2 is a failure"
+        $script:lines.Clear()
+        $old = Join-Path $work "old-xhcidi.exe"
+        [System.IO.File]::WriteAllText($old, "an older image of the same version")
+        $s = @((New-Step "dib" "DIB" "echo XHCIDI.EXE was not built: no Open Watcom & exit /b 2" "the helper was not rebuilt"),
+               (New-Step "dit" "DIT" "exit /b 0" "hint dit" @("dib") "old-xhcidi.exe" -1 "xhciinst\di\build.cmd"))
+        $rc = Invoke-BuildSteps -Steps $s -Max 2 -LogDir (Join-Path $work "l6d") -Root $work -Write $collect -RequireExe
+        Assert-True ($rc -eq 1 -and $s[0].State -eq "failed" -and $s[0].Code -eq 2 -and $s[1].State -eq "not run") `
+            ("an older helper image with its build's exit 2: rc {0}, {1} ({2}) {3}" -f $rc, $s[0].State, $s[0].Code, $s[1].State)
+        Assert-True (($script:lines -join "`n").Contains("ERROR: DIB: the helper was not rebuilt")) "the helper build's exit 2 was not said as the failure."
+
         Write-Step "each step its own TEMP, TMP and log, and the working directory given"
         $script:lines.Clear()
         $s = @((New-Step "p" "P" "echo T=%TEMP% M=%TMP% & cd" "hint p"), (New-Step "q" "Q" "echo T=%TEMP% M=%TMP% & cd" "hint q"))
@@ -405,8 +487,52 @@ function Invoke-RunnerSelfTest {
         try { [void](Invoke-BuildSteps -Steps @((New-Step "r" "R" "exit /b 0" "h" @("zz"))) -Max 1 -LogDir (Join-Path $work "l8") -Root $work -Write $collect) } catch { $threw = $_.Exception.Message }
         Assert-True ($threw.Contains("which is not a step")) ("a dangling wait was not refused: '{0}'" -f $threw)
 
+        Write-Step "the all build's tables: every tool self-test waits for a build of its tool, on both architectures"
+        $toolBuild = @{ "xhciinst-selftest" = "xhciinst-build"; "xhcidi-selftest" = "xhcidi-build"; "xhcimark-selftest" = "xhcimark-build";
+                        "xhcitr-selftest" = "xhcitr-build"; "xhciperf-selftest" = "xhciperf-build" }
+        foreach ($ar in @("x86", "amd64")) {
+            $t = @(Get-BuildSteps -Arch $ar -All)
+            $ids = @($t | ForEach-Object { $_.Id })
+            Assert-True (@($ids | Select-Object -Unique).Count -eq $ids.Count) "an id is used twice in the $ar all table."
+            foreach ($x in $t) { foreach ($a in $x.After) { Assert-True ($ids -contains $a) "$ar all step '$($x.Id)' waits for '$a', not in the table." } }
+            foreach ($k in $toolBuild.Keys) {
+                $x = @($t | Where-Object { $_.Id -eq $k })
+                Assert-True ($x.Count -eq 1 -and ($x[0].After -contains $toolBuild[$k]) -and $x[0].Builder -ne "") "$ar all: '$k' does not wait for '$($toolBuild[$k])' or names no build."
+            }
+            $snap = @($t | Where-Object { $_.Id -eq "xhcitr-snaptest" })
+            Assert-True ($snap.Count -eq 1 -and ($snap[0].After -contains "xhcitr-selftest")) "$ar all: the snapshot self-test does not wait for xhcitr's."
+            $withExe = @($t | Where-Object { $_.IfExists -ne "" })
+            Assert-True ($withExe.Count -eq 6) "$ar all: $($withExe.Count) steps read an EXE, not the six tool self-tests."
+            $dib = @($t | Where-Object { $_.Id -eq "xhcidi-build" })
+            Assert-True ($dib.Count -eq 1 -and ($dib[0].After -contains "xhciinst-build") -and $dib[0].Run.Contains("xhciinst\di\build.cmd")) "$ar all: XHCIDI's own build is missing, or does not wait for xhciinst\build.cmd, which writes the same files."
+        }
+        foreach ($ar in @("x86", "amd64")) {
+            $t = @(Get-BuildSteps -Arch $ar)
+            $ids = @($t | ForEach-Object { $_.Id })
+            Assert-True (-not ($ids -contains "xhciinst-build") -and -not ($ids -contains "xhcimark-build") -and -not ($ids -contains "xhcidi-build")) "a plain $ar run builds the installer, its helper or the mark service."
+        }
+
+        Write-Step "the Python step, with no Python on PATH, fails naming Python, and the field tables' check is not run"
+        $script:lines.Clear()
+        $savedPath = $env:PATH
+        try {
+            $env:PATH = Join-Path $env:SystemRoot "System32"
+            $s = @((New-Step "py" "PY" $script:PythonProbe $script:PythonHint), (New-Step "snap" "SNAP" "exit /b 0" "hint snap" @("py")))
+            $rc = Invoke-BuildSteps -Steps $s -Max 2 -LogDir (Join-Path $work "l10") -Root $work -Write $collect
+        } finally {
+            $env:PATH = $savedPath
+        }
+        Assert-True ($rc -eq 1 -and $s[0].State -eq "failed" -and $s[1].State -eq "not run") ("the Python step without Python: rc {0}, {1} {2}" -f $rc, $s[0].State, $s[1].State)
+        Assert-True (($script:lines -join "`n").Contains("ERROR: PY: no Python runs from PATH")) "the Python step's failure did not name Python."
+
         Write-Step "the build's tables: every wait names a step, every id once"
         foreach ($ar in @("x86", "amd64")) {
+            foreach ($allRun in @($false, $true)) {
+                $t = @(Get-BuildSteps -Arch $ar -All:$allRun)
+                $snap = @($t | Where-Object { $_.Id -eq "cm-snap-fields" })
+                $py = @($t | Where-Object { $_.Id -eq "python" })
+                Assert-True ($snap.Count -eq 1 -and $py.Count -eq 1 -and ($snap[0].After -contains "python") -and $py[0].Run -eq $script:PythonProbe) "$ar (all: $allRun): the field tables' check does not wait for the Python step."
+            }
             $t = @(Get-BuildSteps -Arch $ar)
             $ids = @($t | ForEach-Object { $_.Id })
             Assert-True (@($ids | Select-Object -Unique).Count -eq $ids.Count) "an id is used twice in the $ar table."
@@ -438,6 +564,18 @@ if ($SelfTest) {
 
 $max = Get-StepMax
 $logDir = Join-Path $repo ("out\steps-" + $Arch)
-$steps = if ($Stor98Only) { @(Get-Stor98Steps -Arch $Arch) } else { @(Get-BuildSteps -Arch $Arch) }
-$rc = Invoke-BuildSteps -Steps $steps -Max $max -LogDir $logDir -Root $repo -Write { param($l) Write-Host $l }
+$steps = if ($Stor98Only) { @(Get-Stor98Steps -Arch $Arch) } else { @(Get-BuildSteps -Arch $Arch -All:$All) }
+# The steps passed over because their EXE is not there, one line each in
+# absent.txt, which build-driver.cmd prints again at the end of the run
+# (task 49.34); none, no file. A step that ran and passed over a part of
+# its own (an x64 companion EXE a tool's selftest.cmd checks only where it
+# is) is not listed: that is the step's own output.
+$absentList = Join-Path $logDir "absent.txt"
+if (Test-Path -LiteralPath $absentList) { Remove-Item -LiteralPath $absentList -Force }
+$rc = Invoke-BuildSteps -Steps $steps -Max $max -LogDir $logDir -Root $repo -Write { param($l) Write-Host $l } -RequireExe:($All -and -not $Stor98Only)
+$absent = @($steps | Where-Object { $_.State -eq "absent" } | ForEach-Object { "  {0} (no {1})" -f $_.Title, $_.IfExists })
+if ($absent.Count -gt 0) {
+    if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Path $logDir | Out-Null }
+    [System.IO.File]::WriteAllLines($absentList, [string[]]$absent, (New-Object System.Text.ASCIIEncoding))
+}
 exit $rc

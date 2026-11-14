@@ -388,3 +388,77 @@ ULONG XhciUsbdxIoctlAlias(ULONG code)
     }
     return code;
 }
+
+/* Task 49.45: the notes' packing. */
+
+static ULONG xhciUsbdxSat(ULONG v, ULONG max)
+{
+    return v > max ? max : v;
+}
+
+ULONG XhciUsbdxNoteSeen(const ULONG *table, ULONG used, ULONG slots,
+                        ULONG key)
+{
+    ULONG i;
+
+    if (table == NULL) {
+        return 0;
+    }
+    if (used > slots) {
+        used = slots;
+    }
+    for (i = 0; i < used; i++) {
+        if (table[i] == key) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+ULONG XhciUsbdxNoteWanted(ULONG claimed, ULONG limit)
+{
+    return claimed >= 1 && claimed <= limit;
+}
+
+ULONG XhciUsbdxNoteQiVs(ULONG location, ULONG version, ULONG size)
+{
+    return (xhciUsbdxSat(location, 0xFFUL) << 24) |
+           (xhciUsbdxSat(version, 0xFFFUL) << 12) |
+           xhciUsbdxSat(size, 0xFFFUL);
+}
+
+ULONG XhciUsbdxNoteV1(ULONG answer, ULONG version, ULONG size)
+{
+    return (xhciUsbdxSat(answer, 0xFFUL) << 24) |
+           (xhciUsbdxSat(version, 0xFFFFUL) << 8) |
+           xhciUsbdxSat(size, 0xFFUL);
+}
+
+ULONG XhciUsbdxNoteCap(ULONG capability, ULONG answer, ULONG count)
+{
+    return (xhciUsbdxSat(capability, 0xFFUL) << 24) |
+           (xhciUsbdxSat(answer, 0xFFUL) << 16) |
+           xhciUsbdxSat(count, 0xFFFFUL);
+}
+
+ULONG XhciUsbdxNoteStreams(ULONG endpoint, ULONG answer, ULONG requested,
+                           ULONG granted)
+{
+    return (xhciUsbdxSat(endpoint, 0xFFUL) << 24) |
+           (xhciUsbdxSat(answer, 0xFFUL) << 16) |
+           (xhciUsbdxSat(requested, 0xFFUL) << 8) |
+           xhciUsbdxSat(granted, 0xFFUL);
+}
+
+ULONG XhciUsbdxNoteXfer(ULONG slot, ULONG dci, ULONG stream, ULONG low)
+{
+    return (xhciUsbdxSat(slot, 0xFFUL) << 24) |
+           (xhciUsbdxSat(dci, 0xFFUL) << 16) |
+           (xhciUsbdxSat(stream, 0xFFUL) << 8) | (low & 0xFFUL);
+}
+
+ULONG XhciUsbdxNoteLengths(ULONG requested, ULONG actual)
+{
+    return (xhciUsbdxSat(requested, 0xFFFFUL) << 16) |
+           xhciUsbdxSat(actual, 0xFFFFUL);
+}

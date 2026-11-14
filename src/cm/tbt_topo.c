@@ -1220,6 +1220,94 @@ ULONG XhciTbtLearnArm(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
     return 0;
 }
 
+ULONG XhciTbtShpcSet(const XHCI_TBT_TOPO *topo)
+{
+    ULONG i;
+
+    if (topo == NULL || topo->Tunnels == 0 ||
+        topo->Tunnels > XHCI_TBT_MAX_TUNNELS) {
+        return 0;
+    }
+    for (i = 0; i < topo->Tunnels; i++) {
+        if (topo->Source[i] != XHCI_TBT_SRC_SHPC) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+ULONG XhciTbtLearnOwed(const XHCI_TBT_TOPO *topo, const XHCI_TBT_BINDS *binds)
+{
+    ULONG i;
+    ULONG owed = 0;
+
+    if (topo == NULL || binds == NULL || topo->Tunnels == 0 ||
+        topo->Tunnels > XHCI_TBT_MAX_TUNNELS ||
+        !xhciTbtBaseFits(topo, binds)) {
+        return 0;
+    }
+    for (i = 0; i < topo->Tunnels; i++) {
+        if (binds->BaseSeen[i] == 0 && (binds->BaseDown & (1UL << i)) == 0) {
+            owed |= 1UL << i;
+        }
+    }
+    return owed;
+}
+
+ULONG XhciTbtLearnEvidence(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
+                           PXHCI_TBT_BINDS binds)
+{
+    ULONG i;
+    ULONG bus;
+    ULONG seen;
+    ULONG owed;
+
+    owed = XhciTbtLearnOwed(topo, binds);
+    if (io == NULL || io->Read == NULL) {
+        return owed;
+    }
+    /* Bits are set only, by the arm's own condition (the port DOWN at a
+     * reading where nothing answers behind it); the baseline, its armed
+     * mark and every other bit stand whatever a read here does, so a
+     * failure costs the next attempt nothing (record 22 section 7.6.5). */
+    for (i = 0; i < topo->Tunnels && i < XHCI_TBT_MAX_TUNNELS; i++) {
+        if ((owed & (1UL << i)) == 0) {
+            continue;
+        }
+        if (xhciTbtOccupancy(io, topo->Set[i], &bus, &seen) &&
+            bus == binds->BaseBus[i] && seen == 0 &&
+            XhciTbtPortDown(io, topo->Set[i])) {
+            binds->BaseDown |= 1UL << i;
+            owed &= ~(1UL << i);
+        }
+    }
+    return owed;
+}
+
+ULONG XhciTbtEvidenceDue(ULONG owed, ULONG pending, ULONG armMs, ULONG nowMs,
+                         const ULONG *record, const ULONG *recordAt,
+                         ULONG count)
+{
+    ULONG i;
+
+    if (owed == 0 || pending != 0) {
+        return 0;
+    }
+    /* Unsigned elapsed time: a wrap of the clock is harmless. */
+    if ((ULONG)(nowMs - armMs) < XHCI_TBT_POLL_BUDGET_MS) {
+        return 1;
+    }
+    if (record == NULL || recordAt == NULL) {
+        return 0;
+    }
+    for (i = 0; i < count && i < XHCI_TBT_MAX_TUNNELS; i++) {
+        if (record[i] != recordAt[i]) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 VOID XhciTbtLearnUp(PXHCI_TBT_BINDS binds, ULONG port)
 {
     if (binds == NULL || port == 0 || port > XHCI_TBT_MAX_PORTS ||
@@ -2028,6 +2116,49 @@ ULONG XhciTbtInferReadBack(PXHCI_TBT_CFG io, ULONG bdf, ULONG buses)
         return XHCI_TBT_RB_UNREAD;
     }
     return (active || seen != 0) ? XHCI_TBT_RB_OPEN : XHCI_TBT_RB_CLOSED;
+}
+
+ULONG XhciTbtFunctionRead(PXHCI_TBT_CFG io, ULONG bdf)
+{
+    ULONG v;
+    ULONG primary;
+    ULONG secondary;
+    ULONG subordinate;
+    ULONG vendor;
+    ULONG dev;
+    ULONG retry;
+
+    if (io == NULL || io->Read == NULL || bdf > 0xFFFFUL) {
+        return XHCI_TBT_FN_UNREAD;
+    }
+    if (!xhciTbtRead(io, bdf, XHCI_TBT_CFG_BUSES, &v) ||
+        v == XHCI_TBT_ALL_ONES) {
+        return XHCI_TBT_FN_UNREAD;
+    }
+    primary = v & 0xFFUL;
+    secondary = (v >> 8) & 0xFFUL;
+    subordinate = (v >> 16) & 0xFFUL;
+    if (secondary == 0 || secondary == 0xFFUL || secondary <= primary ||
+        subordinate < secondary) {
+        return XHCI_TBT_FN_UNREAD;
+    }
+    /* Function 0 of every device number: behind a PCI Express link only
+     * device 0 answers, but a PCI bridge's slot (SHPC) puts its card at
+     * the slot's own device number. */
+    retry = 0;
+    for (dev = 0; dev < 32; dev++) {
+        if (!xhciTbtRead(io, XHCI_TBT_BDF(secondary, dev, 0),
+                         XHCI_TBT_CFG_ID, &v)) {
+            return XHCI_TBT_FN_UNREAD;
+        }
+        vendor = v & 0xFFFFUL;
+        if (vendor == 0x0001UL) {
+            retry = 1;
+        } else if (vendor != 0xFFFFUL && vendor != 0UL) {
+            return XHCI_TBT_FN_PRESENT;
+        }
+    }
+    return retry ? XHCI_TBT_FN_NOT_READY : XHCI_TBT_FN_ABSENT;
 }
 
 /* ---- the port reading -------------------------------------------------- */

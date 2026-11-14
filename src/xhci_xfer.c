@@ -2968,6 +2968,49 @@ static ULONG xhciXferFromDequeue(const XHCI_RING *ring, ULONG index)
  * fetched: a reading past a fetched TD that is not held is UNREAD, and one
  * with only held TDs before it settles them, which QEMU has finished.
  */
+ULONG XhciXferStopPosition(const XHCI_RING *ring, ULONG deqLow,
+                           ULONG deqHigh, PULONG index, PULONG at)
+{
+    ULONG i;
+    ULONG dcs;
+    ULONG want;
+
+    if (ring == NULL || ring->Base == NULL || ring->Trbs < 2 ||
+        index == NULL || at == NULL) {
+        return XHCI_XFER_STOP_POS_INVALID;
+    }
+    if (deqHigh != 0 ||
+        XhciRingIndexFromPA(ring, deqLow & XHCI_EP_DEQUEUE_MASK, &i) !=
+            XHCI_RING_OK) {
+        return XHCI_XFER_STOP_POS_INVALID;
+    }
+    dcs = deqLow & XHCI_TRB_CYCLE;
+    if (i == ring->Trbs - 1) {
+        /* On the Link TRB: execution follows it to the base, toggling the
+         * cycle where the Link says to (xHCI 4.11.5.1). */
+        if ((ring->Base[i].Control & XHCI_TRB_CYCLE) != dcs) {
+            return XHCI_XFER_STOP_POS_INVALID;
+        }
+        if ((ring->Base[i].Control & XHCI_TRB_LINK_TC) != 0) {
+            dcs ^= XHCI_TRB_CYCLE;
+        }
+        i = 0;
+    }
+    if (i == ring->Enqueue) {
+        want = ring->Cycle & XHCI_TRB_CYCLE;
+    } else if (XhciRingIsOutstanding(ring, i)) {
+        want = ring->Base[i].Control & XHCI_TRB_CYCLE;
+    } else {
+        return XHCI_XFER_STOP_POS_INVALID;
+    }
+    if (dcs != want) {
+        return XHCI_XFER_STOP_POS_INVALID;
+    }
+    *index = i;
+    *at = xhciXferFromDequeue(ring, i);
+    return XHCI_XFER_STOP_POS_HOLDABLE;
+}
+
 ULONG XhciXferStopPlace(const XHCI_TRANSFER_QUEUE *queue,
                         const XHCI_RING *ring,
                         ULONG deqLow,
@@ -2976,8 +3019,6 @@ ULONG XhciXferStopPlace(const XHCI_TRANSFER_QUEUE *queue,
 {
     const XHCI_TRANSFER *walk;
     ULONG index;
-    ULONG dcs;
-    ULONG want;
     ULONG at;
     ULONG passed;
 
@@ -2991,33 +3032,8 @@ ULONG XhciXferStopPlace(const XHCI_TRANSFER_QUEUE *queue,
         ring->Trbs < 2) {
         return XHCI_XFER_BAD_PARAM;
     }
-    if (deqHigh != 0 ||
-        XhciRingIndexFromPA(ring, deqLow & XHCI_EP_DEQUEUE_MASK, &index) !=
-            XHCI_RING_OK) {
-        return XHCI_XFER_OK;
-    }
-    dcs = deqLow & XHCI_TRB_CYCLE;
-    if (index == ring->Trbs - 1) {
-        /* On the Link TRB: execution follows it to the base, toggling the
-         * cycle where the Link says to (xHCI 4.11.5.1). */
-        if ((ring->Base[index].Control & XHCI_TRB_CYCLE) != dcs) {
-            return XHCI_XFER_OK;
-        }
-        if ((ring->Base[index].Control & XHCI_TRB_LINK_TC) != 0) {
-            dcs ^= XHCI_TRB_CYCLE;
-        }
-        index = 0;
-    }
-    if (index == ring->Enqueue) {
-        want = ring->Cycle & XHCI_TRB_CYCLE;
-        at = xhciXferFromDequeue(ring, index);
-    } else if (XhciRingIsOutstanding(ring, index)) {
-        want = ring->Base[index].Control & XHCI_TRB_CYCLE;
-        at = xhciXferFromDequeue(ring, index);
-    } else {
-        return XHCI_XFER_OK;
-    }
-    if (dcs != want) {
+    if (XhciXferStopPosition(ring, deqLow, deqHigh, &index, &at) !=
+        XHCI_XFER_STOP_POS_HOLDABLE) {
         return XHCI_XFER_OK;
     }
 

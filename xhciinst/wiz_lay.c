@@ -4,6 +4,7 @@
  * wiz_lay.h. The window (xhciwiz.c) measures and places; this decides.
  */
 
+#include <string.h>
 #include "wiz_lay.h"
 
 int wiz_lay_now_col(int widest, int column)
@@ -110,4 +111,44 @@ int wiz_lay_part(int part, int parts)
         return 0;
     }
     return part < 0 || part >= parts ? parts - 1 : part;
+}
+
+int wiz_lay_path_mid(const char *path, int drop, char *out, int cap)
+{
+    const char *rest;
+    const char *p;
+    int root = 0;
+    int i;
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    if (path == NULL || drop < 0 || cap <= 0) {
+        return 0;
+    }
+    if (path[0] != '\0' && path[1] == ':' && path[2] == '\\') {
+        root = 3;
+    } else if (path[0] == '\\' && path[1] == '\\') {
+        root = 2;
+    } else if (path[0] == '\\') {
+        root = 1;
+    }
+    rest = path + root;
+    for (i = 0; i < drop; i++) {
+        p = strchr(rest, '\\');
+        if (p == NULL) {
+            return 0;
+        }
+        rest = p + 1;
+    }
+    if ((size_t)root + (drop > 0 ? 4 : 0) + strlen(rest) + 1 > (size_t)cap) {
+        return 0;
+    }
+    memcpy(out, path, (size_t)root);
+    out[root] = '\0';
+    if (drop > 0) {
+        strcat(out, "...\\");
+    }
+    strcat(out, rest);
+    return 1;
 }

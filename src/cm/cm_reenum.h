@@ -49,6 +49,14 @@
  *                    client's own resume bound and the five-minute cap
  *                    (CM_PORTS_HOLD_MAX_MS) are computed and logged as
  *                    diagnostics only.
+ *   CmReenumResumeSettle  at that D0, before the client's rebuilt tunnels
+ *                    are taken (CmNhiU4Take) and before CmReenumResumed,
+ *                    on a resume that succeeded: on the filter route,
+ *                    each member held at the suspend whose bridge last
+ *                    reported a PDO is read until its function answers
+ *                    again, within CM_PORTS_SETTLE_MS (record 22 section
+ *                    11.1.14, task 49.11). The thread, PASSIVE_LEVEL; no
+ *                    lock held across a read or a wait.
  *   CmReenumResumed  at the D0 after it, once the client's resume and
  *                    reconciliation have run (ok TRUE) or failed (ok
  *                    FALSE): clear the held members' marks and ask each
@@ -204,6 +212,9 @@ typedef struct _CM_REENUM_PORT {
     ULONG Bdf;              /* XHCI_TBT_BDF                               */
     ULONG Source;           /* XHCI_TBT_SRC_*                             */
     ULONG Flags;            /* CM_PORT_*                                  */
+    ULONG SettleWant;       /* held at the suspend with a PDO reported:
+                               its function waited for at the resume
+                               (record 22 section 11.1.14)                */
     ULONG Last;             /* the last XHCI_TBT_PORT_* read              */
     ULONG Reenums;          /* re-enumerations asked for it               */
     ULONG LastStatus;       /* the last call's NTSTATUS or CONFIGRET      */
@@ -242,6 +253,11 @@ typedef struct _CM_REENUM_PORT {
     /* An ACPI-named member: the filter publication its claim was made
      * under (record 22 section 7.6.1), 0 for any other source. */
     ULONG AcpiSerial;
+    /* The wake power-up (design record 21 section 6.3.1, task 49.46): the
+     * sleep epoch of the port's last release by the resume (0 none) and
+     * NowMs then. The thread's alone. */
+    ULONG WpuRelEpoch;
+    ULONG WpuRelAt;
 } CM_REENUM_PORT, *PCM_REENUM_PORT;
 
 /* Children of one tunnel port remembered on 98 as already seen, so that
@@ -488,12 +504,38 @@ typedef struct _CM_REENUM {
     CM_REENUM_KIDEJECT KidEjectHook;
     ULONG KidEjects;        /* kid ejects handed to the hook              */
     ULONG KidEjectsStale;   /* ... dropped by the checklist               */
+    /* The wake power-up (task 49.46): closed by CmReenumStop, opened by
+     * CmReenumStart, under cmRegLock; the counters of the stop block. */
+    ULONG WpuClosed;
+    ULONG WpuSending;       /* the thread between admission and requests  */
+    KEVENT WpuSendDone;     /* signalled whenever WpuSending is 0          */
+    ULONG WpuPassed;        /* the thread's step: once run, and when      */
+    ULONG WpuLastPass;
+    ULONG WpuArmed;
+    ULONG WpuAsked;
+    ULONG WpuOk;
+    ULONG WpuFailed;
+    ULONG WpuNone;
+    /* The domain's gate (cm_ports.h CM_WPU_DOM), under cm_reenum.c's gate
+     * lock; WpuOnCounted: this domain counted among those whose
+     * XhciCmWakePowerUp is 1. */
+    ULONG WpuStopLatch;
+    ULONG WpuPowerDown;
+    ULONG WpuResumeEpoch;
+    ULONG WpuResumeHaltSeq;
+    ULONG WpuResuming;
+    ULONG WpuRelDownSeq;
+    ULONG WpuRelHaltSeq;
+    ULONG WpuRelRefused;
+    ULONG WpuOnCounted;
+    ULONG WpuPendCounted;   /* added, its value not read yet               */
 } CM_REENUM, *PCM_REENUM;
 
 VOID CmReenumStart(struct _CM_NHI *nhi);
 VOID CmReenumAction(struct _CM_NHI *nhi, const TBT_ICM_ACTION *action);
 VOID CmReenumService(struct _CM_NHI *nhi);
 VOID CmReenumSuspend(struct _CM_NHI *nhi);
+VOID CmReenumResumeSettle(struct _CM_NHI *nhi);
 VOID CmReenumResumed(struct _CM_NHI *nhi, BOOLEAN ok);
 /* A resume the thread will not run (the D0 IRP failed below, or no
  * thread to queue it to): every marked member released by the failure
@@ -703,6 +745,13 @@ VOID CmCfgwkGone(struct _CM_CFGWK *w, ULONG members, ULONG active);
  * 7.7's retirement barrier): a request for one stays owed, retried, until
  * a later call lifts it. <= DISPATCH_LEVEL. */
 VOID CmCfgwkHold(struct _CM_CFGWK *w, ULONG members);
+/* Record 21 section 6.1.3: at a system sleep, the members whose next
+ * operation waits for Windows' restore of their bridge's bus numbers.
+ * PASSIVE_LEVEL. */
+VOID CmCfgwkSuspend(struct _CM_CFGWK *w);
+/* ... and the resume, however it ended: the parked operations taken again.
+ * <= DISPATCH_LEVEL. */
+VOID CmCfgwkResumed(struct _CM_CFGWK *w);
 ULONG CmCfgwkRetired(struct _CM_CFGWK *w);
 /* The members with a re-enumeration call admitted before the hold and
  * not yet returned: the removal-only request for one waits until it has.
@@ -1056,9 +1105,17 @@ BOOLEAN CmReenumKidRecheck(struct _CM_NHI *nhi, const CM_KID_EJECT *post);
  * above: a capability, never the header) of the configuration space of
  * this domain's member `bdf`, by IRP_MN_WRITE_CONFIG to its bridge's PDO
  * through the filter's registration (the SHPC DWORD Select byte of the
- * stor98 channel's reading, cm_nvlinkos.c). FALSE where the member has no
+ * stor98 channel's reading, cm_nvlinkos.c, and of the learning's, cm_nhi.c,
+ * record 22 section 7.6.5). FALSE where the member has no
  * published filter (Windows 98 SE and ME have none). PASSIVE_LEVEL. */
 BOOLEAN CmRegConfigWrite(struct _CM_NHI *nhi, ULONG bdf, ULONG offset,
                          ULONG width, ULONG value);
+
+/* Each member's filter record, XHCI_TBT_MAX_TUNNELS entries: 0 where the
+ * member has no published filter owned by this domain (every member on
+ * Windows 98 SE and ME), else that publication's serial (never 0). Read
+ * under the registration's lock, no configuration access (record 22
+ * section 7.6.5). PASSIVE_LEVEL. */
+VOID CmRegMemberRecords(struct _CM_NHI *nhi, PULONG record);
 
 #endif /* CM_REENUM_H */

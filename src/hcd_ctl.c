@@ -84,7 +84,9 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * its storage stack at the next reboot. */
 #define HCD_VALUE_MAX_TRANSFER  L"XhciMaxTransferKB"
 /* Task 47.30 (design record 13 section 11.10): the event ring's size, 256
- * the in-block ring, anything else (absent included) the larger one. */
+ * the in-block ring, any other value the larger one; from 3.5.0.0 (task
+ * 49.35, section 11.10.1) absent is 256 too, and a controller below xHCI
+ * 1.0 always takes 256 (XhciEventRingPick). */
 #define HCD_VALUE_EVENT_RING    L"XhciEventRingTrbs"
 /* Task 36.33: selective suspend, stages A and B (design record 14 section
  * 7). Default 0; the INFs write the 0 (task 36.51). */
@@ -124,6 +126,7 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * every start. */
 #define HCD_VALUE_USB2_BOS      L"XhciUsb2Bos"
 #define HCD_VALUE_RESUME_KEEP   L"XhciResumeKeep"
+#define HCD_VALUE_RESUME_KEEP_BOT L"XhciResumeKeepBot"
 #define HCD_VALUE_LINK_KEEP     L"XhciLinkKeep"
 /* Issue 29 (design record 13 section 21, F8): a SuperSpeed link that keeps
  * failing is sent to USB 2.0 (1, the default, written by the INFs) or
@@ -135,6 +138,11 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * absent, another number, another type or a failed read is on. Read at
  * every start and latched for its lifetime. */
 #define HCD_VALUE_COMMAND_CHECK L"XhciCommandCheck"
+/* Task 49.39 (design record 17 section 4.12.8): a stream endpoint's
+ * dequeues checked after a cancel, written by both INFs at 1: only a DWORD
+ * 0 leaves the checks noting without acting; absent, another number,
+ * another type or a failed read is 1. Read at every start. */
+#define HCD_VALUE_STREAM_DEQ_REPAIR L"XhciStreamDequeueRepair"
 #define HCD_VALUE_ACPI_TABLES   L"XhciAcpiTables"
 /* Task 38.2 (design record 13 section 6.11.3): the silent install's gate,
  * on Windows 98 SE and ME only. Only a DWORD of exactly 1 is on; absent,
@@ -157,6 +165,16 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
 #define HCD_VALUE_INTR_MODE     L"XhciInterruptMode"
 #define HCD_VALUE_POLL_IDLE     L"XhciPollIdleMs"
 #define HCD_VALUE_POLL_ACTIVE   L"XhciPollActiveMs"
+/* XhciInterruptMode 4's values (design record 15 sections 4.5.2 and
+ * 4.5.16, task 49.24): read at every mode-4 start on 2000, XP and XP x64;
+ * the pool's four on the x86 image alone (not offered on XP x64). */
+#define HCD_VALUE_MSI_STRATEGY  L"XhciMsiStrategy"
+#define HCD_VALUE_MSI_ISA_IRQ   L"XhciMsiIsaIrq"
+#define HCD_VALUE_MSI_SHARE     L"XhciMsiShare"
+#define HCD_VALUE_MSI_POOLS     L"XhciMsiPools"
+#define HCD_VALUE_MSI_IN_FIRST  L"XhciMsiInputFirst"
+#define HCD_VALUE_MSI_IN_LAST   L"XhciMsiInputLast"
+#define HCD_VALUE_MSI_IN_BUDGET L"XhciMsiInputBudget"
 /* Task 38.3 (design record 15 section 7.2.4): the finer system timer while
  * polling - 1 is on; 0, absent, unreadable or not a DWORD is off; any
  * other value runs as 1 (off by default since the owner's change of
@@ -402,13 +420,44 @@ static VOID hcdVersionCounters(PHCD_CONTROLLER hc)
 static VOID hcdReadEventRing(PHCD_CONTROLLER hc)
 {
     ULONG value;
+    ULONG read;
+    ULONG cap;
     NTSTATUS status;
 
     value = 0;
     status = hcdReadDword(hc, HCD_VALUE_EVENT_RING, &value);
-    hc->EvtValueRaw = NT_SUCCESS(status) ? value : 0xFFFFFFFFUL;
-    hc->EvtWanted =
-        (NT_SUCCESS(status) && value == XHCI_EVENT_RING_TRBS) ? 0UL : 1UL;
+    /* Absent and another type are told apart: 3.4.x took both as the
+     * larger ring, and from 3.5.0.0 absent is the smaller one. */
+    read = NT_SUCCESS(status) ? XHCI_EVT_READ_DWORD
+           : (status == STATUS_OBJECT_TYPE_MISMATCH) ? XHCI_EVT_READ_OTHER
+                                                     : XHCI_EVT_READ_ABSENT;
+    hc->EvtValueRead = read;
+    hc->EvtValueRaw = (read == XHCI_EVT_READ_DWORD) ? value : 0xFFFFFFFFUL;
+    /*
+     * Task 49.35 (design record 13 section 11.10.1; owner, 2026-11-13): a
+     * controller below xHCI 1.0 always takes the smaller ring, whatever the
+     * value says. Its version is read here, before the ring is allocated,
+     * through the mapping the start has just made, and only when the window
+     * holds the dword (the resource checks come later, in
+     * XhciInitController). The qemu flavour's XhciQemuHciVersion is latched
+     * here, once for the lifetime, so this choice and every capability
+     * check after it decode the same version.
+     */
+    cap = 0xFFFFFFFFUL;
+    if (hc->BarVa != NULL && hc->BarLength >= sizeof(ULONG)) {
+        cap = READ_REGISTER_ULONG((PULONG)hc->BarVa);
+    }
+#if defined(XHCI_FLAVOUR_QEMU)
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_QEMU_HCIVERSION, &value);
+    hc->Hc.HciQemuVersion =
+        (NT_SUCCESS(status) && value != 0 && value < 0xFFFFUL) ? value : 0;
+    cap = XhciEffectiveCapDword0(cap, hc->Hc.HciQemuVersion);
+#endif
+    hc->EvtHciVersion = (cap == 0xFFFFFFFFUL) ? 0xFFFFUL
+                                              : ((cap >> 16) & 0xFFFFUL);
+    hc->EvtPick = XhciEventRingPick(read, hc->EvtValueRaw, cap);
+    hc->EvtWanted = (hc->EvtPick == XHCI_EVT_PICK_LARGE) ? 1UL : 0UL;
 #if defined(XHCI_FLAVOUR_QEMU)
     hc->QemuEventRing = HCD_EVT_QEMU_NONE;
     value = 0;
@@ -443,8 +492,20 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
 
     /* Task 47.30: what hcdReadEventRing and HcdDmaOpen decided. */
     XhciLogNote(ext, "evt.ring.value", hc->EvtValueRaw);
+    /* Task 49.35: how it read (XHCI_EVT_READ_*: 0 absent, 1 a DWORD, 2
+     * another type), so FFFFFFFF above is told apart. */
+    XhciLogNote(ext, "evt.ring.read", hc->EvtValueRead);
+    XhciLogNote(ext, "evt.ring.hciversion", hc->EvtHciVersion);
+    /* Task 49.35: a controller below xHCI 1.0 held at the smaller ring
+     * although the value asked for the larger one (the value read;
+     * FFFFFFFF for a value of another type). */
+    if (XhciEventRingHoldNoted(hc->EvtPick, hc->EvtValueRead,
+                               hc->EvtValueRaw)) {
+        XhciLogNote(ext, "evt.ring.held", hc->EvtValueRaw);
+    }
+    /* Bits 31:24 since task 49.35: the choice (XHCI_EVT_PICK_*). */
     XhciLogNote(ext, "evt.ring",
-                (hc->EvtRoute << 16) |
+                (hc->EvtPick << 24) | (hc->EvtRoute << 16) |
                     (hc->EvtRingVa != NULL ? XHCI_EVENT_RING_BIG_TRBS
                                            : XHCI_EVENT_RING_TRBS));
     if (hc->EvtRingVa != NULL) {
@@ -603,6 +664,13 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
                 NT_SUCCESS(status) ? value : 0xFFFFFFFFUL);
     XhciLogNote(ext, "strict.on", hc->StrictOn);
 
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_STREAM_DEQ_REPAIR, &value);
+    hc->StreamDeqRepair = (NT_SUCCESS(status) && value == 0) ? 0UL : 1UL;
+    XhciLogNote(ext, "cfg.deq.repair.value",
+                NT_SUCCESS(status) ? value : 0xFFFFFFFFUL);
+    XhciLogNote(ext, "cfg.deq.repair", hc->StreamDeqRepair);
+
     /* Task 45.23 (design record 20 section 4.3.2): devices kept across a
      * resume's re-initialization. Written at 1 by the INFs since task
      * 45.50: absent, or anything but a DWORD 0, is on. */
@@ -610,6 +678,33 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     status = hcdReadDword(hc, HCD_VALUE_RESUME_KEEP, &value);
     hc->ResumeKeepOn = (NT_SUCCESS(status) && value == 0) ? 0UL : 1UL;
     XhciLogNote(ext, "resume.keep.on", hc->ResumeKeepOn);
+
+    /* Task 49.34 (design record 20 section 4.3.4, M9 and M18): a Bulk-Only
+     * drive kept too, after a hibernation (1) or a standby (2). Only a
+     * DWORD's known bits count. No INF writes it (M18): absent, or not a
+     * DWORD, is this Windows's default, as tuning.md says of every value
+     * (XhciBotKeepDefault: 1 on 2000, 0 on every other). */
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_RESUME_KEEP_BOT, &value);
+    hc->ResumeKeepBot =
+        NT_SUCCESS(status)
+            ? (value & XHCI_BOT_KEEP_MASK)
+            : XhciBotKeepDefault((IoIsWdmVersionAvailable(1, 0x10) &&
+                                  !IoIsWdmVersionAvailable(1, 0x20))
+                                     ? 1UL
+                                     : 0UL);
+    XhciLogNote(ext, "resume.keepbot.on", hc->ResumeKeepBot);
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* Task 49.34's leg aid, qemu flavour only and written by no INF: the
+     * Bulk-Only reopening delayed this many ms (held to 30 s), so a leg
+     * can let the controller's D0 complete at its bound and the class
+     * driver send in the window the latch closes (record 20 section
+     * 4.3.4, M13). */
+    value = 0;
+    status = hcdReadDword(hc, L"XhciQemuBotDelayMs", &value);
+    hc->QemuBotDelayMs = (NT_SUCCESS(status) && value <= 30000UL) ? value
+                                                                  : 0UL;
+#endif
 
     /* Task 45.41 (design record 13 section 15, L7): a device kept across
      * its SuperSpeed link's recovery. Written at 1 by the INFs since task
@@ -634,10 +729,8 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     XhciLogNote(ext, "hc.accept096", ext->HciAccept096Value);
     XhciLogNote(ext, "hc.floor", ext->HciFloor);
 #if defined(XHCI_FLAVOUR_QEMU)
-    value = 0;
-    status = hcdReadDword(hc, HCD_VALUE_QEMU_HCIVERSION, &value);
-    ext->HciQemuVersion =
-        (NT_SUCCESS(status) && value != 0 && value < 0xFFFFUL) ? value : 0;
+    /* Latched by hcdReadEventRing, before the event ring was chosen
+     * (task 49.35); noted here, once the log is set up. */
     XhciLogNote(ext, "qemu.hciversion.value", ext->HciQemuVersion);
 #endif
     hcdVersionCounters(hc);
@@ -657,6 +750,12 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     value = 0;
     status = hcdReadDword(hc, L"XhciQemuStageFault", &value);
     hc->QemuStageFault = NT_SUCCESS(status) ? value : 0;
+    /* Task 49.29 (record 13 section 11.11.12): bit 3 turns the image's
+     * per-request log on until Windows restarts. */
+    if ((hc->QemuStageFault & HCD_STAGE_QEMU_URBLOG) != 0 &&
+        InterlockedExchange((PLONG)&HcdQemuUrbLog, 1) == 0) {
+        XHCI_DBG_TEXT("urb: log on");
+    }
     value = 0;
     status = hcdReadDword(hc, L"XhciQemuStageMapProbe", &value);
     hc->QemuMapProbe = NT_SUCCESS(status) ? value : 0;
@@ -781,6 +880,25 @@ ULONG HcdSvcQemuPsiE460(PXHCI_EXTENSION ext)
 NTSTATUS HcdCtlQemuReadDword(PHCD_CONTROLLER hc, PCWSTR name, PULONG value)
 {
     return hcdReadDword(hc, name, value);
+}
+
+/* The machine-wide key alone, for the injection layer's periodic trigger
+ * read on 2000 to 10 (task 49.24): hcdReadDword's driver key goes through
+ * IoOpenDeviceRegistryKey, which waits behind the PnP manager, and the
+ * controller thread made that call once a second; under a lost message
+ * with a stick's I/O in flight it waited for ever there, before the loss
+ * could be reported (2000, 2026-11-12). IRQL: PASSIVE_LEVEL. */
+NTSTATUS HcdCtlQemuReadMachineDword(PCWSTR name, PULONG value)
+{
+    ULONG v;
+
+    v = 0;
+    if (hcdQueryDword(RTL_REGISTRY_SERVICES, (PWSTR)HCD_MACHINE_KEY, name,
+                      &v) != XHCI_REG_TAKEN) {
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+    }
+    *value = v;
+    return STATUS_SUCCESS;
 }
 #endif
 
@@ -1578,6 +1696,7 @@ static NTSTATUS hcdParseResources(PHCD_CONTROLLER hc, PIRP irp)
     hc->IntAffinity = 0;
     hc->IntMode = LevelSensitive;
     hc->IntShared = FALSE;
+    hc->IntShare = 0;
     hc->IntRaw.Count = 0;
     hc->IntRaw.Level = 0;
     hc->IntRaw.Vector = 0;
@@ -1614,6 +1733,9 @@ static NTSTATUS hcdParseResources(PHCD_CONTROLLER hc, PIRP irp)
             hc->IntShared = (d->ShareDisposition == CmResourceShareShared)
                                 ? TRUE
                                 : FALSE;
+            /* Mode 4's strategy 1 hands msi4nt the disposition itself
+             * (record 15 section 4.5.3). */
+            hc->IntShare = d->ShareDisposition;
             hc->HaveInterrupt = 1;
         }
     }
@@ -1659,6 +1781,99 @@ static NTSTATUS hcdParseResources(PHCD_CONTROLLER hc, PIRP irp)
         return STATUS_INSUFFICIENT_RESOURCES;
     }
     return STATUS_SUCCESS;
+}
+
+/* A value as read, XHCI_POLL_NOT_FOUND when absent, noted. IRQL:
+ * PASSIVE_LEVEL. */
+static ULONG hcdMsg4Read(PHCD_CONTROLLER hc, PCWSTR name, const char *note)
+{
+    ULONG value;
+
+    value = 0;
+    if (!NT_SUCCESS(hcdReadDword(hc, name, &value))) {
+        value = XHCI_POLL_NOT_FOUND;
+    }
+    XhciLogNote(&hc->Hc, note, value);
+    return value;
+}
+
+/*
+ * Mode 4's decision (design record 15 sections 4.5.2 and 4.5.16): the
+ * values read - on 2000, XP and XP x64 only, the pool's on the x86 image
+ * only - and XhciMsg4Decide. The values and the claim are kept for the
+ * connection and the counter block. IRQL: PASSIVE_LEVEL.
+ */
+static ULONG hcdMsg4Decide(PHCD_CONTROLLER hc, ULONG haveInterrupt,
+                           ULONG message, ULONG msiAvoid, PULONG reason)
+{
+    XHCI_MSG4_IN in;
+    ULONG delivery;
+
+    hc->Msg4StrategyRead = XHCI_POLL_NOT_FOUND;
+    hc->Msg4IsaIrqRead = XHCI_POLL_NOT_FOUND;
+    hc->Msg4ShareRead = XHCI_POLL_NOT_FOUND;
+    hc->Msg4PoolsRead = XHCI_POLL_NOT_FOUND;
+    hc->Msg4InputFirstRead = XHCI_POLL_NOT_FOUND;
+    hc->Msg4InputLastRead = XHCI_POLL_NOT_FOUND;
+    hc->Msg4BudgetRead = XHCI_POLL_NOT_FOUND;
+    if (hc->Msg4System == XHCI_MSG4_SYS_NT5) {
+        hc->Msg4StrategyRead = hcdMsg4Read(hc, HCD_VALUE_MSI_STRATEGY,
+                                           "msg4.strategy.read");
+        /* The NT 5 filter's cache for a later requirements IRP. */
+        hc->Msg4StrategyCache = (hc->Msg4StrategyRead == XHCI_POLL_NOT_FOUND)
+                                    ? 0UL
+                                    : hc->Msg4StrategyRead;
+        if (hc->Msg4StrategyRead == XHCI_POLL_NOT_FOUND ||
+            hc->Msg4StrategyRead == XHCI_MSG4_STRATEGY_CLAIM) {
+            hc->Msg4IsaIrqRead = hcdMsg4Read(hc, HCD_VALUE_MSI_ISA_IRQ,
+                                             "msg4.isairq.read");
+            hc->Msg4ShareRead = hcdMsg4Read(hc, HCD_VALUE_MSI_SHARE,
+                                            "msg4.share.read");
+#if !defined(_WIN64)
+            hc->Msg4PoolsRead = hcdMsg4Read(hc, HCD_VALUE_MSI_POOLS,
+                                            "msg4.pools.read");
+            if (hc->Msg4PoolsRead == XHCI_MSG4_POOLS_HIGH ||
+                hc->Msg4PoolsRead == XHCI_MSG4_POOLS_BOTH) {
+                hc->Msg4InputFirstRead = hcdMsg4Read(
+                    hc, HCD_VALUE_MSI_IN_FIRST, "msg4.input.first.read");
+                hc->Msg4InputLastRead = hcdMsg4Read(
+                    hc, HCD_VALUE_MSI_IN_LAST, "msg4.input.last.read");
+                hc->Msg4BudgetRead = hcdMsg4Read(hc, HCD_VALUE_MSI_IN_BUDGET,
+                                                 "msg4.budget.read");
+            }
+#endif
+        }
+    }
+    hc->Msg4Share = XhciMsg4ShareValue(hc->Msg4ShareRead);
+    hc->Counters.Msg4Strategy = hc->Msg4StrategyRead;
+    hc->Counters.Msg4IsaIrq = hc->Msg4IsaIrqRead;
+    hc->Counters.Msg4Share = hc->Msg4ShareRead;
+    hc->Counters.Msg4Pools = hc->Msg4PoolsRead;
+    hc->Counters.Msg4InputFirst = hc->Msg4InputFirstRead;
+    hc->Counters.Msg4InputLast = hc->Msg4InputLastRead;
+    hc->Counters.Msg4Budget = hc->Msg4BudgetRead;
+
+    in.System = hc->Msg4System;
+    in.Quarantined = 0;
+    in.Avoided = msiAvoid;
+    in.Strategy = hc->Msg4StrategyRead;
+    in.IsaIrq = hc->Msg4IsaIrqRead;
+#if defined(_WIN64)
+    in.PoolsOffered = 0;
+#else
+    in.PoolsOffered = 1;
+#endif
+    in.Pools = hc->Msg4PoolsRead;
+    in.InputFirst = hc->Msg4InputFirstRead;
+    in.InputLast = hc->Msg4InputLastRead;
+    in.Budget = hc->Msg4BudgetRead;
+    in.HaveInterrupt = haveInterrupt;
+    in.Message = message;
+    in.PinStatus = hc->PollPinStatus;
+    in.Pin = hc->PollPin;
+    delivery = XhciMsg4Decide(&in, &hc->Msg4Claim, reason);
+    XhciLogNote(&hc->Hc, "msg4.decide", (delivery << 8) | *reason);
+    return delivery;
 }
 
 /*
@@ -1710,6 +1925,13 @@ static NTSTATUS hcdSettleDelivery(PHCD_CONTROLLER hc)
                       : 0UL;
     XhciPollValues(&hc->PollValues, modeFound, modeValue, idleFound,
                    idleValue, activeFound, activeValue);
+    /* XhciInterruptMode 4 is 2000 to XP x64's alone: on 98 SE and ME it
+     * runs as 0, as a reserved value does (record 15 section 4.5). */
+    hc->Msg4System = HcdMsg4SystemClass();
+    if (hc->PollValues.Mode == XHCI_POLL_MODE_MSG4 &&
+        hc->Msg4System == XHCI_MSG4_SYS_9X) {
+        hc->PollValues.Mode = XHCI_POLL_MODE_AUTO;
+    }
     /* Record 15 section 7.2.4: the finer timer's switch and the value it
      * asks, the active period in effect in 100 ns. Off unless a non-zero
      * value is read (opt-in, the owner's change of 2026-10-14). */
@@ -1815,14 +2037,26 @@ static NTSTATUS hcdSettleDelivery(PHCD_CONTROLLER hc)
     /* Task 38.10, XhciMsiAvoid (design record 20 section 4.1): its value
      * and this controller's identity, read before anything is mapped. */
     msiAvoid = HcdQuirkMsiAvoid(hc, hc->PollValues.Mode);
-    /* A message whose routines were found is decided as connected; a
-     * connection that then fails turns it to a poll, or under mode 3 fails
-     * the start (hcdConnect). */
-    delivery = XhciPollDecideEx(hc->PollValues.Mode, haveInterrupt, message,
-                                (hc->MsgConnectEx != NULL) ? 1UL : 0UL,
-                                hc->PollPinStatus, hc->PollPin,
-                                HcdMsiSystem(), msiAvoid, &reason);
-    if (reason == XHCI_POLL_R_MSI_AVOIDED) {
+    if (hc->Msg4System != XHCI_MSG4_SYS_NT6 && HcdMsg4StartRefused(hc)) {
+        /* Task 49.24 (record 15 section 4.5.4): a function whose message
+         * mode 4 could not prove off this boot starts under no mode. */
+        delivery = XHCI_POLL_DELIVERY_NONE;
+        reason = XHCI_POLL_R_MSG4_QUARANTINED;
+    } else if (hc->PollValues.Mode == XHCI_POLL_MODE_MSG4) {
+        delivery = hcdMsg4Decide(hc, haveInterrupt, message, msiAvoid,
+                                 &reason);
+    } else {
+        /* A message whose routines were found is decided as connected; a
+         * connection that then fails turns it to a poll, or under mode 3
+         * fails the start (hcdConnect). */
+        delivery = XhciPollDecideEx(hc->PollValues.Mode, haveInterrupt,
+                                    message,
+                                    (hc->MsgConnectEx != NULL) ? 1UL : 0UL,
+                                    hc->PollPinStatus, hc->PollPin,
+                                    HcdMsiSystem(), msiAvoid, &reason);
+    }
+    if (reason == XHCI_POLL_R_MSI_AVOIDED ||
+        reason == XHCI_POLL_R_MSG4_AVOIDED) {
         HcdQuirkMsiRefused(hc);
     }
     hc->PollDelivery = delivery;
@@ -1848,8 +2082,10 @@ static NTSTATUS hcdSettleDelivery(PHCD_CONTROLLER hc)
      * configuration refused (record 15 section 4). hcdStartBody records the
      * refusal; the start-decision event follows (record 18 section 9). */
     if (delivery == XHCI_POLL_DELIVERY_NONE) {
-        status = haveInterrupt ? STATUS_DEVICE_CONFIGURATION_ERROR
-                               : STATUS_INSUFFICIENT_RESOURCES;
+        status = (haveInterrupt || hc->PollValues.Mode == XHCI_POLL_MODE_MSG4 ||
+                  reason == XHCI_POLL_R_MSG4_QUARANTINED)
+                     ? STATUS_DEVICE_CONFIGURATION_ERROR
+                     : STATUS_INSUFFICIENT_RESOURCES;
         return status;
     }
     return STATUS_SUCCESS;
@@ -2096,6 +2332,31 @@ static ULONG hcdMsgCapability(PHCD_CONTROLLER hc)
     return XhciMsiCapRead(config);
 }
 
+/* The same for mode 4 (hcd_msg4.c). IRQL: PASSIVE_LEVEL. */
+ULONG HcdCtlMsgCapability(PHCD_CONTROLLER hc)
+{
+    return hcdMsgCapability(hc);
+}
+
+/*
+ * Mode 4's routine (design record 15 section 4.5.5), which the seam's
+ * trampoline calls: message 0 only; the readiness flag clear - another
+ * client's or another member's message, a controller not reachable now -
+ * nothing touched; USBSTS all ones (a controller that vanished before
+ * any notice) nothing claimed; otherwise the line ISR's body, which
+ * claims on USBSTS.EINT. IRQL: the connection's DIRQL.
+ */
+BOOLEAN HcdCtlMsg4Isr(PHCD_CONTROLLER hc, ULONG messageId)
+{
+    if (messageId != 0 || !hc->Msg4Ready) {
+        return FALSE;
+    }
+    if (XhciReadOp(&hc->Hc, XHCI_OP_USBSTS) == 0xFFFFFFFFUL) {
+        return FALSE;
+    }
+    return hcdIsr(NULL, hc);
+}
+
 /* --------------------------------------------------------------------- */
 /* A line another device holds asserted (design record 15 section 4.4)    */
 /* --------------------------------------------------------------------- */
@@ -2185,6 +2446,9 @@ static VOID hcdHeldLine(PHCD_CONTROLLER hc)
     in.Read = hcdHeldRead;
     in.Irq = line & 0xFFUL;
     in.From = 0;
+    in.Kind = XHCI_POLL_WALK_HELD;
+    in.Irq2 = 0;
+    in.OwnClass = 0;
     hc->Counters.HeldIrq = in.Irq;
     if (in.Irq < 1 || in.Irq > 15 ||
         (hc->IntRaw.Count != 0 && hc->IntRaw.Level != in.Irq)) {
@@ -2236,6 +2500,131 @@ static VOID hcdHeldLine(PHCD_CONTROLLER hc)
 }
 
 /*
+ * Mode 4's veto of strategy 1, its PCI half (design record 15 section
+ * 4.5.3): the walk's SHARING kind - any function but this controller whose
+ * Interrupt Pin is 1 to 4, Interrupt Disable clear and Interrupt Line this
+ * controller's (its own register, and the raw level of the interrupt this
+ * start was given when that differs), through the HAL's reads alone.
+ * XHCI_POLL_HELD_NONE when clear; FOUND with *bdf and *id; FAILED when this
+ * controller's own words or line could not be read, its line is 0 or 255,
+ * or the walk could not run. IRQL: PASSIVE_LEVEL.
+ */
+ULONG HcdCtlLineShared(PHCD_CONTROLLER hc, PULONG bdf, PULONG id,
+                       PULONG functions)
+{
+    static const ULONG own[4] = {
+        XHCI_PIRQ_CFG_ID, XHCI_PIRQ_CFG_BAR0, XHCI_PIRQ_CFG_BAR1,
+        XHCI_PIRQ_CFG_SUBSYSTEM
+    };
+    XHCI_POLL_HELD_IN in;
+    XHCI_POLL_HELD_OUT out;
+    ULONG line;
+    ULONG i;
+
+    *bdf = 0;
+    *id = 0;
+    *functions = 0;
+    if (!hcdPswRead(hc, 0x3CUL, &line)) {
+        return XHCI_POLL_HELD_FAILED;
+    }
+    for (i = 0; i < 4; i++) {
+        if (!hcdPswRead(hc, own[i], &in.Own[i])) {
+            return XHCI_POLL_HELD_FAILED;
+        }
+    }
+    in.Context = NULL;
+    in.Read = hcdHeldRead;
+    in.Irq = line & 0xFFUL;
+    in.Irq2 = (hc->IntRaw.Count != 0 && hc->IntRaw.Level != in.Irq &&
+               hc->IntRaw.Level < 0xFFUL)
+                  ? hc->IntRaw.Level
+                  : 0UL;
+    in.From = 0;
+    in.Kind = XHCI_POLL_WALK_SHARING;
+    in.OwnClass = 0;
+    XhciLogNote(&hc->Hc, "msg4.line.irq", (in.Irq2 << 8) | in.Irq);
+    if (in.Irq == 0 || in.Irq == 0xFFUL) {
+        return XHCI_POLL_HELD_FAILED;
+    }
+    XhciPollHeldScan(&in, &out);
+    *functions = out.Functions;
+    *bdf = out.Bdf;
+    *id = out.Id;
+    return out.Result;
+}
+
+/*
+ * Mode 4's location of the function (design record 15 sections 4.5.3 and
+ * 4.5.7, step 3): bus 15:8, device 7:3, function 2:0, 1 when established.
+ * On NT the PDO's bus number and address. On 98 SE and ME, where the
+ * address is not answered, the match walk: this controller's own first 64
+ * bytes through its own configuration route, BAR0 the memory this start
+ * was given, then every function through the HAL, exactly one matching
+ * (*matches the count), and a bus number the PDO answers agreeing.
+ * IRQL: PASSIVE_LEVEL.
+ */
+ULONG HcdCtlMsg4Location(PHCD_CONTROLLER hc, PULONG bdf, PULONG matches)
+{
+    static const ULONG own[4] = {
+        XHCI_PIRQ_CFG_ID, XHCI_PIRQ_CFG_BAR0, XHCI_PIRQ_CFG_BAR1,
+        XHCI_PIRQ_CFG_SUBSYSTEM
+    };
+    XHCI_POLL_HELD_IN in;
+    XHCI_POLL_HELD_OUT out;
+    ULONG bus;
+    ULONG address;
+    ULONG length;
+    ULONG busKnown;
+    ULONG i;
+
+    *bdf = 0;
+    *matches = 0;
+    bus = 0;
+    busKnown = NT_SUCCESS(IoGetDeviceProperty(hc->Pdo,
+                                              DevicePropertyBusNumber,
+                                              sizeof(ULONG), &bus, &length))
+                   ? 1UL
+                   : 0UL;
+    if (IoIsWdmVersionAvailable(1, 0x10)) {
+        address = 0;
+        if (!busKnown ||
+            !NT_SUCCESS(IoGetDeviceProperty(hc->Pdo, DevicePropertyAddress,
+                                            sizeof(ULONG), &address,
+                                            &length))) {
+            return 0;
+        }
+        *bdf = XhciMsg4Bdf(bus, (address >> 16) & 0x1FUL, address & 0x7UL);
+        *matches = 1;
+        return 1;
+    }
+    for (i = 0; i < 4; i++) {
+        if (!hcdPswRead(hc, own[i], &in.Own[i])) {
+            return 0;
+        }
+    }
+    if (!hcdPswRead(hc, 0x08UL, &in.OwnClass) ||
+        (in.Own[1] & 0xFFFFFFF0UL) != hc->BarRaw.LowPart) {
+        return 0;
+    }
+    in.Context = NULL;
+    in.Read = hcdHeldRead;
+    in.Irq = 0;
+    in.Irq2 = 0;
+    in.From = 0;
+    in.Kind = XHCI_POLL_WALK_MATCH;
+    XhciPollHeldScan(&in, &out);
+    *matches = out.Matches;
+    XhciLogNote(&hc->Hc, "msg4.match", (out.Functions << 16) |
+                                            (out.Matches << 8) | out.Result);
+    if (out.Result != XHCI_POLL_HELD_FOUND ||
+        (busKnown && bus != ((out.Bdf >> 8) & 0xFFUL))) {
+        return 0;
+    }
+    *bdf = out.Bdf;
+    return 1;
+}
+
+/*
  * The connection for the delivery settled at start (design record 15
  * section 4): the line through IoConnectInterrupt, nothing for a poll, and
  * a message through the seam, hcdMsgConnect. A message connection's
@@ -2250,6 +2639,12 @@ static NTSTATUS hcdConnect(PHCD_CONTROLLER hc)
 {
     NTSTATUS status;
 
+    /* Task 49.24: mode 4's message is msi4nt's (hcd_msg4.c, record 15
+     * section 4.5); its refusal leaves the delivery none. */
+    if (hc->PollValues.Mode == XHCI_POLL_MODE_MSG4 &&
+        hc->PollDelivery == XHCI_POLL_DELIVERY_MESSAGE) {
+        return HcdMsg4Connect(hc);
+    }
     if (hc->PollDelivery == XHCI_POLL_DELIVERY_LINE) {
 #if defined(XHCI_FLAVOUR_QEMU)
         status = hc->QemuLineConnFail
@@ -2335,25 +2730,38 @@ static VOID NTAPI hcdIsrDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
 {
     PHCD_CONTROLLER hc;
     ULONG portEvents;
+    ULONG lost;
     KIRQL oldIrql;
 
     UNREFERENCED_PARAMETER(Dpc);
     UNREFERENCED_PARAMETER(Arg2);
 
     hc = (PHCD_CONTROLLER)Context;
+    /* Mode 4's brake of strategy 1, latched before the drain (record 15
+     * section 4.5.6); nothing unless the routine tripped it. */
+    HcdMsg4DpcBrake(hc);
     if (!hc->DpcClosed) {
         /* XhciEventDpc's own return is the Version 300 report route, which
          * the HCD never takes (RootHubReportThroughDpc is 0). Under a poll
          * delivery the drain re-arms nothing (design record 15 section 4),
-         * and a peek follows for what a completion routine resubmitted
-         * (section 7.1). */
+         * nor under mode 4's bar on re-enabling (section 4.5.4), and a
+         * peek follows for what a completion routine resubmitted (section
+         * 7.1). */
         portEvents = hc->PortEvents;
         (VOID)XhciEventDpc(&hc->Hc,
-                           (hc->Hc.EventDelivery != XHCI_POLL_DELIVERY_POLL)
+                           (hc->Hc.EventDelivery != XHCI_POLL_DELIVERY_POLL &&
+                            !hc->Msg4Barred)
                                ? TRUE
                                : FALSE);
         if (hc->PortEvents != portEvents) {
             HcdThreadWake(hc);
+        }
+        /* Mode 4's judge (section 4.5.6): drains that took events with no
+         * claimed entry of the routine, counted as a run. */
+        if (HcdMsg4Live(hc)) {
+            XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+            HcdMsg4DrainLocked(hc, &lost);
+            XhciControllerLockRelease(&hc->Hc, oldIrql);
         }
         if (hc->Hc.EventDelivery == XHCI_POLL_DELIVERY_POLL) {
             XhciControllerLockAcquire(&hc->Hc, &oldIrql);
@@ -2500,12 +2908,90 @@ static ULONG hcdRestoreBusMaster(PXHCI_EXTENSION ext)
 }
 
 /*
+ * Task 49.35's reset settle (design record 17 section 4.6.1): the reads and
+ * the sleep XhciTolResetSettle is given, at PASSIVE_LEVEL on this thread.
+ */
+static VOID hcdSettleRead(PVOID context, PULONG usbcmd, PULONG usbsts)
+{
+    PXHCI_EXTENSION ext;
+
+    ext = (PXHCI_EXTENSION)context;
+    *usbcmd = XhciReadOp(ext, XHCI_OP_USBCMD);
+    *usbsts = XhciReadOp(ext, XHCI_OP_USBSTS);
+#if defined(XHCI_FLAVOUR_QEMU)
+    *usbcmd = HcdInjResetAnswer(ext, XHCI_OP_USBCMD, *usbcmd);
+    *usbsts = HcdInjResetAnswer(ext, XHCI_OP_USBSTS, *usbsts);
+#endif
+}
+
+static VOID hcdSettleSleep(PVOID context, ULONG ms)
+{
+    HcdSvcWaitMs((PXHCI_EXTENSION)context, ms);
+}
+
+/*
+ * A reset the recovery left running (XHCI_RECOVER_RESET_BUSY), waited for
+ * here at PASSIVE_LEVEL for the start's own bound instead of the 10 ms stall
+ * the raised recovery may take. Returns 1 when HCRST and CNR both read 0;
+ * with a reset this driver wrote still owed, that reset is then proven
+ * (RecoverResetProven) for the recovery's next call, which adopts it rather
+ * than writing another. 0 when it ran out, or a read was all ones.
+ * IRQL: PASSIVE_LEVEL, the power gate held.
+ */
+static ULONG hcdRecoverSettle(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+    XHCI_TOL_RESET_IO io;
+    ULONG waited;
+    ULONG usbcmd;
+    ULONG usbsts;
+    ULONG r;
+
+    ext = &hc->Hc;
+    io.Read = hcdSettleRead;
+    io.Sleep = hcdSettleSleep;
+    io.Context = ext;
+    r = XhciTolResetSettle(&io, XHCI_TOL_RESET_SETTLE_MS,
+                           XHCI_TOL_RESET_STEP_MS, &waited, &usbcmd, &usbsts);
+    ext->Tol.Stats.ResetSettles++;
+    if (waited > ext->Tol.Stats.ResetSettleMsMax) {
+        ext->Tol.Stats.ResetSettleMsMax = waited;
+    }
+    if (r != XHCI_TOL_SETTLE_DONE) {
+        ext->Tol.Stats.ResetUnsettled++;
+        XhciLogNote(ext, "ctrl.recover.unsettled", usbcmd);
+        ext->InitStatus = usbsts;
+        return 0;
+    }
+    XhciLogNote(ext, "ctrl.recover.settled", waited);
+    if (ext->RecoverResetOwed) {
+        ext->RecoverResetProven = 1;
+    }
+    return 1;
+}
+
+/*
  * The in-place recovery, as the miniport's recovery timer callback ran it,
  * but from this thread instead of a usbport timer DPC: the request is taken
  * under the lock, the recovery itself at DISPATCH_LEVEL, because
  * XhciRecoverController's contract is DISPATCH_LEVEL (it sets
- * InitBelowPassive and keeps every wait a stall). IRQL: PASSIVE_LEVEL.
+ * InitBelowPassive and keeps every wait a stall).
+ *
+ * Task 49.35 (design record 17 section 4.6.1): what that contract cannot
+ * finish is finished here at PASSIVE_LEVEL, and the same recovery run
+ * again, at most HCD_RECOVER_CONTINUES times, the window charged once: a
+ * reset still running (RESET_BUSY) is waited for for the start's 1000 ms,
+ * and a Bus Master Enable this driver cleared is put back - after a settled
+ * reset, before the rerun, so the proven rerun passes the restore step
+ * without a second HCRST. An attempt that still does not recover is charged
+ * once (XhciRecoverCharge, unless the recovery charged it itself), and the
+ * next one is paced (XhciTolRecoverPaced): until 49.35 it began on the
+ * next pass, which a wake makes immediate, and an ASM1042 whose HCRST
+ * outlasts the stall spent all three attempts inside one tick.
+ * IRQL: PASSIVE_LEVEL.
  */
+#define HCD_RECOVER_CONTINUES 3UL
+
 static VOID hcdRecover(PHCD_CONTROLLER hc)
 {
     PXHCI_EXTENSION ext;
@@ -2515,6 +3001,8 @@ static VOID hcdRecover(PHCD_CONTROLLER hc)
     ULONG ok;
     ULONG admitted;
     ULONG allOnes;
+    ULONG k;
+    ULONG barred;
 
     ext = &hc->Hc;
     go = 0;
@@ -2529,7 +3017,11 @@ static VOID hcdRecover(PHCD_CONTROLLER hc)
         !ext->Tol.Unreadable && ext->Tol.Window.Refused == 0 &&
         (ext->Flags & XHCI_EXT_FLAG_SUSPENDED) == 0 &&
         hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0 &&
+        !hc->Msg4Barred && hc->Msg4Lost == HCD_MSG4_LOST_NONE &&
         ext->RecoveryFailuresConsecutive < XHCI_RECOVERY_MAX_ATTEMPTS) {
+        /* Task 49.24 (record 15 section 4.5.4): deferred, left requested
+         * and uncharged, while mode 4's bar stands; refused while its loss
+         * is latched. */
         go = 1;
         /* 35-T.6: a request raised on a window that stopped decoding - a
          * command that timed out on it - is left owed, uncharged, while
@@ -2547,6 +3039,15 @@ static VOID hcdRecover(PHCD_CONTROLLER hc)
         if (XhciTolRecoverDefer(ext->Tol.Stats.Tolerance, admitted,
                                 allOnes)) {
             go = 0;
+        }
+        /* Task 49.35: after a failed attempt, the next waits its gap; the
+         * request stays owed and this thread's 100 ms timeout brings it
+         * back. */
+        if (go && !XhciTolRecoverPaced(ext->RecoveryFailuresConsecutive,
+                                       ext->RecoveryFailTick,
+                                       HcdTolNow(hc))) {
+            go = 0;
+            ext->Tol.Stats.RecoverPaced++;
         }
     }
     if (go) {
@@ -2580,35 +3081,99 @@ static VOID hcdRecover(PHCD_CONTROLLER hc)
     HcdPollRevoke(hc);
     (VOID)HcdPollContain(hc);
     hc->TolStartGen++;
+    /* Task 49.24: the watchdog's count and window start again with the
+     * generation (record 15 section 4.5.6). */
+    HcdMsg4JudgeRestart(hc);
     KeRaiseIrql(DISPATCH_LEVEL, &raised);
     ok = XhciRecoverController(ext);
     KeLowerIrql(raised);
-    /* A sequence refused at the Bus Master Enable restore had halted and
-     * reset the controller and stopped short of Run/Stop only because the
-     * write needs PASSIVE_LEVEL. Made here, under the same gate, and the
-     * sequence run once more: the same recovery, not a new one, so the
-     * window is not charged again. Without it, a recovery after a proof
-     * that cleared the bit could never restore service. */
-    if (!ok && ext->BusMasterCleared &&
-        ext->RecoveryLastStep == XHCI_INIT_STEP_BUS_MASTER_RESTORE &&
-        hcdRestoreBusMaster(ext)) {
-        XhciLogNote(ext, "ctrl.recover.bme.restored", 1);
+    /*
+     * The continuations, each the same recovery run once more, so the window
+     * is not charged again. A reset still running is waited out first. A
+     * sequence refused at the Bus Master Enable restore had halted and reset
+     * the controller and stopped short of Run/Stop only because the write
+     * needs PASSIVE_LEVEL; so has one whose reset just settled, so the bit
+     * is put back here, under the same gate, before the rerun, whichever of
+     * the two stopped it. Without the restore, a recovery after a proof that
+     * cleared the bit could never restore service.
+     */
+    for (k = 0; k < HCD_RECOVER_CONTINUES &&
+                (ok == XHCI_RECOVER_RESET_BUSY ||
+                 ok == XHCI_RECOVER_BME_RESTORE);
+         k++) {
+        if (ok == XHCI_RECOVER_RESET_BUSY && !hcdRecoverSettle(hc)) {
+            break;
+        }
+        /* Task 49.24's admission again, under the lock: mode 4's bar or
+         * its lost message, latched during the settle by the ISR's brake,
+         * is terminal, and a rerun would clear the latch it holds. */
+        XhciControllerLockAcquire(ext, &oldIrql);
+        barred = (hc->Msg4Barred || hc->Msg4Lost != HCD_MSG4_LOST_NONE)
+                     ? 1UL
+                     : 0UL;
+        XhciControllerLockRelease(ext, oldIrql);
+        if (barred) {
+            XhciLogNote(ext, "ctrl.recover.msg4", 1);
+            break;
+        }
+        if (ext->BusMasterCleared) {
+            if (!hcdRestoreBusMaster(ext)) {
+                /* The restore refused: no rerun can pass the step. */
+                ok = XHCI_RECOVER_BME_RESTORE;
+                ext->InitStatus = 0;
+                break;
+            }
+            XhciLogNote(ext, "ctrl.recover.bme.restored", 1);
+        }
         hc->TolStartGen++;
+        ext->Tol.Stats.RecoverReruns++;
         KeRaiseIrql(DISPATCH_LEVEL, &raised);
         ok = XhciRecoverController(ext);
         KeLowerIrql(raised);
+    }
+    /* Task 49.24's loss is terminal: latched while a call ran (the brake's
+     * DPC on another processor, or during a configuration IRP above),
+     * the success that call reported clears nothing - the latch is set
+     * again under the lock, uncharged, and no service is granted. */
+    if (ok == XHCI_RECOVER_RECOVERED) {
+        XhciControllerLockAcquire(ext, &oldIrql);
+        if (hc->Msg4Lost != HCD_MSG4_LOST_NONE) {
+            if ((ext->Flags & XHCI_EXT_FLAG_INITIALIZED) != 0) {
+                XhciMaskInterrupts(ext);
+            }
+            ext->ControllerFailed = 1;
+            ok = XHCI_RECOVER_REFUSED;
+        }
+        XhciControllerLockRelease(ext, oldIrql);
+        if (ok != XHCI_RECOVER_RECOVERED) {
+            XhciLogNote(ext, "ctrl.recover.msg4", 2);
+        }
+    }
+    /* A proof is for the one call it was set for: none outlives this
+     * recovery, the power gate or a break above that made no call. */
+    ext->RecoverResetProven = 0;
+    if (ok == XHCI_RECOVER_RESET_BUSY || ok == XHCI_RECOVER_BME_RESTORE) {
+        /* Not finished: charged once, as a refusal is. */
+        XhciRecoverCharge(ext,
+                          ok == XHCI_RECOVER_RESET_BUSY
+                              ? XHCI_INIT_STEP_RESET
+                              : XHCI_INIT_STEP_BUS_MASTER_RESTORE,
+                          ext->InitStatus);
+        ok = XHCI_RECOVER_REFUSED;
     }
     /* The poller's service back on the final successful pass, inside the
      * power gate (record 15 section 5.3); before it, task 38.10's ASMedia
      * write, which the raised reset could not make (record 20 section
      * 4.8). */
-    if (ok) {
+    if (ok == XHCI_RECOVER_RECOVERED) {
         HcdQuirkAsmFlow(hc);
         HcdPollGrant(hc);
+    } else {
+        ext->RecoveryFailTick = HcdTolNow(hc);
     }
     HcdPowerGateLeave(hc);
 
-    if (!ok) {
+    if (ok != XHCI_RECOVER_RECOVERED) {
         XhciControllerLockAcquire(ext, &oldIrql);
         if (ext->RecoveryFailuresConsecutive < XHCI_RECOVERY_MAX_ATTEMPTS) {
             ext->RecoveryRequested = 1;
@@ -2648,10 +3213,11 @@ static VOID hcdTerminalRelease(PHCD_CONTROLLER hc)
     XhciControllerLockAcquire(ext, &oldIrql);
     if ((ext->Flags & XHCI_EXT_FLAG_STARTED) != 0 &&
         hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0) {
-        terminal = XhciTolTerminal(ext->ControllerFailed, ext->Tol.Unreadable,
-                                   ext->Tol.Window.Refused,
-                                   ext->RecoveryFailuresConsecutive,
-                                   XHCI_RECOVERY_MAX_ATTEMPTS);
+        terminal = XhciTolTerminalEx(ext->ControllerFailed, ext->Tol.Unreadable,
+                                     ext->Tol.Window.Refused,
+                                     ext->RecoveryFailuresConsecutive,
+                                     XHCI_RECOVERY_MAX_ATTEMPTS,
+                                     (hc->Msg4Lost != 0) ? 1UL : 0UL);
         /* Every record with a slot is in the table, written under this
          * lock (hcdDeviceNew, hcdDeviceFree). */
         devices = 0;
@@ -2798,28 +3364,59 @@ VOID HcdCtlBackstopTick(PHCD_CONTROLLER hc)
     ULONG admitted;
     ULONG pending;
     ULONG queue;
+    ULONG watched;
+    ULONG judgeGen;
+    ULONG lost;
 
     ext = &hc->Hc;
     queue = 0;
+    judgeGen = 0;
 #if defined(XHCI_FLAVOUR_QEMU)
     /* Task 36.4's start hold keeps the start's No Op undrained. */
     if (HcdInjStartHeld(hc)) {
         return;
     }
 #endif
+    lost = 0;
     XhciControllerLockAcquire(ext, &oldIrql);
     admitted = hcdDrainAdmitted(hc);
     pending = admitted ? XhciEventRingPending(&ext->EventRing) : 0UL;
-    queue = XhciTolBackstop(&ext->Tol.Obs, ext->Tol.Stats.Tolerance, pending,
-                            ext->EventRing.Dequeue, ext->EventRing.Ccs,
-                            ext->DpcCount, hc->TolStartGen, HcdTolNow(hc));
+    /* Task 49.24 (record 15 section 4.5.6): under a connected mode 4 the
+     * backstop is the watchdog's detector whatever XhciTolerance says. */
+    watched = HcdMsg4WatchedLocked(hc);
+    if (watched) {
+        HcdMsg4TickLocked(hc, &lost);
+        judgeGen = hc->Msg4JudgeGen;
+    }
+    queue = XhciTolBackstop(&ext->Tol.Obs,
+                            (ext->Tol.Stats.Tolerance ||
+                             HcdMsg4ServedLocked(hc))
+                                ? 1UL
+                                : 0UL,
+                            pending, ext->EventRing.Dequeue,
+                            ext->EventRing.Ccs, ext->DpcCount, hc->TolStartGen,
+                            HcdTolNow(hc));
     XhciControllerLockRelease(ext, oldIrql);
+    if (lost) {
+        HcdMsg4LostLatch(hc, HCD_MSG4_LOST_STRANDED);
+        return;
+    }
     if (!queue || !hcdQueueDrain(hc)) {
         return;
     }
     XhciControllerLockAcquire(ext, &oldIrql);
     ext->Tol.Stats.BackstopDrains++;
+    /* Charged only to the lifetime that was watched when the event was
+     * seen: not across a query-stop's release, a reconnect or a reset of
+     * the judge that came while the lock was dropped. */
+    if (watched && HcdMsg4WatchedLocked(hc) &&
+        hc->Msg4JudgeGen == judgeGen) {
+        HcdMsg4StrandedLocked(hc, &lost);
+    }
     XhciControllerLockRelease(ext, oldIrql);
+    if (lost) {
+        HcdMsg4LostLatch(hc, HCD_MSG4_LOST_STRANDED);
+    }
 }
 
 /*
@@ -2932,6 +3529,9 @@ static ULONG hcdContainProof(PXHCI_EXTENSION ext)
     if (proof == XHCI_TOL_PROOF_TUNNEL) {
         hc->IsoProofs++;
     }
+    /* Task 49.35: the proof's verdict, success included (a successful one
+     * clears Bus Master Enable, which until 49.35 nothing recorded). */
+    XhciLogNote(ext, "dma.proof", proof);
     if (asked) {
         XhciLogNote(ext, "tol.proof.tunnel", isolated);
     }
@@ -3187,6 +3787,10 @@ static VOID hcdPoll(PHCD_CONTROLLER hc)
     HcdCountersPoll(hc);
     /* Outside the STARTED gate: a failed resume (HcdControllerFail) is a
      * recovery request on a controller whose flags no longer say it runs. */
+    /* Task 49.24: a lost mode-4 connection's thread half, before the
+     * terminal release it leads to (record 15 section 4.5.4). */
+    HcdMsg4LostThread(hc);
+    HcdMsg4Look(hc);
     hcdRecover(hc);
     hcdTerminalRelease(hc);
     /* The lost-interrupt backstop is the tolerance clock's DPC's since task
@@ -3356,7 +3960,13 @@ static VOID hcdRelease(PHCD_CONTROLLER hc)
     XHCI_DBG_TEXT("hcd: release: poller");
     HcdPollClose(hc);
     XHCI_DBG_TEXT("hcd: release: interrupt");
-    if (hc->MsgVersion != 0) {
+    if (HcdMsg4Live(hc)) {
+        /* Task 49.24 (record 15 section 4.5.4): msi4nt's connection,
+         * disconnected or kept from the controller, never
+         * IoDisconnectInterrupt'd. */
+        HcdMsg4Release(hc);
+        hc->Interrupt = NULL;
+    } else if (hc->MsgVersion != 0) {
         /* Whatever IoConnectInterruptEx connected - a message or the line
          * it fell back to - goes through IoDisconnectInterruptEx with the
          * Version and context it returned (record 15 section 4.3). */
@@ -3527,6 +4137,9 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
     hc->PollValues.Mode = XHCI_POLL_NOT_FOUND;
     hc->PollDelivery = XHCI_POLL_DELIVERY_NONE;
     hc->PollReason = XHCI_POLL_R_NONE;
+    /* Task 49.24: mode 4's lifetime state, whatever this start's mode, so
+     * nothing of an earlier lifetime bars or fails this one. */
+    HcdMsg4StartReset(hc);
 
     status = hcdParseResources(hc, irp);
     if (!NT_SUCCESS(status)) {
@@ -3616,7 +4229,9 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
 
     /* Record 15 section 4.4 (task 46.6): a holder of the line named
      * before anything is connected; diagnostic only. */
-    hcdHeldLine(hc);
+    if (hc->PollValues.Mode != XHCI_POLL_MODE_MSG4) {
+        hcdHeldLine(hc);
+    }
     HcdTimersOpen(hc);
     hc->DpcClosed = 0;
 
@@ -3726,6 +4341,16 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
         if (hc->PollDelivery == XHCI_POLL_DELIVERY_LINE) {
             hcdIntxEnable(hc);
         }
+        /* Mode 4 (record 15 section 4.5.5): the readiness flag set and the
+         * bar lifted, then the causes unmasked; a flag that could not be
+         * set enables nothing and refuses the start. */
+        if (HcdMsg4Live(hc) && !HcdMsg4Open(hc)) {
+            status = HcdMsg4RefuseStart(hc, XHCI_POLL_R_MSG4_REFUSED,
+                                        HCD_MSG4_ST_READY);
+            hcdLogRefused(hc);
+            hcdStopBody(hc);
+            return status;
+        }
         ext->InterruptEnables++;
         KeRaiseIrql(DISPATCH_LEVEL, &raised);
         XhciEnableInterrupts(ext);
@@ -3744,6 +4369,16 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
     }
     /* Record 17 section 4.13.6: before the thread that asks it runs. */
     hcdIsoAcquire(hc);
+    /* Mode 4 (record 15 section 4.5.6): the start's No Op must have come by
+     * the message before the start succeeds; the controller thread, whose
+     * pass and backstop could drain it, is not running yet. Refused as a
+     * failed thread start is stopped. */
+    status = HcdMsg4NoOpSeen(hc);
+    if (!NT_SUCCESS(status)) {
+        hcdLogRefused(hc);
+        hcdStopBody(hc);
+        return status;
+    }
     status = hcdThreadStart(hc);
     if (!NT_SUCCESS(status)) {
         hcdStopBody(hc);
@@ -3824,6 +4459,10 @@ static VOID hcdStopBody(PHCD_CONTROLLER hc)
         KeLowerIrql(raised);
         if (!XhciStopController(ext)) {
             XhciFailClosedDma(ext);
+        } else {
+            /* Mode 4's proof of silence for its release (record 15
+             * section 4.5.4): the stop read back halted. */
+            hc->Msg4Halted = 1;
         }
     }
 #if defined(XHCI_FLAVOUR_QEMU)
@@ -3872,7 +4511,7 @@ static VOID hcdStopBody(PHCD_CONTROLLER hc)
                                         XHCI_EXT_FLAG_INITIALIZED,
                                     0);
     if (hc->BarVa != NULL || hc->Dma != NULL || hc->Interrupt != NULL ||
-        hc->MsgVersion != 0) {
+        hc->MsgVersion != 0 || HcdMsg4Live(hc)) {
         hcdRelease(hc);
     }
     /* The thread's last poll ran before the disable above. */

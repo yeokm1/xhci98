@@ -103,6 +103,11 @@
 VOID HcdSvcWaitMs(PXHCI_EXTENSION ext, ULONG milliseconds);
 MPSTATUS HcdSvcConfigSpace(PXHCI_EXTENSION ext, BOOLEAN read, PVOID buffer,
                            ULONG offset, ULONG length);
+/* The same IRP, answering the bytes the bus driver reports it moved
+ * (IoStatus.Information) on a success, 0 on a failure: XhciInterruptMode
+ * 4's configuration routines, on NT 5.x alone (task 49.24). */
+ULONG HcdSvcConfigBytes(PXHCI_EXTENSION ext, BOOLEAN read, PVOID buffer,
+                        ULONG offset, ULONG length);
 ULONG HcdSvcArmTimer(PXHCI_EXTENSION ext, ULONG milliseconds, PVOID context,
                      ULONG contextLength, XHCI_ASYNC_TIMER_CALLBACK *callback);
 VOID HcdSvcRequestReset(PXHCI_EXTENSION ext);
@@ -134,6 +139,14 @@ ULONG HcdInjDoorbell(PXHCI_EXTENSION ext, ULONG slot, ULONG value);
 ULONG HcdInjEventSwallow(PXHCI_EXTENSION ext, const XHCI_TRB *ev);
 ULONG HcdInjEventTake(PXHCI_EXTENSION ext, XHCI_TRB *ev);
 VOID HcdInjEventDone(PXHCI_EXTENSION ext);
+/* Task 49.35's slow reset (hcd_inj.c, XHCI_INJ_RESET_SLOW): the HCRST
+ * write in xhciReset stamps the hold, and every read of USBCMD or USBSTS
+ * the reset waits make (XhciWaitForBits, the recovery's pre-check, the
+ * thread's settle and the adopted reset's check) is answered through
+ * HcdInjResetAnswer, HCRST or CNR held set while the hold runs. opOffset is
+ * the operational register's offset. IRQL: any. */
+VOID HcdInjResetWritten(PXHCI_EXTENSION ext);
+ULONG HcdInjResetAnswer(PXHCI_EXTENSION ext, ULONG opOffset, ULONG value);
 #endif
 
 #endif /* HCD_SVC_H */

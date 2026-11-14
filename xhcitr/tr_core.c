@@ -1005,6 +1005,7 @@ int tr_query_parse(const unsigned char *b, size_t n, TR_QUERY *q)
         q->RmMember = tr_d32(b + CM_Q_HDR_BYTES + CM_Q_RM_MEMBER);
         q->RmLost = tr_d32(b + CM_Q_HDR_BYTES + CM_Q_RM_LOST);
         q->RmDriver = tr_d32(b + CM_Q_HDR_BYTES + CM_Q_RM_DRIVER);
+        q->RmIrq = tr_d32(b + CM_Q_HDR_BYTES + CM_Q_RM_IRQ);
     } else {
         q->RmMember = CM_Q_UNKNOWN;
     }
@@ -1623,6 +1624,73 @@ void tr_ver_line(int state, TR_U32 running, const TR_U32 *file, char *out,
     }
 }
 
+int tr_ver_parse(const char *s, TR_U32 *packed)
+{
+    TR_U32 v = 0;
+    TR_U32 field;
+    int k;
+    int digits;
+
+    *packed = 0;
+    if (s == NULL) {
+        return 0;
+    }
+    while (*s == ' ') {
+        s++;
+    }
+    for (k = 0; k < 4; k++) {
+        field = 0;
+        digits = 0;
+        while (*s >= '0' && *s <= '9' && digits < 4) {
+            field = field * 10 + (TR_U32)(*s - '0');
+            s++;
+            digits++;
+        }
+        if (digits == 0 || digits > 3 || field > 255) {
+            return 0;
+        }
+        v = (v << 8) | field;
+        if (k < 3) {
+            if (*s != '.') {
+                return 0;
+            }
+            s++;
+        }
+    }
+    while (*s == ' ') {
+        s++;
+    }
+    if (*s != '\0') {
+        return 0;
+    }
+    *packed = v;
+    return 1;
+}
+
+int tr_ver_mixed(TR_U32 installed, int haveRunning, TR_U32 running,
+                 char *out, size_t cap)
+{
+    char inst[32];
+    char run[32];
+
+    if (cap != 0) {
+        out[0] = '\0';
+    }
+    /* A running 0 is a driver before 3.3.0.0, which says no version: an
+     * entry from 3.3.0.0 on is newer than it (the restart line covers
+     * that), and an older entry cannot be compared. */
+    if (!haveRunning || installed == 0 || running == 0 ||
+        installed >= running) {
+        return 0;
+    }
+    tr_ver_text(installed, inst, sizeof(inst));
+    tr_ver_text(running, run, sizeof(run));
+    tr_sprintf(out, cap, "This entry was installed from another version's "
+               "files (%s) than the driver that is running (%s): run "
+               "SETUP.EXE to update it.", inst, run);
+    return 1;
+}
+
 /* s without a leading "\??\" and, for a target, a "!". */
 static const char *tr_pfro_strip(const char *s, int target)
 {
@@ -2000,6 +2068,77 @@ void tr_removal_text(const TR_QUERY *q, char *out, size_t cap)
     }
 }
 
+int tr_ring_irq_text(TR_U32 word, int nt, char *out, size_t cap)
+{
+    static const char *const why[] = {
+        "polled",                                       /* 0, never sent */
+        "polled - set to 0",
+        "polled - the value set is not valid",
+        "polled - no line (see XhciPfwNhiLine)",
+        "polled - Windows gave it no interrupt",
+        "polled - 2 is not available on 98 SE and ME",
+        "polled - a version check failed",
+        "polled - it has no message capability",
+        "polled - refused until Windows restarts",
+        "polled - no free vector",
+        "polled - its message is in use",
+        "polled - its MSI-X could not be turned off",
+        "polled - the interrupt could not be connected",
+        "polled - the interrupt could not be armed",
+        "polled - the self-test failed",
+        "polled - the interrupt stopped arriving",
+        "polled - the interrupt came too often",
+        "polled - braked (restart Windows to retry)",
+        "polled - re-arming after a sleep failed",
+        "polled - its line is disabled",
+        "polled - no ring to watch",
+        "polled - not set up yet",
+        "polled - its interrupt could not be ended safely"
+    };
+    TR_U32 kind;
+    TR_U32 w;
+
+    if (cap == 0) {
+        return 0;
+    }
+    out[0] = '\0';
+    if ((word & CM_Q_IRQ_PRESENT) == 0) {
+        return 0;
+    }
+    kind = CM_Q_IRQ_KIND(word);
+    w = CM_Q_IRQ_WHY(word);
+    switch (kind) {
+    case 1:
+        tr_copy(out, "on, by the line", cap);
+        break;
+    case 2:
+        if ((word & CM_Q_IRQ_IS_IRQ) != 0) {
+            tr_sprintf(out, cap, "on, by message (IRQ %lu)",
+                       (unsigned long)CM_Q_IRQ_NUMBER(word));
+        } else {
+            tr_sprintf(out, cap, "on, by message (vector %02lXh)",
+                       (unsigned long)CM_Q_IRQ_NUMBER(word));
+        }
+        break;
+    case 3:
+        tr_copy(out, "on, by the line (2 works as 1 here)", cap);
+        break;
+    case 0:
+        if (w == CM_Q_IRQ_WHY_NO_VECTOR && nt) {
+            tr_copy(out, "polled - no spare interrupt", cap);
+        } else if (w >= 1 && w < sizeof(why) / sizeof(why[0])) {
+            tr_copy(out, why[w], cap);
+        } else {
+            tr_sprintf(out, cap, "polled (reason %lu)", (unsigned long)w);
+        }
+        break;
+    default:
+        tr_sprintf(out, cap, "unknown (%08lX)", (unsigned long)word);
+        break;
+    }
+    return 1;
+}
+
 void tr_event_text(const TR_EVENT *e, char *out, size_t cap)
 {
     char gen[32];
@@ -2215,6 +2354,15 @@ int tr_parse_args(int argc, char **argv, TR_OPTS *o, char *err, size_t cap)
             alone++;
         } else if (o->Set && tr_switch(a, "show")) {
             o->SetShow = 1;
+            /* Task 49.38: /set /show <text>, the rows that match. */
+            if (i + 1 < argc && argv[i + 1][0] != '/' &&
+                argv[i + 1][0] != '-') {
+                if (strlen(argv[i + 1]) >= TR_SET_ARG_CHARS) {
+                    tr_copy(err, "/set /show takes one search text.", cap);
+                    return 1;
+                }
+                tr_copy(o->SetFind, argv[++i], sizeof(o->SetFind));
+            }
         } else if (o->Set && tr_switch(a, "request")) {
             o->SetRequest = 1;
         } else if (o->Set && tr_switch(a, "yes")) {
@@ -2922,6 +3070,17 @@ int tr_stopped_text(TR_U32 problem, int w2k, char *tag, size_t tagCap,
     tr_copy(tag, "not started", tagCap);
     tr_copy(sentence, "Windows has not started this device.", sentenceCap);
     return 0;
+}
+
+int tr_eject_first(int behindPort, int biosRefuses, int whyNone)
+{
+    if (!behindPort) {
+        return TR_EF_WHY;
+    }
+    if (biosRefuses) {
+        return TR_EF_BIOS;
+    }
+    return whyNone ? TR_EF_GO : TR_EF_WHY;
 }
 
 int tr_usb_after_kind(int walked, int found, int walkBad, int started,
@@ -5192,6 +5351,247 @@ void tr_snap_saved(int rc, const char *folder, const char *name,
                    "named %s was made by something else meanwhile. Run it "
                    "again.", folder, name);
     }
+}
+
+char tr_snap_kchar(int k)
+{
+    if (k >= 0 && k <= 9) {
+        return (char)('0' + k);
+    }
+    if (k >= 10 && k <= 35) {
+        return (char)('A' + (k - 10));
+    }
+    return 0;
+}
+
+static int tr_snap_set_taken(const char *base, TR_NAME_EXISTS exists,
+                             void *context)
+{
+    static const char *const plain[] = {
+        ".DEV", ".TXT", ".BIN", ".PSC",
+        ".DEV.TMP", ".TXT.TMP", ".BIN.TMP", ".PSC.TMP"
+    };
+    static const char kinds[TR_SNAP_FILES] = { 'D', 'T', 'B', 'P' };
+    char name[32];
+    int i;
+    int k;
+
+    for (i = 0; i < (int)(sizeof(plain) / sizeof(plain[0])); i++) {
+        tr_sprintf(name, sizeof(name), "%s%s", base, plain[i]);
+        if (exists(name, context)) {
+            return 1;
+        }
+    }
+    for (k = 0; k <= 35; k++) {
+        for (i = 0; i < TR_SNAP_FILES; i++) {
+            tr_sprintf(name, sizeof(name), "%s.%c%c", base, kinds[i],
+                       tr_snap_kchar(k));
+            if (exists(name, context)) {
+                return 1;
+            }
+        }
+    }
+    /* The connection managers' (task 49.37, record 25 section 23):
+     * .CT<n> and .CB<n>, n 0-9 then A-F, and their temporaries. */
+    for (k = 0; k < 16; k++) {
+        for (i = 0; i < 4; i++) {
+            tr_sprintf(name, sizeof(name), "%s.C%c%c%s", base,
+                       (i & 1) ? 'B' : 'T', tr_snap_kchar(k),
+                       (i & 2) ? ".TMP" : "");
+            if (exists(name, context)) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/* The engine's rule for a NAME given to /snapshot (tr_snap.c,
+ * report_name_ok): an 8.3 base, 1 to 8 letters, digits, '_' and '-', not
+ * '-' first, and not a DOS device name. */
+int tr_snap_name_ok(const char *name)
+{
+    static const char *const dev[] = { "CON", "PRN", "AUX", "NUL", NULL };
+    char up[9];
+    size_t n = strlen(name);
+    size_t i;
+
+    if (n == 0 || n > 8 || name[0] == '-') {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        char c = name[i];
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+              (c >= '0' && c <= '9') || c == '_' || c == '-')) {
+            return 0;
+        }
+        up[i] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+    }
+    up[n] = '\0';
+    for (i = 0; dev[i] != NULL; i++) {
+        if (strcmp(up, dev[i]) == 0) {
+            return 0;
+        }
+    }
+    if (n == 4 && (strncmp(up, "COM", 3) == 0 || strncmp(up, "LPT", 3) == 0) &&
+        up[3] >= '0' && up[3] <= '9') {
+        return 0;
+    }
+    return 1;
+}
+
+int tr_snap_pick_base(const char *given, unsigned month, unsigned day,
+                      unsigned hour, unsigned minute, TR_NAME_EXISTS exists,
+                      void *context, char *out)
+{
+    int letter;
+
+    out[0] = '\0';
+    if (given != NULL) {
+        if (!tr_snap_name_ok(given)) {
+            return TR_PICK_NAME;
+        }
+        tr_copy(out, given, 9);
+        if (tr_snap_set_taken(out, exists, context)) {
+            out[0] = '\0';
+            return TR_PICK_TAKEN;
+        }
+        return TR_PICK_OK;
+    }
+    if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 ||
+        minute > 59) {
+        return TR_PICK_CLOCK;
+    }
+    for (letter = 0; letter < 26; letter++) {
+        tr_sprintf(out, 9, "%c%02u%02u%02u%c",
+                   month <= 9 ? (char)('0' + month)
+                              : (char)('A' + (month - 10)),
+                   day, hour, minute, 'A' + letter);
+        if (!tr_snap_set_taken(out, exists, context)) {
+            return TR_PICK_OK;
+        }
+    }
+    out[0] = '\0';
+    return TR_PICK_TAKEN;
+}
+
+/* The files of one controller with `want` set in `flags` (Moved, or Have
+ * and not Moved), as "BASE.D1, .T1 and .P1"; 0 when there are none. */
+static int tr_snap_list(TR_TEXT *t, const char *base, char c,
+                        const int *flags, const int *other, int unmoved)
+{
+    static const char kinds[TR_SNAP_FILES] = { 'D', 'T', 'B', 'P' };
+    int idx[TR_SNAP_FILES];
+    int n = 0;
+    int f;
+    int i;
+
+    for (f = 0; f < TR_SNAP_FILES; f++) {
+        if (unmoved ? (other[f] && !flags[f]) : flags[f]) {
+            idx[n++] = f;
+        }
+    }
+    for (i = 0; i < n; i++) {
+        if (i == 0) {
+            tr_printf(t, "%s.%c%c", base, kinds[idx[i]], c);
+        } else {
+            tr_printf(t, "%s.%c%c", i == n - 1 ? " and " : ", ",
+                      kinds[idx[i]], c);
+        }
+    }
+    return n;
+}
+
+int tr_snap_saved_all(const char *folder, const char *base,
+                      const TR_SNAP_ONE *one, int n, char *out, size_t cap)
+{
+    TR_TEXT t;
+    int exitCode = 0;
+    int allOk = 1;
+    int moveFail;
+    int i;
+    int f;
+    int rc;
+    char c;
+
+    for (i = 0; i < n; i++) {
+        moveFail = 0;
+        for (f = 0; f < TR_SNAP_FILES; f++) {
+            if (one[i].Have[f] && !one[i].Moved[f]) {
+                moveFail = 1;
+            }
+        }
+        rc = one[i].Rc < 0 ? 2 : one[i].Rc;
+        if (moveFail || one[i].Rc == -2) {
+            exitCode = 9;
+        } else if (exitCode != 9 && rc > exitCode) {
+            exitCode = rc;
+        }
+        if (moveFail || rc != 0) {
+            allOk = 0;
+        }
+    }
+    if (n == 0) {
+        allOk = 0;
+        exitCode = 4;
+    }
+    tr_text_init(&t, out, cap);
+    tr_printf(&t, "%s %s:", allOk ? "Snapshot saved in" : "Snapshot in",
+              folder);
+    for (i = 0; i < n && i < TR_SNAP_LINES; i++) {
+        const TR_SNAP_ONE *o = &one[i];
+        int moved;
+
+        c = tr_snap_kchar(o->Hcd);
+        tr_printf(&t, "\nController %d (%s): ", o->Hcd, o->Door);
+        if (c == 0) {
+            tr_put(&t, "not taken: its number has no file name.");
+            continue;
+        }
+        if (o->Rc == -2) {
+            tr_printf(&t, "not ended: its files are left in %s.", o->Scratch);
+            continue;
+        }
+        moved = tr_snap_list(&t, base, c, o->Moved, o->Have, 0);
+        if (moved == 0) {
+            tr_put(&t, o->Rc == -1 ? "not taken: it did not end within two "
+                                     "minutes"
+                                   : "nothing written");
+        }
+        if (o->Rc == 3) {
+            tr_printf(&t, o->Have[1] ? "; the .T%c is not complete"
+                                     : "; no .T%c was written", c);
+        } else if (o->Rc == 4) {
+            tr_printf(&t, "; no dump: the .D%c says why", c);
+        } else if (o->Rc == 5) {
+            tr_printf(&t, "; its device report .D%c is not complete", c);
+        } else if (o->Rc > 0) {
+            tr_printf(&t, " (exit %d)", o->Rc);
+        } else if (o->Rc == -1 && moved != 0) {
+            tr_put(&t, "; it did not end within two minutes");
+        }
+        for (f = 0; f < TR_SNAP_FILES; f++) {
+            if (o->Have[f] && !o->Moved[f]) {
+                break;
+            }
+        }
+        if (f < TR_SNAP_FILES) {
+            tr_put(&t, "; not moved: ");
+            (void)tr_snap_list(&t, base, c, o->Moved, o->Have, 1);
+            tr_printf(&t, " (in %s)", o->Scratch);
+        }
+        tr_put(&t, ".");
+    }
+    if (n > TR_SNAP_LINES) {
+        tr_printf(&t, "\nand %d more.", n - TR_SNAP_LINES);
+    }
+    if (n == 0) {
+        tr_put(&t, "\nNo controller here is driven by xhci98.sys.");
+    } else {
+        tr_put(&t, "\n(Each file's own text names it .DEV, .TXT, .BIN or "
+                   ".PSC.)");
+    }
+    return exitCode;
 }
 
 TR_U32 tr_at_age(TR_U32 nowLo, TR_U32 nowHi, TR_U32 at)

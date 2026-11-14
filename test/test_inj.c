@@ -75,7 +75,7 @@ static void test_trigger(void)
         ULONG want;
         char what[64];
 
-        if ((f >= 1 && f <= 0x1A) || f == XHCI_INJ_CLEAR) {
+        if ((f >= 1 && f <= 0x1F) || f == XHCI_INJ_CLEAR) {
             want = XHCI_INJ_TAKE_FIRE;
         } else {
             want = XHCI_INJ_TAKE_UNKNOWN;
@@ -369,7 +369,7 @@ static void test_needs_live(void)
         want = (f == XHCI_INJ_LOST_IRQ || f == XHCI_INJ_PED ||
                 f == XHCI_INJ_OC || f == XHCI_INJ_HCH ||
                 f == XHCI_INJ_DEAD || f == XHCI_INJ_DEAD_NOPROOF ||
-                (f >= 0x08 && f <= 0x1A)) ? 1UL : 0UL;
+                (f >= 0x08 && f <= 0x1F)) ? 1UL : 0UL;
         sprintf(what, "fault %lu needs a live controller", f);
         CHECK_EQ(XhciInjNeedsLive(f), want, what);
     }
@@ -445,12 +445,61 @@ static void test_codes(void)
     CHECK_EQ(XhciInjNeedsLive(XHCI_INJ_SELECT_CONFIG), 1UL,
              "19 refused on a failed controller");
     CHECK_EQ(XHCI_INJ_STOP_RACE, 0x1A, "1A a Stop's race (issue 26)");
-    CHECK_EQ(XHCI_INJ_LAST_BUILT, XHCI_INJ_STOP_RACE, "1A the last built");
+    CHECK_EQ(XHCI_INJ_STALE_DEQUEUE, 0x1D, "1D a stale dequeue (49.39)");
+    CHECK_EQ(XHCI_INJ_RESTART_RACE, 0x1E,
+             "1E a restart before the command (49.39)");
+    CHECK_EQ(XHCI_INJ_REPAIR_RACE, 0x1F,
+             "1F a restart inside c1's repair (49.39)");
+    CHECK_EQ(XHCI_INJ_LAST_BUILT, XHCI_INJ_REPAIR_RACE, "1F the last built");
+    CHECK_EQ(XhciInjKind(XHCI_INJ_REPAIR_RACE), XHCI_INJ_KIND_OTHER,
+             "1F is the layer's own");
+    CHECK_EQ(XhciInjKind(XHCI_INJ_STALE_DEQUEUE), XHCI_INJ_KIND_OTHER,
+             "1D is the layer's own");
+    CHECK_EQ(XhciInjKind(XHCI_INJ_RESTART_RACE), XHCI_INJ_KIND_OTHER,
+             "1E is the layer's own");
+    CHECK_EQ(XhciInjNeedsLive(XHCI_INJ_STALE_DEQUEUE), 1UL,
+             "1D refused on a failed controller");
     CHECK_EQ(XhciInjKind(XHCI_INJ_STOP_RACE), XHCI_INJ_KIND_OTHER,
              "1A is the layer's own");
     CHECK_EQ(XhciInjNeedsLive(XHCI_INJ_STOP_RACE), 1UL,
              "1A refused on a failed controller");
+    CHECK_EQ(XHCI_INJ_RESET_SLOW, 0x1B, "1B the slow reset (task 49.35)");
+    CHECK_EQ(XHCI_INJ_HC_EVENT, 0x1C, "1C a Host Controller Event");
+    CHECK_EQ(XhciInjKind(XHCI_INJ_RESET_SLOW), XHCI_INJ_KIND_OTHER,
+             "1B is the layer's own");
+    CHECK_EQ(XhciInjKind(XHCI_INJ_HC_EVENT), XHCI_INJ_KIND_OTHER,
+             "1C is the layer's own");
     CHECK_EQ(XHCI_INJ_REFUSED_CC, 18, "Bandwidth Overrun");
+}
+
+/* Task 49.35: fault 1B's hold and answers, fault 1C's event. */
+static void test_reset_slow(void)
+{
+    XHCI_TRB ev;
+
+    CHECK_EQ(XhciInjResetHoldMs(5), 50, "5: 50 ms");
+    CHECK_EQ(XhciInjResetHoldMs(150), 1500, "150: 1.5 s");
+    CHECK_EQ(XhciInjResetHoldMs(XHCI_INJ_ARG_FOREVER), 0xFFFFFFFFUL,
+             "255: for ever");
+    CHECK_EQ(XhciInjResetHeld(50, 49), 1, "inside the hold");
+    CHECK_EQ(XhciInjResetHeld(50, 50), 0, "the hold ran out");
+    CHECK_EQ(XhciInjResetHeld(0xFFFFFFFFUL, 0xFFFFFFF0UL), 1, "for ever");
+    CHECK_EQ(XhciInjResetAnswer(XHCI_OP_USBCMD, 0, 1, 0), XHCI_USBCMD_HCRST,
+             "HCRST answered set");
+    CHECK_EQ(XhciInjResetAnswer(XHCI_OP_USBSTS, 1, 1, 0), 1,
+             "USBSTS untouched for an HCRST hold");
+    CHECK_EQ(XhciInjResetAnswer(XHCI_OP_USBSTS, 1, 1, 1),
+             1 | XHCI_USBSTS_CNR, "CNR answered set");
+    CHECK_EQ(XhciInjResetAnswer(XHCI_OP_USBCMD, 0, 1, 1), 0,
+             "USBCMD untouched for a CNR hold");
+    CHECK_EQ(XhciInjResetAnswer(XHCI_OP_USBCMD, 0, 0, 0), 0,
+             "no hold: as read");
+    CHECK_EQ(XhciInjResetAnswer(XHCI_OP_USBCMD, 0xFFFFFFFFUL, 1, 0),
+             0xFFFFFFFFUL, "all ones passes");
+    XhciInjHostControllerEvent(&ev, 21);
+    CHECK_EQ(XHCI_TRB_GET_TYPE(ev.Control), XHCI_TRB_TYPE_HOST_CONTROLLER,
+             "a Host Controller Event");
+    CHECK_EQ(XHCI_TRB_GET_COMPLETION(ev.Status), 21, "its code");
 }
 
 static void test_kinds(void)
@@ -999,6 +1048,7 @@ static void test_bulk(void)
 int main(void)
 {
     test_encoding();
+    test_reset_slow();
     test_trigger();
     test_lost_count();
     test_port_fits();

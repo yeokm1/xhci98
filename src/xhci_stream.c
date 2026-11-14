@@ -282,6 +282,40 @@ ULONG XhciStreamDoorbell(ULONG dci, ULONG streamId)
     return (dci & 0xFFUL) | ((streamId & 0xFFFFUL) << 16);
 }
 
+ULONG XhciStreamResendAfter(ULONG code, ULONG state)
+{
+    if (code == XHCI_CC_SUCCESS) {
+        return XHCI_STREAM_RS_AGAIN;
+    }
+    if (code == XHCI_CC_CONTEXT_STATE_ERROR &&
+        state == XHCI_EP_STATE_RUNNING) {
+        return XHCI_STREAM_RS_RESTARTED;
+    }
+    return XHCI_STREAM_RS_GIVEUP;
+}
+
+ULONG XhciStreamAfterRestop(ULONG state)
+{
+    return (state == XHCI_EP_STATE_STOPPED) ? 1UL : 0UL;
+}
+
+ULONG XhciStreamMayResend(ULONG queuedTds, ULONG state)
+{
+    return (queuedTds == 0 && state == XHCI_EP_STATE_STOPPED) ? 1UL : 0UL;
+}
+
+ULONG XhciStreamReadBack(ULONG ctx0, ULONG ctx1, ULONG sentPA,
+                         ULONG sentDcs)
+{
+    if (ctx1 != 0 || (ctx0 & ~0x0FUL) != (sentPA & ~0x0FUL) ||
+        (ctx0 & 1UL) != (sentDcs & 1UL)) {
+        return XHCI_STREAM_RB_DIFFER;
+    }
+    return (((ctx0 >> 1) & 7UL) == XHCI_STREAM_SCT_PRIMARY_TR)
+               ? XHCI_STREAM_RB_EQUAL
+               : XHCI_STREAM_RB_BAD_SCT;
+}
+
 ULONG XhciStreamFind(const XHCI_RING *const *rings, ULONG count,
                      ULONG trbPA)
 {

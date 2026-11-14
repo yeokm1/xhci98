@@ -323,7 +323,7 @@ function Get-CmNineXTable {
 # written by the install): the values outside the rule table, each with
 # the systems that read it. Every path writes XhciCmAsmediaPcie7Credits,
 # XhciCmUsb4V2, (task 45.56) XhciCmGen4LinkRecovery and (task 48.35)
-# XhciCmSleepEntry at
+# XhciCmSleepEntry and (task 49.46) XhciCmWakePowerUp at
 # src\cm\cm_vals.h's defaults, and XhciCmTunnelBridge
 # as the REG_SZ "auto", which the driver takes as its absence, its own
 # finding (cm_vals.c CmValuesTakeBridge); since task 48.26 every path
@@ -338,6 +338,7 @@ $cmAllValues = [ordered]@{
     "XhciCmUsb4V2"              = "CM_USB4_V2_DEFAULT"
     "XhciCmGen4LinkRecovery"    = "CM_GEN4_ELR_DEFAULT"
     "XhciCmSleepEntry"          = "CM_SLEEP_ENTRY_DEFAULT"
+    "XhciCmWakePowerUp"         = "CM_WAKE_POWER_UP_DEFAULT"
     "XhciCmAsm4242Handover"     = "CM_PLAT_HANDOVER_DEFAULT"
     "XhciCmAsm4242Structural"   = "CM_HO_STRUCTURAL_DEFAULT"
     "XhciCmRingInterrupt"       = "CM_RING_IRQ_DEFAULT"
@@ -1101,6 +1102,9 @@ if ($SelfTest) {
                     @{ Rule = "VAL-MISSING";    Text = $t.Replace("HKR,,XhciCmSleepEntry,0x00010003,1`r`n", "") },
                     @{ Rule = "VAL-DEFAULT";    Text = $t.Replace("HKR,,XhciCmSleepEntry,0x00010003,1", "HKR,,XhciCmSleepEntry,0x00010003,0") },
                     @{ Rule = "VAL-FLAG";       Text = $t.Replace("HKR,,XhciCmSleepEntry,0x00010003,1", "HKR,,XhciCmSleepEntry,0x00010001,1") },
+                    @{ Rule = "VAL-MISSING";    Text = $t.Replace("HKR,,XhciCmWakePowerUp,0x00010003,1`r`n", "") },
+                    @{ Rule = "VAL-DEFAULT";    Text = $t.Replace("HKR,,XhciCmWakePowerUp,0x00010003,1", "HKR,,XhciCmWakePowerUp,0x00010003,0") },
+                    @{ Rule = "VAL-FLAG";       Text = $t.Replace("HKR,,XhciCmWakePowerUp,0x00010003,1", "HKR,,XhciCmWakePowerUp,0x00010001,1") },
                     @{ Rule = "VAL-MISSING";    Text = $t.Replace("[Cm.Dev.NTx86]`r`nAddReg=Cm.Values,Cm.ValuesNt,Cm.ValuesNt5", "[Cm.Dev.NTx86]`r`nAddReg=Cm.Values,Cm.ValuesNt") },
                     @{ Rule = "VAL-MISSING";    Text = $t.Replace("[Cm.Dev6.NTx86]`r`nAddReg=Cm.Values,Cm.ValuesNt", "[Cm.Dev6.NTx86]`r`nAddReg=Cm.Values") },
                     @{ Rule = "VAL-EXTRA";      Text = $t.Replace("[Cm.Dev6.NTx86]`r`nAddReg=Cm.Values,Cm.ValuesNt", "[Cm.Dev6.NTx86]`r`nAddReg=Cm.Values,Cm.ValuesNt,Cm.ValuesNt5") },

@@ -42,6 +42,7 @@
 #include "hcd.h"
 #include "xhci_version.h"
 #include "xhci_dbg.h"
+#include "xhci_hw.h"
 
 /* Record 18 section 4.2: the strip is enabled, R1 and R2 having been read
  * on Vista SP2 and 7 SP1, x86 and x64 (section 11; the same list on all
@@ -317,6 +318,10 @@ VOID HcdMsiAddDevice(PHCD_CONTROLLER hc)
         hc->ModeCacheRaw = value;
         hc->ModeCacheFound = 1;
     }
+    value = 0;
+    hc->Msg4StrategyCache =
+        NT_SUCCESS(HcdReadValueDword(hc, L"XhciMsiStrategy", &value)) ? value
+                                                                      : 0UL;
     hc->ModeCacheFrom = HCD_MSI_FROM_ADDDEVICE;
     hcdMsiReadSwitches(hc);
 }
@@ -542,6 +547,117 @@ VOID HcdMsiRemove(PHCD_CONTROLLER hc)
     hc->HlprSetTimer = NULL;
 #endif
     HcdMsiTraceLife(hc, HCD_MSI_LIFE_REMOVE, 0, 0);
+}
+
+/* ---- mode 4's name lookup (record 18 section 15.16, task 49.24) -------- */
+
+#if !defined(_WIN64)
+typedef PVOID (NTAPI *HCD_FIND_ROUTINE)(PUNICODE_STRING name);
+
+/* The helper's MmGetSystemRoutineAddress, once fetched: the kernel's
+ * routine, so it outlives the reference dropped after the query. */
+static HCD_FIND_ROUTINE HcdMsiFindPtr;
+#endif
+
+/*
+ * Whether mode 4's library can resolve: amd64 always; x86 once the
+ * helper's minor-1 routine is fetched, by a one-shot query of its own
+ * (the V2.1 block, judged by XhciHlprAcceptRoutine) that leaves this FDO's
+ * binding (record 18 section 15.4) as it was. Called under hcd_msgnt.c's
+ * image lock. IRQL: PASSIVE_LEVEL.
+ */
+ULONG HcdMsiFindRoutineLook(PHCD_CONTROLLER hc)
+{
+#if defined(_WIN64)
+    UNREFERENCED_PARAMETER(hc);
+    return 1;
+#else
+    XHCI_HLPR_QUERY1 query;
+    UNICODE_STRING name;
+    PFILE_OBJECT file;
+    PDEVICE_OBJECT device;
+    PIRP irp;
+    PIO_STACK_LOCATION next;
+    KEVENT done;
+    NTSTATUS status;
+    ULONG verdict;
+    ULONG routine;
+    PUCHAR p;
+    ULONG i;
+
+    if (HcdMsiFindPtr != NULL) {
+        return 1;
+    }
+    RtlInitUnicodeString(&name, XHCI_HLPR_DEVICE_NAME);
+    status = IoGetDeviceObjectPointer(&name, FILE_READ_DATA, &file, &device);
+    if (!NT_SUCCESS(status)) {
+        XhciLogNote(&hc->Hc, "msg4.helper", (ULONG)status);
+        return 0;
+    }
+    irp = IoAllocateIrp(device->StackSize, FALSE);
+    if (irp == NULL) {
+        ObDereferenceObject(file);
+        XhciLogNote(&hc->Hc, "msg4.helper", (ULONG)STATUS_NO_MEMORY);
+        return 0;
+    }
+    p = (PUCHAR)&query;
+    for (i = 0; i < sizeof(query); i++) {
+        p[i] = 0;
+    }
+    query.V2.Size = sizeof(XHCI_HLPR_QUERY1);
+    query.V2.CallerMajor = XHCI_HLPR_MAJOR;
+    query.V2.CallerMinor = XHCI_HLPR_MINOR;
+    query.V2.CallerVersion = hcdMsiVersion();
+    query.V2.CallerWants = XHCI_HLPR_SVC_ROUTINE;
+    irp->RequestorMode = KernelMode;
+    irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
+    irp->IoStatus.Information = 0;
+    next = IoGetNextIrpStackLocation(irp);
+    next->MajorFunction = IRP_MJ_INTERNAL_DEVICE_CONTROL;
+    next->Parameters.DeviceIoControl.IoControlCode =
+        XHCI_HLPR_IOCTL_QUERY_V2;
+    next->Parameters.DeviceIoControl.Type3InputBuffer = &query;
+    next->Parameters.DeviceIoControl.InputBufferLength =
+        sizeof(XHCI_HLPR_QUERY1);
+    next->Parameters.DeviceIoControl.OutputBufferLength =
+        sizeof(XHCI_HLPR_QUERY1);
+    next->FileObject = file;
+    KeInitializeEvent(&done, NotificationEvent, FALSE);
+    HCD_SET_COMPLETION_ALWAYS(irp, hcdHlprDone, &done);
+    if (IoCallDriver(device, irp) == STATUS_PENDING) {
+        (VOID)HcdWaitEvent(&done, 0);
+    }
+    status = irp->IoStatus.Status;
+    verdict = XhciHlprAcceptRoutine(NT_SUCCESS(status) ? 1UL : 0UL,
+                                    (ULONG)irp->IoStatus.Information,
+                                    sizeof(XHCI_HLPR_QUERY1), &query,
+                                    &routine);
+    IoFreeIrp(irp);
+    ObDereferenceObject(file);
+    XhciLogNote(&hc->Hc, "msg4.helper", (verdict << 8) | routine);
+    if (verdict != XHCI_HLPR_ACCEPTED || routine != XHCI_HLPR_SVC_ACCEPTED) {
+        return 0;
+    }
+    HcdMsiFindPtr = (HCD_FIND_ROUTINE)query.FindRoutine;
+    return 1;
+#endif
+}
+
+/* msi4nt's Resolve and the seam's own names (hcd_msgnt.c): only after
+ * HcdMsiFindRoutineLook answered 1. IRQL: PASSIVE_LEVEL. */
+PVOID HcdMsiResolve(PCWSTR name)
+{
+    UNICODE_STRING s;
+
+    RtlInitUnicodeString(&s, name);
+#if defined(_WIN64)
+    return MmGetSystemRoutineAddress(&s);
+#else
+    if (HcdMsiFindPtr == NULL) {
+        return NULL;
+    }
+    return HcdMsiFindPtr(&s);
+#endif
 }
 
 /*
@@ -772,6 +888,7 @@ static NTSTATUS hcdMsiFilterNt5(PHCD_CONTROLLER hc, PIRP irp)
     ULONG replaced;
     ULONG gsi;
     ULONG memory;
+    ULONG fm;
 
     XhciMsiFilterBegin(&hc->MsiFilter);
     hc->MsiAvoidFilterStrips = 0;
@@ -837,16 +954,24 @@ static NTSTATUS hcdMsiFilterNt5(PHCD_CONTROLLER hc, PIRP irp)
      * alone; 1 (the line) the GSI alone; 2 (poll) memory alone; 3 (a
      * message, which NT 5 cannot give) nothing. The GSI clone only for
      * the PCI driver's shared, level-sensitive line (XhciMsiNt5LineShape). */
+    /* Mode 4 (record 15 section 4.5.2, task 49.24): strategy 1 borrows the
+     * line, so it asks what mode 1 asks; strategy 0 needs no line, so it
+     * asks what mode 0 asks. From AddDevice's or the last start's cache. */
+    fm = hc->FilterMode;
+    if (fm == XHCI_POLL_MODE_MSG4) {
+        fm = (hc->Msg4StrategyCache == XHCI_MSG4_STRATEGY_BORROW)
+                 ? XHCI_POLL_MODE_LINE
+                 : XHCI_POLL_MODE_AUTO;
+    }
     gsi = XHCI_MSI_NO_GSI;
-    if ((hc->FilterMode == XHCI_POLL_MODE_AUTO ||
-         hc->FilterMode == XHCI_POLL_MODE_LINE) &&
+    if ((fm == XHCI_POLL_MODE_AUTO || fm == XHCI_POLL_MODE_LINE) &&
         (hc->NoRoute.Decision == XHCI_PIRQ_O_OFFERED ||
          hc->NoRoute.Decision == XHCI_PIRQ_O_QEMU) &&
         XhciMsiNt5LineShape(list, &hc->FilterWalk)) {
         gsi = hc->NoRoute.Gsi;
     }
-    memory = (hc->FilterMode == XHCI_POLL_MODE_AUTO ||
-              hc->FilterMode == XHCI_POLL_MODE_POLL) ? 1UL : 0UL;
+    memory = (fm == XHCI_POLL_MODE_AUTO || fm == XHCI_POLL_MODE_POLL) ? 1UL
+                                                                     : 0UL;
     if (gsi == XHCI_MSI_NO_GSI && !memory) {
         outcome = XHCI_MSI_OUT_NOT_ASKED;
     } else {

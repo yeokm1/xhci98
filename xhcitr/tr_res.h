@@ -46,6 +46,8 @@
 #define IDC_S_FAST              1120
 #define IDC_S_FASTWIN           1121
 #define IDC_S_STOR              1122    /* the USB drive notice (48.17) */
+#define IDC_S_FIND_L            1123    /* the settings search (49.38)  */
+#define IDC_S_FIND              1124
 
 #define IDM_REFRESH             40001
 #define IDM_SAVE                40002

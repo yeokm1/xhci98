@@ -5566,8 +5566,57 @@ static void test_stop_place_many_cancelled(void)
              "TDs 1 to 3 cancelled: to TD 4");
 }
 
+/* Task 49.39 (design record 17 section 4.12.8, c2): the position alone. */
+static void test_stop_position(void)
+{
+    XFER_FIXTURE fix;
+    XHCI_XFER_STOP_PLACE place;
+    ULONG index;
+    ULONG at;
+
+    fixture_init(&fix, 32);
+    CHECK_EQ(XhciXferStopPosition(&fix.ring, saved_deq(&fix, 0, 1), 0,
+                                  &index, &at),
+             XHCI_XFER_STOP_POS_HOLDABLE, "an empty ring at its enqueue");
+    CHECK_EQ(index, 0, "the base");
+    CHECK_EQ(XhciXferStopPosition(&fix.ring, saved_deq(&fix, 0, 0), 0,
+                                  &index, &at),
+             XHCI_XFER_STOP_POS_INVALID, "the enqueue with the wrong DCS");
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 0), XHCI_XFER_OK, "TD 0");
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 1), XHCI_XFER_OK, "TD 1");
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 2), XHCI_XFER_OK, "TD 2");
+    CHECK_EQ(XhciXferStopPosition(&fix.ring, saved_deq(&fix, 1, 1), 0,
+                                  &index, &at),
+             XHCI_XFER_STOP_POS_HOLDABLE, "inside the head TD");
+    CHECK_EQ(index, 1, "its second TRB");
+    CHECK_EQ(at, 1, "one past the software dequeue");
+    CHECK_EQ(XhciXferStopPosition(&fix.ring, saved_deq(&fix, 6, 1), 0,
+                                  &index, &at),
+             XHCI_XFER_STOP_POS_HOLDABLE,
+             "QEMU's fetch pointer past two unfinished TDs: holdable");
+    CHECK_EQ(XhciXferStopPlace(&fix.queue, &fix.ring, saved_deq(&fix, 6, 1),
+                               0, &place), XHCI_XFER_OK, "placed");
+    CHECK_EQ(place.Verdict, XHCI_XFER_STOP_UNREAD,
+             "and the settle still calls it unread (noted, not acted on)");
+    CHECK_EQ(XhciXferStopPosition(&fix.ring, saved_deq(&fix, 1, 0), 0,
+                                  &index, &at),
+             XHCI_XFER_STOP_POS_INVALID, "inside the head TD, DCS flipped");
+    CHECK_EQ(XhciXferStopPosition(&fix.ring, saved_deq(&fix, 20, 1), 0,
+                                  &index, &at),
+             XHCI_XFER_STOP_POS_INVALID, "past the enqueue");
+    CHECK_EQ(XhciXferStopPosition(&fix.ring, saved_deq(&fix, 1, 1), 1,
+                                  &index, &at),
+             XHCI_XFER_STOP_POS_INVALID, "a high dword");
+    CHECK_EQ(XhciXferStopPosition(&fix.ring, 0x00001000UL | 1UL, 0, &index,
+                                  &at),
+             XHCI_XFER_STOP_POS_INVALID, "off the ring");
+    CHECK_EQ(XhciXferStopPosition(NULL, 0, 0, &index, &at),
+             XHCI_XFER_STOP_POS_INVALID, "no ring");
+}
+
 int main(void)
 {
+    test_stop_position();
     test_td_size_control_forms();
     test_td_size_normal_forms();
     test_td_size_big_td_forms();

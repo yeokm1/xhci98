@@ -26,7 +26,8 @@
  * VAIO T-series that "is not capable of switching ports", is exempted here
  * too. The switch is the XhciIntelPortSwitch value: a DWORD of any nonzero
  * number turns it on; 0, absent or of another type, it is off (owner,
- * 2026-10-09, task 36.42, reversing the default on of 2026-10-05). An exact
+ * 2026-10-09, task 36.42; from task 49.47, 2026-11-14, the INFs write 1,
+ * and absent stays off for text-mode Setup). An exact
  * 2 also routes on an Intel controller the list does not name, at the
  * user's own risk (task 35.5, design record 16 section 4a).
  *

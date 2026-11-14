@@ -719,6 +719,14 @@ VOID CmNvlinkUnload(VOID);
  * state. */
 VOID CmNvlinkStart(struct _CM_NHI *nhi);
 
+/* Whether `bridge` is one whose SHPC slots this driver may read through
+ * the filter's configuration write (record 21 section 7.2's admission,
+ * for the learning of record 22 section 7.6.5): Windows 2000 or later,
+ * the emulator's bridge by vendor id (it, or the bus-0 bridge whose range
+ * holds it), an SHPC capability and no PCI Express capability. Reads
+ * only. PASSIVE_LEVEL, after CmNvlinkStart. */
+BOOLEAN CmNvlinkShpcBridge(struct _CM_NHI *nhi, ULONG bridge);
+
 /* Obligation 1 for tunnel port `bridge` (XHCI_TBT_BDF): before every
  * re-enumeration call that exposes its secondary bus. Every exposure
  * first retires the statements on that bus (and on every entry last

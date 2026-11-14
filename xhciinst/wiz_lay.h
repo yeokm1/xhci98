@@ -2,6 +2,8 @@
  * wiz_lay.h - the settings pages' layout arithmetic (design record 26
  * section 5.4, "The layout"; roadmap-usb4.md task 43.10).
  *
+ * Since record 23 revision 56 also the log line's shortened path.
+ *
  * Pure: no Windows header, every size an int in the caller's units (the
  * window passes pixels it measured from the page's own font and size), so
  * the host suite test\test_wizlay.c checks it as the window runs it. A
@@ -46,5 +48,13 @@ int wiz_lay_note_top(int rowsTop, int tallest, int gap, int bottom,
 /* The part to show: 0 for the first, -1 for the last, else part clamped
  * to 0..parts-1. */
 int wiz_lay_part(int part, int parts);
+
+/* A path for a line that cannot hold it (the Welcome pages' log line,
+ * record 23 section 7.5.1), shortened in the middle: its root ("C:\", a
+ * network path's two backslashes, one backslash, or none), "...\" in
+ * place of its first drop folders, and the rest, so the file name is
+ * always there. drop 0 is the path whole. 0, out empty, when the path has
+ * fewer folders than drop or out (cap) does not hold the result. */
+int wiz_lay_path_mid(const char *path, int drop, char *out, int cap);
 
 #endif

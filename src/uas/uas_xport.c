@@ -630,6 +630,7 @@ static VOID uasFailNoteLocked(PUAS_FDO fdo, PUAS_SLOT slot,
 {
     PULONG w;
 
+    fdo->FailAt[fdo->FailCount % XHCI98_FAIL_RECORDS] = fdo->Seconds;
     w = fdo->Fail[fdo->FailCount % XHCI98_FAIL_RECORDS];
     UasFailPack(w, event, uasFailOrigin(request),
                 (slot != NULL) ? slot->Tag : 0,
@@ -643,6 +644,27 @@ static VOID uasFailNoteLocked(PUAS_FDO fdo, PUAS_SLOT slot,
     fdo->FailCount++;
 }
 
+/* Task 49.39: a request answered with the drive's own earlier refusal
+ * (record 13 section 16.16), entered as event 9. <= DISPATCH_LEVEL. */
+VOID UasEngineNoteReplay(PUAS_FDO fdo, const UCHAR *cdb, ULONG origin,
+                         ULONG length)
+{
+    UCHAR sense[UAS_INVALID_CDB_SENSE];
+    ULONG n;
+    PULONG w;
+    KIRQL irql;
+
+    n = UasInvalidOpcodeSense(sense, sizeof(sense));
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    fdo->FailAt[fdo->FailCount % XHCI98_FAIL_RECORDS] = fdo->Seconds;
+    w = fdo->Fail[fdo->FailCount % XHCI98_FAIL_RECORDS];
+    UasFailPack(w, XHCI98_FAIL_E_REPLAYED, origin, 0,
+                (cdb != NULL) ? cdb[0] : 0, SRB_STATUS_ERROR,
+                UAS_SCSI_CHECK_CONDITION, sense, n, 0, 0, 0, length);
+    fdo->FailCount++;
+    KeReleaseSpinLock(&fdo->Lock, irql);
+}
+
 VOID UasEngineNoteLocal(PUAS_FDO fdo, const UCHAR *cdb, ULONG origin,
                         ULONG length)
 {
@@ -653,6 +675,7 @@ VOID UasEngineNoteLocal(PUAS_FDO fdo, const UCHAR *cdb, ULONG origin,
 
     n = UasInvalidCdbSense(sense, sizeof(sense));
     KeAcquireSpinLock(&fdo->Lock, &irql);
+    fdo->FailAt[fdo->FailCount % XHCI98_FAIL_RECORDS] = fdo->Seconds;
     w = fdo->Fail[fdo->FailCount % XHCI98_FAIL_RECORDS];
     UasFailPack(w, XHCI98_FAIL_E_LOCAL, origin, 0,
                 (cdb != NULL) ? cdb[0] : 0, SRB_STATUS_ERROR,
@@ -776,6 +799,8 @@ static VOID uasSlotReset(PUAS_SLOT slot)
     slot->SenseLength = 0;
     slot->ResponseCode = 0;
     slot->FinalSrbStatus = 0;
+    slot->FinalAt = 0;
+    slot->FinalReset = FALSE;
 }
 
 /*
@@ -996,6 +1021,8 @@ static VOID uasStatusIu(PUAS_FDO fdo, PUAS_XFER x, PUAS_ACT a)
 {
     UAS_IU_INFO iu;
     PUAS_SLOT target;
+    PUAS_PDO pdo;
+    ULONG refused;
     PUCHAR buffer;
     PSCSI_REQUEST_BLOCK srb;
     ULONG parsed;
@@ -1027,6 +1054,18 @@ static VOID uasStatusIu(PUAS_FDO fdo, PUAS_XFER x, PUAS_ACT a)
         target->ScsiStatus = iu.Status;
         target->SenseLength = 0;
         srb = target->Srb;
+        /* Task 49.39 (record 13 section 16.16): the drive's own refusal of
+         * an ATA PASS-THROUGH, read from the IU before any cancel or
+         * recovery can replace the SRB's outcome. */
+        refused = UasAtaRefusal(srb->Cdb, srb->CdbLength, iu.Status,
+                                buffer + UAS_IU_SENSE_HEADER, iu.SenseLength);
+        if (refused != 0 && target->Request != NULL) {
+            pdo = (PUAS_PDO)target->Request->Tail.Overlay
+                      .DriverContext[UAS_CTX_PDO];
+            if (pdo != NULL) {
+                pdo->AtaRefused |= refused;
+            }
+        }
         if (iu.SenseLength != 0 && srb->SenseInfoBuffer != NULL &&
             srb->SenseInfoBufferLength != 0 &&
             (srb->SrbFlags & SRB_FLAGS_DISABLE_AUTOSENSE) == 0) {
@@ -1038,6 +1077,7 @@ static VOID uasStatusIu(PUAS_FDO fdo, PUAS_XFER x, PUAS_ACT a)
             target->SenseLength = copy;
         }
         target->State = UAS_SLOT_FINAL;
+        target->FinalAt = fdo->Seconds;
         if (iu.Status != UAS_SCSI_GOOD) {
             uasActCancel(a, &target->Xfer[UAS_XFER_DATA]);
         }
@@ -1046,6 +1086,7 @@ static VOID uasStatusIu(PUAS_FDO fdo, PUAS_XFER x, PUAS_ACT a)
     case UAS_IU_RESPONSE:
         target->ResponseCode = iu.ResponseCode;
         target->State = UAS_SLOT_FINAL;
+        target->FinalAt = fdo->Seconds;
         if (!target->Tmf) {
             target->ResponseOnly = TRUE;
             fdo->Counters[UAS_CTR_PROTOCOL]++;
@@ -1120,6 +1161,13 @@ static NTSTATUS uasXferDone(PDEVICE_OBJECT device, PIRP irp, PVOID context)
         uasStatusIu(fdo, x, &a);
     } else if (x->Kind == UAS_XFER_DATA) {
         slot->Transferred = x->Urb.TransferBufferLength;
+        /* Task 49.39 (record 13 section 16.17): data delivered in the
+         * direction the counted resets' commands waited for - the drive
+         * is not one a reset fails to bring back. */
+        if (UasDataDelivered(1, x->Urb.TransferBufferLength)) {
+            UasFinalClear(fdo->FinalResets,
+                          slot->DataIn ? UAS_FINAL_DIR_IN : UAS_FINAL_DIR_OUT);
+        }
     }
 
     /* Keep reading status while something still waits for it. */
@@ -1176,7 +1224,12 @@ static NTSTATUS uasTeleDone(PDEVICE_OBJECT device, PIRP irp, PVOID context)
     if (fdo->TeleFails) {
         /* Issue 26: a bus before 3.4.2.0 refuses the failures' record as
          * a malformed telemetry record: not sent again. */
-        if (irp->IoStatus.Status == STATUS_NOT_SUPPORTED ||
+        if (irp->IoStatus.Status == STATUS_INVALID_PARAMETER &&
+            !fdo->FailV1) {
+            /* Task 49.39: a bus before 3.5.0.0 refuses version 2; version
+             * 1 next time. */
+            fdo->FailV1 = TRUE;
+        } else if (irp->IoStatus.Status == STATUS_NOT_SUPPORTED ||
             irp->IoStatus.Status == STATUS_INVALID_DEVICE_REQUEST ||
             irp->IoStatus.Status == STATUS_INVALID_PARAMETER) {
             fdo->FailOff = TRUE;
@@ -1203,16 +1256,29 @@ static NTSTATUS uasTeleDone(PDEVICE_OBJECT device, PIRP irp, PVOID context)
 static BOOLEAN uasFailBuild(PUAS_FDO fdo)
 {
     PULONG w;
+    ULONG ata;
+    ULONG lun;
 
     if (fdo->FailOff || fdo->FailCount == fdo->FailSent) {
         return FALSE;
     }
     w = fdo->FailRecord.Word;
     w[XHCI98_FAIL_SIG] = XHCI98_FAIL_SIGNATURE;
-    w[XHCI98_FAIL_VER] = XHCI98_FAIL_VERSION;
-    w[XHCI98_FAIL_SIZE] = sizeof(XHCI98_FAILURES);
+    w[XHCI98_FAIL_VER] = fdo->FailV1 ? XHCI98_FAIL_VERSION
+                                     : XHCI98_FAIL_VERSION2;
+    w[XHCI98_FAIL_SIZE] = fdo->FailV1 ? sizeof(XHCI98_FAILURES)
+                                      : sizeof(XHCI98_FAILURES2);
     w[XHCI98_FAIL_COUNT] = fdo->FailCount;
     UasCopy(w + XHCI98_FAIL_AT, fdo->Fail, sizeof(fdo->Fail));
+    /* Task 49.39: the entries' times and the LUNs' ATA refusals. */
+    UasCopy(w + XHCI98_FAIL_TIMES_AT, fdo->FailAt, sizeof(fdo->FailAt));
+    ata = 0;
+    for (lun = 0; lun < UAS_MAX_LUNS && lun < 16; lun++) {
+        if (fdo->Luns[lun] != NULL) {
+            ata |= (fdo->Luns[lun]->AtaRefused & 3UL) << (2 * lun);
+        }
+    }
+    w[XHCI98_FAIL_ATA_AT] = ata;
     fdo->FailTurn = FALSE;
     fdo->TeleFails = TRUE;
     fdo->TeleBusy = TRUE;
@@ -1326,6 +1392,7 @@ static VOID uasTick(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2)
     BOOLEAN queue;
     BOOLEAN expired;
     BOOLEAN tele;
+    ULONG final;
     ULONG t;
     KIRQL irql;
 
@@ -1372,12 +1439,34 @@ static VOID uasTick(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2)
         }
         slot->TimeLeft--;
         if (slot->TimeLeft <= 0) {
+            /* Task 49.39 (record 13 section 16.15): answered, its data not
+             * back - held a tick or two after its final IU, then the device
+             * reset rather than an ABORT TASK for a task the device no
+             * longer holds. */
+            final = UasFinalTimeoutDue(
+                (ULONG)(slot->State == UAS_SLOT_FINAL),
+                (ULONG)(slot->Xfer[UAS_XFER_DATA].Busy ||
+                        slot->Xfer[UAS_XFER_DATA].Cancelling ||
+                        slot->Xfer[UAS_XFER_DATA].CancelRefs != 0),
+                fdo->Seconds - slot->FinalAt);
+            if (final == UAS_FINAL_TIMEOUT_WAIT) {
+                slot->TimeLeft = 0;
+                continue;
+            }
             slot->TimedOut = TRUE;
             fdo->Counters[UAS_CTR_TIMEOUTS]++;
             /* Issue 26: what was still outstanding when it ran out. */
             uasFailNoteLocked(fdo, slot, slot->Srb, slot->Request,
                               XHCI98_FAIL_E_TIMEOUT, 0, slot->ScsiStatus,
                               NULL, 0);
+            if (final == UAS_FINAL_TIMEOUT_RESET) {
+                /* Task 49.39 (record 13 section 16.17): the recovery
+                 * worker decides between event 8's reset and, after three
+                 * of them with no data delivered since, the give-up, and
+                 * enters it in the ring (uasGiveUp). */
+                slot->FinalReset = TRUE;
+                slot->Failed = TRUE;
+            }
             expired = TRUE;
         }
     }
@@ -1703,6 +1792,79 @@ static BOOLEAN uasResetDevice(PUAS_FDO fdo)
     uasReleaseQuarantine(fdo);
     fdo->FastArmed = FALSE;
     KeReleaseSpinLock(&fdo->Lock, irql);
+    return TRUE;
+}
+
+/*
+ * Task 49.39 (design record 13 section 16.17), the worker before a device
+ * reset, PASSIVE_LEVEL. Decides for the commands still live whose timeout
+ * asked for event 8's reset (slot->FinalReset): with fewer than three such
+ * resets since data was last delivered, each is noted event 8 and the reset
+ * goes ahead, counted once (FALSE). With three, the first is noted event 10
+ * and the drive given up (TRUE): every command ends SRB_STATUS_NO_DEVICE
+ * and the device is Dead with no cycle - unless its transfers do not come
+ * back, when it is cycled as L5 cycles a device whose reset could not be
+ * sent. No such command (a reset for another cause, or one a reset since
+ * has ended): FALSE, nothing counted.
+ */
+static BOOLEAN uasGiveUp(PUAS_FDO fdo)
+{
+    PUAS_SLOT slot;
+    PUAS_SLOT first;
+    BOOLEAN drained;
+    ULONG dirs;
+    ULONG t;
+    KIRQL irql;
+
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    first = NULL;
+    dirs = 0;
+    for (t = 1; t <= fdo->Tags.Count; t++) {
+        slot = &fdo->Slots[t];
+        if (slot->State != UAS_SLOT_FREE && !slot->Tmf && slot->Failed &&
+            !slot->Aborted && slot->FinalReset) {
+            if (first == NULL) {
+                first = slot;
+            }
+            dirs |= slot->DataIn ? UAS_FINAL_DIR_IN : UAS_FINAL_DIR_OUT;
+        }
+    }
+    if (first == NULL) {
+        /* A reset for another cause: neither counted nor a give-up. */
+        KeReleaseSpinLock(&fdo->Lock, irql);
+        return FALSE;
+    }
+    /* The limit is the asking direction's own: two resets for reads and
+     * one for a write are not three for either (record 13 16.17). */
+    if (!UasFinalDue(fdo->FinalResets, dirs)) {
+        /* Decided here, not at the tick, so data delivered since counts:
+         * every command marked for it is noted, and the reset counted
+         * once. */
+        for (t = 1; t <= fdo->Tags.Count; t++) {
+            slot = &fdo->Slots[t];
+            if (slot->State != UAS_SLOT_FREE && !slot->Tmf &&
+                slot->Failed && !slot->Aborted && slot->FinalReset) {
+                slot->FinalReset = FALSE;
+                uasFailNoteLocked(fdo, slot, slot->Srb, slot->Request,
+                                  XHCI98_FAIL_E_FINAL_TIMEOUT, 0,
+                                  slot->ScsiStatus, NULL, 0);
+            }
+        }
+        UasFinalCount(fdo->FinalResets, dirs);
+        KeReleaseSpinLock(&fdo->Lock, irql);
+        return FALSE;
+    }
+    first->FinalReset = FALSE;
+    uasFailNoteLocked(fdo, first, first->Srb, first->Request,
+                      XHCI98_FAIL_E_GIVEN_UP, 0, first->ScsiStatus, NULL, 0);
+    fdo->Dead = TRUE;
+    KeReleaseSpinLock(&fdo->Lock, irql);
+    uasAbortAll(fdo, SRB_STATUS_NO_DEVICE);
+    drained = uasWaitAllFree(fdo);
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    fdo->CycleOwed = (BOOLEAN)(!drained && fdo->Started && !fdo->Gone);
+    KeReleaseSpinLock(&fdo->Lock, irql);
+    uasCycleOwed(fdo);
     return TRUE;
 }
 
@@ -2071,6 +2233,9 @@ static VOID uasRecoveryWorker(PVOID context)
             uasRecoveryRequest(fdo, irp);
             break;
         default:
+            if (uasGiveUp(fdo)) {
+                break;
+            }
             (VOID)uasResetDevice(fdo);
             break;
         }
@@ -2189,6 +2354,8 @@ VOID UasEngineStart(PUAS_FDO fdo)
     fdo->Active = 0;
     fdo->Dead = FALSE;
     fdo->CycleOwed = FALSE;     /* task 45.41: the last start's, void */
+    /* Task 49.39: the last start's counts, void. */
+    UasFinalClear(fdo->FinalResets, UAS_FINAL_DIR_IN | UAS_FINAL_DIR_OUT);
     fdo->Recovering = FALSE;
     fdo->RecoveryQueued = FALSE;
     /* Task 45.23: a start ends any sleep hold; a new one is the next
@@ -3424,6 +3591,9 @@ static VOID uasWakeWorker(PVOID context)
     }
     fdo->Holding = FALSE;
     fdo->HoldCheck = FALSE;
+    /* Task 49.39 (record 13 section 16.17): a sleep's timeouts are no
+     * evidence about the drive after it. */
+    UasFinalClear(fdo->FinalResets, UAS_FINAL_DIR_IN | UAS_FINAL_DIR_OUT);
     KeReleaseSpinLock(&fdo->Lock, irql);
     uasPump(fdo);
     if (fdo->BusKnown) {

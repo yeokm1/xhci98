@@ -63,6 +63,7 @@ NTSTATUS HcdCompleteIrp(PIRP irp, NTSTATUS status, ULONG_PTR information)
 {
     irp->IoStatus.Status = status;
     irp->IoStatus.Information = information;
+    HCD_QEMU_URB_OUT(irp);
     IoCompleteRequest(irp, IO_NO_INCREMENT);
     return status;
 }
@@ -89,6 +90,10 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     /* Task 48.33: the boot ledger of the DMA memory controllers could
      * name (hcd_dma.c), before any controller is added. */
     HcdDmaLedgerInit(DriverObject);
+    /* Task 49.24: XhciInterruptMode 4's image-wide state (hcd_msg4.c);
+     * the library and the core wait for the first mode-4 start. */
+    HcdMsg4Init();
+    HcdMsgNtInit(RegistryPath);
     HcdUrbInit();
     HcdPdoRetireInit();
     HcdSuspDriverInit();
@@ -269,6 +274,10 @@ static NTSTATUS NTAPI hcdDispatchOther(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     major = IoGetCurrentIrpStackLocation(Irp)->MajorFunction;
     if (common->Kind == HCD_KIND_DEVICE_PDO &&
         major == IRP_MJ_INTERNAL_DEVICE_CONTROL) {
+#if defined(XHCI_FLAVOUR_QEMU)
+        /* Task 49.29: the per-request log's arrival, before any branch. */
+        HcdQemuUrbIn(Irp);
+#endif
         /* A hub's PDO takes no URB: the bus owns the hub, and nothing
          * above its FDO sends one (task 33.4). A composite parent's takes
          * only its own FDO's descriptor reads and SELECT_CONFIGURATION

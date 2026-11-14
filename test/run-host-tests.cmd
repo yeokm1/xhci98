@@ -51,6 +51,10 @@ rem                  Stream ID, the doorbell value and the event's stream
 rem   test_xport   - the mass-storage transport policy (src\xhci_xport.c, task
 rem                  31-A.3): Bulk-Only or UAS for an interface offering
 rem                  either, and the hardware and compatible ids that follow
+rem   test_bot     - the Bulk-Only transport machine of the resume keep
+rem                  (src\xhci_bot.c, task 49.34): CBW, data and CSW
+rem                  framing, the fail-closed transitions, SENSE, the reset
+rem                  recovery, the capacity record and the parsers
 rem   test_usbdx   - Windows 8's client contract (src\xhci_usbdx.c, task
 rem                  43.29): the V1 interface and capability checks, the
 rem                  answers, the URB sizes, the stream URB checks
@@ -199,6 +203,7 @@ rem                  unclassified row fails the build), the installed
 rem                  defaults held to the INFs, the system rules, the values
 rem                  offered, the driver's reading, the apply summary and its
 rem                  exit code, the elevated run's request and its bounds
+rem   test_trctx   - XHCITR's stream contexts and trace reading (xhcitr\tr_ctx.c)
 rem   test_trred   - the red tray icon's decision and tooltip (xhcitr\tr_red.c,
 rem                  task 43.57, design record 25 section 7.2.1): each
 rem                  condition and its clearing, the ranking, the tooltip
@@ -613,6 +618,9 @@ call :run test_stream "test_stream.c ..\src\xhci_stream.c"
 rem test_xport links nothing else: the transport choice and its ids are pure
 rem computations over descriptor bytes and three flags (task 31-A.3).
 call :run test_xport "test_xport.c ..\src\xhci_xport.c"
+rem test_bot links nothing else: the Bulk-Only machine and its parsers are
+rem pure computations over transfer events and bytes (task 49.34).
+call :run test_bot "test_bot.c ..\src\xhci_bot.c"
 rem test_usbdx links the stream plan (xhci_stream.c) beside its own file:
 rem Windows 8's client contract served by the bus - the interface's and
 rem the capability block's checks, the capability answers, the URB sizes
@@ -683,6 +691,11 @@ rem test_stage links nothing else: staging's arithmetic (task 48.33,
 rem design record 13 section 11.11) is pure.
 call :run test_stage "test_stage.c ..\src\xhci_stage.c"
 call :run test_poll "test_poll.c ..\src\xhci_poll.c"
+rem test_msg4 links xhci_poll.c for the reasons and the pin's status:
+rem XhciInterruptMode 4's decision, the resource-map walk, the map's value
+rem names, the refusal table, the brakes and the judge are pure
+rem (roadmap-usb4 task 49.24, design record 15 section 4.5).
+call :run test_msg4 "test_msg4.c ..\src\xhci_msg4.c ..\src\xhci_poll.c"
 rem test_quirk links nothing else: Linux's xHCI controller quirks' values,
 rem lists, match and packed word are pure (task 38.10, design record 20),
 rem as is Q9's bounded wait for the ASMedia control byte (task 44.65);
@@ -779,6 +792,9 @@ call :run test_mark "test_mark.c ..\xhcimark\mark_core.c ..\xhciinst\inst_core.c
 rem test_trred links the red tray icon's decision and tooltip (xhcitr\tr_red.c,
 rem task 43.57, design record 25 section 7.2.1) over XHCITR's pure half.
 call :run test_trred "test_trred.c ..\xhcitr\tr_red.c ..\xhcitr\tr_core.c ..\xhciinst\inst_core.c ..\xhcimark\mark_core.c"
+rem test_trctx: XHCITR's stream contexts and trace reading (xhcitr\tr_ctx.c,
+rem task 49.39, design record 17 section 4.12.9), pure.
+call :run test_trctx "test_trctx.c ..\xhcitr\tr_ctx.c"
 rem test_ej9x links the tools' half of the 9x eject asked of xhcicm.sys
 rem (xhciinst\inst_ej9x.c, task 43.18) with the pure half it maps through.
 call :run test_ej9x "test_ej9x.c ..\xhciinst\inst_ej9x.c ..\xhciinst\inst_core.c"
@@ -866,6 +882,13 @@ rem test_trnet links XHCITR's reader of that answer and its text
 rem (xhcitr\tr_net.c) over answers the builder made: the bounds, the
 rem kinds, the labels, 79 columns, the snapshot's withheld fields.
 call :run test_trnet "test_trnet.c ..\xhcitr\tr_net.c ..\xhcitr\tr_core.c ..\src\cm\cm_qnet.c ..\xhciinst\inst_core.c ..\xhcimark\mark_core.c"
+rem test_cm_snap links the connection manager's state snapshot: the
+rem generated field directories (src\cm\cm_snapf.c), the image's builder
+rem (src\cm\cm_snap.c) and XHCITR's reader (xhcitr\tr_cms.c), over images
+rem the builder made and a canned fixture (design record 21 section 8.4,
+rem task 49.37): every field inside its structure, all N fields agree, the
+rem windows, the hashes, /nosysinfo, 79 columns.
+call :run test_cm_snap "test_cm_snap.c ..\src\cm\cm_snap.c ..\src\cm\cm_snapf.c ..\xhcitr\tr_cms.c ..\xhcitr\tr_core.c ..\xhciinst\inst_core.c ..\xhcimark\mark_core.c"
 rem test_trpci links xhcicm.sys's PCI answer builder (src\cm\cm_qpci.c) over
 rem modelled buses and XHCITR's reader and decoders of it (xhcitr\tr_pci.c):
 rem the bounds, the capability walk with bad lists, the decoders, 79 columns
@@ -920,6 +943,9 @@ set "NORUN="
 goto amd64done
 
 :noamd64
+rem A gated build's run (scripts\build-steps.ps1 sets the variable) needs
+rem the amd64 legs: there a missing compiler fails the suite (task 49.34).
+if "%XHCI98_HOST_AMD64_REQUIRED%"=="1" goto noamd64gated
 set "SUITESKIPPED=1"
 echo.
 echo === test_packet_amd64, test_membuf_amd64, test_cm_irq_amd64, test_cm_breq_amd64 === SKIPPED
@@ -1181,6 +1207,17 @@ exit /b 1
 :norundirfree
 echo.
 echo ERROR: 20 run directory names under %~dp0out were already taken.
+endlocal
+exit /b 1
+
+:noamd64gated
+call :cleanrun
+echo.
+echo ERROR: WDK 7.1's amd64 compiler was not found at %WDK71%\bin\x86\amd64\cl.exe,
+echo so test_packet_amd64, test_membuf_amd64, test_cm_irq_amd64 and
+echo test_cm_breq_amd64 cannot be built. A gated build needs them: set WDK71 to
+echo a WDK 7.1 root ^(default tools\WinDDK71^) and run again.
+echo Host tests FAILED.
 endlocal
 exit /b 1
 

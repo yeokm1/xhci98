@@ -476,8 +476,11 @@ static void test_values(void)
     CmValuesTakeRingIrq(&v, 1, 0);
     CHECK(v.RingIrq == 0 && v.RingIrqFound == 1, "0 is taken");
     CmValuesTakeRingIrq(&v, 1, 2);
-    CHECK(v.RingIrq == 0 && v.RingIrqRefused == 1 && v.RingIrqRaw == 2,
-          "2 (the reserved message step) is refused: 0 stands");
+    CHECK(v.RingIrq == 2 && v.RingIrqRefused == 0 && v.RingIrqRaw == 2,
+          "2 is taken (the message on 98 SE and ME, task 49.27)");
+    CmValuesTakeRingIrq(&v, 1, 3);
+    CHECK(v.RingIrq == 0 && v.RingIrqRefused == 1 && v.RingIrqRaw == 3,
+          "3 is refused: 0 stands");
     CmValuesTakeRingIrq(&v, 1, 0xFFFFFFFFUL);
     CHECK_EQ(v.RingIrq, 0, "all-ones is refused");
     CmValuesTakeRingIrq(&v, 0, 0);
@@ -537,6 +540,22 @@ static void test_values(void)
           v.SleepEntryRaw == 2, "2 is refused: the default stands, the value recorded");
     CmValuesTakeSleepEntry(&v, 0, 0);
     CHECK_EQ(v.SleepEntryFound | v.SleepEntryRefused, 0, "a later absent read clears both");
+    /* XhciCmWakePowerUp (task 49.46): the same rule, default 1. */
+    CmValuesDefault(&v);
+    CHECK_EQ(CM_WAKE_POWER_UP_DEFAULT, 1, "XhciCmWakePowerUp defaults to 1");
+    CHECK_EQ(v.WakePowerUp, 1, "1 after CmValuesDefault");
+    CmValuesTakeWakePowerUp(&v, 0, 0);
+    CHECK(v.WakePowerUp == 1 && v.WakePowerUpFound == 0 &&
+          v.WakePowerUpRefused == 0, "absent: the default, nothing found");
+    CmValuesTakeWakePowerUp(&v, 1, 0);
+    CHECK(v.WakePowerUp == 0 && v.WakePowerUpFound == 1, "0 is taken");
+    CmValuesTakeWakePowerUp(&v, 1, 1);
+    CHECK(v.WakePowerUp == 1 && v.WakePowerUpRefused == 0, "1 is taken");
+    CmValuesTakeWakePowerUp(&v, 1, 2);
+    CHECK(v.WakePowerUp == 1 && v.WakePowerUpRefused == 1 &&
+          v.WakePowerUpRaw == 2, "2 is refused: the default stands, the value recorded");
+    CmValuesTakeWakePowerUp(&v, 0, 0);
+    CHECK_EQ(v.WakePowerUpFound | v.WakePowerUpRefused, 0, "a later absent read clears both");
     CHECK_EQ(v.Found | v.Refused, 0, "the rule table's bits untouched by it");
 }
 

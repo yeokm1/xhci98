@@ -114,6 +114,7 @@ SOURCES=cm_vals.c      \
         cm_dsdos.c     \
         cm_live.c      \
         cm_rirqos.c    \
+        cm_rirqnt.c    \
         cm_net.c       \
         cm_pwrr.c      \
         cm_nvlinkos.c  \
@@ -128,6 +129,9 @@ SOURCES=cm_vals.c      \
         cm_query.c     \
         cm_qnet.c      \
         cm_qryos.c     \
+        cm_snap.c      \
+        cm_snapf.c     \
+        cm_snapos.c    \
         xhcicm.rc
 
 !IF "$(XHCI_EXTRA_DEFINES)" != ""

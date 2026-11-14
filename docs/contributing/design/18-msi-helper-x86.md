@@ -69,6 +69,12 @@ boards under 2000, its gate, and the alternatives.
 **Revision 19, 2026-11-07 (the owner chose option C, in 3.4.2.0):** section
 16.4's "As built".
 
+**Revision 20, 2026-11-11 (roadmap-usb4 task 49.24, designed before
+code; a design only):** section 15.16, the helper's routine service used
+by `xhci98.sys` itself for `XhciInterruptMode` 4 on Windows 2000 and
+32-bit XP (design record 15 section 4.5). Nothing changes in the helper,
+the channel or the INF.
+
 Design record 15 section 4.3 designs MSI for the HCD and fixes the seam
 this record plugs into: `hcdMsgConnect(hc, connect, disconnect)`, handed
 `IoConnectInterruptEx` and `IoDisconnectInterruptEx` by each
@@ -2558,6 +2564,83 @@ code; the choices below were taken on the owner's delegation.
   `cm.osc.handover=100h` with the router answering; then the NHI's device
   removed in Device Manager with its driver software (the Thunderbolt
   part alone): the helper stays; then `/uninstall`: the helper gone.
+
+### 15.16 The routine for `xhci98.sys` too: `XhciInterruptMode` 4 (revision 20, 2026-11-11; roadmap-usb4 task 49.24; a design, not built)
+
+`XhciInterruptMode` 4 (design record 15 section 4.5) connects a message
+on 2000, XP and XP x64 with the MSI stability improvements, built
+hosted: they import nothing beyond the set already on this image's
+allowlist and ask their client to resolve every other kernel routine by
+name. The x86
+`xhci98.sys` cannot import `MmGetSystemRoutineAddress`, because the same
+image loads on 98 SE and ME. It takes the routine service the channel
+has had since its minor version 1 (section 15.3, offset `0x34`:
+`FindRoutine`, the helper's own `MmGetSystemRoutineAddress`), which the
+x86 connection manager already uses. This section is the design; no
+code of it is in the tree, and the names below are those of the MSI
+stability improvements in their state A of record 15 section 4.5.11
+(read 2026-11-11), to be read again when the header is vendored (record
+15 section 4.5.11).
+
+- **The look.** One query of the HCD's own, at `PASSIVE_LEVEL`, at a
+  mode-4 start on 2000 or 32-bit XP: the `XHCI_HLPR_QUERY1` block (`0x38`
+  bytes, minor 1, wanting `XHCI_HLPR_SVC_ROUTINE`), judged by
+  `XhciHlprAcceptRoutine` as `xhcicm.sys` judges it
+  (`hcd_msi86.c`, `HcdMsiFindRoutine`). The pointer returned is the
+  kernel's routine, not code of the helper's, so the HCD keeps it for
+  the image's life and drops its reference to the helper's file object
+  at once. The FDO's binding (section 15.4) and its V2.0 block are not
+  touched: the timer service is as it was.
+- **Before their initialisation, not after.** The MSI stability
+  improvements resolve their routines inside their one initialisation
+  call and do not resolve again, so the
+  HCD makes that call only with the routine in hand (record 15 section
+  4.5.3, step 1). A helper that does not answer the service - absent, a
+  first install before its first boot (section 15.5), or a minor-0
+  helper of `2.4.0.0` to `3.4.0.x` - leaves them uninitialised
+  and refuses that start (record 15's reason 26); the look is made
+  again at the next mode-4 start, and nothing is latched.
+- **The names asked for**, all through the one routine, none imported.
+  For the connection: `KeSetSystemAffinityThread` and
+  `KeRevertToUserAffinityThread`. For the claimed ISA interrupt
+  (`XhciMsiStrategy` 0), its picker and its brake:
+  `IoReportResourceForDetection`, `IoCreateDevice`, `IoDeleteDevice`,
+  `HalGetInterruptVector`, `HalGetBusDataByOffset`, `ZwOpenKey`,
+  `ZwEnumerateKey`, `ZwQueryValueKey`, `ZwClose`, `IoGetCurrentProcess`,
+  and the address of the variable `PsInitialSystemProcess`; and, for the
+  second claim pool's charges kept for the boot (record 15 section
+  4.5.16, in record 15's states C and E), `ZwCreateKey` and
+  `ZwSetValueKey`, whose absence refuses only a claim that chooses that
+  pool; and, from record 15's state G, for its published state (record 15 section
+  4.5.16 item 9), `ZwCreateKey`, `ZwSetValueKey`, `ZwClose` and
+  `KeQuerySystemTime`: without one of the three registry routines
+  nothing is published, without `KeQuerySystemTime` the snapshot's
+  load time is zero; and, from their version 1, for their event history
+  (record 15 section 4.5.16 item 10), `KeQueryInterruptTime`, without
+  which the events have no time; none of them changes the connection. Two of them
+  are the HAL's exports and one is data; that the kernel's routine
+  answers each on 2000 and on XP is their reading on XP and is
+  read on 2000 by the first leg there. A name it does not answer leaves
+  the claim unsupported for the boot (record 15's reason 34), and the
+  borrowed line (`XhciMsiStrategy` 1) still connects.
+- **One name of the HCD's own**: `IoInvalidateDeviceState`, by which a
+  controller that lost its message while running is reported to
+  Windows (record 15 section 4.5.4). It is resolved at the mode-4 start,
+  before the connection; a start that cannot have it is refused.
+- **Windows 98 SE and ME make no look**: the 98 SE and ME message path
+  is not part of `3.5.0.0` (owner, 2026-11-13), and the helper is not
+  installed on those systems.
+- **amd64.** The same entry calls `MmGetSystemRoutineAddress` at the
+  image's one admitted site, `hcd_msi86.obj`, for the same names.
+- **What does not change.** The helper, the channel, its version and
+  the INF: every `3.4.1.0` and later helper answers minor 1. The import
+  gate's allowlists gain no row for these names on x86, since none is
+  imported; the gate's site rule for `MmGetSystemRoutineAddress` on
+  amd64 stands.
+
+The parked branch `w48-mode4` carries an earlier form of this section
+for the two affinity routines only, citing task 48.41; this one replaces
+it (record 15 section 4.5.12).
 
 ## 16. Revision 14: the filter on Windows 2000, XP and XP x64 (task 47.33)
 

@@ -1747,7 +1747,10 @@ static VOID test_memonly(VOID)
 static VOID test_budgets_and_late(VOID)
 {
     CM_NI_OP op;
+    CM_NI_OP op2;
     CM_NI_RES res;
+    ULONG credited;
+    ULONG late;
 
     /* The problem stays: one READY after CM_NI_READY_AFTER_MS, then the
      * deadline. */
@@ -1905,6 +1908,47 @@ static VOID test_budgets_and_late(VOID)
     CmNiTake(&mem, &ctx, &res);
     CHECK_EQ(mem.C.Dropped, 2, "another id dropped");
     CHECK(mem.Out.Id != 0, "still outstanding");
+    /* Record 21 section 6.1.3: the operation a suspend held at its
+     * admission (not made, not taken) stays outstanding through the wait,
+     * is handed out again with its id, and its result is taken - nothing
+     * dropped, the wait not credited by the take. */
+    ctx.Now += 30000UL;
+    CHECK(!CmNiNext(&mem, &ctx, &op2), "held: nothing new while it waits");
+    CHECK(CmNiAgain(&mem, &ctx, &op2), "held: handed out again");
+    CHECK_EQ(op2.Id, op.Id, "held: the same id");
+    CHECK_EQ(op2.Kind, op.Kind, "held: the same kind");
+    CHECK_EQ(op2.Dev, op.Dev, "held: the same entry");
+    credited = mem.C.Credited;
+    memset(&res, 0, sizeof(res));
+    res.Id = op2.Id;
+    CmNiTake(&mem, &ctx, &res);
+    CHECK_EQ(mem.C.Dropped, 2, "held: its result taken, not dropped");
+    CHECK_EQ(mem.Out.Id, 0, "held: none outstanding after");
+    CHECK_EQ(mem.C.Credited, credited, "held: the 30 s wait not credited by the take");
+    CHECK(!CmNiAgain(&mem, &ctx, &op2), "held: nothing to hand out again");
+
+    /* ... an attempt's operation held across the wait: handed out again
+     * while its deadline stands; past it (the parked time's credit spent),
+     * taken as not made - the attempt failed by timeout, nothing handed
+     * out, so the caller makes nothing after the attempt stopped. */
+    model();
+    f.StartOnReprocess = 0;
+    start();
+    pass();
+    CHECK_EQ(st(), CM_NI_S_ATTEMPTED, "held attempt: attempted");
+    ctx.Now += 200;
+    CmNiPass(&mem, &ctx);
+    CHECK(CmNiNext(&mem, &ctx, &op), "held attempt: an operation of the attempt");
+    ctx.Now = mem.Dev[0].Deadline - 1;
+    CHECK(CmNiAgain(&mem, &ctx, &op2), "held attempt: before its deadline, handed out again");
+    CHECK_EQ(op2.Id, op.Id, "held attempt: the same id");
+    ctx.Now = mem.Dev[0].Deadline + 1;
+    late = mem.C.Late;
+    CHECK(!CmNiAgain(&mem, &ctx, &op2), "held attempt: past its deadline, not handed out");
+    CHECK_EQ(mem.Out.Id, 0, "held attempt: taken");
+    CHECK_EQ(st(), CM_NI_S_FAILED, "held attempt: failed");
+    CHECK_EQ(why(), CM_NI_W_TIMEOUT, "held attempt: by timeout");
+    CHECK_EQ(mem.C.Late, late + 1, "held attempt: its result accounted as late");
 
     /* Two devices on one member advance one at a time. */
     model();

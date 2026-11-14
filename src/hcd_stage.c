@@ -69,6 +69,10 @@ static VOID NTAPI hcdStageDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
 static VOID NTAPI hcdStageTimerDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
                                    PVOID Arg2);
 static VOID hcdStagePass(PHCD_CONTROLLER hc);
+#if defined(XHCI_FLAVOUR_QEMU)
+static VOID NTAPI hcdStageHoldDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
+                                  PVOID Arg2);
+#endif
 
 /* ----------------------------------------------------------------------- */
 /* Byte moves                                                               */
@@ -353,6 +357,94 @@ static VOID hcdStageProbeClose(PHCD_CONTROLLER hc)
     hc->StageProbeVa = NULL;
     hc->StageProbeMdls = 0;
 }
+
+/*
+ * Task 49.29 (record 13 section 11.11.12): the hold. Once a start, the
+ * first record to reach the state XhciQemuStageFault bits 19:16 name is
+ * kept in it until staging's admission closes or HCD_STAGE_HOLD_POLLS
+ * polls have passed (hcdStageHoldDpc), then goes on as it would have. The
+ * hold is counted in StageOwners from here to the end of its DPC, so the
+ * stop's join (HcdStageDrain) waits for it as for any owner; a record it
+ * keeps is not free, so its pipe stays open. With bit 2 the injection of
+ * all ones without the proof is armed as it begins. Returns 1 when the
+ * hold began, with `x` (NULL for the modes that keep no one record).
+ * StageLock held.
+ */
+#define HCD_STAGE_HOLD_POLL_MS 20UL
+#define HCD_STAGE_HOLD_POLLS   500UL
+
+static ULONG hcdStageHoldTakeLocked(PHCD_CONTROLLER hc, ULONG point,
+                                    PHCD_XFER x)
+{
+    LARGE_INTEGER due;
+
+    if (hc->StageHoldPoint != point ||
+        hc->StageHoldPhase != HCD_STAGE_HOLD_IDLE || hc->StageClosed) {
+        return 0;
+    }
+    hc->StageHoldPhase = HCD_STAGE_HOLD_HELD;
+    hc->StageHoldX = x;
+    hc->StageHoldPolls = 0;
+    (VOID)InterlockedIncrement((PLONG)&hc->StageOwners);
+    HcdRelativeMs(&due, HCD_STAGE_HOLD_POLL_MS);
+    (VOID)KeSetTimer(&hc->StageHoldTimer, due, &hc->StageHoldDpc);
+    XHCI_DBG_VALUE("stage.hold: taken, state", point);
+    XHCI_DBG_VALUE("stage.hold: record", x);
+    if ((hc->QemuStageFault & HCD_STAGE_QEMU_CONTAIN) != 0) {
+        (VOID)HcdInjContainNoProof(hc);
+    }
+    return 1;
+}
+
+/* The same with StageLock taken here. IRQL: <= DISPATCH_LEVEL, StageLock
+ * not held. */
+static ULONG hcdStageHoldTake(PHCD_CONTROLLER hc, ULONG point, PHCD_XFER x)
+{
+    KIRQL oldIrql;
+    ULONG taken;
+
+    if (hc->StageHoldPoint != point) {
+        return 0;
+    }
+    KeAcquireSpinLock(&hc->StageLock, &oldIrql);
+    taken = hcdStageHoldTakeLocked(hc, point, x);
+    KeReleaseSpinLock(&hc->StageLock, oldIrql);
+    return taken;
+}
+
+/* The modes that keep every record of a kind rather than one (WAITING,
+ * COPY_PENDING): whether the hold stands, begun at the first record to
+ * meet it. StageLock held. */
+static ULONG hcdStageHoldsLocked(PHCD_CONTROLLER hc, ULONG point,
+                                 PHCD_XFER x)
+{
+    if (hc->StageHoldPoint != point) {
+        return 0;
+    }
+    if (hc->StageHoldPhase == HCD_STAGE_HOLD_HELD) {
+        return 1;
+    }
+    return hcdStageHoldTakeLocked(hc, point, x);
+}
+
+/* A copy for a record already detached from its request (its URB
+ * released, HcdIoDeferred) is counted, `stage.copy.detached`; it must not
+ * happen. A stricter test than a copy after the request's completion,
+ * which follows the detachment. IRQL: <= DISPATCH_LEVEL. */
+static VOID hcdStageQemuDetached(PHCD_CONTROLLER hc, PHCD_XFER x)
+{
+    if (x->Urb == NULL) {
+        (VOID)InterlockedIncrement((PLONG)&hc->StageCopyDetached);
+        XHCI_DBG_VALUE_LIMITED("stage.copy: DETACHED record", x);
+    }
+}
+
+/* While COPY_PENDING is held no copy-out gives up (hcdStageMustEnd). */
+#define HCD_STAGE_HOLD_COPIES(hc)                                          \
+    ((hc)->StageHoldPoint == HCD_STAGE_HOLD_COPY &&                        \
+     (hc)->StageHoldPhase == HCD_STAGE_HOLD_HELD)
+#else
+#define HCD_STAGE_HOLD_COPIES(hc) 0
 #endif
 
 /*
@@ -378,10 +470,30 @@ static ULONG hcdStageCopy(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG toStage,
     ULONG n;
     ULONG ok;
     LONG w;
+#if defined(XHCI_FLAVOUR_QEMU)
+    ULONG held;
+#endif
 
     if (bytes == 0) {
         return 1;
     }
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* Task 49.29 (record 13 section 11.11.12): a fill for a record already
+     * detached from its request (hcdStageQemuDetached; a copy-out is
+     * checked in hcdStageCopyOut). And the hold of COPY_PENDING fails
+     * every copy-out, as a window that would not map, while it stands. */
+    if (toStage) {
+        hcdStageQemuDetached(hc, x);
+    }
+    if (!toStage && hc->StageHoldPoint == HCD_STAGE_HOLD_COPY) {
+        KeAcquireSpinLock(&hc->StageLock, &oldIrql);
+        held = hcdStageHoldsLocked(hc, HCD_STAGE_HOLD_COPY, x);
+        KeReleaseSpinLock(&hc->StageLock, oldIrql);
+        if (held) {
+            return 0;
+        }
+    }
+#endif
     HcdTscRead(&lo0, &hi0);
     direct = hcdStageDirect(x);
 #if defined(XHCI_FLAVOUR_QEMU)
@@ -548,7 +660,8 @@ static ULONG hcdStageMustEnd(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG failed,
         *usbd = HCD_USBD_CANCELED;
     } else if (hc->ShutLatched || hc->StageClosed) {
         *usbd = XHCI_USBD_STATUS_DEV_NOT_RESPONDING;
-    } else if (failed && hcdStageGiveUp(hc, x)) {
+    } else if (failed && !HCD_STAGE_HOLD_COPIES(hc) &&
+               hcdStageGiveUp(hc, x)) {
         hc->StageGiveups++;
         *usbd = HCD_USBD_NO_MEMORY;
     } else {
@@ -626,6 +739,12 @@ static ULONG hcdStageTake(PHCD_CONTROLLER hc, PHCD_XFER x)
     want = (remaining < XHCI_STAGE_TD_BYTES || x->Control)
                ? remaining
                : XHCI_STAGE_TD_BYTES;
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* Task 49.29: the hold of WAITING fails every take while it stands. */
+    if (hcdStageHoldsLocked(hc, HCD_STAGE_HOLD_WAITING, x)) {
+        return 0;
+    }
+#endif
 
     /* 0. Nothing to move (a zero-length request queued for its place in
      * its pipe's order): admitted with no staging. */
@@ -959,6 +1078,14 @@ static VOID hcdStagePass(PHCD_CONTROLLER hc)
                 HcdIoMapped(hc, x, 0);
                 continue;
             }
+#if defined(XHCI_FLAVOUR_QEMU)
+            /* Task 49.29: the hold takes this pass with its record -
+             * StagePassBusy and its count in StageOwners - and carries it
+             * on (hcdStageHoldDpc). */
+            if (!x->In && hcdStageHoldTake(hc, HCD_STAGE_HOLD_FILLING, x)) {
+                return;
+            }
+#endif
             if (!hcdStageFill(hc, x, pass, &ended, &moved)) {
                 copied += moved;
                 if (ended) {
@@ -971,6 +1098,11 @@ static VOID hcdStagePass(PHCD_CONTROLLER hc)
                 continue;
             }
             copied += moved;
+#if defined(XHCI_FLAVOUR_QEMU)
+            if (hcdStageHoldTake(hc, HCD_STAGE_HOLD_READY, x)) {
+                return;
+            }
+#endif
             HcdIoMapped(hc, x, 1);
             if (copied >= HCD_STAGE_PASS_BYTES) {
                 more = 1;
@@ -1131,6 +1263,9 @@ static ULONG hcdStageCopyOut(PHCD_CONTROLLER hc, PHCD_XFER x)
     ULONG i;
     ULONG ok;
 
+#if defined(XHCI_FLAVOUR_QEMU)
+    hcdStageQemuDetached(hc, x);
+#endif
     allowed = (x->StageEvent || !hc->CommonBufferPinned) ? 1UL : 0UL;
     ok = 1;
     (VOID)InterlockedIncrement((PLONG)&hc->StageOwners);
@@ -1229,6 +1364,9 @@ ULONG HcdStageComplete(PHCD_CONTROLLER hc, PHCD_XFER x, PULONG budget)
     KIRQL oldIrql;
     ULONG back;
     ULONG ok;
+#if defined(XHCI_FLAVOUR_QEMU)
+    ULONG held;
+#endif
 
     if (x->StageKind == HCD_STAGE_K_NONE) {
         x->StageState = HCD_STAGE_S_NONE;
@@ -1237,7 +1375,17 @@ ULONG HcdStageComplete(PHCD_CONTROLLER hc, PHCD_XFER x, PULONG budget)
     if (x->In && x->Engine && !x->StageCopied && !x->StageAbandon) {
         KeAcquireSpinLock(&hc->StageLock, &oldIrql);
         x->StageState = HCD_STAGE_S_DRAINING;
+#if defined(XHCI_FLAVOUR_QEMU)
+        /* Task 49.29: the hold keeps it DRAINING, its copy-out not made,
+         * as a record waiting for a window is kept (hcdStageHoldDpc). */
+        held = hcdStageHoldTakeLocked(hc, HCD_STAGE_HOLD_DRAINING, x);
+#endif
         KeReleaseSpinLock(&hc->StageLock, oldIrql);
+#if defined(XHCI_FLAVOUR_QEMU)
+        if (held) {
+            return 0;
+        }
+#endif
         if (*budget >= HCD_STAGE_PASS_BYTES) {
             if (hcdStageCopyWait(hc, x, 0)) {
                 return 0;
@@ -1380,6 +1528,13 @@ static VOID NTAPI hcdStageDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
     UNREFERENCED_PARAMETER(Arg1);
     UNREFERENCED_PARAMETER(Arg2);
     hc = (PHCD_CONTROLLER)Context;
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* Task 49.29: the hold runs this DPC's work later, the DPC still
+     * counted in StageDpcsInFlight until then (hcdStageHoldDpc). */
+    if (hcdStageHoldTake(hc, HCD_STAGE_HOLD_DPC, NULL)) {
+        return;
+    }
+#endif
     /* Closed or not: a pass with admission closed ends what waits. The
      * copy-outs a bound left, and any waiting for a window, first. */
     hcdStageRetryCopies(hc);
@@ -1404,6 +1559,103 @@ static VOID NTAPI hcdStageTimerDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
     hcdStagePass(hc);
     (VOID)InterlockedDecrement((PLONG)&hc->StageTimerSet);
 }
+
+#if defined(XHCI_FLAVOUR_QEMU)
+/* A pass the hold took ends as hcdStagePass ends one, and a new one runs
+ * the queue on. IRQL: DISPATCH_LEVEL, no lock held. */
+static VOID hcdStageHoldPassEnd(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+
+    KeAcquireSpinLock(&hc->StageLock, &oldIrql);
+    hc->StagePassBusy = 0;
+    KeReleaseSpinLock(&hc->StageLock, oldIrql);
+    (VOID)InterlockedDecrement((PLONG)&hc->StageOwners);
+    hcdStagePass(hc);
+}
+
+/*
+ * The hold's poll (task 49.29, record 13 section 11.11.12), every
+ * HCD_STAGE_HOLD_POLL_MS until staging's admission closes or the bound
+ * passes; then what it kept goes on as it would have: an OUT's fill and
+ * its publication (FILLING) or the publication alone (READY), the pass
+ * then ended and run again; the copy-out, back to the done list as
+ * hcdStageRetryCopies puts one (DRAINING); the DPC's work (the DPC); a pass
+ * kicked (WAITING, COPY_PENDING). Its own count in StageOwners last. IRQL:
+ * DISPATCH_LEVEL.
+ */
+static VOID NTAPI hcdStageHoldDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
+                                  PVOID Arg2)
+{
+    PHCD_CONTROLLER hc;
+    PHCD_XFER x;
+    LARGE_INTEGER due;
+    KIRQL oldIrql;
+    ULONG point;
+    ULONG closed;
+    ULONG pass;
+    ULONG ended;
+    ULONG moved;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(Arg1);
+    UNREFERENCED_PARAMETER(Arg2);
+    hc = (PHCD_CONTROLLER)Context;
+    KeAcquireSpinLock(&hc->StageLock, &oldIrql);
+    closed = hc->StageClosed ? 1UL : 0UL;
+    if (!closed && ++hc->StageHoldPolls < HCD_STAGE_HOLD_POLLS) {
+        HcdRelativeMs(&due, HCD_STAGE_HOLD_POLL_MS);
+        (VOID)KeSetTimer(&hc->StageHoldTimer, due, &hc->StageHoldDpc);
+        KeReleaseSpinLock(&hc->StageLock, oldIrql);
+        return;
+    }
+    point = hc->StageHoldPoint;
+    x = hc->StageHoldX;
+    hc->StageHoldX = NULL;
+    hc->StageHoldPhase = HCD_STAGE_HOLD_SPENT;
+    pass = ++hc->StagePassNo;
+    KeReleaseSpinLock(&hc->StageLock, oldIrql);
+    XHCI_DBG_VALUE("stage.hold: let go, state", point);
+    XHCI_DBG_VALUE("stage.hold: let go, admission closed", closed);
+    XhciLogNote(&hc->Hc, "qemu.stage.hold", (point << 8) | closed);
+    switch (point) {
+    case HCD_STAGE_HOLD_FILLING:
+        if (hcdStageFill(hc, x, pass, &ended, &moved)) {
+            HcdIoMapped(hc, x, 1);
+        } else if (ended) {
+            HcdIoMapped(hc, x, 0);
+        }
+        hcdStageHoldPassEnd(hc);
+        break;
+    case HCD_STAGE_HOLD_READY:
+        HcdIoMapped(hc, x, 1);
+        hcdStageHoldPassEnd(hc);
+        break;
+    case HCD_STAGE_HOLD_DRAINING:
+        x->StageMoved = 0;
+        if (hcdStageCopyOut(hc, x)) {
+            x->StageCopied = 1;
+        } else if (hcdStageCopyWait(hc, x, 1)) {
+            break;
+        }
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        x->State = HCD_XFER_DONE;
+        InsertTailList(&hc->DoneList, &x->Link);
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        HcdIoDeferred(hc);
+        break;
+    case HCD_STAGE_HOLD_DPC:
+        hcdStageRetryCopies(hc);
+        hcdStagePass(hc);
+        (VOID)InterlockedDecrement((PLONG)&hc->StageDpcsInFlight);
+        break;
+    default:
+        hcdStageKick(hc);
+        break;
+    }
+    (VOID)InterlockedDecrement((PLONG)&hc->StageOwners);
+}
+#endif
 
 /* ----------------------------------------------------------------------- */
 /* Pipes                                                                    */
@@ -1649,6 +1901,13 @@ VOID HcdStageInitObjects(PHCD_CONTROLLER hc)
     KeInitializeDpc(&hc->StageDpc, hcdStageDpc, hc);
     KeInitializeTimer(&hc->StageTimer);
     KeInitializeDpc(&hc->StageTimerDpc, hcdStageTimerDpc, hc);
+#if defined(XHCI_FLAVOUR_QEMU)
+    KeInitializeTimer(&hc->StageHoldTimer);
+    KeInitializeDpc(&hc->StageHoldDpc, hcdStageHoldDpc, hc);
+    hc->StageHoldPoint = HCD_STAGE_HOLD_NONE;
+    hc->StageHoldPhase = HCD_STAGE_HOLD_IDLE;
+    hc->StageHoldX = NULL;
+#endif
     hc->StageClosed = 1;
     hc->StageDpcsInFlight = 0;
     hc->StageTimerSet = 0;
@@ -1708,9 +1967,26 @@ NTSTATUS HcdStageOpen(PHCD_CONTROLLER hc)
     hc->StageProbeVa = NULL;
     hc->StageProbeMdls = 0;
     (VOID)InterlockedExchange((PLONG)&hc->StageProbeArmed, 0);
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* Task 49.29: the hold, once this start; a hold of an earlier start
+     * was joined at its stop (HcdStageDrain). */
+    hc->StageHoldPoint = HCD_STAGE_QEMU_HOLD(hc->QemuStageFault);
+    hc->StageHoldPhase = HCD_STAGE_HOLD_IDLE;
+    hc->StageHoldX = NULL;
+    hc->StageHoldPolls = 0;
+    hc->StageCopyDetached = 0;
+    XhciLogNote(&hc->Hc, "qemu.stage.hold.point", hc->StageHoldPoint);
+#endif
     InitializeListHead(&hc->StageQueue);
     InitializeListHead(&hc->StageCopyQueue);
     hc->StageNt = IoIsWdmVersionAvailable(1, 0x10) ? 1UL : 0UL;
+    /* Task 49.34 (design record 20 section 4.3.4, M3): the Bulk-Only
+     * keep's one window, whatever XhciDmaStaging is; none is a keep that
+     * cannot read the class driver's short answers, which keeps nothing. */
+    hc->BotWin = (hc->ResumeKeepOn && hc->ResumeKeepBot != 0)
+                     ? HcdPoolWindowMdl(2UL * PAGE_SIZE)
+                     : NULL;
+    (VOID)InterlockedExchange((PLONG)&hc->BotWinBusy, 0);
     if (!hc->Staging) {
         /* XhciDmaStaging 0 (owner, 2026-11-09): no pool, no window and
          * admission left closed; every transfer goes through the map
@@ -1847,6 +2123,12 @@ VOID HcdStageNotes(PHCD_CONTROLLER hc)
                    hc->StageDirectLow);
     XHCI_DBG_VALUE("stage: window maps", hc->StageWindowMaps);
     XHCI_DBG_VALUE("stage: window map failures", hc->StageMapFails);
+    /* Task 49.29 (record 13 section 11.11.12). */
+    XhciLogNote(&hc->Hc, "stage.copy.detached", hc->StageCopyDetached);
+    XHCI_DBG_VALUE("stage: copies for a record already detached",
+                   hc->StageCopyDetached);
+    XHCI_DBG_VALUE("urb.log: in, total", (ULONG)HcdQemuUrbsIn);
+    XHCI_DBG_VALUE("urb.log: out, total", (ULONG)HcdQemuUrbsOut);
 #endif
 }
 
@@ -1884,7 +2166,38 @@ VOID HcdStageClose(PHCD_CONTROLLER hc)
         HcdPoolWindowMdlFree(hc->StageWin[i]);
         hc->StageWin[i] = NULL;
     }
+    HcdPoolWindowMdlFree(hc->BotWin);
+    hc->BotWin = NULL;
 #if defined(XHCI_FLAVOUR_QEMU)
     hcdStageProbeClose(hc);
 #endif
+}
+
+/* hcd.h (task 49.34): the window over the client's MDL as a copy's window
+ * is (IoBuildPartialMdl, hcdStageMap, MmUnmapLockedPages), held by an
+ * interlocked flag; a second caller meanwhile reads nothing. */
+ULONG HcdStageCopyHead(PHCD_CONTROLLER hc, PMDL client, PUCHAR to, ULONG n)
+{
+    PUCHAR va;
+    ULONG i;
+
+    if (hc->BotWin == NULL || client == NULL || n == 0 ||
+        n > HCD_BOT_COPY_BYTES || MmGetMdlByteCount(client) < n ||
+        (client->MdlFlags & (MDL_PAGES_LOCKED | MDL_SOURCE_IS_NONPAGED_POOL |
+                             MDL_MAPPED_TO_SYSTEM_VA)) == 0) {
+        return 0;
+    }
+    if (InterlockedExchange((PLONG)&hc->BotWinBusy, 1) != 0) {
+        return 0;
+    }
+    IoBuildPartialMdl(client, hc->BotWin, MmGetMdlVirtualAddress(client), n);
+    va = hcdStageMap(hc, hc->BotWin);
+    if (va != NULL) {
+        for (i = 0; i < n; i++) {
+            to[i] = va[i];
+        }
+        MmUnmapLockedPages(va, hc->BotWin);
+    }
+    (VOID)InterlockedExchange((PLONG)&hc->BotWinBusy, 0);
+    return va != NULL ? 1UL : 0UL;
 }

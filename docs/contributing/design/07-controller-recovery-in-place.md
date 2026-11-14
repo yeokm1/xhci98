@@ -157,7 +157,7 @@ it:
 
 | Site | What it does while set | Why |
 |---|---|---|
-| `XhciWaitForBits` | skips the sleep phase entirely; the wait is the existing 10 ms stall and nothing more | `UsbPortWait` is `KeDelayExecutionThread`. Not extended to busy-wait the full timeout: that would spin a DPC for the better part of a second on hardware that has already failed. A bit that does not settle inside the stall makes the attempt refuse, and the extra time comes from the next attempt rather than from a spin. |
+| `XhciWaitForBits` | skips the sleep phase entirely; the wait is the existing 10 ms stall and nothing more (in the HCD since task 49.35, a reset still running when it ends is waited out by the controller thread at PASSIVE_LEVEL: design record 17 section 4.6.1) | `UsbPortWait` is `KeDelayExecutionThread`. Not extended to busy-wait the full timeout: that would spin a DPC for the better part of a second on hardware that has already failed. A bit that does not settle inside the stall makes the attempt refuse, and the extra time comes from the next attempt rather than from a spin. |
 | `XhciDelayMs` | stalls instead of sleeping | Same reason. The port-power routine `xhciPowerPorts` reaches it through `xhciSettlePortPower`, twice per attempt: each call may spend an optional 20 ms transition delay (the specification states it as a duration, not a condition) plus up to 20 ms of confirmation polling in 5 ms steps, so that routine alone can stall for 60 ms in an attempt. That bounds the power-up step, not the whole recovery, which has other bounded waits and a possible teardown ahead of it. |
 | `XhciInitController` | skips the three PCI configuration-space reads (identification, the INTx gate, the bus-master gate) | `UsbPortReadWriteConfigSpace` goes out to the bus driver; this project's contract for it is PASSIVE_LEVEL. |
 | `xhciTryClearBusMaster` | declines outright | Same service. The proof it would obtain is unavailable, and on this path unnecessary (see below). |
@@ -202,7 +202,12 @@ resumed came back reinitialized and still latched.
 ## 7. Bounds, and what stays terminal
 
 `XHCI_RECOVERY_MAX_ATTEMPTS` is 3, spaced by the health poll (~500 ms apart)
-because each attempt drives the controller through a halt and an HCRST. A
+because each attempt drives the controller through a halt and an HCRST.
+(That spacing was usbport's timer's. The HCD's controller thread began the
+next attempt on its next pass, which a wake makes immediate, and a
+controller whose HCRST outlasts the 10 ms stall spent all three inside one
+tick; since task 49.35 the attempts are paced and a slow reset is waited
+out at PASSIVE_LEVEL, design record 17 section 4.6.1.) A
 controller that will not come back after that stays latched, and that is the
 honest terminal state.
 

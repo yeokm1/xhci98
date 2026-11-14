@@ -2061,6 +2061,10 @@ const char *inst_hvci_text(int state, int cmInRun)
 /* Registry values                                                           */
 /* ======================================================================== */
 
+/* XhciEventRingTrbs's picks (task 49.38; xhci_init.c): 256 the smaller
+ * ring, any other DWORD the larger. */
+static const INST_U32 instEventRingPicks[] = { 256UL, 1024UL };
+
 const INST_VALUE instValues[] = {
     /* The meanings and choices are the release notes' and
      * docs\using\tuning.md's; the question prints each choice on its own
@@ -2073,11 +2077,19 @@ const INST_VALUE instValues[] = {
         NULL } },
     /* Record 26 section 5.0 (owner, 2026-10-22): Advanced, never asked;
      * /set Name=Value. */
-    { "XhciInterruptMode", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0xFUL,
+    /* 4 (task 49.38, the owner's answer Q2 of 2026-11-12): the message of
+     * 2000 to XP x64, offered there alone (inst_def_set_mask). */
+    { "XhciInterruptMode", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x1FUL,
       "how to receive controller signals",
-      "with %s, the controller does not start (Code 10) if Windows does not "
-      "offer the selected means.", 0xAUL,
-      { "automatic", "interrupt only", "always poll", "MSI only" } },
+      "with 1 or 3, the controller does not start (Code 10) if Windows does "
+      "not offer the selected means.", 0,
+      { "automatic", "interrupt only", "always poll", "MSI only",
+        "MSI on 2000 / XP, no fallback" },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL, NULL, INST_VK_DWORD, 0, NULL, 0,
+      "4 (2000 and XP) has no fallback: without the message the controller "
+      "does not start, and a keyboard or mouse on it stops working until "
+      "the value is set back. If Windows does not start, press F8 and "
+      "choose \"Last Known Good Configuration\".", 0x10UL },
     /* Task 45.54 (the owner, 2026-10-31; record 26 section 5.4.1): never
      * asked, the USB page's Advanced rows and /set, in the owner's order,
      * the interrupt mode first; the ranges are docs\using\tuning.md's.
@@ -2097,6 +2109,19 @@ const INST_VALUE instValues[] = {
       "keep devices on root ports as they were after standby or "
       "hibernation resets the controller",
       NULL, 0, { "off", "on", NULL, NULL } },
+    /* Task 49.34 (design record 20 section 4.3.4, M18; owner, 2026-11-13):
+     * asked on 2000 and later, 0 or 1 (2 and 3 by /set and Advanced); no
+     * INF writes it, so its default is the driver's for this Windows
+     * (inst_keepbot_default, NoInf). The draft texts are the owner's to
+     * rephrase. */
+    { "XhciResumeKeepBot", INST_INF_XHCI, INST_APPLY_NT_XHCI, 0x3UL, 0xFUL,
+      "keep a USB drive that is not UAS as it was, with its drive letter "
+      "and open files, after hibernation or standby resets the controller",
+      "a drive swapped during the sleep for one with the same serial number "
+      "and the same size is not noticed.", 0xEUL,
+      { "off", "after hibernation", "after standby",
+        "after hibernation and standby", NULL },
+      0, 0, 1, 0UL },
     { "XhciUsb2Bos", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x3UL,
       "read a USB 2.1 device's BOS descriptor to see whether it can run at "
       "SuperSpeed",
@@ -2197,14 +2222,18 @@ const INST_VALUE instValues[] = {
     /* Task 45.54 (the owner, 2026-10-31; record 26 section 5.4.1): the
      * Thunderbolt page's first Advanced row; never asked. Read on every
      * system and written by every path of the x86 INF since task 48.26
-     * (on 2000 to 10 alone before). */
-    { "XhciCmRingInterrupt", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x3UL,
+     * (on 2000 to 10 alone before). 2 (task 49.27, record 21 section
+     * 4.5.14): on 2000 and XP through msi4nt, as 1 on Vista and later,
+     * not offered on 98 SE and ME (inst_def_set_mask); taken by /set, not
+     * offered as a tick here (the tick is task 49.24's installer part). */
+    { "XhciCmRingInterrupt", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x7UL,
       "use the controller's interrupt to detect plugging and unplugging at "
       "once",
       "1 applies only if Windows gives the controller an interrupt and the "
-      "driver's test of it passes. The driver still checks every "
-      "XhciCmPollIdleMs.", 0x2UL,
-      { "no: check every XhciCmPollIdleMs", "yes", NULL, NULL } },
+      "driver's test of it passes. 2 (2000 and later) does the same by a "
+      "message. The driver still checks every XhciCmPollIdleMs.", 0x6UL,
+      { "no: check every XhciCmPollIdleMs", "yes", "yes, by message",
+        NULL } },
     /* Owner, 2026-10-15: never asked, /set Name=Value only (record 23
      * section 8.1, record 24 section 11). */
     { "XhciCmReenum", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x3UL,
@@ -2329,7 +2358,674 @@ const INST_VALUE instValues[] = {
       "0 still saves the marks, but a mark applies only when that stack is "
       "next rebuilt.", 0x1UL,
       { "no", "yes", NULL, NULL },
-      0, 0, 1, 1UL, INST_LOC_MARK }
+      0, 0, 1, 1UL, INST_LOC_MARK },
+    /* Task 49.38 (the owner, 2026-11-12/13: Setup and the xHCI98 USB Tree
+     * cover every registry value): never asked, the Advanced rows and /set,
+     * in groups; the meanings, ranges and defaults are
+     * docs\using\tuning.md's. The draft texts are the owner's to rephrase. */
+    { "XhciIntelIrqRoute", INST_INF_XHCI, INST_APPLY_PIRQ, 0x0UL, 0x7UL,
+      "repair the Intel 7/8/9-series interrupt routing, pointing the "
+      "controller's interrupt at the line Windows assigned",
+      "2 writes two chipset registers on any of the six reviewed "
+      "Intel controllers. Use it only if USB is slow or stops on such"
+      " a computer.", 0x4UL,
+      {
+        "report only",
+        "on the Dell Latitude E7250 only",
+        "on any reviewed Intel chipset",
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      NULL, INST_VK_DWORD, 0 },
+    { "XhciIntelNoRouteIrq", INST_INF_XHCI, INST_APPLY_NOROUTE, 0x0UL, 0x7UL,
+      "where the firmware gives the USB 3 controller no interrupt, "
+      "offer Windows the line the chipset routes it to before polling"
+      " it",
+      "2 reads two chipset registers on any of the reviewed Intel "
+      "chipsets and writes nothing. A line the firmware gives is "
+      "always taken first. Windows 2000 on the listed computers: 1 "
+      "and 2 ask Windows for no interrupt and the controller is "
+      "polled; 0 asks for one, and Windows 2000 then stops at startup"
+      " (STOP 0x000000A5) unless the computer type is Standard PC.", 0x4UL,
+      {
+        "never: the controller is polled (Windows 2000: see the note)",
+        "on the listed computers only",
+        "on any reviewed Intel chipset",
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      NULL, INST_VK_DWORD, 0 },
+    { "XhciMsiStrategy", INST_INF_XHCI, INST_APPLY_NT5_XHCI, 0x0UL, 0x3UL,
+      "with XhciInterruptMode 4: where the message's IRQ comes from",
+      "read only with XhciInterruptMode 4. 1 borrows the controller's"
+      " own line: use it only when no other device uses that IRQ.", 0,
+      {
+        "a spare interrupt taken for the controller",
+        "the controller's own line borrowed",
+        NULL,
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_M4, INST_VK_DWORD, 0 },
+    { "XhciMsiIsaIrq", INST_INF_XHCI, INST_APPLY_NT5_XHCI, 0x0UL, 0x0UL,
+      "with XhciMsiStrategy 0: the IRQ claimed; 0 lets the driver "
+      "choose",
+      "24 to 255 only on 32-bit 2000 and XP with XhciMsiPools 1 or 2."
+      " An IRQ the driver cannot take keeps the controller from "
+      "starting; a wrong one can stop it, or make Windows stop "
+      "responding.", 0,
+      {
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL
+      },
+      0UL, 255UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_M4, INST_VK_DWORD, 0xFF000CF9UL },
+    { "XhciMsiShare", INST_INF_XHCI, INST_APPLY_NT5_XHCI, 0x0UL, 0x0UL,
+      "with XhciMsiStrategy 0: the most controllers on one IRQ before "
+      "another IRQ is taken; 1 every controller an IRQ of its own",
+      NULL, 0,
+      {
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL
+      },
+      1UL, 16UL, 0, 8UL, INST_LOC_MW, 0UL,
+      INST_G_M4, INST_VK_DWORD, 0 },
+    { "XhciMsiPools", INST_INF_XHCI, INST_APPLY_NT5X86_XHCI, 0x0UL, 0x7UL,
+      "with XhciMsiStrategy 0: which IRQs the driver may claim",
+      "each input above 23 asked for uses up a vector of the computer"
+      " until the next restart.", 0x6UL,
+      {
+        "the ordinary IRQs",
+        "the inputs above 23 only",
+        "both, the ordinary IRQs first",
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_M4, INST_VK_DWORD, 0 },
+    { "XhciMsiInputFirst", INST_INF_XHCI, INST_APPLY_NT5X86_XHCI, 0x0UL, 0x0UL,
+      "with XhciMsiPools 1 or 2: the lowest input above 23 considered",
+      "XhciMsiInputFirst and XhciMsiInputLast are both 0, every input"
+      " from 24 to 255, or 24 <= first <= last <= 255; any other pair"
+      " keeps the controller from starting.", 0,
+      {
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL
+      },
+      0UL, 255UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_M4, INST_VK_DWORD, 0xFF000001UL },
+    { "XhciMsiInputLast", INST_INF_XHCI, INST_APPLY_NT5X86_XHCI, 0x0UL, 0x0UL,
+      "with XhciMsiPools 1 or 2: the highest input considered",
+      "XhciMsiInputFirst and XhciMsiInputLast are both 0, every input"
+      " from 24 to 255, or 24 <= first <= last <= 255; any other pair"
+      " keeps the controller from starting.", 0,
+      {
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL
+      },
+      0UL, 255UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_M4, INST_VK_DWORD, 0xFF000001UL },
+    { "XhciMsiInputBudget", INST_INF_XHCI, INST_APPLY_NT5X86_XHCI,
+      0x0UL, 0x0UL,
+      "with XhciMsiPools 1 or 2: how many inputs above 23 may be "
+      "asked for in one boot; 0 is 16",
+      NULL, 0,
+      {
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL
+      },
+      0UL, 32UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_M4, INST_VK_DWORD, 0 },
+    { "XhciDmaStaging", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x3UL,
+      "pass every transfer's data through the driver's own memory, so"
+      " that a controller that stops answering lets every request "
+      "finish",
+      "1 copies every transfer's data once more, which takes "
+      "processor time and can lower the speed; XhciWideMap then "
+      "changes nothing. If the controller then does not start, set it"
+      " back to 0.", 0x2UL,
+      {
+        "no: the programs' own memory, no copy",
+        "yes",
+        NULL,
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_MEM, INST_VK_DWORD, 0 },
+    { "XhciStagePoolKiB", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x0UL,
+      "the memory, in KiB, set aside at each start for the transfers'"
+      " data, in whole 64 KiB blocks; more lets several fast drives "
+      "move larger pieces at once",
+      NULL, 0,
+      {
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL
+      },
+      256UL, 16384UL, 0, 0UL, INST_LOC_MW, 64UL,
+      INST_G_MEM, INST_VK_DWORD, 0 },
+    { "XhciEventRingTrbs", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x0UL,
+      "the size of the controller's event ring, the queue every device's "
+      "completions pass through",
+      "1024 lets a High Speed audio or video stream keep more queued. A "
+      "controller older than xHCI 1.0 always uses 256. Restart Windows "
+      "after changing it.", 0,
+      {
+        "the smaller ring, the size other systems use",
+        "the larger ring",
+        NULL,
+        NULL,
+        NULL
+      },
+      256UL, 1024UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_MEM, INST_VK_DWORD, 0, instEventRingPicks, 2 },
+    { "XhciTolerance", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x3UL,
+      "recover from transfer, port and controller faults instead of "
+      "leaving a device dead until it is plugged in again",
+      "0 turns most of it off.", 0x1UL,
+      {
+        "off",
+        "on",
+        NULL,
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_CHK, INST_VK_DWORD, 0 },
+    { "XhciCommandCheck", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x3UL,
+      "count and log the commands a controller that follows the xHCI "
+      "specification to the letter would refuse; it changes nothing "
+      "the driver does",
+      NULL, 0,
+      {
+        "off",
+        "on",
+        NULL,
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_CHK, INST_VK_DWORD, 0 },
+    /* Task 49.39 (design record 17 section 4.12.8): the owner's texts,
+     * 2026-11-12. */
+    { "XhciStreamDequeueRepair", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL,
+      0x3UL,
+      "UAS stream check after a cancelled command",
+      "leave it at 1.", 0x1UL,
+      {
+        "check and log only",
+        "repair: set a stale stream again, or reset a drive whose stream is "
+        "untrusted",
+        NULL,
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_CHK, INST_VK_DWORD, 0 },
+    { "XhciAccept096", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x3UL,
+      "start a controller below xHCI 1.0: the NEC/Renesas uPD720200 "
+      "and uPD720200A, the early ASMedia ASM1042",
+      "0 stops such a controller (Code 10), and every device on it.", 0x1UL,
+      {
+        "no, as 2.3.1.0",
+        "yes",
+        NULL,
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_CHK, INST_VK_DWORD, 0 },
+    { "XhciAcpiTables", INST_INF_XHCI, INST_APPLY_9X_XHCI, 0x0UL, 0x3UL,
+      "let the xHCI98 USB Tree save the computer's ACPI firmware "
+      "tables",
+      NULL, 0,
+      {
+        "no",
+        "yes",
+        NULL,
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_CHK, INST_VK_DWORD, 0 },
+    { "XhciIntervalCap", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x7UL,
+      "poll an interrupt endpoint that asks for more than 32 ms every"
+      " 32 ms",
+      NULL, 0,
+      {
+        "off",
+        "on AMD controllers and the ATI 1002:7316",
+        "on every controller",
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_HW, INST_VK_DWORD, 0 },
+    { "XhciAvgTrbEsit", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x3UL,
+      "the average transfer size the controller is told for each "
+      "interrupt endpoint",
+      "a switch for comparison: leave it at 0 unless a device "
+      "misbehaves.", 0x2UL,
+      {
+        "1024 bytes, as the xHCI specification suggests",
+        "the endpoint's largest transfer per interval, as Linux",
+        NULL,
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_HW, INST_VK_DWORD, 0 },
+    { "XhciUsb2HubSpeedFallback", INST_INF_XHCI, INST_APPLY_ANY_XHCI,
+      0x0UL, 0x3UL,
+      "use the standard speed IDs for a Low- or Full-Speed device "
+      "behind a controller's built-in hub whose speed table names "
+      "neither, as on the VIA VL805",
+      "0 refuses every such device: a mouse or keyboard behind that "
+      "hub stops working.", 0x1UL,
+      {
+        "off: such devices are refused",
+        "on",
+        NULL,
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_HW, INST_VK_DWORD, 0 },
+    { "XhciMsiAvoid", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x7UL,
+      "Vista and 7: never a message-signalled interrupt, the line or "
+      "polling instead",
+      "XhciInterruptMode 4 obeys it on every system and has no "
+      "fallback: a controller it applies to then does not start.", 0,
+      {
+        "off",
+        "on the controllers Linux lists",
+        "on every controller",
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_LNX, INST_VK_DWORD, 0 },
+    { "XhciStreamsOff", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x7UL,
+      "no UAS streams: Bulk-Only, or UAS without streams at USB 2.0",
+      NULL, 0,
+      {
+        "off",
+        "on the controllers Linux lists",
+        "on every controller",
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_LNX, INST_VK_DWORD, 0 },
+    { "XhciResumeReinit", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x7UL,
+      "start the controller afresh after standby or hibernation "
+      "instead of restoring it",
+      NULL, 0,
+      {
+        "off",
+        "on the controllers Linux lists",
+        "on every controller",
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_LNX, INST_VK_DWORD, 0 },
+    { "XhciIntelShutdownToEhci", INST_INF_XHCI, INST_APPLY_ANY_XHCI,
+      0x0UL, 0x3UL,
+      "at shutdown, hand the Intel switchable connectors back to the "
+      "USB 2.0 EHCI controller",
+      NULL, 0,
+      {
+        "off",
+        "on the controllers Linux lists",
+        NULL,
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_LNX, INST_VK_DWORD, 0 },
+    { "XhciShutdownReset", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x7UL,
+      "at shutdown, reset the controller once it has halted",
+      NULL, 0,
+      {
+        "off",
+        "on the controllers Linux lists",
+        "on every controller",
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_LNX, INST_VK_DWORD, 0 },
+    { "XhciSuspendHaltDelay", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x7UL,
+      "pause 1.5 ms before the controller is halted for standby",
+      NULL, 0,
+      {
+        "off",
+        "on the controllers Linux lists",
+        "on every controller",
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_LNX, INST_VK_DWORD, 0 },
+    { "XhciSuspendHaltTimeout", INST_INF_XHCI, INST_APPLY_ANY_XHCI,
+      0x0UL, 0x7UL,
+      "wait up to 640 ms, not 32 ms, for the controller to halt for "
+      "standby",
+      NULL, 0,
+      {
+        "off",
+        "on the controllers Linux lists",
+        "on every controller",
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_LNX, INST_VK_DWORD, 0 },
+    { "XhciAsmediaFlowControl", INST_INF_XHCI, INST_APPLY_ANY_XHCI,
+      0x0UL, 0x3UL,
+      "set ASMedia's flow control after each start, recovery and "
+      "resume",
+      NULL, 0,
+      {
+        "off",
+        "on the controllers Linux lists",
+        NULL,
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_LNX, INST_VK_DWORD, 0 },
+    { "XhciTiIntervalCap", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x7UL,
+      "poll a High-Speed or faster interrupt endpoint at least every "
+      "8 ms",
+      NULL, 0,
+      {
+        "off",
+        "on the controllers Linux lists",
+        "on every controller",
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_LNX, INST_VK_DWORD, 0 },
+    { "XhciStuckLinkReset", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x7UL,
+      "after a resume, reset a USB 3 port stuck in its link's Polling"
+      " state",
+      NULL, 0,
+      {
+        "off",
+        "on the controllers Linux lists",
+        "on every controller",
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_LNX, INST_VK_DWORD, 0 },
+    { "XhciStreamRingPad", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x7UL,
+      "leave spare memory after each block of UAS stream rings",
+      NULL, 0,
+      {
+        "off",
+        "on the controllers Linux lists",
+        "on every controller",
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_LNX, INST_VK_DWORD, 0 },
+    { "XhciControlLinkNoOp", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x7UL,
+      "keep a SuperSpeed control transfer from straddling the end of "
+      "its ring",
+      NULL, 0,
+      {
+        "off",
+        "on the controllers Linux lists",
+        "on every controller",
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_LNX, INST_VK_DWORD, 0 },
+    { "XhciIsochSpuriousSuccess", INST_INF_XHCI, INST_APPLY_ANY_XHCI,
+      0x0UL, 0x7UL,
+      "ignore a false success after an audio packet's error",
+      NULL, 0,
+      {
+        "off",
+        "on the controllers Linux lists",
+        "on every controller",
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_LNX, INST_VK_DWORD, 0 },
+    { "XhciAmdSuspendBitClear", INST_INF_XHCI, INST_APPLY_ANY_XHCI,
+      0x0UL, 0x3UL,
+      "clear one AMD register bit before standby",
+      NULL, 0,
+      {
+        "off",
+        "on the controllers Linux lists",
+        NULL,
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_LNX, INST_VK_DWORD, 0 },
+    { "XhciCmNetPollMs", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x0UL,
+      "Thunderbolt networking: how often, in ms, received traffic is "
+      "looked for without the controller's interrupt",
+      NULL, 0,
+      {
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL
+      },
+      1UL, 100UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_NET, INST_VK_DWORD, 0 },
+    { "XhciCmNetRxFrames", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x0UL,
+      "Thunderbolt networking: receive buffers of 4 KB each",
+      NULL, 0,
+      {
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL
+      },
+      32UL, 1024UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_NET, INST_VK_DWORD, 0 },
+    { "XhciCmNetTxFrames", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x0UL,
+      "Thunderbolt networking: send buffers of 4 KB each",
+      NULL, 0,
+      {
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL
+      },
+      32UL, 1024UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_NET, INST_VK_DWORD, 0 },
+    { "XhciCmNetE2E", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x3UL,
+      "Thunderbolt networking: use end-to-end flow control where the "
+      "other computer offers it",
+      NULL, 0,
+      {
+        "no: for a computer that mishandles it",
+        "yes",
+        NULL,
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_NET, INST_VK_DWORD, 0 },
+    { "XhciCmNetInterrupt", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x3UL,
+      "Thunderbolt networking: let the controller's interrupt report "
+      "received traffic at once, where XhciCmRingInterrupt is on and "
+      "that interrupt works",
+      NULL, 0,
+      {
+        "no: look every clock tick",
+        "yes",
+        NULL,
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_NET, INST_VK_DWORD, 0 },
+    { "XhciCmInferAtStart", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x3UL,
+      "USB4: work out the port of a device attached at start, on a "
+      "controller that does not say, so that safely removing it "
+      "closes its connection",
+      NULL, 0,
+      {
+        "no",
+        "yes",
+        NULL,
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_U4, INST_VK_DWORD, 0 },
+    { "XhciCmAsm4242Handover", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x3UL,
+      "send an ASM4242 host on a board the driver knows the USB4 "
+      "handover its firmware gives only to ACPI systems or to Windows"
+      " 11",
+      "0: on such a board no device behind the USB4 host works. "
+      "Restart Windows after changing it.", 0x1UL,
+      {
+        "no: never",
+        "yes",
+        NULL,
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_U4, INST_VK_DWORD, 0 },
+    { "XhciCmGen4LinkRecovery", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x3UL,
+      "USB4: let a Gen 4 link recover from a link error in place, the"
+      " devices behind it kept",
+      "a test switch: leave it at 1.", 0x1UL,
+      {
+        "no: an unplug and a fresh plug",
+        "yes",
+        NULL,
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_U4, INST_VK_DWORD, 0 },
+    { "XhciCmSleepEntry", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x3UL,
+      "USB4: put the Thunderbolt / USB4 devices to sleep in order at "
+      "standby and hibernation, and connect them again afterwards",
+      "leave it as installed.", 0x1UL,
+      {
+        "no: as earlier releases",
+        "yes",
+        NULL,
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_U4, INST_VK_DWORD, 0 },
+    { "XhciCmWakePowerUp", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x3UL,
+      "Thunderbolt / USB4: power up a drive again after standby or "
+      "hibernation when its first power-up failed",
+      "leave it as installed.", 0x1UL,
+      {
+        "no: as earlier releases",
+        "yes",
+        NULL,
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_U4, INST_VK_DWORD, 0 },
+    { "XhciCmAsmediaPcie7Credits", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x3UL,
+      "USB4: write 7 credits into the adapter entries of a PCIe "
+      "tunnel between an ASM4242 host and an ASM2464 device",
+      "a test switch: leave it at 0.", 0x2UL,
+      {
+        "no: keep them as read",
+        "yes",
+        NULL,
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_U4, INST_VK_DWORD, 0 },
+    /* The text row (the owner's answer Q5 of 2026-11-12): written as a
+     * REG_SZ, its form checked as the driver reads it (inst_bdf_list_ok);
+     * its default is the INFs' "auto" (inst_inf_addreg_text). */
+    { "XhciCmTunnelBridge", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x0UL,
+      "the PCI bridges that lead to Thunderbolt / USB4 devices: auto, the "
+      "driver finds them, or up to 4 as bb:dd.f, comma-separated",
+      "a list replaces the driver's own finding: a wrong one can leave "
+      "devices behind a dock without safe removal. Default sets auto "
+      "again.", 0,
+      { NULL, NULL, NULL, NULL, NULL },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_U4, INST_VK_TEXT, 0 },
+    /* One UAS drive's own two (the owner's answer Q3 of 2026-11-12): the
+     * xHCI98 USB Tree's alone, each drive's key (INST_LOC_DRIVE); Setup
+     * shows, writes and removes neither. Worded so that they stay true as
+     * the UAS recovery changes (task 49.39). */
+    { "XhciUasNoAtaPassThrough", INST_INF_UAS, INST_APPLY_ANY_XHCI, 0x0UL,
+      0x3UL,
+      "answer this drive's ATA pass-through and SMART requests as not "
+      "supported, and never send them to the drive",
+      "programs then show no SMART data for this drive. Takes effect when "
+      "the drive is plugged in again.", 0,
+      { "no: send them to the drive", "yes", NULL, NULL, NULL },
+      0UL, 0UL, 0, 0UL, INST_LOC_DRIVE, 0UL,
+      INST_G_UAS, INST_VK_DWORD, 0 },
+    { "XhciUasFastReset", INST_INF_UAS, INST_APPLY_ANY_XHCI, 0x0UL, 0x3UL,
+      "reset this drive sooner when its commands keep timing out, instead "
+      "of asking it again and again to drop each command",
+      "each reset ends every command in flight; leave it at 0 unless the "
+      "drive hangs this way. Takes effect when the drive is plugged in "
+      "again.", 0,
+      { "no", "yes", NULL, NULL, NULL },
+      0UL, 0UL, 0, 0UL, INST_LOC_DRIVE, 0UL,
+      INST_G_UAS, INST_VK_DWORD, 0 },
+    { "LogBytes", INST_INF_CM, INST_APPLY_MARK, 0x0UL, 0x0UL,
+      "the largest size, in bytes, of the safe-removal mark service's"
+      " log",
+      NULL, 0,
+      {
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL
+      },
+      4096UL, 67108864UL, 1, 262144UL, INST_LOC_MARK, 0UL,
+      NULL, INST_VK_DWORD, 0 }
 };
 const int instValueCount = (int)(sizeof(instValues) / sizeof(instValues[0]));
 
@@ -2452,10 +3148,27 @@ int inst_value_applies(int index, const INST_ENV *env)
     }
 }
 
+/* 2000, XP and XP x64; and the 32-bit pair alone (task 49.38). */
+static int inst_nt5(const INST_ENV *env)
+{
+    return env->Nt && env->Major == 5UL;
+}
+
+static int inst_nt5_x86(const INST_ENV *env)
+{
+    return inst_nt5(env) && env->Arch == INST_ARCH_X86;
+}
+
 int inst_value_relevant(int index, const INST_ENV *env)
 {
-    switch (index >= 0 && index < instValueCount ? instValues[index].Apply
-                                                 : -1) {
+    return index >= 0 && index < instValueCount
+               ? inst_def_relevant(&instValues[index], env)
+               : 0;
+}
+
+int inst_def_relevant(const INST_VALUE *v, const INST_ENV *env)
+{
+    switch (v != NULL ? v->Apply : -1) {
     case INST_APPLY_ANY_XHCI:
         return env->AnyXhci ? 1 : 0;
     case INST_APPLY_PSW:
@@ -2474,6 +3187,14 @@ int inst_value_relevant(int index, const INST_ENV *env)
         return (env->Nt && env->Major == 5 && env->CmNhi) ? 1 : 0;
     case INST_APPLY_NT_CM:
         return (env->Nt && env->CmNhi) ? 1 : 0;
+    case INST_APPLY_NT5_XHCI:
+        return (inst_nt5(env) && env->AnyXhci) ? 1 : 0;
+    case INST_APPLY_NT5X86_XHCI:
+        return (inst_nt5_x86(env) && env->AnyXhci) ? 1 : 0;
+    case INST_APPLY_PIRQ:
+        return env->PirqController ? 1 : 0;
+    case INST_APPLY_NOROUTE:
+        return (env->PirqController && inst_nt5(env)) ? 1 : 0;
     default:
         return 0;
     }
@@ -2481,8 +3202,14 @@ int inst_value_relevant(int index, const INST_ENV *env)
 
 int inst_value_greyed(int index, const INST_ENV *env)
 {
-    switch (index >= 0 && index < instValueCount ? instValues[index].Apply
-                                                 : -1) {
+    return index >= 0 && index < instValueCount
+               ? inst_def_greyed(&instValues[index], env)
+               : 0;
+}
+
+int inst_def_greyed(const INST_VALUE *v, const INST_ENV *env)
+{
+    switch (v != NULL ? v->Apply : -1) {
     case INST_APPLY_PSW:
         return (env->AnyXhci && !env->PswController) ? 1 : 0;
     case INST_APPLY_NT_XHCI:
@@ -2501,6 +3228,12 @@ int inst_value_greyed(int index, const INST_ENV *env)
         /* As the 98 SE and ME Thunderbolt rows: shown with no host
          * interface present too (record 26 section 5.5). */
         return env->Nt ? 0 : 1;
+    case INST_APPLY_NT5_XHCI:
+        return (env->AnyXhci && !inst_nt5(env)) ? 1 : 0;
+    case INST_APPLY_NT5X86_XHCI:
+        return (env->AnyXhci && !inst_nt5_x86(env)) ? 1 : 0;
+    case INST_APPLY_NOROUTE:
+        return (env->PirqController && !inst_nt5(env)) ? 1 : 0;
     default:
         return 0;
     }
@@ -2508,8 +3241,14 @@ int inst_value_greyed(int index, const INST_ENV *env)
 
 const char *inst_value_only(int index)
 {
-    switch (index >= 0 && index < instValueCount ? instValues[index].Apply
-                                                 : -1) {
+    return index >= 0 && index < instValueCount
+               ? inst_def_only(&instValues[index])
+               : NULL;
+}
+
+const char *inst_def_only(const INST_VALUE *v)
+{
+    switch (v != NULL ? v->Apply : -1) {
     case INST_APPLY_PSW:
         return "Intel 7-9 series, C610 only";
     case INST_APPLY_NT_XHCI:
@@ -2523,9 +3262,88 @@ const char *inst_value_only(int index)
         return "Windows 2000 and XP only";
     case INST_APPLY_NT_CM:
         return "Windows 2000 to 10 only";
+    case INST_APPLY_NT5_XHCI:
+    case INST_APPLY_NOROUTE:
+        return "Windows 2000 and XP only";
+    case INST_APPLY_NT5X86_XHCI:
+        return "32-bit Windows 2000 and XP only";
     default:
         return NULL;
     }
+}
+
+INST_U32 inst_keepbot_default(const INST_ENV *env)
+{
+    return (env != NULL && env->Nt && env->Major == 5UL && env->Minor == 0UL)
+               ? 1UL
+               : 0UL;
+}
+
+int inst_keepbot_seed(int nt, int targets, int answered, int mwState,
+                      const INST_VNOW *now, int n)
+{
+    int i;
+
+    if (!nt || targets <= 0 || answered || mwState != 0) {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        if (now[i].State > 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int inst_psw_propose(int listedNew, int mwState, int scanOk,
+                     const INST_VNOW *all, int n)
+{
+    return listedNew && mwState == 0 &&
+           inst_keepbot_seed_all(scanOk, all, n);
+}
+
+int inst_psw_counts_nt(int listed, int ourService, int ok, int pending)
+{
+    return listed && ourService && (ok || pending);
+}
+
+int inst_psw_counts_9x(int listed, int ok, int swapped,
+                       int rebootPending)
+{
+    return listed && (ok || swapped || rebootPending);
+}
+
+int inst_psw_write_now(int proposed, int installedOk, int answered,
+                       int list, int cancelled, int takeStopped)
+{
+    return proposed && installedOk && !answered && !list && !cancelled &&
+           !takeStopped;
+}
+
+int inst_keepbot_seed_all(int scanOk, const INST_VNOW *all, int n)
+{
+    int i;
+
+    if (!scanOk || (n > 0 && all == NULL)) {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        if (all[i].State != 0) {
+            return 0;   /* a DWORD of it, or a key not read */
+        }
+    }
+    return 1;
+}
+
+int inst_value_default_env(int index, const char *infText,
+                           const INST_ENV *env, INST_U32 *def)
+{
+    if (index >= 0 && index < instValueCount &&
+        inst_eq(instValues[index].Name, "XhciResumeKeepBot")) {
+        *def = inst_keepbot_default(env);
+        return 1;
+    }
+    return inst_value_default(index, infText, def);
 }
 
 int inst_value_default(int index, const char *infText, INST_U32 *def)
@@ -2550,6 +3368,12 @@ int inst_value_default(int index, const char *infText, INST_U32 *def)
         *def = instValues[index].Def;
         return 1;
     }
+    /* Mode 4's input pool (task 49.38): written by the x86 INF alone,
+     * Def its value, for the amd64 INF, where the row is greyed. */
+    if (instValues[index].Apply == INST_APPLY_NT5X86_XHCI) {
+        *def = instValues[index].Def;
+        return 1;
+    }
     return 0;
 }
 
@@ -2558,8 +3382,17 @@ int inst_value_allowed(int index, const INST_ENV *env, INST_U32 v)
     if (index < 0 || index >= instValueCount) {
         return 0;
     }
+    if (instValues[index].Kind == INST_VK_TEXT) {
+        /* Its text is checked as it is parsed (inst_value_set_text). */
+        return !inst_def_greyed(&instValues[index], env);
+    }
     if (instValues[index].Hi != 0) {
-        return inst_value_in_range(index, v);
+        /* XP x64's image offers the ISA IRQs alone (task 49.38). */
+        if (v > inst_value_hi(index, env)) {
+            return 0;
+        }
+        return inst_def_greyed(&instValues[index], env) ? 0
+               : inst_value_in_range(index, v);
     }
     return v <= 31UL && (inst_value_set_mask(index, env) & (1UL << v)) != 0;
 }
@@ -2569,18 +3402,53 @@ static void inst_cat_number(char *out, size_t cap, INST_U32 v);
 
 int inst_value_in_range(int index, INST_U32 v)
 {
-    const INST_VALUE *x;
-
     if (index < 0 || index >= instValueCount || instValues[index].Hi == 0) {
         return 0;
     }
-    x = &instValues[index];
-    return v >= x->Lo && v <= x->Hi && (x->Step <= 1UL || v % x->Step == 0);
+    return inst_value_takes(&instValues[index], v);
+}
+
+int inst_value_takes(const INST_VALUE *x, INST_U32 v)
+{
+    int k;
+
+    if (x == NULL || x->Hi == 0) {
+        return 0;
+    }
+    if (x->PickCount > 0) {
+        for (k = 0; k < x->PickCount; k++) {
+            if (x->Picks[k] == v) {
+                return 1;
+            }
+        }
+        return 0;
+    }
+    return v >= x->Lo && v <= x->Hi && (x->Step <= 1UL || v % x->Step == 0) &&
+           (x->Accept == 0 || v >= 32UL || (x->Accept & (1UL << v)) != 0);
+}
+
+INST_U32 inst_value_hi(int index, const INST_ENV *env)
+{
+    if (index < 0 || index >= instValueCount) {
+        return 0;
+    }
+    if (env != NULL && env->Arch == INST_ARCH_AMD64 &&
+        inst_eq(instValues[index].Name, "XhciMsiIsaIrq")) {
+        return 23UL;    /* the amd64 image offers the ISA IRQs alone */
+    }
+    return instValues[index].Hi;
 }
 
 void inst_value_range_text(int index, char *out, size_t cap)
 {
+    inst_value_range_text_env(index, NULL, out, cap);
+}
+
+void inst_value_range_text_env(int index, const INST_ENV *env, char *out,
+                               size_t cap)
+{
     const INST_VALUE *x;
+    INST_U32 hi;
 
     if (cap == 0) {
         return;
@@ -2590,6 +3458,50 @@ void inst_value_range_text(int index, char *out, size_t cap)
         return;
     }
     x = &instValues[index];
+    hi = inst_value_hi(index, env);
+    if (x->PickCount > 0) {
+        /* "0, 256 or 1024" */
+        int k;
+        for (k = 0; k < x->PickCount; k++) {
+            if (k > 0) {
+                inst_cat(out, cap, k + 1 == x->PickCount ? " or " : ", ");
+            }
+            inst_cat_number(out, cap, x->Picks[k]);
+        }
+        return;
+    }
+    if (x->Accept != 0) {
+        /* Task 49.38: the numbers below 32 it takes, in runs ("0, 3 to 7,
+         * 10, 11, 24 to 255"). */
+        INST_U32 k = x->Lo;
+        int first = 1;
+        while (k < 32UL && k <= hi) {
+            INST_U32 end;
+            if ((x->Accept & (1UL << k)) == 0) {
+                k++;
+                continue;
+            }
+            end = k;
+            while (end + 1UL < 32UL && end + 1UL <= hi &&
+                   (x->Accept & (1UL << (end + 1UL))) != 0) {
+                end++;
+            }
+            if (end == 31UL && hi > 31UL) {
+                end = hi;
+            }
+            if (!first) {
+                inst_cat(out, cap, ", ");
+            }
+            inst_cat_number(out, cap, k);
+            if (end > k) {
+                inst_cat(out, cap, end == k + 1UL ? ", " : " to ");
+                inst_cat_number(out, cap, end);
+            }
+            first = 0;
+            k = end + 1UL;
+        }
+        return;
+    }
     inst_cat_number(out, cap, x->Lo);
     inst_cat(out, cap, " to ");
     inst_cat_number(out, cap, x->Hi);
@@ -2616,34 +3528,61 @@ INST_U32 inst_value_asked_mask(int index, const INST_ENV *env)
         !(env->Nt && env->Major >= 6)) {
         mask &= ~0x8UL;
     }
+    /* Neither value is asked today (Asked 0); held here too, so that one
+     * made asked later never offers what 98 SE and ME do not take. */
+    mask &= ~inst_value_nine_unoffered(&instValues[index], env);
     return mask;
 }
 
 INST_U32 inst_value_set_mask(int index, const INST_ENV *env)
 {
+    return index >= 0 && index < instValueCount
+               ? inst_def_set_mask(&instValues[index], env)
+               : 0;
+}
+
+INST_U32 inst_def_set_mask(const INST_VALUE *v, const INST_ENV *env)
+{
     INST_U32 mask;
 
-    if (index < 0 || index >= instValueCount) {
+    if (v == NULL) {
         return 0;
     }
-    mask = instValues[index].Settable;
-    if ((instValues[index].Apply == INST_APPLY_9X_XHCI ||
-         instValues[index].Apply == INST_APPLY_9X_CM) && env->Nt) {
+    mask = v->Settable;
+    if ((v->Apply == INST_APPLY_9X_XHCI || v->Apply == INST_APPLY_9X_CM) &&
+        env->Nt) {
         return 0;   /* a 98 SE and ME value: /set refuses it on NT */
     }
-    if (instValues[index].Apply == INST_APPLY_MARK && !inst_mk_system(env)) {
+    if (v->Apply == INST_APPLY_MARK && !inst_mk_system(env)) {
         return 0;   /* no mark service on this system */
     }
-    if (instValues[index].Apply == INST_APPLY_NT5_CM &&
-        !(env->Nt && env->Major == 5)) {
+    if (v->Apply == INST_APPLY_NT5_CM && !(env->Nt && env->Major == 5)) {
         return 0;   /* read by the driver on 2000 and XP alone */
     }
-    if (instValues[index].Apply == INST_APPLY_NT_CM && !env->Nt) {
+    if (v->Apply == INST_APPLY_NT_CM && !env->Nt) {
         return 0;   /* read by the driver on 2000 to 10 alone */
     }
-    if (inst_eq(instValues[index].Name, "XhciInterruptMode") &&
+    if ((v->Apply == INST_APPLY_NT5_XHCI && !inst_nt5(env)) ||
+        (v->Apply == INST_APPLY_NT5X86_XHCI && !inst_nt5_x86(env)) ||
+        (v->Apply == INST_APPLY_NOROUTE && !inst_nt5(env))) {
+        return 0;   /* task 49.38's 2000-and-XP rows */
+    }
+    if (v->Apply == INST_APPLY_NOROUTE && env->Minor == 0UL) {
+        /* Windows 2000: 0 brings back STOP 0xA5 under an ACPI computer
+         * type. The xHCI98 USB Tree asks first (trs_a5_confirm); Setup
+         * asks no such question, so it does not offer 0 there. */
+        mask &= ~0x1UL;
+    }
+    if (inst_eq(v->Name, "XhciInterruptMode") &&
         !(env->Nt && env->Major >= 6)) {
         mask &= ~0x8UL;
+    }
+    if (inst_eq(v->Name, "XhciInterruptMode") &&
+        !(env->Nt && env->Major == 5)) {
+        mask &= ~0x10UL;    /* mode 4: 2000 to XP x64 alone */
+    }
+    if (inst_eq(v->Name, "XhciCmRingInterrupt") && !env->Nt) {
+        mask &= ~0x4UL;     /* 2: 2000 and later (98 SE and ME poll) */
     }
     return mask;
 }
@@ -2693,6 +3632,12 @@ int inst_value_set(const char *arg, int *index, INST_U32 *value)
     if (i < 0) {
         return 0;
     }
+    if (instValues[i].Loc == INST_LOC_DRIVE) {
+        return 0;   /* a drive's own value: the xHCI98 USB Tree's (49.38) */
+    }
+    if (instValues[i].Kind == INST_VK_TEXT) {
+        return -3;
+    }
     if (sep[1] == '0' && (sep[2] == 'x' || sep[2] == 'X')) {
         return -1;
     }
@@ -2705,6 +3650,298 @@ int inst_value_set(const char *arg, int *index, INST_U32 *value)
     *index = i;
     *value = v;
     return 1;
+}
+
+int inst_value_set_text(const char *arg, int *index, char *text,
+                        size_t cap)
+{
+    char name[INST_NAME_CHARS];
+    const char *sep = strchr(arg, '=');
+    size_t n;
+    int i;
+
+    if (sep == NULL || sep == arg || cap == 0) {
+        return 0;
+    }
+    n = (size_t)(sep - arg);
+    if (n >= sizeof(name)) {
+        return 0;
+    }
+    memcpy(name, arg, n);
+    name[n] = '\0';
+    i = inst_value_find(name);
+    if (i < 0 || instValues[i].Kind != INST_VK_TEXT) {
+        return 0;
+    }
+    if (strlen(sep + 1) >= cap || !inst_bdf_list_ok(sep + 1)) {
+        return -1;
+    }
+    inst_copy(text, sep + 1, cap);
+    *index = i;
+    return 1;
+}
+
+int inst_has_text(const char *hay, const char *text)
+{
+    size_t lo = 0;
+    size_t hi;
+    size_t n;
+    size_t i;
+    size_t k;
+
+    if (text == NULL) {
+        return 1;
+    }
+    hi = strlen(text);
+    while (lo < hi && text[lo] == ' ') {
+        lo++;
+    }
+    while (hi > lo && text[hi - 1] == ' ') {
+        hi--;
+    }
+    n = hi - lo;
+    if (n == 0) {
+        return 1;
+    }
+    if (hay == NULL) {
+        return 0;
+    }
+    for (i = 0; hay[i] != '\0'; i++) {
+        for (k = 0; k < n && hay[i + k] != '\0' &&
+                    inst_upper(hay[i + k]) == inst_upper(text[lo + k]);
+             k++) {
+        }
+        if (k == n) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int inst_value_matches(const INST_VALUE *v, const char *text)
+{
+    int b;
+
+    if (inst_has_text("", text)) {
+        return 1;       /* an empty search */
+    }
+    if (v == NULL) {
+        return 0;
+    }
+    if (inst_has_text(v->Name, text) || inst_has_text(v->Meaning, text)) {
+        return 1;
+    }
+    for (b = 0; b < INST_CHOICES; b++) {
+        if (v->Choice[b] != NULL && inst_has_text(v->Choice[b], text)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+INST_U32 inst_value_nine_unoffered(const INST_VALUE *v, const INST_ENV *env)
+{
+    if (v == NULL || env == NULL || env->Nt) {
+        return 0;
+    }
+    if (inst_eq(v->Name, "XhciInterruptMode")) {
+        return 0x10UL;      /* 4: runs as 0 */
+    }
+    if (inst_eq(v->Name, "XhciCmRingInterrupt")) {
+        return 0x4UL;       /* 2: polled */
+    }
+    return 0;
+}
+
+int inst_value_nine_text(const INST_VALUE *v, const INST_ENV *env,
+                         INST_U32 now, char *out, size_t cap)
+{
+    if (cap == 0 || now > 31UL ||
+        (inst_value_nine_unoffered(v, env) & (1UL << now)) == 0) {
+        return 0;
+    }
+    /* The xHCI98 USB Tree's words (xhcitr\tr_set.c, trs_raw_text): the
+     * drivers' default there is 0. */
+    out[0] = '\0';
+    inst_cat_number(out, cap, now);
+    inst_cat(out, cap, " (the driver uses its default, 0 - ");
+    inst_cat(out, cap, v->Choice[0] != NULL ? v->Choice[0] : "");
+    inst_cat(out, cap, ")");
+    return 1;
+}
+
+int inst_settings_list(const char *find, const INST_ENV *env, INST_MW_READ rd,
+                       char *out, size_t cap)
+{
+    int i;
+    int b;
+    int n = 0;
+    char line[INST_LINE_CHARS];
+    char text[INST_TEXT_CHARS];
+
+    if (cap == 0) {
+        return 0;
+    }
+    out[0] = '\0';
+    for (i = 0; i < instValueCount; i++) {
+        const INST_VALUE *v = &instValues[i];
+        INST_U32 now = 0;
+        int st;
+        if (v->Loc == INST_LOC_DRIVE || !inst_value_matches(v, find)) {
+            continue;
+        }
+        n++;
+        inst_cat(out, cap, v->Name);
+        inst_cat(out, cap, ": ");
+        inst_cat(out, cap, v->Meaning);
+        inst_cat(out, cap, ".\n  Allowed: ");
+        if (v->Kind == INST_VK_TEXT) {
+            inst_cat(out, cap, "auto, or up to 4 bb:dd.f, comma-separated");
+        } else if (v->PickCount > 0) {
+            for (b = 0; b < v->PickCount; b++) {
+                if (b > 0) {
+                    inst_cat(out, cap, "; ");
+                }
+                inst_cat_number(out, cap, v->Picks[b]);
+                if (b < INST_CHOICES && v->Choice[b] != NULL) {
+                    inst_cat(out, cap, " ");
+                    inst_cat(out, cap, v->Choice[b]);
+                }
+            }
+        } else if (v->Hi != 0) {
+            inst_value_range_text(i, line, sizeof(line));
+            inst_cat(out, cap, line);
+        } else {
+            int first = 1;
+            INST_U32 offered = v->Settable & ~inst_value_nine_unoffered(v, env);
+            for (b = 0; b < 32; b++) {
+                if ((offered & (1UL << b)) == 0) {
+                    continue;
+                }
+                if (!first) {
+                    inst_cat(out, cap, "; ");
+                }
+                inst_cat_number(out, cap, (INST_U32)b);
+                if (b < INST_CHOICES && v->Choice[b] != NULL) {
+                    inst_cat(out, cap, " ");
+                    inst_cat(out, cap, v->Choice[b]);
+                }
+                first = 0;
+            }
+        }
+        inst_cat(out, cap, ".\n  Machine-wide: ");
+        text[0] = '\0';
+        st = rd != NULL ? rd(i, &now, text, sizeof(text)) : 0;
+        if (st == 1 && inst_value_nine_text(v, env, now, line, sizeof(line))) {
+            inst_cat(out, cap, line);
+        } else if (st == 1) {
+            inst_cat_number(out, cap, now);
+        } else if (st == 2) {
+            inst_cat(out, cap, text);
+        } else if (st == 0) {
+            inst_cat(out, cap, "not set");
+        } else {
+            inst_cat(out, cap, "not a value of its type");
+        }
+        inst_cat(out, cap, ".\n");
+    }
+    if (n == 0 && !inst_has_text("", find)) {
+        inst_cat(out, cap, "No setting matches \"");
+        inst_cat(out, cap, find);
+        inst_cat(out, cap, "\".\n");
+    }
+    return n;
+}
+
+int inst_bdf_auto(const char *t)
+{
+    return t[0] == '\0' || inst_eq(t, "auto");
+}
+
+/* One field of 1 to most hex digits, its value in *v; the position after
+ * it. NULL for none. */
+static const char *inst_bdf_hex(const char *p, int most, INST_U32 *v)
+{
+    int n = 0;
+    int d;
+
+    *v = 0;
+    while (n < most && (d = inst_hexval(*p)) >= 0) {
+        *v = (*v << 4) | (INST_U32)d;
+        p++;
+        n++;
+    }
+    return n != 0 ? p : NULL;
+}
+
+int inst_bdf_list_ok(const char *t)
+{
+    const char *p = t;
+    INST_U32 v;
+    int count = 0;
+
+    if (t == NULL) {
+        return 0;
+    }
+    if (inst_bdf_auto(t)) {
+        return 1;
+    }
+    if (strlen(t) >= INST_TEXT_CHARS) {
+        return 0;
+    }
+    for (;;) {
+        if (count >= 4) {
+            return 0;   /* XHCI_TBT_MAX_TUNNELS */
+        }
+        p = inst_bdf_hex(p, 2, &v);
+        if (p == NULL || *p != ':') {
+            return 0;
+        }
+        p = inst_bdf_hex(p + 1, 2, &v);
+        if (p == NULL || v > 0x1FUL || *p != '.') {
+            return 0;
+        }
+        p = inst_bdf_hex(p + 1, 1, &v);
+        if (p == NULL || v > 7UL) {
+            return 0;
+        }
+        count++;
+        if (*p == '\0') {
+            return 1;
+        }
+        if (*p != ',') {
+            return 0;
+        }
+        p++;
+    }
+}
+
+int inst_inf_addreg_text(const char *text, const char *name, char *out,
+                         size_t cap)
+{
+    char line[INST_LINE_CHARS];
+    char field[INST_LINE_CHARS];
+    const char *p = text;
+
+    if (text == NULL || cap == 0) {
+        return 0;
+    }
+    while ((p = inst_raw_line(p, line, sizeof(line))) != NULL) {
+        if (!inst_inf_field(line, 0, field, sizeof(field)) ||
+            !inst_eq(field, "HKR")) {
+            continue;
+        }
+        if (!inst_inf_field(line, 2, field, sizeof(field)) ||
+            !inst_eq(field, name)) {
+            continue;
+        }
+        if (!inst_inf_field(line, 4, field, sizeof(field))) {
+            return 0;
+        }
+        inst_copy(out, field, cap);
+        return 1;
+    }
+    return 0;
 }
 
 void inst_mask_text(INST_U32 mask, char *out, size_t cap)
@@ -2819,6 +4056,8 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
             opts->NoPfw = 1;
         } else if (inst_switch(a, "nouas")) {
             opts->NoUas = 1;
+        } else if (inst_switch(a, "takeover")) {
+            opts->Takeover = 1;
         } else if (inst_switch(a, "storage")) {
             opts->Storage = 1;
         } else if (inst_switch(a, "nostorage")) {
@@ -2990,6 +4229,7 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
             }
         } else if (inst_switch(a, "set")) {
             char joined[INST_LINE_CHARS];
+            char textArg[INST_TEXT_CHARS];
             int index;
             INST_U32 value;
             int k;
@@ -2998,6 +4238,24 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
                 return 1;
             }
             i++;
+            /* Task 49.38: /set /show [text], the settings listing. */
+            if (inst_switch(argv[i], "show")) {
+                if (opts->SetShow) {
+                    inst_err(err, errCap, "/set /show given twice", NULL);
+                    return 1;
+                }
+                opts->SetShow = 1;
+                if (i + 1 < argc && argv[i + 1][0] != '/' &&
+                    argv[i + 1][0] != '-') {
+                    if (strlen(argv[i + 1]) >= sizeof(opts->SetFind)) {
+                        inst_err(err, errCap, "/set /show: the search text "
+                                 "is too long", NULL);
+                        return 1;
+                    }
+                    inst_copy(opts->SetFind, argv[++i], sizeof(opts->SetFind));
+                }
+                continue;
+            }
             /* A batch file splits Name=Value at '=' into two arguments, and
              * COMMAND.COM has no %* to keep them whole: take the next two. */
             if (strchr(argv[i], '=') == NULL && strchr(argv[i], ':') == NULL) {
@@ -3014,6 +4272,13 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
                 inst_copy(joined, argv[i], sizeof(joined));
             }
             r = inst_value_set(joined, &index, &value);
+            textArg[0] = '\0';
+            if (r == -3) {
+                /* Task 49.38: XhciCmTunnelBridge, a string. */
+                r = inst_value_set_text(joined, &index, textArg,
+                                        sizeof(textArg));
+                value = 0;
+            }
             if (r == 0 && INST_TBNET_WIRED &&
                 inst_eqn(joined, "XhciCmNet=", 10)) {
                 /* The box is the setting (record 35 section 9.1): no second
@@ -3042,6 +4307,8 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
             }
             opts->SetIndex[opts->SetCount] = index;
             opts->SetValue[opts->SetCount] = value;
+            inst_copy(opts->SetText[opts->SetCount], textArg,
+                      sizeof(opts->SetText[0]));
             opts->SetCount++;
         } else {
             inst_err(err, errCap, "unknown argument: ", a);
@@ -3139,6 +4406,17 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
                              !opts->CmOnly))) {
         inst_err(err, errCap, "/s98vsd needs Stor98 in the run (/stor98, "
                  "or /thunderbolt without /nostor98)", NULL);
+        return 1;
+    }
+    /* Record 23 section 5.4.2 (task 49.44): the system's own refusals are
+     * inst_take_switch's. */
+    if (opts->Takeover && (opts->Uninstall || opts->Devices || opts->Eject)) {
+        inst_err(err, errCap, "/takeover belongs to an install", NULL);
+        return 1;
+    }
+    if (opts->Takeover && opts->CmOnly) {
+        inst_err(err, errCap, "/takeover needs the USB drivers: not with "
+                 "/cmonly", NULL);
         return 1;
     }
     if (opts->NoUas && (opts->Uninstall || opts->Devices || opts->Eject)) {
@@ -3841,6 +5119,251 @@ int inst_id_path(const char *id, unsigned char *path, int *count, int room)
     return 1;
 }
 
+const char instBiosHeldDialog[] =
+    "A drive behind this port runs through the BIOS (MS-DOS compatibility "
+    "mode) and cannot be stopped safely. Shut Windows down before you unplug "
+    "it.";
+const char instBiosHeldConsole[] =
+    "Not stopped: a drive behind it runs through the BIOS (MS-DOS "
+    "compatibility mode). Shut Windows down before you unplug it.";
+
+const char instBiosUnsureDialog[] =
+    "The xHCI98 USB Tree could not tell whether a drive behind this port "
+    "runs through the BIOS (MS-DOS compatibility mode), so it is not "
+    "stopped. Shut Windows down before you unplug it.";
+const char instBiosUnsureConsole[] =
+    "Not stopped: it could not be told whether a drive behind it runs "
+    "through the BIOS (MS-DOS compatibility mode). Shut Windows down "
+    "before you unplug it.";
+
+/* A decimal number at *p, moving past it; 0 when there is none. */
+static int sf_dec(const char **p, INST_U32 *v)
+{
+    INST_U32 n = 0;
+    int digits = 0;
+
+    while (**p >= '0' && **p <= '9' && digits < 9) {
+        n = n * 10UL + (INST_U32)(**p - '0');
+        (*p)++;
+        digits++;
+    }
+    *v = n;
+    return digits > 0;
+}
+
+static int sf_bdf(const char **p, INST_U32 *bus, INST_U32 *dev, INST_U32 *fn)
+{
+    if (!sf_dec(p, bus) || **p != '.') {
+        return 0;
+    }
+    (*p)++;
+    if (!sf_dec(p, dev) || **p != '.') {
+        return 0;
+    }
+    (*p)++;
+    return sf_dec(p, fn) && *bus <= 255UL && *dev <= 31UL && *fn <= 7UL;
+}
+
+/* Eight hex digits at *p, moving past them. */
+static int sf_hex8(const char **p, INST_U32 *v)
+{
+    INST_U32 n = 0;
+    int k;
+
+    for (k = 0; k < 8; k++) {
+        char c = (*p)[k];
+        int d = (c >= '0' && c <= '9') ? c - '0'
+                : (c >= 'A' && c <= 'F') ? c - 'A' + 10
+                : (c >= 'a' && c <= 'f') ? c - 'a' + 10 : -1;
+        if (d < 0) {
+            return 0;
+        }
+        n = (n << 4) | (INST_U32)d;
+    }
+    *p += 8;
+    *v = n;
+    return 1;
+}
+
+void inst_storfind_parse(const char *text, INST_STORFIND *f)
+{
+    const char *p;
+
+    memset(f, 0, sizeof(*f));
+    if (text == NULL) {
+        return;
+    }
+    /* The state, as PlatFindReport writes it (src\stor98\src\platform.c):
+     * the left forms first, " taken" after. */
+    if (strstr(text, " left: already set up") != NULL) {
+        f->State = INST_SF_BIOS;
+    } else if (strstr(text, " left: no answer") != NULL) {
+        f->State = INST_SF_NOANSWER;
+    } else if (strstr(text, " left: command not restored") != NULL) {
+        f->State = INST_SF_NOTRESTORED;
+    } else if (strstr(text, " left: unreadable") != NULL) {
+        f->State = INST_SF_UNREADABLE;
+    } else if (strstr(text, " taken") != NULL) {
+        f->State = INST_SF_TAKEN;
+    }
+    p = strstr(text, "; found ");
+    if (p != NULL) {
+        p += 8;
+        f->HaveFound = sf_bdf(&p, &f->Bus, &f->Dev, &f->Fn);
+    }
+    /* "range Lo:Hi": the memory range the port gave the devnode, which
+     * the found function's BAR matched (HwIsPortFunction). The "bars" are
+     * the port's slot's, read before any scan, so they are not used. */
+    p = strstr(text, " range ");
+    if (p != NULL) {
+        INST_U32 lo;
+        INST_U32 hi;
+        p += 7;
+        if (sf_hex8(&p, &lo) && *p == ':' && (p++, sf_hex8(&p, &hi)) &&
+            (lo != 0 || hi != 0)) {
+            f->HaveBar = 1;
+            f->BarLo = lo;
+            f->BarHi = hi;
+        }
+    }
+}
+
+int inst_storfind_name(const char *name, INST_U32 *bus, INST_U32 *dev,
+                       INST_U32 *fn)
+{
+    const char *p;
+    size_t k = strlen(INST_SF_VALUE);
+
+    if (name == NULL || strlen(name) <= k + 1 ||
+        _strnicmp(name, INST_SF_VALUE, k) != 0 || name[k] != ' ') {
+        return 0;
+    }
+    p = name + k + 1;
+    return sf_bdf(&p, bus, dev, fn) && *p == '\0';
+}
+
+int inst_bios_held(int nt, int isNvme, INST_U32 problem,
+                   const INST_U32 *memLo, const INST_U32 *memHi, int nMem,
+                   const char *const *names, const char *const *texts,
+                   int n)
+{
+    int k;
+    int m;
+
+    if (nt || !isNvme || problem != 10UL || nMem <= 0) {
+        return 0;
+    }
+    for (k = 0; k < n; k++) {
+        INST_STORFIND f;
+        INST_U32 b;
+        INST_U32 d;
+        INST_U32 fn;
+        if (names[k] == NULL || texts[k] == NULL ||
+            !inst_storfind_name(names[k], &b, &d, &fn)) {
+            continue;
+        }
+        inst_storfind_parse(texts[k], &f);
+        if (f.State != INST_SF_BIOS || !f.HaveFound || !f.HaveBar ||
+            f.Bus != b || f.Dev != d || f.Fn != fn) {
+            continue;
+        }
+        for (m = 0; m < nMem; m++) {
+            if (memLo[m] == f.BarLo && memHi[m] == f.BarHi) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+int inst_storfind_report(int enumResult, const char *name, int isSz,
+                         const char *text, const INST_U32 *memLo,
+                         const INST_U32 *memHi, int nMem)
+{
+    INST_STORFIND f;
+    INST_U32 b;
+    INST_U32 d;
+    INST_U32 fn;
+    const char *np[1];
+    const char *tp[1];
+
+    if (enumResult != INST_SFE_OK) {
+        return INST_SFR_BAD;    /* a value not read whole: cannot tell */
+    }
+    if (name == NULL || !inst_storfind_name(name, &b, &d, &fn)) {
+        return INST_SFR_SKIP;   /* another of the key's values */
+    }
+    if (!isSz || text == NULL) {
+        return INST_SFR_BAD;
+    }
+    inst_storfind_parse(text, &f);
+    if (f.State == INST_SF_UNKNOWN || !f.HaveFound || !f.HaveBar ||
+        f.Bus != b || f.Dev != d || f.Fn != fn) {
+        return INST_SFR_BAD;    /* no state, function or range to tell by */
+    }
+    np[0] = name;
+    tp[0] = text;
+    return inst_bios_held(0, 1, 10UL, memLo, memHi, nMem, np, tp, 1)
+               ? INST_SFR_MATCH : INST_SFR_NOMATCH;
+}
+
+int inst_bios_verdict(int nt, int nRelevant, int memOk, int keyState,
+                      int enumOk, int nBad, int nMatch)
+{
+    if (nt || nRelevant <= 0) {
+        return INST_BH_GO;
+    }
+    if (nMatch > 0) {
+        return INST_BH_HELD;
+    }
+    if (keyState == 0) {
+        /* Stor98 is not installed: no Code 10 of its making. */
+        return INST_BH_GO;
+    }
+    if (!memOk || keyState < 0 || !enumOk || nBad > 0) {
+        return INST_BH_UNSURE;
+    }
+    return INST_BH_GO;
+}
+
+int inst_storfind_base(const char *name, const char *text,
+                       const INST_U32 *memLo, const INST_U32 *memHi, int nMem)
+{
+    INST_STORFIND f;
+    INST_U32 b;
+    INST_U32 d;
+    INST_U32 fn;
+    int k;
+
+    if (name == NULL || text == NULL ||
+        !inst_storfind_name(name, &b, &d, &fn)) {
+        return -1;
+    }
+    inst_storfind_parse(text, &f);
+    if (!f.HaveBar) {
+        return -1;
+    }
+    for (k = 0; k < nMem; k++) {
+        if (memLo[k] == f.BarLo && memHi[k] == f.BarHi) {
+            return k;
+        }
+    }
+    return -1;
+}
+
+int inst_bios_verdict2(int nt, int nRelevant, int memOk, int keyState,
+                       int enumOk, int nBad, int nMatch, int nUncovered)
+{
+    int v = inst_bios_verdict(nt, nRelevant, memOk, keyState, enumOk, nBad,
+                              nMatch);
+
+    if (v == INST_BH_GO && !nt && nRelevant > 0 && keyState == 1 &&
+        nUncovered > 0) {
+        return INST_BH_UNSURE;  /* a function with no report of its own */
+    }
+    return v;
+}
+
 int inst_tb_loc_match(const char *id, INST_U32 bdf, const unsigned char *path,
                       int pathCount)
 {
@@ -3918,6 +5441,85 @@ int inst_mk_end_action(int cmService, int tbInRun, int markSystem,
         return INST_MK_INSTALL;
     }
     return INST_MK_LEAVE;
+}
+
+INST_U32 inst_mk_hold_gen_next(INST_U32 last)
+{
+    INST_U32 n = (INST_U32)(last + 1UL) & 0xFFFFFFFFUL;
+
+    return n == 0 ? 1UL : n;
+}
+
+int inst_run_guard_keep(int readCode, int planFirst, int ended)
+{
+    return readCode < 0 && planFirst < 0 && !ended;
+}
+
+int inst_run_guard_needed(int nt, int list)
+{
+    return nt && !list;
+}
+
+int inst_mk_end_may(int ownsGuard)
+{
+    return ownsGuard != 0;
+}
+
+int inst_run_guard_how(int got, int owner)
+{
+    if (got < 0) {
+        return INST_GUARD_ERROR;
+    }
+    if (got > 0) {
+        return INST_GUARD_TAKEN;
+    }
+    return inst_mk_owner_ok(owner, 0) ? INST_GUARD_BUSY : INST_GUARD_FOREIGN;
+}
+
+INST_U32 inst_mk_hold_gen_pick(int lastRead, INST_U32 last, int ackRead,
+                               INST_U32 ack)
+{
+    INST_U32 n;
+
+    if (lastRead < 0 || ackRead < 0) {
+        return 0;
+    }
+    n = inst_mk_hold_gen_next(lastRead > 0 ? last : 0);
+    if (ackRead > 0 && n == ack) {
+        n = inst_mk_hold_gen_next(n);
+    }
+    return n;
+}
+
+int inst_mk_hold_how(int eventMade, int idleEvent, int idle, int running)
+{
+    if (eventMade && idleEvent && idle) {
+        return INST_MK_HOLD_HELD;
+    }
+    if (eventMade && !idleEvent && running == 0) {
+        return INST_MK_HOLD_NONE;
+    }
+    return INST_MK_HOLD_STOP;
+}
+
+int inst_mk_owner_ok(int owner, int systemOnly)
+{
+    return owner == INST_OWNER_SYSTEM ||
+           (!systemOnly && owner == INST_OWNER_ADMINS);
+}
+
+int inst_mk_restore_how(int owed, int registered, int state)
+{
+    if (!owed) {
+        return INST_MK_RESTORE_NONE;
+    }
+    if (registered == 0 || state == 1) {
+        return INST_MK_RESTORE_CLEAR;
+    }
+    if (registered == 1 && state == 0) {
+        return INST_MK_RESTORE_START;
+    }
+    return INST_MK_RESTORE_FAIL;
 }
 
 int inst_mk_put_next(int had, INST_U32 err, int timeLeft)
@@ -4812,6 +6414,22 @@ void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
                       "controllers back to Windows' driver. UAS disks use "
                       "Windows' own UAS driver.");
     }
+    if (set & INST_CW_TAKEOVER) {
+        /* Record 23 section 5.4.2 (task 49.44, owner 2026-11-13). */
+        inst_cat_para(out, cap,
+                      "Another manufacturer's driver runs one or more USB 3 "
+                      "controllers here. If ticked, Setup replaces it with "
+                      "xHCI98 on each of them, one at a time, and stops at "
+                      "the first that fails. USB keyboards and mice on them "
+                      "stop working while each restarts, and on 32-bit Vista "
+                      "and 7 until Windows restarts. Have a keyboard/mouse "
+                      "that uses alternative connections like PS/2. A filter "
+                      "driver that manufacturer left on a controller is not removed "
+                      "and stays loaded with xHCI98. Uninstalling gives the "
+                      "controllers back to that driver while Windows still "
+                      "has it; Windows Update or the manufacturer's software may "
+                      "also put it back.");
+    }
     if (set & INST_CW_INTELTB) {
         inst_cat_para(out, cap,
                       "Intel's Thunderbolt driver runs this computer's "
@@ -4828,6 +6446,331 @@ void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
                       "the xHCI98 tools, and the xHCI98 USB drivers if "
                       "ticked.");
     }
+}
+
+/* ======================================================================== */
+/* The takeover (record 23 section 5.4.2; task 49.44)                        */
+/* ======================================================================== */
+
+int inst_take_candidate(int nt, int osKind, const char *service)
+{
+    if (!nt || service == NULL || service[0] == '\0' ||
+        inst_eq(service, "xhci98")) {
+        return 0;
+    }
+    /* Windows' own driver on 8, 8.1 and 10 is the USB drivers' box's
+     * (record 26 section 5.3.1 case 3a). */
+    if (osKind == INST_OS_CMONLY && inst_eq(service, "USBXHCI")) {
+        return 0;
+    }
+    return 1;
+}
+
+int inst_take_reason(int chosen, int bootPath, int stopped)
+{
+    if (!chosen) {
+        return INST_TAKE_OFF;
+    }
+    if (bootPath > 0) {
+        return INST_TAKE_BOOTDISK;
+    }
+    if (bootPath < 0) {
+        return INST_TAKE_BOOTUNK;
+    }
+    return stopped ? INST_TAKE_STOPPED : INST_TAKE_YES;
+}
+
+const char *inst_take_row_text(int reason, int console)
+{
+    switch (reason) {
+    case INST_TAKE_YES:
+    case INST_TAKE_BOOTUNK:
+        return console ? "Replace other driver (/takeover)" :
+                         "Replace other driver";
+    case INST_TAKE_BOOTDISK:
+        return "Skip (other driver; the Windows disk is behind it)";
+    case INST_TAKE_STOPPED:
+        return "Skip (other driver; an earlier replacement failed)";
+    default:
+        return inst_action_text(INST_ACT_FOREIGN);
+    }
+}
+
+int inst_take_runs(int reason)
+{
+    /* Owner, 2026-11-13: where the Windows disk is cannot be read - warned,
+     * and replaced. */
+    return reason == INST_TAKE_YES || reason == INST_TAKE_BOOTUNK;
+}
+
+int inst_take_able(int bootPath, int stopped)
+{
+    return inst_take_runs(inst_take_reason(1, bootPath, stopped));
+}
+
+int inst_take_said(int candidates, int able)
+{
+    /* With every candidate refused nothing announces a replacement (record
+     * 23 section 5.4.2; owner, 2026-11-14). */
+    return candidates > 0 && able > 0 ? candidates : 0;
+}
+
+int inst_take_offered(int chosen, int locked, int warned)
+{
+    return chosen && (!locked || warned);
+}
+
+void inst_take_bootunk_text(const char *name, int result, char *out,
+                            size_t cap)
+{
+    if (cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (result) {
+        inst_cat(out, cap, "  Setup could not tell whether the Windows disk "
+                           "is behind it.\n");
+        return;
+    }
+    inst_cat(out, cap, "Setup cannot tell whether the Windows disk is behind ");
+    inst_cat(out, cap, name);
+    inst_cat(out, cap, ". If it is, do not go on: Windows may not start once "
+                       "its driver is replaced.");
+}
+
+void inst_take_bootunk_many(const char *const *names, int n, char *out,
+                            size_t cap)
+{
+    int i;
+    int said = n > INST_TAKE_NAMES_SAID ? INST_TAKE_NAMES_SAID : n;
+
+    if (cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (n <= 1) {
+        inst_take_bootunk_text(n == 1 ? names[0] : "", 0, out, cap);
+        return;
+    }
+    inst_cat(out, cap, "Setup cannot tell whether the Windows disk is behind ");
+    for (i = 0; i < said; i++) {
+        if (i > 0) {
+            inst_cat(out, cap, i == said - 1 && said == n ? " or " : ", ");
+        }
+        inst_cat(out, cap, names[i]);
+    }
+    if (said < n) {
+        if (n - said > 1) {
+            inst_cat(out, cap, " or ");
+            inst_cat_number(out, cap, (INST_U32)(n - said));
+            inst_cat(out, cap, " more controllers");
+        } else {
+            inst_cat(out, cap, " or one more controller");
+        }
+    }
+    inst_cat(out, cap, ". If it is, do not go on: Windows may not start once "
+                       "its driver is replaced.");
+}
+
+const char *inst_take_switch(int nt, int osKind, int usbOpt)
+{
+    if (!nt) {
+        return "/takeover: on Windows 98 SE and ME Setup does not replace "
+               "another driver.";
+    }
+    if (osKind == INST_OS_CMONLY && !usbOpt) {
+        return "/takeover: on Windows 8, 8.1 and 10 give /usb with it.";
+    }
+    return NULL;
+}
+
+void inst_take_hint(int n, char *out, size_t cap)
+{
+    if (cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    /* The count first: "Another manufacturer's driver runs <N> ..." is 79
+     * columns at two digits (owner, 2026-11-13: "manufacturer"). */
+    inst_cat_number(out, cap, (INST_U32)(n < 1 ? 1 : n));
+    inst_cat(out, cap, n > 1 ? " USB 3 controllers run another manufacturer's "
+                               "driver: /takeover replaces it.\n" :
+                               " USB 3 controller runs another manufacturer's "
+                               "driver: /takeover replaces it.\n");
+}
+
+void inst_take_box_text(int n, char *out, size_t cap)
+{
+    if (cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    inst_cat(out, cap, "Replace another manufacturer's driver on ");
+    inst_cat_number(out, cap, (INST_U32)(n < 1 ? 1 : n));
+    inst_cat(out, cap, n > 1 ? " USB 3 controllers" : " USB 3 controller");
+}
+
+void inst_take_line_text(int n, const char *service, char *out, size_t cap)
+{
+    const char *who = service != NULL && service[0] != '\0' &&
+                      strlen(service) <= INST_TAKE_NAME_MAX ? service :
+                      "other drivers";
+
+    if (cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    inst_cat(out, cap, n > 1 ? "They run " : "It runs ");
+    inst_cat(out, cap, n > 1 || who == service ? who : "another driver");
+    inst_cat(out, cap, n > 1 ? " now. If unticked, Setup leaves them as they "
+                               "are." :
+                               " now. If unticked, Setup leaves it as it is.");
+}
+
+void inst_take_result_text(int ok, const char *service, const char *name,
+                           const char *filters, char *out, size_t cap)
+{
+    if (cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (ok) {
+        inst_cat(out, cap, "Replaced ");
+        inst_cat(out, cap, service);
+        inst_cat(out, cap, " with xHCI98 on ");
+        inst_cat(out, cap, name);
+        inst_cat(out, cap, ".\n");
+        if (filters != NULL && filters[0] != '\0') {
+            inst_cat(out, cap, "  Its filter driver stays on it: ");
+            inst_cat(out, cap, filters);
+            inst_cat(out, cap, ".\n");
+        }
+        return;
+    }
+    inst_cat(out, cap, "Could not replace ");
+    inst_cat(out, cap, service);
+    inst_cat(out, cap, " on ");
+    inst_cat(out, cap, name);
+    inst_cat(out, cap, ". The other controllers on another driver are left "
+                       "as they are.\n");
+}
+
+void inst_take_back_text(int kind, const char *name, const char *service,
+                         char *out, size_t cap)
+{
+    if (cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    inst_cat(out, cap, name);
+    switch (kind) {
+    case INST_TAKE_BACK_GIVEN:
+        inst_cat(out, cap, ": given back to ");
+        inst_cat(out, cap, service);
+        inst_cat(out, cap, ".\n");
+        break;
+    case INST_TAKE_BACK_NONE:
+        inst_cat(out, cap, ": has no driver now. In Device Manager, Update "
+                           "Driver on it and let Windows search.\n");
+        break;
+    case INST_TAKE_BACK_SETUP:
+        inst_cat(out, cap, ": Windows is still setting it up. Answer its "
+                           "Found New Hardware window if one is open.\n");
+        break;
+    default:
+        inst_cat(out, cap, ": not found yet; Windows sets it up again at the "
+                           "next restart.\n");
+        break;
+    }
+}
+
+int inst_take_back_kind(int settled, int present, int svcRead,
+                        const char *service, INST_U32 problem)
+{
+    if (!present || svcRead < 0) {
+        return INST_TAKE_BACK_LATER;
+    }
+    if (svcRead == 0 || service == NULL || service[0] == '\0') {
+        return settled ? INST_TAKE_BACK_NONE : INST_TAKE_BACK_SETUP;
+    }
+    if (problem == INST_PROB_NOT_CONFIGURED ||
+        problem == INST_PROB_REINSTALL) {
+        return INST_TAKE_BACK_SETUP;
+    }
+    /* A service is written before the device starts: with the wait run
+     * out, only a status read now says the setup is over. */
+    if (problem == INST_TAKE_PROB_UNREAD && !settled) {
+        return INST_TAKE_BACK_LATER;
+    }
+    if (!inst_own_service(service)) {
+        return INST_TAKE_BACK_GIVEN;
+    }
+    return INST_TAKE_BACK_LATER;
+}
+
+int inst_take_rec_text(const char *state, const char *service,
+                       const char *infPath, char *out, size_t cap)
+{
+    const char *inf = infPath != NULL ? infPath : "";
+
+    if (cap == 0) {
+        return 0;
+    }
+    out[0] = '\0';
+    if (state == NULL || service == NULL || service[0] == '\0' ||
+        strchr(state, ';') != NULL || strchr(service, ';') != NULL ||
+        strchr(inf, ';') != NULL ||
+        strlen(state) + strlen(service) + strlen(inf) + 3 > cap) {
+        return 0;
+    }
+    strcpy(out, state);
+    strcat(out, ";");
+    strcat(out, service);
+    strcat(out, ";");
+    strcat(out, inf);
+    return 1;
+}
+
+/* The field of data before the next ';' (or its end) into out: 1 it fit. */
+static int inst_take_field(const char **p, char *out, size_t cap)
+{
+    const char *s = *p;
+    const char *e = strchr(s, ';');
+    size_t n = e != NULL ? (size_t)(e - s) : strlen(s);
+
+    if (n + 1 > cap) {
+        return 0;
+    }
+    memcpy(out, s, n);
+    out[n] = '\0';
+    *p = e != NULL ? e + 1 : s + n;
+    return 1;
+}
+
+int inst_take_rec_parse(const char *data, char *state, size_t stateCap,
+                        char *service, size_t serviceCap, char *infPath,
+                        size_t infCap)
+{
+    const char *p = data;
+
+    if (data == NULL || stateCap == 0 || serviceCap == 0 || infCap == 0) {
+        return 0;
+    }
+    state[0] = service[0] = infPath[0] = '\0';
+    if (strchr(data, ';') == NULL ||
+        !inst_take_field(&p, state, stateCap) ||
+        !inst_take_field(&p, service, serviceCap) ||
+        strchr(p, ';') != NULL ||
+        !inst_take_field(&p, infPath, infCap)) {
+        state[0] = service[0] = infPath[0] = '\0';
+        return 0;
+    }
+    if ((strcmp(state, INST_TAKE_ATTEMPT) != 0 &&
+         strcmp(state, INST_TAKE_DONE) != 0) || service[0] == '\0') {
+        state[0] = service[0] = infPath[0] = '\0';
+        return 0;
+    }
+    return 1;
 }
 
 size_t inst_wrap_lines(const char *lead, const char *text, size_t width,
@@ -5653,6 +7596,11 @@ void inst_caution_text(int index, INST_U32 values, char *out, size_t cap)
     p = strstr(c, "%s");
     if (p == NULL) {
         inst_copy(out, c, cap);
+        if (instValues[index].CautionAdv != NULL &&
+            (instValues[index].CautionAdvMask & values) != 0) {
+            inst_cat(out, cap, " ");
+            inst_cat(out, cap, instValues[index].CautionAdv);
+        }
         return;
     }
     these = instValues[index].CautionMask != 0 ?
@@ -5790,9 +7738,13 @@ static int inst_value_question_at(char *out, size_t cap, int index,
         if (now[i].State > 0) {
             inst_cat_number(line, sizeof(line), now[i].Value);
         } else {
-            inst_cat(line, sizeof(line), now[i].State == 0 ?
-                     "not set, the install writes " :
-                     "new install, the default ");
+            /* A value no INF writes (NoInf) stays unset: the driver's own
+             * default is what runs (XhciResumeKeepBot, record 20 section
+             * 4.3.4 M18). */
+            inst_cat(line, sizeof(line),
+                     now[i].State != 0 ? "new install, the default "
+                     : instValues[index].NoInf ? "not set, the driver uses "
+                                               : "not set, the install writes ");
             inst_cat_number(line, sizeof(line), def);
         }
         if (now[i].Desc != NULL && now[i].Desc[0] != '\0') {
@@ -6734,6 +8686,88 @@ int inst_relaunch_cmd(char *out, size_t cap, const char *exe,
     }
     if (strlen(t) + 1 > cap) {
         return 0;
+    }
+    inst_copy(out, t, cap);
+    return 1;
+}
+
+int inst_log_temp_path(char *out, size_t cap, const char *folder,
+                       const char *root)
+{
+    size_t n;
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    if (folder == NULL || folder[0] == '\0') {
+        return 0;
+    }
+    n = strlen(folder);
+    if (n + (folder[n - 1] != '\\') + strlen(INST_LOG_NAME) + 1 > cap) {
+        return 0;
+    }
+    strcpy(out, folder);
+    if (out[n - 1] != '\\') {
+        strcat(out, "\\");
+    }
+    strcat(out, INST_LOG_NAME);
+    if (root != NULL && inst_eq(out, root)) {
+        out[0] = '\0';
+        return 0;
+    }
+    return 1;
+}
+
+int inst_log_pick(int nt, const char *given, const char *root,
+                  const char *temp, INST_LOG_OPEN start, void *ctx,
+                  const char **path)
+{
+    *path = NULL;
+    if (given != NULL && given[0] != '\0') {
+        if (start(ctx, given)) {
+            *path = given;
+            return INST_LOG_GIVEN;
+        }
+        return INST_LOG_NONE;
+    }
+    if (start(ctx, root)) {
+        *path = root;
+        return INST_LOG_ROOT;
+    }
+    if (!nt && temp != NULL && temp[0] != '\0' && start(ctx, temp)) {
+        *path = temp;
+        return INST_LOG_TEMP;
+    }
+    return INST_LOG_NONE;
+}
+
+int inst_log_fail_text(char *out, size_t cap, int place, const char *given,
+                       const char *root, const char *temp)
+{
+    char t[INST_LINE_CHARS * 2];
+    int isGiven = given != NULL && given[0] != '\0';
+    int both = !isGiven && temp != NULL && temp[0] != '\0';
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    if (place == INST_LOG_GIVEN || place == INST_LOG_ROOT) {
+        return 0;
+    }
+    t[0] = '\0';
+    inst_cat(t, sizeof(t), "Cannot write the log to ");
+    inst_cat(t, sizeof(t), isGiven ? given : root);
+    if (place == INST_LOG_TEMP) {
+        inst_cat(t, sizeof(t), ". Using ");
+        inst_cat(t, sizeof(t), temp);
+        inst_cat(t, sizeof(t), ".");
+    } else {
+        if (both) {
+            inst_cat(t, sizeof(t), " or ");
+            inst_cat(t, sizeof(t), temp);
+        }
+        inst_cat(t, sizeof(t), both ? ".\n" : ". ");
+        inst_cat(t, sizeof(t), "Continuing without a log.");
     }
     inst_copy(out, t, cap);
     return 1;
@@ -10651,7 +12685,9 @@ const int instOtherHeadingCount =
 const INST_OTHER_PKG instOtherPkgs[] = {
     /* uac1, withdrawn until usb-wdm-free v0.1.9 carried it, is current
      * with that release for Windows 98 SE alone, opt-in like every
-     * package (task 47.42; the owner's words of 2026-11-08). ax88179,
+     * package (task 47.42; the owner's words of 2026-11-08); from v0.1.10
+     * its set copies it only (a COPY line, owner 2026-11-09), so it has
+     * no box and the stage switch naming it is refused (task 49.3). ax88179,
      * withdrawn in 3.2.0.0 (v0.1.0 lacked it), is current again with
      * v0.1.1 (task 44.34). */
     { INST_SET_FREE, "audio/uac1", INST_PKG_CLASS, "Audio",
@@ -10730,6 +12766,13 @@ const INST_OTHER_PKG instOtherPkgs[] = {
     { INST_SET_NONFREE, "ethernet/rtl815x", INST_PKG_DEVICE, "Network",
       "USB Ethernet (rtl815x): adapters with a Realtek RTL8152 or "
       "RTL8153 chip", 0 },
+    /* ethernet/rtl8157: new with usb-wdm-nonfree v1.4.0 (task 49.3; owner,
+     * 2026-11-11), under the existing Network heading: Realtek's 7 and 8
+     * INFs with six lines enabled, so unsigned; copied only on every
+     * Windows (its STAGE.TXT has COPY lines alone), so it has no box. */
+    { INST_SET_NONFREE, "ethernet/rtl8157", INST_PKG_DEVICE, "Network",
+      "USB Ethernet (rtl8157): adapters with a Realtek RTL8157 or "
+      "RTL8159 chip", 0 },
     { INST_SET_NONFREE, "hid/x360c", INST_PKG_DEVICE, "HID",
       "Game pads (x360c): for Xbox 360 controllers", 0 },
     { INST_SET_NONFREE, "hid/x360wc", INST_PKG_DEVICE, "HID",
@@ -10747,7 +12790,7 @@ const int instOtherPkgCount =
 /* Proposals for the maintainer: the generic and the specific driver of one
  * device, or two drivers of one device, not staged together. */
 const INST_OTHER_REL instOtherRels[] = {
-    /* usb-wdm-free 0.1.9 has the two side by side on 98 SE, where uac1
+    /* usb-wdm-free 0.1.9 and 0.1.10 have the two side by side on 98 SE, where uac1
      * serves no MIDI and usbmidi's hardware ids outrank uac1's class line
      * (its STAGE.TXT COEXISTS there): COEXISTS on W98SE (0x1), EXCLUDES
      * on the rest (0x1FFE). No release staged uac1 before 0.1.9, so no

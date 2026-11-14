@@ -3,7 +3,8 @@
  * (xhciinst\wiz_lay.c; design record 26 section 5.4, "The layout", and
  * section 11; roadmap-usb4.md task 43.10): the "now" column, a part's
  * height, the split into parts of at most three rows, the open list's
- * width, the note's top and the part shown.
+ * width, the note's top and the part shown; and the log line's path
+ * shortened in the middle (design record 23 section 7.5.1).
  */
 
 #include <stdio.h>
@@ -141,6 +142,42 @@ static void test_part(void)
     CHECK_EQ(wiz_lay_part(1, 0), 0, "no parts: the first");
 }
 
+static void test_path_mid(void)
+{
+    static const char p[] = "C:\\Users\\Name\\AppData\\Local\\Temp\\"
+                            "XHCIINST.LOG";
+    char out[80];
+
+    CHECK(wiz_lay_path_mid(p, 0, out, sizeof(out)) && strcmp(out, p) == 0,
+          "the path whole");
+    CHECK(wiz_lay_path_mid(p, 1, out, sizeof(out)) &&
+          strcmp(out, "C:\\...\\Name\\AppData\\Local\\Temp\\XHCIINST.LOG")
+          == 0, "one folder dropped");
+    CHECK(wiz_lay_path_mid(p, 4, out, sizeof(out)) &&
+          strcmp(out, "C:\\...\\Temp\\XHCIINST.LOG") == 0,
+          "four folders dropped");
+    CHECK(wiz_lay_path_mid(p, 5, out, sizeof(out)) &&
+          strcmp(out, "C:\\...\\XHCIINST.LOG") == 0, "the name alone left");
+    CHECK(!wiz_lay_path_mid(p, 6, out, sizeof(out)) && out[0] == '\0',
+          "no folder left to drop");
+    CHECK(!wiz_lay_path_mid("C:\\XHCIINST.LOG", 1, out, sizeof(out)) &&
+          wiz_lay_path_mid("C:\\XHCIINST.LOG", 0, out, sizeof(out)) &&
+          strcmp(out, "C:\\XHCIINST.LOG") == 0, "the root file has none");
+    CHECK(wiz_lay_path_mid("\\\\server\\share\\dir\\L.LOG", 2, out,
+                           sizeof(out)) &&
+          strcmp(out, "\\\\...\\dir\\L.LOG") == 0, "a network path");
+    CHECK(wiz_lay_path_mid("\\dir\\sub\\L.LOG", 1, out, sizeof(out)) &&
+          strcmp(out, "\\...\\sub\\L.LOG") == 0 &&
+          wiz_lay_path_mid("dir\\L.LOG", 1, out, sizeof(out)) &&
+          strcmp(out, "...\\L.LOG") == 0, "a path with no drive");
+    CHECK(wiz_lay_path_mid(p, 4, out, 25) &&
+          !wiz_lay_path_mid(p, 4, out, 24) && out[0] == '\0' &&
+          !wiz_lay_path_mid(p, 0, out, 0) &&
+          !wiz_lay_path_mid(NULL, 0, out, sizeof(out)) &&
+          !wiz_lay_path_mid(p, -1, out, sizeof(out)),
+          "held to its buffer, and the arguments checked");
+}
+
 int main(void)
 {
     test_now_col();
@@ -149,6 +186,7 @@ int main(void)
     test_drop_w();
     test_note_top();
     test_part();
+    test_path_mid();
     printf("test_wizlay: %d checks, %d failures\n", checks, failures);
     return failures;
 }

@@ -272,6 +272,8 @@ NTSTATUS CmNhiAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo,
     }
     self->Flags |= DO_POWER_PAGABLE;
     self->Flags &= ~DO_DEVICE_INITIALIZING;
+    /* Record 21 section 6.3.1: XhciCmWakePowerUp not read yet. */
+    CmWpuAdded(nhi);
     return STATUS_SUCCESS;
 }
 
@@ -783,6 +785,9 @@ VOID CmNhiRevoke(PCM_NHI nhi)
      * a publication either happens before this or not at all. */
     KeAcquireSpinLock(&nhi->WorkLock, &irql);
     CmLiveRevoke(&nhi->Live);
+    /* Record 21 section 4.5.18: the routine's gate closed in the same
+     * hold, no fence here (the stop's, on the thread). */
+    CmRirqHwGateCloseLocked(nhi, CM_RIRQ_GATE_GONE);
     KeReleaseSpinLock(&nhi->WorkLock, irql);
     /* An UP admitted before the revocation finishes its hand-over first;
      * none is admitted after it. The seam's call does not wait for this
@@ -1112,6 +1117,135 @@ static BOOLEAN cmTopoUsable(PCM_NHI nhi)
 {
     return (BOOLEAN)(nhi->ReenumOn && nhi->Reenum.Cfg.Read != NULL &&
                      nhi->Reenum.Topo.Tunnels != 0);
+}
+
+/* ---------------------------------------------------------------------- */
+/* The learning's accessor (design record 22 section 7.6.5, task 49.18)   */
+/* ---------------------------------------------------------------------- */
+
+static ULONG cmU4ShpcWrite(PVOID context, ULONG bdf, ULONG offset,
+                           ULONG width, ULONG value)
+{
+    return CmRegConfigWrite((PCM_NHI)context, bdf, offset, width, value)
+               ? 1UL : 0UL;
+}
+
+/* S1 and S2 of record 22 section 7.6.5, with no configuration access: the
+ * filter route (Windows 2000 and later) and a set whose every member is
+ * of source SHPC. */
+static BOOLEAN cmU4ShpcSet(PCM_NHI nhi)
+{
+    return (BOOLEAN)(nhi->Reenum.Route == CM_ROUTE_FILTER &&
+                     XhciTbtShpcSet(&nhi->Reenum.Topo) != 0);
+}
+
+/*
+ * The accessor the learning's arm, attempt and refresh read through: the
+ * seam's reader, and with it the SHPC DWORD Select writer (TRUE) only
+ * under S1 to S3: the filter route, every member of source SHPC, each the
+ * emulator's bridge. Every other reader of the set keeps Reenum.Cfg,
+ * which has no writer: an SHPC member gives the seam's polls no reading,
+ * and the chain's candidates are not members. The seam's reader takes no
+ * context (cm_reenum.c), so the copy's context is the writer's.
+ */
+static BOOLEAN cmU4LearnIo(PCM_NHI nhi, PXHCI_TBT_CFG io)
+{
+    ULONG i;
+
+    *io = nhi->Reenum.Cfg;
+    if (io->Context != NULL || !cmU4ShpcSet(nhi)) {
+        return FALSE;
+    }
+    for (i = 0; i < nhi->Reenum.Topo.Tunnels; i++) {
+        if (!CmNvlinkShpcBridge(nhi, nhi->Reenum.Topo.Set[i])) {
+            return FALSE;
+        }
+    }
+    io->Write = cmU4ShpcWrite;
+    io->Context = nhi;
+    return TRUE;
+}
+
+/* u4.learn.shpc, when it differs from the last one logged: bit 0 the
+ * writer given, bit 1 a member's evidence owed. The log's alone: nothing
+ * is decided on it. */
+static VOID cmU4ShpcNote(PCM_NHI nhi, BOOLEAN writer)
+{
+    ULONG v;
+
+    v = 0;
+    if (writer) {
+        v = 1UL;
+        if (XhciTbtLearnOwed(&nhi->Reenum.Topo, &nhi->Binds) != 0) {
+            v |= 2UL;
+        }
+    }
+    if (v != nhi->U4ShpcLogged) {
+        nhi->U4ShpcLogged = v;
+        CmLogNote(nhi, "u4.learn.shpc", v);
+    }
+}
+
+/* XhciTbtLearnArm through the learning's accessor. On an SHPC set the
+ * refresh's clock starts here and the members' filter records are taken
+ * first, so a publication during the reading is tried at a later pass
+ * (cmU4ShpcRefresh) - whether or not the writer was given: a bridge's
+ * admission that could not be read now is read again by the refresh. */
+static ULONG cmU4ArmRead(PCM_NHI nhi)
+{
+    XHCI_TBT_CFG io;
+    BOOLEAN writer;
+    ULONG rc;
+
+    if (cmU4ShpcSet(nhi)) {
+        CmRegMemberRecords(nhi, nhi->U4ShpcRecord);
+        nhi->U4ShpcArmMs = nhi->Host.NowMs(nhi);
+    }
+    writer = cmU4LearnIo(nhi, &io);
+    rc = XhciTbtLearnArm(&io, &nhi->Reenum.Topo, &nhi->Binds);
+    cmU4ShpcNote(nhi, writer);
+    return rc;
+}
+
+/*
+ * An idle pass's refresh of the SHPC evidence an arm left owed: the owed
+ * members read again, the baseline kept (XhciTbtLearnEvidence). Only
+ * while no port is pending; at every pass for 2 s after the arm, then
+ * once each time a member's filter record changes. The tests that read
+ * nothing come first: off the filter route or on a set that is not all
+ * SHPC a pass neither reads nor locks anything for this. The record is
+ * acknowledged before the bridges' admission is read, so a set that is
+ * never admitted costs the 2 s and one try a publication, like a writer
+ * that keeps failing.
+ */
+static VOID cmU4ShpcRefresh(PCM_NHI nhi)
+{
+    XHCI_TBT_CFG io;
+    ULONG record[XHCI_TBT_MAX_TUNNELS];
+    ULONG owed;
+    ULONG i;
+
+    if (nhi->Binds.Pending != 0 || !cmTopoUsable(nhi) || !cmU4ShpcSet(nhi)) {
+        return;
+    }
+    owed = XhciTbtLearnOwed(&nhi->Reenum.Topo, &nhi->Binds);
+    if (owed == 0) {
+        return;
+    }
+    CmRegMemberRecords(nhi, record);
+    if (!XhciTbtEvidenceDue(owed, nhi->Binds.Pending, nhi->U4ShpcArmMs,
+                            nhi->Host.NowMs(nhi), record, nhi->U4ShpcRecord,
+                            XHCI_TBT_MAX_TUNNELS)) {
+        return;
+    }
+    for (i = 0; i < XHCI_TBT_MAX_TUNNELS; i++) {
+        nhi->U4ShpcRecord[i] = record[i];
+    }
+    if (!cmU4LearnIo(nhi, &io)) {
+        return;
+    }
+    (VOID)XhciTbtLearnEvidence(&io, &nhi->Reenum.Topo, &nhi->Binds);
+    cmU4ShpcNote(nhi, TRUE);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -1920,9 +2054,7 @@ VOID CmNhiU4Barrier(PCM_NHI nhi)
                  * gain is attributed against what answers now. */
                 if (!armed) {
                     armed = TRUE;
-                    armOk = (BOOLEAN)(XhciTbtLearnArm(&nhi->Reenum.Cfg,
-                                                      &nhi->Reenum.Topo,
-                                                      &nhi->Binds) == 0);
+                    armOk = (BOOLEAN)(cmU4ArmRead(nhi) == 0);
                     if (armOk) {
                         nhi->ArmOwed = 0;
                     }
@@ -2432,7 +2564,7 @@ static VOID cmU4Arm(PCM_NHI nhi)
     if (!cmTopoUsable(nhi)) {
         return;
     }
-    rc = XhciTbtLearnArm(&nhi->Reenum.Cfg, &nhi->Reenum.Topo, &nhi->Binds);
+    rc = cmU4ArmRead(nhi);
     if (rc != 0) {
         CmLogNote(nhi, "u4.learn.arm", rc);
     }
@@ -2442,9 +2574,11 @@ static VOID cmU4Arm(PCM_NHI nhi)
  * members' active marks as the seam keeps them, member by member. */
 static VOID cmU4Learn(PCM_NHI nhi, ULONG port)
 {
+    XHCI_TBT_CFG io;
     ULONG active[XHCI_TBT_MAX_TUNNELS];
     ULONG i;
     ULONG rc;
+    BOOLEAN writer;
 
     if (!cmTopoUsable(nhi)) {
         return;
@@ -2456,8 +2590,9 @@ static VOID cmU4Learn(PCM_NHI nhi, ULONG port)
                         : 0UL;
     }
     nhi->Counters.U4LearnTries++;
-    rc = XhciTbtLearn(&nhi->Reenum.Cfg, &nhi->Reenum.Topo, &nhi->Binds,
-                      port, active);
+    writer = cmU4LearnIo(nhi, &io);
+    rc = XhciTbtLearn(&io, &nhi->Reenum.Topo, &nhi->Binds, port, active);
+    cmU4ShpcNote(nhi, writer);
     if (rc == XHCI_TBT_MAP_LEARNED) {
         nhi->Counters.U4Learned++;
     }
@@ -2760,6 +2895,7 @@ static VOID cmU4LearnPending(PCM_NHI nhi)
     if (nhi->ArmOwed) {
         cmU4Arm(nhi);
     }
+    cmU4ShpcRefresh(nhi);
     cmU4InferPass(nhi, FALSE);
     for (port = 1; port <= nhi->U4.PortCount && port <= XHCI_TBT_MAX_PORTS;
          port++) {
@@ -3414,6 +3550,9 @@ static VOID cmU4Activate(PCM_NHI nhi)
      * and its conflicted ports are the instance's alone. */
     CmZero(&nhi->U4Infer, sizeof(nhi->U4Infer));
     nhi->ArmOwed = 0;
+    nhi->U4ShpcArmMs = 0;
+    CmZero(nhi->U4ShpcRecord, sizeof(nhi->U4ShpcRecord));
+    nhi->U4ShpcLogged = 0;
     nhi->U4On = 1;
     /* The liveness monitor's USB4 rule (record 22 section 7.7): a loss
      * contains, never recovers. Armed by the bind. */
@@ -4145,6 +4284,15 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
     if (nhi->Values.SleepEntryRefused) {
         CmLogNote(nhi, "cm.usb4.sleep.raw", nhi->Values.SleepEntryRaw);
     }
+    /* XhciCmWakePowerUp as run with (record 21 section 6.3.1); bit 8
+     * found, bit 9 refused. */
+    CmLogNote(nhi, "cm.wakepowerup.value",
+              nhi->Values.WakePowerUp | (nhi->Values.WakePowerUpFound << 8) |
+                  (nhi->Values.WakePowerUpRefused << 9));
+    if (nhi->Values.WakePowerUpRefused) {
+        CmLogNote(nhi, "cm.wakepowerup.raw", nhi->Values.WakePowerUpRaw);
+    }
+    CmWpuCount(nhi, TRUE);
 
     cmFindBar(nhi, irp);
     CmLogNote(nhi, "cm.bar.length", nhi->BarLength);
@@ -4165,6 +4313,7 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
     CmZero(&nhi->U4Infer, sizeof(nhi->U4Infer));
     nhi->U4On = 0;
     nhi->ArmOwed = 0;
+    nhi->U4ShpcLogged = 0;
     nhi->U4ClosedValid = 0;
     nhi->U4SeamValid = 0;
     nhi->U4ResumeBoundMs = 0;
@@ -4259,6 +4408,9 @@ NTSTATUS CmNhiPnp(PCM_NHI nhi, PIRP irp)
         cmStartDoneSet(nhi, 0);
         status = CmForwardSync(&nhi->Common, irp);
         if (NT_SUCCESS(status)) {
+            /* Record 21 section 6.3.1: the domain's own start reopens
+             * what its stop or query latched. */
+            CmWpuDomStart(nhi);
             status = cmNhiStart(nhi, irp);
         }
         if (NT_SUCCESS(status)) {
@@ -4289,16 +4441,29 @@ NTSTATUS CmNhiPnp(PCM_NHI nhi, PIRP irp)
     case IRP_MN_QUERY_REMOVE_DEVICE:
     case IRP_MN_CANCEL_STOP_DEVICE:
     case IRP_MN_CANCEL_REMOVE_DEVICE:
+        if (stack->MinorFunction == IRP_MN_QUERY_STOP_DEVICE ||
+            stack->MinorFunction == IRP_MN_QUERY_REMOVE_DEVICE) {
+            /* Record 21 section 6.3.1: no wake power-up asked behind this
+             * NHI from here on, until its own cancel or start. */
+            CmWpuDomStop(nhi);
+        } else {
+            CmWpuDomCancel(nhi);
+        }
         irp->IoStatus.Status = STATUS_SUCCESS;
         break;
 
     case IRP_MN_STOP_DEVICE:
     case IRP_MN_SURPRISE_REMOVAL:
+        CmWpuDomStop(nhi);
+        CmWpuCount(nhi, FALSE);
         if (stack->MinorFunction == IRP_MN_SURPRISE_REMOVAL) {
             /* The function is gone: no access of any class from now, even
              * inside a sequence the thread is running (cm_live.h). */
             CmNhiRevoke(nhi);
             CmNetGone(nhi);
+            /* Record 21 section 4.5.14 item 4: a removal Windows
+             * reported, for the message's absence proof. */
+            nhi->Rirq.Removal = 1;
         }
         cmNhiStop(nhi, stack->MinorFunction);
         if (stack->MinorFunction == IRP_MN_SURPRISE_REMOVAL) {
@@ -4310,6 +4475,9 @@ NTSTATUS CmNhiPnp(PCM_NHI nhi, PIRP irp)
         break;
 
     case IRP_MN_REMOVE_DEVICE:
+        CmWpuDomStop(nhi);
+        CmWpuCount(nhi, FALSE);
+        nhi->Rirq.Removal = 1;
         cmNhiStop(nhi, stack->MinorFunction);
         CmStatusClose(nhi);
         /* Power admission closed, and every power IRP this driver still

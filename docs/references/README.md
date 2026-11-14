@@ -457,6 +457,21 @@ the 0.96 text would settle. If a copy is ever obtained from Intel, record
 it here with its filename, SHA-256 and the licence limit it states, and
 keep it untracked like every document in this directory.
 
+## PCI SHPC 1.0 (roadmap-usb4 task 49.18): not fetched, cited by section
+
+The PCI Standard Hot-Plug Controller and Subsystem Specification, Revision
+1.0 (PCI-SIG), is what `src/cm/tbt_topo.h` and design record
+22 section 7.6.5 cite for the SHPC capability (ID 0Ch) and its DWORD Select
+and DWORD Data window: section 4.2. PCI-SIG publishes it in its specification
+library, [pcisig.com/specifications](https://pcisig.com/specifications),
+to its members; save it here as `shpc_10.pdf`.
+No copy was on the development host when task 49.18 was written, so this
+entry records no SHA-256 and the tree cites no sub-section or page of it;
+whoever fetches it adds the hash to this paragraph and may then cite further.
+The offsets and bit positions the code uses were read again against Linux's
+`drivers/pci/hotplug/shpchp_hpc.c` and QEMU's `hw/pci/shpc.c`, as record 22
+section 7.6.5 says.
+
 ## Windows 98 DDK (roadmap-usb4 task 39-0.3): kept in `tools/`, not here
 
 Design record 21 section 6.1 calls the Windows 98 and ME configuration

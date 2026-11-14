@@ -141,10 +141,52 @@
                                            design record 25 section 18).
                                            Not a layout change: the
                                            version stays 2              */
-/* 20..31 reserved, 0 */
+#define CM_Q_RM_IRQ             20UL    /* the ring interrupt as in force,
+                                           and why it is polled (record 21
+                                           section 4.5.17, task 49.27):
+                                           CM_Q_IRQ_*; 0 from a driver
+                                           before it. Not a layout
+                                           change: the version stays 2   */
+/* 24..31 reserved, 0 */
 
 #define CM_Q_RF_WATCHED         0x01UL  /* this domain's removals are
                                            watched (NT, the filter route) */
+
+/* CM_Q_RM_IRQ: how 7:0 (cm_qnet.h's CM_QN_KIND_*: 0 polled, 1 the line,
+ * 2 a message, 3 the line, value 2 yielding to the USB controllers' mode
+ * 4); why it is polled 15:8 (CM_Q_IRQ_WHY_*, 0 while it is on); the
+ * message's number 23:16 - the vector, or with CM_Q_IRQ_IS_IRQ the ISA
+ * IRQ claimed for it (2000 and XP); CM_Q_IRQ_PRESENT in every word of a
+ * driver that fills it. */
+#define CM_Q_IRQ_PRESENT        0x80000000UL
+#define CM_Q_IRQ_IS_IRQ         0x01000000UL
+#define CM_Q_IRQ_KIND(w)        ((w) & 0xFFUL)
+#define CM_Q_IRQ_WHY(w)         (((w) >> 8) & 0xFFUL)
+#define CM_Q_IRQ_NUMBER(w)      (((w) >> 16) & 0xFFUL)
+
+#define CM_Q_IRQ_WHY_NONE       0UL     /* on, or nothing known            */
+#define CM_Q_IRQ_WHY_OFF        1UL     /* the value is 0                  */
+#define CM_Q_IRQ_WHY_VALUE      2UL     /* the value was refused           */
+#define CM_Q_IRQ_WHY_NO_LINE_9X 3UL     /* 98 SE / ME: no line             */
+#define CM_Q_IRQ_WHY_NO_LINE    4UL     /* Windows gave it no interrupt    */
+#define CM_Q_IRQ_WHY_NOT_9X     5UL     /* 2 on 98 SE / ME: not available  */
+#define CM_Q_IRQ_WHY_OLD        6UL     /* a version check failed          */
+#define CM_Q_IRQ_WHY_NO_MSI     7UL     /* no message capability           */
+#define CM_Q_IRQ_WHY_REFUSED    8UL     /* refused until the restart       */
+#define CM_Q_IRQ_WHY_NO_VECTOR  9UL     /* no free vector, or ISA IRQ      */
+#define CM_Q_IRQ_WHY_IN_USE     10UL    /* the message in use              */
+#define CM_Q_IRQ_WHY_HANDOFF    11UL    /* MSI-X Enable not proven clear   */
+#define CM_Q_IRQ_WHY_CONNECT    12UL    /* could not be connected          */
+#define CM_Q_IRQ_WHY_ARM        13UL    /* the arm failed                  */
+#define CM_Q_IRQ_WHY_SELFTEST   14UL    /* the self-test failed            */
+#define CM_Q_IRQ_WHY_LOST       15UL    /* it stopped arriving             */
+#define CM_Q_IRQ_WHY_STORM      16UL    /* it came too often               */
+#define CM_Q_IRQ_WHY_BRAKED     17UL    /* the storm brake stopped it      */
+#define CM_Q_IRQ_WHY_REARM      18UL    /* the re-arm after a sleep failed */
+#define CM_Q_IRQ_WHY_INTX       19UL    /* Interrupt Disable found set     */
+#define CM_Q_IRQ_WHY_RINGS      20UL    /* no ring to watch                */
+#define CM_Q_IRQ_WHY_WAIT       21UL    /* not set up yet                  */
+#define CM_Q_IRQ_WHY_TEARDOWN   22UL    /* an order down not proven silent */
 
 /*
  * ---- The log answer (design record 25 section 4.5, revision 9) ----
@@ -205,7 +247,8 @@
                                            at the next record */
 #define CM_QL_F_CTR_CUT         0x20UL  /* the counters did not all fit */
 #define CM_QL_F_WITHHELD        0x40UL  /* a value that is an address was
-                                           written "--------" */
+                                           written "--------": below level
+                                           4 (at 4 too before 3.5.0.0) */
 #define CM_QL_F_INERT           0x80UL  /* the thread waits with no timeout:
                                            the counters' pass may be old */
 #define CM_QL_F_HEAD            0x100UL /* the log begins with the head of

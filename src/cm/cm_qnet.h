@@ -90,12 +90,21 @@
 #define CM_QN_S_RINGS_FAILED    88UL
 #define CM_QN_S_IRQ_STATE       92UL    /* CM_QN_IRQ_* (record 35 5.5) */
 #define CM_QN_S_IRQ_KICKS       96UL    /* the interrupt DPC's kicks */
-/* 100..103 reserved, 0 */
+#define CM_QN_S_IRQ_KIND        100UL   /* CM_QN_KIND_* (record 21 4.5.12);
+                                           0 from a driver before 49.27 */
 
 /* The data ring's interrupt (record 35 section 5.5, task 48.38). */
 #define CM_QN_IRQ_POLLED        0UL     /* checked every clock tick */
 #define CM_QN_IRQ_OPEN          1UL     /* the interrupt open */
 #define CM_QN_IRQ_LATCHED       2UL     /* fell back to the poll */
+
+/* How the ring interrupt is delivered (record 21 section 4.5.12, task
+ * 49.27): the counter IrqMode's numbers. */
+#define CM_QN_KIND_UNKNOWN      0UL     /* polled, or a driver before */
+#define CM_QN_KIND_LINE         1UL
+#define CM_QN_KIND_MESSAGE      2UL     /* msi4nt's */
+#define CM_QN_KIND_LINE_YIELD   3UL     /* the line: value 2 yielding to the
+                                           USB controllers' mode 4 */
 
 #define CM_QN_STATE_OFF         0UL     /* XhciCmNet 0, or no network PDO */
 #define CM_QN_STATE_NO_DRIVER   1UL     /* the PDO is there, no Open */

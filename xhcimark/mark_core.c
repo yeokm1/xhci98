@@ -968,6 +968,166 @@ int mk_flush_behind(const INST_U32 *chain, int n, const INST_U32 *members, int m
     return 0;
 }
 
+/* ---- the location kept per instance (record 21 section 7.8.3) ----------- */
+
+#define MK_PBT_APMRESUMECRITICAL    0x0006UL
+#define MK_PBT_APMRESUMESUSPEND     0x0007UL
+#define MK_PBT_APMRESUMEAUTOMATIC   0x0012UL
+
+void mk_loc_reset(MK_LOCS *c)
+{
+    c->Count = 0;
+    c->Cursor = 0;
+}
+
+/* The walk reaches the devnodes in the same order at every poll, so the
+ * search begins after the last one found. */
+static int mk_loc_find(MK_LOCS *c, const char *id)
+{
+    int k;
+    int i;
+
+    for (k = 0; k < c->Count; k++) {
+        i = (c->Cursor + k) % c->Count;
+        if (inst_eq(c->E[i].Id, id)) {
+            c->Cursor = i + 1 < c->Count ? i + 1 : 0;
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int mk_loc_due(INST_U32 now, INST_U32 at)
+{
+    return (INST_U32)(now - at) < 0x80000000UL;
+}
+
+int mk_loc_get(MK_LOCS *c, const char *id, int started, INST_U32 now,
+               INST_U32 *bus, INST_U32 *address)
+{
+    int i = mk_loc_find(c, id);
+    MK_LOC *e = i >= 0 ? &c->E[i] : NULL;
+
+    if (e != NULL) {
+        e->Seen = 1;
+        if (!started) {
+            e->Stale = 1;
+        }
+    }
+    if (started && (e == NULL || e->Stale ||
+                    (e->Failed && mk_loc_due(now, e->RetryAt)))) {
+        return MK_LOC_READ;
+    }
+    if (e == NULL || !e->Has) {
+        return MK_LOC_NONE;
+    }
+    *bus = e->Bus;
+    *address = e->Address;
+    return MK_LOC_KEPT;
+}
+
+void mk_loc_put(MK_LOCS *c, const char *id, int result, INST_U32 bus,
+                INST_U32 address, INST_U32 now)
+{
+    int i = mk_loc_find(c, id);
+    MK_LOC *e;
+
+    if (i < 0) {
+        if (c->Count >= MK_LOC_MAX) {
+            return;
+        }
+        i = c->Count++;
+        inst_copy(c->E[i].Id, id, sizeof(c->E[i].Id));
+    }
+    e = &c->E[i];
+    e->Has = result == MK_LOC_R_OK;
+    e->Bus = e->Has ? bus : 0;
+    e->Address = e->Has ? address : 0;
+    e->Failed = result == MK_LOC_R_FAILED;
+    e->RetryAt = now + MK_LOC_RETRY_MS;
+    e->Stale = 0;
+    e->Seen = 1;
+}
+
+void mk_loc_walk_begin(MK_LOCS *c)
+{
+    int i;
+
+    for (i = 0; i < c->Count; i++) {
+        c->E[i].Seen = 0;
+    }
+}
+
+void mk_loc_walk_end(MK_LOCS *c, int whole)
+{
+    int i;
+    int n = 0;
+
+    if (!whole) {
+        return;
+    }
+    for (i = 0; i < c->Count; i++) {
+        if (c->E[i].Seen) {
+            if (n != i) {
+                c->E[n] = c->E[i];
+            }
+            n++;
+        }
+    }
+    c->Count = n;
+    c->Cursor = 0;
+}
+
+void mk_loc_stale_all(MK_LOCS *c)
+{
+    int i;
+
+    for (i = 0; i < c->Count; i++) {
+        c->E[i].Stale = 1;
+    }
+}
+
+int mk_loc_resume_event(INST_U32 event)
+{
+    return event == MK_PBT_APMRESUMECRITICAL ||
+           event == MK_PBT_APMRESUMESUSPEND ||
+           event == MK_PBT_APMRESUMEAUTOMATIC;
+}
+
+/* ---- the installer's hold (record 21 section 7.8.4) ---------------------- */
+
+int mk_hold_step(MK_HOLD *h, int exists, INST_U32 gen, INST_U32 now,
+                 int *event)
+{
+    *event = MK_HOLD_EV_NONE;
+    h->AckDue = 0;
+    if (!exists) {
+        if (h->Held) {
+            *event = MK_HOLD_EV_ENDED;
+        }
+        h->Held = 0;
+        h->Expired = 0;
+        return 1;
+    }
+    if (!h->Held || gen != h->Gen) {
+        h->Held = 1;
+        h->Expired = 0;
+        h->Since = now;
+        h->Gen = gen;
+        *event = MK_HOLD_EV_BEGAN;
+    } else if (h->Expired) {
+        return 1;
+    } else if ((INST_U32)(now - h->Since) >= MK_HOLD_MAX_MS) {
+        h->Expired = 1;
+        *event = MK_HOLD_EV_EXPIRED;
+        return 1;
+    }
+    h->AckDue = h->AckedGen != h->Gen;
+    return 0;
+}
+
+static MK_LOCS mkTestLocs;
+
 int mk_selftest(void (*report)(int ok, const char *what))
 {
     unsigned char b[1024];
@@ -1759,6 +1919,187 @@ int mk_selftest(void (*report)(int ok, const char *what))
         mem[1] = 0x0519;
         mk_check(!mk_flush_behind(chain, 3, mem, 2), "flush: no member above it");
         mk_check(!mk_flush_behind(chain, 3, mem, 0), "flush: no member at all");
+    }
+    {
+        /* Record 21 section 7.8.3 (task 49.26): the location kept per
+         * instance, never read while the device is not started. */
+        MK_LOCS *lc = &mkTestLocs;
+        const char *a = "PCI\\VEN_8086&DEV_15D3\\3&11583659&0&08";
+        const char *u = "PCI\\VEN_1B21&DEV_2464\\4&2B8260C0&0&0010";
+        INST_U32 bus = 0;
+        INST_U32 ad = 0;
+        int r;
+        int k;
+
+        mk_loc_reset(lc);
+        mk_check(mk_loc_get(lc, u, 0, 1000, &bus, &ad) == MK_LOC_NONE,
+                 "loc: never started, nothing kept: no read");
+        mk_check(mk_loc_get(lc, u, 0, 1000, &bus, &ad) == MK_LOC_NONE &&
+                 lc->Count == 0, "loc: and nothing is kept for it");
+        mk_check(mk_loc_get(lc, a, 1, 1000, &bus, &ad) == MK_LOC_READ,
+                 "loc: started, nothing kept: read");
+        mk_loc_put(lc, a, MK_LOC_R_OK, 5, 0x00010000UL, 1000);
+        bus = 0;
+        ad = 0;
+        mk_check(mk_loc_get(lc, a, 1, 2000, &bus, &ad) == MK_LOC_KEPT &&
+                 bus == 5 && ad == 0x00010000UL,
+                 "loc: started again: the kept values, no read");
+        bus = 0;
+        mk_check(mk_loc_get(lc, a, 0, 3000, &bus, &ad) == MK_LOC_KEPT &&
+                 bus == 5, "loc: not started: the kept values still serve");
+        mk_check(mk_loc_get(lc, a, 0, 3100, &bus, &ad) == MK_LOC_KEPT,
+                 "loc: still not started: no read");
+        mk_check(mk_loc_get(lc, a, 1, 4000, &bus, &ad) == MK_LOC_READ,
+                 "loc: started after a stop: read once again");
+        mk_loc_put(lc, a, MK_LOC_R_OK, 6, 0x00010000UL, 4000);
+        mk_check(mk_loc_get(lc, a, 1, 4100, &bus, &ad) == MK_LOC_KEPT &&
+                 bus == 6, "loc: the new values kept");
+        mk_check(mk_loc_get(lc, "ROOT\\LEGACY_BEEP\\0000", 1, 5000, &bus,
+                            &ad) == MK_LOC_READ, "loc: a root device read once");
+        mk_loc_put(lc, "ROOT\\LEGACY_BEEP\\0000", MK_LOC_R_NOVALUE, 0, 0, 5000);
+        mk_check(mk_loc_get(lc, "ROOT\\LEGACY_BEEP\\0000", 1, 5000 + 2 * MK_LOC_RETRY_MS,
+                            &bus, &ad) == MK_LOC_NONE,
+                 "loc: no such value: kept as none, never read again");
+        mk_check(mk_loc_get(lc, u, 1, 6000, &bus, &ad) == MK_LOC_READ,
+                 "loc: the unit started: read");
+        mk_loc_put(lc, u, MK_LOC_R_FAILED, 0, 0, 6000);
+        r = 1;
+        for (k = 0; k < 5; k++) {
+            if (mk_loc_get(lc, u, 1, 6000 + (INST_U32)k * 10000UL, &bus,
+                           &ad) != MK_LOC_NONE) {
+                r = 0;
+            }
+        }
+        mk_check(r, "loc: a failed read, asked again and again: no read "
+                    "before its retry time");
+        mk_check(mk_loc_get(lc, u, 1, 6000 + MK_LOC_RETRY_MS, &bus, &ad) ==
+                 MK_LOC_READ, "loc: read again at its retry time");
+        mk_loc_put(lc, u, MK_LOC_R_OK, 7, 0, 6000 + MK_LOC_RETRY_MS);
+        mk_check(mk_loc_get(lc, u, 0, 0xFFFFFFF0UL, &bus, &ad) == MK_LOC_KEPT,
+                 "loc: held for eject (not started): its location still known");
+        mk_check(mk_loc_get(lc, u, 1, 0x00000010UL, &bus, &ad) == MK_LOC_READ,
+                 "loc: and read again once it starts");
+        mk_loc_put(lc, u, MK_LOC_R_FAILED, 0, 0, 0xFFFFFFF0UL);
+        mk_check(mk_loc_get(lc, u, 1, 0x00000010UL, &bus, &ad) == MK_LOC_NONE &&
+                 mk_loc_get(lc, u, 1, MK_LOC_RETRY_MS - 0x10UL, &bus,
+                            &ad) == MK_LOC_READ,
+                 "loc: the retry time across the tick's wrap");
+        mk_loc_put(lc, u, MK_LOC_R_OK, 7, 0, 0);
+        mk_loc_stale_all(lc);
+        mk_check(mk_loc_get(lc, a, 1, 7000, &bus, &ad) == MK_LOC_READ &&
+                 mk_loc_get(lc, u, 0, 7000, &bus, &ad) == MK_LOC_KEPT,
+                 "loc: after a resume: a started device read again, one not "
+                 "started kept as it was");
+        mk_loc_put(lc, a, MK_LOC_R_OK, 6, 0x00010000UL, 7000);
+        mk_loc_walk_begin(lc);
+        (void)mk_loc_get(lc, a, 1, 8000, &bus, &ad);
+        mk_loc_walk_end(lc, 0);
+        mk_check(mk_loc_get(lc, u, 0, 8000, &bus, &ad) == MK_LOC_KEPT,
+                 "loc: an incomplete walk drops nothing");
+        mk_loc_walk_begin(lc);
+        (void)mk_loc_get(lc, a, 1, 9000, &bus, &ad);
+        mk_loc_walk_end(lc, 1);
+        mk_check(mk_loc_get(lc, u, 1, 9000, &bus, &ad) == MK_LOC_READ &&
+                 mk_loc_get(lc, a, 1, 9000, &bus, &ad) == MK_LOC_KEPT,
+                 "loc: a whole walk that did not reach it drops it (read "
+                 "anew), the rest kept");
+        mk_check(mk_loc_resume_event(6UL) && mk_loc_resume_event(7UL) &&
+                 mk_loc_resume_event(0x12UL) &&
+                 !mk_loc_resume_event(MK_PBT_APMSUSPEND) &&
+                 !mk_loc_resume_event(MK_PBT_APMQUERYSUSPEND) &&
+                 !mk_loc_resume_event(0x0AUL),
+                 "loc: stale at the three resume notices alone");
+    }
+    {
+        /* Record 21 section 7.8.4: the installer's hold. */
+        MK_HOLD h;
+        int ev;
+
+        memset(&h, 0, sizeof(h));
+        mk_check(mk_hold_step(&h, 0, 0, 100, &ev) == 1 &&
+                 ev == MK_HOLD_EV_NONE && !h.AckDue,
+                 "hold: no event: the poll runs");
+        mk_check(mk_hold_step(&h, 1, 7, 200, &ev) == 0 &&
+                 ev == MK_HOLD_EV_BEGAN && h.AckDue && h.Gen == 7,
+                 "hold: the event: skipped, the hold begins, its number due "
+                 "for acknowledgement");
+        h.AckedGen = h.Gen;
+        mk_check(mk_hold_step(&h, 1, 7, 200 + MK_HOLD_MAX_MS - 1, &ev) == 0 &&
+                 ev == MK_HOLD_EV_NONE && !h.AckDue,
+                 "hold: still held within its bound, acknowledged once");
+        mk_check(mk_hold_step(&h, 1, 7, 200 + MK_HOLD_MAX_MS, &ev) == 1 &&
+                 ev == MK_HOLD_EV_EXPIRED && !h.AckDue,
+                 "hold: at its bound the poll runs");
+        mk_check(mk_hold_step(&h, 1, 7, 300 + MK_HOLD_MAX_MS, &ev) == 1 &&
+                 ev == MK_HOLD_EV_NONE,
+                 "hold: and keeps running while the old event stays");
+        mk_check(mk_hold_step(&h, 0, 7, 400 + MK_HOLD_MAX_MS, &ev) == 1 &&
+                 ev == MK_HOLD_EV_ENDED, "hold: the event gone: ended");
+        mk_check(mk_hold_step(&h, 1, 8, 500 + MK_HOLD_MAX_MS, &ev) == 0 &&
+                 ev == MK_HOLD_EV_BEGAN && h.AckDue,
+                 "hold: a new event holds again");
+        memset(&h, 0, sizeof(h));
+        (void)mk_hold_step(&h, 1, 1, 0xFFFFFF00UL, &ev);
+        mk_check(mk_hold_step(&h, 1, 1, 0x00000100UL, &ev) == 0,
+                 "hold: the tick's wrap does not end it early");
+
+        /* Two runs back to back, the gap between them entirely between two
+         * polls (the event seen at every poll): the second run's number
+         * begins its own hold, whether the first had expired or was at 14
+         * minutes, and is acknowledged; an expired hold is never
+         * acknowledged for a number it did not hold for. */
+        memset(&h, 0, sizeof(h));
+        (void)mk_hold_step(&h, 1, 3, 1000, &ev);
+        h.AckedGen = h.Gen;
+        (void)mk_hold_step(&h, 1, 3, 1000 + MK_HOLD_MAX_MS, &ev);
+        mk_check(h.Expired && ev == MK_HOLD_EV_EXPIRED,
+                 "hold, back to back: the first run's hold expired");
+        mk_check(mk_hold_step(&h, 1, 3, 2000 + MK_HOLD_MAX_MS, &ev) == 1 &&
+                 !h.AckDue,
+                 "hold, back to back: an expired hold with the same number "
+                 "runs and is not acknowledged");
+        mk_check(mk_hold_step(&h, 1, 4, 3000 + MK_HOLD_MAX_MS, &ev) == 0 &&
+                 ev == MK_HOLD_EV_BEGAN && h.AckDue && h.Gen == 4 &&
+                 h.Since == 3000 + MK_HOLD_MAX_MS && !h.Expired,
+                 "hold, back to back after an expired one: the new run's "
+                 "number holds, from now, due for acknowledgement");
+        h.AckedGen = h.Gen;
+        mk_check(mk_hold_step(&h, 1, 4,
+                              3000 + MK_HOLD_MAX_MS + MK_HOLD_MAX_MS - 1,
+                              &ev) == 0,
+                 "hold, back to back after an expired one: held for its own "
+                 "full bound");
+        memset(&h, 0, sizeof(h));
+        (void)mk_hold_step(&h, 1, 5, 1000, &ev);
+        h.AckedGen = h.Gen;
+        mk_check(mk_hold_step(&h, 1, 5, 1000 + 14UL * 60000UL, &ev) == 0,
+                 "hold, back to back: the first run's hold at 14 minutes");
+        mk_check(mk_hold_step(&h, 1, 6, 1000 + 14UL * 60000UL + 1000, &ev) ==
+                     0 && ev == MK_HOLD_EV_BEGAN && h.AckDue &&
+                 h.Since == 1000 + 14UL * 60000UL + 1000,
+                 "hold, back to back at 14 minutes: the new run's hold begins "
+                 "again");
+        mk_check(mk_hold_step(&h, 1, 6,
+                              1000 + 14UL * 60000UL + 1000 + 2UL * 60000UL,
+                              &ev) == 0,
+                 "hold, back to back at 14 minutes: not ended a minute after "
+                 "the first run's bound");
+        memset(&h, 0, sizeof(h));
+        mk_check(mk_hold_step(&h, 1, 0, 1000, &ev) == 0 && !h.AckDue,
+                 "hold: a number not read (0) holds and is never "
+                 "acknowledged (no run's number is 0)");
+    }
+    {
+        /* Record 21 section 7.8.4: the owners each named object is
+         * trusted with. */
+        mk_check(inst_mk_owner_ok(INST_OWNER_SYSTEM, 1) &&
+                 !inst_mk_owner_ok(INST_OWNER_ADMINS, 1) &&
+                 !inst_mk_owner_ok(INST_OWNER_OTHER, 1) &&
+                 inst_mk_owner_ok(INST_OWNER_SYSTEM, 0) &&
+                 inst_mk_owner_ok(INST_OWNER_ADMINS, 0) &&
+                 !inst_mk_owner_ok(INST_OWNER_OTHER, 0),
+                 "named objects: the idle event SYSTEM's alone, the hold "
+                 "event SYSTEM's or the Administrators'");
     }
     return mkFails;
 }

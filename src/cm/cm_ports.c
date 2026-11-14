@@ -724,6 +724,446 @@ ULONG CmPortsRelease(ULONG markedByThis, ULONG reenumOn)
     return CM_PORTS_REL_CLEAR | (reenumOn ? CM_PORTS_REL_INVALIDATE : 0);
 }
 
+BOOLEAN CmPortsSettleAgain(ULONG shown, ULONG waited, ULONG elapsedMs,
+                           ULONG boundMs)
+{
+    return (BOOLEAN)(shown < waited && elapsedMs < boundMs);
+}
+
+ULONG CmPortsDeferredExpose(ULONG failed, ULONG filterRoute,
+                            ULONG transport, ULONG barred)
+{
+    if (failed || !filterRoute || !transport) {
+        return CM_PORTS_DX_NONE;
+    }
+    return barred ? CM_PORTS_DX_OWE : CM_PORTS_DX_EXPOSE;
+}
+
+const ULONG CM_PORTS_HDR_ORDER[CM_PORTS_HDR_WRITES] = {
+    0x18UL, 0x1CUL, 0x20UL, 0x24UL, 0x28UL, 0x2CUL, 0x30UL, 0x10UL, 0x14UL,
+    0x0CUL, 0x3CUL
+};
+
+BOOLEAN CmPortsHdrCopyValid(const ULONG *hdr, ULONG answered)
+{
+    ULONG vendor;
+    ULONG primary;
+    ULONG secondary;
+    ULONG subordinate;
+
+    if (hdr == NULL || answered != CM_PORTS_HDR_DWORDS) {
+        return FALSE;
+    }
+    vendor = hdr[0] & 0xFFFFUL;
+    if (hdr[0] == 0xFFFFFFFFUL || vendor == 0UL || vendor == 0xFFFFUL ||
+        vendor == 0x0001UL) {
+        return FALSE;
+    }
+    if (((hdr[0x0C / 4] >> 16) & 0x7FUL) != 1UL) {
+        return FALSE;
+    }
+    primary = hdr[0x18 / 4] & 0xFFUL;
+    secondary = (hdr[0x18 / 4] >> 8) & 0xFFUL;
+    subordinate = (hdr[0x18 / 4] >> 16) & 0xFFUL;
+    if (secondary == 0 || secondary <= primary || subordinate < secondary) {
+        return FALSE;
+    }
+    return (BOOLEAN)((hdr[0x3C / 4] & (1UL << 22)) == 0);
+}
+
+BOOLEAN CmPortsHdrEligible(ULONG commandNow, ULONG busesNow)
+{
+    return (BOOLEAN)(commandNow != 0xFFFFFFFFUL && busesNow != 0xFFFFFFFFUL &&
+                     (commandNow & 0x7UL) == 0 &&
+                     (busesNow & 0x00FFFF00UL) == 0);
+}
+
+BOOLEAN CmPortsRwRestoreDue(ULONG outcome, ULONG done, ULONG elapsedMs)
+{
+    return (BOOLEAN)(outcome == CM_PORTS_RW_WAIT && done == 0 &&
+                     elapsedMs >= CM_PORTS_RW_GRACE_MS);
+}
+
+ULONG CmPortsHdrRestoreValue(ULONG offset, ULONG copy, ULONG now)
+{
+    switch (offset) {
+    case 0x04UL:
+    case 0x1CUL:
+        return copy & 0xFFFFUL;
+    case 0x0CUL:
+        return (copy & 0xFFFFUL) | (now & 0xFFFF0000UL & ~(1UL << 30));
+    case 0x3CUL:
+        return copy & ~(1UL << 26);
+    default:
+        return copy;
+    }
+}
+
+BOOLEAN CmPortsHdrVerify(ULONG offset, ULONG copy, ULONG readBack)
+{
+    switch (offset) {
+    case 0x04UL:
+        return (BOOLEAN)((readBack & 0x7UL) == (copy & 0x7UL));
+    case 0x18UL:
+        return (BOOLEAN)((readBack & 0x00FFFFFFUL) == (copy & 0x00FFFFFFUL));
+    case 0x1CUL:
+        return (BOOLEAN)((readBack & 0xFFFFUL) == (copy & 0xFFFFUL));
+    case 0x0CUL:
+    case 0x3CUL:
+        return TRUE;
+    default:
+        return (BOOLEAN)(readBack == copy);
+    }
+}
+
+const ULONG CM_PORTS_EP_OFFSET[CM_PORTS_EP_DWORDS] = {
+    0x00UL, 0x04UL, 0x0CUL, 0x10UL, 0x14UL, 0x18UL, 0x1CUL, 0x20UL, 0x24UL,
+    0x3CUL
+};
+
+BOOLEAN CmPortsEpCopyValid(ULONG id, ULONG typeDword)
+{
+    ULONG vendor;
+
+    vendor = id & 0xFFFFUL;
+    if (id == 0xFFFFFFFFUL || vendor == 0UL || vendor == 0xFFFFUL ||
+        vendor == 0x0001UL) {
+        return FALSE;
+    }
+    return (BOOLEAN)(((typeDword >> 16) & 0x7FUL) == 0UL);
+}
+
+BOOLEAN CmPortsEpSnapValid(const ULONG *ep, ULONG idAgain)
+{
+    ULONG k;
+
+    if (ep == NULL || !CmPortsEpCopyValid(ep[0], ep[2]) ||
+        idAgain != ep[0]) {
+        return FALSE;
+    }
+    for (k = 1; k < CM_PORTS_EP_DWORDS; k++) {
+        if (ep[k] == 0xFFFFFFFFUL) {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+static ULONG cmPortsBarAddr(ULONG bar)
+{
+    return (bar & 1UL) ? (bar & ~0x3UL) : (bar & ~0xFUL);
+}
+
+BOOLEAN CmPortsEpReset(ULONG cmd, const ULONG *bars)
+{
+    ULONG k;
+
+    if (bars == NULL || cmd == 0xFFFFFFFFUL || (cmd & 0x7UL) != 0) {
+        return FALSE;
+    }
+    for (k = 0; k < 6; k++) {
+        if (bars[k] == 0xFFFFFFFFUL || cmPortsBarAddr(bars[k]) != 0) {
+            return FALSE;
+        }
+        if ((bars[k] & 0x7UL) == 0x4UL) {
+            /* A 64-bit memory BAR: its upper half is address, whole. */
+            if (k + 1 >= 6 || bars[k + 1] != 0) {
+                return FALSE;
+            }
+            k++;
+        }
+    }
+    return TRUE;
+}
+
+BOOLEAN CmPortsEpVerify(ULONG copy, ULONG readBack)
+{
+    return (BOOLEAN)(readBack != 0xFFFFFFFFUL &&
+                     cmPortsBarAddr(readBack) == cmPortsBarAddr(copy));
+}
+
+/* ---- record 21 section 6.1.5: a switch behind the tunnel port that came
+ * back reset (task 49.30) ------------------------------------------------ */
+
+/* An id that answers: not all ones, its vendor not 0000h, FFFFh or 0001h
+ * (Configuration Request Retry Status). */
+static BOOLEAN cmPortsIdAnswers(ULONG id)
+{
+    ULONG vendor;
+
+    vendor = id & 0xFFFFUL;
+    return (BOOLEAN)(id != 0xFFFFFFFFUL && vendor != 0UL &&
+                     vendor != 0xFFFFUL && vendor != 0x0001UL);
+}
+
+BOOLEAN CmPortsSubNoted(ULONG id, ULONG typeDword, ULONG buses)
+{
+    return (BOOLEAN)(cmPortsIdAnswers(id) && typeDword != 0xFFFFFFFFUL &&
+                     ((typeDword >> 16) & 0x7FUL) == 1UL &&
+                     buses != 0xFFFFFFFFUL &&
+                     ((buses >> 8) & 0xFFUL) != 0);
+}
+
+VOID CmPortsSubMerge(CM_PORTS_SUB *note, const CM_PORTS_SUB *fresh)
+{
+    CM_PORTS_SUB out;
+    ULONG k;
+    ULONG j;
+    ULONG n;
+    BOOLEAN again;
+
+    out.Count = 0;
+    for (k = 0; k < CM_PORTS_SUB_MAX; k++) {
+        out.DevFn[k] = 0;
+        out.Id[k] = 0;
+    }
+    n = fresh->Count < CM_PORTS_SUB_MAX ? fresh->Count : CM_PORTS_SUB_MAX;
+    for (k = 0; k < n; k++) {
+        out.DevFn[out.Count] = fresh->DevFn[k];
+        out.Id[out.Count] = fresh->Id[k];
+        out.Count++;
+    }
+    n = note->Count < CM_PORTS_SUB_MAX ? note->Count : CM_PORTS_SUB_MAX;
+    for (k = 0; k < n && out.Count < CM_PORTS_SUB_MAX; k++) {
+        again = FALSE;
+        for (j = 0; j < out.Count; j++) {
+            if (out.DevFn[j] == note->DevFn[k]) {
+                again = TRUE;
+            }
+        }
+        if (!again) {
+            out.DevFn[out.Count] = note->DevFn[k];
+            out.Id[out.Count] = note->Id[k];
+            out.Count++;
+        }
+    }
+    *note = out;
+}
+
+ULONG CmPortsSubRead(ULONG notedId, ULONG reads, ULONG id, ULONG typeDword,
+                     ULONG cmd, ULONG buses, ULONG elapsedMs)
+{
+    ULONG vendor;
+
+    if ((reads & CM_PORTS_SUB_R_ID) == 0) {
+        return CM_PORTS_SUB_UNDECIDED;
+    }
+    vendor = id & 0xFFFFUL;
+    if (id == 0xFFFFFFFFUL || vendor == 0xFFFFUL) {
+        return elapsedMs >= CM_PORTS_SUB_ABSENT_MS ? CM_PORTS_SUB_ABSENT
+                                                   : CM_PORTS_SUB_UNDECIDED;
+    }
+    if (vendor == 0x0001UL || vendor == 0UL) {
+        return CM_PORTS_SUB_UNDECIDED;
+    }
+    if (id != notedId) {
+        return CM_PORTS_SUB_OTHER;
+    }
+    if ((reads & CM_PORTS_SUB_R_TYPE) == 0 ||
+        (reads & CM_PORTS_SUB_R_CMD) == 0 ||
+        (reads & CM_PORTS_SUB_R_BUSES) == 0 || typeDword == 0xFFFFFFFFUL ||
+        cmd == 0xFFFFFFFFUL || buses == 0xFFFFFFFFUL) {
+        return CM_PORTS_SUB_UNDECIDED;
+    }
+    if (((typeDword >> 16) & 0x7FUL) != 1UL) {
+        return CM_PORTS_SUB_OTHER;
+    }
+    if (CmPortsHdrEligible(cmd, buses)) {
+        return CM_PORTS_SUB_LOST;
+    }
+    if (((buses >> 8) & 0xFFUL) != 0) {
+        return CM_PORTS_SUB_CONFIGURED;
+    }
+    return CM_PORTS_SUB_UNDECIDED;
+}
+
+ULONG CmPortsSubVerdict(const ULONG *entries, ULONG count)
+{
+    ULONG k;
+    ULONG verdict;
+
+    verdict = CM_PORTS_SUBV_SETTLED;
+    for (k = 0; k < count; k++) {
+        if (entries[k] == CM_PORTS_SUB_LOST) {
+            return CM_PORTS_SUBV_LOST;
+        }
+        if (entries[k] == CM_PORTS_SUB_UNDECIDED) {
+            verdict = CM_PORTS_SUBV_UNDECIDED;
+        }
+    }
+    return verdict;
+}
+
+ULONG CmPortsResetFn(ULONG reads, ULONG id, ULONG typeDword, ULONG buses)
+{
+    ULONG vendor;
+
+    if ((reads & CM_PORTS_SUB_R_ID) == 0) {
+        return CM_PORTS_RF_UNKNOWN;
+    }
+    vendor = id & 0xFFFFUL;
+    if (id == 0xFFFFFFFFUL || vendor == 0xFFFFUL) {
+        return CM_PORTS_RF_ABSENT;
+    }
+    if (vendor == 0x0001UL || vendor == 0UL ||
+        (reads & CM_PORTS_SUB_R_TYPE) == 0 || typeDword == 0xFFFFFFFFUL) {
+        return CM_PORTS_RF_UNKNOWN;
+    }
+    if (((typeDword >> 16) & 0x7FUL) != 1UL) {
+        return CM_PORTS_RF_SAFE;
+    }
+    if ((reads & CM_PORTS_SUB_R_BUSES) == 0 || buses == 0xFFFFFFFFUL) {
+        return CM_PORTS_RF_UNKNOWN;
+    }
+    return ((buses >> 8) & 0xFFUL) != 0 ? CM_PORTS_RF_SAFE : CM_PORTS_RF_BUS0;
+}
+
+ULONG CmPortsResetChildOf(const char *text, ULONG chars, ULONG id,
+                          ULONG fbdf, ULONG leaf)
+{
+    ULONG path[CM_PORTS_PATH_MAX];
+    ULONG cid;
+    ULONG at;
+    ULONG n;
+
+    if (text == NULL) {
+        return CM_PORTS_RC_UNREAD;
+    }
+    if (!CmPortsIdVenDev(text, chars, &cid) || cid != id) {
+        return CM_PORTS_RC_NOMATCH;
+    }
+    if (CmPortsIdLocation(text, chars, &at)) {
+        return at == fbdf ? CM_PORTS_RC_MATCH : CM_PORTS_RC_NOMATCH;
+    }
+    if (CmPortsIdPath(text, chars, path, CM_PORTS_PATH_MAX, &n) && n != 0) {
+        return path[0] == leaf ? CM_PORTS_RC_MATCH : CM_PORTS_RC_NOMATCH;
+    }
+    return CM_PORTS_RC_UNREAD;
+}
+
+ULONG CmPortsResetChildAdd(ULONG acc, ULONG child)
+{
+    if (acc == CM_PORTS_RCL_FOUND || child == CM_PORTS_RC_MATCH) {
+        return CM_PORTS_RCL_FOUND;
+    }
+    if (child == CM_PORTS_RC_UNREAD) {
+        return CM_PORTS_RCL_UNKNOWN;
+    }
+    return acc;
+}
+
+ULONG CmPortsResetChildEnd(ULONG acc, BOOLEAN complete)
+{
+    if (acc == CM_PORTS_RCL_FOUND) {
+        return CM_PORTS_RCL_FOUND;
+    }
+    return complete ? acc : CM_PORTS_RCL_UNKNOWN;
+}
+
+ULONG CmPortsResetJoin(ULONG verdict, ULONG fn, ULONG children)
+{
+    if (verdict == CM_PORTS_RU_RESET ||
+        (fn == CM_PORTS_RF_BUS0 && children == CM_PORTS_RCL_FOUND)) {
+        return CM_PORTS_RU_RESET;
+    }
+    if (fn == CM_PORTS_RF_UNKNOWN ||
+        (fn == CM_PORTS_RF_BUS0 && children != CM_PORTS_RCL_NONE)) {
+        return CM_PORTS_RU_UNKNOWN;
+    }
+    return verdict;
+}
+
+ULONG CmPortsResetBare(BOOLEAN complete, ULONG count)
+{
+    return (complete && count == 0) ? CM_PORTS_RU_SAFE : CM_PORTS_RU_UNKNOWN;
+}
+
+ULONG CmPortsLostStep(ULONG outcome, ULONG verdict, ULONG elapsedMs,
+                      BOOLEAN tried, ULONG sinceTryMs)
+{
+    if (verdict == CM_PORTS_SUBV_UNDECIDED) {
+        return elapsedMs >= CM_PORTS_RW_BOUND_MS ? CM_PORTS_LOST_END_KEEP
+                                                 : CM_PORTS_LOST_WAIT;
+    }
+    if (verdict != CM_PORTS_SUBV_LOST) {
+        return CM_PORTS_LOST_END;
+    }
+    if (elapsedMs >= CM_PORTS_RW_BOUND_MS) {
+        return CM_PORTS_LOST_KEPT;
+    }
+    if (outcome != CM_PORTS_RW_RESTORED_HERE &&
+        elapsedMs < CM_PORTS_RW_GRACE_MS) {
+        /* Windows first. */
+        return CM_PORTS_LOST_WAIT;
+    }
+    if (tried && sinceTryMs < CM_PORTS_SUB_RETRY_MS) {
+        return CM_PORTS_LOST_WAIT;
+    }
+    return CM_PORTS_LOST_REMOVE;
+}
+
+BOOLEAN CmPortsResumeWaitWanted(BOOLEAN read, ULONG buses)
+{
+    return (BOOLEAN)(read && buses != 0xFFFFFFFFUL &&
+                     ((buses >> 8) & 0xFFUL) != 0);
+}
+
+ULONG CmPortsResumeWait(BOOLEAN read, ULONG buses, ULONG elapsedMs,
+                        ULONG boundMs)
+{
+    if (!read || buses == 0xFFFFFFFFUL) {
+        return CM_PORTS_RW_UNREAD;
+    }
+    if (((buses >> 8) & 0xFFUL) != 0) {
+        return CM_PORTS_RW_RESTORED;
+    }
+    if (elapsedMs >= boundMs) {
+        return CM_PORTS_RW_TIMEOUT;
+    }
+    return CM_PORTS_RW_WAIT;
+}
+
+VOID CmPortsRwSuspend(CM_PORTS_RWS *s, ULONG mask)
+{
+    s->Wait = mask;
+    s->Asleep = (mask != 0) ? 1UL : 0UL;
+    s->Epoch++;
+}
+
+BOOLEAN CmPortsRwResumed(CM_PORTS_RWS *s, ULONG now)
+{
+    if (s->Asleep == 0) {
+        return FALSE;
+    }
+    s->Asleep = 0;
+    s->From = now;
+    s->Epoch++;
+    return TRUE;
+}
+
+BOOLEAN CmPortsRwClear(CM_PORTS_RWS *s, ULONG bit, ULONG epoch)
+{
+    if ((s->Wait & bit) == 0) {
+        return TRUE;
+    }
+    if (s->Epoch != epoch || s->Asleep != 0) {
+        return FALSE;
+    }
+    s->Wait &= ~bit;
+    return TRUE;
+}
+
+ULONG CmPortsNiAdmit(BOOLEAN open, ULONG wait, ULONG bit)
+{
+    if (!open) {
+        return CM_PORTS_NI_CLOSED;
+    }
+    if ((wait & bit) != 0) {
+        return CM_PORTS_NI_HELD;
+    }
+    return CM_PORTS_NI_GO;
+}
+
 ULONG CmPortsHoldBound(const CM_PORTS_RESUME *resume)
 {
     ULONG bound;
@@ -818,4 +1258,200 @@ ULONG CmPortsKeptLast(ULONG count, ULONG state, ULONG aboveP)
         return CM_KEPT_L_NONE;
     }
     return aboveP ? CM_KEPT_L_QUEUE : CM_KEPT_L_DESTROY;
+}
+
+/* ---- the wake power-up (design record 21 section 6.3.1, task 49.46) ---- */
+
+ULONG CmPortsWpuArm(ULONG dispatchEpoch, ULONG epoch, ULONG consumed,
+                    ULONG failed)
+{
+    /* A D0 dispatched before the latest sleep is stale, and one epoch
+     * arms once: a later failure in it (the rescan's) never re-arms. */
+    return (ULONG)(failed != 0 && epoch != 0 && dispatchEpoch == epoch &&
+                   consumed != epoch);
+}
+
+ULONG CmPortsWpuDue(ULONG elapsed)
+{
+    return (ULONG)(elapsed >= CM_WPU_DELAY_MS);
+}
+
+static BOOLEAN cmPortsEqiA(const WCHAR *a, const char *b, ULONG n)
+{
+    ULONG i;
+    WCHAR x;
+    WCHAR y;
+
+    for (i = 0; i < n; i++) {
+        x = a[i];
+        y = (WCHAR)(UCHAR)b[i];
+        if (x >= 'a' && x <= 'z') {
+            x = (WCHAR)(x - ('a' - 'A'));
+        }
+        if (y >= 'a' && y <= 'z') {
+            y = (WCHAR)(y - ('a' - 'A'));
+        }
+        if (x != y) {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+ULONG CmPortsWpuInfSection(const WCHAR *text, ULONG chars)
+{
+    static const char base[] = "Stor98_Inst";
+    static const char x86[] = ".NTx86";
+    static const char amd64[] = ".NTamd64";
+
+    if (text == NULL || chars < 11 || !cmPortsEqiA(text, base, 11)) {
+        return CM_WPU_OWN_OTHER;
+    }
+    if (chars == 11 ||
+        (chars == 17 && cmPortsEqiA(text + 11, x86, 6)) ||
+        (chars == 19 && cmPortsEqiA(text + 11, amd64, 8))) {
+        return CM_WPU_OWN_STOR98;
+    }
+    return CM_WPU_OWN_OTHER;
+}
+
+ULONG CmPortsWpuOwner(ULONG infSection, ULONG top)
+{
+    if (infSection == CM_WPU_OWN_OTHER || top == CM_WPU_OWN_OTHER) {
+        return CM_WPU_OWN_OTHER;
+    }
+    if (infSection == CM_WPU_OWN_STOR98 && top == CM_WPU_OWN_STOR98) {
+        return CM_WPU_OWN_STOR98;
+    }
+    return CM_WPU_OWN_UNKNOWN;
+}
+
+VOID CmPortsWpuSysPower(CM_WPU_SYS *s, ULONG isSet, ULONG toSleep)
+{
+    if (toSleep) {
+        s->Halt = 1;
+        s->HaltSeq++;
+        if (isSet && s->Claim == 0) {
+            s->Claim = 1;
+            s->Epoch++;
+        }
+    } else if (isSet) {
+        s->Claim = 0;
+    }
+}
+
+VOID CmPortsWpuSysDown(CM_WPU_SYS *s)
+{
+    s->DownSeq++;
+}
+
+VOID CmPortsWpuDomStop(CM_WPU_DOM *d)
+{
+    d->StopLatch = 1;
+}
+
+VOID CmPortsWpuDomCancel(CM_WPU_DOM *d)
+{
+    d->StopLatch = 0;
+}
+
+VOID CmPortsWpuDomStart(CM_WPU_DOM *d)
+{
+    d->StopLatch = 0;
+    d->PowerDown = 0;
+    d->ResumeEpoch = 0;
+    d->ResumeHaltSeq = 0;
+    d->Resuming = 0;
+    d->RelDownSeq = 0;
+    d->RelHaltSeq = 0;
+}
+
+VOID CmPortsWpuDomPowerDown(CM_WPU_DOM *d)
+{
+    d->PowerDown = 1;
+}
+
+VOID CmPortsWpuDomResumeBegin(const CM_WPU_SYS *s, CM_WPU_DOM *d)
+{
+    d->ResumeEpoch = s->Epoch;
+    d->ResumeHaltSeq = s->HaltSeq;
+    d->Resuming = 1;
+}
+
+ULONG CmPortsWpuDomRelease(CM_WPU_SYS *s, CM_WPU_DOM *d)
+{
+    /* Only the release of this domain's own resume, with no sleep and no
+     * sleep query since that resume began: a release that started before
+     * a later sleep never adopts it, and a latched domain stays closed. */
+    if (!d->Resuming || d->StopLatch || s->Epoch == 0 ||
+        d->ResumeEpoch != s->Epoch || d->ResumeHaltSeq != s->HaltSeq) {
+        return 0;
+    }
+    s->Halt = 0;
+    d->PowerDown = 0;
+    d->RelDownSeq = s->DownSeq;
+    d->RelHaltSeq = s->HaltSeq;
+    return 1;
+}
+
+ULONG CmPortsWpuDomOpen(const CM_WPU_SYS *s, const CM_WPU_DOM *d,
+                        ULONG relEpoch)
+{
+    return (ULONG)(s->Epoch != 0 && !s->Halt && !d->StopLatch &&
+                   !d->PowerDown && relEpoch == s->Epoch &&
+                   d->RelDownSeq == s->DownSeq && d->RelHaltSeq == s->HaltSeq);
+}
+
+ULONG CmPortsWpuStep(const CM_WPU_IN *in, PULONG why)
+{
+    ULONG late;
+
+    *why = 0;
+    if (in->Epoch == 0 || in->FailEpoch != in->Epoch ||
+        in->Consumed == in->Epoch) {
+        return CM_WPU_V_IDLE;
+    }
+    if (in->Switch == 0) {
+        *why = CM_WPU_WHY_OFF;
+        return CM_WPU_V_SKIP;
+    }
+    if (in->Closed) {
+        *why = CM_WPU_WHY_REMOVED;
+        return CM_WPU_V_SKIP;
+    }
+    if (!in->Released || !CmPortsWpuDue(in->Elapsed)) {
+        /* No release in this epoch yet (or the domain is suspended or
+         * stopped): nothing is consumed; the next sleep ends the arm. */
+        return CM_WPU_V_WAIT;
+    }
+    if (in->Owner == CM_WPU_OWN_OTHER) {
+        *why = CM_WPU_WHY_NOT_STOR98;
+        return CM_WPU_V_SKIP;
+    }
+    if (in->Outstanding) {
+        /* An earlier request for its unit never completed: detected, not
+         * cancelled, and never followed by a second one. */
+        *why = CM_WPU_WHY_OUTSTANDING;
+        return CM_WPU_V_SKIP;
+    }
+    late = (ULONG)(in->Elapsed > CM_WPU_WINDOW_MS);
+    if (in->Units == 0) {
+        return late ? CM_WPU_V_NONE : CM_WPU_V_WAIT;
+    }
+    if (in->Owner != CM_WPU_OWN_STOR98) {
+        /* Not shown to be Stor98's: fails closed at the window's end. */
+        if (late) {
+            *why = CM_WPU_WHY_NOT_STOR98;
+            return CM_WPU_V_SKIP;
+        }
+        return CM_WPU_V_WAIT;
+    }
+    if (in->Slots < in->Units) {
+        if (late) {
+            *why = CM_WPU_WHY_BUSY;
+            return CM_WPU_V_SKIP;
+        }
+        return CM_WPU_V_WAIT;
+    }
+    return CM_WPU_V_ASK;
 }

@@ -16,6 +16,138 @@ history; those cut folders stay as they were written.
 columns because it is read on the target machine, in Windows 98 Notepad or DOS
 EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
+## 3.5.0.0 - 2026-11-14
+
+### Fixed
+- **A controller that the driver restarts in place** after it stopped
+  answering is given time to finish a slow reset, instead of being given up
+  at once.
+- **A UAS drive that a hardware monitor program asks for its SMART data** no
+  longer hangs until it is unplugged. A command the drive answered but whose
+  data never arrived resets the drive so its volume can carry on.
+- **2000 to 10, a USB4 host with no pre-boot support:** a drive behind a
+  dock or in a chain no longer disappears about 40 seconds after a standby.
+- **A controller older than xHCI 1.0** could stop answering with large event
+  rings. It now always uses 256 entries.
+- **Standby and hibernation with a Thunderbolt or USB4 drive on Stor98 (not
+  on 98 SE and ME):** a drive that woke before its connection was back could
+  stop answering, and Windows could then not finish a copy to it, find new
+  devices or shut down. The driver now powers it up again once its
+  connection is back, so Windows keeps answering it and can shut down
+  (`XhciCmWakePowerUp`). A drive plugged in after Windows started is still
+  disconnected by the sleep and must be plugged in again.
+- **98 SE and ME:** stopping a Thunderbolt or USB4 port while a drive behind
+  it ran through the BIOS took the drive away under Windows and caused "Disk
+  Write Error". That stop is now disallowed.
+
+### Changed
+
+- **The installer**
+  - Every registry value the drivers read is a row of Setup's settings, but
+    for the few set on a page of their own (the log levels, Thunderbolt
+    networking, the network adapter's own settings) and a UAS drive's own
+    values. Among the new rows: `XhciResumeKeepBot`,
+    `XhciStreamDequeueRepair` and `XhciCmWakePowerUp`.
+  - A fresh install sets the event ring to 256 entries (`XhciEventRingTrbs`)
+    for every controller, to maximise compatibility. You may increase it to
+    1024 if you have audio or video dropouts.
+  - 2000 to 10: only one Setup runs at a time.
+  - 98 SE and ME: If `XHCIINST.LOG` cannot be written at the root of the
+    system drive, Setup writes it in the temp folder and shows where.
+  - The safe-removal mark service no longer reads the Thunderbolt and USB4
+    devices again every second, and Setup holds it off while it updates
+    devices.
+- **The USB Tree**
+  - The settings page has a row for every registry value the drivers read.
+  - Search box in settings page.
+  - A snapshot takes every controller this driver drives.
+  - A snapshot also holds more UAS troubleshooting information.
+- **Goodbye to `tools\portsw\`:** the USB Tree's Settings window can do this
+  now.
+- **A UAS drive that refuses an ATA pass-through request as unknown** is
+  asked once. After that refusal the driver answers the same request itself,
+  for that drive and unit, until the drive is plugged in again.
+- **Two drives that report the same serial number** are no longer kept
+  across a resume that starts the controller afresh, so that one cannot be
+  taken for the other.
+
+### New
+
+- **Windows 2000: a USB drive that is not UAS** (a Bulk-Only stick or disk)
+  is kept across a hibernation that starts the controller afresh, with its
+  drive letter and open files.
+- **Intel 7-, 8- and 9-series and C610/X99 chipsets: the port switchover at
+  a first install.** Setup enables it by default so that USB 3 devices on
+  the blue connectors run at USB 3 speed. The driver's own default stays off
+  for stability during Windows Setup. To change it, use the USB Tree's View
+  > Settings..., and restart Windows.
+- **Another manufacturer's USB 3 driver on a controller** is left as it is
+  unless you tick the Setup option (not on 98 SE and ME). xHCI98 then
+  replaces it there, one controller at a time, and Setup refuses a
+  controller the Windows disk is behind.
+- **Windows 98 SE: a drive behind a Thunderbolt or USB4 port is kept across
+  a standby.** A dock's or a chain's drives are removed after the wake and
+  found again a few seconds later.
+- **A port on hold says so.** When a device keeps failing, the driver stops
+  trying its port. The USB Tree now shows such a port as "(on hold)".
+
+### Installing/Updating
+
+- **Use `SETUP.EXE`.** Registry values are kept. Device Manager's Update
+  Driver also works on every system: point it at `98-me\`, `nt-x86\` or
+  `nt-x64\`.
+- **Vista x64 to 10 x64:** the x64 drivers are test-signed, so test-signing
+  mode must be on, **and must stay on while the Thunderbolt 3 / USB4 driver
+  is installed**. On 8, 8.1 and 10 that also means Secure Boot must be off.
+- **Windows 98 SE and ME:** the free and non-free drivers are copied to
+  `C:\XHCI98\USBDRV\`; the ones you tick are also added to Windows' driver
+  search path. When Windows asks for a driver for another such device, point
+  it at that device's folder there. If the installer reports a controller
+  "not reached in this run", restart Windows and run it again.
+
+### Choose from 3 downloads
+
+Each zip holds everything in the one before it.
+- **`xhci98-3.5.0.0.zip`:** the xHCI98 drivers (USB 3, UAS, Thunderbolt 3 /
+  USB4, Thunderbolt networking), Stor98, the installer and the tools. It
+  also has NUSB 3.3's seven Windows 98 SE storage files in `USBDRV\NUSB33\`,
+  offered by the installer on 98 SE if you don't already have NUSB. If you
+  have NUSB already installed, it will be kept.
+- **`xhci98-3.5.0.0-free.zip`:** adds the free USB class drivers (audio,
+  MIDI, webcam, Ethernet, serial, printing etc.) from usb-wdm-free
+  (https://github.com/yeokm1/usb-wdm-free) 0.1.10 in `USBDRV\FREE\`. **These
+  are experimental:** they may not work with every device and can make
+  Windows unstable. Please report their problems to that project.
+  - The network drivers (`rtl815x`, `ax88179`, `ax88772`, `cdcnet`) gain the
+    Advanced tab (Energy-Efficient Ethernet, speed and duplex, flow control,
+    offloads). `cdcnet` tries again when an adapter does not come back after
+    standby.
+  - `uac2` and `uac1`: sound starts again after a stall; a recording or
+    playback opened just after another closed waits for it instead of
+    failing; a device with no product name is shown as "USB Audio 2.0
+    (uac2)" or "USB Audio 1.0 (uac1)".
+  - `uac1` (98 SE) also runs devices with 8-bit, floating-point, A-law or
+    mu-law sound, and is copied only: point Update Driver at its folder.
+  - `uvc98`: a webcam stream starts again after a stall.
+- **`xhci98-3.5.0.0-nonfree.zip`:** also adds a pack of other manufacturers'
+  USB Ethernet, HID, serial and audio drivers from usb-wdm-nonfree
+  (https://github.com/yeokm1/usb-wdm-nonfree) 1.4.0 in `USBDRV\NONFREE\`.
+  - Realtek drivers with modified INFs to support RTL8157 and RTL8159
+    adapters on Windows 7, 8 and 8.1.
+
+All free/non-free drivers are optional and installed only if you select
+them.
+
+### Disclaimer
+
+This is a fairly new driver. It may have bugs or edge cases that are not yet
+accounted for given the large xHCI/USB 3/4/TB specifications and the many
+host controller implementations and devices. **USB4/TB/NVMe features and the
+usb-wdm-free drivers are even more experimental, so use them at your own
+risk!**
+
+Appreciate all issue reports!
+
 ## 3.4.3.0 - 2026-11-10
 
 ### New

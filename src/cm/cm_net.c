@@ -1220,6 +1220,10 @@ ULONG CmNetQueryFill(PCM_NHI nhi)
     in.RingsFailed = net->Counters.RingsFailed;
     in.IrqKicks = net->Counters.IrqKicks;
     in.IrqState = CmRirqDataState(nhi);
+    /* The counter's numbers are CM_QN_KIND_*'s (record 21 4.5.12). */
+    in.IrqKind = (nhi->Rirq.Yield && nhi->Rirq.IrqMode == CM_RIRQ_MODE_LINE)
+                     ? CM_RIRQ_KIND_LINE_YIELD
+                     : nhi->Rirq.IrqMode;
     call = (BOOLEAN)(net->Cb.Stats != NULL && cmNetCbEnter(net, &cb, &ctx));
     KeReleaseSpinLock(&net->Lock, irql);
 

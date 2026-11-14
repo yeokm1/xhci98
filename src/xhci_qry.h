@@ -59,7 +59,8 @@
 #define XHQ_O_CTR_BYTES         28UL    /* as little-endian words, 0 below
                                            level 1 */
 #define XHQ_O_LOG_OFFSET        32UL    /* the log's text, oldest first; */
-#define XHQ_O_LOG_BYTES         36UL    /* 0 below level 2 and at level 4 */
+#define XHQ_O_LOG_BYTES         36UL    /* 0 below level 2 (and at level 4
+                                           from a driver before 3.5.0.0) */
 #define XHQ_O_PCI_OFFSET        40UL    /* configuration space 00h..FFh, */
 #define XHQ_O_PCI_BYTES         44UL    /* 256 when read, else 0 */
 #define XHQ_O_APPENDS           48UL    /* records the ring accepted */
@@ -124,12 +125,23 @@
                                            a record: the log starts at the
                                            next one */
 #define XHQ_F_WITHHELD          0x20UL  /* level 4: the ring holds kernel
-                                           addresses and is not served */
+                                           addresses. A driver before
+                                           3.5.0.0 sets it alone and serves
+                                           no log; from 3.5.0.0 it is set
+                                           with XHQ_F_ADDRESSES and the log
+                                           is served, so a reader before
+                                           3.5.0.0 still says it shows no
+                                           log rather than calling level 4
+                                           off */
 #define XHQ_F_STARTED           0x40UL  /* the controller is started */
 #define XHQ_F_FAILED            0x80UL  /* failed with no recovery coming:
                                            latched or contained, a
                                            terminal of XHQ_TERMINAL_LATCHED
                                            or more (roadmap-usb4 43.57) */
+#define XHQ_F_ADDRESSES         0x100UL /* from 3.5.0.0, level 4: the log is
+                                           served as at levels 2 and 3,
+                                           kernel addresses included (the
+                                           owner, 2026-11-13) */
 
 /* XHCI_TOL_TERMINAL_FAILURES (xhci_tol.h), which this header cannot
  * include for a tool; test_xhq holds the two equal. 1, a failure with a

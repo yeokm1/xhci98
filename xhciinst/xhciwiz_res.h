@@ -65,6 +65,8 @@
 #define IDC_C_FOLDER            1034    /* Change folder...               */
 #define IDC_S_PART              1035    /* a tab's next part              */
 #define IDC_C_PFW               1036    /* XHCIPFW.VXD or XHCIPFW.SYS     */
+#define IDC_C_TAKE              1037    /* the takeover (task 49.44)      */
+#define IDC_C_TAKE_T            1038
 /* The Thunderbolt and USB4 page's own (record 26 section 5.3.5); XHCIPFW,
  * Stor98 and S98VSD keep their ids there. */
 #define IDC_T_HEAD              1110

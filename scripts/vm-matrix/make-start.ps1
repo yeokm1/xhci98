@@ -75,16 +75,28 @@ function Wait-Line {
     return [bool]((Get-LegSerialLines $Serial) -match $Pattern)
 }
 
-# SetupElevated (Vista, 7): the setup must run elevated to create its logon
-# task, so it is typed into the Start menu's search box and started with
-# Ctrl+Shift+Enter, and the consent prompt answered (ConsentKey).
+# SetupElevated (Vista, 7, 10): the setup must run elevated to create its
+# logon task, so it is typed into the Start menu's search box and started
+# with Ctrl+Shift+Enter, and the consent prompt answered (ConsentKey).
+# SetupElevated 'run' (10): typed into the Run box instead, which takes
+# Ctrl+Shift+Enter there (10's Start search is slow to take keys under TCG);
+# the Run box runs a program, so the batch file goes through cmd /c.
+# ConsentSeconds: the wait for the consent prompt (default 8; 10 under TCG
+# draws it later).
 function Invoke-ElevatedBox {
     param([string]$Text)
+    $viaRun = ("$($g.SetupElevated)" -eq 'run')
     Send-QmpChord -Port $ports.Qmp -Chord 'esc' -Layout $layout; Start-Sleep -Seconds 2
-    Send-QmpChord -Port $ports.Qmp -Chord 'meta_l' -Layout $layout; Start-Sleep -Seconds 4
-    Send-QmpText -Port $ports.Qmp -Text $Text -Layout $layout; Start-Sleep -Seconds 3
-    Send-QmpChord -Port $ports.Qmp -Chord 'ctrl-shift-ret' -Layout $layout; Start-Sleep -Seconds 8
-    # ConsentKey: the consent prompt's Yes (7: Alt+Y) or Continue (Vista: Alt+C).
+    if ($viaRun) {
+        Send-QmpChord -Port $ports.Qmp -Chord 'meta_l-r' -Layout $layout; Start-Sleep -Seconds 8
+        Send-QmpText -Port $ports.Qmp -Text "cmd /c $Text" -Layout $layout; Start-Sleep -Seconds 3
+    } else {
+        Send-QmpChord -Port $ports.Qmp -Chord 'meta_l' -Layout $layout; Start-Sleep -Seconds 4
+        Send-QmpText -Port $ports.Qmp -Text $Text -Layout $layout; Start-Sleep -Seconds 3
+    }
+    $cs = 8; if ($g.ContainsKey('ConsentSeconds')) { $cs = [int]$g.ConsentSeconds }
+    Send-QmpChord -Port $ports.Qmp -Chord 'ctrl-shift-ret' -Layout $layout; Start-Sleep -Seconds $cs
+    # ConsentKey: the consent prompt's Yes (7, 10: Alt+Y) or Continue (Vista: Alt+C).
     $ck = 'alt-y'; if ($g.ContainsKey('ConsentKey') -and $g.ConsentKey) { $ck = $g.ConsentKey }
     Send-QmpChord -Port $ports.Qmp -Chord $ck -Layout $layout
 }
@@ -111,14 +123,18 @@ try {
             if (((Get-Date) - $t0).TotalSeconds -ge 90 -and (Test-ScreenSettled -QmpPort $ports.Qmp -Dir $dir)) { break }
         }
     } else {
-        $null = Wait-LegScreen -QmpPort $ports.Qmp -Dir $dir -Since $t0 -MinSeconds 60 -MaxSeconds $bootWait
+        # DesktopSeconds: the least time to the desktop. A still screen
+        # earlier is not it (10 under TCG keeps a black screen for minutes).
+        $dmin = 60; if ($g.ContainsKey('DesktopSeconds')) { $dmin = [int]$g.DesktopSeconds }
+        $null = Wait-LegScreen -QmpPort $ports.Qmp -Dir $dir -Since $t0 -MinSeconds $dmin -MaxSeconds ([math]::Max($bootWait, $dmin + 60))
     }
     Save-LegShot $ports.Qmp $dir 'prep-desktop'
     $ok = $false
     foreach ($L in $letters) {
         if ($g.ContainsKey('SetupElevated') -and $g.SetupElevated) { Invoke-ElevatedBox "$($L):\$setup $L" }
         else { Invoke-RunBox "$($L):\$setup $L" }
-        if (Wait-Line $serial '^XHLEG SETUP (OK|FAIL)' 60 $proc) { $ok = $true; break }
+        $sw0 = 60; if ($g.ContainsKey('SetupSeconds')) { $sw0 = [int]$g.SetupSeconds }
+        if (Wait-Line $serial '^XHLEG SETUP (OK|FAIL)' $sw0 $proc) { $ok = $true; break }
     }
     Save-LegShot $ports.Qmp $dir 'prep-setup'
     if (-not $ok -or -not ((Get-LegSerialLines $serial) -match '^XHLEG SETUP OK')) { throw "guest ${Guest}: XHSETUP did not report OK on COM1 (see $dir\prep-setup.png)" }

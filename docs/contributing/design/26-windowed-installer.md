@@ -1,6 +1,18 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 78, 2026-11-10 (the owner's decision of that day: 98 SE
+Status: draft 81, 2026-11-14 (the owner's decision of that day: the
+takeover row is not shown when every candidate is refused, the Windows
+disk behind each, section 5.3.10; record 23 revision 63);
+draft 80, 2026-11-13 (the owner's answers of that day: every
+takeover text says "manufacturer", and the warning gains a paragraph for a
+controller whose Windows disk cannot be placed, section 5.3.10; record 23
+revision 59);
+draft 79, 2026-11-13 (roadmap-usb4 task 49.44, the owner's
+decision of that day: the Components page's takeover box, unticked by
+default, for every controller another manufacturer's driver runs, section
+5.3.10, section 5.3.1 case 6 and the rows of section 5.3.4; record 23
+revision 58);
+draft 78, 2026-11-10 (the owner's decision of that day: 98 SE
 and ME restart at the finish as every other system does, after a Stor98
 update and after the storage drivers' copy with a UAS devnode at Code 2
 too, the shut-down choice and final lines and their Help topic retired,
@@ -1476,6 +1488,7 @@ words):
 | 3a | the USB drivers ticked on 8 or 8.1 | **From draft 75 (owner, 2026-11-04), on 8, 8.1 and 10:** `xhciuas.inf` is neither staged nor installed and the UAS box is unticked and greyed (`inst_uas_here`); a UAS disk is Windows' own `UASPStor`'s, through the bus's `0x602` client contract (design record 13 sections 6.12.10, 6.13 and 6.13.9); a devnode an earlier release bound to `xhciuas` there is neither updated nor removed by an update, and the uninstall still removes the whole package; the warning's last sentences read "UAS disks use Windows' own UAS driver." (`INST_CW_USB8`); the staging, `INST_ACT_WINDOWS` and the kept-current clauses of the rest of this row are history. Until draft 75: `xhci98.sys` installed through the NT route of record 23 section 5 (`Xhci.Dev6`), taking roadmap task 43.29's row, and, with its box, `xhciuas.inf` staged but forced onto no device (owner, 2026-10-22, draft 27; record 13 section 6.13.9 on the `p43-29` branch: the bus answers Windows 8's own client contract, so Windows' own `uaspstor.sys` stays the default for a UAS disk, unless the package's test certificate is trusted, when Windows may rank the trusted-signed `xhciuas.inf` above it, as the 3.2.0.0 matrix read on 8.1 x64): a UAS disk with no driver is left for Windows to bind (`INST_ACT_WINDOWS`, "left for Windows' own UAS driver", `inst_uas_nt6_action`), one on another driver stays foreign, and one already on `xhciuas` (the user's own pick in Device Manager) is kept current as on 2000 to 7; the staged INF is what Device Manager then offers; and, the one narrow exception to record 23 decision D3 (amended, revision 26), a controller whose service is Windows' own `USBXHCI` is not "another driver" here: with the box ticked it is planned as an install and installed with `INSTALLFLAG_FORCE` (Windows' signed in-box driver otherwise outranks this package's INF), as the user chose; every other vendor's driver on a controller stays foreign and left, as before; such a controller is this package's from then on, and the uninstall removes its devnode and rescans (record 23 section 9.2), after which Windows is expected to bind `usbxhci.sys` again (43.29's "the controller given back", unread until 43.31) | "The xHCI98 USB drivers have not been tested on Windows 8 or 8.1. They replace Windows' own USB 3 driver on every xHCI controller, the one your keyboard and mouse may use included. The uninstall is meant to give the controllers back to Windows' own driver; that has not been tested either. There the UAS disk driver, when ticked, is staged: Windows keeps its own UAS driver unless this package's test certificate is trusted, when Windows may choose xhciuas.sys; either can be chosen for a disk in Device Manager." |
 | 3b | Stor98 ticked on 8 or 8.1 | the bundled Stor98 on tunnel drives as on 2000 to 7 (section 6.3), taking roadmap task 43.23's installer row; the same narrow exception as 3a for Windows' own NVMe driver: on 8.1 a tunnel drive whose service is `stornvme` is installed over with `INSTALLFLAG_FORCE` when the box is ticked, and becomes Stor98's by section 6.3's record (its first binding by this installer); the replacement goes through section 6.3's reconnection rules as an update of a drive Stor98 runs does - the tunnel may be torn down and brought back when the drive's driver changes (the connection manager's child filter sees the removal whatever storage driver ran), so a drive gone after its job is "installed, awaiting reconnection", its read-back deferred to the reconnection (`s98_reconnect_nt`, which then admits a baseline of `stornvme` beside Stor98's own), and its ownership recorded when it is read back running Stor98; because that read-back may come only in a later run (a skipped or timed-out reconnection wait, a run cut short), the drive's id is written under the `Stor98` record's `Pending` subkey with the data `attempt` before its job starts, rewritten `done` once the install call returns success for it, and deleted when the call fails or is cancelled; every later install run and the uninstall resolve each pending id first: a `done` drive read back running Stor98 moves to the record's devices as this installer's (its first binding, evidenced by the call's success); a `done` drive not present stays pending, and the uninstall takes it when its `Enum` entry names Stor98; an `attempt` drive (a run cut short during the call, its outcome unknown) is never taken: read back running Stor98, its value is kept as `unknown`, a durable exclusion that the uninstall's adoption of tunnel drives (section 6.3) honours too, so that Stor98 stays as anyone's; the `attempt` value must be written before the call is made, and a write that fails leaves the drive's group unchanged; a `done` value moves to the devices only once the devices' value is written; a drive read back running another driver, or gone with no `Enum` entry, has its pending value deleted; an internal drive, and a drive another vendor's driver runs, are left as before; the uninstall removes Stor98 from it and rescans, Windows then expected to bind `stornvme` again, unread until 43.24, whose legs gain the `stornvme` replacement, its reconnection, a replug, and the wait skipped, timed out and cut short with the next run and the uninstall resolving the pending drive | "Stor98 has not been tested on Windows 8 or 8.1. If a drive behind a Thunderbolt or USB4 tunnel uses Windows' own NVMe driver, this choice replaces it." |
 | 5 | a package without the connection manager on 8 or 8.1 (owner, 2026-10-22, in place of draft 20's refusal) | the run goes on with what the package has: the USB drivers' box, tickable and unticked by default (case 3a's warning when ticked), and the tools; Stor98, a child of the Thunderbolt support, is not in the run; with nothing ticked the run installs the tools alone | "This package carries no Thunderbolt 3 / USB4 driver. On Windows 8 and 8.1 it installs only what is ticked: the xHCI98 tools, and the xHCI98 USB drivers if their box is ticked." |
+| 6 | the takeover box ticked (task 49.44, the owner, 2026-11-13; record 23 section 5.4.2, section 5.3.10) | every xHCI controller another manufacturer's driver runs, on 2000 to 10 (on 8, 8.1 and 10 with the USB drivers ticked; Windows' own `USBXHCI` stays case 3a's), replaced one at a time unless the disk Windows starts from is below it; the takeover stops at the first that fails | "Another manufacturer's driver runs one or more USB 3 controllers here. If ticked, Setup replaces it with xHCI98 on each of them, one at a time, and stops at the first that fails. USB keyboards and mice on them stop working while each restarts, and on 32-bit Vista and 7 until Windows restarts. Have a keyboard/mouse that uses alternative connections like PS/2. A filter driver that manufacturer left on a controller is not removed and stays loaded with xHCI98. Uninstalling gives the controllers back to that driver while Windows still has it; Windows Update or the manufacturer's software may also put it back." |
 
 Case 3's defaults: on 8 and 8.1 both boxes are shown unticked, as the
 USB drivers' box was; Stor98's box, which elsewhere is ticked with the
@@ -1902,6 +1915,7 @@ its sentence:
 |---|---|---|---|
 | USB drivers | `IDC_C_DRIVERS` (8) | `IDC_C_DRIVERS_T` (20) | always; the sentence not on 98 SE (the storage row's layout, section 5.3.1) |
 | UAS | `IDC_C_UAS` (20) | `IDC_C_UAS_T` (32) | always |
+| Takeover | `IDC_C_TAKE` (20) | `IDC_C_TAKE_T` (32) | when another manufacturer's driver runs a controller, not on 98 SE and ME (section 5.3.10) |
 | USB storage | `IDC_C_STOR` (8) | `IDC_C_STOR_T` (20) | 98 SE alone |
 | Thunderbolt 3 / USB4 | `IDC_C_TB` (8) | `IDC_C_TB_T` (20) | always |
 | XHCIPFW | `IDC_C_PFW` (20) | - | where offered (section 5.3, its row) |
@@ -2511,6 +2525,56 @@ console's line over installed USB drivers reads "Setup updates the xHCI98
 USB drivers already running here (/cmonly leaves them as they are)."
 (the owner's words).
 
+#### 5.3.10 Another manufacturer's driver on a controller: the takeover box (task 49.44; draft 79)
+
+Record 23 section 5.4.2 is the design; this is its window (owner,
+2026-11-13: one box, unticked by default, for every controller another
+manufacturer's driver runs).
+
+**The row.** A box and its sentence directly below the UAS row, at the UAS
+row's indents (`IDC_C_TAKE` at 20, `IDC_C_TAKE_T` at 32), a child of the
+USB drivers' box as the UAS box is: shown only when the reading found at
+least one candidate (record 23 section 5.4.2, `inst_take_candidate`) that
+the box would replace (draft 81: with every candidate's Windows disk behind
+it the row is not shown, `inst_take_said`; the count still every candidate) and
+the system is not 98 SE or ME; unticked at the start of every run; open
+only while the USB drivers' box is ticked, unticked and greyed with it,
+its own state back when they are ticked again. Where no candidate was
+found the row is not shown and the page is laid out as before (section
+5.3.4).
+
+**The words** (each within its control's width at 96 and 120 DPI and at
+640x480, with no scroll bar, the owner's rule of 2026-10-25):
+
+- The box: "Replace another manufacturer's driver on 1 USB 3 controller", or
+  "Replace another manufacturer's driver on <N> USB 3 controllers".
+- The sentence, for one: "It runs <service> now. If unticked, Setup leaves
+  it as it is."; for several: "They run <service> now. If unticked, Setup
+  leaves them as they are.", where <service> is the one service when all
+  run the same, and otherwise "other drivers".
+
+**The warning** on Next from the Components page with the box ticked:
+record 23 section 5.4.2's paragraph, in section 5.3.1's message box with
+the other warnings, after the USB drivers' own (case 3a) where both apply,
+followed by record 23 section 5.4.2's one paragraph naming the controllers
+whose Windows disk Setup cannot place (draft 80).
+
+**What was found, and the Summary.** The Welcome page's device list is
+the reading's plan, the choice off: a candidate's action reads "Skip
+(other driver)" there, as before. The Summary's "Devices:" list is the
+plan for the boxes as ticked, so with the box ticked a candidate reads
+"Replace other driver" or one of record 23 section 5.4.2's refusal rows.
+The Summary repeats the warning's first sentence, as section 5.3.1 does.
+
+**The Help** (the Components page's topic, after the UAS paragraph):
+"Replace another manufacturer's driver on USB 3 controllers: shown when another
+manufacturer's driver runs a USB 3 controller. Ticked, xHCI98 replaces it there,
+one controller at a time; uninstalling gives the controller back."
+
+**The self-test** (`/selftest`'s Components layouts): the page with the
+row and without it, the box's longest form (<N> of two digits) and the
+sentence's longest service name, each at 96 and 120 DPI and at 640x480.
+
 ### 5.4 The USB settings
 
 The values of record 23 section 8.1 whose "Asked when" holds for this
@@ -2557,6 +2621,14 @@ controller's value listed under it, preselected and writing nothing;
 choosing a value replaces the mixed state and writes the machine-wide
 value, which then rules both (the console's "Enter for [each keeps its
 own]", record 23 section 8.3, as a page).
+
+*One proposal* (roadmap-usb4 task 49.47; owner, 2026-11-14):
+`XhciIntelPortSwitch`'s row is preselected with 1, its default shown as
+1, at a first install on a board with a listed controller (design record
+16 section 19), and Next with nothing touched writes 1 machine-wide once
+the run has installed a listed controller (after the results check;
+nothing when that install is refused, fails or is cancelled); 0 chosen
+there is written as any choice is. Elsewhere the row is as above.
 
 **"Advanced..."** opens a dialog with the values record 23 never asks
 (`XhciPollFineTimer`, `XhciSelectiveSuspend`, `XhciFastPollFsLs` (owner,
@@ -2816,6 +2888,34 @@ On the Thunderbolt tab `XhciCmRingInterrupt` comes first, with
   per-controller defaults are the point.
 
 `/set` still refuses each of these by name, as before.
+
+*Since task 49.38* (the owner's answer of 2026-11-12: "Setup grows
+too") every one of them, and every other value a driver reads but the
+few record 25 section 22 item 18 lists, is a row of this table, never
+asked: the Advanced dialog lists them under a header row per group
+(`INST_VALUE.Group`; the dialog's list scrolls at 640 by 480 as it did,
+the header rows select nothing and say "Select a setting."), `/set` takes
+them, the run's report lists them as it lists every row, and the
+uninstall deletes every one from `Services\USB` by name, whichever tool
+set it (the owner's answer Q6). `XhciCmTunnelBridge` is the table's text
+row (`INST_VK_TEXT`): the dialog's box takes text for it, `/set
+XhciCmTunnelBridge=<text>` takes what the driver reads, and it is
+written machine-wide as REG_SZ. A UAS drive's two values are rows the
+xHCI98 USB Tree alone handles (`INST_LOC_DRIVE`): Setup lists, writes and
+removes neither, and its `/set` refuses them. The rule of section 5.4
+that an installer offers no value nobody should set from one is so
+replaced: the cautions say what each risky value does.
+
+`XhciEventRingTrbs` (the owner's final decision of 2026-11-12) is a
+range row of two picks (`INST_VALUE.Picks`: 256 and 1024, `Choice[k]`
+the k-th pick's text): `inst_value_in_range` takes those two alone, the
+range text is "256 or 1024", Setup's box takes the number and the
+xHCI98 USB Tree lists the two with their texts. The driver takes a
+DWORD of 256 as the smaller ring and any other value as the larger, and
+the Tree's reading says so (`TRS_EFF_RING`); a controller older than
+xHCI 1.0 always uses 256, which the report's event ring line shows. The
+INFs write 256 (no-clobber), an update keeps what is there, and the
+uninstall deletes it from `Services\USB` with the table's rows.
 
 *A range with a step.* `XhciMaxTransferKB` is a multiple of 4: the
 driver takes any other number as its default (task 36.22,
@@ -3761,6 +3861,15 @@ so its copy goes to `%SystemRoot%\system32` and is registered from
 there, stopped before it is replaced or removed, and removed with the
 marks it wrote (section 9.3); the install directory's move does not
 concern it. Never on 98 SE or ME.
+
+Every install, update or uninstall run on NT that changes a driver holds
+the service's poll from before its first change to its end (record 21
+section 7.8.4, task 49.26): the hold event `Global\Xhci98MarkHold`, kept
+open to the run's end, and a barrier on the service's idle event and its
+acknowledgement of the run's own number (`HoldRun`, `HoldAck`) for a
+service that knows the hold; a service that does not (an earlier
+release's) is stopped for the run and started again at its end; a run
+that can do neither is refused before any change.
 
 ### 6.3 Stor98, only when ticked
 
@@ -5066,11 +5175,26 @@ unchanged). The packager's `SHA256.TXT`: one line `<sha256, lower case>  <path>`
 the folder, the path relative to `USBDRV\NONFREE\` with `/`, the lines in
 ordinal order of the path, ASCII, CRLF line ends. The pack's `nusb33/` is
 not in it and is not duplicated there (owner, 2026-10-22). The pin
-(`package-common.ps1`): the tag `v1.3.0`, its commit
-`d2f7a26987fb9e074f6c5c4e974b6cad80c96c46`, and the SHA-256 of the pack's `SHA256.TXT` blob
-there, `adf5ab70cb6bbf52ced63038f5f327cd1e2e466d71cdec61354537f0e75888f7`; the generated `USBDRV\NONFREE\SHA256.TXT`
-of that pin, `wifi/` left out, hashes to `f6b23081eeb2cc7a4b5f5a634e5fd13e9f9a3addf4b06bea87b1f193b364950f`, which the
-installer carries (`INST_NONFREE_SUMS`). `v1.3.0` adds
+(`package-common.ps1`): the tag `v1.4.0`, its commit
+`5ba92a162d331b965f9d2f4d56c4dd0d663b1fe2`, and the SHA-256 of the pack's `SHA256.TXT` blob
+there, `b4b0f51543e69ae491ab623b2c10cf577980258e9ff791956d4a90f850a9960a`; the generated `USBDRV\NONFREE\SHA256.TXT`
+of that pin, `wifi/` left out, hashes to `674bafde7ba8f7fe6855e19e3c8e2bb26d33ba4f0b9e10e1d9cff6abfbdde062`, which the
+installer carries (`INST_NONFREE_SUMS`). The tag was moved on 2026-11-14 to
+that commit, which differs from the one it named before
+(`2b337733b66c803faaf477fe3828d818f7724c72`, whose folder hashed to
+`eac5268a0d9040d7958d5b7ae93edef738822989ba76979437e42bfa54fd5c3c`) only in a
+sentence of the pack's `README.md`; the pack's `SHA256.TXT`, `non-free/`,
+`NOTICE.md` and `STAGE.TXT` are the same bytes at both. `v1.4.0` (`3.5.0.0`; task 49.3; owner,
+2026-11-11; tagged 2026-11-11) adds `ethernet/rtl8157/`, Realtek's 7 and 8
+INFs with six commented-out lines enabled for the RTL8157 and RTL8159 beside
+Realtek's unchanged files, so unsigned, and `ethernet/rtl815x/w8/`, Realtek's
+8.68.20 for 8 and 8.1 unchanged, both `COPY` lines alone (the pack's new
+`W8` and `W8X64` tokens appear on `COPY` lines only), so nothing of them is
+staged on any Windows and neither has a box; the installer's table gains the
+`rtl8157` row, a `DEVICE` row under Network ("USB Ethernet (rtl8157):
+adapters with a Realtek RTL8157 or RTL8159 chip"). `3.4.2.0` and `3.4.3.0`
+pinned `v1.3.0` (commit `d2f7a26987fb9e074f6c5c4e974b6cad80c96c46`, the
+pack's `SHA256.TXT` `adf5ab70...`, the folder's `f6b23081...`), which added
 `smartcard/usbccid/`, Microsoft's USB CCID smart card reader driver for
 2000 and XP, copy only (owner, 2026-11-07 and 2026-11-08; roadmap-usb4
 task 47.42; tagged 2026-11-08), and the installer's table its row, a `CLASS` row under
@@ -5094,7 +5218,9 @@ this repository (the pin `scripts\package\wdmfree-pin.txt`: the tag, its
 commit, one `Package:` line per qualifying package with the systems its
 legs passed on, and one `SHA256:` line per file, the release's `LICENSE`,
 `NOTICE.md` and `STAGE.TXT` among them), and that release's `LICENSE`
-(GPL-2.0) and `NOTICE.md`; beside them a `STAGE.TXT` (a fixed header and
+(GPL-2.0) and `NOTICE.md`, and from `v0.1.10` its `LICENSE-docs.md` (the
+licence of its Markdown files, CC BY 4.0, which its `LICENSE` names;
+owner, 2026-11-11); beside them a `STAGE.TXT` (a fixed header and
 then the release's own lines for the qualifying packages' INFs, verbatim,
 in the pack's format below), a `READ.TXT` the packager writes from the
 pin (a fixed header, then one line `<class>/<package> | <systems>` per
@@ -5598,6 +5724,12 @@ the install, and nothing here removes a driver Windows installed (record
   the user types the folder, which the Finish page lists. Whether a
   `SourcePath` the installer sets could spare that, and at what cost to
   the other installs, is owed.
+  Read again with usb-wdm-free `v0.1.10`'s provisional tree (task 49.3,
+  2026-11-11): the prompt is the staging's, not an INF's: `uac1`, now
+  copy-only, installed on 98 SE from the hardware wizard pointed at
+  its folder with no prompt, the setup engine then taking the files
+  from that folder. For the staged `uac2` and `usbmidi` it stays
+  owed.
 - The free set's rows cannot be read until a usb-wdm-free release with a
   `STAGE.TXT` qualifies; until then they are read only with stand-ins
   (`test-package.ps1`).
@@ -5752,7 +5884,7 @@ COEXISTS | <set>:<class>/<package> | <set>:<class>/<package> | <systems> | <why>
   first to choose new ones."); the copy boxes stay open.
 
 Until a set's pinned release carries `PACKAGE` lines (neither does today:
-`usb-wdm-nonfree` `v1.0.0`, from `3.3.0.0` `v1.1.0`, from `3.4.1.0` `v1.2.0`, and from `3.4.2.0` `v1.3.0`, is pinned by its hash, and `usb-wdm-free` has
+`usb-wdm-nonfree` `v1.0.0`, from `3.3.0.0` `v1.1.0`, from `3.4.1.0` `v1.2.0`, from `3.4.2.0` `v1.3.0`, and from `3.5.0.0` `v1.4.0`, is pinned by its hash, and `usb-wdm-free` has
 no release), the installer's own table supplies them
 (`instOtherPkgs`, `inst_core.c`: id, kind, heading, description, and the
 exclusions), and the cut holds the table to the pinned `STAGE.TXT`:
@@ -6148,11 +6280,15 @@ publishes at the top as `usb-wdm-free-test.cer`): `E6A2749B...` is
 itself signed with SHA-256, which 64-bit Windows 7 without Microsoft's
 SHA-2 code-signing update refuses (Code Integrity event 3004), as
 64-bit Vista does, so every x64 image of `v0.1.9` is signed with the
-new certificate (owner, 2026-11-06). The pin is `v0.1.9` at
+new certificate (owner, 2026-11-06). The pin was `v0.1.9` at
 `43f21be24b230b801038932652cd683ecfb04b60` (tagged 2026-11-08), its
 `USBDRV\FREE\SHA256.TXT` hashing to
 `553C5CA44F5C7AFB050A7AF2AFC5719F7881CB7501BAE477066E7E6711F09E80`
-(`INST_WDMFREE_SUMS`). Nothing in the installer
+(`INST_WDMFREE_SUMS`). For `3.5.0.0` it is `v0.1.10` (task 49.3), with
+the same certificate, at `0b19f5a22c5daaaef7cd9a9bfe77b79b9da7c1b1`
+(tagged 2026-11-11; the tag moved on 2026-11-14 to this commit, which adds
+only the changelog entries of its README), its `SHA256.TXT` hashing to
+`509A46B852E0092F7E527DB6464F526A7913F1B3D18FA0023E5E1EE8FB05CA5E`. Nothing in the installer
 names a thumbprint: it reads the certificate from the set's folder.
 With a `Tag:` line, the `Certificate:` line
 and the `SHA256:` line of `usb-wdm-free-test.cer` at the release's top go
@@ -6852,6 +6988,12 @@ the two are kept apart by the device installer's ranking of a hardware id
 over a class id, not by disjoint ids. So the cut refused it ("free:audio/uac1
 is a CLASS package, whose INF does not show which devices its class line
 takes"), read over the staged `v0.1.9` tree on 2026-11-08.
+
+From `v0.1.10` (task 49.3) `uac1` is a `COPY` line on 98 SE (the owner,
+2026-11-09: it is for testing 98 SE in a virtual machine), so the free
+page offers no box for it and `/wdmfree:stage=audio/uac1` is refused
+with the set's reason (section 6.7.12); the two relation lines stay as
+they are, and the rule below still admits them.
 
 **The rule.** What section 6.7.14 guards is an earlier run's staging:
 the installer holds a relationship against what an earlier run staged,

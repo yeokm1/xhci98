@@ -336,6 +336,44 @@ VOID XhciInjTransferEvent(XHCI_TRB *ev, ULONG pa, ULONG residual, ULONG cc,
                   XHCI_TRB_EP_ID(dci) | XHCI_TRB_SLOT_ID(slot);
 }
 
+ULONG XhciInjResetHoldMs(ULONG arg)
+{
+    if (arg == XHCI_INJ_ARG_FOREVER) {
+        return 0xFFFFFFFFUL;
+    }
+    return arg * 10UL;
+}
+
+ULONG XhciInjResetHeld(ULONG holdMs, ULONG elapsedMs)
+{
+    if (holdMs == 0xFFFFFFFFUL) {
+        return 1;
+    }
+    return (elapsedMs < holdMs) ? 1UL : 0UL;
+}
+
+ULONG XhciInjResetAnswer(ULONG opOffset, ULONG value, ULONG held, ULONG cnr)
+{
+    if (!held || value == 0xFFFFFFFFUL) {
+        return value;
+    }
+    if (!cnr && opOffset == XHCI_OP_USBCMD) {
+        return value | XHCI_USBCMD_HCRST;
+    }
+    if (cnr && opOffset == XHCI_OP_USBSTS) {
+        return value | XHCI_USBSTS_CNR;
+    }
+    return value;
+}
+
+VOID XhciInjHostControllerEvent(XHCI_TRB *ev, ULONG cc)
+{
+    ev->Param0 = 0;
+    ev->Param1 = 0;
+    ev->Status = (cc & 0xFFUL) << 24;
+    ev->Control = XHCI_TRB_TYPE(XHCI_TRB_TYPE_HOST_CONTROLLER);
+}
+
 VOID XhciInjEpClear(PXHCI_INJ_EP e)
 {
     XhciInjEpEnd(e);

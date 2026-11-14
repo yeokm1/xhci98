@@ -860,6 +860,122 @@ lacks them, is record 25 section 6.6.
   only as section 7.2 says, and never with a flag that skips the query), no
   `DIF_REMOVE`.
 
+### 7.6 A drive the BIOS holds (98 SE and ME)
+
+The owner's decision of 2026-11-12. An NVMe enclosure plugged in before
+power-on is set up by the BIOS. Stor98 leaves such a controller to it
+(Code 10), and Windows 98 then uses the disk through the BIOS, in MS-DOS
+compatibility mode, with no devnode of its own under the tunnel. A stop
+of the unit closed the PCIe tunnel under that disk, and the next write
+gave Windows' "Disk Write Error". So on 98 SE and ME both tools refuse
+the stop when a member of the unit, or of any other unit behind the same
+tunnel port (stopping one can close the tunnel they share):
+- has class 010802 (an NVMe function);
+- is at Code 10 in this boot's walk;
+- has a memory base this boot (its allocated configuration, else its boot
+  configuration) that equals the memory range of one of Stor98's find
+  reports (its "range Lo:Hi", the range the port gave the devnode, which
+  the found function matched; the report's "bars" are the port's own
+  slot's, which a scan may have gone past).
+
+That find report must say " left: already set up" (or one of its two ME
+forms). Its "found" function must equal its own name's. The reports are
+the REG_SZ values `StorFind <bus>.<dev>.<fn>` (decimal) of
+`HKLM\System\CurrentControlSet\Services\stor98` (`PlatFindReport`,
+src\stor98\src\platform.c); the tools only read them.
+
+The match is by that range, not by bus, device and function. Those are
+not known for a function behind a bridge on 98 (section 4.2), and the
+range is this boot's address. Every report is read to the end (Stor98
+keeps one for each function it ever found), so an old one never hides a
+later match. The pure rule is `inst_bios_held` and
+`inst_storfind_parse` (inst_core.c), with host vectors in
+test\test_inst.c.
+
+The checks are made at four points:
+- XHCITR's window and tray, before the confirmation;
+- XHCITR again on the stop's fresh walk (`ej_run`);
+- XHCITR /eject, the command line and the elevated run;
+- Setup's console /eject, before the question and again after the
+  revalidation.
+
+The window says "A drive behind this port runs through the BIOS (MS-DOS
+compatibility mode) and cannot be stopped safely. Shut Windows down before
+you unplug it." The command lines say "Not stopped: a drive behind it runs
+through the BIOS (MS-DOS compatibility mode). Shut Windows down before you
+unplug it." and exit 1. Safely Remove stays offered for such a unit, so
+the reason is shown when it is chosen.
+
+At each point the check is read before every other reason the unit
+cannot be stopped, "not started" included (the owner's decision of
+2026-11-13, `tr_eject_first`). A unit that is itself the NVMe function at
+Code 10 (an enclosure with no switch, as the emulator's plain and ASM2464
+models behind the SHPC bridge) is refused with these texts, or the
+cannot-tell ones below, not with "not started - problem code 10"; the
+window's Safely Remove and the tray's item are offered for it so that the
+reason is shown. A unit at Code 10 whose verdict lets the stop go on keeps
+the "not started" refusal. Setup's console /eject already made the check
+first. Before this order, on ME (the guest leg of 2026-11-13), Setup
+refused a BIOS-held plain enclosure with the command-line text while
+XHCITR /eject said "not started - problem code 10".
+
+Taken, no answer, command not restored, unreadable, no report, another
+range or a member not at Code 10 go on as before. A Code 10 with no matching
+report neither refuses nor warns.
+
+The check fails closed (the merge review of 2026-11-13). When an NVMe
+function at Code 10 is behind the port, only a check that ran to the end
+and found no matching report lets the stop go on. Each failure falls on
+the refusing side, with its own text:
+- the memory of such a function not read (no call, a configuration or a
+  descriptor that did not read, none at all, or more than the list holds);
+- Stor98's key there but not opened;
+- the list of its values not read to the end;
+- a value that did not read whole (ERROR_MORE_DATA or another error);
+- a function's report that is not REG_SZ, has no state Stor98 writes
+  (missing or cut short), no found function or no range, or names another
+  function than its own.
+
+The window then says "The xHCI98 USB Tree could not tell whether a drive
+behind this port runs through the BIOS (MS-DOS compatibility mode), so it
+is not stopped. Shut Windows down before you unplug it." The command lines
+say "Not stopped: it could not be told whether a drive behind it runs
+through the BIOS (MS-DOS compatibility mode). Shut Windows down before you
+unplug it.", exit 1. Stor98's key absent (`ERROR_FILE_NOT_FOUND`: Stor98
+not installed, so no Code 10 of its making) goes on: a machine without
+Stor98 is never refused. The pure verdict is `inst_bios_verdict`, and
+`inst_storfind_report` classifies each value.
+
+Every NVMe function at Code 10 behind the port also needs a report of its
+own, whatever it says: a "StorFind b.d.f" value whose range is one of
+that function's memory bases (`inst_storfind_base`,
+`inst_bios_verdict2`). With Stor98's key there, a function with none
+refuses with the cannot-tell texts (the merge review of 2026-11-13).
+Stor98 writes that report on every outcome of its find once it has found
+the function: taken, left (each form), and an adapter that then failed.
+It writes none for a function it did not find, which is only the last
+find, "StorFind ... found none". So no report of its own means one of
+these, each with the function already at Code 10:
+- Stor98 did not find the function (its range matched no NVMe function);
+- another driver, or none, holds the function while Stor98 is installed;
+- Stor98's registry write failed (`PlatFindReport` ignores the result).
+
+None is ordinary use: a Thunderbolt NVMe drive that works has no Code 10
+and is not checked. A user is refused wrongly only when such a drive is
+already failing and the BIOS does not hold it.
+
+What is left open:
+- A report does not say which boot wrote it. Its range is the address
+  the BIOS or Windows gave the function, which repeats from boot to boot
+  on the same hardware. So an earlier boot's "taken" report stands for a
+  function whose report Stor98 failed to write this boot (a failed
+  registry write at boot), and the stop goes on. Telling them apart would
+  need Stor98 to stamp its reports with the boot, which is for Stor98's
+  own maintainers to decide.
+- A report from an earlier boot that says the BIOS had the controller, at
+  the same range, for a member at Code 10 for another reason, refuses a
+  stop it need not refuse (the safe side).
+
 ## 8. The command line and exit codes
 
 ### 8.1 Switches

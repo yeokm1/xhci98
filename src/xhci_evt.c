@@ -268,6 +268,14 @@ static ULONG xhciHandleEvent(PXHCI_EXTENSION ext, const XHCI_TRB *trb)
          */
         ext->LastHostControllerCode = XHCI_TRB_GET_COMPLETION(trb->Status);
         ext->HostControllerEventResets++;
+        /* Task 49.35: recorded in a release build, the code with it - a
+         * controller failed by this event once said nothing of why. The
+         * first four of a start are noted; the counters carry the rest. */
+        ext->Tol.Stats.HcEvents++;
+        ext->Tol.Stats.HcEventCode = ext->LastHostControllerCode;
+        if (ext->Tol.Stats.HcEvents <= XHCI_NOTE_ESCALATIONS) {
+            XhciLogNoteLocked(ext, "evt.hc", ext->LastHostControllerCode);
+        }
         XHCI_DBG_VALUE_CHANGED("event: HOST CONTROLLER EVENT, completion code",
                                ext->LastHostControllerCode);
         return 1;
@@ -992,9 +1000,19 @@ static ULONG xhciEventDrain(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts,
      * bare read-modify-write here, whose all-ones read looked like "already
      * armed" - the worst available reading of that value.
      */
-    if (enableInterrupts && (ext->Flags & XHCI_EXT_FLAG_INTERRUPTS) != 0) {
+    /* Mode 4's removal bar (src/xhci.h, IntrBarred) under this same lock:
+     * a drain that sampled its argument before the removal rearms nothing
+     * after it. */
+    if (enableInterrupts && (ext->Flags & XHCI_EXT_FLAG_INTERRUPTS) != 0 &&
+        !ext->IntrBarred) {
         if (!XhciRearmInterrupter(ext)) {
             ext->RearmEscalations++;
+            /* Task 49.35: the escalation recorded, with IMAN as last read. */
+            ext->Tol.Stats.RearmFails++;
+            if (ext->Tol.Stats.RearmFails <= XHCI_NOTE_ESCALATIONS) {
+                XhciLogNoteLocked(ext, "evt.rearm.failed",
+                                  XhciReadIr0(ext, XHCI_IR_IMAN));
+            }
             resetRequested = 1;
         }
     }
@@ -1137,6 +1155,13 @@ VOID XhciEnableInterrupts(PXHCI_EXTENSION ext)
      * value read before quiesce cleared it.
      */
     XhciControllerLockAcquire(ext, &oldIrql);
+    /* Mode 4's removal bar refuses before the request is recorded: a
+     * removed controller has no resume to keep it for, and a recorded
+     * request would let a late drain rearm. */
+    if (ext->IntrBarred) {
+        XhciControllerLockRelease(ext, oldIrql);
+        return;
+    }
     ext->Flags |= XHCI_EXT_FLAG_INTERRUPTS;
     if (ext->ControllerFailed ||
         (ext->Flags & XHCI_EXT_FLAG_INITIALIZED) == 0) {
@@ -1185,6 +1210,11 @@ VOID XhciEnableInterrupts(PXHCI_EXTENSION ext)
      */
     if (!unmasked) {
         ext->UnmaskEscalations++;
+        /* Task 49.35: recorded in a release build. */
+        ext->Tol.Stats.MaskFails++;
+        if (ext->Tol.Stats.MaskFails <= XHCI_NOTE_ESCALATIONS) {
+            XhciLogNote(ext, "intr.unmask.failed", ext->UnmaskEscalations);
+        }
         XHCI_DBG_TEXT("EnableInterrupts: enables could not be restored - "
                       "requesting a controller reset");
         XhciRequestControllerReset(ext);
@@ -1281,6 +1311,11 @@ VOID XhciDisableInterrupts(PXHCI_EXTENSION ext)
      */
     if (!suppressed) {
         ext->MaskEscalations++;
+        /* Task 49.35: recorded in a release build. */
+        ext->Tol.Stats.MaskFails++;
+        if (ext->Tol.Stats.MaskFails <= XHCI_NOTE_ESCALATIONS) {
+            XhciLogNote(ext, "intr.mask.unproven", ext->MaskEscalations);
+        }
         XHCI_DBG_TEXT("DisableInterrupts: delivery is not proven suppressed and "
                       "usbport is about to stop calling the ISR");
         XhciRequestControllerReset(ext);

@@ -1,9 +1,12 @@
 # Issue 26 - A SMART read of a UAS flash drive left its endpoint paused for good: timeouts, a lost volume, a freeze
 
-Status: **fixed for `3.4.2.0`** (commits `d5dc1407`, `0e0488be` and
-`a90afe96` on branch `w47-uasx`), reviewed; **not yet read on the
-reporter's machine.** Why the controller restarted the endpoint against the
-driver's stop is not known.
+Status: **fixed in part for `3.4.2.0`** (commits `d5dc1407`, `0e0488be`
+and `a90afe96` on branch `w47-uasx`), reviewed. **Read on the reporter's
+machine with `3.4.3.0` on 2026-11-12: the hang came back** by another way
+(section 8), and `3.5.0.0` adds the fixes of section 8.2 (task 49.39). Why
+the controller restarts the endpoint, and where the stream's dequeue then
+is, are not known. A second report of the same drive model on an AMD
+500-series chipset controller (2026-11-13) is noted in section 9.
 
 **Scope.** A UAS drive running with streams under `xhciuas.sys`, which is
 Windows 98 SE to 7 (on 8, 8.1 and 10 Windows' own UAS driver serves it). The
@@ -176,6 +179,161 @@ Read in `external/linux` at the pinned commit (`c6859eed`):
   that is neither strands the endpoint as surely as a hang.
 - **A command the driver logs is a command a user can report.** Counters
   showed that something failed; they could not show what.
+
+## 8. The hang again on 3.4.3.0 (2026-11-12)
+
+The reporter read `3.4.3.0`, which carries section 5's fix, on the same
+machine: the same drive (`0781:55A9`, serial form) on the same Intel 7
+Series controller (`8086:1E31`, root port 8, slot 2, UAS with four streams),
+HWMonitor 1.62 started from the drive itself with its SMART reading on.
+HWMonitor reported "L:\Tools\Monitoring is not accessible. The semaphore
+timeout period has expired" and showed the drive as full; Windows was shut
+down from the Start menu. Eight quick saves from one boot (00:04:10 to
+00:09:38), one from the next (00:27:03); the ASMedia ASM1042 on the same
+board had no device in the first eight.
+
+### 8.1 What the saves show
+
+Tags: [obs] read in the saves; [inf] inferred from them; [hyp] not read.
+
+- The trigger is section 3's [obs]: the first failure is HWMonitor's ATA
+  PASS-THROUGH (12) (`A1h`, 512 bytes in, a program's request) refused by
+  the drive with CHECK CONDITION 5/20/00 (ILLEGAL REQUEST, INVALID COMMAND
+  OPERATION CODE), with one transfer event inside no queued TD
+  (`QueueUnmatched` 1). The drive went on working for about 180 data
+  commands.
+- Then one data-in command after another timed out [obs]: a READ (10) first,
+  after HWMonitor's second refusal READ CAPACITY (10) over and over, 29
+  timeouts in five minutes, every one ended by an ABORT TASK the drive
+  answered, so no LUN reset, no device reset and no cycle followed.
+- Every timed-out command had its final IU in, with SCSI status GOOD, and
+  its data-in transfer still outstanding (the failure ring's "final-IU-in"
+  with "data" busy) [obs]. The drive's status said the data was sent; the
+  driver never had the data-in transfer back. Commands with no data phase
+  kept completing GOOD throughout [obs].
+- No further event fell inside no queued TD across those 29 timeouts [obs]:
+  the missing data did not come back to a stale TRB. The data-in
+  endpoint's stream was not serving the driver's TDs [inf]; whether its
+  saved dequeue sat away from them or the controller had stopped serving
+  the stream cannot be told from these saves [hyp], because no report of
+  `3.4.3.0` carries the endpoint's or the streams' contexts.
+- Section 5's guard ran once [obs]: `cfg.deq.running=00020531`, the data-in
+  endpoint (slot 2, DCI 5) read Running before stream 3's Set TR Dequeue,
+  and it was stopped again; no `cfg.stop.again` and no `cfg.stop.giveup`
+  anywhere, so the Stop itself held each time. Just before it,
+  `strict.violation.epstate=10020541`: one stream's Set TR Dequeue reached
+  the controller with the endpoint Running, although the check before it
+  had read Stopped [obs]. The controller restarted the endpoint between
+  the driver's read of its state and the command [inf]. Both came after the
+  first timeouts [obs].
+- `XhciUasFastReset` would not have ended it [obs, code]: every command that
+  ends GOOD counts as progress, and the no-data commands did.
+- In the next boot (00:27:03) the drive moved 1.5 GB on the Intel ports with
+  no failure and no pass-through, and on the ASM1042 ports (Bulk-Only under
+  Windows' `usbstor.sys`, streams off there) it took 14 refusals in the
+  Bulk-Only way (a STALL on the data-in endpoint, recovered) with every
+  transfer completed [obs].
+
+So section 5's fix did what it was built for and the hang came back by
+another way: after a data-in cancel on a stream, the Intel controller's
+handling of the stream's dequeue around the driver's Set TR Dequeue is not
+what the driver believes [inf], and `xhciuas` had no rule that ends a
+drive's answered-but-unfinished commands with a reset. What restarts the
+endpoint, and where the stream's dequeue then is, stay not known [hyp].
+
+### 8.2 The 3.5.0.0 fixes
+
+- **The timeout with its status in** (design record 13 section 16.15): a
+  command whose timeout runs out with its final IU in and its data transfer
+  still outstanding goes to the device reset, not to ABORT TASK. This is
+  what ends a hang like this one, whatever its cause below.
+- **A drive a reset does not bring back** (record 13 section 16.17, the
+  owner's choice): after 3 such resets in a row with no data delivered
+  between them, the drive is given up until it is replugged; every command
+  then fails at once (a device whose transfers do not come back is cycled
+  instead, as a failed reset's). Only data delivered in the direction of
+  the timed-out commands (reads, in every reading so far) counts as the
+  drive working: writes that land do not keep it. Once it is given up,
+  writes fail too: a write Windows had cached and could not save shows
+  "Delayed Write Failed" (read on XP x64: a balloon, "Windows was unable to
+  save all the data for the file L:. The data has been lost."; 2000 and 7
+  the same text [hyp]), and on 98 SE a program writing gets a write error
+  for the drive [hyp]. A user whose drive does this can set
+  `XhciForceBulkOnly` 1 for it ([tuning](../using/tuning.md#forcing-bulk-only-instead-of-uas-xhciforcebulkonly)),
+  so that it runs as Bulk-Only, without streams.
+- **The drive's own refusal replayed** (record 13 section 16.16): once the
+  drive has refused ATA PASS-THROUGH (12) or (16) with 5/20/00, `xhciuas`
+  answers that operation for that drive itself with the same CHECK
+  CONDITION until the drive is replugged, in memory only. This removes the
+  repeat trigger.
+- **The stream's dequeue read back** (design record 17 section 4.12.8): after
+  a cancel on a stream endpoint, with the endpoint at rest, the stream just
+  set is read back against what was sent and set again if it differs, and
+  every other stream's saved dequeue is placed against its own ring; one the
+  controller could not have reached by executing its ring cycles the device
+  alone, never rewound. On by default; `XhciStreamDequeueRepair` 0 keeps
+  the checks and their notes without acting. The emulator's
+  `usb-uas x-ata-passthrough-refuse` gives the drive's refusal with the
+  data-in TD left to cancel, and the qemu fault 1D a stream's dequeue left
+  on the cancelled TD - independent of each other. Fault 1D is a
+  deliberately stale hardware dequeue: a pass shows the driver recovers
+  from it, not that it is the Intel controller's mechanism.
+
+## 9. A second report of the same drive, on an AMD chipset (2026-11-13)
+
+Reported 2026-11-13 against the released `3.4.3.0` (`xhci98.sys` and
+`xhciuas.sys` x64 matched by SHA-256), Windows 7 x64, an MSI MAG B550
+TOMAHAWK with a Ryzen 7 2700X. The drive is `0781:55A9` ("SanDisk
+3.2Gen1", four streams) on the AMD 500-series chipset's controller
+(`1022:43EE`, subsystem `1B21:1142`), root port 3: the same drive model
+on a second controller family (sections 1 to 8 are an Intel 7 Series
+controller's).
+
+Tags as section 8.1.
+
+- Under `xhciuas`, two sessions of about 200 MB recorded no failure [obs].
+  Then a READ (10) of 651,264 bytes timed out after 60 s with neither its
+  data nor its status returned ("transfers status data data-posted"), a
+  TEST UNIT READY timed out after it, and 1 abort and 1 port reset
+  followed [obs]. In the recovery a stream's Set TR Dequeue on DCI 9 was
+  refused with Context State Error because the endpoint read Running
+  again (`cfg.deq.retry` three times; `strict.refused.unpredicted`), then
+  the link dropped to SS.Inactive; `SsWarmResets` reached 5 and root port 3
+  was held after 3 of 3 re-enumerations while PORTSC still showed a
+  device at SuperSpeed [obs].
+- `XhciForceBulkOnly` set while the port was held did not bring the drive
+  back [obs]. The value is read at the device's next enumeration
+  (`HcdCtlForceBulkOnly`, called from `hcdXportFlags` at each device
+  PDO's creation) [code], and a held port does not enumerate: the hold
+  lasts until a stable disconnect (an unplug and plug in again) or the
+  controller's restart [code]. The reporter restarted, and Bulk-Only then
+  ran clean: 39,545 successful transfers, 4 Bulk-Only stalls recovered,
+  no link drop [obs].
+- A UAS class driver of a later Windows, not this project's, on the same
+  controller started on the device and selected alternate setting 1 (four
+  pipes open) but put no disk on it; a Transaction Error on the data-out
+  stream (slot 1, DCI 6) and a warm reset followed [obs]. Why it put no
+  disk is not recorded.
+- Read against `3.5.0.0` from the source, not run [code]: the stop of a
+  stream endpoint read Running before its Set TR Dequeue, and the bounded
+  retries after a Context State Error (`hcdCfgSetDequeueOne`), were
+  already in `3.4.3.0`; `3.5.0.0` adds the read-back of the stream's
+  dequeue after a command that succeeds (`hcdCfgDeqReadBack`). A dequeue
+  refused at every retry, as here, ends in `3.5.0.0` as in `3.4.3.0`: the
+  refusal is logged and the device is cycled. The timeout of a command
+  with no final IU in is still the ordinary ABORT TASK
+  (`UasFinalTimeoutDue`, `uas_iu.h`: section 8.2's device reset is for a
+  command whose final IU is in), and the port hold after three
+  re-enumerations (`XhciTolLocCharge`) is unchanged, so the 60 s stall
+  would probably still occur and be recovered by reset [inf].
+- Not settled: whether the fault belongs to the drive, the controller or
+  the link (a cable or port cause is not ruled out) [hyp]. Asked of the
+  reporter: the same copy at logging level 2 on the chipset port, on a
+  port of the processor's own controller and on a USB 2.0 port, and the
+  drive on another system. Also seen and not explained: the controller's
+  PCI Status reads `0810h` (target abort sent) in every report [obs].
+- The owner's decision (2026-11-13): noted only; no default change for
+  this drive in `3.5.0.0`.
 
 ## Sources
 

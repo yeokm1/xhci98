@@ -155,6 +155,14 @@ static int usbNotHere;
 static int tbOwn;
 static int uasChoice = 1;       /* the UAS driver's box (owner, 2026-10-19) */
 static int uasOwn = 1;          /* its own state while the USB box is off   */
+/* The takeover box (record 26 section 5.3.10, task 49.44): shown when the
+ * reading found a controller another manufacturer's driver runs; unticked
+ * unless /takeover; a child of the USB drivers' box as the UAS box is. */
+static int takeHere;
+static int takeCountW;
+static char takeSvcW[64];
+static int takeChoiceW;
+static int takeOwn;
 static int trayChoice = 1;
 static int trayHere;
 /* Task 43.27 (record 26 section 5.3, draft 33): the "can run faster" box,
@@ -239,6 +247,9 @@ static int choice_live(int v)
 }
 static INST_U32 choiceVal[INST_MAX_VALUES];
 
+/* A text row's choice (task 49.38, XhciCmTunnelBridge), beside
+ * choiceSet and choiceVal. */
+static char choiceText[INST_MAX_VALUES][INST_TEXT_CHARS];
 static INST_ROW rows[INST_MAX_VALUES];
 static int rowCount;
 
@@ -547,6 +558,11 @@ static unsigned __stdcall job_main(void *arg)
             LeaveCriticalSection(&textLock);
             planCode = inst_eng_plan();
             planFirst = planCode;
+            /* The first plan refused greys Welcome: the run can change
+             * nothing more, so no other Setup waits on this window. */
+            if (!inst_run_guard_keep(readCode, planFirst, 0)) {
+                inst_eng_guard_release();
+            }
             {
                 OSVERSIONINFOA v;
                 os_version(&v);
@@ -555,6 +571,15 @@ static unsigned __stdcall job_main(void *arg)
             }
             restageHere = inst_eng_restage_state();
             restageChoice = opts->Restage;
+            {
+                int first;
+                takeCountW = inst_eng_take_state(takeSvcW, sizeof(takeSvcW),
+                                                 &first);
+                takeHere = takeCountW > 0;
+                takeChoiceW = takeHere && first;
+                takeOwn = takeChoiceW;
+                inst_eng_take_choose(takeChoiceW);
+            }
             inst_eng_dir_default(dirChoice, sizeof(dirChoice), dirNow,
                                  sizeof(dirNow), &trayHere);
             fastNow = inst_eng_fast_state();
@@ -579,6 +604,8 @@ static unsigned __stdcall job_main(void *arg)
                     opts->SetIndex[i] < INST_MAX_VALUES) {
                     choiceSet[opts->SetIndex[i]] = 1;
                     choiceVal[opts->SetIndex[i]] = opts->SetValue[i];
+                    inst_copy(choiceText[opts->SetIndex[i]], opts->SetText[i],
+                              sizeof(choiceText[0]));
                 }
             }
         }
@@ -596,6 +623,11 @@ static unsigned __stdcall job_main(void *arg)
                          !fastChoice;
         opts->SetCount = 0;
         for (i = 0; i < INST_MAX_VALUES; i++) {
+            if (i < instValueCount && instValues[i].Kind == INST_VK_TEXT) {
+                inst_eng_choose_text(i, choiceSet[i] && choice_live(i),
+                                     choiceText[i]);
+                continue;
+            }
             inst_eng_choose_value(i, choiceSet[i] && choice_live(i),
                                   choiceVal[i]);
         }
@@ -1032,6 +1064,44 @@ static void welcome_flow(HWND dlg)
     page_redraw(dlg);
 }
 
+/* The log's line for its control (record 23 section 7.5.1): a static
+ * text one line high cuts the end of a path too wide for it, the part
+ * that says which file it is, so such a path is shown shortened in the
+ * middle, by as many folders as it takes. 1 when the line fits. The
+ * control is SS_NOPREFIX, so it draws an '&' as this measures it. */
+static int log_line_fit(HWND c, const char *path, char *line, size_t cap)
+{
+    char mid[WIZ_PATH];
+    HFONT font = (HFONT)SendMessageA(c, WM_GETFONT, 0, 0);
+    HFONT old;
+    HDC dc = GetDC(c);
+    RECT r;
+    int wide = 0;
+    int drop;
+
+    _snprintf(line, cap - 1, "Log file: %s", path);
+    line[cap - 1] = '\0';
+    if (dc == NULL) {
+        return 0;
+    }
+    old = font != NULL ? (HFONT)SelectObject(dc, font) : NULL;
+    GetClientRect(c, &r);
+    for (drop = 1; ; drop++) {
+        text_h(dc, line, 0, &wide);
+        if (wide <= r.right ||
+            !wiz_lay_path_mid(path, drop, mid, (int)sizeof(mid))) {
+            break;
+        }
+        _snprintf(line, cap - 1, "Log file: %s", mid);
+        line[cap - 1] = '\0';
+    }
+    if (old != NULL) {
+        SelectObject(dc, old);
+    }
+    ReleaseDC(c, dc);
+    return wide <= r.right;
+}
+
 static void welcome_texts(HWND dlg)
 {
     char title[128];
@@ -1065,10 +1135,13 @@ static void welcome_texts(HWND dlg)
                                                          INST_PT_UN_AGREE));
     }
     SetDlgItemTextA(dlg, IDC_SYSTEM, system_name(sys, sizeof(sys)));
-    _snprintf(logLine, sizeof(logLine) - 1, "Log file: %s",
-              inst_eng_log_path()[0] ? inst_eng_log_path() :
-              "(not opened yet)");
-    logLine[sizeof(logLine) - 1] = '\0';
+    if (inst_eng_log_path()[0] != '\0') {
+        log_line_fit(GetDlgItem(dlg, IDC_LOG), inst_eng_log_path(), logLine,
+                     sizeof(logLine));
+    } else {
+        inst_copy(logLine, inst_eng_log_tried() ? "Log file: none" :
+                  "Log file: (not opened yet)", sizeof(logLine));
+    }
     SetDlgItemTextA(dlg, IDC_LOG, logLine);
     welcome_flow(dlg);
 }
@@ -1203,6 +1276,7 @@ static void replan(void)
     }
     inst_eng_uas_choose(uasChoice);
     inst_eng_usb_choose(usbChoice);
+    inst_eng_take_choose(takeChoiceW);
     inst_eng_tb_choose(tbChoice);
     if (netOpen) {
         inst_eng_net_choose(netChoice);
@@ -1293,6 +1367,11 @@ static void comp_usb_state(HWND dlg)
                                                     BST_UNCHECKED);
     EnableWindow(GetDlgItem(dlg, IDC_C_UAS), uas);
     EnableWindow(GetDlgItem(dlg, IDC_C_UAS_T), uas);
+    /* The takeover box, the same child (record 26 section 5.3.10). */
+    CheckDlgButton(dlg, IDC_C_TAKE, (takeHere && usb && takeOwn) ?
+                   BST_CHECKED : BST_UNCHECKED);
+    EnableWindow(GetDlgItem(dlg, IDC_C_TAKE), takeHere && usb);
+    EnableWindow(GetDlgItem(dlg, IDC_C_TAKE_T), takeHere && usb);
 
     EnableWindow(GetDlgItem(dlg, IDC_C_TB), tbHave);
     /* The sentence by both boxes: with both unticked, the tools alone. */
@@ -1382,6 +1461,7 @@ static int comp_stor_h(HWND dlg)
  * box and its sentence (0 for none). */
 static const int compRows[][2] = {
     { IDC_C_DRIVERS, IDC_C_DRIVERS_T }, { IDC_C_UAS, IDC_C_UAS_T },
+    { IDC_C_TAKE, IDC_C_TAKE_T },
     { IDC_C_STOR, IDC_C_STOR_T }, { IDC_C_TB, IDC_C_TB_T }, { IDC_C_TRAY, 0 },
     { IDC_C_FAST, 0 }, { IDC_C_RESTAGE, 0 }
 };
@@ -1475,6 +1555,9 @@ static int comp_shown(int id)
         return trayHere;
     case IDC_C_RESTAGE:
         return restageSys;
+    case IDC_C_TAKE:
+    case IDC_C_TAKE_T:
+        return takeHere;
     default:
         return 1;
     }
@@ -1639,6 +1722,13 @@ static void comp_fill(HWND dlg)
     EnableWindow(GetDlgItem(dlg, IDC_C_DRIVERS), usbOffered);
     SetDlgItemTextA(dlg, IDC_C_UAS, inst_page_text(INST_PT_UAS));
     SetDlgItemTextA(dlg, IDC_C_UAS_T, inst_page_text(INST_PT_UAS_T));
+    if (takeHere) {
+        inst_take_box_text(takeCountW, text, sizeof(text));
+        SetDlgItemTextA(dlg, IDC_C_TAKE, text);
+        inst_take_line_text(takeCountW, takeSvcW[0] ? takeSvcW : NULL, text,
+                            sizeof(text));
+        SetDlgItemTextA(dlg, IDC_C_TAKE_T, text);
+    }
     SetDlgItemTextA(dlg, IDC_C_TB, inst_page_text(INST_PT_TB));
     if (tbPresent && inst_eng_tb_intel()) {
         SetDlgItemTextA(dlg, IDC_C_TB_T, inst_page_text(INST_PT_TB_INTEL));
@@ -1782,6 +1872,7 @@ static void comp_keep(HWND dlg)
     int vsd;
     int rs;
     int pfw;
+    int take;
 
     trayChoice = IsDlgButtonChecked(dlg, IDC_C_TRAY) == BST_CHECKED;
     fastChoice = IsDlgButtonChecked(dlg, IDC_C_FAST) == BST_CHECKED;
@@ -1807,6 +1898,15 @@ static void comp_keep(HWND dlg)
     stor = storShown && storOffered &&
            IsDlgButtonChecked(dlg, IDC_C_STOR) == BST_CHECKED;
     rs = restageHere && IsDlgButtonChecked(dlg, IDC_C_RESTAGE) == BST_CHECKED;
+    take = takeHere && usb && IsDlgButtonChecked(dlg, IDC_C_TAKE) ==
+                              BST_CHECKED;
+    if (usb && takeHere) {
+        takeOwn = take;
+    }
+    if (take != takeChoiceW) {
+        takeChoiceW = take;
+        compOwed |= 2;
+    }
     pfw = pfwShown && tb && pfwOwn;
     if (pfw != pfwChoice) {
         pfwChoice = pfw;
@@ -1848,8 +1948,8 @@ static void comp_take(HWND dlg)
 static int comp_leave(HWND dlg)
 {
     char checked[WIZ_PATH];
-    char warn[2048];
-    char box[2200];
+    char warn[4096];
+    char box[4300];
     const char *why;
     int usb;
     int tb;
@@ -1872,6 +1972,10 @@ static int comp_leave(HWND dlg)
     s98 = inst_s98_box_open(s98Have, tbHave, tb) && s98Own;
     stor = storShown && storOffered &&
            IsDlgButtonChecked(dlg, IDC_C_STOR) == BST_CHECKED;
+    /* The takeover's warning reads the box as it stands (record 26 section
+     * 5.3.10). */
+    inst_eng_take_choose(takeHere && usb &&
+                         IsDlgButtonChecked(dlg, IDC_C_TAKE) == BST_CHECKED);
     why = inst_eng_comp_refusal(usb, tb);
     if (why != NULL) {
         /* Record 26 section 5.3.3: Secure Boot on refuses these boxes; the
@@ -2772,8 +2876,20 @@ static int rows_for(int page, int advanced, int *idx, int cap)
 static void row_now(const INST_ROW *r, char *out, size_t cap)
 {
     const INST_VALUE *v = &instValues[r->Value];
+    char nine[128];
 
-    if (r->MwState == 1) {
+    if (v->Kind == INST_VK_TEXT) {
+        _snprintf(out, cap - 1, "Current: %s%s", r->Text,
+                  r->MwState == 1 ? " (all controllers)" : "");
+        out[cap - 1] = '\0';
+        return;
+    }
+    if (r->MwState == 1 &&
+        inst_eng_nine_text(r->Value, r->MwValue, nine, sizeof(nine))) {
+        /* 98 SE and ME: a value the drivers read as their default there,
+         * shown as the USB Tree shows it; the stored value is left. */
+        _snprintf(out, cap - 1, "Current: %s (all controllers)", nine);
+    } else if (r->MwState == 1) {
         _snprintf(out, cap - 1, "Current: %lu (all controllers)",
                   (unsigned long)r->MwValue);
     } else if (r->MwState == -1) {
@@ -2783,6 +2899,8 @@ static void row_now(const INST_ROW *r, char *out, size_t cap)
     } else if (r->NowCount == 0) {
         _snprintf(out, cap - 1, "Current: not set (default %lu)",
                   (unsigned long)r->Def);
+    } else if (inst_eng_nine_text(r->Value, r->InForce, nine, sizeof(nine))) {
+        _snprintf(out, cap - 1, "Current: %s", nine);
     } else {
         _snprintf(out, cap - 1, "Current: %lu%s", (unsigned long)r->InForce,
                   r->InForce == r->Def ? " (default)" : "");
@@ -2819,6 +2937,27 @@ static void row_note(const INST_ROW *r, char *out, size_t cap)
 
     _snprintf(out, cap - 1, "%s - %s.", v->Name, v->Meaning);
     out[cap - 1] = '\0';
+    if (v->Kind == INST_VK_TEXT) {
+        /* Task 49.38: XhciCmTunnelBridge. */
+        if (r->MwState == 1) {
+            _snprintf(line, sizeof(line) - 1, " Set for all controllers: "
+                      "%s.", r->Text);
+        } else if (r->MwState == -1) {
+            _snprintf(line, sizeof(line) - 1, " The value saved for all "
+                      "controllers is not text.");
+        } else {
+            _snprintf(line, sizeof(line) - 1, " Not set for all "
+                      "controllers (each uses its own, %s as installed).",
+                      r->DefText);
+        }
+        line[sizeof(line) - 1] = '\0';
+        strncat(out, line, cap - strlen(out) - 1);
+        _snprintf(line, sizeof(line) - 1, " Default: %s. Note: %s",
+                  r->DefText, v->Caution != NULL ? v->Caution : "");
+        line[sizeof(line) - 1] = '\0';
+        strncat(out, line, cap - strlen(out) - 1);
+        return;
+    }
     if (r->Greyed) {
         _snprintf(line, sizeof(line) - 1, " Used on %s; nothing is saved "
                   "here.", inst_value_only(r->Value));
@@ -2826,15 +2965,27 @@ static void row_note(const INST_ROW *r, char *out, size_t cap)
         strncat(out, line, cap - strlen(out) - 1);
     }
     if (r->MwState == 1) {
-        _snprintf(line, sizeof(line) - 1, " Set for all controllers: %lu.",
-                  (unsigned long)r->MwValue);
+        char nine[128];
+        if (inst_eng_nine_text(r->Value, r->MwValue, nine, sizeof(nine))) {
+            _snprintf(line, sizeof(line) - 1, " Set for all controllers: %s.",
+                      nine);
+        } else {
+            _snprintf(line, sizeof(line) - 1, " Set for all controllers: "
+                      "%lu.", (unsigned long)r->MwValue);
+        }
         line[sizeof(line) - 1] = '\0';
         strncat(out, line, cap - strlen(out) - 1);
         for (i = 0; i < r->NowCount; i++) {
             if (r->Now[i].State > 0 && r->Now[i].Value != r->MwValue) {
-                _snprintf(line, sizeof(line) - 1, " %s's own value: %lu "
-                          "(ignored).", r->Now[i].Desc,
-                          (unsigned long)r->Now[i].Value);
+                char own[128];
+                if (!inst_eng_nine_text(r->Value, r->Now[i].Value, own,
+                                        sizeof(own))) {
+                    _snprintf(own, sizeof(own) - 1, "%lu",
+                              (unsigned long)r->Now[i].Value);
+                    own[sizeof(own) - 1] = '\0';
+                }
+                _snprintf(line, sizeof(line) - 1, " %s's own value: %s "
+                          "(ignored).", r->Now[i].Desc, own);
                 line[sizeof(line) - 1] = '\0';
                 strncat(out, line, cap - strlen(out) - 1);
             }
@@ -2847,16 +2998,22 @@ static void row_note(const INST_ROW *r, char *out, size_t cap)
         strncat(out, " Each controller keeps its own value unless you "
                 "choose one:", cap - strlen(out) - 1);
         for (i = 0; i < r->NowCount; i++) {
-            _snprintf(line, sizeof(line) - 1, " %s: %lu.", r->Now[i].Desc,
-                      (unsigned long)(r->Now[i].State > 0 ? r->Now[i].Value
-                                                          : r->Def));
+            char nine[128];
+            INST_U32 each = r->Now[i].State > 0 ? r->Now[i].Value : r->Def;
+            if (inst_eng_nine_text(r->Value, each, nine, sizeof(nine))) {
+                _snprintf(line, sizeof(line) - 1, " %s: %s.", r->Now[i].Desc,
+                          nine);
+            } else {
+                _snprintf(line, sizeof(line) - 1, " %s: %lu.",
+                          r->Now[i].Desc, (unsigned long)each);
+            }
             line[sizeof(line) - 1] = '\0';
             strncat(out, line, cap - strlen(out) - 1);
         }
     }
     if (v->Hi != 0) {
         char range[64];
-        inst_value_range_text(r->Value, range, sizeof(range));
+        inst_eng_range_text(r->Value, range, sizeof(range));
         _snprintf(line, sizeof(line) - 1, " Allowed: %s.", range);
         line[sizeof(line) - 1] = '\0';
         strncat(out, line, cap - strlen(out) - 1);
@@ -3167,8 +3324,13 @@ static void row_fill_combo(HWND combo, const INST_ROW *r)
     }
     if (sel < 0 && !mixed) {
         /* A value in force the list does not offer stays what it is. */
-        _snprintf(text, sizeof(text) - 1, "%lu  (current)",
-                  (unsigned long)cur);
+        char nine[128];
+        if (inst_eng_nine_text(r->Value, cur, nine, sizeof(nine))) {
+            _snprintf(text, sizeof(text) - 1, "%s", nine);
+        } else {
+            _snprintf(text, sizeof(text) - 1, "%lu  (current)",
+                      (unsigned long)cur);
+        }
         text[sizeof(text) - 1] = '\0';
         sel = (int)SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)text);
         SendMessageA(combo, CB_SETITEMDATA, sel, (LPARAM)cur);
@@ -3762,14 +3924,24 @@ static int advCur = -1;
 static int advSet[INST_MAX_VALUES];
 static INST_U32 advVal[INST_MAX_VALUES];
 static HWND advWnd;             /* the dialog while it is open */
+/* Task 49.38: a header item above each group (instValues[]'s Group), so
+ * the list's items are the rows and the headers: row i's item, and an
+ * item's row (-1 a header). */
+static int advItem[INST_MAX_VALUES];
+static char advText[INST_MAX_VALUES][INST_TEXT_CHARS];
+static char advShown[INST_TEXT_CHARS];  /* the text row's box as shown */
+static int advRowOf[2 * INST_MAX_VALUES];
+static int advItems;
 
 static void adv_cell(HWND lv, int i)
 {
     const INST_ROW *r = &rows[advIdx[i]];
-    char text[96];
+    char text[160];
 
     if (r->Greyed) {
         _snprintf(text, sizeof(text) - 1, "(%s)", inst_value_only(r->Value));
+    } else if (advSet[i] && instValues[r->Value].Kind == INST_VK_TEXT) {
+        _snprintf(text, sizeof(text) - 1, "%s (will be saved)", advText[i]);
     } else if (advSet[i]) {
         _snprintf(text, sizeof(text) - 1, "%lu (will be saved)",
                   (unsigned long)advVal[i]);
@@ -3777,7 +3949,7 @@ static void adv_cell(HWND lv, int i)
         row_now(r, text, sizeof(text));
     }
     text[sizeof(text) - 1] = '\0';
-    ListView_SetItemText(lv, i, 1, text);
+    ListView_SetItemText(lv, advItem[i], 1, text);
 }
 
 /* The selected row's choice read into advSet/advVal. 0 when a range's
@@ -3796,6 +3968,33 @@ static int adv_take(HWND dlg)
         advSet[advCur] = 0;
         return 1;
     }
+    if (instValues[r->Value].Kind == INST_VK_TEXT) {
+        char t[INST_TEXT_CHARS + 2];
+        GetDlgItemTextA(dlg, IDC_A_EDIT, t, sizeof(t));
+        if (GetWindowTextLengthA(GetDlgItem(dlg, IDC_A_EDIT)) >=
+                INST_TEXT_CHARS ||
+            !inst_bdf_list_ok(t)) {
+            MessageBoxA(dlg, "XhciCmTunnelBridge takes auto, or up to 4 "
+                        "bb:dd.f separated by commas (bb and dd hex, dd up "
+                        "to 1F, f 0 to 7).", instValues[r->Value].Name,
+                        MB_OK | MB_ICONWARNING);
+            return 0;
+        }
+        if (t[0] == '\0') {
+            inst_copy(t, "auto", sizeof(t));
+        }
+        /* Staged only when the text is changed from the one shown: a
+         * controller's own list is never replaced by a row merely viewed
+         * (the value in force is read machine-wide alone). */
+        if (inst_eq(t, advShown) ||
+            (inst_bdf_auto(t) && inst_bdf_auto(advShown))) {
+            return 1;   /* as shown: a pending text stays pending */
+        }
+        advSet[advCur] = !(inst_eq(t, r->Text) && r->MwState == 1);
+        inst_copy(advText[advCur], t, sizeof(advText[0]));
+        adv_cell(GetDlgItem(dlg, IDC_LIST), advCur);
+        return 1;
+    }
     if (instValues[r->Value].Hi != 0) {
         GetDlgItemTextA(dlg, IDC_A_EDIT, text, sizeof(text));
         if (text[0] == '\0') {
@@ -3808,9 +4007,10 @@ static int adv_take(HWND dlg)
         if (GetWindowTextLengthA(GetDlgItem(dlg, IDC_A_EDIT)) >=
                 (int)sizeof(text) ||
             !inst_parse_dec(text, &v) ||
-            !inst_value_in_range(r->Value, v)) {
+            !inst_value_in_range(r->Value, v) ||
+            !inst_eng_value_allowed(r->Value, v)) {
             char range[64];
-            inst_value_range_text(r->Value, range, sizeof(range));
+            inst_eng_range_text(r->Value, range, sizeof(range));
             _snprintf(text, sizeof(text) - 1, "%s.", range);
             text[sizeof(text) - 1] = '\0';
             MessageBoxA(dlg, text, instValues[r->Value].Name, MB_OK |
@@ -3842,7 +4042,24 @@ static void adv_show(HWND dlg, int i)
      * own record is put back at once (Cancel keeps nothing). */
     choiceSet[r->Value] = advSet[i];
     choiceVal[r->Value] = advVal[i];
-    if (instValues[r->Value].Hi != 0) {
+    {
+        /* A text row takes any character (task 49.38); a number box digits
+         * only, as the template says. */
+        HWND e = GetDlgItem(dlg, IDC_A_EDIT);
+        LONG st = GetWindowLongA(e, GWL_STYLE);
+        if (instValues[r->Value].Kind == INST_VK_TEXT) {
+            SetWindowLongA(e, GWL_STYLE, st & ~(LONG)ES_NUMBER);
+        } else {
+            SetWindowLongA(e, GWL_STYLE, st | (LONG)ES_NUMBER);
+        }
+    }
+    if (instValues[r->Value].Kind == INST_VK_TEXT) {
+        inst_copy(advShown, advSet[i] ? advText[i] : r->Text,
+                  sizeof(advShown));
+        SetDlgItemTextA(dlg, IDC_A_EDIT, advShown);
+        ShowWindow(GetDlgItem(dlg, IDC_A_EDIT), SW_SHOW);
+        ShowWindow(GetDlgItem(dlg, IDC_A_CHOICE), SW_HIDE);
+    } else if (instValues[r->Value].Hi != 0) {
         INST_U32 start = row_start(r, &mixed);
         if (mixed) {
             text[0] = '\0';
@@ -3893,22 +4110,40 @@ static WIZ_DLGRET CALLBACK adv_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         c.pszText = "Setting";
         ListView_InsertColumn(lv, 1, &c);
         advCount = rows_for(advPage, 1, advIdx, INST_MAX_VALUES);
+        advItems = 0;
         for (i = 0; i < advCount; i++) {
             const INST_ROW *r = &rows[advIdx[i]];
+            const char *g = instValues[r->Value].Group;
             int mixed;
             advSet[i] = choiceSet[r->Value];
             advVal[i] = advSet[i] ? choiceVal[r->Value]
                                   : row_start(r, &mixed);
+            inst_copy(advText[i], advSet[i] ? choiceText[r->Value] : r->Text,
+                      sizeof(advText[0]));
+            if (g != NULL &&
+                (i == 0 || instValues[rows[advIdx[i - 1]].Value].Group ==
+                               NULL ||
+                 strcmp(g, instValues[rows[advIdx[i - 1]].Value].Group) !=
+                     0)) {
+                memset(&it, 0, sizeof(it));
+                it.mask = LVIF_TEXT;
+                it.iItem = advItems;
+                it.pszText = (char *)g;
+                ListView_InsertItem(lv, &it);
+                advRowOf[advItems++] = -1;
+            }
             memset(&it, 0, sizeof(it));
             it.mask = LVIF_TEXT;
-            it.iItem = i;
+            it.iItem = advItems;
             it.pszText = (char *)instValues[r->Value].Name;
             ListView_InsertItem(lv, &it);
+            advItem[i] = advItems;
+            advRowOf[advItems++] = i;
             adv_cell(lv, i);
         }
         advCur = -1;
         if (advCount > 0) {
-            ListView_SetItemState(lv, 0, LVIS_SELECTED | LVIS_FOCUSED,
+            ListView_SetItemState(lv, advItem[0], LVIS_SELECTED | LVIS_FOCUSED,
                                   LVIS_SELECTED | LVIS_FOCUSED);
             adv_show(dlg, 0);
         }
@@ -3921,7 +4156,8 @@ static WIZ_DLGRET CALLBACK adv_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
              * the highlight never leaves the row the pane edits. */
             NMLISTVIEW *nl = (NMLISTVIEW *)lp;
             if ((nl->uNewState & LVIS_SELECTED) &&
-                !(nl->uOldState & LVIS_SELECTED) && nl->iItem != advCur &&
+                !(nl->uOldState & LVIS_SELECTED) &&
+                (advCur < 0 || nl->iItem != advItem[advCur]) &&
                 !adv_take(dlg)) {
                 SET_RESULT(dlg, TRUE);
                 return TRUE;
@@ -3930,8 +4166,17 @@ static WIZ_DLGRET CALLBACK adv_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         if (nm->idFrom == IDC_LIST && nm->code == LVN_ITEMCHANGED) {
             NMLISTVIEW *nl = (NMLISTVIEW *)lp;
             if ((nl->uNewState & LVIS_SELECTED) && nl->iItem >= 0 &&
-                nl->iItem < advCount && nl->iItem != advCur) {
-                adv_show(dlg, nl->iItem);   /* taken at the change */
+                nl->iItem < advItems) {
+                int row = advRowOf[nl->iItem];
+                if (row >= 0 && row != advCur) {
+                    adv_show(dlg, row);     /* taken at the change */
+                } else if (row < 0) {
+                    /* A group's header: no setting until one is chosen. */
+                    advCur = -1;
+                    set_edit(dlg, IDC_A_TEXT, "Select a setting.");
+                    EnableWindow(GetDlgItem(dlg, IDC_A_CHOICE), FALSE);
+                    EnableWindow(GetDlgItem(dlg, IDC_A_EDIT), FALSE);
+                }
             }
         }
         break;
@@ -3960,6 +4205,8 @@ static WIZ_DLGRET CALLBACK adv_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
                 int value = rows[advIdx[i]].Value;
                 choiceSet[value] = advSet[i];
                 choiceVal[value] = advVal[i];
+                inst_copy(choiceText[value], advText[i],
+                          sizeof(choiceText[0]));
             }
             EndDialog(dlg, IDOK);
             return TRUE;
@@ -4597,6 +4844,7 @@ static void settings_open(HWND comp, int set)
     static const int pg[3] = { P_USB, P_TBS, P_S98 };
     static int keepSet[INST_MAX_VALUES];
     static INST_U32 keepVal[INST_MAX_VALUES];
+    static char keepText[INST_MAX_VALUES][INST_TEXT_CHARS];
     static int keepS98Set[INST_S98_COUNT];
     static char keepS98Val[INST_S98_COUNT][32];
     PROPSHEETPAGEA p[3];
@@ -4642,6 +4890,7 @@ static void settings_open(HWND comp, int set)
     }
     memcpy(keepSet, choiceSet, sizeof(keepSet));
     memcpy(keepVal, choiceVal, sizeof(keepVal));
+    memcpy(keepText, choiceText, sizeof(keepText));
     memcpy(keepS98Set, s98WinSet, sizeof(keepS98Set));
     memcpy(keepS98Val, s98WinVal, sizeof(keepS98Val));
     memset(&h, 0, sizeof(h));
@@ -4658,6 +4907,7 @@ static void settings_open(HWND comp, int set)
     if (!setApplied) {
         memcpy(choiceSet, keepSet, sizeof(keepSet));
         memcpy(choiceVal, keepVal, sizeof(keepVal));
+        memcpy(choiceText, keepText, sizeof(keepText));
         memcpy(s98WinSet, keepS98Set, sizeof(keepS98Set));
         memcpy(s98WinVal, keepS98Val, sizeof(keepS98Val));
     }
@@ -4782,7 +5032,7 @@ static void summary_fill(HWND dlg)
         {
             /* The Components page's warnings repeated (record 26 section
              * 5.0): each one's first sentence. */
-            char warn[2048];
+            char warn[4096];
             if (inst_eng_comp_warn(usbChoice, storShown && storChoice,
                                    s98Choice, tbChoice, dirChoice, warn,
                                    sizeof(warn)) != 0) {
@@ -4937,7 +5187,14 @@ static void summary_fill(HWND dlg)
         tb_add(&t, "\nSettings saved for all controllers:\n");
         any = 0;
         for (i = 0; i < INST_MAX_VALUES && i < instValueCount; i++) {
-            if (choiceSet[i] && choice_live(i)) {
+            if (choiceSet[i] && choice_live(i) &&
+                instValues[i].Kind == INST_VK_TEXT) {
+                _snprintf(line, sizeof(line) - 1, "- %s = %s\n",
+                          instValues[i].Name, choiceText[i]);
+                line[sizeof(line) - 1] = '\0';
+                tb_add(&t, line);
+                any = 1;
+            } else if (choiceSet[i] && choice_live(i)) {
                 _snprintf(line, sizeof(line) - 1, "- %s = %lu\n",
                           instValues[i].Name, (unsigned long)choiceVal[i]);
                 line[sizeof(line) - 1] = '\0';
@@ -5530,6 +5787,11 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         case IDC_C_UAS:
             if (HIWORD(wp) == BN_CLICKED) {
                 uasOwn = IsDlgButtonChecked(dlg, IDC_C_UAS) == BST_CHECKED;
+            }
+            return TRUE;
+        case IDC_C_TAKE:
+            if (HIWORD(wp) == BN_CLICKED) {
+                takeOwn = IsDlgButtonChecked(dlg, IDC_C_TAKE) == BST_CHECKED;
             }
             return TRUE;
         case IDC_C_DRIVERS:
@@ -6147,6 +6409,25 @@ static void st_welcome_rows(HWND parent)
     SetDlgItemTextA(d, IDC_SYSTEM, "This computer: Windows 98 SE (4.10.2222 "
                     "A), 32-bit; the longest line this page gives a system, "
                     "and a second line.");
+    {
+        /* The log's line holds a path wider than it (record 23 section
+         * 7.5.1): shortened in the middle, the name kept. */
+        char line[WIZ_PATH + 16];
+        int held = log_line_fit(GetDlgItem(d, IDC_LOG), "C:\\Documents and "
+                                "Settings\\WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW\\"
+                                "Local Settings\\WWWWWWWWWWWWWWWWWWWWWWWW\\"
+                                "Temp\\XHCIINST.LOG", line, sizeof(line));
+        st(held && strstr(line, "C:\\...\\") != NULL &&
+           strstr(line, "\\XHCIINST.LOG") != NULL,
+           "the log's line: a long path shortened to its control");
+        held = log_line_fit(GetDlgItem(d, IDC_LOG), "C:\\XHCIINST.LOG", line,
+                            sizeof(line));
+        st(held && strcmp(line, "Log file: C:\\XHCIINST.LOG") == 0,
+           "the log's line: the root file whole");
+        /* Drawn as measured: an '&' in a folder's name is no prefix. */
+        st((GetWindowLongA(GetDlgItem(d, IDC_LOG), GWL_STYLE) &
+            SS_NOPREFIX) != 0, "the log's line: no prefix character");
+    }
     SetDlgItemTextA(d, IDC_LOG, "The log: C:\\XHCIINST.LOG");
     welcome_flow(d);
     lv = GetDlgItem(d, IDC_LIST);
@@ -6228,6 +6509,12 @@ static void st_comp_words(HWND d, const char *note)
     st_comp_longest(d, IDC_C_DRIVERS_T, drv, 3);
     SetDlgItemTextA(d, IDC_C_UAS, inst_page_text(INST_PT_UAS));
     SetDlgItemTextA(d, IDC_C_UAS_T, inst_page_text(INST_PT_UAS_T));
+    /* The takeover row at its longest (record 26 section 5.3.10): two
+     * digits, a name as long as the sentence says. */
+    inst_take_box_text(99, text, sizeof(text));
+    SetDlgItemTextA(d, IDC_C_TAKE, text);
+    inst_take_line_text(99, "WWWWWWWWWWWWWWWWWWWWWWWW", text, sizeof(text));
+    SetDlgItemTextA(d, IDC_C_TAKE_T, text);
     SetDlgItemTextA(d, IDC_C_STOR, inst_page_text(INST_PT_STOR));
     comp_stor_text(note, text, sizeof(text));
     SetDlgItemTextA(d, IDC_C_STOR_T, text);
@@ -6415,6 +6702,15 @@ static void st_comp_layout_nt(HWND parent)
     st_comp_variant(parent, "no tray tool", 0, 0, 1, 1, 0, 0, 0, NULL);
     st_comp_variant(parent, "no Stor98, no tray tool", 0, 0, 1, 0, 0, 0, 0,
                     NULL);
+    /* Record 26 section 5.3.10: the takeover row, on 2000 to 10 only. */
+    takeHere = 1;
+    st_comp_variant(parent, "2000 and XP, the takeover row", 0, 1, 0, 1, 1, 0,
+                    0, NULL);
+    st_comp_variant(parent, "32-bit Vista and 7, the takeover row", 0, 1, 1,
+                    1, 1, 0, 0, NULL);
+    st_comp_variant(parent, "64-bit, and 8 to 10, the takeover row", 0, 0, 1,
+                    1, 1, 0, 0, NULL);
+    takeHere = 0;
     st_comp_variant(parent, "98 SE, no Stor98", 1, 1, 0, 0, 1, 1, 1, "");
     st_comp_variant(parent, "98 SE, no S98VSD.VXD", 1, 1, 0, 1, 1, 1, 0, "");
 }
@@ -6851,7 +7147,8 @@ static void st_advanced(HWND parent, int page, const char *form)
     }
     for (i = 0; i < advCount; i++) {
         adv_show(a, i);
-        if (instValues[rows[advIdx[i]].Value].Hi != 0) {
+        if (instValues[rows[advIdx[i]].Value].Hi != 0 ||
+            instValues[rows[advIdx[i]].Value].Kind == INST_VK_TEXT) {
             continue;
         }
         _snprintf(what, sizeof(what) - 1, "Advanced, %s, %s", form,

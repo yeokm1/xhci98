@@ -15,7 +15,7 @@ Compatible=1
 Class=Net
 ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=11/10/2026,3.4.3.0
+DriverVer=11/14/2026,3.5.0.0
 CatalogFile=xhcinet.cat
 
 [Manufacturer]

@@ -1297,6 +1297,357 @@ static void test_window(void)
     CHECK_EQ(w.Count, 0, "nothing recorded");
 }
 
+/*
+ * Task 49.35 (design record 17 section 4.6.1): a fake controller whose HCRST,
+ * or whose CNR, stays set for a given time after the write, on a virtual
+ * millisecond clock. FOREVER never clears; DEAD answers all ones.
+ */
+#define FAKE_FOREVER 0xFFFFFFFFUL
+/* src\xhci_hw.h's cap, which a host build does not include. */
+#ifndef XHCI_RECOVERY_MAX_ATTEMPTS
+#define XHCI_RECOVERY_MAX_ATTEMPTS 3UL
+#endif
+
+typedef struct _FAKE_HC {
+    ULONG Now;          /* ms                                       */
+    ULONG Written;      /* when HCRST was written                   */
+    ULONG Writes;
+    ULONG HcrstHold;    /* ms HCRST reads 1 after the write         */
+    ULONG CnrHold;      /* ms CNR reads 1 after the write           */
+    ULONG Dead;
+    ULONG Reads;
+} FAKE_HC;
+
+static ULONG fakeHeld(const FAKE_HC *f, ULONG hold)
+{
+    if (f->Writes == 0) {
+        return 0;
+    }
+    if (hold == FAKE_FOREVER) {
+        return 1;
+    }
+    return (f->Now - f->Written) < hold ? 1UL : 0UL;
+}
+
+static VOID fakeRead(PVOID context, PULONG usbcmd, PULONG usbsts)
+{
+    FAKE_HC *f = (FAKE_HC *)context;
+
+    f->Reads++;
+    if (f->Dead) {
+        *usbcmd = 0xFFFFFFFFUL;
+        *usbsts = 0xFFFFFFFFUL;
+        return;
+    }
+    *usbcmd = fakeHeld(f, f->HcrstHold) ? XHCI_USBCMD_HCRST : 0UL;
+    *usbsts = XHCI_USBSTS_HCH |
+              (fakeHeld(f, f->CnrHold) ? XHCI_USBSTS_CNR : 0UL);
+}
+
+static VOID fakeSleep(PVOID context, ULONG ms)
+{
+    ((FAKE_HC *)context)->Now += ms;
+}
+
+static void fakeInit(FAKE_HC *f, ULONG hcrst, ULONG cnr)
+{
+    memset(f, 0, sizeof(*f));
+    f->Now = 5000;
+    f->HcrstHold = hcrst;
+    f->CnrHold = cnr;
+}
+
+static ULONG fakeRunning(FAKE_HC *f)
+{
+    ULONG cmd;
+    ULONG sts;
+
+    fakeRead(f, &cmd, &sts);
+    return XhciTolResetRunning(cmd, sts);
+}
+
+static void test_reset_settle(void)
+{
+    static const ULONG holds[6] = { 0, 5, 50, 500, 1500, FAKE_FOREVER };
+    XHCI_TOL_RESET_IO io;
+    FAKE_HC f;
+    ULONG waited;
+    ULONG cmd;
+    ULONG sts;
+    ULONG r;
+    ULONG i;
+    ULONG which;
+
+    io.Read = fakeRead;
+    io.Sleep = fakeSleep;
+    io.Context = &f;
+
+    CHECK_EQ(XhciTolResetRunning(0, 0), 0, "nothing set");
+    CHECK_EQ(XhciTolResetRunning(XHCI_USBCMD_HCRST, 0), 1, "HCRST");
+    CHECK_EQ(XhciTolResetRunning(0, XHCI_USBSTS_CNR), 1, "CNR");
+    CHECK_EQ(XhciTolResetRunning(0xFFFFFFFFUL, 0xFFFFFFFFUL), 0,
+             "all ones proves no reset");
+
+    /* HCRST held (which 0), then CNR held (which 1), each for every hold;
+     * the write made at the fake's Now. */
+    for (which = 0; which < 2; which++) {
+        for (i = 0; i < 6; i++) {
+            fakeInit(&f, which == 0 ? holds[i] : 0,
+                     which == 1 ? holds[i] : 0);
+            f.Writes = 1;
+            f.Written = f.Now;
+            r = XhciTolResetSettle(&io, XHCI_TOL_RESET_SETTLE_MS,
+                                   XHCI_TOL_RESET_STEP_MS, &waited, &cmd,
+                                   &sts);
+            if (holds[i] <= XHCI_TOL_RESET_SETTLE_MS) {
+                CHECK_EQ(r, XHCI_TOL_SETTLE_DONE, "settled inside 1 s");
+                CHECK(waited >= holds[i] &&
+                          waited < holds[i] + XHCI_TOL_RESET_STEP_MS,
+                      "waited the hold, to a step");
+                CHECK_EQ(XhciTolResetRunning(cmd, sts), 0, "last read clear");
+            } else {
+                CHECK_EQ(r, XHCI_TOL_SETTLE_TIMEOUT, "1.5 s / for ever: out");
+                CHECK_EQ(waited, XHCI_TOL_RESET_SETTLE_MS, "the whole bound");
+                CHECK_EQ(XhciTolResetRunning(cmd, sts), 1, "still running");
+            }
+        }
+    }
+
+    fakeInit(&f, FAKE_FOREVER, 0);
+    f.Writes = 1;
+    f.Dead = 1;
+    r = XhciTolResetSettle(&io, XHCI_TOL_RESET_SETTLE_MS,
+                           XHCI_TOL_RESET_STEP_MS, &waited, &cmd, &sts);
+    CHECK_EQ(r, XHCI_TOL_SETTLE_DEAD, "all ones ends it");
+    CHECK_EQ(waited, 0, "at once");
+    CHECK_EQ(f.Reads, 1, "one read");
+}
+
+static void test_recover_paced(void)
+{
+    ULONG gap = XHCI_TOL_RECOVER_GAP_TICKS;
+
+    CHECK(gap * XHCI_TOL_TICK_CREDIT_MS >= XHCI_TOL_RECOVER_GAP_MS,
+          "the gap is at least 500 ms of shortest ticks");
+    CHECK_EQ(XhciTolRecoverPaced(0, 100, 100), 1, "no failure: at once");
+    CHECK_EQ(XhciTolRecoverPaced(1, 100, 100), 0, "same tick: not yet");
+    CHECK_EQ(XhciTolRecoverPaced(1, 100, 100 + gap - 1), 0, "one short");
+    CHECK_EQ(XhciTolRecoverPaced(2, 100, 100 + gap), 1, "the gap passed");
+    CHECK_EQ(XhciTolRecoverPaced(1, 0xFFFFFFFEUL, gap), 1,
+             "across the clock's wrap");
+}
+
+/*
+ * The recovery loop as hcdRecover and XhciRecoverController run it, on the
+ * fake: the thread passes every 100 ms (its timeout) unless woken; an
+ * attempt's reset wait at DISPATCH_LEVEL is a 1 ms pause and a 10 ms stall
+ * (xhciReset); a reset still running then is RESET_BUSY, not charged, and
+ * waited for at PASSIVE_LEVEL (XhciTolResetSettle); once settled, a Bus
+ * Master Enable this driver cleared is put back and the same recovery runs
+ * again with the reset proven (no second write), at most three
+ * continuations; an attempt not finished is charged once, and the next
+ * waits XhciTolRecoverPaced's gap. A cleared BME with the reset done inside
+ * the stall is BME_RESTORE (the restore step refuses below PASSIVE_LEVEL).
+ */
+#define MODEL_STALL_MS 11UL
+#define M_REFUSED   0UL
+#define M_RECOVERED 1UL
+#define M_BUSY      2UL
+#define M_BME       3UL
+
+typedef struct _MODEL_OUT {
+    ULONG Recovered;
+    ULONG Charges;
+    ULONG ChargeTick[4];
+    ULONG Settles;
+    ULONG Writes;
+    ULONG Restores;
+    ULONG Terminal;
+    ULONG Passes;
+} MODEL_OUT;
+
+typedef struct _MODEL_HC {
+    FAKE_HC F;
+    ULONG Owed;
+    ULONG Proven;
+    ULONG BmeCleared;
+    ULONG RestoreOk;
+} MODEL_HC;
+
+/* XhciRecoverController on the fake. */
+static ULONG modelAttempt(MODEL_HC *m)
+{
+    ULONG proven;
+
+    proven = m->Proven;
+    m->Proven = 0;
+    if (fakeRunning(&m->F)) {
+        return M_BUSY;                      /* the pre-check: no write */
+    }
+    if (proven && m->Owed) {
+        m->Owed = 0;                        /* xhciReset adopts it */
+    } else {
+        m->F.Writes++;
+        m->F.Written = m->F.Now;
+        m->Owed = 1;
+        m->F.Now += MODEL_STALL_MS;
+        if (fakeRunning(&m->F)) {
+            return M_BUSY;
+        }
+        m->Owed = 0;
+    }
+    if (m->BmeCleared) {
+        return M_BME;                       /* the restore step, raised */
+    }
+    return M_RECOVERED;
+}
+
+static void modelRun(ULONG hcrst, ULONG cnr, ULONG bme, ULONG restoreOk,
+                     MODEL_OUT *out)
+{
+    XHCI_TOL_RESET_IO io;
+    XHCI_TOL_WINDOW win;
+    MODEL_HC m;
+    ULONG requested;
+    ULONG failures;
+    ULONG failStamp;
+    ULONG tick;
+    ULONG waited;
+    ULONG cmd;
+    ULONG sts;
+    ULONG ok;
+    ULONG k;
+    ULONG pass;
+
+    memset(out, 0, sizeof(*out));
+    memset(&m, 0, sizeof(m));
+    fakeInit(&m.F, hcrst, cnr);
+    m.BmeCleared = bme;
+    m.RestoreOk = restoreOk;
+    io.Read = fakeRead;
+    io.Sleep = fakeSleep;
+    io.Context = &m.F;
+    XhciTolWindowInit(&win);
+    requested = 1;
+    failures = 0;
+    failStamp = 0;
+    for (pass = 0; pass < 400 && requested; pass++) {
+        tick = m.F.Now / XHCI_TOL_TICK_MS;
+        out->Passes++;
+        if (failures < XHCI_RECOVERY_MAX_ATTEMPTS &&
+            XhciTolRecoverPaced(failures, failStamp, tick) &&
+            XhciTolWindowAdmit(&win, 1, tick)) {
+            ok = modelAttempt(&m);
+            for (k = 0; k < 3 && (ok == M_BUSY || ok == M_BME); k++) {
+                if (ok == M_BUSY) {
+                    out->Settles++;
+                    if (XhciTolResetSettle(&io, XHCI_TOL_RESET_SETTLE_MS,
+                                           XHCI_TOL_RESET_STEP_MS, &waited,
+                                           &cmd, &sts) !=
+                        XHCI_TOL_SETTLE_DONE) {
+                        break;
+                    }
+                    if (m.Owed) {
+                        m.Proven = 1;
+                    }
+                }
+                if (m.BmeCleared) {
+                    if (!m.RestoreOk) {
+                        ok = M_BME;
+                        break;
+                    }
+                    m.BmeCleared = 0;
+                    out->Restores++;
+                }
+                ok = modelAttempt(&m);
+            }
+            if (ok == M_RECOVERED) {
+                out->Recovered = 1;
+                failures = 0;
+                requested = 0;
+            } else {
+                if (out->Charges < 4) {
+                    out->ChargeTick[out->Charges] = tick;
+                }
+                out->Charges++;
+                failures++;
+                failStamp = m.F.Now / XHCI_TOL_TICK_MS;
+            }
+        }
+        if (failures >= XHCI_RECOVERY_MAX_ATTEMPTS) {
+            break;
+        }
+        m.F.Now += 100;
+    }
+    out->Writes = m.F.Writes;
+    out->Terminal = XhciTolTerminal(!out->Recovered, 0, win.Refused, failures,
+                                    XHCI_RECOVERY_MAX_ATTEMPTS);
+}
+
+static void test_recover_model(void)
+{
+    static const ULONG holds[6] = { 0, 5, 50, 500, 1500, FAKE_FOREVER };
+    MODEL_OUT o;
+    ULONG which;
+    ULONG bme;
+    ULONG i;
+    ULONG k;
+
+    for (bme = 0; bme < 2; bme++) {
+        for (which = 0; which < 2; which++) {
+            for (i = 0; i < 6; i++) {
+                if (which == 0) {
+                    modelRun(holds[i], 0, bme, 1, &o);
+                } else {
+                    modelRun(0, holds[i], bme, 1, &o);
+                }
+                if (holds[i] <= 5) {
+                    CHECK_EQ(o.Recovered, 1, "0/5 ms: recovered");
+                    CHECK_EQ(o.Settles, 0, "inside the stall: no wait");
+                    /* A reset done inside the stall is not adopted: the
+                     * BME rerun writes its own, as before task 49.35. */
+                    CHECK_EQ(o.Writes, 1 + bme, "one HCRST, two with BME");
+                    CHECK_EQ(o.Charges, 0, "nothing charged");
+                    CHECK_EQ(o.Restores, bme, "BME put back once if cleared");
+                } else if (holds[i] <= XHCI_TOL_RESET_SETTLE_MS) {
+                    CHECK_EQ(o.Recovered, 1, "50/500 ms: recovered");
+                    CHECK_EQ(o.Settles, 1, "one settle at PASSIVE");
+                    CHECK_EQ(o.Writes, 1, "the rerun wrote no second HCRST");
+                    CHECK_EQ(o.Charges, 0, "the busy refusal not charged");
+                    CHECK_EQ(o.Restores, bme,
+                             "BME put back before the one rerun");
+                    CHECK_EQ(o.Terminal, XHCI_TOL_TERMINAL_NONE, "in service");
+                } else {
+                    CHECK_EQ(o.Recovered, 0, "1.5 s / for ever: not recovered");
+                    CHECK_EQ(o.Charges, XHCI_RECOVERY_MAX_ATTEMPTS,
+                             "three charged failures");
+                    CHECK_EQ(o.Terminal, XHCI_TOL_TERMINAL_FAILURES,
+                             "the latch still reached");
+                    for (k = 1; k < XHCI_RECOVERY_MAX_ATTEMPTS; k++) {
+                        CHECK(o.ChargeTick[k] - o.ChargeTick[k - 1] >=
+                                  XHCI_TOL_RECOVER_GAP_TICKS,
+                              "attempts at least the gap apart");
+                    }
+                    CHECK(o.ChargeTick[2] != o.ChargeTick[0],
+                          "never three inside one tick");
+                    CHECK(o.Writes <= XHCI_RECOVERY_MAX_ATTEMPTS,
+                          "at most one HCRST an attempt");
+                    CHECK_EQ(o.Restores, 0, "no restore without a settle");
+                }
+            }
+        }
+    }
+    /* The restore refused: each attempt charged once, the latch reached. */
+    modelRun(0, 0, 1, 0, &o);
+    CHECK_EQ(o.Recovered, 0, "restore refused: not recovered");
+    CHECK_EQ(o.Charges, XHCI_RECOVERY_MAX_ATTEMPTS, "charged once each");
+    CHECK_EQ(o.Terminal, XHCI_TOL_TERMINAL_FAILURES, "latched");
+    modelRun(500, 0, 1, 0, &o);
+    CHECK_EQ(o.Charges, XHCI_RECOVERY_MAX_ATTEMPTS,
+             "slow reset and restore refused: charged once each");
+    CHECK(o.Writes <= XHCI_RECOVERY_MAX_ATTEMPTS, "one HCRST an attempt");
+}
+
 static void test_dead(void)
 {
     XHCI_TOL_DEAD d;
@@ -1426,6 +1777,23 @@ static void test_terminal(void)
     CHECK_EQ(XhciTolTerminal(0, XHCI_TOL_CONTAINED_DMA_UNPROVEN, 0, 0, 3),
              XHCI_TOL_TERMINAL_DMA_UNPROVEN, "whatever the failure word");
     CHECK_EQ(XHCI_TOL_TERMINAL_DMA_UNPROVEN, 5, "the dump's value");
+
+    /* Mode 4's lost message (record 15 section 4.5.4, task 49.24). */
+    CHECK_EQ(XhciTolTerminalEx(1, 0, 0, 0, 3, 1), XHCI_TOL_TERMINAL_MSG4,
+             "lost: terminal at once, no recovery owed");
+    CHECK_EQ(XhciTolTerminalEx(1, 0, 1, 3, 3, 1), XHCI_TOL_TERMINAL_MSG4,
+             "lost: ahead of the window and the run");
+    CHECK_EQ(XhciTolTerminalEx(1, 1, 0, 0, 3, 1),
+             XHCI_TOL_TERMINAL_UNREADABLE, "a containment still its own");
+    CHECK_EQ(XhciTolTerminalEx(1, 0, 0, 1, 3, 0), XHCI_TOL_TERMINAL_OWED,
+             "not lost: as before");
+    CHECK_EQ(XHCI_TOL_TERMINAL_MSG4, 6, "the dump's value");
+    CHECK_EQ(XhciTolResumeRefused(XHCI_TOL_TERMINAL_MSG4), 1,
+             "lost: no resume reinitializes");
+    CHECK_EQ(XhciTolTerminalRelease(XHCI_TOL_TERMINAL_MSG4, 0, 0, 1), 1,
+             "lost: the devices released");
+    CHECK_EQ(XhciTolTerminalRelease(XHCI_TOL_TERMINAL_MSG4, 0, 1, 1), 0,
+             "lost: once per lifetime");
 }
 
 /* 35-V: a terminal no recovery acts on completes what the halted controller
@@ -1977,6 +2345,9 @@ int main(void)
     test_cycle_charge();
     test_port();
     test_window();
+    test_reset_settle();
+    test_recover_paced();
+    test_recover_model();
     test_dead();
     test_dead_recover();
     test_terminal();

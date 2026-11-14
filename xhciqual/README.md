@@ -407,8 +407,8 @@ and the second is the one that decides it:
 The obligation that replaces it: the release notes must say where to get the
 qualifier, because the recommended procedure begins with it. Build it from
 this directory (see "Build (Windows host)" above), or take it from the same
-place the driver package came from. That obligation is met by the "Before
-you install: check the machine" section of
+place the driver package came from. That obligation is met by the "XHCIQUAL: checking a machine's controller
+(optional)" section of
 [`../docs/using/release-notes.md`](../docs/using/release-notes.md), which
 also carries the four quick-scan verdicts. Keep the two in step: that
 section is a rendering of this one, and this file is the normative copy.
@@ -1382,8 +1382,8 @@ PCI configuration writes):
   same mechanism as BAR0 (a table straddling 1 MB is assembled from a
   direct copy and a mapping from `100000h`, since DPMI `0800h` refuses
   addresses below 1 MB), and at most 64 KB of it is walked. Printed: Type 0
-  BIOS vendor, version and date with the SMBIOS version; Type 1 maker,
-  product, version and family; Type 2 board maker and product; Type 4's
+  BIOS vendor, version and date with the SMBIOS version; Type 1 manufacturer,
+  product, version and family; Type 2 board manufacturer and product; Type 4's
   socket, and its version string where CPUID has no brand string.
 - **No SMBIOS** (an old machine, or a table that cannot be read): the ROM's
   own date at `F000:FFF5` and model byte at `F000:FFFE`, labelled `no
@@ -1417,7 +1417,7 @@ withheld when it ends in any head of an identifier, the UUID's included, so
 a cut cannot print a serial less its last characters. And once every
 field is read, both reports are rendered and checked line by line, exactly
 as printed, against every identifier (held in the parser's private list,
-never in `SYSINFO`, and wiped after): a maker `ACME` and a product
+never in `SYSINFO`, and wiped after): a manufacturer `ACME` and a product
 `12345678` would print a serial `ACME 12345678` that neither field holds,
 and a line's fixed words, the BIOS line's SMBIOS suffix or the short
 line's 79-column cut can complete or expose one too. A line that carries
