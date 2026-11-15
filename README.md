@@ -272,15 +272,15 @@ On Intel 7/8/9-series boards, the driver moves the blue USB 3 ports from EHCI to
 | Machine | Controller | Tested by |
 |---|---|---|
 | 2012 Lenovo B490 | Intel Ivy Bridge, Panther Point HM77 (7-series) PCH, with EHCI beside it. xHCI 1.0. | Me |
-| 2012 HP EliteBook 2570p | Intel Ivy Bridge, Panther Point QM77 (7-series) PCH, with EHCI beside it. xHCI 1.0. | Community (3.5.0.0) |
+| 2012 HP EliteBook 2570p | Intel Ivy Bridge, Panther Point QM77 (7-series) PCH, with EHCI beside it. xHCI 1.0. | Community |
 | 2012 HP EliteBook 8470p | Intel Ivy Bridge, Panther Point QM77 (7-series) PCH, with EHCI beside it. xHCI 1.0. | Me |
 | 2015 Dell Latitude E7250 | Intel Broadwell-U, Wildcat Point-LP (9-series) PCH, with EHCI beside it. xHCI 1.0. | Me |
 | 2016 ThinkPad E460 | Intel Skylake, Sunrise Point-LP (100-series) PCH. xHCI 1.0. | Me |
 | 2018 HP EliteBook 850 G5 | Intel Sunrise Point-LP, xHCI 1.0. | Community |
 | 2020 ThinkPad P14s Gen 1 | Intel Comet Lake PCH-LP (400-series). xHCI 1.1. | Me |
 | ASUS ROG Crosshair X870E Apex | AMD 800-series chipset and Ryzen (Raphael) xHCI controllers; ASMedia ASM4242 USB4 host. | Me |
-| Omores' Intel and AMD desktops | H110, B360, B550, X570, X670 | [Omores](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) (1.x.x.x) |
-| VMware Workstation 26 (virtual hardware 21), Windows XP SP3 guest | VMware's virtual xHCI (`15AD:077A`), a USB 3.0 stick at SuperSpeed | [Community](https://github.com/yeokm1/xhci98/issues/25) (3.2.0.0) |
+| Omores' Intel and AMD desktops | H110, B360, B550, X570, X670 | [Omores](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) |
+| VMware Workstation 26 (virtual hardware 21), Windows XP SP3 guest | VMware's virtual xHCI (`15AD:077A`), a USB 3.0 stick at SuperSpeed | [Community](https://github.com/yeokm1/xhci98/issues/25) |
 
 ## The package
 
