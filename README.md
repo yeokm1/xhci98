@@ -272,6 +272,8 @@ On Intel 7/8/9-series boards, the driver moves the blue USB 3 ports from EHCI to
 | Machine | Controller | Tested by |
 |---|---|---|
 | 2012 Lenovo B490 | Intel Ivy Bridge, Panther Point HM77 (7-series) PCH, with EHCI beside it. xHCI 1.0. | Me |
+| 2012 HP EliteBook 2570p | Intel Ivy Bridge, Panther Point QM77 (7-series) PCH, with EHCI beside it. xHCI 1.0. | Community |
+| 2012 HP EliteBook 8470p | Intel Ivy Bridge, Panther Point QM77 (7-series) PCH, with EHCI beside it. xHCI 1.0. | Me |
 | 2015 Dell Latitude E7250 | Intel Broadwell-U, Wildcat Point-LP (9-series) PCH, with EHCI beside it. xHCI 1.0. | Me |
 | 2016 ThinkPad E460 | Intel Skylake, Sunrise Point-LP (100-series) PCH. xHCI 1.0. | Me |
 | 2018 HP EliteBook 850 G5 | Intel Sunrise Point-LP, xHCI 1.0. | Community |
