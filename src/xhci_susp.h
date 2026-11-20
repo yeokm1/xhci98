@@ -313,6 +313,13 @@ ULONG XhciSuspDecide(PXHCI_SUSP_LINK link, PXHCI_SUSP_FUNC funcs,
 #define XHCI_SUSP_RES_EXPIRED       7UL /* OBSERVE or VERIFY: the bound ran
                                          * out with every sample read and
                                          * nothing seen either way       */
+#define XHCI_SUSP_RES_ABORTED       8UL /* STOP or STOP_FUNCS: a rewind's
+                                         * Set TR Dequeue aborted cleanly
+                                         * or left (task 50.30 step 3,
+                                         * design record 17 section
+                                         * 4.15.5a, hcdSuspRewind): never
+                                         * restarted, the device failed
+                                         * alone - OUT_ALONE, RECOVERING */
 
 /* How a sequence ended (link->Outcome). */
 #define XHCI_SUSP_OUT_NONE          0UL
@@ -321,6 +328,8 @@ ULONG XhciSuspDecide(PXHCI_SUSP_LINK link, PXHCI_SUSP_FUNC funcs,
 #define XHCI_SUSP_OUT_UNCERTAIN     3UL /* RECOVERING                     */
 #define XHCI_SUSP_OUT_GONE          4UL
 #define XHCI_SUSP_OUT_ACTIVE        5UL /* a resume reached ACTIVE        */
+#define XHCI_SUSP_OUT_ALONE         6UL /* RES_ABORTED: RECOVERING, the
+                                         * device removed alone          */
 
 /* A refusal's reason (3.5). */
 #define XHCI_SUSP_WHY_NONE          0UL

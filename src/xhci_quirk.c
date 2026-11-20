@@ -106,6 +106,15 @@ static const ULONG xhciQkAmdBit[] = {
     XHCI_QK_ID(0x1022, 0x15E5), 0
 };
 
+/* XhciStreamDequeueAvoid (task 50.20), no Linux quirk: the controllers on
+ * which a stream's Set TR Dequeue Pointer has been seen to leave another
+ * stream of the endpoint at the position it sent - the Intel 7 Series
+ * xHCI alone, from the field's stream traces (design record 17 section
+ * 4.12.10). Lynx Point is not listed on its ancestry. */
+static const ULONG xhciQkDeqAvoid[] = {
+    XHCI_QK_ID(0x8086, 0x1E31), 0
+};
+
 typedef struct _XHCI_QK_DEF {
     const char *Flag;
     const char *Label;
@@ -150,7 +159,9 @@ static const XHCI_QK_DEF xhciQkDefs[XHCI_QK_COUNT] = {
     { "XHCI_ETRON_HOST", "quirk.isochsuccess",
       xhciQkEtron, 1, 1 },
     { "XHCI_DISABLE_SPARSE", "quirk.amdbit",
-      xhciQkAmdBit, 1, 0 }
+      xhciQkAmdBit, 1, 0 },
+    { "none", "quirk.deqavoid",
+      xhciQkDeqAvoid, 1, 1 }
 };
 
 const char *XhciQuirkValueName(ULONG quirk)

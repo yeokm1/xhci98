@@ -6,8 +6,10 @@
  * THE RECORDS. Every transaction is an image-static record (CM_EJ_REC),
  * never the NHI's extension and never the call workers' block: it is the
  * member blocker of part 0 by construction. The image stays resident on
- * 98 SE and ME (no DriverUnload, R4), so a record outlives the NHI's stop
- * and its workers: CmEjectStop detaches the records of the stopping NHI;
+ * 98 SE and ME (the device object DriverEntry makes there and never
+ * deletes, R4, design record 21 section 7.9), so a record outlives the
+ * NHI's stop and its workers: CmEjectStop detaches the records of the
+ * stopping NHI;
  * one whose removal is already authorised (a CLEAN or ISOLATED_NOT_CLEAN
  * answer taken, an isolation proven, the unit vanished after its query, or
  * a unit with no request) and still owed is completed by its member's
@@ -160,6 +162,12 @@ static ULONG cmEjTickUs;
 static ULONG cmEjReadNumber;    /* every sweep reading of the image, for
                                    the readings' tags (task 46.13)     */
 static ULONG cmEjStartSeq;      /* the starts' numbers (task 46.13)    */
+/* Record 21 section 6.1.6: the calls that change devnodes or write
+ * configuration space (CmEjectActivity), and the write-back passes under
+ * way that they wait for. Under cmEjLock. */
+static ULONG cmEjActSeq;
+static ULONG cmEjActRunning;
+static ULONG cmEjPassOn;
 
 /* ====================================================================== */
 /* The clock and configuration space                                      */
@@ -471,6 +479,43 @@ static ULONG cmEjStill(PCM_CFGMG cfg, const CM_EJ_REC *rec, ULONG devnode)
                                       : CMG_CR_NO_SUCH_DEVNODE;
 }
 
+/* Record 21 section 6.1.6: such a call begins - counted, and held while a
+ * write-back pass is under way (its next check sees the sequence moved
+ * and stops after the one configuration access it may have in flight).
+ * PASSIVE_LEVEL (the call workers); above it the call is counted and not
+ * held. */
+static VOID cmEjActStart(VOID)
+{
+    KIRQL irql;
+    LARGE_INTEGER pause;
+    ULONG on;
+
+    KeAcquireSpinLock(&cmEjLock, &irql);
+    cmEjActSeq++;
+    cmEjActRunning++;
+    on = cmEjPassOn;
+    KeReleaseSpinLock(&cmEjLock, irql);
+    while (on != 0 && KeGetCurrentIrql() == PASSIVE_LEVEL) {
+        CmRelativeMs(&pause, 10);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &pause);
+        KeAcquireSpinLock(&cmEjLock, &irql);
+        on = cmEjPassOn;
+        KeReleaseSpinLock(&cmEjLock, irql);
+    }
+}
+
+static VOID cmEjActEnd(VOID)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&cmEjLock, &irql);
+    cmEjActSeq++;
+    if (cmEjActRunning != 0) {
+        cmEjActRunning--;
+    }
+    KeReleaseSpinLock(&cmEjLock, irql);
+}
+
 /* QUERY and REMOVE: op [0] the devnode. Result [0] the CONFIGRET. */
 static ULONG cmEjRunQuery(PVOID route, PVOID context, const VOID *op,
                           VOID *res)
@@ -480,10 +525,12 @@ static ULONG cmEjRunQuery(PVOID route, PVOID context, const VOID *op,
 
     cfg = (PCM_CFGMG)route;
     devnode = ((const ULONG *)op)[0];
+    cmEjActStart();
     ((PULONG)res)[0] = cmEjStill(cfg, (CM_EJ_REC *)context, devnode);
     if (((PULONG)res)[0] == CMG_CR_SUCCESS) {
         ((PULONG)res)[0] = CmCfgmgQueryRemove(cfg, devnode);
     }
+    cmEjActEnd();
     return 4;
 }
 
@@ -495,10 +542,12 @@ static ULONG cmEjRunRemove(PVOID route, PVOID context, const VOID *op,
 
     cfg = (PCM_CFGMG)route;
     devnode = ((const ULONG *)op)[0];
+    cmEjActStart();
     ((PULONG)res)[0] = cmEjStill(cfg, (CM_EJ_REC *)context, devnode);
     if (((PULONG)res)[0] == CMG_CR_SUCCESS) {
         ((PULONG)res)[0] = CmCfgmgRemove(cfg, devnode);
     }
+    cmEjActEnd();
     return 4;
 }
 
@@ -631,6 +680,7 @@ static ULONG cmEjRunSlot(PVOID route, PVOID context, const VOID *op,
     out[0] = in[2];
     out[1] = XHCI_TBT_PORT_ERROR;
     out[2] = 0;
+    cmEjActStart();
     if (cfg->Open && (cfg->PciOpen || CmCfgmgPciOpen(cfg, in[0], in[1]))) {
         io.Read = cmEjVxdRead;
         io.Write = cmEjVxdWrite;
@@ -642,6 +692,7 @@ static ULONG cmEjRunSlot(PVOID route, PVOID context, const VOID *op,
         out[1] = verdict;
         out[2] = (port.ShpcCap != 0 && port.PcieCap == 0) ? 1UL : 0UL;
     }
+    cmEjActEnd();
     out[3] = cmEjNow();
     return 16;
 }
@@ -956,10 +1007,12 @@ static VOID cmEjDetachedLoop(PCM_CFGMG cfg, CM_EJ_REC *rec)
         seq = rec->Tx.Sequence;
         KeReleaseSpinLock(&cmEjLock, irql);
         if (what == CM_EJ_DO_REMOVE) {
+            cmEjActStart();
             cr = cmEjStill(cfg, rec, devnode);
             if (cr == CMG_CR_SUCCESS) {
                 cr = CmCfgmgRemove(cfg, devnode);
             }
+            cmEjActEnd();
             t = cmEjNow();
             KeAcquireSpinLock(&cmEjLock, &irql);
             CmEjFeed(&rec->Tx, CM_EJ_FED_REMOVE, cr, 0, t);
@@ -2579,6 +2632,9 @@ VOID CmEjectLinkDown(PCM_NHI nhi, ULONG port, ULONG gen)
     nhi->Ej.LinkDownEvt[member] = e;
     nhi->Ej.LinkDownValid |= 1UL << member;
     KeReleaseSpinLock(&cmEjLock, irql);
+    /* Record 21 section 6.1.6 item 5 b: the connection's continuity, for
+     * a unit's copy below the member. */
+    CmCfgwkConnLost(nhi->Reenum.Wk, 1UL << member);
     CmLogNote(nhi, "cm.vanish.down",
               ((member & 0xFFUL) << 24) | (gen & 0xFFFFFFUL));
     CmLogNote(nhi, "cm.vanish.down.evt", e);
@@ -2833,4 +2889,77 @@ BOOLEAN CmEjectParkedAny(ULONG bridge)
     }
     KeReleaseSpinLock(&cmEjLock, irql);
     return any;
+}
+
+ULONG CmEjectActivity(ULONG bridge, PBOOLEAN busy)
+{
+    KIRQL irql;
+    ULONG i;
+    ULONG seq;
+    BOOLEAN b;
+
+    KeAcquireSpinLock(&cmEjLock, &irql);
+    seq = cmEjActSeq;
+    b = (BOOLEAN)(cmEjActRunning != 0);
+    for (i = 0; i < CM_EJ_RECORDS && !b; i++) {
+        if (cmEj[i].Tx.Phase != CM_EJ_P_FREE && cmEj[i].Tx.Bridge == bridge) {
+            b = TRUE;
+        }
+    }
+    for (i = 0; i < CM_EJ_SWEEPS && !b; i++) {
+        if (cmEjSw[i].InUse && cmEjSw[i].Bridge == bridge) {
+            b = TRUE;
+        }
+    }
+    KeReleaseSpinLock(&cmEjLock, irql);
+    *busy = b;
+    return seq;
+}
+
+BOOLEAN CmEjectPassBegin(ULONG bridge, PULONG seq)
+{
+    KIRQL irql;
+    ULONG i;
+    BOOLEAN b;
+
+    KeAcquireSpinLock(&cmEjLock, &irql);
+    b = (BOOLEAN)(cmEjActRunning != 0);
+    for (i = 0; i < CM_EJ_RECORDS && !b; i++) {
+        if (cmEj[i].Tx.Phase != CM_EJ_P_FREE && cmEj[i].Tx.Bridge == bridge) {
+            b = TRUE;
+        }
+    }
+    for (i = 0; i < CM_EJ_SWEEPS && !b; i++) {
+        if (cmEjSw[i].InUse && cmEjSw[i].Bridge == bridge) {
+            b = TRUE;
+        }
+    }
+    if (!b) {
+        cmEjPassOn++;
+        *seq = cmEjActSeq;
+    }
+    KeReleaseSpinLock(&cmEjLock, irql);
+    return (BOOLEAN)!b;
+}
+
+BOOLEAN CmEjectPassGo(ULONG seq)
+{
+    KIRQL irql;
+    BOOLEAN go;
+
+    KeAcquireSpinLock(&cmEjLock, &irql);
+    go = (BOOLEAN)(cmEjActSeq == seq && cmEjActRunning == 0);
+    KeReleaseSpinLock(&cmEjLock, irql);
+    return go;
+}
+
+VOID CmEjectPassEnd(VOID)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&cmEjLock, &irql);
+    if (cmEjPassOn != 0) {
+        cmEjPassOn--;
+    }
+    KeReleaseSpinLock(&cmEjLock, irql);
 }

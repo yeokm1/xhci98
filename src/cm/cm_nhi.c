@@ -4292,6 +4292,14 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
     if (nhi->Values.WakePowerUpRefused) {
         CmLogNote(nhi, "cm.wakepowerup.raw", nhi->Values.WakePowerUpRaw);
     }
+    /* XhciCmWakeOrder as run with (record 21 section 6.3.2); bit 8 found,
+     * bit 9 refused. */
+    CmLogNote(nhi, "cm.wakeorder.value",
+              nhi->Values.WakeOrder | (nhi->Values.WakeOrderFound << 8) |
+                  (nhi->Values.WakeOrderRefused << 9));
+    if (nhi->Values.WakeOrderRefused) {
+        CmLogNote(nhi, "cm.wakeorder.raw", nhi->Values.WakeOrderRaw);
+    }
     CmWpuCount(nhi, TRUE);
 
     cmFindBar(nhi, irp);

@@ -92,6 +92,49 @@ NTSTATUS UasBusIoctl(PUAS_FDO fdo, ULONG code, PVOID arg1)
     return uasInternalIoctl(fdo, code, arg1);
 }
 
+/*
+ * Task 50.38 (design record 17 section 4.12.11): uasInternalIoctl on the
+ * recovery worker's own IRP, made at the engine's first start, so that the
+ * worker's requests allocate nothing. The IRP is made ready again only
+ * once the wait has seen its completion routine run, which returns
+ * STATUS_MORE_PROCESSING_REQUIRED. A lower stack deeper than the IRP was
+ * made for takes an IRP allocated as before. PASSIVE_LEVEL, the recovery
+ * worker only.
+ */
+NTSTATUS UasRecoveryIoctl(PUAS_FDO fdo, ULONG code, PVOID arg1)
+{
+    PIO_STACK_LOCATION next;
+    KEVENT done;
+    PIRP irp;
+
+    irp = fdo->RecoveryIrp;
+    if (irp == NULL || fdo->Lower->StackSize > fdo->RecoveryIrpStack) {
+        return uasInternalIoctl(fdo, code, arg1);
+    }
+    UasIrpReset(irp, fdo->RecoveryIrpSize, fdo->RecoveryIrpStack);
+    KeInitializeEvent(&done, NotificationEvent, FALSE);
+    irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
+    next = IoGetNextIrpStackLocation(irp);
+    next->MajorFunction = IRP_MJ_INTERNAL_DEVICE_CONTROL;
+    next->Parameters.DeviceIoControl.IoControlCode = code;
+    next->Parameters.Others.Argument1 = arg1;
+    UAS_SET_COMPLETION_ALWAYS(irp, uasSignal, &done);
+    (VOID)IoCallDriver(fdo->Lower, irp);
+    UasWaitEvent(&done);
+    return irp->IoStatus.Status;
+}
+
+NTSTATUS UasRecoveryUrb(PUAS_FDO fdo, PURB urb)
+{
+    NTSTATUS status;
+
+    status = UasRecoveryIoctl(fdo, IOCTL_INTERNAL_USB_SUBMIT_URB, urb);
+    if (NT_SUCCESS(status) && !USBD_SUCCESS(urb->UrbHeader.Status)) {
+        status = STATUS_UNSUCCESSFUL;
+    }
+    return status;
+}
+
 /* One standard descriptor from the device, into nonpaged pool. */
 static NTSTATUS uasGetDescriptor(PUAS_FDO fdo, UCHAR type, UCHAR index,
                                  USHORT language, PVOID buffer,
@@ -346,6 +389,10 @@ static VOID uasReadNoAta(PUAS_FDO fdo)
         /* Issue 26, the owner's option 4: XhciUasFastReset, the same key,
          * the same rules (uas_xport.c, UasFastResetDue). */
         fast = uasReadDeviceDword(key, L"XhciUasFastReset");
+#if defined(XHCI_FLAVOUR_QEMU)
+        /* Task 50.20's control legs; never read by a release build. */
+        fdo->QemuTest = uasReadDeviceDword(key, L"XhciUasQemuTest");
+#endif
         ZwClose(key);
     }
     KeAcquireSpinLock(&fdo->Lock, &irql);
@@ -646,12 +693,15 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
     uasReadSerial(fdo, serialIndex);
 
     fdo->Streamed = FALSE;
+    fdo->StreamContract = FALSE;
     if (fdo->Info.SuperSpeed) {
         wanted = uasStreamsWanted(fdo);
         if (wanted < 2) {
             return STATUS_DEVICE_CONFIGURATION_ERROR;
         }
         status = UasStreamsOpen(&fdo->Streams, fdo->Lower,
+                                (BOOLEAN)((fdo->QemuTest &
+                                           UAS_QT_NO_DECLARE) == 0),
                                 fdo->Pipe[UAS_PIPE_STATUS - 1],
                                 fdo->Pipe[UAS_PIPE_DATA_IN - 1],
                                 fdo->Pipe[UAS_PIPE_DATA_OUT - 1], wanted);
@@ -663,6 +713,7 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
             return STATUS_DEVICE_CONFIGURATION_ERROR;
         }
         fdo->Streamed = TRUE;
+        fdo->StreamContract = fdo->Streams.Contract;
     }
 
     if (fdo->Slots == NULL) {

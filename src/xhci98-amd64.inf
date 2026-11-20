@@ -28,7 +28,7 @@ ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
 Provider=%Provider%
 LayoutFile=layout.inf
 ; Must equal src\xhci_version.h.
-DriverVer=11/14/2026,3.5.0.0
+DriverVer=11/20/2026,3.6.0.0
 ; Made and test-signed by the packager alone (design record 19).
 CatalogFile=xhci98.cat
 
@@ -161,7 +161,15 @@ HKR,,XhciForceBulkOnly,0x00010003,0
 HKR,,XhciFastPollFsLs,0x00010003,0
 HKR,,XhciFirstEnumWaitMs,0x00010003,5000
 HKR,,XhciFirstEnumPortMs,0x00010003,2000
-HKR,,XhciIntelPortSwitch,0x00010003,0
+; The Intel port switchover (design record 16 section 21, task 50.34):
+; on in every section, held by the driver on 2000 and later while
+; Windows Setup runs; XhciIntelPortSwitchSetup 0 automatic, 1 bypass,
+; 2 always hold.
+; XhciIntelPortSwitchReady is the first-session check's own note, 0
+; until the driver sets it; 98 SE and ME have no such check.
+HKR,,XhciIntelPortSwitchSetup,0x00010003,0
+HKR,,XhciIntelPortSwitchReady,0x00010003,0
+HKR,,XhciIntelPortSwitch,0x00010003,1
 HKR,,XhciIntelIrqRoute,0x00010003,1
 HKR,,XhciIntelNoRouteIrq,0x00010003,1
 HKR,,XhciTolerance,0x00010003,1
@@ -181,6 +189,10 @@ HKR,,XhciSilentInstall,0x00010003,0
 HKR,,XhciUsb2HubSpeedFallback,0x00010003,1
 HKR,,XhciAccept096,0x00010003,1
 HKR,,XhciCommandCheck,0x00010003,1
+HKR,,XhciCancelStatus,0x00010003,1
+HKR,,XhciDeviceIsolation,0x00010003,1
+HKR,,XhciUnplugComplete,0x00010003,1
+HKR,,XhciFailedRetrySec,0x00010003,5
 HKR,,XhciStreamDequeueRepair,0x00010003,1
 HKR,,XhciAcpiTables,0x00010003,1
 ; The BOS read at High and Full Speed (design record 13 section 8.4.1), a
@@ -237,6 +249,10 @@ HKR,,XhciStreamRingPad,0x00010003,1
 HKR,,XhciControlLinkNoOp,0x00010003,1
 HKR,,XhciIsochSpuriousSuccess,0x00010003,1
 HKR,,XhciAmdSuspendBitClear,0x00010003,1
+; A controller whose stream Set TR Dequeue moves another stream (task 50.20;
+; design record 17 section 4.12.10), a value of this driver's own in the
+; same form: 0 off, 1 the listed controllers (8086:1E31), 2 every one.
+HKR,,XhciStreamDequeueAvoid,0x00010003,1
 HKR,,XhciImodInterval250ns,0x00010003,160
 HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"
 HKR,,Controller,1,01

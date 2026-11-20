@@ -401,6 +401,19 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
 #define CM_WAKE_POWER_UP_DEFAULT 1UL
 
 /*
+ * XhciCmWakeOrder, REG_DWORD (design record 21 section 6.3.2, task 50.10):
+ * 1 has the child filter on a device directly behind a tunnel port answer
+ * PowerRelations with the NHI on Windows 7 and later, so Windows powers
+ * the device up only after the NHI at a wake from standby or hibernation;
+ * 0 answers, asks and refuses nothing of it, as 3.5.0.0. The default is 0
+ * (owner, 2026-11-15: off by default, a bench reading to follow). The INFs
+ * write it at the default under the don't-overwrite flag; absent reads as
+ * the default, and any other value is refused and the default stands. Read
+ * once per start, machine-wide key first, as every value.
+ */
+#define CM_WAKE_ORDER_DEFAULT 0UL
+
+/*
  * XhciCmBridgeReq, REG_DWORD, Windows 2000, XP and XP x64 only (design
  * record 33 section 9.1, task 45.12): 1 rewrites the requirement list of
  * a hot-added bridge below an active tunnel port (record 33 section 6)
@@ -481,6 +494,10 @@ typedef struct _CM_VALUES {
     ULONG WakePowerUpFound;
     ULONG WakePowerUpRaw;
     ULONG WakePowerUpRefused;
+    ULONG WakeOrder;            /* XhciCmWakeOrder as run with              */
+    ULONG WakeOrderFound;
+    ULONG WakeOrderRaw;
+    ULONG WakeOrderRefused;
     ULONG BridgeReq;            /* XhciCmBridgeReq as run with              */
     ULONG BridgeReqFound;
     ULONG BridgeReqRaw;
@@ -541,6 +558,10 @@ VOID CmValuesTakeSleepEntry(PCM_VALUES v, ULONG found, ULONG raw);
 /* Take XhciCmWakePowerUp: 0 or 1, anything else refused (the default
  * stands). */
 VOID CmValuesTakeWakePowerUp(PCM_VALUES v, ULONG found, ULONG raw);
+
+/* Take XhciCmWakeOrder: 0 or 1, anything else refused (the default
+ * stands). */
+VOID CmValuesTakeWakeOrder(PCM_VALUES v, ULONG found, ULONG raw);
 
 /* Take XhciCmBridgeReq: 0, 1 or 2, anything else refused (1 stands). */
 VOID CmValuesTakeBridgeReq(PCM_VALUES v, ULONG found, ULONG raw);

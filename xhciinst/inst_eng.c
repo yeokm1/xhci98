@@ -250,6 +250,9 @@ typedef struct _DEVREC {
     int RegOnly;            /* 98/ME: an Enum entry with no devnode */
     char InfPath[64];       /* the driver key's InfPath       */
     int InfPathState;       /* 1 read, 0 absent, -1 unreadable */
+    int KeyGone;            /* the driver key its Driver value names is
+                               not there (record 23 section 5.3,
+                               revision 65)                   */
     int S98Place;           /* Stor98: INST_S98_AT_*          */
     int S98Why;             /* Stor98: INST_S98_ELIGIBLE or the
                                reason it is left             */
@@ -1806,20 +1809,39 @@ static void dev_driver_values(DEVREC *d)
     char path[INST_DRIVER_PATH_CHARS];
     char text[128];
     HKEY k;
+    LONG e = ERROR_INVALID_DATA;
     int r;
 
     d->VersionState = INST_VS_ABSENT;
     d->VersionText[0] = '\0';
+    d->KeyGone = 0;
     if (d->Driver[0] == '\0') {
         return;
     }
-    if (!driver_key_path(d, path, sizeof(path)) ||
-        RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, &k) !=
-        ERROR_SUCCESS) {
+    if (driver_key_path(d, path, sizeof(path))) {
+        e = RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, &k);
+    }
+    if (e == ERROR_FILE_NOT_FOUND &&
+        inst_driver_value_form(envNow.Nt, d->Driver)) {
+        /* Deleted by hand, the Enum entry left (record 23 section 5.3,
+         * revision 65): no version, and on 98 and ME no NTMPDriver, so
+         * nothing loads for it. Who owns it is the plan's question. Its
+         * InfPath stays unreadable, as before, for the INF removal and
+         * /restage. */
+        d->KeyGone = 1;
+        d->InfPathState = -1;
+        inst_copy(d->VersionText, "(driver entry missing)",
+                  sizeof(d->VersionText));
+        logonly("%s: its driver key %s is not there\n", d->Id, path);
+        return;
+    }
+    if (e != ERROR_SUCCESS) {
         d->VersionState = INST_VS_UNREADABLE;
         d->InfPathState = -1;
         inst_copy(d->VersionText, "(driver key unreadable)",
                   sizeof(d->VersionText));
+        logonly("%s: its driver key %s did not open (%ld)\n", d->Id,
+                path[0] != '\0' ? path : "(no path)", (long)e);
         if (!envNow.Nt) {
             /* 98 and ME name the driver in that key (NTMPDriver): its
              * owner is unknown, never "no driver" (section 6.3). */
@@ -2038,6 +2060,147 @@ static int reg9x_driver(const char *id, char *drv)
         r = -1;
     }
     return r;
+}
+
+/* Record 23 section 6.3, revision 65: on 98 SE and ME the package's own bus
+ * entries (HKLM\Enum\USB\XHCI98_*: a root hub, hub or composite device
+ * xhci98.sys created) whose driver key was deleted by hand and which have
+ * no devnode. Read with the devices, shown in the plan, and removed by the
+ * helper in an install run (stale_bus_run), so that Windows makes the entry
+ * afresh when it finds the device again. */
+#define INST_MAX_STALE 32
+typedef struct _STALE9X {
+    char Id[INST_ID_CHARS];
+    char Desc[128];
+} STALE9X;
+static STALE9X stale9x[INST_MAX_STALE];
+static int stale9xCount;
+static int stale9xMore;             /* more qualified than the list holds:
+                                       the rest are left for a later run */
+static int stale9xMoreRun;          /* so in the plan this run confirmed */
+static STALE9X stale9xRun[INST_MAX_STALE];  /* the confirmed set, copied
+                                               when the passes start    */
+static int stale9xRunCount;
+static int stale9xRunTried[INST_MAX_STALE]; /* reached by stale_bus_run */
+static int stale9xRemoved;          /* removed in this run              */
+static STALE9X stale9xFail[INST_MAX_STALE];
+static char stale9xWhy[INST_MAX_STALE][96];
+static int stale9xFailCount;        /* left with a step in this run     */
+static int keyGoneFixed;            /* a device whose driver key was gone
+                                       installed in this run            */
+
+/* The devices of the plan left as INST_ACT_ORPHAN. */
+static int orphan_count(void);
+
+/* 1 when the entry is the package's own bus entry, its Driver value has
+ * 98's form and names a key that is not there, and the configuration
+ * manager has no devnode for it: the check before it is listed and again
+ * before it is removed. Every other answer is 0, and the entry is left.
+ * path (INST_DRIVER_PATH_CHARS) gets the driver key's path where it was
+ * built, for the log. */
+static int stale_bus_gone(const char *id, char *path)
+{
+    char drv[INST_DRIVER_BYTES];
+    HKEY k;
+    LONG e;
+    DWORD dn;
+
+    path[0] = '\0';
+    if (envNow.Nt || inst_bus_id(id) != 1 || api.Locate == NULL) {
+        return 0;
+    }
+    drv[0] = '\0';
+    if (reg9x_driver(id, drv) <= 0 || !inst_driver_value_form(0, drv) ||
+        !inst_driver_key_path(path, INST_DRIVER_PATH_CHARS, 0, drv)) {
+        path[0] = '\0';
+        return 0;
+    }
+    e = RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, &k);
+    if (e == ERROR_SUCCESS) {
+        RegCloseKey(k);
+        return 0;
+    }
+    if (e != ERROR_FILE_NOT_FOUND) {
+        return 0;
+    }
+    return api.Locate(&dn, (char *)id, 0) == INST_CR_NO_SUCH_DEVNODE;
+}
+
+static void stale_bus_scan_9x(void)
+{
+    HKEY usb;
+    HKEY dev;
+    char name[INST_ID_CHARS];
+    char inst[INST_ID_CHARS];
+    char id[INST_ID_CHARS];
+    char path[INST_DRIVER_PATH_CHARS];
+    DWORD i;
+    DWORD j;
+    DWORD n;
+    STALE9X *s;
+
+    stale9xCount = 0;
+    stale9xMore = 0;
+    if (envNow.Nt || opts.Uninstall ||
+        RegOpenKeyExA(HKEY_LOCAL_MACHINE, "Enum\\USB", 0, KEY_READ, &usb) !=
+        ERROR_SUCCESS) {
+        return;
+    }
+    for (i = 0; !stale9xMore; i++) {
+        n = sizeof(name);
+        if (RegEnumKeyExA(usb, i, name, &n, NULL, NULL, NULL, NULL) !=
+            ERROR_SUCCESS) {
+            break;
+        }
+        if (!inst_eqn(name, "XHCI98_", 7) ||
+            RegOpenKeyExA(usb, name, 0, KEY_READ, &dev) != ERROR_SUCCESS) {
+            continue;
+        }
+        for (j = 0; !stale9xMore; j++) {
+            n = sizeof(inst);
+            if (RegEnumKeyExA(dev, j, inst, &n, NULL, NULL, NULL, NULL) !=
+                ERROR_SUCCESS) {
+                break;
+            }
+            if (strlen(name) + strlen(inst) + 6 > sizeof(id)) {
+                continue;
+            }
+            _snprintf(id, sizeof(id) - 1, "USB\\%s\\%s", name, inst);
+            id[sizeof(id) - 1] = '\0';
+            if (!stale_bus_gone(id, path)) {
+                continue;
+            }
+            if (stale9xCount >= INST_MAX_STALE) {
+                stale9xMore = 1;
+                logonly("stale bus entries: more than %d; the rest are left "
+                        "for a later run\n", INST_MAX_STALE);
+                break;
+            }
+            s = &stale9x[stale9xCount++];
+            memset(s, 0, sizeof(*s));
+            inst_copy(s->Id, id, sizeof(s->Id));
+            (void)reg9x_value(id, "DeviceDesc", s->Desc, sizeof(s->Desc));
+            logonly("stale bus entry: %s (its driver key %s is not there, no "
+                    "devnode)\n", id, path);
+        }
+        RegCloseKey(dev);
+    }
+    RegCloseKey(usb);
+}
+
+/* 98 SE and ME: 1 when the current plan lets the stale bus entries be
+ * removed - an install run with the USB drivers and the xhci98.sys group
+ * allowed - and 1 from stale_bus_due when there are such entries (the
+ * first INST_MAX_STALE; more are said, and left for a later run). */
+static int stale_bus_allowed(void)
+{
+    return !envNow.Nt && !opts.Uninstall && usbInclude &&
+           groupVerdict[0] == INST_GROUP_OK;
+}
+
+static int stale_bus_due(void)
+{
+    return stale_bus_allowed() && stale9xCount > 0;
 }
 
 /* 98 SE and ME: a string value of HKLM\Enum\<id> read whole, whatever its
@@ -2737,6 +2900,7 @@ static int scan_9x(void)
     if (!devTruncated) {
         registry_controllers_9x();
     }
+    stale_bus_scan_9x();
     if (devTruncated) {
         out("More than %d devices: the list is incomplete, so nothing is "
             "changed.\n", INST_MAX_DEVS);
@@ -3030,7 +3194,7 @@ static void group_verdicts(void)
             }
             d->Refused = 0;
             if (groupVerdict[g] != INST_GROUP_OK && d->Action != INST_ACT_FOREIGN &&
-                d->Action != INST_ACT_WINDOWS) {
+                d->Action != INST_ACT_WINDOWS && d->Action != INST_ACT_ORPHAN) {
                 d->Refused = 1;
                 d->Runs = 0;
             } else if (repair && envNow.Nt && d->Present &&
@@ -3951,9 +4115,71 @@ static void take_lock(void)
             takeWarnCount);
 }
 
+/* 98 and ME, a device whose driver key is gone (record 23 section 6.3,
+ * revision 65): 1 when its Enum entry proves it this package's. */
+static int keygone_ours(const DEVREC *d)
+{
+    char mfg[64];
+    int r;
+
+    mfg[0] = '\0';
+    r = reg9x_value(d->Id, "Mfg", mfg, sizeof(mfg));
+    return inst_keygone_ours9x(d->Id, r > 0 ? mfg : NULL);
+}
+
+/* 98 and ME: 1 when the Enum entry id, with a devnode or not, names a
+ * driver key that is gone (the form of section 5.3, ERROR_FILE_NOT_FOUND)
+ * and does not prove itself the package's: nothing of it is edited. */
+static int keygone_unproven9x(const char *id)
+{
+    char drv[INST_DRIVER_BYTES];
+    char path[INST_DRIVER_PATH_CHARS];
+    char mfg[64];
+    HKEY k;
+    LONG e;
+    int r;
+
+    if (envNow.Nt) {
+        return 0;
+    }
+    drv[0] = '\0';
+    if (reg9x_driver(id, drv) <= 0 || !inst_driver_value_form(0, drv) ||
+        !inst_driver_key_path(path, sizeof(path), 0, drv)) {
+        return 0;
+    }
+    e = RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, &k);
+    if (e == ERROR_SUCCESS) {
+        RegCloseKey(k);
+        return 0;
+    }
+    if (e != ERROR_FILE_NOT_FOUND) {
+        return 0;
+    }
+    mfg[0] = '\0';
+    r = reg9x_value(id, "Mfg", mfg, sizeof(mfg));
+    return !inst_keygone_ours9x(id, r > 0 ? mfg : NULL);
+}
+
+static int orphan_count(void)
+{
+    int i;
+    int n = 0;
+
+    for (i = 0; i < devCount; i++) {
+        if (devs[i].Present && devs[i].Inf >= 0 &&
+            devs[i].Action == INST_ACT_ORPHAN) {
+            n++;
+        }
+    }
+    return n;
+}
+
 /* The plan's row for a device. */
 static const char *row_text(const DEVREC *d, int console)
 {
+    if (d->Action == INST_ACT_ORPHAN) {
+        return inst_action_text(INST_ACT_ORPHAN);
+    }
     if (d->TakeCand && d->Inf == INST_INF_XHCI && d->Take != INST_TAKE_OFF) {
         return inst_take_row_text(d->Take, console);
     }
@@ -4154,6 +4380,14 @@ static void plan(void)
         if (d->Inf == INST_INF_UAS) {
             d->Action = inst_uas_nt6_action(osKind, d->Action);
         }
+        /* Record 23 section 6.3, revision 65: on 98 and ME a driver key
+         * deleted by hand took the owner's NTMPDriver with it, so nothing
+         * is installed there unless the Enum entry proves the device this
+         * package's (decision D3); NT keeps its owner in the Enum entry's
+         * Service, and inst_action has read it. */
+        if (!envNow.Nt && d->KeyGone && !keygone_ours(d)) {
+            d->Action = INST_ACT_ORPHAN;
+        }
         d->Runs = inst_action_runs(d->Action, opts.Force);
         /* /restage: a confirmed binary mismatch reinstalls the INF's devices,
          * whatever their DriverVersion says (record 23 section 5.7). */
@@ -4263,10 +4497,15 @@ static void print_plan(void)
                 }
             }
         }
-        out("    INF %s; driver %s%s%s; %s%s\n", instInfFile[d->Inf],
-            d->Service[0] ? d->Service : "none",
-            d->VersionText[0] ? " " : "", d->VersionText,
-            row_text(d, 1), "");
+        {
+            /* The action under the line where the whole would wrap
+             * (owner, 2026-11-20: the orphan's row). */
+            char row[512];
+            inst_plan_row(row, sizeof(row), instInfFile[d->Inf],
+                          d->Service[0] ? d->Service : "none",
+                          d->VersionText, row_text(d, 1));
+            out("%s", row);
+        }
         if (d->TakeCand && d->Take != INST_TAKE_OFF) {
             /* Record 23 section 5.4.2: what the takeover read, logged. */
             take_log_filters(d);
@@ -4289,10 +4528,29 @@ static void print_plan(void)
         } else if (d->Runs && opts.Restage && trapOem[d->Inf][0] != '\0') {
             out("    /restage: reinstalled from this package\n");
         }
-        if (d->Inf == INST_INF_S98 && d->Present &&
+        if (d->Action == INST_ACT_ORPHAN) {
+            out("    Its driver entry is missing, and its entry does not show "
+                "that it was this\n    package's: Setup leaves it.\n");
+        } else if (d->Inf == INST_INF_S98 && d->Present &&
             d->S98Why != INST_S98_ELIGIBLE) {
             out("    Skipped: %s\n", inst_s98_left_text(d->S98Why, s98FallbackOs,
                                                  s98_later_of(d), 0));
+        }
+    }
+    if (stale_bus_due()) {
+        /* Record 23 section 6.3, revision 65: shown before the
+         * confirmation, removed in the run. */
+        for (i = 0; i < stale9xCount; i++) {
+            any = 1;
+            out("  %s\n    %s\n    INF %s; driver none (driver entry "
+                "missing) (listed, not running);\n    %s\n",
+                stale9x[i].Desc[0] ? stale9x[i].Desc : stale9x[i].Id,
+                stale9x[i].Id, instInfFile[INST_INF_XHCI],
+                opts.List ? "would remove the old entry" :
+                            "Remove the old entry");
+        }
+        if (stale9xMore) {
+            out("  %s\n", INST_STALE_MORE_TEXT);
         }
     }
     s98_share_note(1);
@@ -5568,8 +5826,9 @@ int inst_eng_rows(INST_ROW *rows, int cap)
         if (value_inf(v) == NULL) {
             continue;
         }
-        if (instValues[v].Loc == INST_LOC_DRIVE) {
-            continue;   /* a drive's own key: the USB Tree's (task 49.38) */
+        if (INST_LOC_TREE_ONLY(instValues[v].Loc)) {
+            continue;   /* a drive's or a controller's own key: the USB
+                         * Tree's (tasks 49.38, 50.34) */
         }
         if (instValues[v].Kind == INST_VK_TEXT) {
             r->Def = 0;
@@ -5714,7 +5973,7 @@ static int value_needs_write(int v)
     DWORD mwv = 0;
     int mw;
 
-    if (!answerSet[v] || instValues[v].Loc == INST_LOC_DRIVE ||
+    if (!answerSet[v] || INST_LOC_TREE_ONLY(instValues[v].Loc) ||
         (envNow.Nt && (instValues[v].Apply == INST_APPLY_9X_XHCI ||
                        instValues[v].Apply == INST_APPLY_9X_CM)) ||
         (instValues[v].Apply == INST_APPLY_NT5_CM &&
@@ -11539,6 +11798,14 @@ static INST_U32 devs_signature(void)
         h = inst_fnv1a(h, (const unsigned char *)d->Upper, d->UpperBytes);
         h = sig_number(h, (INST_U32)d->UpperLong);
     }
+    /* 98 SE and ME: the stale bus entries the run would remove are part of
+     * the plan confirmed (record 23 section 6.3, revision 65). */
+    if (stale_bus_due()) {
+        for (i = 0; i < stale9xCount; i++) {
+            h = sig_text(h, stale9x[i].Id);
+        }
+        h = sig_number(h, (INST_U32)stale9xMore);
+    }
     return h;
 }
 
@@ -11782,7 +12049,10 @@ static int plan_nt(void)
  * owed. */
 static int uas_absent_owed(const DEVREC *d)
 {
-    return infText[INST_INF_UAS] != NULL && !infTrap[INST_INF_UAS] &&
+    /* Not one whose driver key is gone (record 23 section 5.3, revision
+     * 65): such an entry is acted on only with a devnode. */
+    return !d->KeyGone &&
+           infText[INST_INF_UAS] != NULL && !infTrap[INST_INF_UAS] &&
            inst_uas_absent_runs(envNow.Nt, osKind, usbInclude && uasInclude,
                                 groupVerdict[1] == INST_GROUP_OK,
                                 d->Present, d->Service, d->VersionState,
@@ -12632,7 +12902,8 @@ static int planned_runs(void)
     for (i = 0; i < devCount; i++) {
         runs += devs[i].Runs;
     }
-    return runs + uas_absent_count() + (s98FileUpd ? 1 : 0) + stale_plan(0);
+    return runs + uas_absent_count() + (s98FileUpd ? 1 : 0) + stale_plan(0) +
+           (stale_bus_due() ? stale9xCount : 0);
 }
 
 /* The session manager's PendingFileRenameOperations (record 23 section
@@ -13731,9 +14002,13 @@ static int steps_9x(const char *dir)
             "external NVMe drives,\n  run Setup again and confirm; never "
             "use Update Driver on a drive Stor98\n  runs.\n");
     }
-    if (helperRan && stepsCount == 0) {
+    if (helperRan && stepsCount == 0 && orphan_count() == 0 &&
+        stale9xFailCount == 0 && stale9xRemoved == 0 && !keyGoneFixed &&
+        !stale9xMoreRun) {
         /* The helper did every device (record 26 section 7): only the
-         * storage advice stays. */
+         * storage advice stays. A device left with its driver key gone, a
+         * stale entry not removed, and the restart after a repair of
+         * either (record 23 section 6.4, revision 65) keep the steps. */
         if (stor_advice()) {
             out("\n");
             stor_advice_out();
@@ -13754,6 +14029,17 @@ static int steps_9x(const char *dir)
         const DEVREC *d = &devs[i];
         int fix;
         if (!d->Present || d->Inf < 0) {
+            continue;
+        }
+        if (d->Action == INST_ACT_ORPHAN) {
+            /* Before every other filter (record 23 section 6.4, revision
+             * 65): Setup installs nothing there, the user removes it in
+             * Device Manager, which the run offers to open. */
+            any = 1;
+            needs = 1;
+            out("\n%s\n  Its driver entry in the registry is missing. Device "
+                "Manager: remove it,\n  restart, and run Setup again.\n",
+                d->Desc[0] ? d->Desc : d->Id);
             continue;
         }
         /* After the helper, only the devices it could not do. */
@@ -13894,6 +14180,27 @@ static int steps_9x(const char *dir)
             break;
         }
         print_uas_fix(fix, "  - ");
+    }
+    /* Record 23 section 6.4, revision 65: a stale bus entry not removed
+     * has no devnode, so Device Manager does not list it; the next run
+     * tries it again. */
+    for (i = 0; i < stale9xFailCount; i++) {
+        any = 1;
+        out("\n%s\n  Its old entry could not be removed (%s). Restart "
+            "Windows and run Setup\n  again.\n",
+            stale9xFail[i].Desc[0] ? stale9xFail[i].Desc : stale9xFail[i].Id,
+            stale9xWhy[i]);
+    }
+    if (stale9xMoreRun) {
+        any = 1;
+        out("\nMore old entries of this package's USB devices are left than "
+            "one run removes.\nRestart Windows and run Setup again.\n");
+    }
+    if (stale9xRemoved > 0 || keyGoneFixed) {
+        /* Advice, not a step: the run's exit code is unchanged. */
+        any = 1;
+        out("\nAfter the restart, run Setup again: it checks the devices "
+            "Windows sets up\nagain.\n");
     }
     /* A device the helper reached that is not present now (record 26
      * section 7): its own line, with what to do. */
@@ -14144,7 +14451,8 @@ static int helper_job(int job, const DEVREC *d, const char *inf, int force,
     CloseHandle(pi.hThread);
     _snprintf(what, sizeof(what) - 1, "Windows' device installer is %s %s; a "
               "Windows dialog may be waiting behind this window",
-              job == INST_DI_REMOVE ? "removing" :
+              (job == INST_DI_REMOVE || job == INST_DI_REMOVESTALE) ?
+                  "removing" :
               job == INST_DI_INSTALL ? "installing" : "starting for",
               d != NULL ? (d->Desc[0] ? d->Desc : d->Id) : "this system");
     what[sizeof(what) - 1] = '\0';
@@ -14593,6 +14901,9 @@ static int helper_install(DEVREC *d)
         }
         if (out9x == INST_DI_OUT_RESTART) {
             flagRestart = 1;
+        }
+        if (d->KeyGone) {
+            keyGoneFixed = 1;   /* record 23 section 6.4, revision 65 */
         }
         flagChanged = 1;
         step(INST_STEP_DONE, "%s: %s", d->Desc[0] ? d->Desc : d->Id, why);
@@ -15112,6 +15423,93 @@ static void drivers_9x(void)
     }
 }
 
+static int enum9x_exists(const char *id);
+
+/* One stale bus entry not removed: kept for the steps (exit 4, never a
+ * failure of the run; record 23 section 6.4, revision 65). */
+static void stale_bus_left(const STALE9X *s, const char *why)
+{
+    if (stale9xFailCount < INST_MAX_STALE) {
+        stale9xFail[stale9xFailCount] = *s;
+        inst_copy(stale9xWhy[stale9xFailCount], why,
+                  sizeof(stale9xWhy[stale9xFailCount]));
+        stale9xFailCount++;
+    }
+    flagSteps = 1;
+    step(INST_STEP_LEFT, "%s: old entry not removed",
+         s->Desc[0] ? s->Desc : s->Id);
+}
+
+/* Record 23 section 6.3, revision 65: the stale bus entries of the plan
+ * confirmed (stale9xRun) removed by the helper's remove job (record 27
+ * section 9), each read again first and after. 0 when the run stops
+ * (go_on). */
+static int stale_bus_run(void)
+{
+    int i;
+
+    for (i = 0; i < stale9xRunCount; i++) {
+        const STALE9X *s = &stale9xRun[i];
+        const char *name = s->Desc[0] ? s->Desc : s->Id;
+        INST_DI_RESULT r;
+        DEVREC d;
+        int v;
+        int o;
+        char path[INST_DRIVER_PATH_CHARS];
+
+        if (!go_on()) {
+            return 0;
+        }
+        stale9xRunTried[i] = 1;
+        if (!stale_bus_allowed()) {
+            /* The plan made again during the passes refused the group. */
+            stale_bus_left(s, "the USB driver was skipped");
+            continue;
+        }
+        if (!stale_bus_gone(s->Id, path)) {
+            logonly("stale bus entry: %s no longer qualifies: left\n", s->Id);
+            continue;
+        }
+        if (helperState < 0) {
+            stale_bus_left(s, "the helper is not running");
+            continue;
+        }
+        memset(&d, 0, sizeof(d));
+        inst_copy(d.Id, s->Id, sizeof(d.Id));
+        inst_copy(d.Desc, s->Desc, sizeof(d.Desc));
+        out("Removing the old entry of %s ...\n", name);
+        step(INST_STEP_BEGIN, "Removing the old entry of %s", name);
+        /* The helper reads the conditions again immediately before the
+         * removal and keeps an entry that no longer meets them (record 27
+         * section 9.1, record 23 revision 67). */
+        v = helper_job(INST_DI_REMOVESTALE, &d, NULL, 0, &r);
+        o = inst_di_outcome(INST_DI_REMOVESTALE, v);
+        if (v == INST_DI_V_KEPT) {
+            logonly("stale bus entry: %s kept by the helper (%s)\n", s->Id,
+                    r.Detail);
+            stale_bus_left(s, inst_di_kept_text(r.Detail));
+            continue;
+        }
+        if (o != INST_DI_OUT_OK && o != INST_DI_OUT_RESTART) {
+            stale_bus_left(s, inst_di_verdict_text(v));
+            continue;
+        }
+        if (enum9x_exists(s->Id) != 0) {
+            stale_bus_left(s, "it is still recorded");
+            continue;
+        }
+        if (o == INST_DI_OUT_RESTART) {
+            flagRestart = 1;
+        }
+        flagChanged = 1;
+        stale9xRemoved++;
+        out("Removed the old entry of %s: its driver entry was missing.\n",
+            name);
+        step(INST_STEP_DONE, "Old entry of %s removed", name);
+    }
+    return 1;
+}
+
 static void helper_installs(void)
 {
     int k;
@@ -15119,15 +15517,33 @@ static void helper_installs(void)
     int i;
     int first = 1;
     int controllerFailed = 0;
+    int stale = stale_bus_due() && !opts.List;
 
     if (!pass_any(INST_INF_XHCI, -1) && !pass_any(INST_INF_UAS, -1) &&
         !pass_any(INST_INF_CM, -1) && !pass_any(INST_INF_S98, -1) &&
-        !pass_any(INST_INF_NET, -1) &&
+        !pass_any(INST_INF_NET, -1) && !stale &&
         !(storCopyOk && (stor_any(INST_STOR_KIND_BULK) ||
                          stor_any(INST_STOR_KIND_UNIT)))) {
         return;
     }
+    if (stale) {
+        /* Only the entries of the plan confirmed (devs_signature holds
+         * them); a scan during the passes adds none. */
+        memcpy(stale9xRun, stale9x, sizeof(stale9xRun));
+        stale9xRunCount = stale9xCount;
+        memset(stale9xRunTried, 0, sizeof(stale9xRunTried));
+        if (stale9xMore) {
+            stale9xMoreRun = 1;
+            flagSteps = 1;
+        }
+    }
     if (!helper_ready()) {
+        /* The stale entries keep their step too (record 23 section 6.4,
+         * revision 65): they are not on the device list. */
+        for (i = 0; stale && i < stale9xRunCount; i++) {
+            stale9xRunTried[i] = 1;
+            stale_bus_left(&stale9xRun[i], "the helper is not running");
+        }
         return;
     }
     if (pass_any(INST_INF_XHCI, 1)) {
@@ -15151,6 +15567,37 @@ static void helper_installs(void)
         if (controllerFailed) {
             out("A controller's install failed: the devices below it are "
                 "skipped.\n");
+            goto left;
+        }
+    }
+    if (stale && !runCancelled) {
+        /* After the controllers, before their root hubs and hubs, behind
+         * the same settle and gate as a later pass (record 23 section 6.3,
+         * revision 65): a controller just installed may be enumerating its
+         * root hub, which then has a devnode and is left. */
+        if (!first) {
+            s98_inf_sync();
+            out("Waiting for the devices to settle ... ");
+            i = settle(INST_INSTALL_WAIT_MS, 20000UL, 20000UL, 0);
+            if (i <= 0) {
+                settle_failed(i, "10 minutes");
+                goto left;
+            }
+            out("done.\n");
+            if (!scan()) {
+                flagFailed = 1;
+                goto left;
+            }
+            plan();
+            s98_record_devices();
+            stor_record();
+            s98_inf_after(NULL, 1);
+        }
+        if (!gate_9x(1)) {
+            goto left;
+        }
+        first = 0;
+        if (!stale_bus_run()) {
             goto left;
         }
     }
@@ -15268,6 +15715,14 @@ left:
             !was_installed(d->Id) && steps_why(d->Id) == NULL) {
             steps_add(d, "not reached in this run");
             flagSteps = 1;
+        }
+    }
+    /* A confirmed stale entry the run stopped before keeps its step too
+     * (record 23 section 6.4, revision 65); the stop's own verdict stays. */
+    for (i = 0; stale && i < stale9xRunCount; i++) {
+        if (!stale9xRunTried[i]) {
+            stale9xRunTried[i] = 1;
+            stale_bus_left(&stale9xRun[i], "not reached in this run");
         }
     }
 }
@@ -15492,6 +15947,14 @@ static int ask_9x(void)
                 runs = 1;
             }
         }
+        if (d->Present && d->Inf >= 0 && d->Action == INST_ACT_ORPHAN) {
+            steps = 1;      /* record 23 section 6.4, revision 65 */
+        }
+    }
+    /* The stale bus entries' removals are changes (record 23 section 6.3,
+     * revision 65). */
+    if (stale_bus_due()) {
+        runs = 1;
     }
     /* The USB storage drivers' copies are a change of their own (record
      * 26 section 6.5.4). */
@@ -15769,6 +16232,9 @@ static int run_install_9x(void)
         if (d->Present && d->Inf >= 0 && (d->Runs || d->Refused) &&
             (!helperRan || steps_why(d->Id) != NULL)) {
             steps = 1;
+        }
+        if (d->Present && d->Inf >= 0 && d->Action == INST_ACT_ORPHAN) {
+            steps = 1;      /* record 23 section 6.4, revision 65 */
         }
     }
     i = steps_9x(srcDir);
@@ -16188,6 +16654,18 @@ static int names_reconcile(int uninstall)
         if (!names_dev(d)) {
             continue;
         }
+        if (!envNow.Nt && d->KeyGone && !keygone_ours(d)) {
+            /* Its driver key gone and its entry not proving it the
+             * package's (record 23 section 6.3, revision 65): nothing of
+             * it is edited, its name included; listed, so the records'
+             * pass below leaves it too. */
+            logonly("%s: its driver key is gone and its entry does not "
+                    "show it the package's: its name is left\n", d->Id);
+            if (done < INST_MAX_DEVS) {
+                inst_copy(ids[done++], d->Id, INST_ID_CHARS);
+            }
+            continue;
+        }
         canon = names_canon(d, canonBuf, sizeof(canonBuf));
         if (canon == NULL && names_rec_get(d->Id, rec, sizeof(rec)) == 0) {
             continue;
@@ -16241,6 +16719,15 @@ static int names_reconcile(int uninstall)
         }
         RegCloseKey(k);
         for (i = 0; i < nLeft; i++) {
+            if (keygone_unproven9x(left[i])) {
+                /* An entry with no devnode whose key is gone and which
+                 * does not show it the package's (record 23 section 6.3,
+                 * revision 65): its name and record are left. */
+                logonly("%s: its driver key is gone and its entry does not "
+                        "show it the package's: its name is left\n",
+                        left[i]);
+                continue;
+            }
             if (!names_one(set, left[i], 0, NULL)) {
                 whole = 0;
             }
@@ -18781,6 +19268,60 @@ static void un9x_consider(const char *id)
         return;
     }
     dev_driver_values(&d);
+    if (d.KeyGone && !inst_own_service(d.Service) && inst_bus_id(id) == 0 &&
+        !inst_cm_child_id(id) && !inst_uas_unit_id(id)) {
+        /* Its driver key deleted by hand (record 23 section 9.4, revision
+         * 65): an entry whose Mfg proves it the package's is removed as the
+         * package's, ranked by what the entry itself says, since the key
+         * that named its driver is gone - an xHCI controller xhci98's, any
+         * other PCI function xhcicm's (an NHI), anything else a UAS
+         * function's, before every parent. A controller or host interface
+         * it does not prove is left and said; anything else is not the
+         * package's business. */
+        static char said[INST_MAX_UN9X][INST_ID_CHARS];
+        static int saidCount;
+        char mfg[64];
+        int ids;
+        int host = 0;
+        int ctl = 0;
+        int own;
+        mfg[0] = '\0';
+        own = reg9x_value(id, "Mfg", mfg, sizeof(mfg)) > 0 &&
+              inst_keygone_ours9x(id, mfg);
+        ids = ids9x(0, &d, 0) && ids9x(0, &d, 1);
+        if (ids) {
+            ctl = is_controller(&d);
+            host = ctl || is_u4_nhi(&d);
+        }
+        dev_release(&d);
+        if (own && !ids && inst_starts(id, "PCI\\")) {
+            /* Its rank cannot be read: the uninstall stops, as for any
+             * entry that cannot be read. */
+            out("  unreadable: a value of HKLM\\Enum\\%s\n", id);
+            walkErrors++;
+            return;
+        }
+        if (!own) {
+            if (host && inst_once(said, &saidCount, INST_MAX_UN9X, id)) {
+                /* Once per entry: the uninstall walks Enum three times
+                 * (owner, 2026-11-20); as many entries as the uninstall
+                 * holds of its own. */
+                out("  %s: its driver entry is missing and it does not show "
+                    "that it was this\n  package's: left.\n", id);
+            } else if (host) {
+                logonly("%s: its driver key is not there, not shown this "
+                        "package's: left (said above)\n", id);
+            } else {
+                logonly("%s: its driver key is not there: not this "
+                        "package's, left\n", id);
+            }
+            return;
+        }
+        inst_copy(d.Service, !inst_starts(id, "PCI\\") ? "xhciuas" :
+                             ctl ? "xhci98" : "xhcicm", sizeof(d.Service));
+        logonly("%s: its driver key is not there; its Mfg proves it the "
+                "package's: removed as %s's\n", id, d.Service);
+    }
     /* A UAS unit is the package's whichever storage driver it is bound to
      * (task 47.7): only xhciuas.sys creates the XHCIUAS enumerator's. */
     if (!inst_own_service(d.Service) && inst_bus_id(id) == 0 &&
@@ -20092,6 +20633,12 @@ static int tb_read(TBNODE *t)
     outQuiet = 0;
     if (walkErrors != before) {
         walkErrors = before;
+        ok = 0;
+    }
+    if (!envNow.Nt && d->KeyGone) {
+        /* Not read whole, as before revision 65 of record 23 counted it a
+         * walk error here: the eject and the Stor98 placement stay as
+         * they were. */
         ok = 0;
     }
     inst_copy(t->Shown, d->Service, sizeof(t->Shown));
@@ -24095,7 +24642,10 @@ static void s98_places(void)
                                        0));
         }
         d->Runs = 0;
-        if (s98Shown && !s98_said(d->Id, why)) {
+        if (s98Shown && d->Action != INST_ACT_ORPHAN &&
+            !s98_said(d->Id, why)) {
+            /* An orphan's own row and step speak for it (record 23
+             * section 6.3, revision 65). */
             out("Stor98: %s (%s) is skipped: %s.\n",
                 d->Desc[0] ? d->Desc : "an NVMe drive", d->Id,
                 inst_s98_left_text(why, s98FallbackOs, s98_later_of(d), 0));
@@ -40551,6 +41101,13 @@ void inst_eng_take_choose(int on)
     takeChoice = on ? 1 : 0;
 }
 
+int inst_eng_stale_more(void)
+{
+    /* Record 23 revision 67: the window says what the console's plan
+     * says of stale entries past the list (section 6.3). */
+    return stale_bus_due() && stale9xMore;
+}
+
 int inst_eng_found(int i, INST_FOUND *f)
 {
     int j;
@@ -40574,7 +41131,8 @@ int inst_eng_found(int i, INST_FOUND *f)
                   d->RegOnly ? " (listed, not running)" :
                   !d->Present ? " (not plugged in)" : "");
         f->Now[sizeof(f->Now) - 1] = '\0';
-        f->Action = d->Refused ? "Skip (newer or unknown version)" :
+        f->Action = d->Action == INST_ACT_ORPHAN ? row_text(d, 0) :
+                    d->Refused ? "Skip (newer or unknown version)" :
                     (d->Inf == INST_INF_S98 && d->Present &&
                      d->S98Why != INST_S98_ELIGIBLE) ?
                         inst_s98_left_text(d->S98Why, s98FallbackOs,
@@ -40583,6 +41141,22 @@ int inst_eng_found(int i, INST_FOUND *f)
         f->Runs = d->Runs;
         f->Refused = d->Refused;
         f->Present = d->Present;
+        return 1;
+    }
+    /* Record 23 section 6.3, revision 65: the stale bus entries this run
+     * removes, after the devices, so the device table and the Summary show
+     * them before anything is done. */
+    if (stale_bus_due() && i - n >= 0 && i - n < stale9xCount) {
+        const STALE9X *s = &stale9x[i - n];
+        memset(f, 0, sizeof(*f));
+        f->Desc = s->Desc[0] ? s->Desc : s->Id;
+        f->Id = s->Id;
+        f->Inf = instInfFile[INST_INF_XHCI];
+        inst_copy(f->Now, "none (driver entry missing) (listed, not running)",
+                  sizeof(f->Now));
+        f->Action = "Remove the old entry";
+        f->Runs = 1;
+        f->Present = 1;
         return 1;
     }
     return 0;

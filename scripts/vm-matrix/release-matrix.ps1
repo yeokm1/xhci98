@@ -25,8 +25,9 @@ the two Windows 10 legs (roadmap-usb4 49.4). Before any leg starts, WHPX is
 probed once for each guest a selected WHPX leg runs on; where it cannot run
 that guest the matrix stops with QEMU's own message and starts nothing: a
 WHPX leg never falls back to TCG by itself. -ForceTcg runs every leg under
-TCG, the periodic cross-check of the WHPX legs. The table names each leg's
-accelerator.
+TCG, where WHPX cannot run the Windows 10 guests or to tell the
+accelerator's part after a WHPX reading not explained; no cut asks for it
+(roadmap-usb4 50.2). The table names each leg's accelerator.
 
 The package is the unpacked download (INSTALL.BAT at its top); it goes onto
 each leg's CD and is never run on the host.

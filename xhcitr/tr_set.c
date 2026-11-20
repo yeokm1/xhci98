@@ -52,7 +52,7 @@ INST_U32 trs_install_def(const TRS_ROW *r)
  * here (test_trset holds it), listed or out with why. */
 static const TRS_ROW trsRows[] = {
     { "XhciIntelPortSwitch", TRS_TAB_USB, C, TRS_AP_BOOT, 0,
-      TRS_EFF_NONZERO, 0, 0UL, 0UL, -1, NULL },
+      TRS_EFF_NONZERO, 0, 0UL, 1UL, -1, NULL },
     { "XhciIntelIrqRoute", TRS_TAB_USB, C, TRS_AP_CTRL, 0,
       TRS_EFF_LIST, 0x7UL, 1UL, 1UL, -1, NULL },
     { "XhciIntelNoRouteIrq", TRS_TAB_USB, C, TRS_AP_ADD, 1,
@@ -132,8 +132,20 @@ static const TRS_ROW trsRows[] = {
       TRS_EFF_RING, 0, 256UL, 256UL, -1, NULL },
     { "XhciTolerance", TRS_TAB_USB, A, TRS_AP_CTRL, 0,
       TRS_EFF_LIST, 0x3UL, 1UL, 1UL, -1, NULL },
+    { "XhciDeviceIsolation", TRS_TAB_USB, A, TRS_AP_CTRL, 0,
+      TRS_EFF_LIST, 0x7UL, 1UL, 1UL, -1, NULL },
     { "XhciCommandCheck", TRS_TAB_USB, A, TRS_AP_CTRL, 0,
       TRS_EFF_NONZERO, 0, 1UL, 1UL, -1, NULL },
+    { "XhciCancelStatus", TRS_TAB_USB, A, TRS_AP_CTRL, 0,
+      TRS_EFF_LIST, 0x7UL, 1UL, 1UL, -1, NULL },
+    { "XhciUnplugComplete", TRS_TAB_USB, A, TRS_AP_CTRL, 0,
+      TRS_EFF_LIST, 0x3UL, 1UL, 1UL, -1, NULL },
+    /* Task 50.31 (design record 38 section 16): 0, or 2 to 600; 1 and
+     * anything else the driver reads as 5 (the range row's Accept). */
+    { "XhciFailedRetrySec", TRS_TAB_USB, A, TRS_AP_CTRL, 0,
+      TRS_EFF_RANGE, 0, 5UL, 5UL, -1,
+      "The seconds before the driver tries a stopped controller again: "
+      "2 to 600, or 0 for never. Restart the controller after a change." },
     { "XhciStreamDequeueRepair", TRS_TAB_USB, A, TRS_AP_CTRL, 0,
       TRS_EFF_NONZERO, 0, 1UL, 1UL, -1, NULL },
     { "XhciAccept096", TRS_TAB_USB, A, TRS_AP_CTRL, 0,
@@ -174,6 +186,14 @@ static const TRS_ROW trsRows[] = {
       TRS_EFF_LIST, 0x7UL, 1UL, 1UL, -1, NULL },
     { "XhciAmdSuspendBitClear", TRS_TAB_USB, A, TRS_AP_CTRL, 0,
       TRS_EFF_LIST, 0x3UL, 1UL, 1UL, -1, NULL },
+    { "XhciStreamDequeueAvoid", TRS_TAB_USB, A, TRS_AP_CTRL, 0,
+      TRS_EFF_LIST, 0x7UL, 1UL, 1UL, -1, NULL },
+    { "XhciIntelPortSwitchSetup", TRS_TAB_USB, A, TRS_AP_CTRL, 1,
+      TRS_EFF_LIST, 0x7UL, 0UL, 0UL, -1, NULL },
+    /* Task 50.34: read once a Windows session, at its first start of the
+     * controller, so a change takes a restart of Windows. */
+    { "XhciIntelPortSwitchReady", TRS_TAB_USB, A, TRS_AP_BOOT, 0,
+      TRS_EFF_ONE, 0, 0UL, 0UL, -1, NULL },
     { "XhciLogVerbosity", TRS_TAB_USB, O, TRS_AP_CTRL, 0,
       TRS_EFF_LIST, 0x1FUL, 2UL, 2UL, -1,
       "set in the Logging level dialog (owner, 2026-11-07)" },
@@ -243,6 +263,8 @@ static const TRS_ROW trsRows[] = {
       TRS_EFF_LIST, 0x3UL, 1UL, 1UL, -1, NULL },
     { "XhciCmWakePowerUp", TRS_TAB_CM, A, TRS_AP_NHI, 1,
       TRS_EFF_LIST, 0x3UL, 1UL, 1UL, -1, NULL },
+    { "XhciCmWakeOrder", TRS_TAB_CM, A, TRS_AP_NHI, 1,
+      TRS_EFF_LIST, 0x3UL, 0UL, 0UL, -1, NULL },
     { "XhciCmAsmediaPcie7Credits", TRS_TAB_CM, A, TRS_AP_NHI, 1,
       TRS_EFF_LIST, 0x3UL, 0UL, 0UL, -1, NULL },
     { "XhciCmTunnelBridge", TRS_TAB_CM, A, TRS_AP_NHI, 1,
@@ -410,7 +432,25 @@ int trs_loc(const TRS_ROW *r)
     if (v != NULL && v->Loc == INST_LOC_DRIVE) {
         return TRS_LOC_DEVICE;
     }
+    if (v != NULL && v->Loc == INST_LOC_CTRL) {
+        return TRS_LOC_CTRL;
+    }
     return TRS_LOC_DRIVER;
+}
+
+int trs_scoped(const TRS_ROW *r)
+{
+    if (r == NULL) {
+        return 0;
+    }
+    return (trs_loc(r) == TRS_LOC_DRIVER && r->Tab != TRS_TAB_S98) ||
+           trs_loc(r) == TRS_LOC_CTRL;
+}
+
+int trs_ready_applies(int intel, int listed, int subsysKnown,
+                      int boardRefused, int override2)
+{
+    return intel && subsysKnown && !boardRefused && (listed || override2);
 }
 
 /* ---- the system rules ---------------------------------------------------- */
@@ -457,6 +497,11 @@ int trs_state(const TRS_ROW *r, const TRS_ENV *e)
     }
     if (v->Loc == INST_LOC_DRIVE) {
         return e->UasDrives > 0 ? TRS_SHOW : TRS_HIDE;
+    }
+    if (v->Loc == INST_LOC_CTRL) {
+        /* Task 50.34: the first-session check runs on 2000 and later
+         * alone, and only on a controller the switchover applies to. */
+        return (e->Inst.Nt && e->PswXhci > 0) ? TRS_SHOW : TRS_HIDE;
     }
     if (r->Tab == TRS_TAB_CM && !e->Inst.CmNhi) {
         return TRS_HIDE;
@@ -850,8 +895,12 @@ INST_U32 trs_effective(const TRS_ROW *r, int found, INST_U32 v,
         }
         break;
     case TRS_EFF_RANGE:
+        /* A range's numbers below 32 it refuses (its Accept, task 50.31's
+         * XhciFailedRetrySec 1) take the default too. */
         if (x != NULL && (v < x->Lo || v > x->Hi ||
                           (x->Step > 1UL && v % x->Step != 0) ||
+                          (x->Accept != 0 && v < 32UL &&
+                           (x->Accept & (1UL << v)) == 0) ||
                           (x->PickCount > 0 && !inst_value_takes(x, v)))) {
             *how = TRS_HOW_DEFAULT;
             e = trs_absent_def(r);
@@ -1412,6 +1461,14 @@ void trs_psw_text(int on, int noDriver, char *out, size_t cap)
                    "to xHCI98, and a device on them is found again on "
                    "xHCI98. Do not have a drive on them busy when you "
                    "restart.");
+        /* Task 50.34 (design record 16 section 21.7; a draft for the
+         * owner, Q8): the hold while Windows Setup runs and the
+         * first-session check, 2000 and later only. */
+        if (trsSystem.Nt) {
+            tr_put(&t, " They are not moved while Windows says Setup is in "
+                       "progress or that cannot be read, nor, after this is "
+                       "first turned on, before Windows is restarted.");
+        }
         return;
     }
     tr_put(&t, "At Windows' next start the shared connectors stay with the "

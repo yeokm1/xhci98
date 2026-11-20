@@ -817,8 +817,17 @@ static ULONG xhciEventDrain(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts,
     ULONG ringEmpty;
     ULONG resetRequested;
     ULONG report;
+    ULONG whyReason;
+    ULONG whyExtra;
+    XHCI_RESET_REC whyPlace;
     KIRQL oldIrql;
 
+    whyReason = XHCI_WHY_EVENT_RING;
+    whyExtra = 0;
+    whyPlace.Slot = 0;
+    whyPlace.RootPort = 0;
+    whyPlace.Route = 0;
+    whyPlace.VidPid = 0;
     if (drainedOut != NULL) {
         *drainedOut = 0;
     }
@@ -1013,8 +1022,13 @@ static ULONG xhciEventDrain(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts,
                 XhciLogNoteLocked(ext, "evt.rearm.failed",
                                   XhciReadIr0(ext, XHCI_IR_IMAN));
             }
+            XhciTolWhyStage(&ext->Why, XHCI_WHY_EVENT_RING, 1, NULL);
             resetRequested = 1;
         }
+    }
+    /* Task 50.30 step 1: the reason staged by the event that asked. */
+    if (resetRequested) {
+        whyReason = XhciTolWhyTake(&ext->Why, &whyExtra, &whyPlace);
     }
 
     XhciControllerLockRelease(ext, oldIrql);
@@ -1063,7 +1077,9 @@ static ULONG xhciEventDrain(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts,
     XhciSlotDeferredWork(ext, XHCI_ARM_UNLOCKED);
 
     if (resetRequested) {
-        XhciRequestControllerReset(ext);
+        /* The device the staging site proved, copied then; nothing is
+         * read from a slot now that the lock is gone. */
+        XhciRequestControllerResetPlaced(ext, whyReason, whyExtra, &whyPlace);
     }
     return report;
 }
@@ -1217,7 +1233,7 @@ VOID XhciEnableInterrupts(PXHCI_EXTENSION ext)
         }
         XHCI_DBG_TEXT("EnableInterrupts: enables could not be restored - "
                       "requesting a controller reset");
-        XhciRequestControllerReset(ext);
+        XhciRequestControllerResetWhy(ext, XHCI_WHY_INTERRUPTS, 0, 1);
     }
 }
 
@@ -1318,7 +1334,7 @@ VOID XhciDisableInterrupts(PXHCI_EXTENSION ext)
         }
         XHCI_DBG_TEXT("DisableInterrupts: delivery is not proven suppressed and "
                       "usbport is about to stop calling the ISR");
-        XhciRequestControllerReset(ext);
+        XhciRequestControllerResetWhy(ext, XHCI_WHY_INTERRUPTS, 0, 2);
     }
 }
 

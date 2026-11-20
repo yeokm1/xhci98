@@ -257,12 +257,52 @@ static NTSTATUS hcdUrbComplete(PIRP irp, PURB urb, USBD_STATUS usbd,
     return HcdCompleteIrp(irp, status, 0);
 }
 
+/* Task 50.26: the URB layout XhciPipeUrbCancelOut walks (xhci_pipe.h), at
+ * this build's pointer width. */
+#if defined(_WIN64)
+#define HCD_URB_WIDE 1UL
+XHCI_C_ASSERT(urb_iso_shape_64,
+              FIELD_OFFSET(struct _URB_HEADER, Length) ==
+                  XHCI_PIPE_URB_LENGTH_OFF &&
+              FIELD_OFFSET(struct _URB_HEADER, Function) ==
+                  XHCI_PIPE_URB_FUNCTION_OFF &&
+              FIELD_OFFSET(struct _URB_HEADER, Status) ==
+                  XHCI_PIPE_URB_STATUS_OFF &&
+              FIELD_OFFSET(struct _URB_ISOCH_TRANSFER, NumberOfPackets) ==
+                  XHCI_PIPE_ISOURB_NPKT_64 &&
+              FIELD_OFFSET(struct _URB_ISOCH_TRANSFER, ErrorCount) ==
+                  XHCI_PIPE_ISOURB_ERRORS_64 &&
+              FIELD_OFFSET(struct _URB_ISOCH_TRANSFER, IsoPacket) ==
+                  XHCI_PIPE_ISOURB_PACKET0_64);
+#else
+#define HCD_URB_WIDE 0UL
+XHCI_C_ASSERT(urb_iso_shape_32,
+              FIELD_OFFSET(struct _URB_HEADER, Length) ==
+                  XHCI_PIPE_URB_LENGTH_OFF &&
+              FIELD_OFFSET(struct _URB_HEADER, Function) ==
+                  XHCI_PIPE_URB_FUNCTION_OFF &&
+              FIELD_OFFSET(struct _URB_HEADER, Status) ==
+                  XHCI_PIPE_URB_STATUS_OFF &&
+              FIELD_OFFSET(struct _URB_ISOCH_TRANSFER, NumberOfPackets) ==
+                  XHCI_PIPE_ISOURB_NPKT_32 &&
+              FIELD_OFFSET(struct _URB_ISOCH_TRANSFER, ErrorCount) ==
+                  XHCI_PIPE_ISOURB_ERRORS_32 &&
+              FIELD_OFFSET(struct _URB_ISOCH_TRANSFER, IsoPacket) ==
+                  XHCI_PIPE_ISOURB_PACKET0_32);
+#endif
+XHCI_C_ASSERT(urb_iso_packet_shape,
+              sizeof(USBD_ISO_PACKET_DESCRIPTOR) ==
+                  XHCI_PIPE_ISO_PACKET_BYTES &&
+              FIELD_OFFSET(USBD_ISO_PACKET_DESCRIPTOR, Status) ==
+                  XHCI_PIPE_ISO_PACKET_STATUS_OFF &&
+              URB_FUNCTION_ISOCH_TRANSFER == XHCI_PIPE_URB_ISO_FUNCTION);
+
 #if defined(XHCI_FLAVOUR_QEMU)
 /*
  * Task 49.29 (design record 13 section 11.11.12), qemu only: the per-request
  * log. Every URB IRP sent to a device PDO is logged on the 0xE9 channel as
  * it arrives (hcd_entry.c, before any branch) and just before each
- * IoCompleteRequest that can complete one (HCD_QEMU_URB_OUT), each line with
+ * IoCompleteRequest that can complete one (HCD_URB_OUT), each line with
  * a sequence number of the log's own, taken and printed under the log's
  * lock so its lines are emitted whole and in that order (other trace lines
  * are not serialized against them); the IRP is the pairing key, its address
@@ -334,6 +374,9 @@ VOID HcdQemuUrbIn(PIRP irp)
 VOID HcdQemuUrbOut(PIRP irp)
 {
     PURB urb;
+    ULONG errors;
+    ULONG l;
+    ULONG e;
 
     if (HcdQemuUrbLog == 0 || !hcdQemuUrbOf(irp, &urb)) {
         return;
@@ -343,8 +386,69 @@ VOID HcdQemuUrbOut(PIRP irp)
                    (ULONG)irp->IoStatus.Status,
                    (urb != NULL) ? (ULONG)urb->UrbHeader.Status
                                  : 0xFFFFFFFFUL);
+    /* Task 50.26: an isochronous URB's packets as the client receives
+     * them - its ErrorCount, and how many packets carry each cancelled
+     * value (0x00010000 in the high half, 0xC0010000 in the low). */
+    if (XhciPipeUrbIsoCount(urb, HCD_URB_WIDE, XHCI_PIPE_USBD_CANCELED,
+                            &errors, &l) &&
+        XhciPipeUrbIsoCount(urb, HCD_URB_WIDE, XHCI_PIPE_USBD_CANCELED_E,
+                            &errors, &e)) {
+        hcdQemuUrbLine("urb: out iso seq/irp/errors/canceled", irp, errors,
+                       ((l & 0xFFFFUL) << 16) | (e & 0xFFFFUL));
+    }
+}
+
+VOID HcdQemuUrbEvent(PIRP irp, ULONG event, ULONG serial)
+{
+    if (HcdQemuUrbLog == 0) {
+        return;
+    }
+    hcdQemuUrbLine("urb: event seq/irp/event/serial", irp, event, serial);
 }
 #endif
+
+/*
+ * Task 50.26 (record 13 section 6.15.3): the one place a URB's cancelled
+ * status changes value, just before IoCompleteRequest. Only a URB IRP of
+ * a device PDO is touched, with the PDO's copy of its controller's choice
+ * (which an orphan keeps), and only 0x00010000 is rewritten, in the header
+ * and in the packets the URB's own Length holds (XhciPipeUrbCancelOut),
+ * and only where `ours` says this completion wrote them (hcd.h). An IRP
+ * whose current stack location is not one of its own (CurrentLocation
+ * outside 1..StackCount) is not read. IRQL: <= DISPATCH_LEVEL.
+ */
+VOID HcdUrbOut(PIRP irp, ULONG ours)
+{
+    PIO_STACK_LOCATION stack;
+    PDEVICE_OBJECT obj;
+    ULONG urbIrp;
+    ULONG devicePdo;
+
+    if (irp->CurrentLocation < 1 || irp->CurrentLocation > irp->StackCount) {
+        return;
+    }
+    stack = IoGetCurrentIrpStackLocation(irp);
+    obj = stack->DeviceObject;
+    urbIrp = (stack->MajorFunction == IRP_MJ_INTERNAL_DEVICE_CONTROL &&
+              stack->Parameters.DeviceIoControl.IoControlCode ==
+                  IOCTL_INTERNAL_USB_SUBMIT_URB)
+                 ? 1UL
+                 : 0UL;
+    devicePdo = (urbIrp && obj != NULL &&
+                 ((PHCD_COMMON)obj->DeviceExtension)->Kind ==
+                     HCD_KIND_DEVICE_PDO)
+                    ? 1UL
+                    : 0UL;
+    if (devicePdo) {
+        (VOID)XhciPipeUrbCancelOut(
+            urbIrp, devicePdo, ours, stack->Parameters.Others.Argument1,
+            (ULONG)((PHCD_DEVICE_PDO)obj->DeviceExtension)->CancelOut,
+            HCD_URB_WIDE);
+    }
+#if defined(XHCI_FLAVOUR_QEMU)
+    HcdQemuUrbOut(irp);
+#endif
+}
 
 /* A device gone: refused, but completed at the next tick (HcdIoRefuseLater,
  * hcd_io.c) - never inside this dispatch, which a client's completion
@@ -890,6 +994,36 @@ static NTSTATUS hcdFunctionControl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
 }
 
 /*
+ * Task 50.28 (design record 13 section 10.5.3, point 11), the qemu flavour
+ * only: XhciQemuStageFault bit 4 waits between an abort's mark and its
+ * release, so a leg can land a report's claim between the two (bit 6: the
+ * longer wait); the per-request log's event line marks its end, before the
+ * release. At PASSIVE_LEVEL only; compiled out of every other flavour.
+ */
+#if defined(XHCI_FLAVOUR_QEMU)
+static VOID hcdQemuAbortGap(PHCD_DEVICE_PDO pdo, PIRP irp)
+{
+    PHCD_CONTROLLER hc;
+    LARGE_INTEGER due;
+
+    hc = pdo->Controller;
+    if (hc == NULL || (hc->QemuStageFault & HCD_STAGE_QEMU_ABORTGAP) == 0 ||
+        KeGetCurrentIrql() != PASSIVE_LEVEL) {
+        return;
+    }
+    XhciLogNote(&hc->Hc, "qemu.abort.gap", pdo->Serial);
+    HcdRelativeMs(&due, (hc->QemuStageFault & HCD_STAGE_QEMU_ABORTLONG) != 0
+                            ? HCD_STAGE_QEMU_ABORT_LONG_MS
+                            : HCD_STAGE_QEMU_ABORT_GAP_MS);
+    (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    HCD_QEMU_URB_EVENT(irp, HCD_QEMU_EV_ABORT_GAP, pdo->Serial);
+}
+#define HCD_QEMU_ABORT_GAP(pdo, irp) hcdQemuAbortGap((pdo), (irp))
+#else
+#define HCD_QEMU_ABORT_GAP(pdo, irp)
+#endif
+
+/*
  * A URB on a contained controller (35-T.6, design record 17 section 4.6:
  * Unreadable): every transfer and command is held on its PDO instead of
  * refused (HcdIoHoldUnreadable), listed or departed alike, and an abort is
@@ -940,6 +1074,7 @@ static ULONG hcdUnreadable(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     switch (function) {
     case URB_FUNCTION_ABORT_PIPE:
         HcdIoAbortMark(pdo, irp, urb->UrbPipeRequest.PipeHandle, 0);
+        HCD_QEMU_ABORT_GAP(pdo, irp);
         (VOID)HcdIoParkedRelease(pdo, 1);
         urb->UrbHeader.Status = USBD_STATUS_SUCCESS;
         *status = HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
@@ -1131,6 +1266,7 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
          * the hold later are measured against the same horizon.
          */
         HcdIoAbortMark(pdo, irp, urb->UrbPipeRequest.PipeHandle, 0);
+        HCD_QEMU_ABORT_GAP(pdo, irp);
         (VOID)HcdIoParkedRelease(pdo, 1);
         urb->UrbHeader.Status = USBD_STATUS_SUCCESS;
         return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
@@ -1191,6 +1327,7 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
         if (dev == NULL) {
             if (function == URB_FUNCTION_ABORT_PIPE) {
                 HcdIoAbortMark(pdo, irp, urb->UrbPipeRequest.PipeHandle, 0);
+                HCD_QEMU_ABORT_GAP(pdo, irp);
                 (VOID)HcdIoParkedRelease(pdo, 1);
                 urb->UrbHeader.Status = USBD_STATUS_SUCCESS;
                 return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
@@ -1212,6 +1349,7 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
             XhciControllerLockRelease(&hc->Hc, lockIrql);
             if (valid) {
                 HcdIoAbortMark(pdo, irp, urb->UrbPipeRequest.PipeHandle, 1);
+                HCD_QEMU_ABORT_GAP(pdo, irp);
                 (VOID)HcdIoParkedRelease(pdo, 1);
             }
         }
@@ -1236,11 +1374,14 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
 
     default:
         /* Among them CONTROL_TRANSFER_EX (0x32, Vista) and Windows 8's
-         * GET_ISOCH_PIPE_TRANSFER_PATH_DELAYS: no class driver on any
-         * target sends one (section 6.5; Windows 8's usbccgp sends 0x32
+         * GET_ISOCH_PIPE_TRANSFER_PATH_DELAYS: none of the class drivers
+         * section 6.5 read sends one (Windows 8's usbccgp sends 0x32
          * only after a FUNCTION_SUSPEND capability this bus refuses,
-         * section 6.13.2), and the stock usbport of XP and of 2000
-         * refuses them all as an unknown function. */
+         * section 6.13.2), but Windows 10 sent a 0x32 to a device newly
+         * enumerated after a replug in task 50.28's legs, refused here
+         * (runtime; which driver sent it was not read), and the stock
+         * usbport of XP and of 2000 refuses them all as an unknown
+         * function. */
         break;
     }
     return hcdUrbComplete(irp, urb, USBD_STATUS_INVALID_URB_FUNCTION,
@@ -2509,6 +2650,10 @@ NTSTATUS HcdUrbQueryUsbdx(PHCD_DEVICE_PDO pdo, PIRP irp)
     out->SelectInterfaceUrbAllocateAndBuild = hcdUsbdxSelectInterface;
     out->UrbFree = hcdUsbdxUrbFree;
     hcdBusifReference(slot);
+    /* Task 50.25: kept until the device's REMOVE, not ended by the handle's
+     * Unregister - a client such as USBSTOR closes its handle after its
+     * start and is a 0x602 client still (record 13 section 6.13.12). */
+    (VOID)InterlockedExchange(&pdo->Usbdx602, 1);
     if (InterlockedIncrement(&hcdUsbdxRegistered) == 1) {
         XHCI_DBG_TEXT("hcd: USBD V1 interface answered, contract 0x602");
     }
@@ -2686,6 +2831,9 @@ static NTSTATUS hcdStreamsIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     for (i = 0; i <= XHCI98_STREAMS_MAX; i++) {
         rq->StreamPipeHandle[i] = NULL;
     }
+    /* Task 50.20 (record 17 section 4.12.10): the bus's half of Flags is
+     * written on every request, so only a served open can acknowledge. */
+    rq->Flags &= XHCI98_STREAMS_F_CLIENT_MASK;
     if (rq->Signature != XHCI98_STREAMS_SIGNATURE ||
         rq->Version != XHCI98_STREAMS_VERSION) {
         rq->Status = XHCI98_STREAMS_INVALID_REQUEST;

@@ -16,14 +16,20 @@ Every registry setting of the xHCI98 controller driver and of the Thunderbolt an
 - [UAS command size and two transfer pieces at once (`XhciMaxTransferKB`, `XhciWideMap`)](#uas-command-size-and-two-transfer-pieces-at-once-xhcimaxtransferkb-xhciwidemap)
 - [A UAS drive's ATA and SMART requests answered by the driver (`XhciUasNoAtaPassThrough`)](#a-uas-drives-ata-and-smart-requests-answered-by-the-driver-xhciuasnoatapassthrough)
 - [A UAS drive reset sooner when its commands keep timing out (`XhciUasFastReset`)](#a-uas-drive-reset-sooner-when-its-commands-keep-timing-out-xhciuasfastreset)
+- [A controller that moves another UAS stream (`XhciStreamDequeueAvoid`)](#a-controller-that-moves-another-uas-stream-xhcistreamdequeueavoid)
 - [Low- and Full-Speed devices behind a built-in hub (`XhciUsb2HubSpeedFallback`)](#low--and-full-speed-devices-behind-a-built-in-hub-xhciusb2hubspeedfallback)
 - [Selective suspend (`XhciSelectiveSuspend`)](#selective-suspend-xhciselectivesuspend)
+- [The status of a cancelled transfer (`XhciCancelStatus`)](#the-status-of-a-cancelled-transfer-xhcicancelstatus)
+- [A device's transfers when it is unplugged (`XhciUnplugComplete`)](#a-devices-transfers-when-it-is-unplugged-xhciunplugcomplete)
 - [The silent install (`XhciSilentInstall`)](#the-silent-install-xhcisilentinstall)
-- [Controller faults (`XhciTolerance`, `XhciIntervalCap`, `XhciAvgTrbEsit`)](#controller-faults-xhcitolerance-xhciintervalcap-xhciavgtrbesit)
+- [Controller faults (`XhciTolerance`, `XhciFailedRetrySec`, `XhciIntervalCap`, `XhciAvgTrbEsit`)](#controller-faults-xhcitolerance-xhcifailedretrysec-xhciintervalcap-xhciavgtrbesit)
+- [A device that stops answering (`XhciDeviceIsolation`)](#a-device-that-stops-answering-xhcideviceisolation)
 - [Linux's controller quirks (`XhciMsiAvoid` and thirteen more)](#linuxs-controller-quirks-xhcimsiavoid-and-thirteen-more)
 - [The Thunderbolt driver: bridges behind a tunnel on 98 SE and ME (`XhciCmBridgeNumbering`)](#the-thunderbolt-driver-bridges-behind-a-tunnel-on-98-se-and-me-xhcicmbridgenumbering)
 - [Thunderbolt networking speed on 98 SE and ME: the TCP receive window (`DefaultRcvWindow`)](#thunderbolt-networking-speed-on-98-se-and-me-the-tcp-receive-window-defaultrcvwindow)
 - [Thunderbolt networking speed on 98 SE and ME: the controller's interrupt](#thunderbolt-networking-speed-on-98-se-and-me-the-controllers-interrupt)
+- [A value the driver writes (`XhciMode4Refusal`)](#a-value-the-driver-writes-xhcimode4refusal)
+- [The port switchover's record and session key (`XhciIntelPortSwitchResult`, `XhciIntelPortSwitchSession`)](#the-port-switchovers-record-and-session-key-xhciintelportswitchresult-xhciintelportswitchsession)
 
 ## Where the values are, and every value
 
@@ -79,14 +85,21 @@ A value there **wins** over the same value in a controller's own key, for every 
 | `XhciLinkKeep` | From `3.4.0.0`: a UAS drive with a serial number kept as it was - its drive letter and the files open on it - when its SuperSpeed link drops and recovers (behind a hub or on a root port), instead of being removed and found again; every other device is found again as before; `0` turns it off, any other value is on | `0` | `1` | `1` | `1` |
 | `XhciSsFlapFallback` | From `3.4.3.0`: a USB 3 device whose SuperSpeed link keeps failing (three resets within a minute, then a fourth failure) is moved to the USB 2.0 side of the same connector, or of its USB 3 hub, where it runs at High Speed; `0` stops resetting the link instead and leaves the device off until it is unplugged and plugged in again; any other value is on | `0` | `1` | `1` | `1` |
 | `XhciCommandCheck` | From `3.4.0.0`: the command-state checker, which reads a device's state before each command the driver gives the controller and counts and logs what a controller that follows the xHCI specification to the letter would refuse; it changes nothing the driver does, and the xHCI98 USB Tree's snapshot shows its counters (`StrictChecked`, `StrictViolations`, `StrictUndefined`, `StrictRefusals`) and log lines (`strict.*`) for a report; `0` turns it off, any other value is on | `0` | `1` | `1` | `1` |
+| `XhciCancelStatus` | From `3.6.0.0`: the status a cancelled USB transfer reports to its device's driver: `1` as each Windows' own USB stack reports it (`0x00010000` on Windows 98 SE and ME, `0xC0010000` on Windows 2000 and later); `0` `0x00010000` on every Windows, which earlier releases reported; `2` `0xC0010000` on every Windows. The transfer ends as cancelled at every value; any other value is `1` (see "The status of a cancelled transfer") | `0` | `2` | `1` | `1` |
+| `XhciUnplugComplete` | From `3.6.0.0`: what happens to the transfers a USB device still has outstanding when it is unplugged: `1` on Windows 2000 and later they are ended once Windows has been told the device is gone, so a drive's removal need not wait for its driver's time-out (some are still held; see the section), and on Windows 98 SE and ME they are held until the device's driver cancels them or Windows removes the device; `0` they are held on every Windows, as earlier releases did. Any other value is `1` (see "A device's transfers when it is unplugged") | `0` | `1` | `1` | `1` |
+| `XhciFailedRetrySec` | From `3.6.0.0`: when a controller has stopped after repeated failures, the seconds before the driver tries it again by itself; later waits double up to ten minutes; `0` never tries again, as earlier releases did; `1`, a value above `600` or one of another type is read as `5` (see "Controller faults") | `0` | `600` | `5` | `5` |
 | `XhciStreamDequeueRepair` | From `3.5.0.0`: the UAS stream check after a cancelled command. `1` repairs: it sets a stale stream again, or resets a drive whose stream is untrusted; `0` checks and logs only (`cfg.deq.*` in the log, the `StreamDeq*` counters in the snapshot). Leave it at `1` | `0` | `1` | `1` | `1` |
+| `XhciStreamDequeueAvoid` | From `3.6.0.0`: a UAS drive on a controller that moves another of the drive's streams when it is told where a cancelled command's stream goes on (the Intel 7 Series, `8086:1E31`): that command is not sent, and the UAS driver recovers the drive itself, which Windows does not see as a removal. `1` on the listed controllers, `2` on every controller **at your own risk**, `0` off: the drive is checked and removed and found again as in `3.5.0.0` (see "A controller that moves another UAS stream"). It applies only to a drive run by xHCI98's own UAS driver | `0` | `2` | `1` | `1` |
+| `XhciDeviceIsolation` | From `3.6.0.0`: what the driver does when a device stops answering while plugged in. `1` (default): on the listed controller, the Intel 7 Series (`8086:1E31`), the device is removed and its port put on hold, and the other devices on the controller keep working; on other controllers, as `0`. `0`: the whole controller is reset, which removes every device on it for a moment, as earlier releases did. `2`: as `1` on every controller, **at your own risk** (see "A device that stops answering") | `0` | `2` | `1` | `1` |
 | `XhciAcpiTables` | From `3.4.1.0`: Windows 98 SE and ME: the computer's firmware (ACPI) tables read when the xHCI98 USB Tree saves them (File > Save Firmware Tables..., `XHCITR /acpi`); `0` refuses it, any other value allows it; 2000 and later ignore it | `0` | `1` | `1` | `1` |
 
 **Hardware quirks**, each for a particular controller or chipset
 
 | Value | What it sets | Minimum | Maximum | Default when absent | Written by the install |
 |---|---|---|---|---|---|
-| `XhciIntelPortSwitch` | The Intel 7/8/9-series port switchover; `1` turns it on, `2` applies it to any Intel controller **at your own risk** (the USB Tree sets `0` or `1`) | `0` | `2` | `0` | `0` |
+| `XhciIntelPortSwitch` | The Intel 7/8/9-series port switchover; `1` turns it on, `2` applies it to any Intel controller **at your own risk** (the USB Tree sets `0` or `1`). From `3.6.0.0` a new install writes `1`; an update keeps the value it had | `0` | `2` | `0` | `1` |
+| `XhciIntelPortSwitchSetup` | From `3.6.0.0`: whether the port switchover waits while Windows Setup runs (2000 and later); `0` automatic, `1` bypass (move the connectors whatever Windows says), `2` never move them while the switchover is on, at shutdown included; another number is `0` | `0` | `2` | `0` | `0` |
+| `XhciIntelPortSwitchReady` | From `3.6.0.0`, 2000 and later: the port switchover's first-session check's own note, set by the driver, never machine-wide (see the switchover's section) | `0` | `1` | `0` | `0` (2000 and later) |
 | `XhciIntelIrqRoute` | The Intel 7/8/9-series interrupt routing repair; `1` the Dell Latitude E7250 only, `2` any reviewed Intel chipset, `0` report only | `0` | `2` | `1` | `1` |
 | `XhciIntelNoRouteIrq` | 2000, XP and XP x64: the chipset's interrupt line for a USB 3 controller the firmware gives none; `1` the listed computers, `2` any reviewed Intel chipset, `0` never (the controller is polled) | `0` | `2` | `1` | `1` |
 | `XhciIntervalCap` | Interrupt endpoints polled at least every 32 ms: `1` on AMD controllers and the ATI Navi10's USB-C controller (`1002:7316`), `2` on every controller, `0` off | `0` | `2` | `1` | `1` |
@@ -166,6 +179,7 @@ A value there **wins** over the same value in a controller's own key, for every 
 | `XhciCmGen4LinkRecovery` | USB4 connection manager, from `3.4.0.0`: a bench switch, leave it at `1`. `1` lets a Gen 4 link between the controller and a USB4 version 2 device recover from a link error in place, the devices behind it kept, and checks the device's connections after each recovery; `0` takes such an error as an unplug followed by a fresh plug, as before; `XhciCmUsb4V2` `0` turns it off too; any other value is refused and `1` stands | `0` | `1` | `1` | `1` |
 | `XhciCmSleepEntry` | USB4 connection manager, from `3.4.3.0`: leave it as installed. `1` (the default) puts the Thunderbolt / USB4 devices to sleep in order at standby and hibernation and builds their connections again afterwards; `0` leaves them as earlier releases did; any other value is refused and `1` stands | `0` | `1` | `1` | `1` |
 | `XhciCmWakePowerUp` | From `3.5.0.0`, 2000 to 10: `1` (the default): a drive behind a Thunderbolt or USB4 tunnel that did not power up when Windows woke from standby or hibernation is powered up again once its tunnel is back, so that it answers and Windows can shut down; `0` leaves it as earlier releases did; any other value is refused and `1` stands | `0` | `1` | `1` | `1` |
+| `XhciCmWakeOrder` | From `3.6.0.0`, 7 to 10: `1` powers a device behind a Thunderbolt or USB4 tunnel up only after the Thunderbolt / USB4 controller when Windows wakes from standby or hibernation, so that the device finds its tunnel back; `0` (the default) leaves it as earlier releases did; any other value is refused and `0` stands. Ignored on 98 SE, ME, 2000, XP and Vista | `0` | `1` | `0` | `0` |
 
 **Thunderbolt networking (`xhcinet.sys`, and `xhcinet6.sys` on 8, 8.1 and 10)**, from `3.4.0.0`: the value is in the network adapter's own driver key (`HKLM\System\CurrentControlSet\Services\Class\Net\NNNN` on 98 SE and ME, `HKLM\SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}\NNNN` on 2000 to 10, the subkey whose `DriverDesc` is "xHCI98 Thunderbolt Networking"), not in `Services\USB`, and it is a string (`REG_SZ`) holding a number, as Windows' network Advanced page writes it: the adapter's Properties, Advanced, "MTU" sets it. It is read when the adapter starts: disable and enable the adapter, or restart Windows, after a change. A value outside its range is refused and the default stands. Raise it on both computers together; a peer that takes no large frames still gets frames of up to 1514 bytes.
 
@@ -178,7 +192,7 @@ A value there **wins** over the same value in a controller's own key, for every 
 
 The xHCI98 USB Tree (`XHCITR`) shows and sets `XhciLogVerbosity` in every `xhci98.sys` controller's driver key, and the Thunderbolt driver's own level, `XhciCmLogVerbosity` in its controller's driver key, beside it: View > Logging level..., with "Set as administrator..." on Windows 2000 to 7 for a user without administrator rights (the release notes, "The xHCI98 USB Tree"). It writes only `0` to `4`, and offers the restart the new level needs. From `3.1.0.0` it also shows the machine-wide value and, under it, each device's own value that it overrides; where the machine-wide value is set, "Set" writes that one, the value in force for every device.
 
-From `3.4.2.0` the xHCI98 USB Tree's View > Settings... shows and sets the values Setup offers, with Setup's meanings, choices and defaults, on a tab each for the controller driver, the Thunderbolt and USB4 driver and Stor98, and also `XhciIntelIrqRoute` and `XhciIntelNoRouteIrq`; "Show advanced settings" adds the rest of Setup's Advanced rows and, from `3.5.0.0`, every other value in these tables, in groups (one UAS drive's two values, memory, faults and checks, the controller quirks, Linux's controller quirks, Thunderbolt networking, USB4 and the ASM4242 with `XhciCmTunnelBridge`), except the log levels (View > Logging level...), `XhciCmNet` (Setup's Thunderbolt networking box) and the network adapter's values (its own Properties, Advanced). A UAS drive's two values are written in that drive's own key, for the drive chosen under "Applies to" or every UAS drive present (a UAS drive's right-click opens them for that drive); on 2000 and later, where Windows lets only the system write that key, the Tree writes it with an administrator's backup and restore rights and leaves its permissions as they are. From `3.5.0.0` Setup's Advanced lists offer the same values but a drive's two (Setup writes every value machine-wide). For every controller it writes the machine-wide value where one is set, else each controller's own key; one controller's own value can be set while no machine-wide value is set. After a change it says what the change takes (a restart, a Device Manager disable and enable where this page says so, or a drive plugged in again) and offers the restart. On Windows 2000 to 10 it asks for administrator rights. `XHCITR /set Name=Value` does the same from a command line, and `XHCITR /set /show` lists the values (the tool's `README.TXT`). Setup's USB settings page says so too: "You can change these settings later in xHCI98 USB Tree: View > Settings." The same window holds the tool's own quick-save hotkey (the tool's `README.TXT`, "Quick save"), stored for each user, not in the driver's keys.
+From `3.4.2.0` the xHCI98 USB Tree's View > Settings... shows and sets the values Setup offers, with Setup's meanings, choices and defaults, on a tab each for the controller driver, the Thunderbolt and USB4 driver and Stor98, and also `XhciIntelIrqRoute` and `XhciIntelNoRouteIrq`; "Show advanced settings" adds the rest of Setup's Advanced rows and, from `3.5.0.0`, every other value in these tables, in groups (one UAS drive's two values, memory, faults and checks, the controller quirks, Linux's controller quirks, Thunderbolt networking, USB4 and the ASM4242 with `XhciCmTunnelBridge`), except the log levels (View > Logging level...), `XhciCmNet` (Setup's Thunderbolt networking box) and the network adapter's values (its own Properties, Advanced). A UAS drive's two values are written in that drive's own key, for the drive chosen under "Applies to" or every UAS drive present (a UAS drive's right-click opens them for that drive); on 2000 and later, where Windows lets only the system write that key, the Tree writes it with an administrator's backup and restore rights and leaves its permissions as they are. From `3.5.0.0` Setup's Advanced lists offer the same values but a drive's two (Setup writes every value machine-wide), and from `3.6.0.0` but `XhciIntelPortSwitchReady` too. For every controller it writes the machine-wide value where one is set, else each controller's own key; one controller's own value can be set while no machine-wide value is set. `XhciIntelPortSwitchReady` is the exception: it is never machine-wide, and the Tree reads and writes it only in the own key of each controller the port switchover applies to (a listed Intel controller, or any Intel one while `XhciIntelPortSwitch` is `2` for it; never the excluded Sony board). After a change it says what the change takes (a restart, a Device Manager disable and enable where this page says so, or a drive plugged in again) and offers the restart. On Windows 2000 to 10 it asks for administrator rights. `XHCITR /set Name=Value` does the same from a command line, and `XHCITR /set /show` lists the values (the tool's `README.TXT`). Setup's USB settings page says so too: "You can change these settings later in xHCI98 USB Tree: View > Settings." The same window holds the tool's own quick-save hotkey (the tool's `README.TXT`, "Quick save"), stored for each user, not in the driver's keys.
 
 The install writes every value in these tables, at the number in its last column (from `3.4.0.0` every value the drivers read, roadmap-usb4 task 45.50), so each one is already in the key, ready to change; a value marked with systems is written there alone, the systems that read it. An install or update writes a value only where it is missing, so a value you changed stays as you set it. To go back to the table's value, set it again, or delete the value and update the driver.
 
@@ -207,6 +221,8 @@ On my P14s with the MSSU10 over UAS (Windows 98 SE, 8 MB transfers), `500` gave 
 - Absent: as `1`. That is how text-mode Setup sees it, before any INF has run, and Setup has only Windows' own `usbstor` for storage.
 
 A UAS-only device stays on UAS either way. The value is read each time a device enumerates, so unplug and replug the drive after changing it.
+
+A UAS-only drive at SuperSpeed on a controller that cannot stream (`XhciStreamsOff`) is sent to the USB 2.0 side of its connector. If it does not appear there within about 20 seconds, it is listed with no driver until it is unplugged, and the xHCI98 USB Tree's details for it say why. The wait is fixed; no value sets it.
 
 A drive used as Bulk-Only, with this value or at SuperSpeed on a controller that cannot stream (`XhciStreamsOff`), has a Device Manager entry of its own for Bulk-Only (`XhciBulkOnlyOwnId`, from `3.4.2.0`): Windows installs its own Bulk-Only driver on it the first time, and where the drive is used as UAS again its UAS entry is used. A drive installed as Bulk-Only by an earlier release is found once more as a new entry, and may get another drive letter. With `XhciBulkOnlyOwnId` set to `0` the drive has one entry everywhere, as before: it keeps the driver it was first installed with until you uninstall it in Device Manager and replug it, and one installed with the UAS driver stops at Code 10 on a controller that cannot stream.
 
@@ -252,12 +268,12 @@ With the defaults, the root hub's first report typically comes 20 to 30 ms after
 
 On Intel 7-, 8- and 9-series chipsets (Ivy Bridge to Broadwell) and C610/X99, each switchable connector, usually a blue one, is wired to both the USB 2.0 (EHCI) and the xHCI controller. With the firmware's USB 3.0 setting on Auto, or no setting at all, those connectors start on the USB 2.0 controller.
 
-On these machines, a USB 3 stick or drive that copies only at USB 2.0 speed on a blue connector is most likely still on the USB 2.0 controller. The switchover is off by default (`XhciIntelPortSwitch` `0`). SETUP.EXE proposes to turn it on when it finds one of these controllers at a first install; an update keeps the value it had. To turn it on or off, use the USB Tree's View > Settings..., or `XHCITR /set XhciIntelPortSwitch=1` (or `=0`), and restart Windows. On 2000 and later, `XHCITR /set` needs an administrator.
+On these machines, a USB 3 stick or drive that copies only at USB 2.0 speed on a blue connector is most likely still on the USB 2.0 controller. From `3.6.0.0` a new install turns the switchover on (`XhciIntelPortSwitch` `1`), on every Windows; SETUP.EXE still asks at a first install on these computers, and its answer `0` turns it off. An update keeps the value it had: an install made from `2.3.0.0` to `3.5.0.0` keeps its `0`. To turn it on or off, use the USB Tree's View > Settings..., or `XHCITR /set XhciIntelPortSwitch=1` (or `=0`), and restart Windows. On 2000 and later, `XHCITR /set` needs an administrator.
 
 `XhciIntelPortSwitch` lets the driver move them to the xHCI controller at each start and resume, and hand them back when the controller is disabled or removed, or the machine shuts down. The hand-back writes only the registers the driver itself wrote.
 
-- `0` (default): off.
-- `1` (Setup's choice at a first install on these computers): on, for Intel xHCI device ids `1E31`, `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`, but never on a Sony VAIO with subsystem id `104D:90A8`, which Linux records as unable to switch, or where the subsystem id cannot be read.
+- `0`: off. This driver does not move the connectors when it starts or when Windows wakes; they stay where the computer's firmware put them, except that at shutdown, on the Intel 7 Series and two of the 8 and 9 Series chipsets, the driver still hands them back to the USB 2.0 controller (`XhciIntelShutdownToEhci`). At `0` the setting below is not read.
+- `1` (what a new install writes): on, for Intel xHCI device ids `1E31`, `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`, but never on a Sony VAIO with subsystem id `104D:90A8`, which Linux records as unable to switch, or where the subsystem id cannot be read.
 - With the value missing, or not a DWORD, the switchover is off, as during text-mode Setup.
 - `2`: on any Intel xHCI controller, listed or not; on a listed one it is the same as `1`. **At your own risk**: see below.
 
@@ -266,6 +282,20 @@ With `2`, on a chipset without these registers (every Intel chipset from the 100
 A device on a switchable connector under a running USB 2.0 driver (NUSB's, for example) is disconnected there when this driver starts, and comes back under it, so do not have a drive busy on a blue connector at that moment.
 
 The value is read when the controller starts, so restart Windows after changing it.
+
+**While Windows Setup runs (2000 and later).** The driver does not move the connectors while Windows says Setup is in progress or that cannot be read, in Windows PE, or (Vista and later) before Windows reports its installation complete, and not in the Windows session in which the switchover was first turned on for the controller: they can move at a later start of Windows, once none of these holds them. A start that is held writes nothing to the connectors' registers for as long as the controller runs, at shutdown included, and they stay where the firmware routed them, which on a computer whose firmware routes them to the USB 3 controller is already that controller. The xHCI98 USB Tree says when it is waiting and why. If it keeps waiting after Windows Setup has finished, set `XhciIntelPortSwitchSetup` to `1` and restart Windows; a device in use on those connectors is disconnected when they move. On 98 SE and ME nothing of this is checked: unless `XhciIntelPortSwitchSetup` is `2`, the connectors move at the driver's first start, during an install from a drive on one of them included.
+
+`XhciIntelPortSwitchSetup` (read only while `XhciIntelPortSwitch` is `1` or `2`):
+
+- `0` (default): automatic, as above.
+- `1`: bypass. The connectors are moved at every start where nothing else stops it, whatever Windows' Setup state says. It also removes the protection during Windows Setup, and it does not make a drive Windows starts from safe on those connectors. On 98 SE and ME it is the same as `0`.
+- `2`: always hold. While the switchover is on, this driver writes nothing to the connectors at all, at shutdown included.
+
+Do not rely on the automatic port switchover for a drive Windows starts from, or keeps its system on, when that drive is on one of the shared (usually blue) connectors: on some computers Windows' installation state cannot be read when the controller starts at some starts of Windows and can at others, so the drive can be on one controller at one start and on the other at the next. Use a connector that is always on one controller (a black USB 2.0 one, or one the switchover does not move), or choose a fixed setting and check that Windows starts with it several times. Where Windows no longer starts from such a drive: start Windows with the drive on another connector (or from other media), set `XhciIntelPortSwitch` to `0` or `XhciIntelPortSwitchSetup` to `2` there (the USB Tree, `XHCITR /set`, or the registry from Windows' recovery tools), and restart.
+
+`XhciIntelPortSwitchReady` is the driver's own note, in each controller's driver key and never machine-wide: `0` until a start of the driver has found the switchover on for that controller and could tell its Windows session from an earlier one (on 32-bit Windows that needs the helper `xhcihlpr.sys` running), then `1`; only an exact `1` counts. Nobody needs to set it. An image of Windows made from a computer whose driver had already run carries the `1`: to have the deployed computers' first Windows session held as well (a `0` prepares a fresh Windows session; the session running now is not changed by it), set it to `0` in each xHCI98 controller's key before capturing the image (the USB Tree's View > Settings..., Show advanced settings, with each controller under "Applies to", or `XHCITR /set XhciIntelPortSwitchReady=0` for every controller it applies to at once) as the last step, and capture the image before the controller starts again: any further start of it that finds the switchover on sets it back to `1`, a restart of the controller in the same Windows session included; or set it in the captured image offline; a driver staged and never started in the image has the install's `0`.
+
+For a Windows install image that should never move the connectors during Setup, write `XhciIntelPortSwitchSetup` `2` where the driver reads it in each environment that will start the controller - Windows PE's own registry when the driver is given to PE, and the installed image's when it is staged for the installed system - and set it back to `0` (or delete it) once Setup has finished.
 
 ## The Intel 7/8/9-series interrupt routing repair (`XhciIntelIrqRoute`)
 
@@ -309,7 +339,7 @@ A controller with no interrupt pin is polled instead of refused, and so is one w
 - `1`: the interrupt line only. With no line, the controller fails to start (Code 10).
 - `2`: always poll, at the cost of more processor wake-ups. Use it for an interrupt that fails in a way the driver cannot see in the controller's registers. On Windows 98 SE it is also the way round an IRQ that another device holds raised with no working driver (an NVMe drive the BIOS still runs, in MS-DOS compatibility mode, for example), which makes Windows crawl or freeze once any driver uses that IRQ: under `2` the driver connects no interrupt, so Windows leaves the IRQ masked as before the install, and USB keeps working (roadmap-usb4 task 45.33). That holds only while no other working driver uses the IRQ; otherwise the device holding it needs a working driver or removing. Set it in the machine-wide key for every controller, or in the key of each controller on that IRQ, and restart Windows (or disable and enable each of those controllers): the value is read at the controller's start.
 - `3`: a message-signalled interrupt only (Vista and 7). With no message, the controller fails to start (Code 10).
-- `4`: an unsupported test feature, a message-signalled interrupt on 2000, XP and XP x64, which have none of their own. Automatic never chooses it. On 98 SE and ME a `4` runs as `0`. The values that go with it (`XhciMsiStrategy` and those after it in the table) are marked there the same way.
+- `4`: an unsupported test feature, a message-signalled interrupt on 2000, XP and XP x64, which have none of their own. Automatic never chooses it. On 98 SE and ME a `4` runs as `0`. The values that go with it (`XhciMsiStrategy` and those after it in the table) are marked there the same way. Under `XhciMsiStrategy` `0` the interrupt arrives through an IRQ the driver takes for the controller, not the line Windows assigned, which is left unused: Device Manager still lists that line, and the xHCI98 USB Tree marks it "not in use" and lists the IRQ taken under it.
 
 Under `1`, Vista and 7 are asked for the line, and a controller that is given a message instead (for example because it has no line) fails to start. Under `3`, Vista and 7 are asked for the message; it fails to start when none is granted or it cannot be connected, which on 32-bit means `xhcihlpr.sys` is not running. Windows 98 SE, ME, 2000 and XP have no message-signalled interrupts, so `3` always fails there.
 
@@ -366,6 +396,18 @@ When a UAS drive does not finish a command in time, the driver asks the drive to
 
 What it trades: more resets. Each one ends every command in flight, and Windows checks the drive's volume again afterwards; on a removable drive a check that fails reports the volume as changed ("Wrong Volume"). Leave it at `0` unless a drive hangs this way. It is set in the same key as `XhciUasNoAtaPassThrough` above, and read when the drive is plugged in or Windows starts.
 
+## A controller that moves another UAS stream (`XhciStreamDequeueAvoid`)
+
+On the Intel 7 Series USB 3 controller (`8086:1E31`), when the driver cancels one command of a UAS drive - a request of a monitoring program that the drive refuses, for example - and tells the controller where that command's stream goes on, the controller can move another of the drive's streams to the same place. A read can then complete twice, or wait until it times out; from `3.5.0.0` the driver's check finds the damage and removes the drive and finds it again, and files open on it are lost.
+
+From `3.6.0.0`, on that controller, the driver sends no such command for a drive whose driver recovers it by itself (the UAS driver of this package). It holds the drive's endpoint instead, and the UAS driver resets the endpoint, or the drive, which Windows does not see as a removal: the commands in flight are sent again after a pause of about a second. A drive on another UAS driver (Windows 8 and later's own) keeps the `3.5.0.0` behaviour. It applies only to a drive run by xHCI98's own UAS driver.
+
+- `0`: off on every controller, the `3.5.0.0` behaviour.
+- `1` (default): on the listed controller, the Intel 7 Series (`8086:1E31`).
+- `2`: on every controller, at your own risk on one not known to need it: there every cancelled UAS command costs a reset of the endpoint or of the drive in place of that command.
+
+It is read when the controller starts, so restart after changing it. The snapshot shows it as the last row of its "Linux quirks" block (it is not one of Linux's), and its counters `StreamDeqUntrusted`, `StreamContractOpens` and `StreamDebts` show it at work.
+
 ## Low- and Full-Speed devices behind a built-in hub (`XhciUsb2HubSpeedFallback`)
 
 Some controllers reach Low- and Full-Speed devices only through a USB 2.0 hub built into the chip, and their USB 2.0 port's speed table names High Speed alone; the VIA VL805 (`1106:3483`) is one. Every mouse, keyboard and other Low- or Full-Speed device on such a controller sits behind that hub.
@@ -386,6 +428,31 @@ The driver can suspend an idle USB 2.0 or SuperSpeed device when Windows asks, a
 
 The driver suspends a device only when Windows or the device's own driver asks (on XP and later, also through Windows' idle notification), never on a timer of its own. A composite device's parts are suspended together, once all of them are idle. A device that cannot signal a remote wake is offered to Windows as able to sleep but not to wake. A suspended device is not asked for descriptors a tool requests: the request fails until it wakes. Restart after changing it. If a device misbehaves with it on, set `0`, restart and report whether that changed it.
 
+## The status of a cancelled transfer (`XhciCancelStatus`)
+
+When a USB transfer is cancelled - a program stops a read, a device's driver aborts its pipe, a device is stopped or removed - the request ends as cancelled, and it also reports a status number to the device's driver. Windows has used two numbers for it: the earlier `0x00010000`, which the USB stacks of Windows 98 SE and ME report, and the later `0xC0010000`, which the USB 2.0 stacks and Windows 2000 and later report. Earlier releases of the driver reported the earlier number on every Windows, so after an update Windows 2000 and later get the later number unless the value is set to `0`.
+
+- `1` (default): as each Windows' own USB stack reports it: the earlier number on Windows 98 SE and ME, the later number on Windows 2000 and later.
+- `0`: the earlier number everywhere.
+- `2`: the later number everywhere.
+
+Any other value is `1`. It applies to the transfer and to each packet of an audio or video (isochronous) transfer that had not been answered, but for one case: a transfer still waiting when its device was unplugged reports its unanswered packets as the device gone (`0xC0007000`) at every value. A packet already answered keeps its own status. The request ends as cancelled at every value. Use `0` or `2` only for a device's driver that misbehaves after a cancel at the default. It is read when the controller starts, so restart after changing it. The xHCI98 USB Tree's snapshot shows the value read and the number chosen in its log (`urb.cancel.value`, `urb.cancel.out`).
+
+## A device's transfers when it is unplugged (`XhciUnplugComplete`)
+
+When a USB device is unplugged, the transfers its driver still has outstanding cannot finish. On Windows 2000 and later the driver ends them, reporting that the device is gone, once it has told Windows the device has left, instead of holding them until the device's driver cancels them; a drive's removal, a copy to it and a window on it then need not wait for that driver's own time-out. Not every transfer ends that way, so a removal can still wait:
+
+- a transfer the device's driver has already aborted ends as cancelled, and one of a device Windows is already removing ends when that removal reaches it;
+- on a controller that stopped answering and was closed off (see "Controller faults"), the transfers stay held until their drivers cancel them or Windows removes the devices;
+- where a stopped controller could not be shown to have finished with the programs' memory (`XhciDmaStaging` at `0`), the transfers whose memory it may still use stay pending.
+
+On Windows 98 SE and ME the transfers are held until the device's driver cancels them or Windows removes the device: on Windows 98 SE a keyboard or mouse driver keeps asking again without end when its transfers end that way. Earlier releases held them on every Windows.
+
+- `1` (default): ended as above on Windows 2000 and later, held on Windows 98 SE and ME.
+- `0`: held on every Windows, as earlier releases did.
+
+Any other value is `1`; no value ends them on Windows 98 SE or ME. Use `0` only for a device's driver that misbehaves after an unplug at the default. It is read when the controller starts, so restart after changing it. The xHCI98 USB Tree's snapshot shows the value read and the rule taken in its log (`urb.gone.value`, `urb.gone.policy`).
+
 ## The silent install (`XhciSilentInstall`)
 
 On Windows 98 SE, a device Windows already has drivers for still brings the Add New Hardware wizard whenever Windows makes a new entry for it: on a port it has never used, unless it carries a serial number Windows follows from port to port. With `XhciSilentInstall` at `1`, a device whose class is in the `SilentClasses` list installs with no wizard instead. Windows 2000 and later never read it.
@@ -401,7 +468,7 @@ With it on, Windows 98 SE installs a keyboard, mouse, stick and hub, each a devi
 
 SweetLow provided the information on how Windows decides a silent install, and the list.
 
-## Controller faults (`XhciTolerance`, `XhciIntervalCap`, `XhciAvgTrbEsit`)
+## Controller faults (`XhciTolerance`, `XhciFailedRetrySec`, `XhciIntervalCap`, `XhciAvgTrbEsit`)
 
 The driver does not leave a device dead until it is replugged after a transfer, port or controller fault. This follows a tester's report of a mouse that stopped at random on an AMD AM5 board. A missed interrupt is picked up by the driver itself, and a USB transaction error is retried up to three times before the transfer fails.
 
@@ -411,10 +478,17 @@ Each is tried a few times at most; then the port or the controller is held until
 
 - **A re-enumeration is an unplug and a plug to Windows:** transfers in flight end, a drive's open files with them, and a file copy running across it fails; check a drive as after any surprise removal. A recovery of a halted controller re-enumerates every device on it the same way.
 - **Each port has a budget**, a root port and a hub's port alike: three re-enumerations and, on a root port, three repowers. Once it is spent, the next fault there removes the device and holds the port. A held port that is still powered is released by unplugging its device; one held unpowered after over-currents only by restarting the controller (restarting Windows, or a disable and enable in Device Manager). A port gets its budget back after its device has worked for at least a minute with no fault (about two and a quarter minutes by the clock), or once it has been empty for at least a second (about 2.4 seconds) and a device is plugged in again: leave it unplugged a few seconds.
-- **A controller that halts** is recovered at most three times in a window of at least ten minutes (about 22 minutes by the clock); after that its devices are removed and it stays stopped until it is restarted.
+- **A controller that halts** is recovered at most three times in a window of at least ten minutes (about 22 minutes by the clock); after that its devices are removed and it stays stopped until the driver's own tries bring it back (`XhciFailedRetrySec`, below) or it is restarted.
 - **A controller that stops answering** (its status register reading all ones for a second or more) is closed off: once the driver has proved it can no longer write to memory, its devices are removed. Without that proof everything it might still write into is kept, the snapshot reads "CONTAINED", and disabling the controller then hangs: do not disable it, and save your work; Windows may not be able to shut down or restart afterwards, so if it does not finish, switch the computer off at the power button (the release notes' known limitations).
-- **At every value of `XhciTolerance`**, `0` included: a device the controller reports incompatible is removed and found again, counting against its port's budget; a recovery that cannot stop the controller is closed off as above; and a controller latched failed has its held transfers completed and its devices removed when it shows it has halted, is not brought back by a resume, and has no state saved for standby.
+- **At every value of `XhciTolerance`**, `0` included: a device the controller reports incompatible is removed and found again, counting against its port's budget; a recovery that cannot stop the controller is closed off as above; and a controller latched failed has its held transfers completed and its devices removed when it shows it has halted, is not brought back by a resume itself (the driver may try it again after the resume unless `XhciFailedRetrySec` is `0`), and has no state saved for standby. The tries of `XhciFailedRetrySec` are made at every value of `XhciTolerance` too.
 - The snapshot counts what happened at `XhciLogVerbosity` `1` or above (the errors, every completion code, the retries, each re-enumeration and why, the lost interrupts, each port's budget and hold, the recoveries); at `XhciTolerance` `0` it still counts the faults, though not what the switched-off handling would have done.
+
+`XhciFailedRetrySec` lets the driver try a controller again by itself once it has stopped after repeated failures. The first try comes after the value's seconds. Each later wait is twice the one before, up to ten minutes. A device unplugged from or plugged into one of the controller's own ports, not a hub's, can bring the next try sooner once the change has held for a second. Such a try never comes sooner than the value's seconds after the controller stopped. At most three such tries come in ten minutes. A try makes up to three attempts to restart the controller and stops at the first that works. Every device on the controller is then found again, as if it had been replugged. If the faulty device is still plugged in, the controller may stop again. The next wait is then longer, up to ten minutes. A controller a try brought back that then runs ten minutes with no trouble and no standby/hibernation starts its waits again from the value. There is no limit to the number of tries.
+
+- `0`: no tries, as in earlier releases. A stopped controller stays stopped until it is restarted: restart Windows, disable and enable it in Device Manager, or on Windows 2000 and later use the xHCI98 USB Tree's Restart Controller.
+- `2` to `600` (default `5`): the first wait, in seconds.
+
+Any other value is `5`. The waits are seconds by Windows' clock. Each lasts at least as long as written, or a little longer when the computer is busy, so the default's first wait is about 5 seconds and the longest about ten minutes. If the clock is set while a wait runs, that wait can end sooner or later. Time in standby/hibernation does not count, and no try is made then. A wait that ended before the computer went to sleep brings the try soon after it wakes. A controller closed off because it stopped answering is never tried again. The value is read when the controller starts, so restart the controller after changing it. The xHCI98 USB Tree shows a stopped controller and about how many seconds remain before its next try.
 
 `XhciTolerance` switches all of it together.
 
@@ -433,6 +507,20 @@ Each is tried a few times at most; then the port or the controller is held until
 - `1`: the endpoint's largest transfer per service interval, as Linux does.
 
 All three are read when the controller starts, so restart after changing one.
+
+## A device that stops answering (`XhciDeviceIsolation`)
+
+`XhciDeviceIsolation`: what the driver does when a device stops answering while plugged in.
+
+- `1` (default): on the listed controller, the Intel 7 Series (`8086:1E31`), the device is removed and its port put on hold, and the other devices on the controller keep working; on other controllers, as `0`.
+- `0`: the whole controller is reset, which removes every device on it for a moment, as earlier releases did.
+- `2`: as `1` on every controller, at your own risk.
+
+The listed controller is the Intel 7 Series, `8086:1E31`.
+
+If a device on this controller behaves worse than before, set `XhciDeviceIsolation` to `0`.
+
+Read when the controller starts.
 
 ## Linux's controller quirks (`XhciMsiAvoid` and thirteen more)
 
@@ -586,3 +674,49 @@ fails or stops, the driver goes back to looking at every clock tick.
 
 To undo it, set `XhciCmRingInterrupt` to `0` and `XhciPfwNhiLine` to `1`,
 then shut down and start Windows again.
+
+## A value the driver writes (`XhciMode4Refusal`)
+
+`XhciMode4Refusal` is not a setting: nobody sets it, and the install does
+not write it. The controller driver writes it, a `REG_BINARY` in the
+controller's driver key (the key above), on 2000 and later, when
+`XhciInterruptMode` `4` (an unsupported test feature) keeps the
+controller from starting. It holds why: the reason, the status of the
+message-signalled interrupt's connection, the `XhciMsi*` values as the
+driver read them, for a claimed IRQ each IRQ's reason, the time, the
+driver's version and the controller's PCI location. The next start that
+`XhciInterruptMode` `4` does not refuse marks it cleared. On 98 SE and ME
+it is never written. Changing or deleting it changes nothing the driver
+does.
+
+The xHCI98 USB Tree prints it: `XHCITR /dump`, when no controller can be
+opened, lists every controller key that holds one, and the device report
+of `XHCITR /snapshot` and Save Report shows it under the controller, as
+"mode 4".
+
+## The port switchover's record and session key (`XhciIntelPortSwitchResult`, `XhciIntelPortSwitchSession`)
+
+Neither is a setting, and the install writes neither.
+
+`XhciIntelPortSwitchResult` is a `REG_BINARY` the controller driver
+writes in an Intel controller's driver key at each start the switchover applies to (the switchover on, `1` on a listed controller or `2` on any Intel one, and the board not the excluded one): what decided
+the port switchover at that start - each Windows Setup value as read,
+the Windows PE tests, the image state, the first-session check, where
+`XhciIntelPortSwitch` and `XhciIntelPortSwitchSetup` were set, and the
+time. The driver never reads it back; changing or deleting it changes
+nothing the driver does. The xHCI98 USB Tree shows the running
+controller's decision from the driver itself, and this record, as
+recorded at its time, for a controller that is not running
+(`XHCITR /dump`, and the device report under the controller).
+
+`XhciIntelPortSwitchSession` is a key the driver creates under the
+controller's driver key on 2000 and later, as a volatile key (Windows
+keeps it in memory and removes it at a restart), with one `DWORD`,
+`ReadyAtStart`: whether the switchover had been on for the controller
+before this Windows session began. The driver reads it at the later
+starts of the same session. It is the one value the driver reads
+that no install writes (an install cannot write into a key that
+exists only while Windows runs). A key of that name that is not
+volatile (made by hand, or copied by a tool) holds the switchover at
+every start, and the USB Tree says so: delete the key, then restart
+Windows.

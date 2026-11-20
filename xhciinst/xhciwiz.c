@@ -5059,6 +5059,11 @@ static void summary_fill(HWND dlg)
             tb_add(&t, line);
             any = 1;
         }
+        if (any && inst_eng_stale_more()) {
+            /* Record 23 revision 67: said before the confirmation, as the
+             * console's plan says it. */
+            tb_add(&t, "- " INST_STALE_MORE_TEXT "\n");
+        }
         if (!any) {
             tb_add(&t, toolsOnly ? "- none changed (no driver in this run).\n"
                                  : "- none found: drivers stored for later.\n");

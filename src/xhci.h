@@ -37,6 +37,7 @@
  * 12 section 3.3), embedded for the same reason. */
 #include "xhci_vhub.h"
 #include "xhci_tol.h"
+#include "xhci_retry.h"
 #include "xhci_quirk.h"
 
 /* ------------------------------------------------------------------ */
@@ -3484,6 +3485,13 @@ ULONG XhciRingNoOpAt(PXHCI_RING ring, ULONG index);
  * command ring's, and the two are not interchangeable - a type 8 on the command
  * ring is a TRB Error (roadmap Phase 20, F12). XhciRingNoOpAt is this with 8. */
 ULONG XhciRingNoOpAtType(PXHCI_RING ring, ULONG index, ULONG trbType);
+/* Task 50.30 (design record 17 section 4.15.9): the command a Command
+ * Ring Stopped event abandons - the one still outstanding, or, with none,
+ * the TRB the same abort's Command Aborted ended when the stop names it
+ * (`aborted`, 0 for none, already held to its generation); 0 when the
+ * stop abandons nothing. Pure. */
+ULONG XhciRingStopAbandoned(ULONG outstanding, ULONG aborted,
+                            ULONG pointer);
 
 /* The physical address the dequeue pointer currently sits at - the value a Set
  * TR Dequeue Pointer command must carry so the two pointers agree. 16-byte
@@ -9011,6 +9019,63 @@ typedef struct _XHCI_EXTENSION {
     ULONG RecoveryFailTick;
     ULONG RecoverResetsAdopted;
 
+    /*
+     * Task 50.30, step 1 (design record 17 section 4.15.8): why each
+     * controller reset was requested, the counts by reason and the ring of
+     * the requests recoveries began from (xhci_tol.h, XHCI_TOL_WHY), written
+     * under the controller lock by HcdSvcRequestResetWhy and cleared at each
+     * start; read by the snapshot (its HCD header's words
+     * XHCI_SNAPSHOT_HCD_WHY_AT and _BYTES) and the recovery-status request.
+     * Recording only. Appended last, so no offset the harness reads moves;
+     * 68 ULONGs, so the parity TrailingPad keeps is unchanged. Task 50.30
+     * step 3 appended the spread records of section 4.15.6 inside it (18
+     * ULONGs) and then XhciDeviceIsolation's value and state of section
+     * 4.15.11 (2 ULONGs), 88 in all: the parity is unchanged again, and
+     * the fields after it move by those 20 ULONGs, which the snapshot
+     * reader takes from the header's words, not from a fixed offset.
+     */
+    XHCI_TOL_WHY Why;
+
+    /*
+     * Task 50.30 (design record 17 section 4.15.9, the engine's
+     * correction): the TRB the current abort's Command Aborted event ended
+     * as outstanding, and the command generation it was ended in. Set only
+     * by a Command Aborted naming the outstanding command while an abort is
+     * outstanding; read only by the Command Ring Stopped that ends that
+     * abort in the same generation, and cleared there, by every
+     * invalidation and by every rebuild of the command ring, so it can never
+     * match a later command placed at the same address. Appended last; two
+     * ULONGs, so the parity TrailingPad keeps is unchanged.
+     */
+    ULONG CommandAbortedPA;
+    ULONG CommandAbortedGen;
+
+    /*
+     * Task 50.30 step 3 (design record 17 section 4.15.3, verdict 2): an
+     * abort's clean end as xhciCommandRingStopped records it for
+     * XhciSlotCommandAbortEnded, under the controller lock: the TRB the
+     * abort abandoned (the one its Command Aborted event ended, or the one
+     * still outstanding when the stop event came alone), the command
+     * generation, and 1 when a Command Aborted event came, 2 when only the
+     * stop event did. Appended last; four ULONGs with the pad, so the parity
+     * TrailingPad keeps is unchanged.
+     */
+    ULONG CommandAbortEndedPA;
+    ULONG CommandAbortEndedGen;
+    ULONG CommandAbortEndedHow;
+    ULONG CommandAbortEndedPad;
+
+    /*
+     * Task 50.31 (design record 38): a controller stopped after repeated
+     * failures, tried again - the retry state (xhci_retry.h,
+     * XHCI_TOL_RETRY), set by every start (XhciTolRetryInit from
+     * hcdReadValues), written under the controller lock; read by the
+     * snapshot (its HCD header's words XHCI_SNAPSHOT_HCD_RETRY_AT and
+     * _BYTES) and the recovery-status request. Appended last; 52 ULONGs, so
+     * the parity TrailingPad keeps is unchanged.
+     */
+    XHCI_TOL_RETRY Retry;
+
     ULONG TrailingPad;
 
     ULONG TrailingSignature;
@@ -9531,7 +9596,37 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_UT_TIMES      1  /* 8 times                     */
 #define XHCI_SNAPSHOT_HCD_UT_ATA        9  /* the LUNs' ATA refusal bits  */
 #define XHCI_SNAPSHOT_HCD_UTIME_RECORD_WORDS 10UL
-#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    952UL /* the records end the header */
+/*
+ * Appended by task 50.30, step 1 (design record 17 section 4.15.8),
+ * version unchanged, after 49.39's records: where the reset reasons' state
+ * is in the extension (XHCI_EXTENSION.Why, an XHCI_TOL_WHY) and its size. A
+ * header that ends at word 952 is an earlier driver's.
+ */
+#define XHCI_SNAPSHOT_HCD_WHY_AT        952 /* XHCI_EXTENSION.Why         */
+#define XHCI_SNAPSHOT_HCD_WHY_BYTES     953 /* sizeof (XHCI_TOL_WHY)      */
+/*
+ * Appended by task 50.31 (design record 38 section 15.3), version
+ * unchanged, after 50.30's words: where the retry state is in the
+ * extension (XHCI_EXTENSION.Retry, an XHCI_TOL_RETRY) and its size. A
+ * header that ends at word 954 is an earlier driver's.
+ */
+#define XHCI_SNAPSHOT_HCD_RETRY_AT      954 /* XHCI_EXTENSION.Retry       */
+#define XHCI_SNAPSHOT_HCD_RETRY_BYTES   955 /* sizeof (XHCI_TOL_RETRY)    */
+/*
+ * Appended by task 50.34 (design record 16 section 21.7), version
+ * unchanged, after 50.31's two words: the Intel port switchover's latched
+ * decision for this started lifetime - the words of the start's
+ * XhciIntelPortSwitchResult (xhci_psw.h, XHCI_PSW_REC_*, built by
+ * XhciPswRecordBuild), whatever became of their write - and that write's
+ * NTSTATUS (XHCI_SNAPSHOT_HCD_NOT_READ where the start wrote none: a
+ * controller not Intel). The word count and the write's status come
+ * first. A header that ends at word 956 is an earlier driver's.
+ */
+#define XHCI_SNAPSHOT_HCD_PSW_WORDS     956 /* XHCI_PSW_REC_WORDS         */
+#define XHCI_SNAPSHOT_HCD_PSW_WRITE     957 /* the record's write status  */
+#define XHCI_SNAPSHOT_HCD_PSW_AT        958
+#define XHCI_SNAPSHOT_HCD_PSW_COUNT     58UL
+#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    1016UL
 #define XHCI_SNAPSHOT_HCD_NOT_READ      0xFFFFFFFFUL
 
 /* A device record's link word: the link state (XHCI_SUSP_*) in 3:0, Ss in
@@ -9581,7 +9676,7 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_F_UNREADABLE  0x00000004UL /* PORTSC read all ones */
 
 /* XHCIHC_COUNTERS in ULONGs (xhci_counters.h; asserted in xhci_snap.c). */
-#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 320UL
+#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 326UL
 /* Usb2HubSpeedFallbackSlots' word, which the door computes (issue 18). */
 #define XHCI_SNAPSHOT_HCD_HUB_SPEED_SLOTS 166UL
 /* Task 49.45: UsbdxClientUrbs and UsbdxForeignFrees, image-wide figures the
@@ -9615,6 +9710,12 @@ ULONG XhciSnapHcdFlags(ULONG settleDeferred, ULONG linkRecovering,
 #define XHCI_SNAPSHOT_S_BAD_REGION      0x00000008UL /* unknown Region; no payload */
 #define XHCI_SNAPSHOT_S_PAST_END        0x00000010UL /* Offset >= RegionBytes; no payload */
 #define XHCI_SNAPSHOT_S_NO_MMIO         0x00000020UL /* HcInfoStatus not OK; PORTSC not read */
+/* 50.32 (eject wait), design record 13 section 8.8.1: the power gate was
+ * held (the controller thread busy, a recovery, a suspend or resume), so
+ * the window was answered without it, from memory, at a moment of work
+ * under way: no register read (PORTSC answers NO_MMIO too, the live DNCTRL
+ * word NOT_READ) and the routing record's words NOT_READ. */
+#define XHCI_SNAPSHOT_S_BUSY            0x00000040UL
 
 /*
  * Header BuildFlags bits - what kind of binary produced this window.

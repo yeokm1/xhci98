@@ -814,6 +814,26 @@ BOOLEAN CmEjectParkedAny(ULONG bridge);
  * takes the records' lock, the innermost. */
 BOOLEAN CmEjectVanishHeld(ULONG bridge);
 
+/*
+ * Record 21 section 6.1.6 (TBSTBYWB9X.1): the eject paths around a 98 SE
+ * write-back pass below a member. Every call of these records that changes
+ * devnodes or writes configuration space (a query, a removal, a detached
+ * removal, a slot reading) advances one activity sequence at its start and
+ * at its end and counts itself running; at its start it waits, 10 ms at a
+ * time, while a pass is under way, so no such call meets a write of a pass
+ * in flight. CmEjectActivity: the sequence, and whether member `bridge`
+ * has any record or sweep at all, or any such call is running (busy).
+ * CmEjectPassBegin: a pass admitted only when not busy (the sequence
+ * returned in `seq`), then counted under way until CmEjectPassEnd;
+ * CmEjectPassGo, before each of its writes: the sequence still `seq` and no
+ * call running. Any IRQL <= DISPATCH_LEVEL; the records' lock, the
+ * innermost.
+ */
+ULONG CmEjectActivity(ULONG bridge, PBOOLEAN busy);
+BOOLEAN CmEjectPassBegin(ULONG bridge, PULONG seq);
+BOOLEAN CmEjectPassGo(ULONG seq);
+VOID CmEjectPassEnd(VOID);
+
 #endif /* !XHCI_HOST_TEST */
 
 #endif /* CM_EJECT_H */

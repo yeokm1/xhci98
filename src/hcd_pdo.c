@@ -501,6 +501,12 @@ static NTSTATUS hcdDeviceQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
  *               instance id wedged ME's configuration manager (2026-10-04,
  *               28-V.1 clause 8: START refused on the stale PDOs, new PDOs
  *               never started, the shell hung);
+ *   carried   - 98 SE and ME: gone in a containment's drop and stopped by
+ *               PnP since, so every relations answer still carries it
+ *               until its next START (a ghost's, or refused) or its
+ *               REMOVE (design record 17 section 4.13.10): ME stops a
+ *               device whose start failed, and its hidusb.sys holds the
+ *               REMOVE an answer without it brings (task 43.49);
  *   orphaned  - when its parent goes first while it still awaits a REMOVE
  *               (a surprise removal with handles open): it leaves both lists,
  *               forgets the controller, and is deleted after that REMOVE:
@@ -762,7 +768,9 @@ static VOID hcdSilentDecide(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
  * SuperSpeed hub, or when the hold is not taken, it is refused in place -
  * its PDOs list with the XHCI98_NOXPORT hardware and device ids and no
  * compatible ids (xhci_xport.h, design record 13 10.7.1),
- * its hub port and siblings untouched. Each place is counted. Returns
+ * its hub port and siblings untouched; and so is the connection that
+ * followed a send-back which timed out there (task 50.5, HcdHoldToRefuse).
+ * Each place is counted. Returns
  * nonzero when the hold request was accepted - queued for the thread's next
  * pass, which reads the device's identity on the SuperSpeed port, writes PED
  * and feeds the port a disconnect. Thread only, at DISPATCH_LEVEL under
@@ -794,6 +802,13 @@ static ULONG hcdXportRefusal(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     XHCI_DBG_VALUE("hcd: UAS-only at SuperSpeed without streams, port/where",
                    (dev->Port << 16) | at);
     if (at != XHCI_XPORT_AT_ROOT_COMPANION) {
+        return 0;
+    }
+    if (HcdHoldToRefuse(hc, dev)) {
+        /* Task 50.5 (design record 13 section 10.7.4): the connection that
+         * followed a send-back which never reached USB 2.0, timed out and
+         * re-armed: refused in place, never held again. */
+        hc->XportHoldsNotTaken++;
         return 0;
     }
     if (dev->HoldRefused ||
@@ -928,6 +943,12 @@ static NTSTATUS hcdPdoNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     pdo->Common.SystemPower = PowerSystemWorking;
     pdo->Controller = hc;
     pdo->Device = dev;
+    /* Task 50.26: this start's cancelled status, kept by the PDO itself
+     * so an orphan, whose Controller is NULL, still encodes (HcdUrbOut). */
+    pdo->CancelOut = hc->CancelOut;
+    /* Task 50.28: this start's policy for its requests when its device
+     * leaves (design record 13 section 10.5.3, point 6). */
+    pdo->UnplugAtOnce = hc->UnplugAtOnce;
     /* Selective suspend's slot (design record 14 section 4.1): D0 asked
      * and acted on; the rest of it zero with the extension. */
     pdo->PwrWanted = XHCI_SUSP_D0;
@@ -1297,6 +1318,8 @@ static ULONG hcdDormantRetireLocked(PHCD_CONTROLLER hc,
     return n;
 }
 
+static ULONG hcdCarriedLocked(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo);
+
 static ULONG hcdSameVidPid(PHCD_DEVICE_PDO a, PHCD_DEVICE_PDO b)
 {
     return hcdBytesEqual(a->DeviceDesc + 8, b->DeviceDesc + 8, 4);
@@ -1335,10 +1358,12 @@ static ULONG hcdSerialTakenLocked(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo,
      * absent is not the one that reports the newcomer, so the two answers
      * could present one instance id twice (33.4). Under the same parent
      * one answer does both, as the move between root ports above relies
-     * on. */
+     * on - but not for a PDO carried while stopped (design record 17
+     * section 4.13.10), which that answer carries too. */
     for (other = hc->GonePdos; other != NULL; other = other->Next) {
         if (!other->MissingReported && other->Group == other->Serial &&
-            other->ParentSerial != pdo->ParentSerial &&
+            (other->ParentSerial != pdo->ParentSerial ||
+             hcdCarriedLocked(hc, other)) &&
             hcdSameVidPid(other, pdo) &&
             XhciFuncSerialSame(other->SerialId, pdo->SerialId)) {
             return 1;
@@ -1728,6 +1753,13 @@ static ULONG hcdDormantRevive(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
              * carries an old device's arm into the new one. */
             a->FwArmed = 0;
             a->ArmNow = 0;
+            /* Task 50.26: the start that revives it decides its URBs'
+             * cancelled status from here on. */
+            a->CancelOut = hc->CancelOut;
+            /* Task 50.28: and the policy for its requests when its device
+             * leaves. A dormant PDO has none pending (hcdDormantKeep) and
+             * was never reported, so no mark is reset here. */
+            a->UnplugAtOnce = hc->UnplugAtOnce;
             a->Dormant = 0;
         }
         dev->Pdo = old->Common.Self;
@@ -2084,6 +2116,80 @@ cleanup:
     return status;
 }
 
+/*
+ * Task 50.28 (design record 13 section 10.5.3, point 6, steps 4 and 5): the
+ * PDOs a report has just taken out of the relations, and asked PnP about
+ * where it is to be asked, each referenced by the report: on 2000 and later
+ * each is marked and its drain's holds claimed and completed, no lock held,
+ * then its reference dropped. The containment is read under the controller
+ * lock it is set under; the report runs on the controller thread, where the
+ * containment also runs, or at the stop. In the qemu flavour only,
+ * XhciQemuStageFault bit 5 waits first, so a leg can land an abort, a
+ * cancel, a closing or a drain between the relations request and the
+ * claim (bit 22 records an abort's horizon before it, and that abort's
+ * release after the claim); and a PDO whose claim took or left anything
+ * gets one trace line (point 11): its serial, then how many it claimed
+ * DEVICE_GONE, claimed CANCELED and left held for its closing. IRQL:
+ * PASSIVE_LEVEL.
+ */
+static VOID hcdGoneSweep(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO *told,
+                         ULONG tells)
+{
+    LIST_ENTRY mine;
+    KIRQL oldIrql;
+    ULONG contained;
+    ULONG claimed;
+    ULONG left;
+    ULONG done;
+    ULONG i;
+#if defined(XHCI_DBG_TRACE)
+    ULONG w[4];
+#endif
+#if defined(XHCI_FLAVOUR_QEMU)
+    LARGE_INTEGER due;
+
+    if ((hc->QemuStageFault & HCD_STAGE_QEMU_ABORTFORCE) != 0) {
+        for (i = 0; i < tells; i++) {
+            HcdIoQemuHorizon(told[i]);
+        }
+    }
+    if (tells != 0 && (hc->QemuStageFault & HCD_STAGE_QEMU_SWEEPGAP) != 0) {
+        XhciLogNote(&hc->Hc, "qemu.sweep.gap", told[0]->Serial);
+        HCD_QEMU_URB_EVENT(NULL, HCD_QEMU_EV_SWEEP_GAP, told[0]->Serial);
+        HcdRelativeMs(&due, (hc->QemuStageFault & HCD_STAGE_QEMU_SWEEPLONG) != 0
+                                ? HCD_STAGE_QEMU_SWEEP_LONG_MS
+                                : HCD_STAGE_QEMU_SWEEP_GAP_MS);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
+#endif
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    contained = hc->Hc.Tol.Unreadable != 0 ? 1UL : 0UL;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    for (i = 0; i < tells; i++) {
+        InitializeListHead(&mine);
+        claimed = HcdIoGoneClaim(told[i], contained, &mine, &left);
+        done = HcdIoGoneFinish(&mine);
+#if defined(XHCI_DBG_TRACE)
+        if (claimed != 0 || left != 0) {
+            w[0] = told[i]->Serial;
+            w[1] = (done >> 8) & 0xFFUL;
+            w[2] = done & 0xFFUL;
+            w[3] = left;
+            XHCI_DBG_WORDS(
+                "hcd: departed PDO reported: serial, gone, cancelled, left",
+                w, 4);
+        }
+#endif
+#if defined(XHCI_FLAVOUR_QEMU)
+        if ((hc->QemuStageFault & HCD_STAGE_QEMU_ABORTFORCE) != 0) {
+            (VOID)HcdIoParkedRelease(told[i], 1);
+        }
+#endif
+        ObDereferenceObject(told[i]->Common.Self);
+    }
+}
+
 static VOID hcdUnlinkLocked(PHCD_DEVICE_PDO *head, PHCD_DEVICE_PDO pdo)
 {
     PHCD_DEVICE_PDO *at;
@@ -2117,17 +2223,28 @@ ULONG HcdDevicePdoGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     /* A split device's chain is its composite parent (task 36.43) and up
      * to XHCI_FUNC_MAX functions. */
     HCD_SUSP_SETTLE settle[XHCI_FUNC_MAX + 1];
+    /* Task 50.28: the PDOs reported to PnP here, referenced across the
+     * sweep (hcdGoneSweep). */
+    PHCD_DEVICE_PDO told[XHCI_FUNC_MAX + 1];
     KIRQL oldIrql;
+    ULONG tells;
     ULONG settles;
     ULONG waits;
     ULONG group;
     ULONG parent;
+    ULONG carry;
     ULONG i;
 
     if (dev == NULL || dev->Pdo == NULL) {
         return 0;
     }
+    /* Design record 17 section 4.13.10: a containment's drop marks what
+     * it takes off the bus, on 98 SE and ME alone. */
+    carry = (hc->ContainDropping && !IoIsWdmVersionAvailable(1, 0x10))
+                ? 1UL
+                : 0UL;
     settles = 0;
+    tells = 0;
     pdo = (PHCD_DEVICE_PDO)dev->Pdo->DeviceExtension;
     dev->Pdo = NULL;
     group = pdo->Group;
@@ -2151,6 +2268,13 @@ ULONG HcdDevicePdoGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         hcdUnlinkLocked(&hc->DevicePdos, pdo);
         pdo->Listed = 0;
         pdo->Device = NULL;
+        if (pdo->Reported && tells < XHCI_FUNC_MAX + 1) {
+            /* Kept readable past this lock whatever PnP does meanwhile
+             * (hcdDeletePdo's rule), for the sweep after the relations
+             * request (task 50.28). */
+            ObReferenceObject(pdo->Common.Self);
+            told[tells++] = pdo;
+        }
         if (!pdo->Reported) {
             pdo->Next = doomed;
             doomed = pdo;
@@ -2173,6 +2297,10 @@ ULONG HcdDevicePdoGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
             pdo->Next = hc->GonePdos;
             hc->GonePdos = pdo;
             waits = 1;
+            if (carry) {
+                pdo->StopCarry = 1;
+                hc->CarryArmed = 1;
+            }
         }
     }
     KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
@@ -2186,11 +2314,27 @@ ULONG HcdDevicePdoGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         pdo->Next = NULL;
         hcdDeletePdo(pdo);
     }
-    if (!waits) {
-        return 0;
+    /* Task 50.28 (design record 13 section 10.5.3, point 6): PnP is asked
+     * first, then the reported PDOs are marked and their drain's holds
+     * completed, so no request of the departed device completes before the
+     * relations request is issued. A PDO under a parent PnP has let go of
+     * is missing to PnP without one. */
+    if (waits) {
+        hcdInvalidateFor(hc, parent);
     }
-    hcdInvalidateFor(hc, parent);
-    return group;
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* XhciQemuStageFault bits 20 and 21 (hcd.h): an invalidation's drop
+     * that has not drained this device yet drains it here, between the
+     * relations request and the claim, as a drain on another processor
+     * could land; HCRST has taken its slot. */
+    if (hc->QemuDropLate &&
+        (hc->QemuStageFault & HCD_STAGE_QEMU_DRAINGAP) != 0 && tells != 0) {
+        HCD_QEMU_URB_EVENT(NULL, HCD_QEMU_EV_GAP_DRAIN, told[0]->Serial);
+        (VOID)HcdIoDeviceDrain(hc, dev);
+    }
+#endif
+    hcdGoneSweep(hc, told, tells);
+    return waits ? group : 0;
 }
 
 /* Whether any PDO of that group still holds its port: listed, or gone and
@@ -2335,6 +2479,74 @@ VOID HcdRelationsGiveBack(PDEVICE_RELATIONS old)
     HcdPoolFreeForeign(old);
 }
 
+/* The first carries one relations answer logs; one past them is noted at
+ * a later answer. */
+#define HCD_CARRY_NOTES 8UL
+
+/*
+ * MEBOOTDROP.1 (design record 17 section 4.13.10). A gone PDO a
+ * containment's drop marked (HcdDevicePdoGone, 98 SE and ME alone) is
+ * carried in its parent's answers while PnP holds it stopped: ME stops a
+ * device whose start failed - the containment failing its class driver's
+ * start requests - and its hidusb.sys then holds the REMOVE an answer
+ * without it would bring, for good (task 43.49). Its own carry: marked,
+ * stopped, no REMOVE, not reported missing, no parent gone from PnP's
+ * view. PdoListLock held.
+ */
+static ULONG hcdCarrySelfLocked(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
+{
+    if (pdo->Listed || pdo->DeletePending || pdo->Deleted) {
+        return 0;
+    }
+    return XhciEnumStopCarry(pdo->StopCarry,
+                             (pdo->Common.PnpState == HCD_PNP_STOPPED &&
+                              !pdo->Surprised)
+                                 ? 1UL
+                                 : 0UL,
+                             pdo->RemoveReceived, pdo->MissingReported) &&
+           !hcdAncestorGoneLocked(hc, pdo);
+}
+
+/* Whether the gone PDO `pdo` is carried: its own carry, or a hub or
+ * composite parent PDO, itself gone and not yet missing or removed, above
+ * a PDO carried on its own - PnP removes a devnode's children with it.
+ * 0 at once on a controller that never marked a PDO. PdoListLock held. */
+static ULONG hcdCarriedLocked(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
+{
+    PHCD_DEVICE_PDO q;
+    PHCD_DEVICE_PDO up;
+    ULONG serial;
+    ULONG depth;
+
+    if (!hc->CarryArmed || pdo->Listed || pdo->MissingReported ||
+        pdo->RemoveReceived || pdo->DeletePending || pdo->Deleted) {
+        return 0;
+    }
+    if (hcdCarrySelfLocked(hc, pdo)) {
+        return 1;
+    }
+    if (!HcdPdoIsParent(pdo)) {
+        return 0;
+    }
+    for (q = hc->GonePdos; q != NULL; q = q->Next) {
+        if (q == pdo || !hcdCarrySelfLocked(hc, q)) {
+            continue;
+        }
+        serial = q->ParentSerial;
+        for (depth = 0; serial != 0 && depth <= HCD_MAX_HUBS; depth++) {
+            up = hcdHubFindLocked(hc, serial);
+            if (up == NULL) {
+                break;
+            }
+            if (up == pdo) {
+                return 1;
+            }
+            serial = up->ParentSerial;
+        }
+    }
+    return 0;
+}
+
 /*
  * A parent's BusRelations - the root hub's (`parent` 0) or a hub FDO's (the
  * Serial of its hub PDO; task 33.4): whatever the list already held, then
@@ -2348,9 +2560,11 @@ VOID HcdRelationsGiveBack(PDEVICE_RELATIONS old)
  * the next. One hold of PdoListLock for the count, the allocation, the copy
  * and the moves; the PDOs removed before this answer
  * are detached in the same hold, so one moved now waits for the next
- * answer. NULL when the pool has nothing, and then nothing moves. IRQL:
- * PASSIVE_LEVEL (the allocation is NonPagedPool, so it is legal under the
- * spin lock).
+ * answer. NULL when the pool has nothing, and then nothing moves. On 98
+ * SE and ME a gone PDO carried (hcdCarriedLocked) is in the list as a
+ * listed one is, and is neither marked missing nor moved (design record
+ * 17 section 4.13.10). IRQL: PASSIVE_LEVEL (the allocation is
+ * NonPagedPool, so it is legal under the spin lock).
  */
 PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
                                         PDEVICE_RELATIONS old, ULONG parent)
@@ -2360,16 +2574,19 @@ PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
     PHCD_DEVICE_PDO *at;
     PHCD_DEVICE_PDO reap;
     ULONG ports[HCD_PORT_WORDS];
+    ULONG notedSerial[HCD_CARRY_NOTES];
     KIRQL oldIrql;
     ULONG listed;
     ULONG count;
     ULONG moved;
     ULONG sweeps;
+    ULONG noted;
     ULONG i;
 
     for (i = 0; i < HCD_PORT_WORDS; i++) {
         ports[i] = 0;
     }
+    noted = 0;
     count = (old != NULL) ? old->Count : 0;
     KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
     reap = hc->RemovedPdos;
@@ -2378,6 +2595,13 @@ PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
     for (pdo = hc->DevicePdos; pdo != NULL; pdo = pdo->Next) {
         if (XhciEnumAnswerCarries(pdo->ParentSerial, parent,
                                   pdo->ParentLetGo)) {
+            listed++;
+        }
+    }
+    for (pdo = hc->GonePdos; pdo != NULL; pdo = pdo->Next) {
+        if (XhciEnumAnswerCarries(pdo->ParentSerial, parent,
+                                  pdo->ParentLetGo) &&
+            hcdCarriedLocked(hc, pdo)) {
             listed++;
         }
     }
@@ -2396,6 +2620,19 @@ PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
             ObReferenceObject(pdo->Common.Self);
             pdo->Reported = 1;
         }
+        for (pdo = hc->GonePdos; pdo != NULL; pdo = pdo->Next) {
+            if (!XhciEnumAnswerCarries(pdo->ParentSerial, parent,
+                                       pdo->ParentLetGo) ||
+                !hcdCarriedLocked(hc, pdo)) {
+                continue;
+            }
+            rel->Objects[i++] = pdo->Common.Self;
+            ObReferenceObject(pdo->Common.Self);
+            if (!pdo->CarryNoted && noted < HCD_CARRY_NOTES) {
+                pdo->CarryNoted = 1;
+                notedSerial[noted++] = pdo->Serial;
+            }
+        }
         rel->Count = i;
         for (sweeps = 0; sweeps <= HCD_MAX_HUBS + 1UL; sweeps++) {
             moved = 0;
@@ -2404,6 +2641,10 @@ PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
                 pdo = *at;
                 if (pdo->ParentSerial != parent && !pdo->ParentLetGo &&
                     !hcdAncestorGoneLocked(hc, pdo)) {
+                    at = &pdo->Next;
+                    continue;
+                }
+                if (hcdCarriedLocked(hc, pdo)) {
                     at = &pdo->Next;
                     continue;
                 }
@@ -2437,6 +2678,11 @@ PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
         }
     }
     KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    for (i = 0; i < noted; i++) {
+        XhciLogNote(&hc->Hc, "pdo.carry", notedSerial[i]);
+        XHCI_DBG_VALUE("hcd: gone PDO carried while stopped, serial",
+                       notedSerial[i]);
+    }
     hcdDeleteChain(reap);
     HcdPdoReapRetired();
     for (i = 0; i < HCD_PORT_COUNT; i++) {
@@ -3075,6 +3321,104 @@ static ULONG hcdPdoGhostStart(PHCD_DEVICE_PDO pdo)
 }
 
 /*
+ * Design record 17 section 4.13.10 (MEBOOTDROP.1): a START ends the carry
+ * of a PDO a containment's drop marked, whatever its answer - a ghost's
+ * success or the refusal (hcdPdoStartIrp) - so the relations of its
+ * parent, asked again once the START is answered (hcdInvalidateFor), omit
+ * it, and its removal follows. Returns 1 when a mark was cleared. IRQL:
+ * PASSIVE_LEVEL.
+ */
+static ULONG hcdCarryEnd(PHCD_DEVICE_PDO pdo)
+{
+    PHCD_CONTROLLER hc;
+    KIRQL oldIrql;
+    ULONG ended;
+    ULONG noted;
+
+    hc = pdo->Controller;
+    if (hc == NULL) {
+        return 0;
+    }
+    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+    ended = pdo->StopCarry;
+    noted = pdo->CarryNoted;
+    pdo->StopCarry = 0;
+    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    if (ended && noted) {
+        XhciLogNote(&hc->Hc, "pdo.carry.end", pdo->Serial);
+        XHCI_DBG_VALUE("hcd: carried PDO started, carry ended, serial",
+                       pdo->Serial);
+    }
+    return ended;
+}
+
+/*
+ * After a START that ended a carry: the relations asked again of each gone
+ * hub or composite ancestor whose FDO PnP has started - hcdInvalidateFor
+ * names listed parents alone, and a carried parent is gone - and then as
+ * hcdInvalidateFor asks them for its parent (the root hub's, for a gone
+ * one), whose answer runs the ancestor rule over the ancestors no longer
+ * carried. IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdCarryAsk(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
+{
+    PDEVICE_OBJECT objs[HCD_MAX_HUBS + 1];
+    PHCD_DEVICE_PDO up;
+    KIRQL oldIrql;
+    ULONG serial;
+    ULONG depth;
+    ULONG n;
+    ULONG i;
+
+    n = 0;
+    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+    serial = pdo->ParentSerial;
+    for (depth = 0; serial != 0 && depth <= HCD_MAX_HUBS; depth++) {
+        up = hcdHubFindLocked(hc, serial);
+        if (up == NULL) {
+            break;
+        }
+        if (!up->Listed && up->Reported && !up->MissingReported &&
+            !up->DeletePending && !up->Deleted &&
+            up->Common.PnpState == HCD_PNP_STARTED) {
+            objs[n] = up->Common.Self;
+            ObReferenceObject(objs[n]);
+            n++;
+        }
+        serial = up->ParentSerial;
+    }
+    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    for (i = 0; i < n; i++) {
+        IoInvalidateDeviceRelations(objs[i], BusRelations);
+        ObDereferenceObject(objs[i]);
+    }
+    hcdInvalidateFor(hc, pdo->ParentSerial);
+}
+
+/* IRP_MN_START_DEVICE of a device PDO (HcdDevicePdoPnp). IRQL:
+ * PASSIVE_LEVEL. */
+static NTSTATUS hcdPdoStartIrp(PHCD_DEVICE_PDO pdo, PIRP irp)
+{
+    if (pdo->Dormant) {
+        hcdDormantWait(pdo);
+    }
+    if (!hcdPdoStarted(pdo)) {
+        if (hcdPdoGhostStart(pdo)) {
+            XHCI_DBG_VALUE("hcd: START answered, device gone (ghost), "
+                           "port",
+                           pdo->Port);
+            pdo->Common.PnpState = HCD_PNP_STARTED;
+            return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+        }
+        XHCI_DBG_VALUE("hcd: START refused, device gone, port", pdo->Port);
+        return HcdCompleteIrp(irp, STATUS_UNSUCCESSFUL, 0);
+    }
+    pdo->Common.PnpState = HCD_PNP_STARTED;
+    HcdDoorDeviceStart(pdo);
+    return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+}
+
+/*
  * IRP_MN_REMOVE_DEVICE, before the IRP completes and inside the dispatch's
  * Busy pin (HcdDevicePdoPnp). The lifecycle above decides: an orphan is
  * deleted by the dispatch once the IRP is complete (this returns 1); a
@@ -3126,6 +3470,10 @@ static ULONG hcdPdoRemoved(PHCD_DEVICE_PDO pdo)
          * again, on Windows 2000): it is RemovedPdos' already. */
     } else {
         pdo->RemoveReceived = 1;
+        /* Design record 17 section 4.13.10: no answer carries it again;
+         * the next one moves it to RemovedPdos, as for any gone PDO whose
+         * REMOVE came first. */
+        pdo->StopCarry = 0;
         if (!pdo->Listed && (pdo->MissingReported || !pdo->Reported ||
                              pdo->ParentLetGo ||
                              hcdAncestorGoneLocked(hc, pdo))) {
@@ -3323,7 +3671,7 @@ static VOID hcdQueryInterfaceNote(PHCD_DEVICE_PDO pdo,
 
 /* Task 49.45: the notes' per-PDO bounds start again for the next driver
  * loaded on the device (each count and table of hcd.h's NoteQi group, and
- * OwnClient). At IRP_MN_REMOVE_DEVICE, which no other request of the PDO
+ * OwnClient; task 50.25, Usbdx602). At IRP_MN_REMOVE_DEVICE, which no other request of the PDO
  * overlaps in the PnP manager's order; a request a racing client sends
  * still only notes within the table's room. IRQL: PASSIVE_LEVEL. */
 static VOID hcdPdoNotesReset(PHCD_DEVICE_PDO pdo)
@@ -3343,6 +3691,7 @@ static VOID hcdPdoNotesReset(PHCD_DEVICE_PDO pdo)
     (VOID)InterlockedExchange(&pdo->NoteStreams, 0);
     (VOID)InterlockedExchange(&pdo->NoteUrbs, 0);
     (VOID)InterlockedExchange(&pdo->OwnClient, 0);
+    (VOID)InterlockedExchange(&pdo->Usbdx602, 0);
 }
 
 /*
@@ -3420,7 +3769,9 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
 {
     PIO_STACK_LOCATION stack;
     PDEVICE_RELATIONS rel;
+    NTSTATUS status;
     PWCHAR text;
+    ULONG carried;
     ULONG orphan;
     ULONG n;
 
@@ -3443,24 +3794,14 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
 
     switch (stack->MinorFunction) {
     case IRP_MN_START_DEVICE:
-        if (pdo->Dormant) {
-            hcdDormantWait(pdo);
+        /* PnP holds the devnode across its own START, so the PDO and its
+         * controller outlive the IRP's completion here. */
+        carried = hcdCarryEnd(pdo);
+        status = hcdPdoStartIrp(pdo, irp);
+        if (carried && pdo->Controller != NULL) {
+            hcdCarryAsk(pdo->Controller, pdo);
         }
-        if (!hcdPdoStarted(pdo)) {
-            if (hcdPdoGhostStart(pdo)) {
-                XHCI_DBG_VALUE("hcd: START answered, device gone (ghost), "
-                               "port",
-                               pdo->Port);
-                pdo->Common.PnpState = HCD_PNP_STARTED;
-                return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
-            }
-            XHCI_DBG_VALUE("hcd: START refused, device gone, port",
-                           pdo->Port);
-            return HcdCompleteIrp(irp, STATUS_UNSUCCESSFUL, 0);
-        }
-        pdo->Common.PnpState = HCD_PNP_STARTED;
-        HcdDoorDeviceStart(pdo);
-        return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+        return status;
 
     case IRP_MN_QUERY_STOP_DEVICE:
     case IRP_MN_QUERY_REMOVE_DEVICE:

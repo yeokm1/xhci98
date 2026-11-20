@@ -841,8 +841,8 @@ try {
         "not a real driver XHCI98_FLAVOUR_RELEASE" -Encoding ASCII
 
     function New-Inf {
-        param([string]$Name, [scriptblock]$Mutate)
-        $text = [System.IO.File]::ReadAllText($fxInf)
+        param([string]$Name, [scriptblock]$Mutate, [string]$From = $fxInf)
+        $text = [System.IO.File]::ReadAllText($From)
         if ($null -ne $Mutate) { $text = & $Mutate $text }
         $path = Join-Path $script:work "$Name.inf"
         [System.IO.File]::WriteAllText($path, $text, (New-Object System.Text.ASCIIEncoding))
@@ -850,6 +850,30 @@ try {
     }
 
     $plainInf = New-Inf -Name "plain" -Mutate $null
+
+    # The published release's INFs that the upload-set cases publish (task
+    # 50.34). The upload assembly gates a published INF at its own version
+    # (check-inf.ps1 -PublishedVersion, the rows by published version, task
+    # 50.3), held to the defaults that release wrote. A tree whose DriverVer
+    # names a release already published - one not yet bumped for its cut -
+    # may carry later defaults than that release's INF, so its own INF is not
+    # a true stand-in: the cases publish that release's own published INFs,
+    # releases\<version>\nt-x86\ and nt-x64\, and every mutation they publish
+    # is made from them. A tree whose version is not published yet is that
+    # release, and its own INFs stand in.
+    $pubX86Inf = $plainInf
+    $pubAmd64Inf = $fxAmd64Inf
+    if ([System.IO.File]::ReadAllText($fxInf) -match '(?m)^DriverVer\s*=\s*[^,\r\n]+,\s*([0-9.]+)\s*$') {
+        $pubDir = Join-Path $fxRepo ("releases\" + $Matches[1].Trim())
+        $pubX86From = Join-Path $pubDir "nt-x86\xhci98.inf"
+        $pubAmd64From = Join-Path $pubDir "nt-x64\xhci98.inf"
+        if ((Test-Path -LiteralPath $pubX86From -PathType Leaf) -and (Test-Path -LiteralPath $pubAmd64From -PathType Leaf)) {
+            $pubX86Inf = New-Inf -Name "pub-plain" -Mutate $null -From $pubX86From
+            $pubAmd64Inf = $pubAmd64From
+        } elseif (Test-Path -LiteralPath $pubDir) {
+            Assert-True $false ("releases\{0} is published but has no nt-x86\xhci98.inf and nt-x64\xhci98.inf; the upload-set cases have no stand-in for it." -f $Matches[1].Trim())
+        }
+    }
 
     # --- the baseline package must build ------------------------------------
     Write-Step "a flat package builds and gates"
@@ -2463,7 +2487,7 @@ try {
             $pubFlavour = Join-Path $pubRoot $fl
             Ensure-Directory $pubFlavour
             [System.IO.File]::WriteAllBytes((Join-Path $pubFlavour "xhci98.sys"), $flavourBytes[$fl])
-            Copy-Item -LiteralPath $plainInf -Destination (Join-Path $pubFlavour "xhci98.inf") -Force
+            Copy-Item -LiteralPath $pubX86Inf -Destination (Join-Path $pubFlavour "xhci98.inf") -Force
             # The x86 media's third file of this project's own since task
             # 36.15 (design record 18), published beside xhci98.sys.
             Set-Content -LiteralPath (Join-Path $pubFlavour "xhcihlpr.sys") -Encoding ASCII `
@@ -2474,7 +2498,7 @@ try {
             $pkgFlavour = Join-Path $pkgRoot ("pkg-" + $fl)
             Ensure-Directory $pkgFlavour
             [System.IO.File]::WriteAllBytes((Join-Path $pkgFlavour "xhci98.sys"), $flavourBytes[$fl])
-            Copy-Item -LiteralPath $plainInf -Destination (Join-Path $pkgFlavour "xhci98.inf") -Force
+            Copy-Item -LiteralPath $pubX86Inf -Destination (Join-Path $pkgFlavour "xhci98.inf") -Force
             Set-Content -LiteralPath (Join-Path $pkgFlavour "xhcihlpr.sys") -Encoding ASCII `
                         -Value "stand-in xhcihlpr.sys, $fl flavour, $relVersion"
         }
@@ -3946,7 +3970,7 @@ try {
         foreach ($fl in @("release")) {
             Ensure-Directory (Join-Path $olderRoot $fl)
             Copy-Item -LiteralPath (Join-Path $pubRoot "$fl\xhci98.sys") -Destination (Join-Path $olderRoot "$fl\xhci98.sys") -Force
-            Copy-Item -LiteralPath $plainInf -Destination (Join-Path $olderRoot "$fl\xhci98.inf") -Force
+            Copy-Item -LiteralPath $pubX86Inf -Destination (Join-Path $olderRoot "$fl\xhci98.inf") -Force
         }
         Set-Content -LiteralPath (Join-Path $olderRoot "readme.txt") -Encoding ASCII -Value "stand-in older cut"
         $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $olderVersion, "-ReleasesDir", $relRoot,
@@ -3999,15 +4023,16 @@ try {
         # same code without two builds.
         #
         Write-Step "-UploadSetOnly assembles a four-directory tree, each INF under its own architecture"
-        # The tracked 64-bit INF, read from src\ rather than mutated, because
-        # what is under test is the gate profile it is parsed under.
-        $amd64InfSrc = Join-Path $fxRepo "src\xhci98-amd64.inf"
+        # The 64-bit INF, the published one where the release is (above),
+        # else the tracked src\ one, never mutated, because what is under test
+        # is the gate profile it is parsed under.
+        $amd64InfSrc = $pubAmd64Inf
         Assert-True (Test-Path -LiteralPath $amd64InfSrc) `
-            "src\xhci98-amd64.inf is missing; the 64-bit half of the upload set cannot be driven."
+            "$amd64InfSrc is missing; the 64-bit half of the upload set cannot be driven."
         $relRoot4 = Join-Path $script:work "releases-4dir"
         $pubRoot4 = Join-Path $relRoot4 $relVersion
         foreach ($leg in @(
-            @{ Dir = "release-x86"; Inf = $plainInf },
+            @{ Dir = "release-x86"; Inf = $pubX86Inf },
             @{ Dir = "release-x64"; Inf = $amd64InfSrc }
         )) {
             $d = Join-Path $pubRoot4 $leg.Dir
@@ -4331,7 +4356,7 @@ try {
         # would refuse the file's presence on the media anyway, so the refusal
         # this case pins is the one that fires with no package at all.
         Write-Step "-UploadSetOnly refuses an INF naming a media file the tracked directory cannot supply"
-        $thirdInf = New-Inf -Name "third" -Mutate {
+        $thirdInf = New-Inf -Name "third" -From $pubX86Inf -Mutate {
             param($t) $t.Replace("xhci98.inf=1", "xhci98.inf=1`r`nextra.bin=1")
         }
         foreach ($fl in @("release")) {
@@ -4343,7 +4368,7 @@ try {
         Assert-True ($r.Output -match "extra\.bin") `
             ("expected the refusal to name the file the tracked directory cannot supply. Output:`n" + $r.Output)
         foreach ($fl in @("release")) {
-            Copy-Item -LiteralPath $plainInf -Destination (Join-Path $pubRoot "$fl\xhci98.inf") -Force
+            Copy-Item -LiteralPath $pubX86Inf -Destination (Join-Path $pubRoot "$fl\xhci98.inf") -Force
         }
 
         # --- what is NOT covered here, and why -------------------------------
@@ -4374,7 +4399,7 @@ try {
         # true and says nothing about why.
         #
         Write-Step "a publishable file declared in a subdirectory is refused with its reason"
-        $subPubInf = New-Inf -Name "subpub" -Mutate {
+        $subPubInf = New-Inf -Name "subpub" -From $pubX86Inf -Mutate {
             param($t) $t.Replace("xhci98.inf=1", "xhci98.inf=1,setup")
         }
         foreach ($fl in @("release")) {
@@ -4387,8 +4412,8 @@ try {
         Assert-True ($r.Output -match "carries those two at its root") `
             ("expected the refusal to explain the release layout. Output:`n" + $r.Output)
         foreach ($fl in @("release")) {
-            Copy-Item -LiteralPath $plainInf -Destination (Join-Path $pubRoot "$fl\xhci98.inf") -Force
-            Copy-Item -LiteralPath $plainInf -Destination (Join-Path $pkgRoot "pkg-$fl\xhci98.inf") -Force
+            Copy-Item -LiteralPath $pubX86Inf -Destination (Join-Path $pubRoot "$fl\xhci98.inf") -Force
+            Copy-Item -LiteralPath $pubX86Inf -Destination (Join-Path $pkgRoot "pkg-$fl\xhci98.inf") -Force
         }
 
         # --- the upload set may not be assembled inside the release ---------
@@ -5155,7 +5180,7 @@ try {
         $newUpRoot = Join-Path $script:work "upload-newnames"
         Ensure-Directory $newUpRoot
 
-        $newInf = $fxInf
+        $newInf = $pubX86Inf
         foreach ($fl in @("release-x86")) {
             $d = Join-Path $newPubRoot $fl
             Ensure-Directory $d
@@ -7347,7 +7372,7 @@ try {
             $ErrorActionPreference = $savedEap
             Remove-Item Env:\XHCI98_PACKAGER_SELFTEST -ErrorAction SilentlyContinue
         }
-        Assert-True ($LASTEXITCODE -ne 0 -and $o -match $c.Says -and $o -notmatch "build-driver\.cmd all") `
+        Assert-True ($LASTEXITCODE -ne 0 -and $o -match $c.Says -and $o -notmatch 'build-driver\.cmd"? (all|cut)\b') `
             ("cut-builds.ps1 was not refused for {0} with '{1}' before any build: {2}" -f $c.Why, $c.Says, $o)
     }
     # The lock's marker: when it cannot be written the lock is given up.
@@ -7420,13 +7445,13 @@ try {
                 (Join-Path $imRoot ("mark-" + $Arch + ".txt")), $script:cbExit[$Arch])
     }
     function Invoke-CbRun {
-        param([switch]$Serial, [scriptblock]$BeforeStart = $null)
+        param([switch]$Serial, [scriptblock]$BeforeStart = $null, [switch]$WithQemu)
         foreach ($ar in @("x86", "amd64")) { Remove-Item -LiteralPath (Join-Path $imRoot ("mark-" + $ar + ".txt")) -ErrorAction SilentlyContinue }
         $r = $null
         $err = ""
         try {
             $r = Invoke-CutBuilds -Repo $imA -X64Tree $imB -Serial:$Serial -CommandFor $cbCommand -BeforeStart $BeforeStart `
-                                  -NoToolchainCheck -Rules $biRules
+                                  -NoToolchainCheck -Rules $biRules -WithQemu:$WithQemu
         } catch { $err = $_.Exception.Message }
         $locks = @()
         foreach ($t in @($imA, $imB)) {
@@ -7471,6 +7496,30 @@ try {
     Assert-True ($cb4.Error -eq "" -and $cb4.Result.Imported.Count -eq 1 -and $cb4.Locks.Count -eq 0 -and
                  $cb4.Result.Wall -ge ($cb4.Result.Builds[0].Elapsed + $cb4.Result.Builds[1].Elapsed)) `
         ("-Serial did not run the two one after the other and import: '{0}'" -f $cb4.Error)
+    # Task 50.1: the builds are cut, the release flavour alone, so the
+    # import takes release alone, whatever other record B holds - here a
+    # qemu record that admits nothing (an earlier all build's, left); with
+    # -WithQemu (all) the qemu record is imported too, and that one refused.
+    Assert-True ((Get-CutBuildCommand -Tree "C:\t" -Arch "x86") -eq '"C:\t\scripts\build-driver.cmd" cut' -and
+                 (Get-CutBuildCommand -Tree "C:\t" -Arch "amd64") -eq '"C:\t\scripts\build-driver.cmd" cut -amd64' -and
+                 (Get-CutBuildCommand -Tree "C:\t" -Arch "amd64" -WithQemu) -eq '"C:\t\scripts\build-driver.cmd" all -amd64') `
+        "Get-CutBuildCommand does not give cut (release alone), or all with -WithQemu."
+    $imStaleQ = Get-GatedManifestPath -Repo $imB -Arch "amd64" -Flavor "qemu"
+    [System.IO.File]::WriteAllText($imStaleQ, "not a record")
+    $cb4q = Invoke-CbRun
+    Assert-True ($cb4q.Error -eq "" -and $cb4q.Result.Imported.Count -eq 1 -and $cb4q.Result.Imported[0].Flavor -eq "release" -and
+                 -not (Test-Path -LiteralPath (Get-GatedManifestPath -Repo $imA -Arch "amd64" -Flavor "qemu"))) `
+        ("a cut's import took more than the release flavour, or a qemu record left in B stopped it: '{0}'" -f $cb4q.Error)
+    $cb4w = Invoke-CbRun -WithQemu
+    Assert-True ($cb4w.Error -match "qemu: '.*' is not a gated build record" -and $cb4w.Locks.Count -eq 0) `
+        ("-WithQemu did not import the qemu record too: '{0}'" -f $cb4w.Error)
+    $imShaBQ2 = Set-ImBuild -Root $imB -Flavor "qemu"
+    [void](Set-ImRecord -Root $imB -Flavor "qemu" -Sha $imShaBQ2 -Commit $imHeadNow)
+    $cb4w2 = Invoke-CbRun -WithQemu
+    Assert-True ($cb4w2.Error -eq "" -and $cb4w2.Result.Imported.Count -eq 2 -and
+                 (Test-Path -LiteralPath (Get-GatedManifestPath -Repo $imA -Arch "amd64" -Flavor "qemu"))) `
+        ("-WithQemu did not import both flavours: '{0}'" -f $cb4w2.Error)
+    Remove-Item -LiteralPath $imStaleQ -Force
     # The trees must be at one commit, clean, and free of either lock.
     $lockB = Join-Path $imB "out\gated-amd64.lock"
     New-Item -ItemType Directory -Force -Path $lockB | Out-Null
@@ -7766,6 +7815,17 @@ try {
                  ([regex]::Matches($soBuildText, 'set "XHCI98_GATED_RUN="')).Count -eq 1 -and
                  ([regex]::Matches($soBuildText, 'XHCI98_GATED_RUN=')).Count -eq 2) `
         "build-driver.cmd sets XHCI98_GATED_RUN somewhere other than around the one writer call."
+    # Task 50.1: "cut" is the release flavour alone, run as "all" runs it -
+    # the tools built (-All) and every self-test in full unless a pre-merge
+    # build allows the skip - and both words are read before the flavours
+    # are checked.
+    $soCutAt = $soBuildText.IndexOf('if /i "%FLAVORS%"=="cut" set "FLAVORS=release"')
+    Assert-True ($soBuildText.Contains('if /i "%FLAVORS%"=="cut" set "ALLRUN=-All"') -and
+                 $soBuildText.Contains('if /i "%FLAVORS%"=="all" set "ALLRUN=-All"') -and
+                 $soBuildText.Contains('if defined ALLRUN if not "%XHCI98_SELFTEST_SKIP_OK%"=="1" set "XHCI98_FULL_SELFTESTS=1"') -and
+                 $soCutAt -gt $soBuildText.IndexOf('if /i "%FLAVORS%"=="cut" set "ALLRUN=-All"') -and
+                 $soCutAt -lt $soBuildText.IndexOf('for %%F in (%FLAVORS%) do call :validateflavor %%F')) `
+        "build-driver.cmd's cut is no longer the release flavour run as all runs it (task 50.1)."
 
     # The suite's git policy (task 45.51) is in force: no system
     # configuration, the suite's own global one, no inherited injection, no

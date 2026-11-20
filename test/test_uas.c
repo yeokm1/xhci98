@@ -24,6 +24,7 @@
 #include <string.h>
 #include "../src/uas/uas_iu.h"
 #include "../src/xhci98_xfer.h"
+#include "../src/xhci98_streams.h"
 #include "test_harness.h"
 
 static int bytes_eq(const UCHAR *a, const UCHAR *b, ULONG n)
@@ -2137,8 +2138,130 @@ static void test_ata_replay(void)
     CHECK_EQ(XHCI98_FAIL_E_REPLAYED, 9, "the ring's event 9");
 }
 
+/* ------------------------------------------------------------------ */
+/* Task 50.20 (design record 17 section 4.12.10, section 8)             */
+/* ------------------------------------------------------------------ */
+
+static void test_stream_recovery(void)
+{
+    /* The reason and the barrier. */
+    CHECK_EQ(UasStreamOnCancel(0, 1, 0), 0UL,
+             "no contract (unflagged): today's cancel");
+    CHECK_EQ(UasStreamOnCancel(1, 0, 0), 0UL,
+             "the command pipe's transfer: no stream, nothing owed");
+    CHECK_EQ(UasStreamOnCancel(1, 1, 0), UAS_SO_OWE | UAS_SO_ASK,
+             "a refusal's data-in cancel: owed, the worker asked for");
+    CHECK_EQ(UasStreamOnCancel(1, 1, 1), UAS_SO_OWE,
+             "a recovery's own cancel: joins it, nothing new asked");
+
+    /* A stop's cancels (Started clear, so the contract is not passed in):
+     * nothing owed, no worker. */
+    CHECK_EQ(UasStreamOnCancel(0, 1, 0), 0UL,
+             "a cancel of the engine's stop: owes nothing");
+
+    /* The pump's barrier: (recovering, streamOwed, phase, ended). */
+    CHECK_EQ(UasPumpBarrier(0, 0, 0, 0), 0UL, "nothing owed: runs");
+    CHECK_EQ(UasPumpBarrier(1, 0, 0, 0), 1UL, "a recovery runs: stops");
+    CHECK_EQ(UasPumpBarrier(0, 1, 0, 0), 1UL, "the stream recovery owed: stops");
+    CHECK_EQ(UasPumpBarrier(1, 1, 1, 0), 0UL,
+             "the command phase: its own marked requests start");
+    CHECK_EQ(UasPumpBarrier(0, 1, 0, 1), 0UL,
+             "owed but Dead or gone: the queue is failed, not left pending");
+    CHECK_EQ(UasPumpBarrier(1, 1, 0, 1), 1UL,
+             "Dead while the worker still runs: its end drains it");
+
+    /* The proof: (active, tmf, quarantined, tmfFailed, cancelsBack,
+     * finalBusy, budgetGone). */
+    CHECK_EQ(UasStreamProof(0, 0, 0, 0, 0, 0, 0), UAS_SP_WAIT,
+             "a cancelled transfer not back: wait");
+    CHECK_EQ(UasStreamProof(0, 0, 0, 0, 0, 0, 1), UAS_SP_RESET,
+             "not back within the budget: the reset");
+    CHECK_EQ(UasStreamProof(0, 0, 0, 0, 1, 0, 0), UAS_SP_RECYCLE,
+             "the refusal alone: every task ended, the recycle");
+    CHECK_EQ(UasStreamProof(0, 0, 0, 0, 1, 1, 0), UAS_SP_WAIT,
+             "a FINAL slot's uncancelled transfer still busy: wait, though "
+             "every cancel is back");
+    CHECK_EQ(UasStreamProof(0, 0, 0, 0, 1, 1, 1), UAS_SP_RESET,
+             "FINAL-busy past the budget: the reset");
+    CHECK_EQ(UasStreamProof(1, 0, 0, 0, 1, 0, 0), UAS_SP_RESET,
+             "another command alive (a copy loop's read): the reset");
+    CHECK_EQ(UasStreamProof(3, 0, 0, 0, 0, 1, 0), UAS_SP_RESET,
+             "commands alive: the reset at once, no wait");
+    CHECK_EQ(UasStreamProof(0, 1, 0, 0, 1, 0, 0), UAS_SP_RESET,
+             "a task management slot alive: the reset");
+    CHECK_EQ(UasStreamProof(0, 0, 1, 0, 1, 0, 0), UAS_SP_RESET,
+             "a tag in quarantine (an unanswered TMF): the reset");
+    CHECK_EQ(UasStreamProof(0, 0, 0, 1, 1, 0, 0), UAS_SP_RESET,
+             "a TMF answered but not an applicable success: the reset");
+    CHECK_EQ(UasStreamProof(0, 0, 0, 0, 1, 0, 1), UAS_SP_RECYCLE,
+             "settled just as the budget ran out: the proof decides");
+
+    /* Reset before wait: each reset condition wins over cancels not back
+     * and over a FINAL slot's busy transfer. */
+    CHECK_EQ(UasStreamProof(0, 1, 0, 0, 0, 0, 0), UAS_SP_RESET,
+             "a TMF slot with cancels outstanding: the reset, no wait");
+    CHECK_EQ(UasStreamProof(0, 1, 0, 0, 1, 1, 0), UAS_SP_RESET,
+             "a TMF slot with FINAL-busy: the reset, no wait");
+    CHECK_EQ(UasStreamProof(0, 0, 1, 0, 0, 0, 0), UAS_SP_RESET,
+             "quarantine with cancels outstanding: the reset");
+    CHECK_EQ(UasStreamProof(0, 0, 1, 0, 1, 1, 0), UAS_SP_RESET,
+             "quarantine with FINAL-busy: the reset");
+    CHECK_EQ(UasStreamProof(0, 0, 0, 1, 0, 0, 0), UAS_SP_RESET,
+             "an unsuccessful TMF with cancels outstanding: the reset");
+    CHECK_EQ(UasStreamProof(0, 0, 0, 1, 1, 1, 0), UAS_SP_RESET,
+             "an unsuccessful TMF with FINAL-busy: the reset");
+    CHECK_EQ(UasStreamProof(2, 0, 0, 0, 0, 0, 0), UAS_SP_RESET,
+             "commands alive with cancels outstanding: the reset");
+
+    /* The command phase after the driver's own port reset:
+     * (answer, device answers so far, resource failures so far). */
+    CHECK_EQ(UasRecoveryPhaseNext(UAS_RP_A_GOOD, 1, 0), UAS_RP_DONE,
+             "GOOD: the LUN is ready");
+    CHECK_EQ(UasRecoveryPhaseNext(UAS_RP_A_ATTENTION, 1, 0), UAS_RP_AGAIN,
+             "the reset's UNIT ATTENTION: again");
+    CHECK_EQ(UasRecoveryPhaseNext(UAS_RP_A_ATTENTION, 3, 0), UAS_RP_AGAIN,
+             "a third attention: again");
+    CHECK_EQ(UasRecoveryPhaseNext(UAS_RP_A_ATTENTION, 4, 0), UAS_RP_DONE,
+             "the fourth: the phase ends, an attention maybe pending");
+    CHECK_EQ(UasRecoveryPhaseNext(UAS_RP_A_OTHER, 1, 0), UAS_RP_DONE,
+             "another device answer (NOT READY, a RESPONSE IU): done");
+    CHECK_EQ(UasRecoveryPhaseNext(UAS_RP_A_RESOURCE, 0, 1), UAS_RP_RETRY,
+             "a first allocation or admission failure: once more");
+    CHECK_EQ(UasRecoveryPhaseNext(UAS_RP_A_RESOURCE, 0, 2), UAS_RP_FAILED,
+             "a second: the failed reset's path");
+    CHECK_EQ(UasRecoveryPhaseNext(UAS_RP_A_RESOURCE, 2, 1), UAS_RP_RETRY,
+             "a first resource failure after attentions: once more");
+    CHECK_EQ(UasRecoveryPhaseNext(UAS_RP_A_TRANSPORT, 0, 0), UAS_RP_FAILED,
+             "a transport failure: no answer, failed at once");
+    CHECK_EQ(UasRecoveryPhaseNext(UAS_RP_A_DEADLINE, 0, 0), UAS_RP_FAILED,
+             "the deadline before any answer: failed");
+    CHECK_EQ(UasRecoveryPhaseNext(UAS_RP_A_DEADLINE, 2, 1), UAS_RP_FAILED,
+             "the deadline after attentions: failed");
+    CHECK_EQ(UasRecoveryPhaseNext(9UL, 0, 0), UAS_RP_FAILED,
+             "an unknown outcome: never taken for an answer");
+}
+
+static void test_handshake_client(void)
+{
+    CHECK_EQ(UasStreamsAcked(1, XHCI98_STREAMS_F_CLIENT_RECOVERS |
+                                 XHCI98_STREAMS_F_ACK_CONTRACT),
+             1UL, "served and acknowledged");
+    CHECK_EQ(UasStreamsAcked(1, XHCI98_STREAMS_F_CLIENT_RECOVERS), 0UL,
+             "an old bus echoes the declaration: not an ack");
+    CHECK_EQ(UasStreamsAcked(0, XHCI98_STREAMS_F_ACK_CONTRACT), 0UL,
+             "a failed open: never an ack");
+    CHECK_EQ(UasStreamsContract(3, 3), UAS_SC_CONTRACT,
+             "all three opens acknowledged");
+    CHECK_EQ(UasStreamsContract(0, 3), UAS_SC_LEGACY, "none: legacy");
+    CHECK_EQ(UasStreamsContract(2, 3), UAS_SC_FAULT,
+             "two of three: a bus fault, the start fails");
+    CHECK_EQ(UasStreamsContract(1, 3), UAS_SC_FAULT, "one of three");
+}
+
 int main(void)
 {
+    test_handshake_client();
+    test_stream_recovery();
     test_tags();
     test_tele();
     test_policy();

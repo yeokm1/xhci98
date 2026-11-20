@@ -611,3 +611,99 @@ ULONG XhciHoldCompanionDisconnect(PXHCI_LINK_HOLD hold)
     hold->MatchSeen = 0;
     return XHCI_HOLD_KEEP;
 }
+
+/* ------------------------------------------------------------------ */
+/* Task 50.5: the send-back's time-out (design record 13 10.7.4)       */
+/* ------------------------------------------------------------------ */
+
+ULONG XhciHoldQuietDue(const XHCI_LINK_HOLD *hold, ULONG eligible,
+                       ULONG idle, ULONG quietAt, ULONG now, ULONG bound)
+{
+    if (hold == NULL || !eligible || !idle || hold->ConnectSeen ||
+        (hold->Kind != XHCI_HOLD_PAIRED &&
+         hold->Kind != XHCI_HOLD_UNIDENTIFIED)) {
+        return 0;
+    }
+    return ((ULONG)(now - quietAt) >= bound) ? 1UL : 0UL;
+}
+
+ULONG XhciHoldToConnect(ULONG state)
+{
+    return (state == XHCI_HOLD_TO_ARMED) ? XHCI_HOLD_TO_LATCHED : state;
+}
+
+ULONG XhciHoldToExpire(ULONG state, ULONG at, ULONG now, ULONG window,
+                       ULONG present)
+{
+    if (state == XHCI_HOLD_TO_ARMED && !present &&
+        (ULONG)(now - at) > window) {
+        return XHCI_HOLD_TO_NONE;
+    }
+    return state;
+}
+
+ULONG XhciHoldToCreate(ULONG state, ULONG match, PULONG refuse)
+{
+    *refuse = 0;
+    if (state != XHCI_HOLD_TO_LATCHED) {
+        return state;
+    }
+    if (!match) {
+        return XHCI_HOLD_TO_NONE;
+    }
+    *refuse = 1;
+    return XHCI_HOLD_TO_LATCHED;
+}
+
+ULONG XhciHoldToDepart(ULONG state)
+{
+    return (state == XHCI_HOLD_TO_LATCHED) ? XHCI_HOLD_TO_NONE : state;
+}
+
+ULONG XhciHoldToSerialKey(const char *id, ULONG room)
+{
+    ULONG key;
+    ULONG i;
+
+    key = 2166136261UL;
+    if (id == NULL) {
+        return key;
+    }
+    for (i = 0; i < room && id[i] != 0; i++) {
+        key ^= (ULONG)(UCHAR)id[i];
+        key = (key * 16777619UL) & 0xFFFFFFFFUL;
+    }
+    return key;
+}
+
+ULONG XhciHoldToSameUnit(ULONG heldForm, ULONG heldKey, ULONG newForm,
+                         ULONG newKey)
+{
+    if (heldForm == XHCI_HOLD_TO_SER_UNKNOWN ||
+        newForm == XHCI_HOLD_TO_SER_UNKNOWN) {
+        return 1;
+    }
+    if (heldForm == XHCI_HOLD_TO_SER_NONE ||
+        newForm == XHCI_HOLD_TO_SER_NONE) {
+        /* One offering a serial and the other none: two units. */
+        return (heldForm == newForm) ? 1UL : 0UL;
+    }
+    if (heldForm == XHCI_HOLD_TO_SER_ID && newForm == XHCI_HOLD_TO_SER_ID) {
+        return (heldKey == newKey) ? 1UL : 0UL;
+    }
+    /* An OTHER's text is not known, so it proves nothing against an ID or
+     * an OTHER: a malformed reply of the held drive's own serial is one. */
+    return 1;
+}
+
+ULONG XhciHoldToMatch(ULONG heldVidPid, ULONG heldForm, ULONG heldKey,
+                      ULONG vidPid, ULONG form, ULONG key)
+{
+    if (heldVidPid != vidPid) {
+        return XHCI_HOLD_TO_IDS_DIFFER;
+    }
+    if (!XhciHoldToSameUnit(heldForm, heldKey, form, key)) {
+        return XHCI_HOLD_TO_OTHER_UNIT;
+    }
+    return XHCI_HOLD_TO_MATCH;
+}

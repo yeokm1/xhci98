@@ -20,6 +20,8 @@
 
 #include <stdio.h>
 #include "../src/xhci_stream.h"
+#include "../src/xhci98_streams.h"
+#include "../src/xhci_quirk.h"
 #include "test_harness.h"
 
 /* ------------------------------------------------------------------ */
@@ -601,27 +603,37 @@ static void test_ring_pad(void)
  * repair. */
 static void test_resend_after(void)
 {
-    CHECK_EQ(XhciStreamResendAfter(XHCI_CC_SUCCESS, XHCI_EP_STATE_STOPPED),
+    CHECK_EQ(XhciStreamResendAfter(XHCI_CC_SUCCESS, XHCI_EP_STATE_STOPPED, 0),
              XHCI_STREAM_RS_AGAIN, "Success: read back again");
-    CHECK_EQ(XhciStreamResendAfter(XHCI_CC_SUCCESS, XHCI_EP_STATE_RUNNING),
+    CHECK_EQ(XhciStreamResendAfter(XHCI_CC_SUCCESS, XHCI_EP_STATE_RUNNING, 0),
              XHCI_STREAM_RS_AGAIN, "Success: the read-back reads the state");
     CHECK_EQ(XhciStreamResendAfter(XHCI_CC_CONTEXT_STATE_ERROR,
-                                   XHCI_EP_STATE_RUNNING),
+                                   XHCI_EP_STATE_RUNNING, 0),
              XHCI_STREAM_RS_RESTARTED,
              "refused, the endpoint restarted: stop and place, no cycle");
     CHECK_EQ(XhciStreamResendAfter(XHCI_CC_CONTEXT_STATE_ERROR,
-                                   XHCI_EP_STATE_STOPPED),
+                                   XHCI_EP_STATE_STOPPED, 0),
              XHCI_STREAM_RS_GIVEUP, "refused while Stopped: given up");
     CHECK_EQ(XhciStreamResendAfter(XHCI_CC_CONTEXT_STATE_ERROR,
-                                   XHCI_EP_STATE_HALTED),
+                                   XHCI_EP_STATE_HALTED, 0),
              XHCI_STREAM_RS_GIVEUP, "refused, Halted: given up");
     CHECK_EQ(XhciStreamResendAfter(XHCI_CC_CONTEXT_STATE_ERROR,
-                                   XHCI_EP_STATE_ERROR),
+                                   XHCI_EP_STATE_ERROR, 0),
              XHCI_STREAM_RS_GIVEUP, "refused, Error: given up");
-    CHECK_EQ(XhciStreamResendAfter(XHCI_CC_TRB_ERROR, XHCI_EP_STATE_RUNNING),
+    CHECK_EQ(XhciStreamResendAfter(XHCI_CC_TRB_ERROR, XHCI_EP_STATE_RUNNING, 0),
              XHCI_STREAM_RS_GIVEUP, "another code: given up");
-    CHECK_EQ(XhciStreamResendAfter(0, XHCI_EP_STATE_RUNNING),
+    CHECK_EQ(XhciStreamResendAfter(0, XHCI_EP_STATE_RUNNING, 0),
              XHCI_STREAM_RS_GIVEUP, "no command built: given up");
+    /* Task 50.30 step 3 (design record 17 section 4.15.5a): an aborted or
+     * left resend is its own result, read before the code and the state. */
+    CHECK_EQ(XhciStreamResendAfter(25, XHCI_EP_STATE_STOPPED, 1),
+             XHCI_STREAM_RS_REMOVED, "aborted, Stopped: removed");
+    CHECK_EQ(XhciStreamResendAfter(25, XHCI_EP_STATE_RUNNING, 1),
+             XHCI_STREAM_RS_REMOVED, "aborted, Running: never a restop");
+    CHECK_EQ(XhciStreamResendAfter(0x100, XHCI_EP_STATE_RUNNING, 1),
+             XHCI_STREAM_RS_REMOVED, "left: removed");
+    CHECK_EQ(XhciStreamResendAfter(XHCI_CC_SUCCESS, XHCI_EP_STATE_STOPPED, 1),
+             XHCI_STREAM_RS_REMOVED, "the verdict outranks the code");
     CHECK_EQ(XhciStreamAfterRestop(XHCI_EP_STATE_STOPPED), 1,
              "stopped again: the stream may be placed");
     CHECK_EQ(XhciStreamAfterRestop(XHCI_EP_STATE_RUNNING), 0,
@@ -663,8 +675,250 @@ static void test_read_back(void)
              XHCI_STREAM_RB_DIFFER, "a zeroed context");
 }
 
+/* ------------------------------------------------------------------ */
+/* Task 50.20 (design record 17 section 4.12.10)                        */
+/* ------------------------------------------------------------------ */
+
+#define S_KEEP      XHCI_STREAM_KIND_KEEP
+#define S_REPLACE   XHCI_STREAM_KIND_REPLACE
+#define S_DROP      XHCI_STREAM_KIND_DROP
+
+static void test_untrusted_id(void)
+{
+    CHECK_EQ(XhciStreamSetDeqUntrustedId(0x1E318086UL), 1UL,
+             "Intel 7 Series xHCI 8086:1E31: flagged");
+    CHECK_EQ(XhciStreamSetDeqUntrustedId(0x80861E31UL), 0UL,
+             "the halves swapped: not it");
+    CHECK_EQ(XhciStreamSetDeqUntrustedId(0x8C318086UL), 0UL,
+             "Lynx Point 8C31: no evidence, not flagged");
+    CHECK_EQ(XhciStreamSetDeqUntrustedId(0x9C318086UL), 0UL,
+             "Lynx Point-LP 9C31: not flagged");
+    CHECK_EQ(XhciStreamSetDeqUntrustedId(0x000D1B36UL), 0UL,
+             "QEMU's xHCI: only by the injection, never by ID");
+    CHECK_EQ(XhciStreamSetDeqUntrustedId(0UL), 0UL, "no ID");
+    /* Task 50.20's setting: the list is XhciStreamDequeueAvoid's. */
+    CHECK_EQ(XhciQuirkMatches(XHCI_QK_DEQ_AVOID, 0x1E318086UL), 1UL,
+             "the one list: the quirk table's");
+}
+
+/* Task 50.20: RESET_PIPE's recycle Configure not taken (hcd_cfg.c,
+ * hcdCfgRecycleFailed). A contract endpoint whose Configure the controller
+ * answered with an error code is held for the client's device reset;
+ * no completion (0) and every endpoint without the contract take today's
+ * fault. */
+static void test_recycle_failed(void)
+{
+    static const ULONG refused[] = {
+        2, 5, 7, 8, 11, 12, 17, 19, 0xFF
+    };
+    ULONG i;
+
+    for (i = 0; i < sizeof(refused) / sizeof(refused[0]); i++) {
+        CHECK_EQ(XhciStreamRecycleFailed(1, refused[i], 0), XHCI_STREAM_RF_HOLD,
+                 "contract, a completion code: held, no reset, no cycle");
+        CHECK_EQ(XhciStreamRecycleFailed(0, refused[i], 0),
+                 XHCI_STREAM_RF_FAULT, "no contract: today's fault");
+    }
+    CHECK_EQ(XhciStreamRecycleFailed(1, 7, 0), XHCI_STREAM_RF_HOLD,
+             "Resource Error (fault 34 arg 0 and 2): held");
+    CHECK_EQ(XhciStreamRecycleFailed(1, 0, 0), XHCI_STREAM_RF_FAULT,
+             "no completion (fault 34 arg 10h): the general rule");
+    CHECK_EQ(XhciStreamRecycleFailed(0, 0, 0), XHCI_STREAM_RF_FAULT,
+             "no completion, no contract: the general rule");
+    CHECK_EQ(XhciStreamRecycleFailed(1, 1, 0), XHCI_STREAM_RF_FAULT,
+             "Success is never a failure to hold");
+    /* Task 50.30 step 3 (design record 17 section 4.15.5a): an aborted or
+     * left recycle removes the device on either kind of endpoint. */
+    CHECK_EQ(XhciStreamRecycleFailed(1, 25, 1), XHCI_STREAM_RF_REMOVE,
+             "contract, aborted: removed, never held");
+    CHECK_EQ(XhciStreamRecycleFailed(0, 25, 1), XHCI_STREAM_RF_REMOVE,
+             "no contract, aborted: removed");
+    CHECK_EQ(XhciStreamRecycleFailed(1, 0x100, 1), XHCI_STREAM_RF_REMOVE,
+             "contract, left: removed");
+    CHECK_EQ(XhciStreamRecycleFailed(0, 0x100, 1), XHCI_STREAM_RF_REMOVE,
+             "no contract, left: removed");
+    CHECK_EQ(XhciStreamRecycleFailed(1, 25, 0), XHCI_STREAM_RF_HOLD,
+             "25 without the verdict (isolation not applying): as today");
+}
+
+static void test_flag_decide(void)
+{
+    ULONG k;
+
+    CHECK_EQ(XhciStreamFlagDecide(0, S_KEEP, XHCI_EP_STATE_STOPPED, 1),
+             XHCI_STREAM_FD_TODAY, "unflagged cancel: 4.12.8 as today");
+    CHECK_EQ(XhciStreamFlagDecide(0, S_DROP, XHCI_EP_STATE_ERROR, 1),
+             XHCI_STREAM_FD_TODAY, "unflagged drop: as today");
+
+    for (k = S_KEEP; k <= S_DROP; k++) {
+        CHECK_EQ(XhciStreamFlagDecide(1, k, XHCI_EP_STATE_RUNNING, 1),
+                 XHCI_STREAM_FD_FAULT, "still Running: today's give-up");
+        CHECK_EQ(XhciStreamFlagDecide(1, k, 5UL, 1), XHCI_STREAM_FD_FAULT,
+                 "a reserved state: not at rest");
+        CHECK_EQ(XhciStreamFlagDecide(1, k, XHCI_EP_STATE_DISABLED, 1),
+                 XHCI_STREAM_FD_NONE, "Disabled: no command, nothing owed");
+        CHECK_EQ(XhciStreamFlagDecide(1, k, XHCI_EP_STATE_STOPPED, 0),
+                 XHCI_STREAM_FD_NONE, "nothing taken off a ring: the Stop "
+                                      "alone, nothing owed");
+        CHECK_EQ(XhciStreamFlagDecide(1, k, XHCI_EP_STATE_STOPPED, 1),
+                 XHCI_STREAM_FD_WITHHELD, "a TD taken off: withheld");
+        CHECK_EQ(XhciStreamFlagDecide(1, k, XHCI_EP_STATE_HALTED, 0),
+                 XHCI_STREAM_FD_WITHHELD, "Halted: withheld");
+    }
+    CHECK_EQ(XhciStreamFlagDecide(1, S_KEEP, XHCI_EP_STATE_ERROR, 0),
+             XHCI_STREAM_FD_WITHHELD, "KEEP in Error: left in Error, owed");
+    CHECK_EQ(XhciStreamFlagDecide(1, S_REPLACE, XHCI_EP_STATE_ERROR, 1),
+             XHCI_STREAM_FD_REFUSE, "RESET_PIPE in Error: refused, owed");
+    CHECK_EQ(XhciStreamFlagDecide(1, S_DROP, XHCI_EP_STATE_ERROR, 1),
+             XHCI_STREAM_FD_ERROR_EXIT, "a drop in Error: the Error exit");
+    CHECK_EQ(XhciStreamFlagDecide(1, 7UL, XHCI_EP_STATE_STOPPED, 1),
+             XHCI_STREAM_FD_FAULT, "an unknown caller kind");
+
+    CHECK_EQ(XhciStreamFlagSetsDebt(XHCI_STREAM_FD_TODAY), 0UL, "today: no");
+    CHECK_EQ(XhciStreamFlagSetsDebt(XHCI_STREAM_FD_FAULT), 0UL, "fault: no");
+    CHECK_EQ(XhciStreamFlagSetsDebt(XHCI_STREAM_FD_NONE), 0UL, "none: no");
+    CHECK_EQ(XhciStreamFlagSetsDebt(XHCI_STREAM_FD_WITHHELD), 1UL,
+             "withheld: yes");
+    CHECK_EQ(XhciStreamFlagSetsDebt(XHCI_STREAM_FD_ERROR_EXIT), 1UL,
+             "the Error exit: yes, until the Drop");
+    CHECK_EQ(XhciStreamFlagSetsDebt(XHCI_STREAM_FD_REFUSE), 1UL,
+             "refused in Error: yes");
+}
+
+/* A model of pipe objects, each with its own debt and pause count, which
+ * other holders also take: a replacement pipe at the same DCI is another
+ * object and inherits nothing. */
+typedef struct _S_PIPE {
+    ULONG Debt;
+    ULONG Paused;
+} S_PIPE;
+
+static void s_withhold(S_PIPE *p)
+{
+    if (XhciStreamDebtSet(&p->Debt)) {
+        p->Paused++;
+    }
+}
+
+static void s_replaced(S_PIPE *p)
+{
+    if (XhciStreamDebtReplaced(&p->Debt) && p->Paused != 0) {
+        p->Paused--;
+    }
+}
+
+static void test_debt(void)
+{
+    S_PIPE in;
+    S_PIPE status;
+    S_PIPE fresh;
+
+    in.Debt = 0;
+    in.Paused = 1;          /* the cancel's own pause */
+    status.Debt = 0;
+    status.Paused = 1;      /* a suspend's */
+    fresh.Debt = 0;
+    fresh.Paused = 0;
+
+    s_withhold(&in);
+    CHECK_EQ(in.Debt, 1UL, "data-in owes");
+    CHECK_EQ(in.Paused, 2UL, "one reference taken");
+    s_withhold(&in);
+    s_withhold(&in);
+    CHECK_EQ(in.Paused, 2UL, "repeated cancels take no more");
+    s_withhold(&status);
+    CHECK_EQ(status.Paused, 2UL, "the status pipe its own one");
+
+    /* RESET_PIPE's recycle of data-in. */
+    s_replaced(&in);
+    CHECK_EQ(in.Debt, 0UL, "replaced: nothing owed");
+    CHECK_EQ(in.Paused, 1UL, "the cancel's own pause still held");
+    s_replaced(&in);
+    CHECK_EQ(in.Paused, 1UL, "replaced twice releases once");
+    CHECK_EQ(status.Debt, 1UL, "the other endpoint still owes");
+
+    /* A select detaches the owing status pipe and opens another object at
+     * its DCI: the old one is closed, the new one owes nothing. */
+    XhciStreamDebtClosed(&status.Debt);
+    CHECK_EQ(status.Debt, 0UL, "closed: cleared");
+    CHECK_EQ(status.Paused, 2UL, "closed: nothing released, it never runs");
+    CHECK_EQ(fresh.Debt, 0UL, "the replacement inherits nothing");
+    s_replaced(&fresh);
+    CHECK_EQ(fresh.Paused, 0UL, "and a Configure for it releases nothing");
+}
+
+static void test_handshake_bus(void)
+{
+    CHECK_EQ(XhciStreamAckFlags(1, XHCI98_STREAMS_F_CLIENT_RECOVERS, 1),
+             XHCI98_STREAMS_F_CLIENT_RECOVERS | XHCI98_STREAMS_F_ACK_CONTRACT,
+             "flagged, declared, served: acknowledged");
+    CHECK_EQ(XhciStreamAckFlags(0, XHCI98_STREAMS_F_CLIENT_RECOVERS, 1),
+             XHCI98_STREAMS_F_CLIENT_RECOVERS,
+             "unflagged: the bus's half written 0");
+    CHECK_EQ(XhciStreamAckFlags(1, 0, 1), 0UL,
+             "flagged, not declared (option B): no contract");
+    CHECK_EQ(XhciStreamAckFlags(1, XHCI98_STREAMS_F_CLIENT_RECOVERS, 0),
+             XHCI98_STREAMS_F_CLIENT_RECOVERS, "a failed open: no ack");
+    CHECK_EQ(XhciStreamAckFlags(1, 0xFFFFFFFFUL, 1),
+             0x0000FFFFUL | XHCI98_STREAMS_F_ACK_CONTRACT,
+             "a client that set the bus's half: overwritten");
+    CHECK_EQ(XhciStreamAckFlags(0, 0xFFFF0000UL, 1), 0UL,
+             "stale bus bits never survive an answer");
+
+    CHECK_EQ(XhciStreamSurvivorDoorbell(1, 0), 1UL,
+             "survivors, no debt: rung as today");
+    CHECK_EQ(XhciStreamSurvivorDoorbell(1, 1), 0UL,
+             "survivors on an owed endpoint: never rung");
+    CHECK_EQ(XhciStreamSurvivorDoorbell(0, 0), 0UL, "nothing queued");
+    CHECK_EQ(XhciStreamSurvivorDoorbell(0, 1), 0UL,
+             "nothing queued, owed");
+}
+
+/* D2: the cancel's references, the operation's and the debt's, through
+ * repeated cancels (one with no move) and the recovery, with an
+ * unrelated holder throughout. */
+static void test_epilogue(void)
+{
+    S_PIPE ep;
+    ULONG rung;
+
+    ep.Debt = 0;
+    ep.Paused = 1;              /* an unrelated holder */
+    rung = 0;
+
+    ep.Paused++;                /* cancel 1: the operation */
+    s_withhold(&ep);            /* a TD taken: the debt */
+    rung += XhciStreamSurvivorDoorbell(1, ep.Debt);
+    ep.Paused--;                /* its epilogue */
+    CHECK_EQ(ep.Paused, 2UL, "after cancel 1: the holder and the debt");
+
+    ep.Paused++;                /* cancel 2, no move: nothing withheld */
+    rung += XhciStreamSurvivorDoorbell(1, ep.Debt);
+    ep.Paused--;
+    ep.Paused++;                /* cancel 3, a move again */
+    s_withhold(&ep);
+    rung += XhciStreamSurvivorDoorbell(1, ep.Debt);
+    ep.Paused--;
+    CHECK_EQ(ep.Paused, 2UL, "after three cancels: unchanged");
+    CHECK_EQ(rung, 0UL, "no survivors' doorbell while owed");
+
+    ep.Paused++;                /* RESET_PIPE: its operation */
+    s_replaced(&ep);            /* the recycle: the debt released */
+    ep.Paused--;                /* its epilogue */
+    CHECK_EQ(ep.Debt, 0UL, "recovered: nothing owed");
+    CHECK_EQ(ep.Paused, 1UL, "only the unrelated holder left");
+    CHECK_EQ(XhciStreamSurvivorDoorbell(1, ep.Debt), 1UL,
+             "and the next cancel rings as today");
+}
+
 int main(void)
 {
+    test_handshake_bus();
+    test_epilogue();
+    test_untrusted_id();
+    test_recycle_failed();
+    test_flag_decide();
+    test_debt();
     test_read_back();
     test_resend_after();
     test_ring_pad();

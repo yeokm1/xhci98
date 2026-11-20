@@ -32,6 +32,8 @@ ULONG XhciInjTake(PXHCI_INJ_TRIGGER t, ULONG found, ULONG value)
     t->Seq = seq;
     fault = XHCI_INJ_GET_FAULT(value);
     if ((fault >= XHCI_INJ_LOST_IRQ && fault <= XHCI_INJ_LAST_BUILT) ||
+        fault == XHCI_INJ_QUERY_STOP ||
+        (fault >= XHCI_INJ_RETRY_FIRST && fault <= XHCI_INJ_RETRY_LAST) ||
         fault == XHCI_INJ_CLEAR) {
         return XHCI_INJ_TAKE_FIRE;
     }
@@ -224,8 +226,9 @@ ULONG XhciInjPciCommand(const XHCI_INJ_REGS *r, ULONG command)
 
 ULONG XhciInjNeedsLive(ULONG fault)
 {
-    return (fault >= XHCI_INJ_LOST_IRQ && fault <= XHCI_INJ_LAST_BUILT &&
-            fault != XHCI_INJ_OC_RELEASE) ? 1UL : 0UL;
+    return ((fault >= XHCI_INJ_LOST_IRQ && fault <= XHCI_INJ_LAST_BUILT &&
+             fault != XHCI_INJ_OC_RELEASE) ||
+            fault == XHCI_INJ_QUERY_STOP) ? 1UL : 0UL;
 }
 
 ULONG XhciInjLostCount(ULONG arg)
@@ -606,6 +609,445 @@ ULONG XhciInjEp0Fires(PXHCI_INJ_EP e, ULONG devPort, ULONG published)
         e->Ep0Want = 0;
     }
     return 1;
+}
+
+/* ----------------------------------------------------------------------- */
+/* Task 50.30 step 2: a device or a command that stops answering            */
+/* ----------------------------------------------------------------------- */
+
+VOID XhciInjHangEnd(PXHCI_INJ_HANG h)
+{
+    h->Fault = 0;
+    h->Port = 0;
+    h->Behind = 0;
+    h->Outcome = 0;
+    h->Left = 0;
+    h->ByBehaviour = 0;
+    h->Armed = 0;
+    h->HoldNext = 0;
+    h->HoldType = 0;
+    h->HoldSlot = 0;
+    h->HeldPA = 0;
+    h->NoOpPA = 0;
+    h->StopOwedPA = 0;
+    h->Recovery = 0;
+    h->RecSlot = 0;
+    h->HoldRec = 0;
+    h->MarkSlot = 0;
+    h->MarkTick = 0;
+}
+
+VOID XhciInjHangRingGone(PXHCI_INJ_HANG h)
+{
+    h->HoldNext = 0;
+    h->HoldType = 0;
+    h->HoldSlot = 0;
+    h->HeldPA = 0;
+    h->NoOpPA = 0;
+    h->StopOwedPA = 0;
+    /* Step 3: the latched slot is given back with the ring (an HCRST, a
+     * stop, a rebuild), so a later device given the same slot number
+     * never inherits the latch or the mark deadline; bit 7 stays armed for
+     * the next primary. */
+    h->RecSlot = 0;
+    h->HoldRec = 0;
+    h->MarkSlot = 0;
+    h->MarkTick = 0;
+}
+
+VOID XhciInjHangArm(PXHCI_INJ_HANG h, ULONG fault, ULONG port, ULONG arg)
+{
+    ULONG withheld;
+
+    withheld = h->Withheld;
+    XhciInjHangEnd(h);
+    h->Withheld = withheld;
+    if (fault < XHCI_INJ_ADDRESS_HANG || fault > XHCI_INJ_RESETDEV_HANG) {
+        return;
+    }
+    if (fault == XHCI_INJ_DEVICE_HANG && (port & XHCI_INJ_HG_BEHIND) != 0) {
+        /* Its end is the root port's disconnect, which a device behind a
+         * hub never shows: it would outlive the device and hang the hub's
+         * other devices. A root port only. */
+        return;
+    }
+    h->Fault = fault;
+    h->Port = port & 0x7FUL;
+    h->Behind = (port & XHCI_INJ_HG_BEHIND) != 0 ? 1UL : 0UL;
+    h->Outcome = XHCI_INJ_HG_OUTCOME(arg);
+    h->Left = XHCI_INJ_HG_COUNT(arg);
+    if (h->Left == 0) {
+        h->Left = 1;
+    }
+    h->ByBehaviour = (fault == XHCI_INJ_DEVICE_HANG &&
+                      (arg & XHCI_INJ_HG_BIT7) != 0) ? 1UL : 0UL;
+    h->Recovery = ((fault == XHCI_INJ_ADDRESS_HANG ||
+                    fault == XHCI_INJ_EP0_HANG) &&
+                   (arg & XHCI_INJ_HG_BIT7) != 0) ? 1UL : 0UL;
+    if (fault == XHCI_INJ_DEVICE_HANG) {
+        /* Until the place's disconnect: the count is not spent. */
+        h->Left = XHCI_INJ_HG_FOREVER;
+    }
+    h->Armed = h->ByBehaviour ? 0UL : 1UL;
+}
+
+ULONG XhciInjHangCmdType(ULONG fault)
+{
+    switch (fault) {
+    case XHCI_INJ_ADDRESS_HANG:
+    case XHCI_INJ_DEVICE_HANG:
+        return XHCI_TRB_TYPE_ADDRESS_DEVICE;
+    case XHCI_INJ_CFGEP_HANG:
+        return XHCI_TRB_TYPE_CONFIGURE_EP;
+    case XHCI_INJ_RESETEP_HANG:
+        return XHCI_TRB_TYPE_RESET_EP;
+    case XHCI_INJ_SETDEQ_HANG:
+        return XHCI_TRB_TYPE_SET_TR_DEQUEUE;
+    case XHCI_INJ_EVAL_HANG:
+        return XHCI_TRB_TYPE_EVALUATE_CONTEXT;
+    case XHCI_INJ_RESETDEV_HANG:
+        return XHCI_TRB_TYPE_RESET_DEVICE;
+    default:
+        return 0;
+    }
+}
+
+VOID XhciInjHangLatch(PXHCI_INJ_HANG h, ULONG slot, ULONG now)
+{
+    if (!h->Recovery || slot == 0) {
+        return;
+    }
+    h->RecSlot = slot;
+    if (h->Fault == XHCI_INJ_EP0_HANG && h->Outcome == XHCI_INJ_OUT_MARK) {
+        h->MarkSlot = slot;
+        h->MarkTick = now + XHCI_INJ_HG_MARK_TICKS;
+    }
+}
+
+ULONG XhciInjHangRecoveryFits(const XHCI_INJ_HANG *h, ULONG type, ULONG slot,
+                              ULONG epId)
+{
+    if (h->Fault == 0 || !h->Recovery || h->RecSlot == 0 ||
+        slot != h->RecSlot) {
+        return 0;
+    }
+    if (type == XHCI_TRB_TYPE_DISABLE_SLOT) {
+        return 1;
+    }
+    /* Outcome 7's recovery command is the cycle's Disable Slot: the
+     * teardown may stop the abandoned transfer's EP0 first
+     * (hcdDeviceStop), and that Stop must go out. */
+    return (h->Fault == XHCI_INJ_EP0_HANG &&
+            h->Outcome != XHCI_INJ_OUT_MARK &&
+            type == XHCI_TRB_TYPE_STOP_EP && epId == 1)
+               ? 1UL
+               : 0UL;
+}
+
+ULONG XhciInjHangRecoveryTake(PXHCI_INJ_HANG h, ULONG type, ULONG slot,
+                              ULONG epId)
+{
+    if (!XhciInjHangRecoveryFits(h, type, slot, epId)) {
+        return 0;
+    }
+    h->RecSlot = 0;
+    h->Withheld++;
+    return 1;
+}
+
+ULONG XhciInjHangMarkDue(PXHCI_INJ_HANG h, ULONG slot, ULONG now)
+{
+    if (h->MarkSlot == 0 || slot != h->MarkSlot ||
+        (LONG)(now - h->MarkTick) < 0) {
+        return 0;
+    }
+    h->MarkSlot = 0;
+    h->MarkTick = 0;
+    return 1;
+}
+
+ULONG XhciInjHangActOutcome(ULONG outcome)
+{
+    return outcome == XHCI_INJ_OUT_MARK ? XHCI_INJ_OUT_FETCHED : outcome;
+}
+
+ULONG XhciInjRvRouteLets(ULONG point, ULONG standing, ULONG latched)
+{
+    if (point != XHCI_INJ_RV_RECOVERY) {
+        return 0;
+    }
+    return ((standing | latched) != 0) ? 1UL : 0UL;
+}
+
+ULONG XhciInjHangFits(PXHCI_INJ_HANG h, ULONG port, ULONG route)
+{
+    if (h->Fault == 0 || port == 0) {
+        return 0;
+    }
+    if (h->Port != 0 && h->Port != port) {
+        return 0;
+    }
+    if ((h->Behind != 0) != (route != 0)) {
+        return 0;
+    }
+    return 1;
+}
+
+/* One withholding made: the place latched where it was "the first that
+ * fits", the count spent unless for ever. */
+static VOID xhciInjHangSpend(PXHCI_INJ_HANG h, ULONG port)
+{
+    h->Port = port;
+    h->Withheld++;
+    if (h->Left != XHCI_INJ_HG_FOREVER && h->Left != 0) {
+        h->Left--;
+    }
+}
+
+ULONG XhciInjHangCmdFits(PXHCI_INJ_HANG h, ULONG type, ULONG port,
+                         ULONG route)
+{
+    if (!h->Armed || h->Left == 0 || type == 0 ||
+        XhciInjHangCmdType(h->Fault) != type ||
+        !XhciInjHangFits(h, port, route)) {
+        return 0;
+    }
+    return 1;
+}
+
+ULONG XhciInjHangCmd(PXHCI_INJ_HANG h, ULONG type, ULONG port, ULONG route)
+{
+    if (!XhciInjHangCmdFits(h, type, port, route)) {
+        return 0;
+    }
+    xhciInjHangSpend(h, port);
+    return 1;
+}
+
+ULONG XhciInjHangEp0(PXHCI_INJ_HANG h, ULONG port, ULONG route)
+{
+    if (!h->Armed || h->Left == 0 ||
+        (h->Fault != XHCI_INJ_EP0_HANG && h->Fault != XHCI_INJ_DEVICE_HANG) ||
+        !XhciInjHangFits(h, port, route)) {
+        return 0;
+    }
+    xhciInjHangSpend(h, port);
+    return 1;
+}
+
+ULONG XhciInjHangLate(PXHCI_INJ_HANG h, ULONG port, ULONG route,
+                      ULONG withheld)
+{
+    if (!h->ByBehaviour || h->Armed || withheld ||
+        !XhciInjHangFits(h, port, route)) {
+        return 0;
+    }
+    h->Port = port;
+    h->Armed = 1;
+    return 1;
+}
+
+ULONG XhciInjHangGone(PXHCI_INJ_HANG h, ULONG port)
+{
+    if (h->Fault != XHCI_INJ_DEVICE_HANG || h->Port == 0 || h->Port != port ||
+        (!h->Armed && h->ByBehaviour)) {
+        return 0;
+    }
+    XhciInjHangEnd(h);
+    return 1;
+}
+
+VOID XhciInjCommandEvent(XHCI_TRB *ev, ULONG pa, ULONG cc)
+{
+    ev->Param0 = pa;
+    ev->Param1 = 0;
+    ev->Status = (cc & 0xFFUL) << 24;
+    ev->Control = XHCI_TRB_TYPE(XHCI_TRB_TYPE_COMMAND_COMPLETION);
+}
+
+ULONG XhciInjHangEvents(ULONG outcome, ULONG heldPA, ULONG nextPA,
+                        ULONG badPA, XHCI_TRB *ev, PULONG rewrite,
+                        PULONG ring)
+{
+    *rewrite = 0;
+    *ring = 0;
+    switch (outcome) {
+    case XHCI_INJ_OUT_STOP_HERE:
+        XhciInjCommandEvent(&ev[0], heldPA, XHCI_CC_COMMAND_RING_STOPPED);
+        return 1;
+    case XHCI_INJ_OUT_FETCHED:
+        *rewrite = 1;
+        XhciInjCommandEvent(&ev[0], heldPA, XHCI_CC_COMMAND_ABORTED);
+        XhciInjCommandEvent(&ev[1], nextPA, XHCI_CC_COMMAND_RING_STOPPED);
+        return 2;
+    case XHCI_INJ_OUT_FETCHED_NA:
+        *rewrite = 1;
+        XhciInjCommandEvent(&ev[0], nextPA, XHCI_CC_COMMAND_RING_STOPPED);
+        return 1;
+    case XHCI_INJ_OUT_ABORT_HERE:
+        XhciInjCommandEvent(&ev[0], heldPA, XHCI_CC_COMMAND_ABORTED);
+        XhciInjCommandEvent(&ev[1], heldPA, XHCI_CC_COMMAND_RING_STOPPED);
+        return 2;
+    case XHCI_INJ_OUT_RACE:
+        *ring = 1;
+        return 0;
+    case XHCI_INJ_OUT_DIVERGE:
+        XhciInjCommandEvent(&ev[0], badPA, XHCI_CC_COMMAND_RING_STOPPED);
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* ----------------------------------------------------------------------- */
+/* Task 50.30 step 3: 2D, the query-stop exercise (record 17 4.15.16 E)     */
+/* ----------------------------------------------------------------------- */
+
+VOID XhciInjQsStart(PXHCI_INJ_QSTOP q)
+{
+    q->State = XHCI_INJ_QS_IDLE;
+    q->Arg = 0;
+    q->Abort = 0;
+    q->Terminal = 0;
+    q->Released = 0;
+    q->Due = 0;
+    q->Closed = 0;
+    q->HeldSlot = 0;
+    q->HeldPA = 0;
+}
+
+ULONG XhciInjQsArmRefusal(const XHCI_INJ_QSTOP *q, ULONG started,
+                          ULONG mode4, ULONG isolation)
+{
+    if (!started) {
+        return XHCI_INJ_QS_R_STOPPED;
+    }
+    if (!mode4) {
+        return XHCI_INJ_QS_R_MODE;
+    }
+    if (!isolation) {
+        return XHCI_INJ_QS_R_ISOLATION;
+    }
+    if (q->State != XHCI_INJ_QS_IDLE) {
+        return XHCI_INJ_QS_R_ACTIVE;
+    }
+    if (q->Busy != 0) {
+        return XHCI_INJ_QS_R_BUSY;
+    }
+    if (q->Closed) {
+        return XHCI_INJ_QS_R_CLOSED;
+    }
+    return XHCI_INJ_QS_R_OK;
+}
+
+VOID XhciInjQsArm(PXHCI_INJ_QSTOP q, ULONG arg)
+{
+    q->State = XHCI_INJ_QS_ARMED;
+    q->Arg = arg & 0xFFUL;
+    q->Abort = 0;
+    q->Terminal = 0;
+    q->Released = 0;
+    q->Due = 0;
+    q->HeldSlot = 0;
+    q->HeldPA = 0;
+}
+
+ULONG XhciInjQsTrigger(PXHCI_INJ_QSTOP q, ULONG slot, ULONG pa, ULONG now)
+{
+    if (q->State != XHCI_INJ_QS_ARMED) {
+        return 0;
+    }
+    q->State = XHCI_INJ_QS_TRIGGERED;
+    q->Due = now + XHCI_INJ_QS_DELAY(q->Arg);
+    q->HeldSlot = slot;
+    q->HeldPA = pa;
+    return 1;
+}
+
+ULONG XhciInjQsDebtFits(const XHCI_INJ_QSTOP *q, ULONG owed, ULONG slot,
+                        ULONG pa)
+{
+    return (owed != 0 && q->HeldPA != 0 && slot == q->HeldSlot &&
+            pa == q->HeldPA)
+               ? 1UL
+               : 0UL;
+}
+
+ULONG XhciInjQsStep(PXHCI_INJ_QSTOP q, ULONG now, ULONG ready, ULONG debt)
+{
+    switch (q->State) {
+    case XHCI_INJ_QS_TRIGGERED:
+        if (q->Abort) {
+            /* A bracket ends a triggered exercise itself; never left
+             * waiting here. */
+            q->State = XHCI_INJ_QS_IDLE;
+            return XHCI_INJ_QS_ENDED;
+        }
+        if ((LONG)(now - q->Due) < 0 || q->Busy != 0 || q->Closed ||
+            !ready) {
+            return XHCI_INJ_QS_NONE;
+        }
+        if ((q->Arg & XHCI_INJ_QS_WINDOW) != 0 && !debt) {
+            q->State = XHCI_INJ_QS_IDLE;
+            return XHCI_INJ_QS_NODEBT;
+        }
+        q->State = XHCI_INJ_QS_CALLING;
+        return XHCI_INJ_QS_QUERY;
+    case XHCI_INJ_QS_QUERIED:
+        if (q->Abort && q->Terminal) {
+            q->State = XHCI_INJ_QS_IDLE;
+            q->Released = 0;
+            return XHCI_INJ_QS_HANDOFF;
+        }
+        if (q->Abort || (LONG)(now - q->Due) >= 0) {
+            q->State = XHCI_INJ_QS_CALLING;
+            return XHCI_INJ_QS_CANCEL;
+        }
+        return XHCI_INJ_QS_NONE;
+    default:
+        return XHCI_INJ_QS_NONE;
+    }
+}
+
+VOID XhciInjQsQueried(PXHCI_INJ_QSTOP q, ULONG released, ULONG now)
+{
+    q->State = XHCI_INJ_QS_QUERIED;
+    q->Released = released ? 1UL : 0UL;
+    q->Due = now + XHCI_INJ_QS_HOLD(q->Arg) * XHCI_INJ_QS_TICKS_PER_S;
+}
+
+VOID XhciInjQsEnded(PXHCI_INJ_QSTOP q)
+{
+    q->State = XHCI_INJ_QS_IDLE;
+    q->Released = 0;
+}
+
+ULONG XhciInjQsBracket(PXHCI_INJ_QSTOP q, ULONG terminal)
+{
+    q->Busy++;
+    if (terminal) {
+        q->Closed = 1;
+        q->Terminal = 1;
+    }
+    q->Abort = 1;
+    switch (q->State) {
+    case XHCI_INJ_QS_ARMED:
+    case XHCI_INJ_QS_TRIGGERED:
+        q->State = XHCI_INJ_QS_IDLE;
+        return XHCI_INJ_QS_BR_ENDED;
+    case XHCI_INJ_QS_CALLING:
+    case XHCI_INJ_QS_QUERIED:
+        return XHCI_INJ_QS_BR_WAIT;
+    default:
+        return XHCI_INJ_QS_BR_NOTHING;
+    }
+}
+
+VOID XhciInjQsLeave(PXHCI_INJ_QSTOP q)
+{
+    if (q->Busy != 0) {
+        q->Busy--;
+    }
 }
 
 #else /* release: injection is not in the image */

@@ -6,7 +6,11 @@
  * device numbers refused, VIA's vendor-wide row, the effective policy, the
  * packed word, XhciMsiAvoid's decision with an unknown identity,
  * XhciStreamsOff's reading of HCCPARAMS1, and XhciAsmediaFlowControl's
- * bounded wait for the control byte (task 44.65). The quirks' executors
+ * bounded wait for the control byte (task 44.65), and task 50.20's
+ * fifteenth value, XhciStreamDequeueAvoid: its list, its three values on
+ * the listed controller and on others, and the qemu flavour's fault 33,
+ * which counts a controller as listed and leaves the value to decide
+ * (record 17 section 4.12.10). The quirks' executors
  * carry their own vectors in test_ring, test_iso, test_link, test_stream,
  * test_tol and test_poll.
  */
@@ -53,10 +57,13 @@ static const ULONG ringPad[] = {
 };
 static const ULONG etron[] = { ID(0x1B6F, 0x7023), ID(0x1B6F, 0x7052), 0 };
 static const ULONG amdBit[] = { ID(0x1022, 0x15E5), 0 };
+/* Task 50.20: the Intel 7 Series xHCI alone (record 17 section 4.12.10). */
+static const ULONG deqAvoid[] = { ID(0x8086, 0x1E31), 0 };
 
 static const ULONG *const lists[XHCI_QK_COUNT] = {
     msiAvoid, streamsOff, resumeReinit, shutToEhci, shutReset, haltDelay,
-    haltTimeout, asmFlow, tiCap, stuckLink, ringPad, etron, etron, amdBit
+    haltTimeout, asmFlow, tiCap, stuckLink, ringPad, etron, etron, amdBit,
+    deqAvoid
 };
 
 /* Every vendor any list names, for the cross-vendor refusals. */
@@ -299,6 +306,82 @@ static void test_msi_avoid(void)
              "2: every controller");
 }
 
+/*
+ * Task 50.20: XhciStreamDequeueAvoid decides whether a controller is
+ * "flagged" (hcd_ctl.c, hcdStreamDeqApplies: XhciQuirkOn after
+ * XhciQuirkMatchAll). The field's controller, its Lynx Point neighbours,
+ * QEMU's and an unread id, at each value; then the qemu flavour's fault 33,
+ * which sets the match as on the listed controller and so obeys 0.
+ */
+static void test_deq_avoid(void)
+{
+    static const ULONG ids[5] = {
+        ID(0x8086, 0x1E31), ID(0x8086, 0x8C31), ID(0x8086, 0x9C31),
+        ID(0x1B36, 0x000D), 0
+    };
+    XHCI_QUIRK_STATE st;
+    ULONG v;
+    ULONG i;
+    ULONG want;
+    ULONG w;
+
+    CHECK_TRUE(strcmp(XhciQuirkValueName(XHCI_QK_DEQ_AVOID),
+                      "XhciStreamDequeueAvoid") == 0, "the fifteenth's name");
+    CHECK_TRUE(strcmp(XhciQuirkLinuxFlag(XHCI_QK_DEQ_AVOID), "none") == 0,
+               "no Linux flag");
+    CHECK_TRUE(strcmp(XhciQuirkLabel(XHCI_QK_DEQ_AVOID), "quirk.deqavoid") ==
+                   0, "its label");
+    CHECK_EQ(XhciQuirkDefault(XHCI_QK_DEQ_AVOID), 1, "on by default");
+    CHECK_EQ(XhciQuirkTwoOffered(XHCI_QK_DEQ_AVOID), 1, "2 offered");
+    CHECK_EQ(XHCI_QK_COUNT_BLOCK, XHCI_QK_DEQ_AVOID,
+             "the fourteen together, the fifteenth apart");
+
+    for (v = 0; v <= 3; v++) {
+        for (i = 0; i < 5; i++) {
+            XhciQuirkInit(&st);
+            XhciQuirkSetValue(&st, XHCI_QK_DEQ_AVOID, XHCI_QK_FOUND_DWORD, v);
+            XhciQuirkMatchAll(&st, ids[i]);
+            if (v == 0) {
+                want = 0;
+            } else if (v == 2) {
+                want = 1;
+            } else {
+                /* 1, and 3 read as the default 1: the listed one alone. */
+                want = (i == 0) ? 1UL : 0UL;
+            }
+            CHECK_EQ(XhciQuirkOn(&st, XHCI_QK_DEQ_AVOID), want,
+                     "the value decides the flag");
+            w = XhciQuirkPacked(&st, XHCI_QK_DEQ_AVOID);
+            CHECK_EQ((w & XHCI_QK_PACK_MATCHED) != 0 ? 1UL : 0UL,
+                     (i == 0) ? 1UL : 0UL, "listed is the 1E31 alone");
+            CHECK_EQ((w & XHCI_QK_PACK_EFFECTIVE) != 0 ? 1UL : 0UL, want,
+                     "the packed word's policy");
+        }
+    }
+    /* Absent and another type: the default, 1. */
+    XhciQuirkInit(&st);
+    XhciQuirkMatchAll(&st, ids[0]);
+    CHECK_EQ(XhciQuirkOn(&st, XHCI_QK_DEQ_AVOID), 1, "absent: on the 1E31");
+    XhciQuirkSetValue(&st, XHCI_QK_DEQ_AVOID, XHCI_QK_FOUND_OTHER, 0);
+    XhciQuirkMatchAll(&st, ids[0]);
+    CHECK_EQ(XhciQuirkOn(&st, XHCI_QK_DEQ_AVOID), 1,
+             "another type: the default");
+
+    /* Fault 33 (hcd_inj.c): QEMU counted as listed; the value decides. */
+    for (v = 0; v <= 2; v++) {
+        XhciQuirkInit(&st);
+        XhciQuirkSetValue(&st, XHCI_QK_DEQ_AVOID, XHCI_QK_FOUND_DWORD, v);
+        XhciQuirkMatchAll(&st, ids[3]);
+        CHECK_EQ(XhciQuirkOn(&st, XHCI_QK_DEQ_AVOID), v == 2 ? 1UL : 0UL,
+                 "QEMU before the fault: only 2");
+        XhciQuirkSetEffective(&st, XHCI_QK_DEQ_AVOID, 1,
+                              XhciQuirkEffective(
+                                  st.Mode[XHCI_QK_DEQ_AVOID], 1), 0);
+        CHECK_EQ(XhciQuirkOn(&st, XHCI_QK_DEQ_AVOID), v != 0 ? 1UL : 0UL,
+                 "fault 33: as the listed controller, 0 still off");
+    }
+}
+
 static void test_streams(void)
 {
     ULONG hcc1;
@@ -423,6 +506,7 @@ int main(void)
     test_effective();
     test_state();
     test_msi_avoid();
+    test_deq_avoid();
     test_streams();
     test_asm_wait();
 

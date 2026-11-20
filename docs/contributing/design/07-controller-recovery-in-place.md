@@ -2,7 +2,15 @@
 
 > **Status: the `1.2.0.0` miniport's record** (branch `1.2.0.0`). The
 > host controller driver's recovery and controller tolerance are design
-> records 13 and 17.
+> records 13 and 17. Since tasks 50.30 and 50.31 (design record 17
+> section 4.15), where `XhciDeviceIsolation` makes it apply, the host
+> controller driver asks for this recovery only where a command's abort
+> itself fails, for the commands that keep it, for a hub's own unanswered
+> transfer and where a device's teardown fails - a device that stops
+> answering fails alone - and at every value each request names its
+> reason, and a controller latched
+> failed is tried again, backing off, instead of staying latched until a
+> stop and start.
 
 Phase 13, batch 13-R, task 13-R.1. This record comes out of the defect batch
 13-E found on a ThinkPad E460 and read off the machine rather than inferred:

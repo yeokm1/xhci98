@@ -134,9 +134,12 @@ function Get-LegHardwareArgs {
 # two Windows 10 legs on WHPX, every other leg and every starting point on
 # TCG). A leg's own is its Accel in release-legs.psd1, tcg when it names
 # none; -ForceTcg (run-leg.ps1, release-matrix.ps1) runs a WHPX leg on TCG,
-# the periodic cross-check. Nothing here turns a TCG leg into a WHPX one,
-# and nothing falls back: a WHPX leg on a host without WHPX is refused
-# (Assert-LegWhpx). Returns Own and Use (tcg or whpx) and Forced.
+# an operator's choice with no schedule since roadmap-usb4 50.2: where WHPX
+# cannot run the guest, or to tell the accelerator's part from the
+# package's after a WHPX reading not explained. Nothing here turns a TCG
+# leg into a WHPX one, and nothing falls back: a WHPX leg on a host
+# without WHPX is refused (Assert-LegWhpx). Returns Own and Use (tcg or
+# whpx) and Forced.
 function Resolve-LegAccel {
     param($Def, [bool]$ForceTcg = $false)
     $own = 'tcg'
@@ -236,7 +239,7 @@ function Get-LegWhpxProbeArgs {
 function Assert-LegWhpx {
     param($Config, $Guest, [hashtable]$Ports, [string]$What, [string]$Dir)
     $accel = Get-LegAccelArg $Guest 'whpx'
-    $tail = 'Nothing was started. A WHPX leg does not fall back to TCG; -ForceTcg runs it under TCG (the cross-check).'
+    $tail = 'Nothing was started. A WHPX leg does not fall back to TCG; -ForceTcg runs it under TCG.'
     $help = @(& $Config.QemuExe -accel help 2>$null)
     if (-not (Test-LegAccelListed $help 'whpx')) {
         throw "${What}: $($Config.QemuExe) has no WHPX (-accel help: $((@($help | Select-Object -Skip 1) -join ' ').Trim())). $tail"
@@ -343,16 +346,14 @@ function Get-LegVerdictReasons {
 # The line a leg's record and the matrix's table carry for the controller's
 # remove: its answer and the accelerator it was given under. The answer is
 # recorded under either accelerator and judged under neither, since TCG
-# itself has given both (runs/run-49.md, "49.4"). Under WHPX it is not
-# that step's reading: the step keeps a TCG reading, which only the same
-# leg under -ForceTcg on the same package gives, so the line says that the
-# reading is owed there and does not claim one.
+# itself has given both (runs/run-49.md, "49.4"). Under WHPX it is that
+# step's reading by itself (owner, 2026-11-14; roadmap-usb4 50.2): until
+# then the line said a TCG reading was owed, which only the same leg under
+# -ForceTcg on the same package gave.
 function Get-LegRemoveNote {
     param([string]$Answer, [string]$Kind)
     if (-not $Answer) { $Answer = 'not read' }
-    $t = "remove: $Answer under $Kind"
-    if ($Kind -cne 'tcg') { $t += '; recorded only: this step keeps a TCG reading, which this leg with -ForceTcg on the same package gives' }
-    return $t
+    return "remove: $Answer under $Kind"
 }
 
 function Get-LegHardwareHash {

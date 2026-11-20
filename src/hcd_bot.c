@@ -330,7 +330,7 @@ VOID HcdBotXferEnd(PHCD_CONTROLLER hc, PHCD_XFER x, LONG status)
         how = XHCI_BOT_XFER_OK;
     } else if (status == XHCI_USBD_STATUS_STALL_PID) {
         how = XHCI_BOT_XFER_STALL;
-    } else if (x->CancelRequested || status == HCD_USBD_CANCELED) {
+    } else if (x->CancelRequested || XhciPipeUsbdIsCancel((ULONG)status)) {
         how = XHCI_BOT_XFER_CANCEL;
     } else {
         how = XHCI_BOT_XFER_ERROR;
@@ -552,7 +552,9 @@ static ULONG hcdBotXfer(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     }
     answer = XHCI_XFER_BUSY;
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-    if (!dev->Gone && !pipe->Closed && !pipe->Halted && !dev->BotXferArmed) {
+    /* Task 50.30 step 3: nothing is published for a frozen device. */
+    if (!dev->Gone && !pipe->Closed && !pipe->Halted && !dev->BotXferArmed &&
+        !HCD_DEV_FROZEN(dev)) {
         dev->BotXferDone = 0;
         answer = XhciXferSubmitNormal(pipe->Queue, pipe->Ring, &nreq, in,
                                       &dev->BotXfer, dev, trbs,
@@ -581,7 +583,7 @@ static ULONG hcdBotXfer(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     }
     if (!done) {
         hc->ScratchTainted = 1;
-        HcdSvcRequestReset(&hc->Hc);
+        HcdSvcRequestResetWhy(&hc->Hc, XHCI_WHY_BOT_XFER, dev->SlotId, 0, 0);
         XhciLogNote(&hc->Hc, "bot.check.timeout", (dev->SlotId << 8) | pipe->Dci);
         return 0;
     }

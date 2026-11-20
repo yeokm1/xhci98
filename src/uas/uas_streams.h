@@ -37,13 +37,16 @@ typedef struct _UAS_STREAMS {
     USBD_PIPE_HANDLE Base[3];           /* status, data-in, data-out */
     USBD_PIPE_HANDLE Pipe[3][UAS_STREAMS_MAX + 1];  /* [n]: stream n */
     BOOLEAN Open[3];
+    /* Task 50.20 (design record 17 section 4.12.10): every one of the three
+     * opens acknowledged to the contract by the bus. */
+    BOOLEAN Contract;
 } UAS_STREAMS, *PUAS_STREAMS;
 
 #define UAS_STREAM_STATUS   0
 #define UAS_STREAM_DATA_IN  1
 #define UAS_STREAM_DATA_OUT 2
 
-NTSTATUS UasStreamsOpen(PUAS_STREAMS s, PDEVICE_OBJECT lower,
+NTSTATUS UasStreamsOpen(PUAS_STREAMS s, PDEVICE_OBJECT lower, BOOLEAN declare,
                         USBD_PIPE_HANDLE status, USBD_PIPE_HANDLE dataIn,
                         USBD_PIPE_HANDLE dataOut, ULONG wanted);
 USBD_PIPE_HANDLE UasStreamsPipe(PUAS_STREAMS s, ULONG which, ULONG stream);

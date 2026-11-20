@@ -83,6 +83,7 @@ ntoskrnl.exe!IoIsWdmVersionAvailable      all  required  nt52-amd64-export; twin
 ntoskrnl.exe!ExQueueWorkItem               all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
 ntoskrnl.exe!RtlQueryRegistryValues        all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
 ntoskrnl.exe!ZwClose                       all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!ZwCreateKey                   all  required  nt52-amd64-export; the port switchover's first-session guard's volatile session key (task 50.34, design record 16 section 21.5.1); amd64 only - the x86 image, which loads on 98 SE and ME, looks it up through the helper at run time
 ntoskrnl.exe!IoGetDmaAdapter               all  required  SITES=hcd_dma.obj nt52-amd64-export; twin of the x86 row (task 26-A.2)
 HAL.dll!KeStallExecutionProcessor          all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
 ntoskrnl.exe!DbgPrint                      all  required  SITES=hcd_log.obj,xhci_dbg.obj nt52-amd64-export; the log ring's DebugView sink (hcd_log.c, task 26-A.8) and the qemu trace (xhci_dbg.c), as on x86

@@ -1,13 +1,13 @@
 /*
  * hcd_msgnt.c - XhciInterruptMode 4 on Windows 2000, XP, Server 2003 and
  * XP x64: the seam to the library msi4nt (design record 15 sections 4.5.3,
- * 4.5.4, 4.5.6 and 4.5.16; roadmap-usb4 task 49.24). The one file that
- * compiles msi4nt.h's implementation (src\msi4nt.h, vendored from msi4nt's
- * version 1, read 2026-11-12; legal-provenance.md section 2a), hosted,
- * without its Vista path and with the ISA claim: its pool is hcd_pool.c's, its
- * configuration access this controller's IRP_MN_READ_CONFIG route, its
- * names hcd_msi86.c's (the x86 helper's minor-1 routine, or amd64's
- * MmGetSystemRoutineAddress).
+ * 4.5.4, 4.5.6, 4.5.16 and 4.5.21; roadmap-usb4 tasks 49.24 and 50.27). The
+ * one file that compiles msi4nt.h's implementation (src\msi4nt.h, vendored
+ * from msi4nt's version 1, read 2026-11-16; legal-provenance.md section
+ * 2a), hosted, without its Vista path and with the ISA claim: its pool is
+ * hcd_pool.c's, its configuration access this controller's
+ * IRP_MN_READ_CONFIG route, its names hcd_msi86.c's (the x86 helper's
+ * minor-1 routine, or amd64's MmGetSystemRoutineAddress).
  *
  * The lifetime around these calls - when each is made and what follows a
  * failure - is hcd_msg4.c's; the library is never initialised on 98 SE or
@@ -15,19 +15,26 @@
  *
  * IRQL: PASSIVE_LEVEL, in the PnP manager's threads, the power work item
  * or the controller thread, none holding a processor affinity of this
- * driver's; HcdMsgNtSync any IRQL up to DISPATCH_LEVEL; HcdMsgNtIsrSaw at
- * the connection's DIRQL. Each tagged where it differs.
+ * driver's; HcdMsgNtEnd in DriverUnload; HcdMsgNtSync any IRQL up to
+ * DISPATCH_LEVEL; HcdMsgNtIsrSaw at the connection's DIRQL. Each tagged
+ * where it differs.
  */
 
 #include "hcd.h"
 #include "hcd_svc.h"
 #include "xhci_hw.h"
+#include "xhci_dbg.h"
 
 #define MSI4NT_HOSTED
 #define MSI4NT_NO_NATIVE
 #define MSI4NT_ISA_LINE
 #define MSI4NT_IMPLEMENTATION
 #include "msi4nt.h"
+
+/* Section 4.5.21: the unload ends the library's copy (HcdMsgNtEnd). */
+#if !defined(MSGIRQ_CALL_UNINITIALIZE)
+#error "msi4nt.h without MsgIrqUninitialize: take the copy legal-provenance.md section 2a records"
+#endif
 
 /* The resource map's layout, the pure walk's (xhci_msg4.h), one level at a
  * time (MSVC 6.0 takes no nested member in a constant FIELD_OFFSET). */
@@ -101,6 +108,21 @@ VOID HcdMsgNtInit(PUNICODE_STRING registryPath)
     HcdMsgNtRegistryPath.Buffer = HcdMsgNtRegistryBuffer;
     HcdMsgNtRegistryPath.Length = (USHORT)(n * sizeof(WCHAR));
     HcdMsgNtRegistryPath.MaximumLength = (USHORT)sizeof(HcdMsgNtRegistryBuffer);
+}
+
+/* A kernel routine by name for the port switchover's first-session guard
+ * (design record 16 section 21.5.1, step 2): the library's look at the
+ * helper's routine service, under the library's lock; NULL where the
+ * helper does not answer. Never called on 98 SE or ME. IRQL:
+ * PASSIVE_LEVEL. */
+PVOID HcdMsgNtFindRoutine(PHCD_CONTROLLER hc, PCWSTR name)
+{
+    PVOID routine;
+
+    (VOID)HcdWaitEvent(&HcdMsgNtLock, 0);
+    routine = HcdMsiFindRoutineLook(hc) ? HcdMsiResolve(name) : NULL;
+    (VOID)KeSetEvent(&HcdMsgNtLock, IO_NO_INCREMENT, FALSE);
+    return routine;
 }
 
 /* ---- the host table and the configuration routines -------------------- */
@@ -805,6 +827,31 @@ ULONG HcdMsgNtLook(PHCD_CONTROLLER hc)
                     (state.Stray << 8) | (state.Run & 0xFFUL));
     }
     return state.Braked ? 1UL : 0UL;
+}
+
+/*
+ * The library's end (section 4.5.21), last in DriverUnload, a defensive
+ * step: hcdMsgNtLibrary keeps the image once the library has started, so
+ * an image that reaches DriverUnload never started it, and the call
+ * returns OK having done nothing (98 SE, ME, Vista and later, any mode but
+ * 4, a mode-4 start refused before the library). Should a started copy
+ * ever reach it, every device object is gone and every controller's stop
+ * has joined its thread, so nothing else calls the library. IN_USE is
+ * recorded and left: DriverUnload cannot refuse, and a retry would meet
+ * the same holding. IRQL: PASSIVE_LEVEL.
+ */
+VOID HcdMsgNtEnd(VOID)
+{
+    ULONG status;
+
+    status = MsgIrqUninitialize();
+    if (status == MSGIRQ_STATUS_OK) {
+        HcdMsgNtReady = 0;
+    }
+    XHCI_DBG_VALUE("msg4.uninit", status);
+#if !defined(XHCI_FLAVOUR_QEMU)
+    UNREFERENCED_PARAMETER(status);
+#endif
 }
 
 /* Windows told the controller failed (section 4.5.4, step 5). IRQL:

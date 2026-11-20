@@ -634,6 +634,11 @@ ULONG HcdSsHubPortRecover(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
         hub->Changed |= 1UL << n;
         return 0;
     }
+    /* Task 50.30 step 3 (design record 17 section 4.15.4, item 4): no warm
+     * reset at a place held because its device stopped answering. */
+    if (HcdTolHeldUnanswered(hc, q)) {
+        return 0;
+    }
     /* As HcdSsHubPortReset: an older reset's change cleared first, so the
      * one that ends this warm reset is its own, and a clear the hub
      * refuses sends nothing and charges nothing. */

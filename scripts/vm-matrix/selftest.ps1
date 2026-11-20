@@ -1543,14 +1543,14 @@ Write-Host "--- the release legs' accelerator: the leg's own, forced TCG, and no
     }
 
     # The tracked legs: only the two Windows 10 legs are WHPX legs, both
-    # start cold under either accelerator, carry TCG deadlines for the
-    # cross-check, and run the controller sequence.
+    # start cold under either accelerator, carry TCG deadlines for a run
+    # forced to TCG, and run the controller sequence.
     $legs = (Import-PowerShellDataFile -LiteralPath (Join-Path $PSScriptRoot 'release-legs.psd1')).Legs
     $wl = @($legs | Where-Object { (Resolve-LegAccel $_ $false).Use -eq 'whpx' })
     Assert "the WHPX legs are the two Windows 10 legs"         "w10x64-console,w10x86-console" ((@($wl | ForEach-Object { $_.Id }) | Sort-Object) -join ',')
     Assert "...on the two Windows 10 guests"                   "w10x64,w10x86" ((@($wl | ForEach-Object { $_.Guest }) | Sort-Object) -join ',')
     Assert "...each cold under TCG too"                        2 (@($wl | Where-Object { $_.Cold -eq $true })).Count
-    Assert "...each with TCG deadlines for the cross-check"    2 (@($wl | Where-Object { [int]$_.TcgMinutes -gt [int]$_.Minutes -and [int]$_.TcgStallSeconds -gt 900 })).Count
+    Assert "...each with TCG deadlines for -ForceTcg"          2 (@($wl | Where-Object { [int]$_.TcgMinutes -gt [int]$_.Minutes -and [int]$_.TcgStallSeconds -gt 900 })).Count
     Assert "...each with the controller sequence"              2 (@($wl | Where-Object { $_.Devices -eq $true })).Count
     Assert "no leg forced to TCG stays on WHPX"                0 (@($legs | Where-Object { (Resolve-LegAccel $_ $true).Use -ne 'tcg' })).Count
     Assert "every other leg is a TCG leg"                      ($legs.Count - 2) (@($legs | Where-Object { (Resolve-LegAccel $_ $false).Own -eq 'tcg' })).Count
@@ -1616,7 +1616,9 @@ Write-Host "--- the release legs' accelerator: the leg's own, forced TCG, and no
     Assert "an empty stderr is none"                           "" (Get-LegStderrReason "`r`n" 'tcg')
 
     Assert "the remove's line under TCG is a reading"          "remove: done under tcg" (Get-LegRemoveNote 'done' 'tcg')
-    Assert "...under WHPX it is recorded and claims no TCG reading" $true ((Get-LegRemoveNote 'restart asked' 'whpx') -match '^remove: restart asked under whpx; recorded only: this step keeps a TCG reading, which this leg with -ForceTcg')
+    Assert "...and under WHPX a reading by itself (task 50.2)" "remove: restart asked under whpx" (Get-LegRemoveNote 'restart asked' 'whpx')
+    Assert "...which asks for no TCG reading"                  $false ((Get-LegRemoveNote 'done' 'whpx') -match 'recorded only|TCG reading|ForceTcg')
+    Assert "...and an answer not read says so"                 "remove: not read under whpx" (Get-LegRemoveNote '' 'whpx')
 }
 
 Write-Host "--- the legs' copy check: exit codes and a destination from before (roadmap-usb4 49.4) ---"

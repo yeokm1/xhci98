@@ -2979,9 +2979,11 @@ function Start-CutBuild {
 }
 
 function Get-CutBuildCommand {
-    # The build each tree runs: build-driver.cmd all, or all -amd64.
-    param([string]$Tree, [string]$Arch)
-    $c = '"{0}" all' -f (Join-Path $Tree "scripts\build-driver.cmd")
+    # The build each tree runs: build-driver.cmd cut, or cut -amd64, the
+    # release flavour alone (task 50.1); with -WithQemu all, release and qemu.
+    param([string]$Tree, [string]$Arch, [switch]$WithQemu)
+    $word = if ($WithQemu) { "all" } else { "cut" }
+    $c = '"{0}" {1}' -f (Join-Path $Tree "scripts\build-driver.cmd"), $word
     if ($Arch -eq "amd64") { $c += " -amd64" }
     return $c
 }
@@ -3110,12 +3112,16 @@ function Invoke-CutBuilds {
     # or the import alone (-ImportOnly). Throws when it refuses or a build
     # fails; returns Builds (Arch, ExitCode, Elapsed, Log), Wall and
     # Imported. Its locks are dropped only once every build it started has
-    # ended. -CommandFor (a scriptblock of Tree and Arch giving a cmd.exe
-    # command line), -BeforeStart (run with Arch before each start),
-    # -NoToolchainCheck and -Rules are the self-tests'.
+    # ended. -WithQemu (task 50.1): the builds are all, release and qemu,
+    # and both flavours are imported; without it they are cut and the
+    # release flavour alone is imported, -ImportOnly too, so a qemu record
+    # an earlier build left in tree B is never taken. -CommandFor (a
+    # scriptblock of Tree and Arch giving a cmd.exe command line),
+    # -BeforeStart (run with Arch before each start), -NoToolchainCheck and
+    # -Rules are the self-tests'.
     param([string]$Repo, [string]$X64Tree, [switch]$Serial, [switch]$ImportOnly, [switch]$NoTargetEvidence,
           [scriptblock]$CommandFor = $null, [scriptblock]$BeforeStart = $null, [switch]$NoToolchainCheck,
-          $Rules = $null)
+          $Rules = $null, [switch]$WithQemu)
     if ($Serial -and $ImportOnly) { throw "-Serial and -ImportOnly contradict each other: -ImportOnly builds nothing." }
     if ($NoTargetEvidence -and -not $ImportOnly) {
         throw "-NoTargetEvidence goes with -ImportOnly alone: the x86 build a cut takes needs the target evidence (the helper's import gate), so build without it, or build by hand and import with -ImportOnly."
@@ -3131,7 +3137,9 @@ function Invoke-CutBuilds {
     $X64Tree = Resolve-TreePath $X64Tree
     $why = Get-GatedImportTreeFault -Repo $Repo -From $X64Tree
     if ($why -ne "") { throw "-X64Tree: $why." }
-    if ($null -eq $CommandFor) { $CommandFor = { param($Tree, $Arch) Get-CutBuildCommand -Tree $Tree -Arch $Arch } }
+    if ($null -eq $CommandFor) { $CommandFor = { param($Tree, $Arch) Get-CutBuildCommand -Tree $Tree -Arch $Arch -WithQemu:$WithQemu } }
+    $importFlavors = @("release")
+    if ($WithQemu) { $importFlavors += "qemu" }
 
     $reserved = @()
     $started = New-Object System.Collections.ArrayList
@@ -3210,7 +3218,7 @@ function Invoke-CutBuilds {
 
         Write-Step ("the amd64 build of {0}, into this tree" -f $X64Tree)
         $watch = [System.Diagnostics.Stopwatch]::StartNew()
-        $result.Imported = @(Import-GatedBuild -Repo $Repo -From $X64Tree -NoTargetEvidence ([bool]$NoTargetEvidence) `
+        $result.Imported = @(Import-GatedBuild -Repo $Repo -From $X64Tree -Flavor $importFlavors -NoTargetEvidence ([bool]$NoTargetEvidence) `
                                                -RepoLockHeld:(-not $ImportOnly) -Rules $Rules)
         $watch.Stop()
         foreach ($r in $result.Imported) {

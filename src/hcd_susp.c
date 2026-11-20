@@ -199,7 +199,8 @@ static ULONG hcdSuspServes(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
     PHCD_DEVICE_PDO pdo;
 
-    if (!hc->SuspOn || dev->Gone || dev->Hub != NULL) {
+    if (!hc->SuspOn || dev->Gone || dev->Hub != NULL ||
+        HCD_DEV_FROZEN(dev)) {
         return 0;
     }
     pdo = hcdSuspPdo(dev->Pdo);
@@ -609,9 +610,16 @@ static ULONG hcdSuspDoneKickLocked(PHCD_CONTROLLER hc)
     return 0;
 }
 
-/* The flag set last and the thread gone. IRQL: PASSIVE_LEVEL. */
+/* The flag set last and the thread gone; on 98 SE and ME, where the join
+ * knows the thread by the flag alone, set from outside the image (record
+ * 15 section 4.5.22). IRQL: PASSIVE_LEVEL. */
 static VOID hcdSuspDoneExit(PHCD_SUSP_DONE w)
 {
+#if defined(_M_IX86)
+    if (!IoIsWdmVersionAvailable(1, 0x10)) {
+        HcdThreadEnd9x(HCD_END9X_WORKER, NULL, (PLONG)&w->Exited);
+    }
+#endif
     (VOID)InterlockedExchange((PLONG)&w->Exited, 1);
     (VOID)PsTerminateSystemThread(STATUS_SUCCESS);
 }
@@ -743,12 +751,11 @@ static ULONG hcdSuspDoneNew(PHCD_CONTROLLER hc)
 
 /*
  * One thread joined and its context freed: NT by its thread object; 9x by
- * its flag, then a short grace. The flag is set just before the thread's
- * call into PsTerminateSystemThread, so on 9x it proves the context's last
- * use, not that the thread has left the image: the same standing as the
- * enum thread's and the callback thread's joins (hcd_ctl.c, hcdThreadStart;
- * a Windows 98 stop unloads nothing, and the remove that would has not
- * been measured against that window). IRQL: PASSIVE_LEVEL, the stop.
+ * its flag, which the thread sets by a call chained into
+ * PsTerminateSystemThread (HcdThreadEnd9x), so that it proves the thread
+ * has left the image as well as the context's last use. Until record 15
+ * section 4.5.22 the flag was set with an ordinary call and a 10 ms grace
+ * followed it here, no proof. IRQL: PASSIVE_LEVEL, the stop.
  */
 static VOID hcdSuspDoneJoin(PHCD_SUSP_DONE w)
 {
@@ -776,8 +783,6 @@ static VOID hcdSuspDoneJoin(PHCD_SUSP_DONE w)
             HcdRelativeMs(&due, 1);
             (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
         }
-        HcdRelativeMs(&due, 10);
-        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
     }
     HcdPoolFree(w);
 }
@@ -1321,7 +1326,7 @@ static VOID hcdSuspGateOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                         : XHCI_EP_STATE_DISABLED;
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
         mine = pipe->SuspendPause;
-        if (mine && restart && !dev->Gone &&
+        if (mine && restart && !dev->Gone && !HCD_DEV_FROZEN(dev) &&
             state == XHCI_EP_STATE_STOPPED && !pipe->Halted &&
             pipe->Paused == 1) {
             if (pipe->Queue->Count != 0) {
@@ -1467,8 +1472,14 @@ static ULONG hcdSuspArm(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG bound)
  * isochronous, a TD already measured, an event elsewhere or none - the
  * endpoint is left as the controller has it. Returns 0 when a rewind was
  * due and refused: the TD would be stranded again, so the stop reports the
- * uncertain outcome and the device is cycled. Thread only.
+ * uncertain outcome and the device is cycled. Task 50.30 step 3 (design
+ * record 17 section 4.15.5a, the HcdCfgRewind row): HCD_SUSP_REWIND_ABORTED
+ * when its Set TR Dequeue aborted cleanly or left - the device's mark set
+ * by it (or one already set) - a third outcome, carried by hcdSuspStop as
+ * XHCI_SUSP_RES_ABORTED: never restarted, removed by the device-alone
+ * path. Thread only.
  */
+#define HCD_SUSP_REWIND_ABORTED 2UL
 static ULONG hcdSuspRewind(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG dci)
 {
     PHCD_PIPE pipe;
@@ -1502,6 +1513,9 @@ static ULONG hcdSuspRewind(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG dci)
     if (!HcdCfgRewind(hc, dev, pipe)) {
         XHCI_DBG_VALUE("hcd: suspend stop rewind refused, slot/dci",
                        (dev->SlotId << 8) | dci);
+        if (HCD_DEV_FROZEN(dev)) {
+            return HCD_SUSP_REWIND_ABORTED;
+        }
         return 0;
     }
     return 1;
@@ -1656,8 +1670,15 @@ static ULONG hcdSuspStop(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG first)
     XHCI_TRB trb;
     ULONG control;
     ULONG code;
+    ULONG rewound;
     ULONG dci;
 
+    if (HCD_DEV_FROZEN(dev)) {
+        /* Task 50.30 step 3 (section 4.15.5a, "The failed device is
+         * frozen"): no Stop but its teardown's - never restarted,
+         * removed by the device-alone path. */
+        return XHCI_SUSP_RES_ABORTED;
+    }
     for (dci = first; dci < 32; dci++) {
         if (hcdSuspPipe(dev, dci) == NULL ||
             hcdSuspEpState(hc, dev, dci) != XHCI_EP_STATE_RUNNING) {
@@ -1669,7 +1690,11 @@ static ULONG hcdSuspStop(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG first)
             code = HcdThreadCommand(hc, &trb, &control);
         }
         if (code == XHCI_CC_SUCCESS) {
-            if (!hcdSuspRewind(hc, dev, dci)) {
+            rewound = hcdSuspRewind(hc, dev, dci);
+            if (rewound == HCD_SUSP_REWIND_ABORTED) {
+                return XHCI_SUSP_RES_ABORTED;
+            }
+            if (!rewound) {
                 return XHCI_SUSP_RES_TIMEOUT;
             }
             continue;
@@ -1677,6 +1702,15 @@ static ULONG hcdSuspStop(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG first)
         hcdSuspStopUnwatch(hc, dev, dci);
         if (code == XHCI_CC_CONTEXT_STATE_ERROR) {
             continue;
+        }
+        if (XhciTolCmdVerdict(code)) {
+            /* Task 50.30 step 3 (design record 17 section 4.15.5a, the
+             * hcdSuspStop row): a Stop aborted or left keeps the reset, as
+             * a Stop that never completed always did - hcdCommand requested
+             * it for an aborted one (XhciTolAbortKeepsReset), the
+             * settlement owes it for a left one - and is uncertain here,
+             * never a refusal that restarts the endpoints. */
+            return XHCI_SUSP_RES_TIMEOUT;
         }
         return hcdSuspHalted(hc) ? XHCI_SUSP_RES_TIMEOUT
                                  : XHCI_SUSP_RES_FAILED;
@@ -2121,6 +2155,9 @@ static ULONG hcdSuspRun(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG step,
     case XHCI_SUSP_OUT_GONE:
         hc->Counters.SuspGone++;
         break;
+    case XHCI_SUSP_OUT_ALONE:
+        hc->Counters.SuspUncertain++;
+        break;
     default:
         break;
     }
@@ -2141,6 +2178,14 @@ static ULONG hcdSuspRun(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG step,
         break;
     case XHCI_SUSP_RECOVERING:
     case XHCI_SUSP_GONE:
+        if (dev->Susp.Outcome == XHCI_SUSP_OUT_ALONE) {
+            /* Task 50.30 step 3 (design record 17 section 4.15.5a): the
+             * rewind aborted or left - the device fails alone, cycled once
+             * through hcdCfgFault's step (a hub keeps the reset), not by
+             * the uncertain outcome's cycle a later resume could race. */
+            (VOID)HcdCfgFaultMarked(hc, dev);
+            break;
+        }
         if (!hcdSuspHalted(hc)) {
             /* The device cycle re-establishes it, or takes a device the
              * machine saw leave off its port when the port's own
@@ -2590,7 +2635,8 @@ static ULONG hcdSuspCfgServes(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
     ULONG cls;
 
-    if (!hc->SuspOn || dev->Gone || dev->Hub != NULL) {
+    if (!hc->SuspOn || dev->Gone || dev->Hub != NULL ||
+        HCD_DEV_FROZEN(dev)) {
         return 0;
     }
     cls = HcdDeviceSpeedClass(hc, dev);
@@ -4020,15 +4066,23 @@ static VOID NTAPI hcdSuspCbThread(PVOID context)
         more = 1;
     }
     (VOID)KeSetEvent(&cb->Exited, IO_NO_INCREMENT, FALSE);
+#if defined(_M_IX86)
+    /* 98 SE and ME: the flag the joins poll, set from outside the image
+     * (record 15 section 4.5.22); nothing here reads the controller, which
+     * an abandoned context may have outlived. */
+    if (!IoIsWdmVersionAvailable(1, 0x10)) {
+        HcdThreadEnd9x(HCD_END9X_CALLBACK, NULL, (PLONG)&cb->ExitFlag);
+    }
+#endif
     (VOID)InterlockedExchange((PLONG)&cb->ExitFlag, 1);
     (VOID)PsTerminateSystemThread(STATUS_SUCCESS);
 }
 
 /* The thread's exit waited for (36.32): on NT its object; on 9x, where a
  * thread-object wait faults and an event wait may return 0xFFFFFFFF
- * unsatisfied (win98-wdm.md), the flag the thread sets last, polled at 1 ms -
- * as the controller thread's stop leaves only the thread's call into
- * PsTerminateSystemThread after it. IRQL: PASSIVE_LEVEL. */
+ * unsatisfied (win98-wdm.md), the flag the thread sets last, polled at 1 ms,
+ * set by a call chained into PsTerminateSystemThread (HcdThreadEnd9x,
+ * record 15 section 4.5.22). IRQL: PASSIVE_LEVEL. */
 static VOID hcdSuspCbExitWait(PHCD_SUSP_CB cb)
 {
     LARGE_INTEGER due;
@@ -4146,6 +4200,7 @@ NTSTATUS HcdSuspCbStart(PHCD_CONTROLLER hc)
     NTSTATUS status;
     PUCHAR p;
     ULONG i;
+    ULONG failed;
 
     InitializeListHead(&hc->IdleQueue);
     hc->SuspCb = NULL;
@@ -4172,21 +4227,18 @@ NTSTATUS HcdSuspCbStart(PHCD_CONTROLLER hc)
         HcdPoolFree(cb);
         return status;
     }
-    status = STATUS_SUCCESS;
     if (IoIsWdmVersionAvailable(1, 0x10)) {
-        status = ObReferenceObjectByHandle(handle, THREAD_ALL_ACCESS, NULL,
-                                           KernelMode, &cb->ThreadObject,
-                                           NULL);
-    }
-    (VOID)ZwClose(handle);
-    if (!NT_SUCCESS(status)) {
-        /* As the controller thread's start (hcd_ctl.c): told to leave and
-         * its event waited for. */
-        cb->ThreadObject = NULL;
-        (VOID)hcdSuspCbMove(cb, XHCI_SUSP_ACTOR_TEARDOWN, XHCI_SUSP_PH_IDLE,
-                            XHCI_SUSP_PH_EXITING);
-        hcdSuspCbJoin(cb);
-        return status;
+        /* Task 50.27: the reference retried until had, as the controller
+         * thread's (hcd_ctl.c, HcdThreadReference), so the stop and the
+         * unload's abandoned list always join on the object. */
+        failed = HcdThreadReference(hc, handle, &cb->ThreadObject,
+                                    "susp.cb.ref.fail",
+                                    L"XhciQemuThreadRefCb");
+        if (failed != 0) {
+            XhciLogNote(&hc->Hc, "susp.cb.ref.retry", failed);
+        }
+    } else {
+        (VOID)ZwClose(handle);
     }
     hc->SuspCb = cb;
     return STATUS_SUCCESS;

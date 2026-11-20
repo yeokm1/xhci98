@@ -112,6 +112,15 @@ BOOLEAN CmNhiPlatformInit(PCM_NHI nhi)
  * callback when the thread is not there (cmSystemDeviceDone). */
 VOID CmPowerSystemWork(PCM_NHI nhi, PIRP irp)
 {
+    PIO_STACK_LOCATION stack;
+
+    /* Record 21 section 6.3.2: an S0 completing, recorded before it
+     * completes, with whether its device D0 came and succeeded. */
+    stack = IoGetCurrentIrpStackLocation(irp);
+    if (stack->Parameters.Power.Type == SystemPowerState &&
+        stack->Parameters.Power.State.SystemState == PowerSystemWorking) {
+        CmPrNhiS0(nhi, (BOOLEAN)(nhi->Reenum.PrS0NoDev != 0));
+    }
     PoStartNextPowerIrp(irp);
     IoCompleteRequest(irp, IO_NO_INCREMENT);
     CmPowerRelease(nhi);
@@ -529,6 +538,7 @@ VOID CmPowerD0Work(PCM_NHI nhi, PIRP irp)
 VOID CmPowerDirectWork(PCM_NHI nhi, PIRP irp)
 {
     CmLogNote(nhi, "cm.power.direct", (ULONG)nhi->DirectWant);
+    nhi->Reenum.PrS0NoDev = 1;
     if (nhi->DirectWant == PowerDeviceD0) {
         /* CmNhiReinit acts only on a client suspended in D0; a function
          * the bus has not powered keeps its suspension (cmSystemDone never
@@ -620,11 +630,12 @@ static VOID NTAPI cmSystemDeviceDone(PDEVICE_OBJECT DeviceObject,
     UNREFERENCED_PARAMETER(DeviceObject);
     UNREFERENCED_PARAMETER(MinorFunction);
     UNREFERENCED_PARAMETER(PowerState);
-    UNREFERENCED_PARAMETER(IoStatus);
 
     /* One system IRP is in flight at a time (the power manager's rule),
      * so one slot holds it, as hcd_power.c's PendingSystemIrp does. */
     nhi = (PCM_NHI)Context;
+    /* Record 21 section 6.3.2: whether the device IRP succeeded. */
+    nhi->Reenum.PrS0NoDev = NT_SUCCESS(IoStatus->Status) ? 0UL : 1UL;
     systemIrp = nhi->PendingSystemIrp;
     nhi->PendingSystemIrp = NULL;
     if (KeGetCurrentIrql() == PASSIVE_LEVEL ||
@@ -640,6 +651,14 @@ static VOID NTAPI cmSystemDeviceDone(PDEVICE_OBJECT DeviceObject,
  * IRQL: <= DISPATCH_LEVEL (cmSystemDone's). */
 static NTSTATUS cmSystemPass(PCM_NHI nhi, PIRP irp)
 {
+    PIO_STACK_LOCATION stack;
+
+    /* Record 21 section 6.3.2: an S0 going on with no device D0. */
+    stack = IoGetCurrentIrpStackLocation(irp);
+    if (stack->Parameters.Power.Type == SystemPowerState &&
+        stack->Parameters.Power.State.SystemState == PowerSystemWorking) {
+        CmPrNhiS0(nhi, TRUE);
+    }
     PoStartNextPowerIrp(irp);
     CmPowerRelease(nhi);
     return STATUS_SUCCESS;

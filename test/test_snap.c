@@ -29,8 +29,8 @@ static void test_header(void)
 {
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_VERSION_AT), 1,
              "version 1");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_BYTES), 3808,
-             "a 952-word header (49.39 appended 23; issue 26 69; 47.30 68; 45.40 163; "
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_BYTES), 4064,
+             "a 1016-word header (50.34 appended 60; 50.31 2; 50.30 2; 49.39 23; issue 26 69; 47.30 68; 45.40 163; "
              "35-T.8 "
              "twelve, 36.3 28, 36.21 154, 36.9 two, 36.24 and 36.25 33, "
              "36.38 69, 44.35 323)");
@@ -38,12 +38,12 @@ static void test_header(void)
              "the E460's eighteen root ports");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORT_BYTES), 80,
              "a twenty-word record (45.40 appended four)");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 3808,
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 4064,
              "records right after the header");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 320,
-             "the whole counter block (49.45's twelve: 308 to 319)");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 326,
+             "the whole counter block (50.20's six: 320 to 325)");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS_AT),
-             3808 + 18 * 80, "counters after the last record");
+             4064 + 18 * 80, "counters after the last record");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_IDPLACE_RECORDS), 32,
              "45.40: 32 places behind hubs");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_IDPLACE_WORDS), 5,
@@ -86,8 +86,8 @@ static void test_header(void)
              "selective suspend's block at word 114");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SuspNotesSuppressed) / 4, 141,
              "selective suspend's last word at 141");
-    CHECK_EQ(XhciSnapHcdWords(18), 952 + 18 * 20 + 320, "the E460's image");
-    CHECK_EQ(XhciSnapHcdWords(0), 952 + 320,
+    CHECK_EQ(XhciSnapHcdWords(18), 1016 + 18 * 20 + 326, "the E460's image");
+    CHECK_EQ(XhciSnapHcdWords(0), 1016 + 326,
              "no ports: a header and the counters");
     CHECK_EQ(XhciSnapHcdWords(1000), XhciSnapHcdWords(XHCI_MAX_ROOT_PORTS),
              "ports held to the root port maximum");
@@ -211,11 +211,14 @@ static void test_tol_words(void)
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_STATE, Stats), 0, "counters first");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_STATS, Codes) + 256 * 4,
              sizeof(XHCI_TOL_STATS), "the histogram ends the counters");
-    /* XHCITR's names (xhcitr\tr_snap.c, tol_counter_names) are these 46
-     * words in field order (34 until task 49.35); a counter added before
-     * the histogram fails here until the tool names it. */
-    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_STATS, Codes), 46 * 4,
-             "the forty-six counters XHCITR names");
+    /* XHCITR's names (xhcitr\tr_snap.c, tol_counter_names) are these 48
+     * words in field order (34 until task 49.35, 46 until task 50.30's
+     * step 3); a counter added before the histogram fails here until the
+     * tool names it. */
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_STATS, Codes), 48 * 4,
+             "the forty-eight counters XHCITR names");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_STATS, ResetLeftSuppressed), 46 * 4,
+             "step 3's counters from word 46");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_STATS, ResetSettles), 34 * 4,
              "49.35's counters from word 34");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_STATS, Cycles), 17 * 4,
@@ -861,7 +864,10 @@ static void test_counter_tail(void)
              231 * 4, "QuirkShutFlushSinkOff at 231");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkShutFlushUnacked),
              232 * 4, "QuirkShutFlushUnacked at 232");
-    CHECK_EQ(XHCI_QK_COUNT, 14, "one packed word per quirk");
+    CHECK_EQ(XHCI_QK_COUNT_BLOCK, 14,
+             "one packed word per quirk, 199 to 212");
+    CHECK_EQ(XHCI_QK_COUNT, 15,
+             "and task 50.20's fifteenth at 325 (QuirkStreamDequeueAvoid)");
     /* 38.10's eight (xhcisnap.c, rings_counter_names and
      * print_hcd_rings). */
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, PoolRingsInUse), 233 * 4,
@@ -943,7 +949,13 @@ static void test_counter_tail(void)
              "the foreign frees at 316");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, XferShortRefused), 319 * 4,
              "XferShortRefused at 319");
-    CHECK_EQ(sizeof(XHCIHC_COUNTERS), 320 * 4, "320 words in all");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, StreamDeqUntrusted), 320 * 4,
+             "StreamDeqUntrusted at 320");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, StreamErrorExits), 324 * 4,
+             "StreamErrorExits at 324");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkStreamDequeueAvoid),
+             325 * 4, "QuirkStreamDequeueAvoid at 325");
+    CHECK_EQ(sizeof(XHCIHC_COUNTERS), 326 * 4, "326 words in all");
 }
 
 /* 44.35: the transport records' header words (tr_snap.c's print_xport
@@ -980,7 +992,110 @@ static void test_xport_words(void)
              "issue 26's records end at 49.39's block");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_UTIME_RECORDS, 929, "49.39's block at 929");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_UTIME_AT + 2 * 10,
-             XHCI_SNAPSHOT_HCD_HEAD_WORDS, "49.39's records end the header");
+             XHCI_SNAPSHOT_HCD_WHY_AT, "49.39's records end at 50.30's words");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_WHY_BYTES + 1, XHCI_SNAPSHOT_HCD_RETRY_AT,
+             "50.30's two words, then 50.31's");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_RETRY_BYTES + 1, XHCI_SNAPSHOT_HCD_PSW_WORDS,
+             "50.31's two words, then 50.34's");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_RETRY_AT, 954, "the retry block's place at 954");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_RETRY_BYTES),
+             sizeof(XHCI_TOL_RETRY), "the retry block's size");
+    CHECK_EQ(sizeof(XHCI_TOL_RETRY), 52 * 4, "52 ULONGs, an even count");
+    /* xhcitr\tr_snap.c's print_retry reads these words by number. */
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, Raw) / 4, 1, "Raw at 1");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, Value) / 4, 2, "Value at 2");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, Scale) / 4, 3, "Scale at 3");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, Base) / 4, 4, "Base at 4");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, Ceiling) / 4, 5,
+             "Ceiling at 5");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, StormTicks) / 4, 7,
+             "StormTicks at 7");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, State) / 4, 8, "State at 8");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, Level) / 4, 9, "Level at 9");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, Tries) / 4, 10, "Tries at 10");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, TriesTotal) / 4, 11,
+             "TriesTotal at 11");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, TriesRecovered) / 4, 12,
+             "TriesRecovered at 12");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, LatchStamp) / 4, 13,
+             "LatchStamp at 13");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, LatchWait) / 4, 14,
+             "LatchWait at 14");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, DeadlineValid) / 4, 15,
+             "DeadlineValid at 15");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, LastCause) / 4, 16,
+             "LastCause at 16");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, LastStamp) / 4, 17,
+             "LastStamp at 17");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, Armed) / 4, 19, "Armed at 19");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, Leave) / 4, 21, "Leave at 21");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, LeaveGen) / 4, 22,
+             "LeaveGen at 22");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, ResumeFailed) / 4, 23,
+             "ResumeFailed at 23");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, Burst) / 4, 24, "Burst at 24");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, BurstAttempts) / 4, 25,
+             "BurstAttempts at 25");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, LastBurstAttempts) / 4, 26,
+             "LastBurstAttempts at 26");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, LastBurstOutcome) / 4, 27,
+             "LastBurstOutcome at 27");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, SkipOnes) / 4, 28,
+             "SkipOnes at 28");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, WaitLeave) / 4, 31,
+             "WaitLeave at 31");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, Episodes) / 4, 32,
+             "Episodes at 32");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, SampleOff) / 4, 34,
+             "SampleOff at 34");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, LastEpisodePort) / 4, 36,
+             "LastEpisodePort at 36");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, StormStamp) / 4, 38,
+             "StormStamp at 38");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, StormCount) / 4, 41,
+             "StormCount at 41");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, CleanPending) / 4, 43,
+             "CleanPending at 43");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, CleanArmed) / 4, 44,
+             "CleanArmed at 44");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, BackoffEnds) / 4, 47,
+             "BackoffEnds at 47");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_RETRY, ReleaseState) / 4, 49,
+             "ReleaseState at 49");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_RETRY_AT) % 4, 0,
+             "the retry block aligned");
+    CHECK(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_RETRY_AT) +
+              sizeof(XHCI_TOL_RETRY) <= sizeof(XHCI_EXTENSION),
+          "the retry block inside the extension");
+    CHECK(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_RETRY_AT) >=
+              XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_WHY_AT) +
+                  sizeof(XHCI_TOL_WHY),
+          "after the reasons' block: nothing earlier moved");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_PSW_WORDS, 956,
+             "the port switchover's count at 956, after 50.31's");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_PSW_AT + 58, XHCI_SNAPSHOT_HCD_HEAD_WORDS,
+             "50.34's count, write status and 58-word record end the header");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PSW_WORDS), 58,
+             "the record's words");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PSW_WRITE), 0,
+             "the write's status is a reading, the door's");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_WHY_BYTES),
+             sizeof(XHCI_TOL_WHY), "the reasons' block size");
+    CHECK_EQ(sizeof(XHCI_TOL_WHY), 88 * 4,
+             "88 ULONGs (task 50.30 step 3's spread records and isolation "
+             "pair appended), an even count");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_WHY, IsolationValue), 86 * 4,
+             "the isolation pair where the snapshot reader looks for it");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_WHY, SpreadCount), 68 * 4,
+             "the spread records after the reasons' 68 ULONGs, which an "
+             "earlier reader reads as before");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_WHY, Spread), 70 * 4,
+             "the spread ring where the snapshot reader looks for it");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_WHY, Rec), 32 * 4,
+             "the ring where the snapshot reader looks for it");
+    CHECK(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_WHY_AT) +
+              sizeof(XHCI_TOL_WHY) <= sizeof(XHCI_EXTENSION),
+          "the reasons' block inside the extension");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_UTIME_RECORDS), 2,
              "two times records");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_UTIME_WORDS), 10,
@@ -1006,6 +1121,68 @@ static void test_xport_words(void)
 /* 36.38: selective suspend's stage B header words and the counters
  * XHCISNAP names from word 142 (xhcisnap.c, hcd_ssusp_counter_names and
  * print_ssusp, which read these places). */
+/*
+ * Task 50.30 step 1: the reasons' block as the snapshot carries it, a byte
+ * copy of XHCI_TOL_WHY, after a transfer engine's fatal verdict went through
+ * the staging (XhciTolWhyStageXfer), the drain's take and the record - read
+ * at the words the snapshot reader reads (`tr_snap.c`, `print_why`: Rec[]
+ * from word 32, eight words a record: reason, extra, slot, root port,
+ * route, VID:PID). A fatal code on an event matched to a queued TD keeps
+ * the device; one on an event inside no TD - on EP0, an ordinary pipe or an
+ * isochronous pipe alike, which share the helper - keeps XFER_FATAL and its
+ * code and names no slot, port or device.
+ */
+static void why_fatal_record(XHCI_TOL_WHY *w, ULONG matched, ULONG code)
+{
+    XHCI_RESET_REC place;
+    XHCI_RESET_REC rec;
+    ULONG extra;
+
+    place.Reason = 0;
+    place.Extra = 0;
+    place.Slot = 5;
+    place.RootPort = 2;
+    place.Route = 0x21;
+    place.VidPid = 0x0D8C0014UL;
+    place.Clock = 0;
+    place.Recoveries = 0;
+    (VOID)XhciTolWhyStageXfer(w, 1, matched, code, &place);
+    rec.Reason = XhciTolWhyTake(w, &extra, &rec);
+    rec.Extra = extra;
+    (VOID)XhciTolWhyRecord(w, &rec, 1);
+}
+
+static void test_why_fatal_words(void)
+{
+    XHCI_TOL_WHY w;
+    const ULONG *words;
+    ULONG at;
+
+    words = (const ULONG *)&w;
+    XhciTolWhyInit(&w);
+    why_fatal_record(&w, 1, XHCI_CC_EVENT_LOST);
+    at = 32 + 8 * XhciTolWhyAt(&w, 0);
+    CHECK_EQ(words[at], XHCI_WHY_XFER_FATAL, "matched: the reason");
+    CHECK_EQ(words[at + 1], XHCI_CC_EVENT_LOST, "... its code");
+    CHECK_EQ(words[at + 2], 5, "... the matched device's slot");
+    CHECK_EQ(words[at + 3], 2, "... its root port");
+    CHECK_EQ(words[at + 4], 0x21, "... its route");
+    CHECK_EQ(words[at + 5], 0x0D8C0014UL, "... its VID:PID");
+
+    why_fatal_record(&w, 0, XHCI_CC_UNDEFINED_ERROR);
+    at = 32 + 8 * XhciTolWhyAt(&w, 0);
+    CHECK_EQ(words[at], XHCI_WHY_XFER_FATAL, "unmatched: the reason kept");
+    CHECK_EQ(words[at + 1], XHCI_CC_UNDEFINED_ERROR, "... and its code");
+    CHECK_EQ(words[at + 2], 0, "... no slot");
+    CHECK_EQ(words[at + 3], 0, "... no root port");
+    CHECK_EQ(words[at + 4], 0, "... no route");
+    CHECK_EQ(words[at + 5], 0, "... no VID:PID");
+    CHECK_EQ(XhciTolWhyInvolved(&w), 0, "the newest names no place");
+    CHECK_EQ(w.Kept, 2, "both kept");
+    CHECK_EQ(words[32 + 8 * XhciTolWhyAt(&w, 1) + 2], 5,
+             "the older matched record keeps its slot");
+}
+
 static void test_ssusp_words(void)
 {
     CHECK_EQ(XHCI_SNAPSHOT_HCD_DNCTRL_LIVE, 237,
@@ -1191,6 +1368,7 @@ int main(void)
     test_counter_tail();
     test_ssusp_words();
     test_xport_words();
+    test_why_fatal_words();
     test_xstat_math();
     test_xpol();
     test_walk(0);

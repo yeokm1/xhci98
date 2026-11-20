@@ -2026,6 +2026,7 @@ ULONG XhciXferEvent(PXHCI_TRANSFER_QUEUE queue,
     result->Code = 0;
     result->Refused = 0;
     result->Unattributed = 0;
+    result->Matched = 0;
 
     if (queue == NULL || ring == NULL) {
         return XHCI_XFER_BAD_PARAM;
@@ -2134,6 +2135,7 @@ ULONG XhciXferEvent(PXHCI_TRANSFER_QUEUE queue,
         }
         return XHCI_XFER_OK;
     }
+    result->Matched = 1;
 
     /*
      * The soft retry (35-T.2, design record 17 section 4.2), here because
@@ -2693,6 +2695,7 @@ ULONG XhciXferRetryReplay(PXHCI_TRANSFER_QUEUE queue,
     result->Code = 0;
     result->Refused = 0;
     result->Unattributed = 0;
+    result->Matched = 0;
     if (ring == NULL || !XhciXferRetryHeadIs(queue, token)) {
         return 0;
     }
@@ -2819,6 +2822,7 @@ static ULONG xhciXferDrainSettle(PXHCI_TRANSFER_QUEUE queue,
     result->Code = 0;
     result->Refused = 0;
     result->Unattributed = 0;
+    result->Matched = 0;
 
     if (queue == NULL || ring == NULL) {
         return XHCI_XFER_BAD_PARAM;
@@ -4186,6 +4190,7 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
     result->Code = 0;
     result->Refused = 0;
     result->Unattributed = 0;
+    result->Matched = 0;
 
     if (queue == NULL || ring == NULL) {
         return XHCI_XFER_BAD_PARAM;
@@ -4314,6 +4319,7 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
         }
         return XHCI_XFER_OK;
     }
+    result->Matched = 1;
     if ((owner->Flags & XHCI_XFER_FLAG_ISOCH) == 0 ||
         owner->IsoParams == NULL || owner->IsoPacketCount == 0) {
         /* A non-isochronous transfer on a ring this driver only ever creates as

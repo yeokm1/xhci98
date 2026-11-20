@@ -546,6 +546,40 @@ static void test_alias(void)
     CHECK_EQ(XhciUsbdxIoctlAlias(0x00220FB7UL), 0x00220FB7UL, "a neighbour");
 }
 
+/* Task 50.25 (design record 13 section 6.13.12): every combination of the
+ * flag, the direction, the transfer kind and the PDO's 0x602 mark. Only
+ * the flag, or a bulk or interrupt IN on a 0x602 PDO, allows a short
+ * end. */
+static void test_short_ok(void)
+{
+    ULONG flag;
+    ULONG in;
+    ULONG bulk;
+    ULONG contract;
+    ULONG want;
+
+    for (flag = 0; flag < 2; flag++) {
+        for (in = 0; in < 2; in++) {
+            for (bulk = 0; bulk < 2; bulk++) {
+                for (contract = 0; contract < 2; contract++) {
+                    want = (flag || (in && bulk && contract)) ? 1UL : 0UL;
+                    CHECK_EQ(XhciUsbdxShortOk(flag, in, bulk, contract), want,
+                             "short ok: flag, in, bulk, contract");
+                }
+            }
+        }
+    }
+    CHECK_EQ(XhciUsbdxShortOk(0, 1, 1, 0), 0,
+             "a legacy PDO's bulk IN without the flag: refused, as before");
+    CHECK_EQ(XhciUsbdxShortOk(0, 1, 1, 1), 1,
+             "a 0x602 PDO's bulk IN without the flag (UASPStor's status)");
+    CHECK_EQ(XhciUsbdxShortOk(0, 1, 0, 1), 0,
+             "a 0x602 PDO's control or isochronous IN: unchanged");
+    CHECK_EQ(XhciUsbdxShortOk(0, 0, 1, 1), 0,
+             "a 0x602 PDO's OUT: unchanged");
+    CHECK_EQ(XhciUsbdxShortOk(1, 0, 0, 0), 1, "the flag alone");
+}
+
 /* Task 49.45: the notes' packing and bounds, worked by hand from section
  * 6.13.11's table. */
 static void test_notes(void)
@@ -640,6 +674,7 @@ int main(void)
     test_grant();
     test_answers();
     test_alias();
+    test_short_ok();
     test_notes();
     printf("test_usbdx: %d checks, %d failures\n", checks, failures);
     return failures;

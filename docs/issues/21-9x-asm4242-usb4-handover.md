@@ -6,7 +6,9 @@ Status: **the product forms shipped in `3.4.1.0`** (cut 2026-11-05; section
 Windows 10 x64 and under 98 SE, where the handover was answered and a
 tunnelled NVMe drive ran on Stor98 as D: (1004/1060 MB/s sequential, no
 fault; roadmap-usb4 46.11 and 46.12). What is left is what those two tasks
-name, in "Planned - Left by `3.4.1.0`": for 46.11, the owner's question
+name, in "Planned - Left by `3.4.1.0`" (both dropped by the owner on
+2026-11-09, roadmap-usb4's decisions table, "Phase 48"; the section removed
+on 2026-11-20): for 46.11, the owner's question
 whether the step should leave the lines with steering enabled, and a case
 where a routing link is shown to serve the functions; for 46.12, the board's
 reading with the LAN on and off, and the items earlier partials left (the 9x

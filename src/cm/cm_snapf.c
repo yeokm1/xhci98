@@ -254,6 +254,12 @@ const CM_QS_FIELD CmQsF_TBT_U4_PORT[] = {
     CM_QS_F(TBT_U4_PORT, ElrCheckSinceUs, 4, 0),
     CM_QS_F(TBT_U4_PORT, ElrNoteSeq, 4, 0),
     CM_QS_F(TBT_U4_PORT, SleepCancelFailed, 1, 0),
+    CM_QS_F(TBT_U4_PORT, SuspIdValid, 1, 0),
+    CM_QS_F(TBT_U4_PORT, SuspVendor, 4, 0),
+    CM_QS_F(TBT_U4_PORT, SuspDevice, 4, 0),
+    CM_QS_F(TBT_U4_PORT, SuspUuid, 0, CM_QS_FD_HASH),
+    CM_QS_F(TBT_U4_PORT, ResumeSame, 1, 0),
+    CM_QS_F(TBT_U4_PORT, ResumeSameGen, 4, 0),
 };
 const ULONG CmQsN_TBT_U4_PORT = sizeof(CmQsF_TBT_U4_PORT) / sizeof(CmQsF_TBT_U4_PORT[0]);
 

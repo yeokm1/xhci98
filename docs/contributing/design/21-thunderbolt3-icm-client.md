@@ -111,6 +111,10 @@ there) and the native PCIe hot-plug tunnel port that no resume of this
 driver can order (section 11.1.8 there); sections 1.4.3, 1.4.4, 5.6 and
 6.3 here describe what ships until it is coded.
 
+Revised 2026-11-15 (task 50.10, a design, reviewed and revised; behind
+`XhciCmWakeOrder`, 0 by default): section 6.3.2, the wake order by
+`PowerRelations` on Windows 7 and later.
+
 ## 1. Purpose, scope and what it is not
 
 ### 1.1 What this is for
@@ -2831,6 +2835,79 @@ IRP could read the NHI's registers while the function was unpowered.
    transition's S0: opened by the first pass in the working state.
    No guest leg: no fault injection makes both disconnects fail.
 
+#### 4.5.19 The library's end at the unload (task 50.27, 2026-11-16)
+
+The header of the MSI stability improvements gained
+`MsgIrqUninitialize`, which unmaps the local APIC page the library's
+start mapped on the fake-IRQ path and returns the copy to "not
+initialised"; its contract, and what `xhci98.sys` does with it, are
+record 15 section 4.5.21. This image holds a copy of its own (section
+4.5.14, "Two drivers asking on one machine"), started by
+`CmRirqNtInit` on the connection-manager thread at the first message
+connection an NHI asks for.
+
+**What this image did until now, and does still.** On 2000 and later
+the image is resident from `DriverEntry`: `CmNvlinkInit` clears
+`DriverUnload` before it registers the link-state callback (task 45.31,
+`stor98cm.h` R4), which the first load of each boot does, and it gives
+the routine back only when that registration fails (the table's
+allocation, the callback object or the registration refused). Section
+4.5.14 item 2 makes the image resident before the first claim as well,
+and the connect again (section 4.5.6). So an image that started the
+library is not unloaded, and its one page stays with it until the
+restart: one page per boot, never one per load. On 98 SE and ME
+`cmUnload` is never installed.
+
+**The decision** (owner, 2026-11-16: "Conservative", no change of
+behaviour). `MsgIrqUninitialize` is added as the last step of
+`cmUnload`, after `CmCfgwkDrain` and `CmNvlinkUnload`; the residency
+rules are unchanged. **The call is defensive only**: it is reached only
+on the abnormal path below.
+
+- **Which images reach it.** Only one whose link-state registration
+  failed and that then never asked the library for a claim: `DriverUnload`
+  is cleared before the first claim, so such an image holds no claim, no
+  connection and no quarantine, each of which needs a claim first. There
+  the call ends a copy that `CmRirqNtInit` started (unmapping the page
+  on the fake-IRQ path, nothing on a PIC-mode HAL) or, the library never
+  started, returns `OK` having done nothing. Every other image never
+  reaches it.
+- **Nothing else calls the library then.** `cmUnload` runs once every
+  device object is deleted. The library is called from the
+  connection-manager thread alone (the file header of `cm_rirqnt.c`),
+  and each NHI's removal joins its thread (`cm_thr.c`, the wait on the
+  thread object) before its device object goes; no connection existed,
+  so the trampoline never called the routine. The image's other workers
+  call nothing of the library.
+- **The result** is written on the qemu flavour's port-`0xE9` mirror
+  (`cm.irq.msg.uninit`, from `cm_log.c`, the binary's one `0xE9` site, at
+  `PASSIVE_LEVEL`); no NHI's note ring exists at the unload, and
+  `DbgPrint` stays at its two call sites (section 8). A started copy's
+  end is also in the library's published history (UNINIT, kind 129, or
+  the refused call with its status). `IN_USE` is recorded and left: no
+  retry, no loop; a `DriverUnload` cannot refuse.
+
+**Start-up failures.** The library is started at an NHI's first message
+connection, never in `DriverEntry`, so `DriverEntry` needs no call. A
+connection refused after the library's start leaves the copy started for
+the image, which stays loaded.
+
+**The thread's start** (owner, 2026-11-16, folded into task 50.27): the
+connection-manager thread's reference is retried until had, so its stop
+always joins the object; record 15 section 4.5.21, "The thread starts'
+join", is the rule for both drivers.
+
+**98 SE and ME.** `cmUnload` is never installed there, so the call never
+runs; the library is never started there either (the 98 SE and ME
+message path is not part of `3.5.0.0`, section 4.5.16).
+
+**Legs** (run sheet 50.27). The image reaches the call only when the
+link-state registration fails, so the case of a library started with no
+claim followed by an unload is not reachable in normal operation, and is
+not run; no injection is added for it. The legs read
+`XhciCmRingInterrupt` 2 on 2000 and XP as before the change, and the
+image still loaded after the NHI's removal.
+
 ## 5. The ICM client
 
 ### 5.1 Bind, on the thread (`ICM-PROTOCOL` section 6.1)
@@ -4685,15 +4762,138 @@ sections 6.1.3 and 6.1.4, whose items stand):
    link-state table is not touched: the one child removed is a bridge,
    for whose id no entry is ever published, so the removal step finds
    none and makes no handshake; nothing is published for a reset bridge.
-   A removal still refused at the bound is not asked again by a timer:
-   the devnodes stay over the reset device, as before this section, until
-   a later standby tries again or the device is unplugged (the DOWN's
-   sweep, as today). Section 6.1.4's items 1 to 6 are unchanged: a single
+   A removal still refused at the bound is asked again about once a
+   minute (item 9) until it is accepted, the device is unplugged, the next
+   standby or a stop; nothing is forced. Section 6.1.4's items 1 to 6 are
+   unchanged: a single
    function right behind the tunnel port is still written back and keeps
    its open files. ME takes the same rule and is expected never to remove
    anything: its own restore reads configured. Windows 2000 and later
    (the filter route) are untouched. No registry value: the rule follows
    the mark, which follows `XhciCmReenum`.
+9. **The slow retry** (the owner, 2026-11-13, from this section's legs;
+   task 50.6; section 6.1.4 item 2's grace kept as it is). A wait that
+   ended with its note unresolved after Windows refused a recovery query
+   is not left there: the member is asked again once a minute
+   (`CM_PORTS_SUB_SLOW_MS`, 60000 ms), so the drive can come back once
+   the program lets go of it, without a restart. Each attempt is the same
+   query as item 5's, a refusal respected and never forced.
+   - **Refused** is the query's own answer (`CR_REMOVE_VETOED`, or any
+     answer other than success, no such devnode or an invalid devnode,
+     to a query made), recorded for this resume (`RwLostRefused`) - not
+     `RwLostTried`, which other attempts that made no query set too.
+   - **Armed** after such a refusal whenever the wait ends with the note
+     unresolved: lost, not removed (outcome 8), the switch read undecided
+     at the bound (0xFE, the note kept), or the list unreadable at the
+     bound (0xFC) - the refusal stands, and each attempt reads the switch
+     and the list again and queries only on a fresh lost verdict. Not
+     armed when the wait ended removed, settled, or with an inventory this
+     section does not recover (0xFD: more children, another child): that
+     is no refusal to outlast (`CmPortsSlowArm`).
+   - **State** (under the worker's lock): `RwSlow` set when the wait ends
+     so, with `RwSlowEpoch` the marks' epoch then, `RwSlowAt` the time
+     and `RwSlowSeq` advanced (an attempt publishes its end only at the
+     sequence it started at); the note is kept (it already is). The
+     arming is made only for a member still active whose lifetime token
+     (`ActSeq`, advanced at every departure from the active set, armed or
+     not) reads as it did before the check's unlocked reads
+     (`CmPortsSlowAlive`): a departure, and a return with no
+     re-enumeration post, between them never arm a retry on the new
+     connection. A refusal belongs to the connection it was given on: it
+     is recorded only when the token read under the very lock that
+     admitted the query (`cmWkRecGo`) still reads so at its answer, with
+     the marks' epoch still the admission's, no suspend taking its copies
+     and the worker awake (`CmPortsRefusalKeep`) - so an answer that comes
+     back after a suspend has cleared this resume's evidence is not
+     recorded - and every departure forgets it.
+   - **The attempt**: at each worker pass, a member with `RwSlow` whose
+     minute has passed (`CmPortsSlowDue`), that is active, with the worker
+     awake, no suspend taking its copies (`RwStop` clear) and the epoch
+     still `RwSlowEpoch`, has the expiry consumed: flagged due (`SlowDue`;
+     a due member counts for no wait and is not posted again), and its
+     re-enumeration posted (`ReqReenum` alone: the expiry asks for no
+     vanished-child scan, whose query is admitted by no suspend check; a
+     device unplugged meanwhile is swept by its own DOWN, and a scan asked
+     by another post merged into the operation runs as it would have).
+     A due member whose operation the loop's gates hold back (a removal
+     owed, a retirement barrier, a vanished child's record, a prune owed)
+     keeps its flag and is taken by the loop's ordinary retry, at its
+     ordinary spacing; the flag is not posted again meanwhile. A member
+     held with its removal (section 6.1.2's hold, `Defer`) is no retry:
+     its operation waits with the hold, which the release drops (the
+     rebuilt tunnel's own post re-enumerates the member), and the flag,
+     still set, is taken by the member's next operation. A no-IRQ attempt
+     in progress does not hold it back (a removal is no re-enumeration, as
+     item 4's). The operation (the member loop, after
+     the resume park check, `cmWkSlowTry`) makes the attempt before
+     anything else of it, the flag cleared, and the next minute counts
+     from the attempt's end (`RwSlowAt` set then, whatever it read), so an
+     attempt held back by a gate, or by a slow CONFIGMG call, is never
+     followed at once by another query. The member's bridge is read - not
+     read, all ones, or the member in its no-configuration mode: nothing
+     asked, the retry stays (`F1`); read with secondary bus 0 (its own
+     bridge reset since: not this retry's case): the retry ends (`F0`) -
+     then the note read as item 2 with the absent bound passed, and then:
+     - lost: the removal of item 5 unchanged - exactly one child naming
+       the lost bridge, the eject claim, Windows' query, a refusal
+       respected and never forced, `Remove_SubTree` only after an
+       accepted query, the no-IRQ state ended at an accepted query;
+       `cmWkRecGo` right before the query requires, in place of the mark,
+       `RwSlow` still set with the epoch `RwSlowEpoch` and no mark
+       standing (and everything else it requires). Removed (a complete
+       list with no child): the retry ends and the note is emptied (`7`).
+       Refused, the attempt stopped (`cm.reenum.9x.resume-lost.stopped`)
+       or the list not read: the retry stays (`8`). Not an inventory this
+       section recovers: the retry ends (`FD`);
+     - settled (the switch reads configured, another device, or absent -
+       unplugged): the retry ends and the note is emptied (`0`);
+     - undecided: the retry stays (`FE`).
+     **Whatever the attempt read, the operation then goes on as any**:
+     its numbering and item 7's guard before its `Reenumerate_DevNode`
+     (and a vanished-child scan only where a post merged into it asked for
+     one). After
+     a removal the guard reads the empty inventory and the switch is
+     numbered and found again, as after outcome 7; while the switch still
+     reads reset under its devnode (a refusal, an undecided reading) the
+     guard holds the re-enumeration, as it holds any request for such a
+     member. So the attempt never consumes a request merged into the same
+     operation (a tunnel's post, a no-scan re-enumeration owed): the
+     operation does what it would have done without the retry.
+     Logged: `cm.reenum.9x.slow` = `(bdf << 8) | r` (1 armed; 7 removed,
+     8 refused or not made, 0 settled, FD not recoverable, FE undecided,
+     F0 the member's bridge reads secondary bus 0, F1 not read), and at
+     every recovery query, item 5's and this item's,
+     `cm.reenum.9x.query-remove.ms`, the time from the resume to the query.
+   - **Ends**: the drive removed and found again; the switch settled
+     (configured, replaced or absent - an unplug); an inventory this
+     section does not recover; the member's own bridge reading reset; the
+     member no longer active (its port's tunnel gone: the DOWN, a loss, a
+     stop) - cleared under the lock at the very update that takes the
+     member out of the active set (`cmWkSlowDrop`), with the sequence
+     advanced, so a departure and a return between two passes never carry
+     an old retry onto the new connection; the next suspend
+     (`CmCfgwkSuspend` clears `RwSlow`, `RwLostRefused` and `SlowDue`: a
+     new standby, a new recovery from the kept note, item 1); the worker
+     leaving (a stop of the NHI, shutdown). No count or time limit ends it
+     otherwise: a refusal that lasts is asked about once a minute for as
+     long as it lasts.
+   - **No query is admitted during a suspend or after the member is
+     gone**: the post is made only with the worker awake, `RwStop` clear
+     and the epoch unchanged, and the query only after `cmWkRecGo` reads
+     all of that again under one lock right before it. As for every
+     CONFIGMG call of the worker (item 5), a query admitted before a
+     suspend, a departure or a stop begins is already in flight when it
+     comes: it is not withdrawn (no CONFIGMG service cancels one), and an
+     accepted one is completed by its removal, as item 5 says.
+   - **What it costs**: one attempt a minute while a refusal lasts (the
+     member's bridge and the note read, its child list and the child's
+     id, one `Query_Remove_SubTree`, then the member's ordinary operation,
+     held by item 7's guard); Windows showed no second message at a
+     repeated query in section 6.1.5's legs. The worker's wait, while a
+     retry is armed and nothing else is owed, is the time left to the
+     earliest armed retry's minute (a due flag already consumed does not
+     count) or to the ordinary retry's, whichever is sooner; never zero
+     (`CmPortsSlowWait`).
 
 **What a refusal is, as read** (98 SE on the q35 emulator, the dock,
 `runs/run-49.md`, "49.30"). With nothing using the volume around the
@@ -4727,9 +4927,47 @@ replug. A program that uses such a drive in the first seconds after the
 wake can make Windows refuse the removal (in the legs with such a
 program, sometimes with Windows' message that data on the volume was
 lost); a file held open on the drive across the sleep did. The drive
-then stays gone, Windows answering (after the message, a retry sometimes
-succeeds and the drive comes back). A later standby asks for the removal
-again.
+is then gone, Windows answering (after the message, a retry inside the
+first 20 s sometimes succeeds and the drive comes back); after that the
+removal is asked again about once a minute (item 9), and the drive comes
+back once Windows accepts it - in the legs once Windows' message had been
+answered, but never while or after a file had been held open on the drive
+across the sleep, so such a drive may not come back until Windows is
+restarted (below). A later standby asks for the removal again.
+
+**Item 9, as read** (task 50.6, `runs/run-50.md`, "50.6"; 98 SE on the q35
+emulator, the dock, this package installed; ME on the `pc` machine with a
+PCI Express tunnel port and the same dock). A file held open on the
+dock's drive across one standby - opened for writing and written once
+before the sleep and nothing after, written through its handle every 5 s
+also after the wake, or held open for reading - made Windows refuse every
+query inside the bound, without a message; the retry was armed
+(`cm.reenum.9x.slow=...01`) and every query of it was refused
+(`...08`), also after the program had closed the file about 95 s after the
+wake: in each of the four qemu-flavour legs to the end of the leg (two or
+three queries after the close; in one, ten over the ten minutes after it);
+the release flavour's leg the same (no drive to its end). Closing the file does not lift the refusal on 98
+SE here. With a program reading the drive every 5 s across the sleep and
+for about a minute after the wake, and Windows' data-lost message left
+standing for about 45 s: the query was refused, the wait ended lost, not
+removed, and after the message was answered the retry's first query, about
+105 s after the resume, was accepted and the drive removed and found again
+under its letter (`cm.reenum.9x.slow=...07`), back and written at the late
+check - in both qemu-flavour legs, and the release flavour's leg the same
+by its checks (no drive at 70 s, the drive back at 190 s). In the
+held-file leg that wrote through its handle after the wake, the first such
+write already failed with error 6; in every held-file leg the program's
+close returned success with error 6 recorded. Whoever answers the query
+with the refusal is not identified (98 SE's query reports no vetoing
+devnode), and it is not released by the program's close.
+With the message answered at once, a query inside the bound was accepted
+and the retry was never armed; with nothing using the drive, removed and
+found as before, no retry. ME with a file held open on the drive refused
+the standby itself ("cannot hibernate or standby because the Stor98
+Storage Controller ... cannot enter into a low-power state"), on this
+package and on `3.4.3.0` alike; without one it restored the dock itself,
+nothing was removed and no retry was armed (the qemu flavour's log), and
+the release flavour's leg passed the same file checks after the wake.
 
 **Why this is safe enough.** The only thing the rule can do wrongly is
 remove and re-enumerate a device that did not need it. It removes only
@@ -4743,12 +4981,18 @@ plug-in already takes.
 **Where.** `src\cm\cm_ports.h`, `cm_ports.c` (`CM_PORTS_SUB_MAX`,
 `CM_PORTS_SUB_ABSENT_MS`, `CM_PORTS_SUB_RETRY_MS`, the outcomes 7 and 8,
 `CmPortsSubNoted`, `CmPortsSubMerge`, `CmPortsSubRead`, `CmPortsSubVerdict`,
-`CmPortsLostStep`; host vectors in `test\test_cm_ports.c`,
-`test_sub_lost`); `src\cm\cm_cfgwk.c` (`CM_WK_PORT.RwSub*`, `RwLost`,
+`CmPortsLostStep`, item 9's `CM_PORTS_SUB_SLOW_MS`, `CmPortsSlowArm`,
+`CmPortsSlowDue`, `CmPortsSlowWait`, `CmPortsSlowAlive`,
+`CmPortsRefusalKeep`; host vectors in `test\test_cm_ports.c`,
+`test_sub_lost`, `test_slow_retry`); `src\cm\cm_cfgwk.c`
+(`CM_WK_PORT.RwSub*`, `RwLost`,
 `RwHow`, the note in `CmCfgwkSuspend`, `cmWkSubRead`, `cmWkLostRemove`,
 the second phase and the end in `cmWkResumeParked`, `cmWkRecGo` before a
 recovery's query in `cmWkRemoveChild`, the member loop's no-IRQ
-queueing, `cmWkResetUnder` before the re-enumerations of item 7).
+queueing, `cmWkResetUnder` before the re-enumerations of item 7; item
+9's `RwSlow*`, `RwLostRefused`, `ActSeq`, `SlowDue`, `cmWkSlowTry`,
+`cmWkSlowDrop`, the arming in `cmWkResumeParked`, the expiry and the wait
+in the worker's loop).
 
 **Legs.** 98 SE on the q35 emulator, the release and the qemu flavour: the
 dock alone, one standby and two in one boot - after each wake the volume
@@ -4763,6 +5007,335 @@ and 6.1.4 again (item 6 still writes it back, nothing removed). ME on the
 i440FX emulator with a PCI Express tunnel port: the dock across one and
 two standbys (expected: restored by Windows, nothing removed), and the
 single enclosure. The bench is owed.
+
+### 6.1.6 After a standby on 98 SE: a dock's or switched enclosure's own switch put back, the removal of section 6.1.5 underneath (TBSTBYWB9X.1, designed as task 50.12; a design, reviewed and revised; built 2026-11-15 on the owner's word, its legs below; taken into 3.6.0.0 by the owner's decision of the same day on the emulator's readings alone: no real computer that can enter Stand by was available, item 15)
+
+**What is asked** (the owner, 2026-11-13, from section 6.1.5's open questions; roadmap 50.12). Section 6.1.5 turns a
+certain freeze into a removal and a finding again: after a standby on 98 SE a switch behind the tunnel port that
+came back reset is removed through Windows' query and enumerated anew, so its drives go away at the wake and come
+back seconds later, and a file held open on one, or a program using it in the first seconds, makes Windows refuse
+the removal (item 9 then asks again once a minute). The owner's decision: put a dock's or switched enclosure's own
+switch headers back after the wake, as section 6.1.4 puts back the tunnel port and the function right behind it,
+so that the drives, their open files and the unit's other functions stay; keep section 6.1.5's removal and finding
+again underneath for any doubt; a chain after it.
+
+**What was learned before** (task 49.12's subtree write-back, reviewed four times in Phase 49, not converged). The
+writes were never the difficulty; what a copy below the tunnel port is bound to was. This design binds it three
+ways at once - the router's identity compared by the core across the sleep, the unit's devnodes and every path that
+changes them fenced around the copy and counted until the write, and each node's own reading at the write - and
+turns every case it cannot bind into section 6.1.5's removal, which needs no binding.
+
+**The scope** (all of it, or no table: nothing is written below the member, and section 6.1.5 decides, items 10 and
+11):
+
+1. **Windows 98 SE, positively**: CONFIGMG's version word as read at the worker's open is 040Bh (read on the
+   emulator; ME's reads 045Ah); any other value takes no table. ME restored the dock's switch and its NVMe itself
+   within about 5 s of the wake in section 6.1.5's legs, and a write-back racing that restore is what section 6.1.4
+   item 2's grace exists to avoid. On 98 SE, in every emulator leg with a child devnode below the bridge, PCI.VXD
+   never restored the bridge (section 6.1.4); that is a reading, not an exclusion (item 14).
+2. **The USB4 software connection manager only** (`nhi->U4On`): item 6's identity is the core's. The Thunderbolt 3
+   firmware connection manager's route has no identity of this driver's across a sleep: no table there.
+3. **A switch unit, no chain.** At the suspend the member's secondary bus holds exactly one answering function, a
+   type 1 header at function 0 of one device number, noted configured by section 6.1.5 item 1 (the unit's upstream
+   port); the upstream port's secondary bus holds only type 1 headers at function 0 (the downstream ports); each
+   downstream port's secondary bus holds only type 0 headers (every function of every device number that answers,
+   a multi-function device's included), or nothing. A type 1 header at that third level (a chained device's
+   upstream port, a nested switch) makes it a chain: no table (the chain is a later task). A dock's empty chain
+   port is a downstream port like any other. At most 24 nodes (`CM_PORTS_UNIT_MAX`: one upstream port, up to 7
+   downstream ports, the rest functions). The emulator's CalDigit TS3 Plus model (an upstream port, five downstream
+   ports, two FL1100 xHCIs, an ASM1142 xHCI, a NIC, the empty chain port: 10 nodes), its HP Thunderbolt Dock G2
+   model (upstream port, two downstream ports, an xHCI: 4), the generic `downstream-ports=1` dock (upstream port,
+   two downstream ports, its NVMe: 4) and the ASM2464 enclosure (upstream port, one downstream port, its NVMe: 3)
+   are switch units; the dock with an enclosure chained behind it is not.
+4. **Every node copied whole** (item 5), or no table.
+
+**The rule** (the CONFIGMG route; sections 6.1.3 to 6.1.5 stand, and this is a third phase of the resume wait,
+between the member's own restore and section 6.1.5's reading):
+
+5. **The copy, fenced** (the suspend, `CmCfgwkSuspend`, after the handoff, on the branch that reads a fresh valid
+   member copy and a note; the NHI's thread; reads through the HAL, as section 6.1.4 items 1 and 6 read).
+   a. **The fence first.** Under the worker's lock, with the suspend's `RwStop`, every active member's capture gate
+      is set (`RwCapture`): every admission the resume mark refuses (a `Reenumerate_DevNode`'s and a no-IRQ
+      operation's admission, the numbering's next forward step through `cmWkResumeMarked`, a chain port's
+      re-enumeration) refuses it too, as a retirement hold refuses one - owed, not failed, parked after the resume
+      like any operation the mark stops; a recovery's query is refused by `RwStop` itself. Then the member must be
+      idle: the worker between two passes or on another member (`InCall`, `OpMember`), no admitted call outstanding
+      (`EnumBusy`), no removal owed, no-scan state, hold or deferral; and the eject paths idle for it
+      (`CmEjectActivity` in `cm_ejectos.c`, under its own lock: no record or sweep of any kind naming the member's
+      bridge - transactions, claims parked or running, vanished children, detached removals - and no
+      devnode-changing call running at all). Not idle: no table.
+   b. **What the copy is bound to**, read before the reads and again after them, unchanged or no table:
+      - the member's connection count `RwConn`, advanced under the worker's lock by `CmCfgwkConnLost`: at
+        `CmEjectLinkDown` (the software manager's link-down upcall), at the seam's TUNNEL_DOWN for the member and at
+        a chained tunnel's up or down below it (`cm_reenum.c`), at the member's departure from the active set
+        (`cmWkSlowDrop`) and at a removal request naming it (`cmWkGoneReq`);
+      - the member's lifetime token (`ActSeq`, section 6.1.5 item 9);
+      - the worker's operations on the member (`OpSeq`, advanced at each one's start), so no re-enumeration, child
+        removal or numbering of this worker came between the two readings;
+      - the eject paths' activity sequence (`CmEjectActivity`), which every devnode-changing call of
+        `cm_ejectos.c` - a query, a removal, a detached removal, a slot reading - advances at its start and at its
+        end, whatever it did, so a removal that began and ended between two readings moves it.
+   c. **The reads.** Breadth first by items 1 to 3. A node holds its bus, device and function as read, its parent's
+      index, its kind and its copy: a bridge dwords 00h to 3Ch, valid by `CmPortsHdrCopyValid` and nested
+      (`CmPortsUnitNested`: primary equal to the parent's secondary, secondary above it, subordinate not above the
+      parent's, its bus range disjoint from every sibling's, each open window - I/O 1Ch/30h, memory 20h,
+      prefetchable 24h/28h/2Ch - inside the parent's of the same kind, a prefetchable one alternatively inside the
+      parent's memory window, the halves compared as pairs); a function section 6.1.4 item 6's ten dwords plus 08h
+      (class and revision) and 2Ch (subsystem), valid by `CmPortsEpSnapValid` and every BAR that holds an address
+      starting inside a window of its parent of the fitting kind (the start only: a BAR's size is never read).
+      Then the whole unit and the member's header are read a second time and compared dword for dword.
+   d. **After the reads**: `RwConn[i]` read again and item a's idleness tested again, under the same lock. Any
+      difference, any node not valid, or a second reading not the same: no table. Otherwise the table is published
+      under the lock with the member copy (valid only with it, forgotten with it), `RwUnitConn` = the count, and the
+      member's lifetime token (`ActSeq`). `RwCapture` is cleared once the marks are set (the mark takes over the
+      gate without a gap: both are read by the same admissions).
+   e. **The unit's place list** (`RwUnitList`: every node's bus, device, function, kind and id, the topology the
+      reads found) is kept **also when there is no table** (scope 1 and 2 aside, and only when the unit was read
+      whole and stable twice): item 11's reading uses it.
+   Logged: `cm.reenum.9x.resume-unit` = `(bdf << 8) | nodes`, `0x80` set when no table (the low bits then say why:
+   1 not 98 SE, 2 not the software manager, 3 a chain, 4 too many nodes, 5 a node not valid, 6 not the same twice,
+   7 the count moved, 8 not idle, 9 no note).
+
+6. **The router's identity across the sleep** (the USB4 core; a small change of `tbt_u4cm.c`). `TbtU4Suspend`
+   records, for each port with an obligation, the device router's identity as it stands (vendor, device, the UUID
+   and that it was read) in a record of its own beside the port (`SuspendId`), not in the port's router record,
+   which a reconnection zeroes; the port-table rebuild of the resume keeps it. `TbtU4Resume` sets the port's `ResumeSame` only when, at the end of its work for the
+   port, the router enumerated there reads that identity again with its UUID read now - whether it was verified
+   with its tunnel kept (SAME) or rebuilt (LOST, then `tbtU4Connect`, which samples the identity afresh: the
+   comparison is made after that sampling, against the suspend's record, so a router replaced between the
+   classification and the rebuild never passes). Every later connection, teardown, departure or link-down of the
+   port clears it. A port with both a PCIe and a USB3 obligation is judged once, after both are dealt with; every
+   exit of the port's resume work that is not a success (held, failed, torn down, the budget spent) leaves it
+   clear. The seam reads it at `CmReenumResumed` for each member's port and hands the worker a mask
+   (`CmCfgwkResumed`'s new argument; `CmReenumResumeFailed` hands none). A resume that failed, a port held, a
+   router not read whole: no authority (item 8), hence a doubt (item 10). The recorded UUID is listed in the state
+   snapshot as a hash only, as the router's own is (section 8.4's identity rule: `SuspUuid` among
+   `scripts\gen-cm-snap.py`'s hashed names; `test\test_cm_snap.c` holds every listed UUID to a hash).
+
+7. **When the pass runs** (`cmWkResumeParked`, the worker thread, PASSIVE_LEVEL, at each check of the marked member
+   while its mark stands). Only after the member's own wait has ended restored by this driver (outcome 5). On 98 SE
+   with a child devnode Windows was never seen restoring the member; if it does (outcome 1), Windows is at work on
+   the subtree, no table is used and items 10 and 11 decide. The first pass is in the same check as the member's
+   write-back; a pass is taken again at each check (200 ms) until every node is final or 6000 ms
+   (`CM_PORTS_UNIT_BOUND_MS`) have passed since the resume, inside section 6.1.3's 20 s bound.
+
+8. **The authority** (under the worker's lock at the pass's admission and again before every write, in
+   `cmWkRestoreGo`, which already stops on a suspend, a moved epoch and the worker asleep): the member active with
+   the lifetime token the table stored; no removal owed, no no-scan state, no hold, no retirement barrier; its bit in
+   the resume's `ResumeSame` mask (item 6); `RwConn[i]` equal to `RwUnitConn`; and, read once right before the
+   first pass (the worker thread, read-only CONFIGMG calls), the member's complete list of immediate children
+   holding exactly one child, whose instance id names the noted upstream port's place and spells its vendor and
+   device (section 6.1.5 item 5's test). Failing, before the first write or after one: nothing more is written
+   below the member (`cm.reenum.9x.resume-unit.go` = `(bdf << 8) | why`, once) and the table ends **in doubt**
+   (item 10) - a table made at a suspend ends either whole or as a removal obligation, never as "not used": what
+   the authority could not prove (another router, a moved count, a failed resume, other devnodes) may leave the
+   unit's devnodes over devices that are not the ones they describe, whatever those read now.
+   The eject paths' sequence is part of the authority: a pass is admitted only when `CmEjectPassBegin` finds no
+   record or sweep naming the member and no such call running, with the sequence the copy was taken against, and
+   every write is preceded by `CmEjectPassGo` (the sequence unchanged, nothing running).
+   **The handoff.** Every devnode-changing call of the eject paths, at its start, advances the sequence and then
+   waits, 10 ms at a time with no bound, while a pass is under way (`CmEjectPassBegin` to `CmEjectPassEnd`), as
+   the suspend's handoff waits for a write-back: a pass tests its authority before each write and makes one
+   configuration access between two tests, so the pass stops at its next test, and no removal's query meets a
+   write in flight. The calls are made on the call workers at PASSIVE_LEVEL, holding no spin lock across the wait.
+   A link-down, a tunnel down or a departure moves the connection count and needs no wait: no devnode changes
+   until an eject path or the worker acts on it, and both are held as above. The pass's writes are PCI.VXD
+   configuration accesses through the numbering's guarded route; no lock is held across them.
+
+9. **One pass** (`cmWkUnitPass`, inside `RwBusy`; no wait inside it: a node not answering is read again at the next
+   check). Nothing a pass does rests on what an earlier pass read; a node's result records what was done to it,
+   never a permission. Top-down, each pass establishing its own path:
+   a. The member first, every pass: its id, header type, command and dwords 18h to 30h must read as this driver's
+      write-back left them (section 6.1.4 item 3's values). Otherwise the pass ends and item 10 applies.
+   b. The nodes in table order. A node is read or written only when its parent is **forwarding now**: the member
+      after step a, or a bridge node that this pass has read as its copy (id, type 1, bus numbers, windows and the
+      command's enables equal to the copy's) or has just written and verified. A bridge already done that still has
+      an unfinished node behind it is read again in this pass before anything behind it; no longer as its copy: in
+      doubt.
+   c. A node with no result yet whose parent is forwarding now:
+      - a bridge: id, header type, command and dwords 18h to 30h read. Not all read, or the id not answering (all
+        ones, 0000h, 0001h): no result yet. Another id or not type 1: in doubt. **Reset as a whole**
+        (`CmPortsHdrEligible`): written as section 6.1.4 item 3 writes the member (`CM_PORTS_HDR_ORDER`, each value
+        from `CmPortsHdrRestoreValue`, each dword read back and judged by `CmPortsHdrVerify`, at 3Ch also the bridge
+        control's ISA and VGA enables), the command last and only when every earlier write took: **written**,
+        forwarding now; a write not taken: in doubt. As its copy: done. Any other state: in doubt.
+      - a function: read as section 6.1.4 item 6 reads one, and 08h and 2Ch. Not read whole: no result yet.
+        Another id, class, revision or subsystem, or not type 0: in doubt. From reset (`CmPortsEpReset`): six BARs
+        and 3Ch written and read back (`CmPortsEpVerify`), then the command's lower half: **written**, or in doubt.
+        As its copy: done. Any other state: in doubt.
+   d. A node behind one in doubt is not read or written.
+   Logged once per node when final: `cm.reenum.9x.resume-unit.node` = `(bdf << 8) | result` (1 written, 5 as its
+   copy, 2 a write not taken, 3 another device or state, 4 not answering at the bound, 8 stopped).
+
+10. **The unit put back, or the doubt kept.**
+    - **Whole** (every node written or as its copy): section 6.1.5's reading (item 11) reads every node of the unit
+      configured: settled, nothing removed; the wait ends with the member's outcome (5), the note emptied, and the
+      member's operation runs as after a settled end (its numbering finds the bridges numbered and leaves them;
+      section 6.1.5 item 7 reads every bridge configured; its `Reenumerate_DevNode` finds nothing new). The drives
+      and the unit's other functions stay, under their devnodes and letters; a file held open across the sleep does
+      not (item 15's reading: on 98 SE its handle is invalid after the wake and its data written before the sleep
+      is lost, as on a drive right behind the port).
+    - **In doubt** (a node in doubt or stopped, the member not as its reference, the authority failing at any point,
+      a node unfinished at the bound): `RwUnitDoubt[i]` set under the worker's lock, and no further write for the
+      table. A table still being copied or passed when the member's wait ends (an outcome other than restored, the
+      bound) ends in doubt too. It is **an obligation, not a state of this resume**: it stands through the wait's end, a refused
+      removal, item 9's slow retry and later suspends, and is cleared only when a complete list shows the member
+      with no child (the unit removed, by the recovery or another route) or the member leaves the active set. While
+      it stands: section 6.1.5's reading - at the resume's second phase and at every slow retry - takes the member's
+      noted upstream port as **lost** whatever any node reads (a unit this driver part-wrote is never read as
+      configured, as Windows' work, or as undecided); no table is read at a suspend (a part-written unit is never
+      read as a new copy); the note's entries stay pending; **every re-enumeration of the member, of a chain port
+      below it, and the rescan a completed removal owes is held** (section 6.1.5 item 7's guard answers proven reset
+      for the member, whatever it reads at the first level: a deeper bridge left reset under its devnode would
+      otherwise be walked by PCI.VXD as bus 0's functions); and **the slow retry is armed by the obligation itself**
+      (section 6.1.5 item 9: at the end of each resume's wait that leaves the member with a child, and kept armed
+      while the obligation stands - after a later suspend, at the next resume's end, with or without a new refusal
+      - its attempt reading the member lost by this obligation; neither the retry nor the note ends
+      while it stands, and every suspend marks the member whatever its bridge reads, so each resume's wait
+      reaches the recovery or arms the retry). The recovery is section 6.1.5's, unchanged: the one
+      child naming the upstream port, Windows' query, a refusal respected and never forced, the slow retry after
+      it, `Remove_SubTree` after an accepted one, and the hot-plug path then finds the unit anew. Nothing the pass
+      wrote is undone while the devnodes stand: a removal is Windows' own, of devices whose drivers may already use
+      what was put back, and their query is how they let go. **Once a complete list shows the member with no
+      child** (the removal made, by the recovery or another route: no devnode and no driver below the member any
+      more), where a pass wrote any node, every node of the table proven to be this unit's is put back to reset
+      before anything else (`cmWkUnitUndo`: the functions' command off, then the bridges' command off and bus
+      numbers 0, deepest first, each read and written through PCI.VXD's own route as the numbering's are - after
+      the removal `HalGetBusData` answers all ones for the functions PCI.VXD no longer knows), and the unit is
+      forgotten; the numbering and PCI.VXD then meet the unit as at a hot plug. **Proven before anything is
+      written** (`CmPortsUnitUndoPlan`), because a saved bus number and a vendor and device prove nothing once
+      the buses may have been given out again: from the member down, a node's place counts only when its parent
+      is the member or a bridge of the table itself already proven and identified, and the whole path routes it
+      now (`CmPortsUnitPathRouted`): the member reads the secondary bus `UnitSec`, every bridge of the path reads,
+      at its proven place, the secondary bus its copy recorded, inside the bus range of every bridge above it (the
+      ranges intersected level by level), and the node's own bus lies inside that intersection - so its bus
+      reaches it through the member and this unit's own bridges alone, a bridge's stale numbers past a narrowed
+      range above it proving nothing. At such a place the node must read as its copy beyond its vendor and
+      device (its class and revision, its header's layout, a function's subsystem), the member's connection still
+      the table's. Just before each write the whole path and the node's id are read again. A second unit of the same model at a reused bus number is never written: its bus is not
+      routed by this member and this unit's bridges. A node not proven - its parent reading another bus or reset,
+      not answering, not this unit's - is left untouched and logged (`resume-unit.undo` low byte 4); a chain proven
+      only in part is undone in its proven part (the nodes this driver can show are its own; resetting them cuts
+      the route to the rest, which no devnode uses, the member having no child). A node not proven does not keep
+      the obligation: the removal was made and the member has no child, which is what the obligation was for, so
+      the unit is forgotten and the numbering meets it as it finds it (with nothing reset, the numbering's own
+      outcome says what it found). Only a refused read, a reset that did not take, or a suspend keeps the
+      obligation (the next proof of the empty member tries again). Every node, not only the ones the pass wrote: the routing the pass opened reaches the nodes
+      behind it and Windows' removal writes through it (read with the forced doubt: after the removal the dock's
+      chain-port bridge, which the pass had not written, was found numbered, and the numbering stopped there,
+      `cm.brnum.9x.outcome` 9, "inconsistent"). Read with the forced doubt (item 15) before
+      this was added: the upstream port left numbered by the pass over downstream ports left reset made the
+      member's numbering leave the chain as it found it (`cm.brnum.9x.outcome` 2, "already numbered"), and the
+      drive behind it was not found again.
+
+11. **Section 6.1.5's reading widened to the unit** (`cmWkSubRead`, the resume's second phase and the slow retry).
+    Where the suspend kept a place list (item 5 e) for the member - table or no table - each node of it is read at
+    its recorded place under the member's secondary bus as read now, each level's bus as the parent reads it now:
+    a bridge of the recorded id reading a type 1 header at secondary bus 0 (whatever its command and windows: the
+    criterion of section 6.1.5 item 7's guard, not "reset as a whole"), or a function of the recorded id reading
+    from reset (`CmPortsEpReset`) whose copy was not itself from reset (a function Windows never gave resources,
+    such as one left at problem 29, reads reset at both ends and loses nothing), under a parent that reads
+    configured, is **lost** for the member, as the
+    upstream port reading lost is today; a node not read (its parent not forwarding, a read refused) adds nothing
+    beyond today's verdict. Section 6.1.5 item 7's guard reads the same list by the same criterion, while the
+    member still has its child devnode, and holds the member's re-enumeration as a reset bridge at the first
+    level holds it today: so every deeper state the guard holds is one this reading calls lost, and the recovery
+    (with item 9's slow retry after a refusal) is owed for it - never a hold with no removal asked. So a unit with
+    a node reset under live devnodes is removed and found again whether the table was taken, refused, or never
+    made - the freeze class section 6.1.5 closes for the first level is closed for the unit's depth. While the
+    obligation stands (item 10's doubt), the unit's upstream port is named lost by the unit's own record alone -
+    its place and id as copied, which a later suspend does not replace - whatever the note, its place or the
+    verdict hold now (`CmPortsUnitVerdict`): an upstream port that stopped answering while its devnode stands, or
+    a note a later suspend refreshed, would otherwise leave the obligation holding the member's re-enumeration
+    with no removal ever asked; the recovery names the child devnode by its instance id before anything is
+    asked, as for any lost entry. The same holds when the member itself does not read, or reads
+    reset: the resume's wait reads the unit only behind a member restored and read, and the retry the obligation
+    arms at the wait's end (item 10) then asks by the record, at the member's secondary bus as copied with the
+    place list and kept with it while the obligation stands (`UnitSec`, which item 10's undo reads too; a later
+    suspend's header does not replace it) (`CmPortsSlowPlace`; `cm.reenum.9x.slow` low byte F2h when the record
+    names nothing). Under the obligation the removal, from the resume's wait or the retry, names the child devnode
+    at that recorded bus - the bus it was enumerated at - whatever the member reads now (`CmPortsUnitNameBus`).
+    Without a place list (a chain, a unit not read whole) the reading is today's (the first level only, section
+    6.1.5 item 2's limit stated there).
+
+12. **What it does not do.** Registers above 3Ch (the PCI Express capability: device and link control, ASPM, slot
+    control; MSI and MSI-X; power management) and the expansion ROM bases are not written: after a reset they read
+    their defaults on both ends of each link, and 98 SE uses neither MSI nor native hot-plug for these functions.
+    A chain, a nested switch, a unit not copied whole, ME, the firmware connection manager: no table, section 6.1.5
+    (with item 11) as today. The functions' drivers were not stopped and may have met their device reset before
+    the pass (Windows sends its D0 and starts the devices after the resume in its own order, and section 6.1.4 item
+    2's 2000 ms come first): whether each driver works on with the configuration put back is that driver's -
+    `xhci98.sys` on a dock's xHCI (its own resume path), Stor98 on an NVMe, a NIC's miniport - and it is read in the
+    legs, not assumed. Windows 2000 and later: nothing changes.
+
+13. **What the user sees.** On 98 SE, after a standby with a dock or an enclosure that has a switch and nothing
+    chained behind it: its drives and devices stay, as with a drive right behind the port; a file held open across
+    the standby is lost as there (item 15's reading). With
+    a chain, on ME (which restores the dock itself), with a Thunderbolt 3 firmware connection manager, or when
+    anything is in doubt: section 6.1.5's removal and finding again, as today.
+
+14. **The residual** (what binds nothing). (a) A function of the same vendor, device, class, revision and subsystem
+    put in place of the copied one behind a router that is the same unit (an SSD changed inside an enclosure while
+    the computer slept with the enclosure unplugged and plugged back) is written as the devnode that stayed
+    describes it - as section 6.1.4 item 6 already does for the function right behind the port: its driver then
+    meets another device of the same model under the old one's state. (b) Windows' own changes are not excluded:
+    the user's Device Manager removing or refreshing the unit, or PCI.VXD reprogramming a node, between the
+    devnode reading of item 8 and a write (seconds after the wake). A pass reads a node's identity and its path's
+    forwarding once, then makes the node's writes (a dozen configuration accesses for a bridge), testing this
+    driver's authority before each and reading each value back, but not the device's identity or its ancestors
+    again between them: Windows' own change inside that span, or between the path's reading and a deeper node's
+    writes, is not excluded, as Windows' restore is not excluded inside section 6.1.4 item 3's writes. (c) An eject path of this
+    driver not counted by item 5 b would be a defect of the count, not of the rule.
+
+15. **Legs** (the emulator: 98 SE on q35, the Intel ADL host model with the software connection manager,
+    `piix3-ide` with no geometry hints, the S3 SeaBIOS; qemu and release flavours; this package installed): the
+    generic dock (`downstream-ports=1` with its NVMe), the ASM2464 enclosure alone, the CalDigit TS3 Plus model
+    (`dialect=tb3,dock-model=ts3plus`) and the HP Thunderbolt Dock G2 model (`dock-model=hp-g2`): one standby and two
+    in one boot, a file held open across the sleep and written after the wake, a file written in the last second,
+    `cm.reenum.9x.resume-unit*` read, nothing removed (`resume-lost=...00`); the dock with the enclosure chained (no
+    table; removal as today); the dock unplugged during the sleep, and another unit (another UUID) in its place (no
+    identity: no table); ME with the dock (no table, ME's own restore); the single drive of section 6.1.4
+    (unchanged); a doubt forced by a qemu-flavour-only test value (`XhciCmQemuUnitStop`, not in the release flavour,
+    not INF-written: the number of passes to stop) stopping a pass after the upstream port (removal
+    and finding again over a part-configured unit, a refusal held across it and item 9's retry after the file
+    closes).
+
+    **Every reading of this section is the emulator's.** No real computer was available for a standby: no bench
+    machine of this project can enter Stand by, so nothing here has been read on a real dock,
+    enclosure or host router. The owner decided on these readings to take it into 3.6.0.0 (2026-11-15); a bench reading is
+    owed whenever a machine that can enter Stand by is available. A doubt whose upstream port stops answering,
+    or whose member does not read (item 11), rests on host vectors alone: the qemu flavour's test value stops a
+    pass, it does not silence a port.
+
+    Read on the emulator only (2026-11-15): written whole on the generic dock, the enclosure, the TS3 Plus model (10
+    nodes) and the HP G2 model, after one standby and after two, nothing queried or removed and none of 49.31's
+    fatal 0E screens (they appear on the removal path only). With a file held open the drive stays under its
+    letter; the held handle is invalid after the wake and the file's data written before the sleep is absent, as on
+    the single drive of section 6.1.4 with nothing of this section's (98 SE's own across a standby). The unit
+    unplugged or swapped during the sleep: `resume-unit.go` 0x11, nothing written, the departure or arrival taken
+    as before. The chain and ME: no table, as before. The forced doubt: removed, undone (item 10) and found again,
+    on the dock and on the enclosure; with a file held, the obligation's query refused and item 9's retry armed by
+    it and refused every minute, also after the file was closed: no drive at the check, about 4 min after the wake
+    (section 6.1.5 item 9's reading of a held file). The dock's
+    chain-port bridge was read in some resumes already as its copy at the pass, in others at reset: something on
+    Windows' side restores it at the resume, not identified.
+
+**Where.** `src\cm\cm_ports.h`, `cm_ports.c` (`CM_PORTS_UNIT_MAX`, `CM_PORTS_UNIT_DS_MAX`,
+`CM_PORTS_UNIT_BOUND_MS`, the node results, `CmPortsUnitNested`, `CmPortsUnitDisjoint`, `CmPortsUnitBarsIn`,
+`CmPortsUnitBridgeNow`, `CmPortsUnitFnNow`, `CmPortsUnitDoubt`, `CmPortsUnitLost`, `CmPortsUnitVerdict`,
+`CmPortsSlowPlace`, `CmPortsUnitNameBus`, `CmPortsUnitPathRouted`, `CmPortsUnitUndoPlan`; host vectors in
+`test\test_cm_ports.c`,
+`test_unit_rules` and `test_undo_plan`); `src\cm\cm_cfgwk.c` (`RwCapture` and the admissions that read it,
+`cmWkUnitCapture` and `cmWkUnitRead` in `CmCfgwkSuspend`, `RwConn`, `OpSeq` and `CmCfgwkConnLost`, the third phase
+`cmWkUnitPhase` with `cmWkUnitPass`, `cmWkUnitWrite` and the authority `cmWkUnitGo` in `cmWkResumeParked`,
+`cmWkUnitDevnodes`, `UnitDoubt`, `cmWkUnitOwes` and `cmWkUnitVerdict` in section 6.1.5's readings, `cmWkUnitHold`
+in item 7's guard, the undo `cmWkUnitUndo` with `UnitTouched`, the retry's arming); `src\cm\cm_ejectos.c` (`CmEjectActivity`, `CmEjectPassBegin`,
+`CmEjectPassGo`, `CmEjectPassEnd`, the sequence and the handoff around the query, removal, detached removal and
+slot calls, `CmCfgwkConnLost` at `CmEjectLinkDown`); `src\cm\cm_reenum.c` (`CmCfgwkConnLost` at a tunnel down and
+a chained tunnel up; `CmCfgwkResumed`'s mask); `src\cm\tbt_u4cm.c` / `.h` (the identity recorded at
+`TbtU4Suspend`, `ResumeSame` and `TbtU4PortResumeSame`; host vectors `test_resume_same` in `test\test_u4cm.c`);
+`src\cm\cm_reg.c` (`XhciCmQemuUnitStop`, the qemu flavour's); `scripts\gen-cm-snap.py` and `src\cm\cm_snapf.c`
+(`SuspUuid` hashed; `test\test_cm_snap.c`).
 
 ### 6.2 Windows 2000 and later: the bridge filter
 
@@ -5705,9 +6278,171 @@ slot, 5 not Stor98's, 6 a request still out, 7 closed between the
 admission and the request), `.sendwait`, `.over`; `.counts` at the stop. Location values only, no address.
 
 **Not solved here.** The order itself (the drive still wakes before its
-tunnel; this recovers it). A power dependency the power manager would order
-by itself (`PowerRelations`, 7 and later) is a candidate for later work,
-not this release.
+tunnel; this recovers it). A power dependency the power manager orders by
+itself (`PowerRelations`, 7 and later) is section 6.3.2 (task 50.10).
+
+### 6.3.2 The wake order: a tunnelled function's power relation to its NHI (task 50.10; a design, reviewed and revised)
+
+**What it adds to 6.3.1.** Section 6.3.1 recovers a drive whose wake D0
+failed against the absent tunnel; it does not order the wake. Windows 7 and
+later have a relation the power manager orders by itself: a device's
+`PowerRelations`. Here the child filter on the function directly behind a
+tunnel port answers it with the PDO of the NHI that owns the port, so the
+NHI is turned on before the function at a system wake. On the normal path
+the NHI completes its system S0 only after its resume has rebuilt the tunnel
+(`cm_power.c`: the S0's device D0 is retained until `CmNhiReinit` has run
+the client's resume and reconciliation, or `TbtU4Resume` and the settle, and
+released the held ports, but a port held for a pending storage statement,
+which a later pass releases), so the function, and by the tree's order every
+device behind it, powers up after the tunnel is back. Built on 2026-11-15;
+switched per NHI by `XhciCmWakeOrder` (section 8.1's rule: written by the
+INFs at its default under the don't-overwrite flag; absent, the default;
+any value but 0 or 1 refused and the default kept), which is 0, off (owner,
+2026-11-15: off by default, a reading on real hardware to follow). With 0
+the driver answers, asks and refuses nothing of this section and behaves as
+`3.5.0.0` did (a relation an earlier start with 1 installed is still
+cleared by the NHI's thread); the `cm.wakeorder.value` note at each start says what it ran
+with (bit 8 found, bit 9 refused).
+
+**The contract [documented].** Microsoft Learn,
+"IRP_MN_QUERY_DEVICE_RELATIONS",
+https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/irp-mn-query-device-relations,
+read on 2026-11-15: function and filter drivers may handle `PowerRelations`,
+from Windows 7; the PnP manager queries a device's power relations only when
+the device's driver calls `IoInvalidateDeviceRelations` with that type; the
+driver of the queried (target) device returns the PDOs of the devices "that
+must be turned on by the power manager before the target device is turned
+on", and turned off only after it; the guarantee covers the system
+transitions to and from S1 to S5, not device power changes in S0; each PDO
+returned is referenced, the list is paged pool, a replaced list is freed; a
+target in a paging, hibernation or dump file's path must forward the usage
+notification to each related device and succeed only if they all do; the
+answering driver should follow each related device's target-device-change
+notifications. Which systems honour it, and in which order, are this
+section's readings, not the page's.
+
+**Who answers.** Every child filter (section 7.4) whose device sits directly
+behind a tunnel port, by location: its bus is the secondary bus of an
+active, exclusive member of a listed domain whose `XhciCmWakeOrder` is 1, as that
+domain's thread read the member's bridge header at its last pass (exactly
+one such member; `cmPrDomainOf`), the child's bus read again at every start
+of its device (a renumbering stops and starts it). Whatever filter made the
+child: on the ASM4242 model the tunnel port's stack also carries a chain
+child, since the host switch's upstream port is a filter port too, and that
+child reads the port's `BusRelations` first, so the enclosure switch's child
+is a chain child of depth 3; a rule by depth and bridge missed it (read
+on 2026-11-15 on Windows 7 x86 in the emulator with an earlier build of
+this change, before the rule by location; `runs/run-50.md`, "50.10"). The
+device is the
+drive's function (the Titan Ridge model's enclosure) or the upstream port of
+an enclosure's or dock's own switch (the ASM4242 model's enclosure, 03:00.0
+to 04:00.0 to the NVMe at 05:00.0); anything deeper is its PnP descendant.
+Narrowed: a device right behind the port that carries only a bridge filter
+of this driver (decision M15) and no child answers nothing. Windows 7 or
+later only (the kernel's shared data page, as `cmChildTagOs`); 2000, XP and
+Vista are never asked and never answer; 98 SE and ME have no filter. The
+tunnel port itself is never related: its configuration restore must stay
+before the NHI's resume, which reads through it (record 22 section 11.1.14,
+decision U15).
+
+**The answer** (`CmPrRelations`, `cm_reenum.c`, from the child's PnP
+dispatch, PASSIVE_LEVEL): forwarded and waited for, then on its way back.
+The lower answer (success, its list or none; `STATUS_NOT_SUPPORTED` with no
+list, none; anything else, or more than 1024 entries, up as it came, the
+query ended as failed). The target is computed under the registration list's
+lock and referenced there (a domain is delisted under that lock before its
+NHI can go); a new paged list carries the lower entries and the NHI's PDO
+unless already listed (the reference then dropped). It is published under
+the same lock with the target computed again: if the domain left meanwhile,
+the appended entry is taken out again after the locks (the list is paged)
+and the answer becomes a clearing one where this child had given a relation
+before, else it goes up with the lower entries alone and nothing is
+recorded. A clearing answer (no target now, one
+given before) is a success with the lower list as it is, or with an empty
+list kept for it (`PrEmpty`, allocated before any target is given, so a
+clearing never waits on pool). What was installed is recorded on the child
+(`PrAnsTarget`, a token compared and never dereferenced; `PrAnsOk`), and
+every path that ends the query closes the ask (`PrAskOut`), a failed one
+marked for a paced retry (`PrAnsFailed`).
+
+**The asks.** The NHI's thread, at most every 500 ms beside the wake
+power-up's step, asks (`IoInvalidateDeviceRelations`, the child held across
+the call, no lock) every started child whose answer would differ from the
+one it installed, or that installed none since its start; an ask out or a
+failed query is asked again after 5 s; a relation naming an NHI no longer
+listed is asked again by any running NHI's thread. At the NHI's stop,
+surprise removal or removal, right after its domain is delisted, every child
+whose installed answer names it is asked once for a clearing query, whatever
+its state, in batches until none is left. Left: a clearing the PnP manager
+never queries, or one failed below, stands until a running NHI's thread or
+the child's own removal; with no NHI left nothing retries. A child's start
+clears `PrAnsOk` (asked again); its removal clears the relation's record and
+frees `PrEmpty`.
+
+**Special files.** This driver does not forward the usage notification to
+the NHI (its FDO is pageable and has no special-file handling); it makes the
+exclusion hold before such a use is accepted instead. On a child, a paging,
+hibernation or dump notification with InPath TRUE is failed at the dispatch,
+not forwarded (`cm.powerrel.inpath.refused`), while the child has a relation
+installed or an answer giving one being made (only ever with
+`XhciCmWakeOrder` 1, or after it, until the relation is cleared); an ask
+still out is not enough, since its answer gives no target while the
+notification is pending or accepted. Otherwise the notification is counted
+pending, under the child's lock and with that check, before it is forwarded
+(no target meanwhile), and accepted only if it succeeds below; InPath FALSE
+lowers the count and is never failed. Tracking runs whatever the value, from
+the child's attach. So with the order on such a file cannot be put on a
+drive while it has the relation (owner, 2026-11-15: the refusal kept; the
+documented alternative is forwarding the notification to the NHI).
+
+**What is not ordered.** The failure paths complete the NHI's S0 without a
+rebuilt tunnel, on purpose (a D0 the bus failed, a resume that failed, a
+device IRP that could not be asked for): there the order gives nothing, and
+section 6.3.1's recovery is what is left. That every local path completes
+the NHI's D0 and S0 does not rule out a dependency cycle in the power
+manager keeping those paths from running: the legs of task 50.10 read it
+(`runs/run-50.md`, "50.10").
+
+**Read (2026-11-15, in the emulator; `runs/run-50.md`, "50.10" and
+"50.11").** [runtime] Windows 7 x86 and x64 and Windows 10 x86 send the
+`PowerRelations` query after the filter's invalidation and take the NHI.
+With the order on and the enclosure kept (7 x86: the Titan Ridge model with
+the drive present from power-on, and the ASM4242 model with no pre-OS
+connection manager and the drive plugged after the desktop, standby,
+hibernation and two standbys in one leg; 7 x64 the same models, standby and
+hibernation; 10 x86 the ASM4242 model, hibernation alone, standby being
+disabled on those guests) each device behind the tunnel port had its first
+wake D0 after the NHI's S0, the D0 succeeded, no wake parked, no write
+failed and the shutdown finished; with `XhciCmWakePowerUp` 0 too, so
+ordinary disk I/O through the class stack, a writer started only after the
+wake included, had the unit powered by its owner. On the ASM4242 model this
+keeps a drive plugged in after the start, which task 49.13 lost (record 22
+section 11.1.8). With the enclosure removed after the wake, or during the
+standby, the writes after the removal failed and the shutdown finished; in
+the second case each D0 came after the NHI's S0 and failed `C000000E`,
+nothing being there. With 0: section 6.3.1's fault (two hangs in two with
+`XhciCmWakePowerUp` 0) and the drive lost on the ASM4242 model, as
+`3.5.0.0`, and no note of this section but the value's. Not read: an NHI
+whose own wake failed (the one attempt did not trigger), Vista (never
+answered), 8 and 8.1, 10 in standby, the Intel ADL model's integrated tunnel
+root ports, the stop before the sleep, more than one NHI, a relation cleared
+at an NHI's removal, real hardware.
+
+**The log.** `cm.powerrel.ask` (location; bit 24 the target given, 0 a
+clearing query; bit 25 a repeat of an ask still out); `cm.powerrel.answer` (location; the entries
+returned in bits 23:16; bit 24 the NHI given; bit 25 a clearing answer);
+`cm.powerrel.nomem`; `cm.powerrel.inpath.refused`; `cm.powerrel.s0` at each
+system S0 completion of an NHI with the switch on, on every completion route
+(epoch in bits 23:8; bit 0 that wake's resume had reported success by then
+(`CmReenumResumed` with success; a port it holds for a pending storage
+statement is released later);
+bit 1 no device D0 came or it failed); and `cm.powerrel.d0` with
+`.d0.status`, once per wake for each child of the domain, of the FIRST
+device D0 the child saw in that wake, latched at its dispatch and matched to
+its completion (bit 31 the NHI's S0 had completed in this wake when that D0
+reached the child: the order reading; bit 30 the D0 failed; bit 29 the
+resume had reported success by then; bit 28 the child was started; bits 27:24
+the D0s seen in the wake; bits 23:20 the depth; the location below).
 
 ### 6.4 When re-enumeration cannot be done
 
@@ -5878,11 +6613,12 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
   before any `UP` is published on 9x, the driver fills the table's
   `Cookie` (nonzero, per boot) and then, in this order
   (`CmNvlinkPublish9x`, host-tested):
-  1. **residency** (R4): on 98 SE and ME `DriverEntry` leaves the driver
-     with no `DriverUnload`, so the image that answers the proof and
-     writes the table stays loaded for the rest of the boot whatever its
-     PnP devices do (until `3.0.0.0` the start of a CONFIGMG worker,
-     section 6.1, did the same later); the publication checks it;
+  1. **residency** (R4): on 98 SE and ME `DriverEntry` makes one device
+     object that is never deleted (section 7.9, task 50.40; until then the
+     missing `DriverUnload` alone was taken for it, and the image went 18
+     to 43 s after the last NHI's removal), so the image that answers the
+     proof and writes the table stays loaded for the rest of the boot
+     whatever its PnP devices do; the publication checks it;
   2. **the current-boot proof** (R3a): it opens
      `HKEY_DYN_DATA\Stor98LinkState`; if the key exists another publisher
      owns it, and if the open fails with anything but "not found"
@@ -5932,8 +6668,9 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
   own devices. This driver does not: a disabled or removed Thunderbolt or
   USB4 controller stops its domain, as on every other target, and the
   update and uninstall of design record 23's tool go through that removal. The
-  image stays loaded all the same, so the proof is still answered and the
-  table stays valid; what is lost is that domain's further statements and
+  image stays loaded all the same (section 7.9), so the proof is still
+  answered and the table stays valid; what is lost is that domain's
+  further statements and
   requests, and Stor98's own gone deadline (MD-1) covers its drives - the
   case R4 itself describes for a connection manager that stops writing.
 
@@ -9561,6 +10298,238 @@ build without the hold; a tunnelled device marked when it arrives, and
 when it arrives during an installer's hold, after it; Windows 7 x86
 once.
 
+### 7.9 The image resident on 98 SE and ME: one device object that is never deleted (task 50.40)
+
+**What was read** (`runs/run-50.md`, "50.37 (continued): xhcicm.sys and
+xhcinet.sys on 98 SE and ME - can their images unload?", worker unload9x2,
+2026-11-20; QEMU, one processor, the emulator's TB3 Alpine Ridge host
+router). On 98 SE and on ME this driver's image is unloaded 18 to 43 s after
+the removal of its last NHI (`IRP_MN_REMOVE_DEVICE`, Device Manager's
+Remove), although `DriverEntry` registers no `DriverUnload` there. Once a
+tunnel had been exposed in the boot, the dynamic key
+`HKEY_DYN_DATA\Stor98LinkState` (section 7.2 step 2) outlived the image, and
+the next read of it - Regedit's export in the legs; Stor98's `HwFindAdapter`
+is the other reader - stopped the guest: "A fatal exception 0E has occurred
+at 0028:FF0BC0E2" on 98 SE and "Error: 0E : 0028 : FF14AA42" on ME, each the
+old base + `0x7D622`, the first byte of `cmNvProofQuery` in that image. The
+registry called the key's provider in freed memory. The published `3.4.0.0`
+to `3.5.0.0` make the same key.
+
+**Why the image went.** Section 7.2 step 1 took the missing `DriverUnload`
+for the image's residency on 98 SE and ME. It is not: on 98 SE an image with
+no `DriverUnload` still goes once its driver object has no device object
+left (`runs/run-46.md`, "46.20 follow-up": the test images `w98se-tR1` and
+`-tR2`, `xhci98.sys` at a Remove of its controller, and the boot
+`xhciuas.sys`), and with, in addition, one device object made at
+`DriverEntry` and never deleted, it stays (`w98se-tS2`, `-tS3`: the Refresh
+brought no second `DriverEntry` and the controller started again on the
+first image). This driver's device objects on 98 SE and ME are the NHI's
+function object, its query device (`cm_qryos.c`) and its network PDO
+(`cm_net.c`), each deleted at or after the NHI's removal, so the last NHI's
+removal leaves the driver object empty. The same was read on ME in the legs
+above; 46.20 had not read ME.
+
+**What rests on the residency.** On 98 SE and ME every one of these was
+written for an image that stays: the proof key's query handler (section 7.2
+step 2); the CONFIGMG worker that the stop leaves inside a call, which frees
+its own block when the call returns (`cm_cfgwk.c`, section 6.1); the
+per-member call workers, never waited for, and the late takers and the
+detached eject loop that run on them after the stop (`cm_callwk.c`,
+`cm_ejectos.c`, section 7.4, whose records are kept "for a later start");
+the connection-manager thread's end, joined by its event alone (`cm_thr.c`);
+the return after a DPC's last decrement (section 4.5, "The image outlives
+every DPC"); and every completion routine and dispatch that returns through
+the image after the act that lets the removal finish. stor98cm.h R4 names
+the stand-in for this residency: no `DriverUnload`, a non-PnP device object
+created in `DriverEntry`, and a `DriverEntry` that fails if that object
+cannot be created. The device object was never made.
+
+**The change.** On a system where `IoIsWdmVersionAvailable(1, 0x10)` is
+FALSE (98 SE: WDM 1.00; ME: 1.05), `DriverEntry` creates one device object
+before anything else is set up: unnamed, `FILE_DEVICE_UNKNOWN`, no
+characteristics, not exclusive, with an extension that is a `CM_COMMON` of a
+new kind, `CM_KIND_RESIDENT` (`'XCMR'`), and nothing else;
+`DO_DEVICE_INITIALIZING` cleared. It is attached to nothing, reported to
+nobody, given no name or symbolic link, and never deleted; the driver keeps
+its address (`CmResidentObject`). If `IoCreateDevice` fails, `DriverEntry`
+returns its status: the load fails, so no NHI gets this driver, rather than
+a driver that could publish a channel and then be unloaded under it. It is
+made first - after the flavour check, before the pool choice, the registry
+reads and the link-state table's allocation - so a failure leaves nothing
+allocated and nothing to delete (and no `IoDeleteDevice` runs inside
+`DriverEntry`, which on 98 calls `DriverUnload` before `DriverEntry`
+returns, `docs/usb-xhci-info/win98-wdm.md`). The dispatch routines tell this
+kind first, as they tell the query device: every request to it is completed
+with `STATUS_INVALID_DEVICE_REQUEST` (a power request after
+`PoStartNextPowerIrp`). None is expected - the object has no name, no stack
+and no devnode - so this is the defensive answer, not a route. The
+publication's residency check (`cmNvPubResident`, section 7.2 step 1) asks
+for the object as well as for the missing `DriverUnload`.
+
+`DriverUnload` stays NULL on 98 SE and ME as before (`DriverEntry`, and
+`CmCfgwkStart`, which clears it where a CONFIGMG worker starts): the routine
+was never what kept the image, but nothing should call it either.
+
+**2000 and later: unchanged.** `IoIsWdmVersionAvailable(1, 0x10)` is TRUE on
+Windows 2000 (WDM 1.10) and every later system, x86 and amd64 (the amd64
+image runs on XP x64 and later only), so no such object is made there and no
+dispatch ever sees the kind; the test is the one `DriverEntry` already makes
+for the unload routine. NT's residency stays as section 7.2 has it: the load
+that registers the link-state callback, or that ever connected the ring
+interrupt or asked a claim, has no `DriverUnload`, and NT does not unload a
+driver without one.
+
+**Why not the narrower changes** (`runs/run-50.md`, the section above, its
+options 2 and 3). Deleting the key at the last NHI's removal and ending the
+connection-manager thread by record 15 section 4.5.22's chained call would
+close the key's fault and the thread's own window and leave the detached
+CONFIGMG worker, the call workers and their late takers, the DPC returns and
+the completion tails running in an image that can go; and it would change
+the channel's lifetime, which R4 sets (below). The residency closes every
+one of them at once, which is what the code already assumes, and it is the
+stand-in R4 names.
+
+**What a reader of the channel gets after the last NHI's removal.** With the
+image resident:
+
+- The proof key is still answered by the image that made it. `BootCookie`
+  and `TableLinear` are this boot's cookie and this boot's table, which is
+  allocated for the boot and never freed (section 7.2, "The table"); neither
+  names a device, so neither turns stale when a device goes. The locator in
+  `HKEY_LOCAL_MACHINE` is the same statement.
+- The table's entries keep what the domain last published. The NHI's stop
+  gives up the domain's ownership of its entries (`CmReenumStop`,
+  `CmNvlinkStop`: the shadow's owner cleared and its tunnels forgotten) and
+  leaves each entry's flags as they were. `IRP_MN_REMOVE_DEVICE` and
+  `IRP_MN_STOP_DEVICE` run the same stop (`cmNhiStop`), so this is what a
+  reader has met after every disable on 98 SE (which reaches the NHI as a
+  stop) since `3.0.0.0`, and after every NHI removal on NT once the table is
+  published. The unbind keeps the tunnels (section 5.6: "Tunnels and
+  approvals survive it"), so an `UP` left in place is still true; what the
+  domain can no longer give is a later statement or removal request, which
+  is R4's case for a connection manager that stops writing ("receivers
+  holding the pointer get no further statement: MD-1 covers them"). On 98 SE
+  and ME no stop marks a loss in the table (no bridge reading there, section
+  7.2 "The statement"), so a Stor98 still bound keeps its own gone deadline.
+- An NHI that starts again in the session - after a disable and enable,
+  the stop and start of 98 SE read in the legs, or an NHI added again,
+  which the legs could not make (Code 29, the paragraph after the legs) -
+  starts on the same image. The record stays published (`cmNvEnsure` finds
+  it written), so the domain's first exposure publishes `UP` in the same
+  table, under the cookie the key answers; its tunnels are numbered afresh
+  (the stop above), and a new tunnel advances the entry's `LinkGeneration`
+  (R8b).
+
+So the key is neither withdrawn nor re-pointed at the removal. Withdrawn, it
+would answer "no channel" to a Stor98 that binds a drive behind the NHI
+added again, in a boot whose table is still being written; to publish it
+again would need R4's rules for a connection manager loaded again (a new
+table, a new cookie, every endpoint retired before the first `UP`) where no
+image changed. Before this change a read of the key once the image had gone
+called freed memory (the fault above); and by the code, an NHI that got this
+driver again after the image had gone would have loaded a new image, whose
+publication opened the old image's key, found it present - another
+publisher's, by step 2's rule - and published nothing for the rest of the
+boot (not read: the NHI added again stayed at Code 29 with the published
+release too).
+
+**What else the object changes.**
+
+- *Shutdown and standby*: nothing. The object is in no PnP stack, so the
+  power manager sends it no request, and it registers for no shutdown
+  notification. The NHIs' shutdown (section 5.6) is unchanged.
+- *An update by Setup without a restart*: Setup already treats this file on
+  98 SE and ME as a resident image (`xhciinst\inst_eng.c`, `sys_9x` and
+  `inst_eng_resident_plan`; design record 26 section 5.0): a file in place
+  is replaced through `WININIT.INI` at the next start, and the run asks for
+  the restart ("Setup will replace ... at the next start. Restart Windows to
+  load it."). No installer change. The running image is the old one until
+  the restart, and what it does meanwhile is the old image's: over a build
+  without this change (`3.5.0.0` and earlier) the boot keeps that build's
+  behaviour until the restart - an NHI removed before it can still let the
+  image go and leave the key behind - so the update's restart is what brings
+  the residency; over a build with it, the old image stays loaded until the
+  restart (read across an NHI's removal), and an NHI that starts again
+  before it starts on the old image (an NHI added again did not start, Code
+  29).
+- *The uninstall*: on 98 SE and ME the image stays loaded until the restart
+  - with nothing to run once its NHIs are gone but a CONFIGMG or call worker
+  finishing a call it was inside at the stop - and the proof key is answered
+  until then (a restart starts with no `HKEY_DYN_DATA` key). Where Windows
+  still holds the file, the uninstall's file step already says so and asks
+  for a restart and another run of the uninstall to delete it (`files_9x`:
+  "... is still in use: restart Windows, then run the uninstall again to
+  delete it."); whether it is held, and what the run says, is read in the
+  legs.
+- *Device Manager*: no entry. On 98 SE and ME a device object that no
+  AddDevice made and no bus reported is no devnode (46.20's `w98se-tS2` and
+  `-tS3` counted 14 devnodes after the Refresh, none with a problem, with
+  such an object in place); the legs read the device list.
+- *The gates*: no new import (`IoCreateDevice`, `PoStartNextPowerIrp` and
+  `IoIsWdmVersionAvailable` are rows of `xhcicm-imports.allow` already) and
+  no INF change.
+- *A start on a resident image*: an NHI that starts again meets the image-wide
+  state its predecessor left - the link-state record and table, the eject
+  records kept for a later start, the query device indices and the domain
+  slots each stop gives back, the log clock (`cm.ms` runs on from the first
+  `DriverEntry`). It is the state a second NHI, or a disable and enable,
+  meets today, and the state every NHI removal and return on NT has met
+  since the table's publication made the image resident there.
+
+**The thread ends and the detached workers, with the image resident** (per
+thread, from the code):
+
+| Thread | Its end on 98 SE and ME | What waits | With the image resident |
+|---|---|---|---|
+| The connection-manager thread (`cm_thr.c`, `cmThread`) | `KeSetEvent(&nhi->ThreadExited)`, then `PsTerminateSystemThread` | `CmThrStop`, on the event; the NHI's extension goes with its `IoDeleteDevice` after | after the signal the thread executes only this image's code and reads nothing of the extension: no window left. What `KeSetEvent` touches of the event after waking the waiter is what every event handshake here relies on (record 15 section 4.5.22) |
+| The CONFIGMG worker, waited for (`cm_cfgwk.c`, `cmWkThread`) | `KeSetEvent(&w->Exited)`, then `PsTerminateSystemThread` | `CmCfgwkStop`, on the event, then it frees the block | as above |
+| The CONFIGMG worker, detached (inside a call at the stop) | `CmCfgmgClose`, `CmFree(w)`, then `PsTerminateSystemThread` | nothing | its own block; only this image's code after it: no window left |
+| Each call worker (`cm_callwk.c`, `cmCwThread`) and what runs on it after the stop (the late taker `cmEjLate` and the detached loop, `cm_ejectos.c`) | `cmCwRelease` (the last reference frees the block), then `PsTerminateSystemThread`; the takers write records that are image-static or never freed (`cm_call.h`, "AFTER THE STOP") | nothing | no window left |
+
+The work items, DPCs, completion routines, dispatch tails and the proof
+key's handler return into a resident image too. So nothing else changes in
+this driver: record 15 section 4.5.22's chained ending is not added to these
+threads, because it would close only a thread's own last instructions, which
+the residency closes with the rest.
+
+**Legs** (as planned; the emulator's TB3 Alpine Ridge rig, 98 SE on the
+AHCI disk and ME on the PIIX disk, as the section above; what was read is
+`runs/run-50.md`, "50.40", and the paragraph after this list):
+
+- the reproduction on the published `3.5.0.0`, 98 SE and ME: a tunnel
+  exposed (the emulator's TB3 NVMe enclosure), the key exported, the last
+  NHI removed, the image's span read until its pages go, the key exported
+  again: the fault;
+- the same on this change: the image's span still mapped well past the 18 to
+  43 s at which it went, no second `DriverEntry` (the `cm.ms` clock runs
+  on), the key exported again with no fault and the same values;
+- the NHI removed and added again (a Device Manager Refresh, or `DEVCYCLE`'s
+  rescan) four times on each system: each start on the resident image, the
+  tunnel exposed again, the key's values read and valid after each; then a
+  shutdown. Not made: the NHI added again never started (Code 29, below);
+  its stop and start (a disable and enable) was read four times on 98 SE
+  alone in its place;
+- Setup's update over an installed `3.5.0.0` (the build carries the same
+  version, so `/force`), on 98 SE and ME: the replacement staged and the
+  restart asked for, then after it this change's image loaded and resident;
+  and the same over an installed build of this change: the restart asked
+  for, and the old image still loaded and serving an NHI removed and added
+  again before it (read: the old image stayed loaded across the NHI's
+  removal; the NHI added again did not start, Code 29, below);
+- the uninstall on 98 SE and ME: what it asks for and says, and whether the
+  image stays loaded until the restart;
+- the device list before and after (no new entry);
+- Windows 2000: the NHI disabled and enabled, removed and found again:
+  unchanged (no object, NT's join); with Thunderbolt networking installed
+  there, the adapter's worker started and joined on its thread object at
+  each (section 19 of record 35).
+
+Read (task 50.40's legs, 2026-11-20): an NHI removed in Device Manager came
+back after a Refresh at Code 29 with no resources on 98 SE and ME, the
+published release too, so no NHI started again on the resident image after
+a removal; its stop and start was read four times on 98 SE instead.
+Accepted as it is and recorded (owner, 2026-11-20).
+
 ## 8. Registry values, counters, the log and the snapshot
 
 Values, each `REG_DWORD` unless said, each written by every install path at
@@ -9721,6 +10690,7 @@ no INF before this task:
 | `xhcicm.sys` | `XhciCmGen4LinkRecovery` | every system | 1 | 1, every path of both NHI INFs (task 45.56) |
 | `xhcicm.sys` | `XhciCmRingInterrupt` | every system since task 48.26 (2000 to 10 before; 98 SE and ME read it and polled whatever it said) | 0 | 0, every path since task 48.26 (the NT paths, `.NTx86`, `.NTx86.6.0`, `.NTamd64`, `.NTamd64.6.0`, before) |
 | `xhcicm.sys` | `XhciCmBridgeReq` | NT 5.x alone (2000, XP, XP x64; `CmBreqGate`) | 1 | 1, the NT 5.x paths (`.NTx86`, `.NTamd64`) |
+| `xhcicm.sys` | `XhciCmWakeOrder` | read on every system, acted on by Windows 7 to 10 alone (section 6.3.2) | 0 | 0, every path of both NHI INFs (task 50.10) |
 
 Exempt, as the owner's rule says: the `qemu` flavour's test-only values
 (`XhciQemu*`, `XhciCmQemuIrqDead`, `XhciCmQemuFailD0`,

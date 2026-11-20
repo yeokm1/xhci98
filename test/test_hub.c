@@ -330,6 +330,23 @@ static void test_suspend(void)
     CHECK(!XhciHubResumeBeforeReset(XHCI_HUB_PORT_SUSPEND),
           "not when nothing is connected");
 
+    /* Design record 17 section 4.15.16 D: the one predicate of a hub
+     * port's absence. */
+    CHECK(!XhciHubPortGone(on, 0), "connected and enabled: present");
+    CHECK(XhciHubPortGone(XHCI_HUB_PORT_POWER | XHCI_HUB_PORT_ENABLE, 0),
+          "not connected: gone");
+    CHECK(XhciHubPortGone(XHCI_HUB_PORT_POWER | XHCI_HUB_PORT_CONNECTION, 0),
+          "not enabled: gone");
+    CHECK(XhciHubPortGone(on, XHCI_HUB_C_PORT_CONNECTION),
+          "a connection change: gone");
+    CHECK(!XhciHubPortGone(on, XHCI_HUB_C_PORT_ENABLE),
+          "an enable change alone on a connected, enabled port: present");
+    CHECK(!XhciHubPortGone(on, XHCI_HUB_C_PORT_ENABLE | XHCI_HUB_C_PORT_RESET),
+          "the reset's changes on an enabled port: present");
+    CHECK(XhciHubPortGone(XHCI_HUB_PORT_POWER | XHCI_HUB_PORT_CONNECTION,
+                          XHCI_HUB_C_PORT_ENABLE),
+          "an error disable (enable change, port disabled): gone");
+
     CHECK_EQ(XhciHubResumeProgress(on | XHCI_HUB_PORT_SUSPEND),
              XHCI_HUB_RESUME_PENDING, "still resuming");
     CHECK_EQ(XhciHubResumeProgress(on), XHCI_HUB_RESUME_DONE, "resumed");

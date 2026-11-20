@@ -19,8 +19,9 @@
  * last to let go closes the routes and frees it. The stop never waits for
  * a worker: one inside a call may be waiting on the very removal the stop
  * belongs to. Such a worker finishes its call alone and leaves; the image
- * stays resident on 98 SE and ME (no DriverUnload from DriverEntry, R4;
- * the CONFIGMG worker's rule, cm_cfgwk.c), so its code outlives the stop.
+ * stays resident on 98 SE and ME (the device object DriverEntry makes and
+ * never deletes, R4, design record 21 section 7.9; the CONFIGMG worker's
+ * rule, cm_cfgwk.c), so its code outlives the stop.
  * What a detached transaction still owes (the removal an accepted query
  * authorised, the member blocker of record 21 section 7.2 part 0) is its
  * client's state, kept where the client keeps it: an operation of kind

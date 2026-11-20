@@ -210,6 +210,17 @@ VOID XhciHubPortDecide(ULONG state, ULONG status, ULONG change,
  * suspended. */
 ULONG XhciHubResumeBeforeReset(ULONG status);
 
+/* Design record 17 section 4.15.16 D: whether a hub port's GET_STATUS reply
+ * establishes that the device below it has gone - not connected, not
+ * enabled, or C_PORT_CONNECTION set. C_PORT_ENABLE alone, on a port that
+ * reads connected and enabled, does not: the change stays set until it is
+ * cleared, so an earlier error's change can outlive a later reset that
+ * enabled the port, and QEMU's hub raises it at a reset that enables a
+ * disabled port. The one predicate of HcdHubPathPresent and the serial
+ * deferral's path check; what an unanswered request means stays each
+ * caller's. Pure. */
+ULONG XhciHubPortGone(ULONG status, ULONG change);
+
 /*
  * A resume's outcome, from one GET_STATUS answer (XhciHubResumeProgress):
  * PENDING while the suspend bit is still set; DONE once it is clear on a

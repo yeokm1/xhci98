@@ -11,6 +11,8 @@
  */
 
 #include "xhci_stream.h"
+#include "xhci98_streams.h"
+#include "xhci_quirk.h"
 
 static ULONG xhciStreamIsPow2(ULONG v)
 {
@@ -282,8 +284,11 @@ ULONG XhciStreamDoorbell(ULONG dci, ULONG streamId)
     return (dci & 0xFFUL) | ((streamId & 0xFFFFUL) << 16);
 }
 
-ULONG XhciStreamResendAfter(ULONG code, ULONG state)
+ULONG XhciStreamResendAfter(ULONG code, ULONG state, ULONG aborted)
 {
+    if (aborted) {
+        return XHCI_STREAM_RS_REMOVED;
+    }
     if (code == XHCI_CC_SUCCESS) {
         return XHCI_STREAM_RS_AGAIN;
     }
@@ -336,4 +341,101 @@ ULONG XhciStreamFind(const XHCI_RING *const *rings, ULONG count,
         }
     }
     return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Task 50.20 (design record 17 section 4.12.10)                        */
+/* ------------------------------------------------------------------ */
+
+ULONG XhciStreamRecycleFailed(ULONG contract, ULONG code, ULONG aborted)
+{
+    if (aborted) {
+        return XHCI_STREAM_RF_REMOVE;
+    }
+    if (contract && code != 0 && code != XHCI_CC_SUCCESS) {
+        return XHCI_STREAM_RF_HOLD;
+    }
+    return XHCI_STREAM_RF_FAULT;
+}
+
+ULONG XhciStreamSetDeqUntrustedId(ULONG vendorDevice)
+{
+    /* The one list: XhciStreamDequeueAvoid's (xhci_quirk.c). */
+    return XhciQuirkMatches(XHCI_QK_DEQ_AVOID, vendorDevice);
+}
+
+ULONG XhciStreamFlagDecide(ULONG contract, ULONG kind, ULONG state,
+                           ULONG taken)
+{
+    if (!contract) {
+        return XHCI_STREAM_FD_TODAY;
+    }
+    if (kind != XHCI_STREAM_KIND_KEEP && kind != XHCI_STREAM_KIND_REPLACE &&
+        kind != XHCI_STREAM_KIND_DROP) {
+        return XHCI_STREAM_FD_FAULT;
+    }
+    switch (state) {
+    case XHCI_EP_STATE_DISABLED:
+        return XHCI_STREAM_FD_NONE;
+    case XHCI_EP_STATE_STOPPED:
+        return taken ? XHCI_STREAM_FD_WITHHELD : XHCI_STREAM_FD_NONE;
+    case XHCI_EP_STATE_HALTED:
+        return XHCI_STREAM_FD_WITHHELD;
+    case XHCI_EP_STATE_ERROR:
+        if (kind == XHCI_STREAM_KIND_DROP) {
+            return XHCI_STREAM_FD_ERROR_EXIT;
+        }
+        return (kind == XHCI_STREAM_KIND_REPLACE) ? XHCI_STREAM_FD_REFUSE
+                                                  : XHCI_STREAM_FD_WITHHELD;
+    default:
+        /* Running after the bounded stop, or a reserved state. */
+        return XHCI_STREAM_FD_FAULT;
+    }
+}
+
+ULONG XhciStreamFlagSetsDebt(ULONG decision)
+{
+    return (decision == XHCI_STREAM_FD_WITHHELD ||
+            decision == XHCI_STREAM_FD_ERROR_EXIT ||
+            decision == XHCI_STREAM_FD_REFUSE) ? 1UL : 0UL;
+}
+
+ULONG XhciStreamDebtSet(PULONG debt)
+{
+    if (*debt) {
+        return 0;
+    }
+    *debt = 1;
+    return 1;
+}
+
+ULONG XhciStreamDebtReplaced(PULONG debt)
+{
+    if (!*debt) {
+        return 0;
+    }
+    *debt = 0;
+    return 1;
+}
+
+VOID XhciStreamDebtClosed(PULONG debt)
+{
+    *debt = 0;
+}
+
+ULONG XhciStreamAckFlags(ULONG flagged, ULONG inFlags, ULONG success)
+{
+    ULONG out;
+
+    out = inFlags & XHCI98_STREAMS_F_CLIENT_MASK;
+    if (success && flagged &&
+        (inFlags & XHCI98_STREAMS_F_CLIENT_RECOVERS) != 0) {
+        out |= XHCI98_STREAMS_F_ACK_CONTRACT;
+    }
+    return out;
+}
+
+ULONG XhciStreamSurvivorDoorbell(ULONG queued, ULONG debt)
+{
+    return (queued != 0 && !debt) ? 1UL : 0UL;
 }

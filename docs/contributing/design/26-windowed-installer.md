@@ -2628,7 +2628,12 @@ own]", record 23 section 8.3, as a page).
 16 section 19), and Next with nothing touched writes 1 machine-wide once
 the run has installed a listed controller (after the results check;
 nothing when that install is refused, fails or is cancelled); 0 chosen
-there is written as any choice is. Elsewhere the row is as above.
+there is written as any choice is. Elsewhere the row is as above. From
+task 50.34 the INFs write 1 too and the proposal is kept unchanged (record
+16 section 21.8, "`SETUP.EXE`"); the USB tab's Advanced list gains
+`XhciIntelPortSwitchSetup` (record 23 section 8's table), and
+`XhciIntelPortSwitchReady`, a value of each controller's own key, is
+offered nowhere in Setup.
 
 **"Advanced..."** opens a dialog with the values record 23 never asks
 (`XhciPollFineTimer`, `XhciSelectiveSuspend`, `XhciFastPollFsLs` (owner,
@@ -6288,7 +6293,18 @@ new certificate (owner, 2026-11-06). The pin was `v0.1.9` at
 the same certificate, at `0b19f5a22c5daaaef7cd9a9bfe77b79b9da7c1b1`
 (tagged 2026-11-11; the tag moved on 2026-11-14 to this commit, which adds
 only the changelog entries of its README), its `SHA256.TXT` hashing to
-`509A46B852E0092F7E527DB6464F526A7913F1B3D18FA0023E5E1EE8FB05CA5E`. Nothing in the installer
+`509A46B852E0092F7E527DB6464F526A7913F1B3D18FA0023E5E1EE8FB05CA5E`. For
+`3.6.0.0` it was `v0.1.11`, with the same certificate, at
+`20bd643f50c8343fd8daf94027e31536332274dc` (tagged 2026-11-15; every
+device name of its drivers carries "(wdm-free)"), its `SHA256.TXT`
+hashing to
+`CD89EAFDCF455DC9A3F1989D70C16DC3D877FBF5941C6601ADFAABDFADFA2EAF`,
+until the owner chose `v0.1.12` instead: with the same certificate, at
+`e3b3ad7732011fcb20de93435c42b9c1dc30e1ce` (tagged 2026-11-20; rtl815x
+0.2.4.0 and cdcnet 0.1.6.0's INFs, `STAGE.TXT` in those packages'
+notes, every other file `v0.1.11`'s bytes), its `SHA256.TXT` hashing to
+`CAFBF4FCAAFB8983A35D2A08D4008C60A6646E9B1877AA218523CA647253471A`.
+Nothing in the installer
 names a thumbprint: it reads the certificate from the set's folder.
 With a `Tag:` line, the `Certificate:` line
 and the `SHA256:` line of `usb-wdm-free-test.cer` at the release's top go

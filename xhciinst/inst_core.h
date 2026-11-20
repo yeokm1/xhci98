@@ -223,6 +223,41 @@ int inst_pci_vendev(const char *id, INST_U32 *vendorDevice);
  * &VID_ forms), 2 old (XHCI98\...), 0 neither. */
 int inst_bus_id(const char *instanceId);
 
+/* A driver key deleted by hand under an Enum entry that still names it
+ * (record 23 sections 5.3 and 6.3, revision 65; run-50 "50.17 (Setup,
+ * deleted key)"). INST_MFG_9X is the Mfg string of xhci98.inf, xhciuas.inf
+ * and xhcicm.inf, which the setup engine of 98 SE and ME copies into the
+ * Enum entry of a device it installs from one of them. */
+#define INST_MFG_9X "xHCI98 Project"
+
+/* 1 when a Driver value has the system's own form: on 98 SE and ME
+ * <class>\NNNN (letters, digits or _, a backslash, four decimal digits),
+ * on NT {8-4-4-4-12 hex digits}\NNNN. Only such a value whose key is
+ * not found counts as a key that is gone. */
+int inst_driver_value_form(int nt, const char *value);
+
+/* 98 SE and ME, a device whose driver key is gone: 1 when its Enum entry
+ * proves it this package's - an id only this package's drivers create
+ * (inst_bus_id, inst_cm_child_id, inst_uas_unit_id), or an Mfg value
+ * (mfg, NULL when the entry has none) of exactly INST_MFG_9X. */
+int inst_keygone_ours9x(const char *instanceId, const char *mfg);
+
+/* A line said once per entry in a run that reads the same entries more
+ * than once (the 98 SE and ME uninstall walks Enum three times): 1 the
+ * first time id is seen, recording it in seen[0..cap-1] (*count of them);
+ * 0 when seen before. With the list full it answers 1, so a line is said
+ * again rather than lost. */
+int inst_once(char (*seen)[INST_ID_CHARS], int *count, int cap,
+              const char *id);
+
+/* The plan's row of a device, "    INF <inf>; driver <driver><text>;
+ * <action>", into out (cap): on one line when it fits the console's
+ * INST_COLUMNS, else with the action on a line of its own under it, as
+ * the stale entries' rows are; the words are the same either way. */
+void inst_plan_row(char *out, size_t cap, const char *inf,
+                   const char *driver, const char *text,
+                   const char *action);
+
 /* ---- the action per device (record 23 section 5.4) ----------------------------- */
 
 #define INST_ACT_INSTALL    0   /* no driver                               */
@@ -233,6 +268,8 @@ int inst_bus_id(const char *instanceId);
 #define INST_ACT_FILTER     5   /* tunnel port on pci without our filter   */
 #define INST_ACT_UNKNOWN    6   /* ours, version unreadable: refused        */
 #define INST_ACT_WINDOWS    7   /* 8, 8.1: a UAS disk left to Windows' own  */
+#define INST_ACT_ORPHAN     8   /* 98/ME: its driver key gone and the Enum
+                                   entry not proven this package's: left  */
 
 /* A driver key's DriverVersion: three answers (record 23 section 5.3). */
 #define INST_VS_ABSENT      0
@@ -607,6 +644,13 @@ const char *inst_hvci_text(int state, int cmInRun);
                                    driver's two; task 49.38): the xHCI98
                                    USB Tree's alone, Setup never writes
                                    one */
+#define INST_LOC_CTRL       4   /* one xHCI controller's own driver key,
+                                   never the machine-wide one (task 50.34:
+                                   XhciIntelPortSwitchReady): the xHCI98
+                                   USB Tree's alone, Setup never writes
+                                   one */
+/* A value Setup never shows, writes or removes: the Tree's alone. */
+#define INST_LOC_TREE_ONLY(l) ((l) == INST_LOC_DRIVE || (l) == INST_LOC_CTRL)
 
 /* A value's kind (task 49.38): a DWORD, or a string (XhciCmTunnelBridge). */
 #define INST_VK_DWORD       0
@@ -2250,6 +2294,9 @@ int inst_wizard_title(const char *title);
 #define INST_DI_PROBE           0
 #define INST_DI_INSTALL         1
 #define INST_DI_REMOVE          2
+#define INST_DI_REMOVESTALE     3   /* a stale bus entry: the helper reads
+                                       its conditions again right before
+                                       the removal (record 27 9.1)      */
 
 /* A 16-bit program's command tail holds 126 characters (record 27 section
  * 4.1, read on 98 SE: CreateProcessA failed at 127), so the job travels in
@@ -2318,6 +2365,9 @@ int inst_di_nocopy(int controller, int controllerCopied, int placed);
 #define INST_DI_V_REMOVED_RESTART   9
 #define INST_DI_V_NOT_FOUND         10
 #define INST_DI_V_PROBED            11
+#define INST_DI_V_KEPT              12  /* removestale: no longer stale,
+                                           nothing removed; Detail the
+                                           helper's reason             */
 
 typedef struct _INST_DI_RESULT {
     int Verdict;            /* INST_DI_V_*                                 */
@@ -2359,6 +2409,10 @@ int inst_di_outcome(int job, int verdict);
  * unfinished with steps, never a failure of the device and never
  * "nothing to do" (98 SE update, 2026-10-19). */
 int inst_di_unfinished(int verdict);
+
+/* removestale's "kept" as the step's reason: its entry back in use
+ * (devnode, key) or not readable as stale (the rest). */
+const char *inst_di_kept_text(const char *detail);
 
 /* The verdict as one phrase ("installed", "the helper did not finish"). */
 const char *inst_di_verdict_text(int verdict);
@@ -3523,7 +3577,7 @@ int inst_qc_build(const unsigned char *b, size_t n, INST_U32 member,
  * make-release.ps1 writes it for package-common.ps1's pins (the cut and
  * test-package.ps1 hold the two equal): the installer's record of what the
  * folder must hold. "" for a release with no such set. */
-#define INST_WDMFREE_SUMS       "509A46B852E0092F7E527DB6464F526A7913F1B3D18FA0023E5E1EE8FB05CA5E"
+#define INST_WDMFREE_SUMS       "CAFBF4FCAAFB8983A35D2A08D4008C60A6646E9B1877AA218523CA647253471A"
 #define INST_NONFREE_SUMS     "674BAFDE7BA8F7FE6855E19E3C8E2BB26D33BA4F0B9E10E1D9CFF6ABFBDDE062"
 /* The owner, 2026-10-23: NUSB 3.3's files and both sets under one folder,
  * in the download and in the install directory, every level 8.3. */

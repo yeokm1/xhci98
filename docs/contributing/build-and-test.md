@@ -287,8 +287,8 @@ Setup scripts:
 | `scripts\package\extract-usbd-sources.ps1` | Stages reference copies of each target's own `usbd.sys` (and Win98 SE's `usbhub.sys`, an import-gate precedent binary) from that OS's install media into the git-ignored `tools\`, then authenticates them. Packaged by nothing since 1.0.0.1; see "The files the OS supplies" |
 | `scripts\package\make-package.ps1` | Assembles the install media both targets are installed from (`out\pkg-<flavor>-<arch>\`), staging against the layout `check-inf.ps1 -EmitMediaLayout` derives, and gates it. `-Arch x86` (default) or `amd64` moves three things at once and they are not separable: the obj subdirectory, which of the two INFs is staged, and the architecture both gates run under. `-TestSignPfx <pfx> -SignOnly` test-signs the binaries a gated `build-driver.cmd` run recorded in `out\gated-<arch>-<flavour>.txt` without running its host suite and import gates again ("Since 2.3.0.0 the x64 package is test-signed") |
 | `scripts\package\test-package.ps1` | The packager's regression tests; stand-ins only, run by `build-driver.cmd` |
-| `scripts\package\cut-builds.ps1` | A cut's two gated builds at once: `build-driver.cmd all` in this tree and `all -amd64` in a second worktree (`-X64Tree`; by default `<this tree>-x64`, made or brought to this tree's HEAD by the script, task 45.3), each with its own temporary folder and log, then the amd64 build and its records imported into this tree (`Import-GatedBuild`, `package-common.ps1`); `-Serial`, `-ImportOnly`. Roadmap-usb4 task 44.31; "The cut's two builds at once" and "A faster gated build" below |
-| `scripts\package\pre-cut.ps1` | Before a cut, after the version bump is committed: every input of the cut rebuilt in this tree - the text checks, `XHCIPFW`, `XHCIQUAL`, the mark service, the installer and its helper, then `build-driver.cmd all` and `all -amd64` here one after the other (or `-TwoTrees`, `cut-builds.ps1`) - and `make-release.ps1 -CheckOnly`, stopping at the first failure, each step's log in `out\pre-cut\`, every step with `XHCI98_FULL_SELFTESTS=1` and without `XHCI98_SELFTEST_SKIP_OK` (task 48.34). It refuses first unless the tree is clean, `releases\<version>\` is not there yet, no gated build lock is held and, while `wdmfree-pin.txt` names a usb-wdm-free release, `-WdmFreeRoot` or `scripts\local\usb-wdm-free` holds its tag at its commit; `-Plan` checks and lists, `-SelfTest` runs on fixture trees and stand-in steps (run by `build-driver.cmd`). Roadmap-usb4 task 48.10, after the `3.4.2.0` cut met a stale Stor98 and `XHCIQUAL` built in another tree |
+| `scripts\package\cut-builds.ps1` | A cut's two gated builds at once: `build-driver.cmd cut` in this tree and `cut -amd64` in a second worktree (`-X64Tree`; by default `<this tree>-x64`, made or brought to this tree's HEAD by the script, task 45.3), each with its own temporary folder and log, then the amd64 build and its release record imported into this tree (`Import-GatedBuild`, `package-common.ps1`); `-Serial`, `-ImportOnly`, `-WithQemu` (`all`, and both flavours imported; task 50.1). Roadmap-usb4 task 44.31; "The cut's two builds at once" and "A faster gated build" below |
+| `scripts\package\pre-cut.ps1` | Before a cut, after the version bump is committed: every input of the cut rebuilt in this tree - the text checks, `XHCIPFW`, `XHCIQUAL`, the mark service, the installer and its helper, then `build-driver.cmd cut` and `cut -amd64` here one after the other (or `-TwoTrees`, `cut-builds.ps1`; `-WithQemu` for `all`, task 50.1) - and `make-release.ps1 -CheckOnly`, stopping at the first failure, each step's log in `out\pre-cut\`, every step with `XHCI98_FULL_SELFTESTS=1` and without `XHCI98_SELFTEST_SKIP_OK` (task 48.34). It refuses first unless the tree is clean, `releases\<version>\` is not there yet, no gated build lock is held and, while `wdmfree-pin.txt` names a usb-wdm-free release, `-WdmFreeRoot` or `scripts\local\usb-wdm-free` holds its tag at its commit; `-Plan` checks and lists, `-SelfTest` runs on fixture trees and stand-in steps (run by `build-driver.cmd`). Roadmap-usb4 task 48.10, after the `3.4.2.0` cut met a stale Stor98 and `XHCIQUAL` built in another tree |
 | `scripts\build-steps.ps1` | The checks of a gated build that need no DDK, run at once as separate processes, each with its own `TEMP` and log under `out\steps-<arch>\`, at most `XHCI98_BUILD_STEPS` at a time (default 4), each step's output printed whole when it ends and a table of results and times after them; `-SelfTest` on stand-in steps. Run by `build-driver.cmd` after its text checks. Roadmap-usb4 task 45.3; "A faster gated build" below |
 | `scripts\import-gate\test-flavour-rules.ps1` | Regression tests for the import allowlist's `FLAVORS` grammar (release, qemu and all; `both` and `debug` refused), on synthetic allowlists, and checks of the production files before anything is linked: every common-format allowlist (each `*.allow` but Stor98's, twelve) parses, and Stor98's under its own reader (`scripts\check-stor98-build.ps1 -ParseOnly`); each x86 allowlist that carries `HAL.dll!WRITE_PORT_UCHAR` (xhci98, xhcicm, xhcipfw) carries it in exactly one `qemu required` row, the row that keeps it out of every published binary; the qemu-only rows of every allowlist are exactly the ones it names; and the net98 and net6 profiles' row rules run on synthetic rows. Run by `build-driver.cmd` |
 
@@ -627,8 +627,23 @@ build plus every gate a binary must pass before it goes near a VM:
 scripts\build-driver.cmd            REM release, the one that ships (default)
 scripts\build-driver.cmd release
 scripts\build-driver.cmd qemu       REM the emulator-only flavour
-scripts\build-driver.cmd all        REM both - what a release cut gates
+scripts\build-driver.cmd all        REM both, every self-test in full
+scripts\build-driver.cmd cut        REM release as a release cut builds it
 ```
+
+`cut` is what a release cut builds since roadmap-usb4 task 50.1 (owner,
+2026-11-14, after the `3.5.0.0` pre-cut: "just release build will do"):
+the release flavour alone, run as `all` runs it - every self-test in full
+and every tool built first (below) - so the qemu flavour, which a cut
+never publishes, is not built. Nothing the cut or `make-package.ps1
+-SignOnly` reads needs the qemu build or its record: `make-release.ps1`
+publishes and checks release alone, `-SignOnly` reads the record of the
+flavour it stages, and the one reader of a qemu record, the import of
+`cut-builds.ps1`, takes the flavours its builds made ("The cut's two
+builds at once" below). `all` keeps its meaning, both flavours with the
+same rigour; `pre-cut.ps1 -WithQemu` and `cut-builds.ps1 -WithQemu` build
+it. A `cut` or `release` run leaves an earlier qemu record of its
+architecture where it was, and nothing in a cut reads it.
 
 `debug` and `both` are refused by name: roadmap-usb4 task 45.45 (owner,
 2026-10-30) retired the debug flavour, and `both` was debug and release
@@ -680,7 +695,8 @@ flavour word:
 
 ```
 scripts\build-driver.cmd release -amd64 REM the one that ships, 64-bit
-scripts\build-driver.cmd all  -amd64    REM both - what a release cut gates
+scripts\build-driver.cmd all  -amd64    REM both, every self-test in full
+scripts\build-driver.cmd cut  -amd64    REM release as a release cut builds it
 ```
 
 It selects WDK 7.1 (`x64 WNET`) instead of the Windows 2000 DDK, and
@@ -944,7 +960,7 @@ again by the packager:
   self-tests `scripts\build-steps.ps1` passed over because their EXE is not
   built in this tree (`out\steps-<arch>\absent.txt`: XHCIINST, XHCIMARK,
   XHCIDI and, on amd64, XHCITR and XHCIPERF are built by their own
-  `build.cmd`). An `all` run (`build-steps.ps1 -All`) builds them itself
+  `build.cmd`). An `all` or `cut` run (`build-steps.ps1 -All`) builds them itself
   first on both architectures - `xhcimark\build.cmd`, `xhciinst\build.cmd`,
   then `xhciinst\di\build.cmd` in a step of its own after it (the
   installer's build also runs it but takes its exit 2, no Open Watcom, as
@@ -970,7 +986,8 @@ so they sit here, under their own titles.
 
 ### The cut's two builds at once (roadmap-usb4 task 44.31)
 
-A cut needs `scripts\build-driver.cmd all` and `all -amd64`, and until
+A cut needs `scripts\build-driver.cmd cut` and `cut -amd64` (`all` and
+`all -amd64` until task 50.1, and with `-WithQemu`), and until
 `3.3.0.0` it ran them one after the other in the one tree the cut is made
 from: two runs in one tree write the same files outside the
 per-architecture object directories (the host suite's and the self-tests'
@@ -1032,8 +1049,12 @@ revised).
   start in either tree while it runs and it refuses while one is running
   or a stopped one left its lock; a `.pending` record in B (a build that
   did not finish) is refused too. A must be clean (`Get-GitTreeState`).
-  Then each flavour's record in B (`release`, and `qemu` where B has its
-  record; `debug` until task 45.45) is read once, as bytes, and must admit B's binaries
+  Then each flavour's record in B is read once, as bytes - the flavours
+  `cut-builds.ps1`'s builds made: `release`, and `qemu` too with
+  `-WithQemu`, in `-ImportOnly` as well, so a qemu record an earlier `all`
+  build left in B is never taken (task 50.1; until then `qemu` wherever B
+  had its record, and `debug` until task 45.45; `Import-GatedBuild` called
+  with no `-Flavor` still takes it so) - and must admit B's binaries
   against A's HEAD and A's state exactly as `-SignOnly` admits its own
   (`Get-GatedManifestFault` with `Get-GatedHeadAdvance`): that
   architecture and flavour, the four binaries an amd64 build records and
@@ -1051,8 +1072,9 @@ revised).
   ones, or there are none. A refusal names the record and the reason, as
   `-SignOnly`'s do.
 - **The builds at once.** `cut-builds.ps1 -X64Tree <B>` starts
-  `scripts\build-driver.cmd all` in A and `scripts\build-driver.cmd all
-  -amd64` in B as two processes at once, each with `TEMP` and `TMP` set to
+  `scripts\build-driver.cmd cut` in A and `scripts\build-driver.cmd cut
+  -amd64` in B (`all` and `all -amd64` with `-WithQemu`; task 50.1) as two
+  processes at once, each with `TEMP` and `TMP` set to
   its own tree's `out\tmp-<arch>\` (the shared temporary folder is where
   two builds collided), each writing its tree's `out\cut-build-<arch>.log`;
   waits for both; prints each one's exit code and time; and imports when
@@ -1179,8 +1201,8 @@ reviewed and revised).
   in beside them. In a release or qemu run a step whose EXE is absent
   (XHCIINST, XHCIMARK, XHCIDI, and on the amd64 run XHCITR and XHCIPERF
   where they were never built) is said and passed over, as
-  `build-driver.cmd` passed over it; in an `all` run the tools are built
-  first and such a step fails (`-RequireExe`).
+  `build-driver.cmd` passed over it; in an `all` or `cut` run the tools
+  are built first and such a step fails (`-RequireExe`).
 - **What the log shows.** When a step ends its log is printed whole under
   its old `=== <title> ===` heading, followed by `--- <title>: passed
   (exit 0, m:ss)` or `failed`, so a step's output is never interleaved
@@ -1327,8 +1349,9 @@ settled before the code (reviewed and revised).
   digest. It assumes no one edits those files while a run is reading
   them; the end-of-run digest catches an edit that is not undone. `-Force`
   runs it regardless, and so does `XHCI98_FULL_SELFTESTS=1`, which
-  `build-driver.cmd all` sets - `all` is what every cut builds, through
-  `cut-builds.ps1` or by hand for `-ImportOnly` or a one-tree cut - and
+  `build-driver.cmd all` and `cut` set - `cut` is what every cut builds
+  since task 50.1 (`all` before it), through `cut-builds.ps1` or
+  `pre-cut.ps1` or by hand for `-ImportOnly` or a one-tree cut - and
   `cut-builds.ps1` sets for its builds too, so a cut always runs it in
   full (`make-release.ps1` runs the gate, not its self-tests). An
   ordinary `build-driver.cmd` (`both`, or one flavour) takes the skip.
@@ -1351,7 +1374,7 @@ settled before the code (reviewed and revised).
   reproduced: the self-test exits 1 and the build stops at its failure.
 
 A pre-merge build of a branch may set `XHCI98_SELFTEST_SKIP_OK=1`, and
-then `build-driver.cmd all` lets that skip stand as any other build does;
+then `build-driver.cmd all` or `cut` lets that skip stand as any other build does;
 a cut never sets it, so a cut's builds, and any caller that sets
 `XHCI98_FULL_SELFTESTS=1`, still run the self-tests whole (owner,
 2026-10-30). Since task 48.34 every pre-merge gated build sets it (below,
@@ -1414,7 +1437,7 @@ all, deleted before a run, and written only after a run in which every
 check passed and the digest taken again at the end is the one it began
 with. `-Force` and `XHCI98_FULL_SELFTESTS=1` run it whole, so every cut
 does (`cut-builds.ps1` and `package-common.ps1` set it, and
-`build-driver.cmd all` sets it unless a pre-merge build sets
+`build-driver.cmd all` and `cut` set it unless a pre-merge build sets
 `XHCI98_SELFTEST_SKIP_OK=1`, above). A changed C source changes the
 digest too: the skip saves the repeated run of one tree, not a run after
 an edit. Checked by the self-test itself: the digest moves for a tracked
@@ -1486,7 +1509,7 @@ gate run once per case. Task 48.34 does two things.
   recorded there, by any tree: a branch that touches none of their inputs
   skips them.
 - **A cut always runs everything.** A cut's builds never set
-  `XHCI98_SELFTEST_SKIP_OK`: `build-driver.cmd all` without it sets
+  `XHCI98_SELFTEST_SKIP_OK`: `build-driver.cmd cut` (or `all`) without it sets
   `XHCI98_FULL_SELFTESTS=1`, which wins over the skip, `cut-builds.ps1`
   gives its builds that too (`package-common.ps1`), and
   `scripts\package\pre-cut.ps1` gives each of its steps
@@ -7697,6 +7720,8 @@ and data on every path (`[Xhci.AddReg]` for 98 SE and ME,
 | `XhciAccept096` | each start, latched for the started lifetime | 1 | 0 the 1.0 floor, any other the 0.96 floor | 1 (since 38.11) | yes |
 | `XhciCommandCheck` | each start, latched for the started lifetime | 1 | only 0 off | 1 (since 45.45) | yes |
 | `XhciStreamDequeueRepair` | each start | 1 | only DWORD 0 off (check and log only) | 1 (since 49.39) | yes |
+| `XhciStreamDequeueAvoid` | each start, latched for the started lifetime | 1 | 0, 1, 2; else 1 | 1 (since 50.20) | yes |
+| `XhciFailedRetrySec` | each start, latched for the started lifetime | 5 | 0 off, 2-600 the first wait in seconds; 1, above 600 or another type 5 | 5 (since 50.31) | yes |
 | `XhciMsiAvoid` | each start; on NT 6 also at AddDevice (the requirements filter's cache, record 20 section 4.1) | 1 | 0 off, 1 listed, 2 every controller; another number or type, 1 | 1 (since 38.10) | yes |
 | `XhciStreamsOff` | each start | 1 | 0, 1, 2; else 1 | 1 (since 38.10) | yes |
 | `XhciResumeReinit` | each start | 1 | 0, 1, 2; else 1 | 1 (since 38.10) | yes |
@@ -7728,7 +7753,10 @@ controller where the record offers it; the log notes `quirk.<label>` and
 record 20 section 13.5, and the snapshot reader prints them as its "Linux quirks"
 block). Task 48.33 added two more, both written: `XhciStagePoolKiB` and
 `XhciDmaStaging` (owner, 2026-11-09; the latter written at 0 since the
-owner's change of 2026-11-10). **No
+owner's change of 2026-11-10). Task 50.31 added `XhciFailedRetrySec`,
+written at 5 (owner, 2026-11-17; design record 38 section 4): a controller
+stopped after repeated failures tried again, 0 never as before
+`3.6.0.0`. **No
 value is a tri-state** whose absence means something no written number
 does, so none is left unwritten. Except for `XhciForceBulkOnly` since
 roadmap-hcd 37.2 (written 0, an absent one read as 1; above), what a
@@ -7743,13 +7771,123 @@ except the moderation interval's and, since 37.2, `XhciForceBulkOnly`'s
 
 Not in the table, and written by no INF on purpose:
 
-- the `qemu` flavour's test hooks, compiled into no other flavour:
+- the `qemu` flavour's test hooks, compiled into no other flavour
+  (decided, owner, 2026-11-18: a value read only by the `qemu` flavour
+  and compiled into no release build is excepted from the rule that
+  every value a driver reads is written by its INF and listed in
+  `tuning.md`; it is documented here instead):
   `XhciQemuInject`, `XhciQemuStartHold`, `XhciQemuMapGrant`,
+  `xhciuas.sys`'s qemu flavour's `XhciUasQemuTest` (the drive's device key;
+  bit 0 opens the streams without record 17 section 4.12.10's declaration,
+  bit 1 leaves out its command phase after a reset: task 50.20's control
+  legs; bits 2 to 5 drive section 4.12.11's legs, task 50.38: the phase
+  taken as failed, the cycle asked with an op no bus knows, the start's
+  recovery set made in part, each LUN's first phase command abandoned),
   `XhciQemuBigRefuse`, `XhciQemuIsoRing`, `XhciQemuPsiE460`,
   `XhciQemuNoInterrupt`,
   `XhciQemuPinUnreadable`, `XhciQemuDeadLine`, `XhciQemuMsgConnectFail`,
   `XhciMsi86NoStrip`, `XhciMsi86InjNoLine`, `XhciQemuTmrDelayMs`,
-  `XhciQemuSuspHoldDx`, and `xhcihlpr.sys`'s `XhciHlprInject` (its service
+  `XhciQemuSuspHoldDx`, `XhciQemuPswModel` (the port switchover's
+  stand-in, below; machine-wide or the controller's key),
+  `XhciQemuRetryScale` (task 50.31, design record 38 section 17: read
+  at each start, machine-wide or the controller's key; `0` and `1` none,
+  `2` to `600` divide the retry's own intervals - the first wait, the
+  ceiling, the clean run and the storm limit's ten minutes - by that
+  number, each at least one tick, and no other interval; above `600`,
+  `600`; noted `qemu.retry.scale`),
+  `XhciQemuStartFailLate` (task 50.27, design record 15 section
+  4.5.21: machine-wide; not `0` fails the controller's start just
+  after its idle callback thread is made, so the failed start's stop
+  joins it), `XhciQemuThreadRefCtl`, `XhciQemuThreadRefCb` and
+  `xhcicm.sys`'s `XhciQemuThreadRefCm` (the same task and section:
+  machine-wide; that many reference attempts, at most `1000`, of the
+  controller thread's, the idle callback thread's and the
+  connection-manager thread's start counted as failed, the object given
+  back each time), `xhcinet.sys`'s `XhciQemuThreadRefNet` (the same, at
+  most `1000`, for the network worker's start; the adapter's own key),
+  `XhciQemuThreadRefReader` (task 50.38, design record 17 section 5, "The
+  trigger reader", revision 40: machine-wide; that many reference
+  attempts, at most `1000`, of the trigger reader thread's start counted
+  as failed, as `XhciQemuThreadRefCtl` does for the controller thread),
+  `XhciQemuThreadExitSleep` and `XhciQemuThreadExitOld` (task 50.37,
+  design record 15 section 4.5.22: read at each start, by `xhci98.sys`
+  machine-wide and by `xhcinet.sys` from the adapter's own key (task
+  50.40, design record 35 section 19); on 98 SE and ME the milliseconds
+  each thread end sleeps between its signal and its end, at most `10000`
+  in `xhci98.sys` and `300000` in `xhcinet.sys`, and exactly `1` the
+  ending as before that section, the control: the controller thread's in
+  `xhci98.sys`, the adapter worker's in `xhcinet.sys`),
+  `xhcicm.sys`'s `XhciCmQemuUnitStop` (task 50.24, design record 21
+  section 6.1.6 item 15: machine-wide, else the NHI's key; how many 98
+  SE write-back passes are stopped after the unit's upstream port, so
+  the doubt path can be read),
+  `xhci98.sys`'s further values, each read like the controller's own
+  values (machine-wide when there, else the controller's key) and only by
+  the qemu flavour:
+  `XhciQemuHciVersion` (task 38.11, design record 17 section 4.14.10;
+  latched at each start since task 49.35, record 13 section 11.10.1):
+  `0x0001` to `0xFFFE` replaces the HCIVERSION every capability check
+  decodes, so the xHCI 0.96 branches run on the emulator's controller;
+  `0`, absent or `0xFFFF` and above the register's own,
+  `XhciQemuEventRing` (task 47.30, record 13 section 11.10 point 9; only
+  where the larger ring is wanted, as `XhciEventRingTrbs` and an
+  HCIVERSION of 1.0 or more give it): `1` the event ring in the
+  controller's block, `2` the 32 KiB route whatever the block's placement,
+  `3` both requests read as refused, the 256-entry ring; `0`, absent or
+  higher the rule as published,
+  `XhciQemuBotDelayMs` (task 49.34, design record 20 section 4.3.4): the
+  reopening of a Bulk-Only drive kept across a re-initialization delayed
+  that many milliseconds, at most `30000` (above: none),
+  `XhciQemuStagePool` and `XhciQemuStageFault` and `XhciQemuStageMapProbe`
+  (task 48.33, record 13 section 11.11; `hcd.h`'s `HCD_STAGE_QEMU_*`): the
+  staging pool's slabs at most (`0` none; absent, another type or a value
+  at least the normal count leaves that count); the fault switch - bit 0
+  every stop's quiesce reported not proven, bit 1 (98 SE and ME) a copy
+  through a window even for an MDL with a system address, bits 15:8 that
+  many window mappings failed (`255` all), and from task 49.29 (section
+  11.11.12) bit 2 the hold arming all ones without the proof, bit 3 the
+  per-request log until Windows restarts, bits 19:16 the state the hold
+  keeps, and from task 50.28 (section 10.5.3 point 11) bits 4 to 7 the
+  waits of 500 ms and 3 s (6 s and 75 s with bits 6 and 7) between a
+  departed PDO's abort mark and its release and between a report's
+  relations request and its claim, bits 20 and 21 the invalidation's
+  drains (bit 20 after each device's report, at its record's free; with
+  bit 21 too, between the relations request and its claim instead), and
+  bit 22 an every-pipe abort horizon recorded at each report; and the
+  first window copy's probe, which maps its span through that many window
+  MDLs of its own, at most `0x8000`, stopping at the first failure,
+  reports the count on the `0xE9` channel and unmaps them,
+  `XhciQemuNoRouteGsi`, `XhciQemuLineConnectFail`, `XhciQemuNoRouteListed`
+  and `XhciQemuStripFail` (task 47.33, design record 18 section 16; 2000,
+  XP and XP x64 only): the GSI offered with no chipset read in place of
+  `XhciIntelNoRouteIrq`'s run; `1` the line's connection made to fail; `1`
+  QEMU's controller taken as listed where the GSI stands in for the run,
+  `2` listed with the run ended as a failed mapping; `1`, `2` or `3` the
+  interrupt resource's strip failed for want of memory, a refused shape or
+  a refused walk,
+  `XhciQemuMsg4Fail` (task 49.24, design record 15; `XhciInterruptMode` 4
+  on 2000, XP and XP x64): bit 0 the release's disconnect, bit 1 the
+  re-arm after a resume, bit 2 the disconnect at a query-stop, bit 3 the
+  reconnect at a cancelled stop, each made to fail as a configuration
+  space that stops answering does;
+  `xhcicm.sys`'s further values, each read machine-wide when there, else
+  from the NHI's key, and only by the qemu flavour: `XhciCmQemuIrqDead`
+  (task 45.22, design record 21 section 4.5.11): after that many claims
+  the ring interrupt's routine goes on acknowledging but stops counting
+  and queueing, a line that died; `0` never,
+  `XhciCmQemuFailD0` and `XhciCmQemuFailReenum` (task 45.27, design record
+  21 section 8.1): the NHI's D0 of that number, counted from 1, that the
+  bus completed taken as failed once (`0` none); that many of the 98 SE
+  and ME worker's member calls taken as failed before they are made,
+  `XhciCmQemuOscNoClear` and `XhciCmQemuEcamFault` (tasks 46.12 and 46.25,
+  design record 32 section 12.8.15): not `0` leaves the platform
+  handover's boot guard marker as the router's answer finds it, so a quit
+  after the start stands for a start that never finished; `1` the ECAM
+  base taken 1 MB too high, `2` MCFG taken as absent,
+  `XhciCmQemuWakePowerUpForce` (task 49.46, design record 21 section
+  6.3.1): not `0` arms every member at every wake as if its wake power-up
+  had failed,
+  and `xhcihlpr.sys`'s `XhciHlprInject` (its service
   key's `Parameters` subkey; `xhcimsi.sys`'s `XhciMsiInject` until task
   38.3);
 - values the OS owns: `MSISupported` (the `.HW` section's interrupt
@@ -7758,6 +7896,12 @@ Not in the table, and written by no INF on purpose:
   `MaximumTransferLength`, which `xhciuas.sys` reads and never writes;
   `xhciuas.sys` reads no value of its own (its `XhciUas*` values are status
   it writes into the storage device's key), so the UAS INFs gain nothing;
+  and Windows' own `SystemSetupInProgress`, `SetupType`, `OOBEInProgress`
+  and `MiniSetupInProgress` under `HKLM\SYSTEM\Setup`, which `xhci98.sys`
+  reads in every flavour on 2000 and later at a start the port switchover
+  applies to, to decide whether it holds the shared connectors (task
+  50.34, design record 16 section 21.3), and which the qemu flavour's
+  stand-in also traces (`XhciQemuPswModel`, below);
 - the `1.2.0.0` miniport's `XhciVirtualHSHub`, `XhciVirtualHSHubVid` and
   `XhciVirtualHSHubPid`, which this driver does not read (`VAL-HCDVHUB`
   refuses them).
@@ -7946,7 +8090,8 @@ writes to it appears on the host. Launch with:
 ```
 
 In the driver, the debug helper (`xhci_dbg.c`) mirrors every message to the
-port, character by character:
+port, character by character, one whole line at a time ("Whole lines on
+the debug console" below):
 
 ```c
 WRITE_PORT_UCHAR((PUCHAR)0xE9, c);   /* any IRQL; QEMU-only side channel */
@@ -7984,6 +8129,135 @@ with `-serial file:` and reads its results out of that log. That is a DOS
 program's own output in a virtual machine, not a kernel trace channel on
 metal, and it is the Phase 0 matrix runner's only way of getting an answer out
 of a headless guest.
+
+#### Whole lines on the debug console (qemu flavour, 2026-11-18)
+
+Until 2026-11-18 the emitter wrote each line's bytes to the port one at a
+time with nothing held across the line, so a line from another thread, a
+DPC, the ISR or the other processor could land inside it: `xxhci98: hcd:
+device PDO PnP minor=00000009` followed by `hci98: endpoints opened=...`
+is one such tear, on the uniprocessor 2000 ACPI guest of task 50.34's
+legs, and a harness that refuses torn lines failed legs on them at
+random. A harness that tolerates them can hide a line. The cure is in
+`src\xhci_dbg.c` and in the qemu flavour alone.
+
+*Who emits.* Every `XHCI_DBG_*` macro (about 660 sites) and the M86
+records reach the one emitter, `xhciDbgEmit`, through four line builders
+(`XhciDbgText`, `XhciDbgValue`, `XhciDbgCallback`, `XhciDbgWords`); no
+other code in `xhci98.sys` writes port `0xE9`. The contexts that reach
+them, on every supported Windows:
+
+- PASSIVE_LEVEL: `DriverEntry` and the unload, every PnP and power IRP of
+  the controller, the root hub, the hubs and the device PDOs, the
+  controller thread (enumeration, hubs, the counter lines), the
+  configuration IRPs and their routing-register lines, the door's
+  requests, the shutdown hand-back, and the hosted message library's
+  configuration callbacks and uninitialise (`hcd_msgnt.c`, NT 5).
+- DISPATCH_LEVEL: the event DPC and everything it completes (commands,
+  transfers, the URB lines, which `hcd_urb.c` emits under its own spin
+  lock), the timers and watchdogs, URB submission from the class drivers,
+  cancel and completion routines.
+- DIRQL: the ISRs (`hcdIsr`, the message ISRs) and the
+  `KeSynchronizeExecution` routines carry no site today; the register
+  accessors' refusal lines (`src\xhci_pci.c`) can be reached from any
+  context that touches a register, the ISR included, on a refused offset.
+- Above that: nothing. The driver registers no bugcheck or NMI callback,
+  and the hosted library's history ring, which runs at HIGH_LEVEL, writes
+  no trace (`MSI4NT_TRACE` compiles to nothing in this driver).
+
+On 98 SE and ME (one processor) a line is broken into by an interrupt -
+the ISR, then the DPC on the way out - or by a thread switch at a clock
+tick; on a uniprocessor NT the same; on SMP NT (2000 on the MP HAL, XP,
+Vista to 10, x64) two processors emit at once as well.
+
+*The mechanism.* Each line is built whole in a buffer on the caller's
+stack, as before. It is then written under one flag, `xhciDbgLineFlag`,
+with every interrupt of the processor held off:
+
+- x86 (98 SE, ME, 2000 to 10): `pushfd` and `cli` before the flag,
+  `popfd` after it, which puts back whatever the caller had. The one x86
+  binary runs on 98 SE and ME, whose emulation of the levels above
+  DISPATCH_LEVEL this project has not read, so the masking does not rest
+  on `KeRaiseIrql` there; with IF clear no maskable interrupt (the
+  device's, the clock's, an IPI on NT) reaches the processor on any x86
+  kernel, and ring 0 may clear it on all of them. No import.
+- amd64 (XP x64 to 10 x64): `KeRaiseIrql(HIGH_LEVEL)` and `KeLowerIrql`,
+  the documented level that masks every interrupt, an intrinsic there (no
+  import).
+- The flag is taken by `xchg` (on x86 written by hand, as
+  `MsgIrqpXchg` in `src\msi4nt.h`, so nothing is called with IF clear; on
+  amd64 the intrinsic `InterlockedExchange`) and released the same way.
+  A processor that finds it held puts its caller's interrupt state back
+  and looks again: interrupts are held off for one look at a time and for
+  the writing of its own line, not across the wait, so a waiting processor
+  still takes its interrupts if its caller allowed them.
+
+Nothing is done under the flag but the port writes, so while a
+processor holds the flag no emit can start on it except from an NMI or
+a fault (an ordinary interrupt can start one while the processor waits
+for the flag, which is safe, since a waiter holds nothing), and the
+holder never waits for anything. The flag is not fair:
+with several processors emitting, one can find it taken again and again,
+so a wait can outlast several lines. Against that, an NMI path and a
+holder that never lets go, the wait is bounded: after 2^26 looks at the
+flag (`XHCI_DBG_LOCK_SPINS`; how long that is was not measured, and it is
+far beyond one line) the line is written without the flag and a notice
+follows it, `xhci98: dbg: line written without the line flag,
+lines=NNNNNNNN` (the count of such lines since the load, kept by an
+interlocked increment: `lock xadd` by hand on x86, the intrinsic
+`InterlockedIncrement` on amd64), so no context can hang on it and the
+event is never silent. `DbgPrint` is called after
+the release, at the caller's IRQL, exactly as before.
+
+*The cost.* One line is at most 127 port writes, each a trap to the
+emulator; the same writes were made before, with interrupts on. Now the
+processor takes no interrupt for the time of one line's writes, and a
+second processor that wants the flag waits, with its interrupts taken
+between looks, for the lines ahead of it. None of this was measured: if
+one port write under QEMU's TCG is a few microseconds, a full line holds
+interrupts off for some hundreds of microseconds at most, and a typical
+50-character line for a fraction of that.
+
+*The release build is unaffected.* The flag, the masking and the builder
+are inside `#ifdef XHCI_DBG_TRACE`, and the flag and the masking inside
+`#ifdef XHCI_DBG_E9` as well, both of which only the qemu flavour defines
+(`src\sources`); the release flavour compiles `xhci_dbg.c` to its
+placeholder as before. No registry value. The import gates are
+unchanged: the x86 half calls nothing new and the amd64 half uses
+intrinsics.
+
+*The formats do not change.* A line of at most 126 characters (the
+prefix counted, the newline not) comes out byte for byte as before, only
+whole. A longer line used to be cut at 127 characters with no newline, so
+the next line ran on after it; two sites are that long, `bus master: bus
+mastering is disabled ...` and `teardown: DMA not proven stopped inside
+the in-place recovery ...` (`src\xhci_init.c`). Such a line is now split:
+the first 125 characters and a backslash, then the rest on lines that
+begin with `xhci98: \`, each at most 127 bytes with its newline, nothing
+dropped. No builder leaves a line open across calls, and no caller builds
+one line from several calls. What comes out as several lines does so by
+design and each line is whole and labelled: a word dump of more than four
+words (`+00:`, `+10:`, ... - the switchover's verdict line with its
+`+10: image sys` line, the URB lines on amd64), and groups printed by
+consecutive calls, such as the indented `  first port`, `  port count`
+lines of each protocol group in the port map. Their neighbours were never
+guaranteed and are not now: a line of another context can fall between
+two of them, never inside one. Each line of a word dump is written on its
+own for that reason; the label places it.
+
+*Not touched.* The log ring's DebugView sink, `XhciLogDebugView` in
+`src\hcd_log.c`, is another channel (`DbgPrint` from the controller
+thread, every flavour) and is left as it was. Other drivers that write
+port `0xE9` in their own qemu builds (`xhcicm.sys`, XHCIPFW, S98VSD) have
+no flag shared with this one, so a line of theirs can still meet a line
+of `xhci98.sys`.
+
+*How it was checked.* `test\test_dbg.c` drives the builders on the host:
+every line that fits is the old builder's bytes, and a longer line's
+pieces rebuild it. In the guests, a whole-line check of each capture
+(every line begins with `xhci98: `, holds no second prefix and ends with a
+newline) before and after the change is in `runs/run-50.md`, "50.34:
+whole lines on the qemu flavour's debug console".
 
 ### The qemu flavour's test aids: the E460 speed table and fault injection
 
@@ -8165,6 +8439,210 @@ shutdown hangs, so clear it before a shutdown; and `qemu.stop.dx` never
 appeared, since Windows removed the children before the controller's
 stop (design record 15 section 7.2's leg T3).
 
+**`XhciQemuPswModel`** (2026-11-17, for the Setup legs behind the owner's
+question on the switchover's default; design record 16 section 20; `qemu`
+flavour only, written by no INF). The emulator has no
+Intel 7/8/9-series chipset, so the port switchover's decision never passes
+its device-id gate on QEMU's controller; this switch makes it pass, for
+the switchover's own code and nothing else.
+
+- *Where and how it is read.* Through the same read as every value of
+  the controller (`hcdReadDword`), at every start: from the machine-wide
+  `HKLM\System\CurrentControlSet\Services\USB` when the value is there in
+  any type, else from the controller's driver key (the key the section's
+  introduction names). A machine-wide value of another type stands, and
+  the model is off; a machine-wide value taken counts in `RegMachineWon`
+  as any other.
+- *When it is on.* A REG_DWORD of four bytes, exactly 1, and the real
+  PCI id at offset 0 exactly `1B36:000D` (QEMU's `qemu-xhci`). Absent,
+  another type, any other number, or any other controller (a real Intel
+  one included) is off. The choice is latched at the start for that
+  started lifetime: the route at a return to D0, the release at a stop,
+  removal or shutdown and the lifetime's end use it, so a change takes
+  effect at the next start.
+- *What it changes.* The switchover's configuration-space callbacks, and
+  no other reader's, see a listed controller: offset 0 reads `8086:1E31`;
+  `D0h`, `D4h`, `D8h` and `DCh` (`XUSB2PR`, `XUSB2PRM`, `USB3_PSSEN`,
+  `USB3PRM`) read four dwords held in the controller's extension; writes
+  to `D0h` and `D8h` land there and any other write is refused; any other
+  offset (the subsystem, for the Sony exemption) is QEMU's real one. No
+  write reaches QEMU's configuration space. `XhciIntelPortSwitch` still
+  decides as on real hardware: the INFs wrote 0 until task 50.34 and
+  write 1 from it (a leg on an older package sets 1 or 2 itself), and
+  Setup proposes nothing on QEMU's controller, which is not listed.
+- *What persists.* The four dwords are set at the device object's first
+  start with the model on - `XUSB2PR` 0, `XUSB2PRM` `0xF`, `USB3_PSSEN`
+  0, `USB3PRM` `0xF`: four switchable connectors of each kind, all left
+  on the EHCI controller - and then live as long as the device object,
+  through its stops, starts and power changes, written by each route and
+  release. A device object created again (after a removal or a restart)
+  starts from those values again.
+- *The trace* (port `0xE9`). At each start with the model on, `hcd: qemu
+  psw model on: 1B36:000D seen as 8086:1E31`, then one line for each of
+  four values under `HKLM\SYSTEM\Setup` - `SystemSetupInProgress`,
+  `SetupType`, `OOBEInProgress`, `MiniSetupInProgress` - as `hcd: qemu psw
+  model, Setup <name> state status value+00: SSSSSSSS TTTTTTTT VVVVVVVV`:
+  the registry state (0 absent, 1 a DWORD taken, 2 another type), the
+  `NTSTATUS` `RtlQueryRegistryValues` returned, as each target returns it,
+  and the whole DWORD (0 unless taken). At every start of an Intel or
+  modelled controller, `hcd: port switchover, XhciIntelPortSwitch
+  found=` and `hcd: port switchover, XhciIntelPortSwitch=`; then the
+  switchover's own lines as on real hardware (`USB3_PSSEN now`, `XUSB2PR
+  now` at a route, `released, step` at a release). The model's lines are
+  printed only with the model on and only by a start that reaches the
+  switchover step: a start that fails before it prints none. The log ring
+  gains no note of its own; its `psw.*` notes are an Intel controller's.
+- *What it does not do.* Nothing moves in the emulator: QEMU's own ports
+  stay where they are. A leg harness, outside the driver and not tracked,
+  moves the devices it treats as switchable from an emulated EHCI
+  controller to the xHCI controller at the route's `XUSB2PR now` line,
+  back at the release's `released, step` line, and back to EHCI at a guest
+  reset, as a board's firmware would. What such a leg reads is the
+  driver's decision and the guest's reaction to devices moving, under the
+  model's limits, not a real board's multiplexer (record 16 section 20).
+- *From task 50.34* (record 16 section 21): the INFs write
+  `XhciIntelPortSwitch` 1, so the model alone reaches the hold while
+  Windows Setup runs. Each start that reaches the step prints `hcd: psw
+  verdict val set guard / image sys`, six words: the verdict
+  (`XHCI_PSW_V_*`), the value it names, the setting in force with its key
+  in bits 15:8, the first-session guard (G in 7:0, its outcome
+  `XHCI_PSW_GUARD_*` in 15:8, S in 23:16, the key's disposition in
+  31:24), the image state (`XHCI_PSW_IMG_*`) and the system
+  (`XHCI_PSW_SYS_*`), and a held one `hcd: port
+  switchover held at this start, no routing access for this lifetime`.
+  The model also reaches the shutdown hand-back (`XhciIntelShutdownToEhci`
+  lists `1E31`): at a shutdown's D3, `hcd: qemu psw model, shutdown
+  hand-back: D8h and D0h written 0` for a lifetime that may hand back, or
+  `hcd: qemu psw model, shutdown hand-back held: no access` for a held
+  one; the real quirk's own decision on QEMU's id is unchanged.
+- *Every access to the routing registers, each one* (task 50.34, for the
+  Windows Setup legs): every read and every write of D0h to DCh
+  (`XUSB2PR`, `XUSB2PRM`, `USB3_PSSEN`, `USB3PRM`) the driver makes on
+  its controller, by whichever path, prints where it happens `hcd: psw acc
+  op off val at+00:` and four words: the operation, the offset, the value
+  read or written, and the moment. The operations (`HCD_PSW_ACC_*`): 0 a
+  read of the model, 1 a write the model takes, 2 a write to another
+  offset, which the model refuses; 3 the model's seed, its four values set
+  at the device object's first start with the model on (no access to
+  anything, printed so that a harness holding every write to a verdict
+  sees it as the seed); 4 a read and 5 a write of configuration space
+  itself, through the configuration IRP (`hcd_svc.c`), whoever makes it -
+  the route, the release and the end on a controller the model does not
+  stand in for, the real shutdown hand-back (`XhciIntelShutdownToEhci`:
+  D8h written 0 and read back, then D0h), and any other reader; 6 a
+  diagnostic read, the query request's configuration dump
+  (`IOCTL_XHCI98_QUERY`, which XHCITR sends for its PCI configuration node
+  and to read the log), made of the real configuration space with the
+  model on or off; 7 the message capability's read of all 256 bytes, at a
+  start whose interrupt is a connected message, the ordinary connection
+  and `XhciInterruptMode` 4 alike (record 15 section 4.3); 8 a read and 9
+  a write of the hosted message-interrupt library's (`XhciInterruptMode`
+  4 on NT 5.x, `hcd_msgnt.c`), whose capability walk and programming
+  reach D0h to DCh only on a controller with a capability there. To any of
+  4 to 9, `HCD_PSW_ACC_FAILED` (10h) is added when the IRP's status is a
+  failure (14h to 19h). An access prints one line for each register it
+  covers, in offset order; a configuration access prints once its IRP is
+  done, with the dword's bytes as the buffer then holds them (a narrower
+  access's other bytes 0). A failed read prints 0, whatever the bus driver
+  left in the caller's buffer; a failed write prints the value it tried
+  to write; a transfer the bus driver reports as a success but short is
+  not marked. An access that was never sent (above `PASSIVE_LEVEL`, or no
+  IRP) prints none. The moments (`HCD_PSW_AT_*`): 1 the start's decision
+  and route, 2 a return to D0's route, 3 the shutdown D3's release, 4 a
+  stop's or a refused start's end, 5 the shutdown hand-back's model, 6 the
+  model's seed, 7 the real shutdown hand-back, 0 none of these. Operations
+  6 to 9 (16h to 19h failed) are not the switchover's and carry whatever
+  moment is current, normally 0: the dump runs on the requester's thread,
+  so one made while a route runs carries the route's moment. Every other
+  reader and writer of this driver's configuration space that prints
+  operation 4 or 5 - the id, revision, BARs, subsystem and interrupt line
+  and pin, the Command register, the VL805 firmware dword (50h), the
+  ASMedia vendor write (E0h, F8h, FCh) - stays outside D0h to DCh, so in
+  this driver's code as of task 50.34 an operation 0 to 5 at moment 0
+  (14h and 15h included) is an access outside every known path, and a
+  harness treats one as a failure. The trace makes no access and reads no
+  registry value of its own: it prints only where an access is already
+  made, on any controller, Intel or not.
+- *What a held start shows.* A held start's decision reads none of D0h to
+  DCh: it reads offset 0 (the id) and 2Ch (the subsystem) and returns
+  before the route, and only the route reads the masks (D4h, DCh). A held
+  lifetime therefore prints no line of operations 0 to 5 after its start's
+  decision: its returns to D0, its release and its end make no access, and
+  both shutdown hand-backs are refused. Lines of operations 6 to 9 can
+  still appear in it, and are no routing access. The route's and the
+  release's summary lines follow their accesses as before, so a write with
+  no summary after it, a write later put back, or a routing access in a
+  held lifetime shows as such.
+- *What these lines do not show.* The raw registry types and lengths
+  behind the readings below (each gives a state, a status and a value),
+  the image text, or the G and S queries beyond their results; whether
+  any device moved (the model moves nothing, and QEMU's ports stay where
+  they are) or whether a USB source was usable; which controller or which
+  start a line belongs to - no line carries a controller or start
+  identifier or a sequence number, and none was added, since the access
+  line's four words and each reading's four are all in use and a fifth
+  would change the line; and lines of two controllers or two threads
+  come in the order they were written, each whole since 2026-11-18
+  ("Whole lines on the debug console" above). They are the driver's report of its own accesses to its
+  own controller, not a monitor of the bus. The HAL's reads by bus and
+  slot, which do not take the configuration IRP, are outside that claim:
+  the interrupt routing quirk (task 36.3) reads 40h bytes from offset 0
+  of 00:14.0 (the controller's own header, when it sits there), its
+  qemu-flavour probe 40h of each bus-0 device's function 0 and of
+  00:1F.0, and the held line's walk 40h of each function, none reaching
+  D0h; but the quirk's read of the LPC bridge (00:1F.0) takes 100h bytes,
+  covering D0h to DCh of that other function, which are not the
+  controller's routing registers and are not traced. Accesses by other
+  software - `xhcicm.sys`, the PCI bus driver, a filter in the
+  controller's stack - are not traced here either.
+- *The readings of every start that reaches the step* (task 50.34), after
+  the verdict line, each `+00:` and four words: `hcd: psw rd set st val
+  src use` (`XhciIntelPortSwitchSetup`: state `XHCI_REG_*`, the value
+  found, its key `XHCI_REG_FROM_*`, the setting in force); `hcd: psw rd
+  ssip st n sta val`, and the same with `type`, `oobe` and `mini` (each
+  Setup value: state `XHCI_PSW_RD_*`, the routine's call count, the
+  query's status, the value); `hcd: psw rd pe key sta opt sta` (the
+  `MiniNT` test's result `XHCI_PSW_PE_*` and status, then the boot
+  options'); `hcd: psw rd img hive sta img sta` (the hive test and the
+  image state: result and status each); `hcd: psw rd grd g rtn open disp`
+  (G, the routine there, the driver key's open status, the session key's
+  disposition); `hcd: psw rd grd probe s wrs wrg` (the volatility probe's
+  status, S - 0, 1, or `000000FF` where it is unknown,
+  `XHCI_PSW_S_UNKNOWN` -, `ReadyAtStart`'s write status, G's write
+  status); `hcd: psw rd out rec verdict val` (the guard's outcome, the
+  record write's status, the verdict and its value). A status not
+  reached is `XHCI_PSW_ST_NOT_RUN` (`FFFFFFFF`).
+  Each label is short enough for the whole line to fit the trace's
+  128-character line. The trace only: nothing more is read or written in
+  the registry, and a start that does not reach the step prints none of
+  them.
+
+**The port switchover's injections** (2026-11-18, task 50.34; record 16
+section 21.10) are `XhciQemuInject`'s fault `2C` (below): its argument is
+read as fault `21`'s is, from the controller's key and then the
+machine-wide one, and only by a start that reaches the switchover's step
+(the model or an Intel controller with the switchover on and the board
+passing), never by any other start. Bit 0 makes the `SOFTWARE` hive's
+test read "not loaded yet" (no call, `0xC0000034`); bit 1 the
+first-session guard's routine not there (the helper not answering); bit 2
+the session key's create refused; bit 3 `ReadyAtStart`'s reading refused;
+bit 4 its write refused; bit 5 the guard's `XhciIntelPortSwitchReady`
+write refused - each refusal `STATUS_ACCESS_DENIED` in place of the call,
+nothing else changed. Noted `qemu.inj.psw` (the argument); fired at run
+time it changes nothing (`qemu.inj.psw.ignored`).
+
+*What the model's shutdown lines show, and what they do not.* The lines
+`hcd: qemu psw model, shutdown hand-back...` come from a branch of their
+own in `HcdQuirkShutdown`, taken whenever the model is on, before the real
+quirk's decision: they show that the lifetime's predicate
+(`XhciPswShutdownAllowed`) answers as the design says for each lifetime,
+held or routed. They do not show the real hand-back's path running: on
+QEMU's controller (`1B36:000D`) the real `XhciIntelShutdownToEhci` quirk
+is not enabled, so its own enablement and readiness checks, its writes
+and its outcome are not exercised by these legs; the host vectors are
+their evidence so far, and a listed board's reading is owed, after the
+cut.
+
 **The `M86` trace** (`qemu` flavour; record 18 section 9). The
 requirements filter writes every list it receives (`R`), rewrites (`I`)
 and returns (`T`), and the helper binding and the start's decision write
@@ -8246,8 +8724,12 @@ its "finer system timer" section. None has been
 read in a guest yet.
 
 **`XhciQemuInject`** (roadmap-hcd task 35-T.9, design record 17 section 5).
-A REG_DWORD the controller thread re-reads about once a second, so a script
-in the guest fires a fault at run time by writing it:
+A REG_DWORD re-read about once a second, so a script in the guest fires a
+fault at run time by writing it. Since roadmap-usb4 task 50.38 a thread of
+its own reads it (design record 17 section 5, "The trigger reader") and the
+controller thread takes each new value at its next pass, in the order read:
+a value is taken once it has been read, even if it is deleted afterwards,
+and a value replaced before a read is not seen; withdraw a fault with `FF`.
 
 | Bits | Field |
 |---|---|
@@ -8276,6 +8758,13 @@ in the guest fires a fault at run time by writing it:
 | `1D` | A stale stream dequeue (task 49.39) | the next `arg` (0 one) stream Set TR Dequeues a cancel sends after taking its head TD off - a UAS drive's, so a command the drive refuses with its data-in TD posted (the emulator's `usb-uas x-ata-passthrough-refuse=on`) or any data-in cancel - go out for real with that TD's first TRB and its cycle in place of the driver's position. QEMU takes it and writes the Stream Context, so the stream would run the cancelled TD again: a deliberately stale hardware dequeue, not a model of any controller's mechanism. Design record 17 section 4.12.8's read-back meets it: with `arg` 0 to 2 the command is sent again and the cancel completes (`cfg.deq.readback`); from 3 every send is altered and the device alone is cycled (`cfg.deq.giveup`); with `XhciStreamDequeueRepair` 0 it is noted only. Noted `qemu.inj.staledeq` (slot `<< 16` \| DCI `<< 8` \| stream) |
 | `1E` | A restart between the read and the command (task 49.39) | the next `arg` (0 one) times a stream's Set TR Dequeue is about to be sent, a doorbell is first rung for another stream of the endpoint that holds a TD, so QEMU may run the endpoint before the command: the command then meets Context State Error and the existing retry stops and sends it again (`cfg.deq.retry`), or it lands and the read-back finds the endpoint Running (`cfg.deq.readback` low nibble 3). Noted `qemu.inj.restart` (slot `<< 16` \| DCI `<< 8` \| the stream rung) |
 | `1F` | A restart inside the read-back's repair (task 49.39) | the next `arg` (0 one) times the read-back is about to resend a stream's Set TR Dequeue after a difference, a doorbell is first rung for another stream of the endpoint (one that holds a TD, else any other: an empty ring runs nothing but takes the endpoint Running), so the endpoint runs between the difference and the resend: the pre-send read finds it Running, or the resend meets Context State Error (`cfg.deq.retry` low nibble 1), and either way the read-back stops it again and places the stream without a cycle (record 17 section 4.12.8). Use it with `1D`, which makes the difference. Noted `qemu.inj.repairrace` (slot `<< 16` \| DCI `<< 8` \| the stream rung) |
+| `21` | The stream flag and the QEMU resync switch (task 50.20) | design record 17 section 4.12.10: `arg` bit 0 counts the controller as listed, as the Intel 7 Series xHCI is, so that `XhciStreamDequeueAvoid` 1 or 2 flags it (0 leaves it unflagged) and a declaring client's streams open is acknowledged to the contract (no stream Set TR Dequeue on that endpoint, the client's recovery); bit 1 turns the QEMU stream resync (4.12.4) off on every endpoint, so on an emulator that honours a Stream Context's DCS (usb4-emu's `qemu-xhci x-stream-dcs`) 4.12.8's give-up form can show. **Unlike every other fault, its value is read at the controller's start, and only then** (a value present at a start otherwise never fires), since the flag must stand before the streams open; fired at run time it changes nothing and is noted `qemu.inj.streamflag.ignored`. Noted `qemu.inj.streamflag` (flag `<< 1` \| resync off). The injection's own stream commands are refused on a contract endpoint (`qemu.inj.contract`) |
+| `22` | A recycle's Configure Endpoint not taken (task 50.20) | RESET_PIPE's recycle on a contract endpoint (design record 17 section 4.12.10; fault `19` reaches only a switch's) answered and never issued, once: `arg` bits 3:0 the attempt (0 the next, N the Nth from now), bit 4 clear refused with Resource Error: RESET_PIPE fails with the endpoint held by its debt (`cfg.recycle.refused`; no controller reset and no cycle from the bus), and xhciuas resets the device (RESET_PORT, then TEST UNIT READY), the drive kept; bit 4 set: no completion, which is taken as every command with no completion is - the controller failed and reset, every device on it removed and found again; the port byte the DCI (0 any). With two endpoints gated, attempt 2 fails the second after the first recycled: the partial recovery. Noted `qemu.inj.recycle` (slot `<< 24` \| DCI `<< 16` \| attempt `<< 8` \| code) |
+| `23` | A rendezvous (task 50.20) | `arg` 1, 2 or 3 arms a point: 1 a contract endpoint's cancel between its take-off and its completion delivery, 2 RESET_PIPE between the device's clear and the recycle, 3 a requested recovery's entry, before it takes the power gate and holding no lock (task 50.30 step 3, design record 17 section 4.15.16 C), which also lets the thread go at once when any route's bit is raised - a power transition, a removal or a stop - so the recovery meets that transition: a bit standing, or one raised since the point was reached (`HcdEnumLeaveRaise` keeps each bit it raises for the point, since a power transition's bit stands only for its suspend; revision 34 of that section), noted first as `qemu.inj.rv.route` (the bits). The controller thread holds there, notes `qemu.inj.rv.reached` (point `<< 16` \| count, and at once a debugcon line, since the ring is not flushed while the thread holds) and polls the machine-wide key every 100 ms until `23` comes again with `arg` 0 (the release; with nothing held it disarms) or 60 s pass (`qemu.inj.rv.released`, point `<< 16` \| polls). While it holds nothing else of the controller thread runs |
+| `24` to `2B` | A device, or a command, that stops answering (task 50.30, step 2; design record 17 section 4.15.9) | the next command of the fault's kind for a device at the place - `24` Address Device, `27` Configure Endpoint, `28` Reset Endpoint, `29` Set TR Dequeue Pointer, `2A` Evaluate Context, `2B` Reset Device - is put on the command ring with its doorbell withheld, so QEMU never fetches it and the engine's watchdog fires for real at 5 s; `25` withholds the thread's next EP0 doorbell for the device at the place (no event: its deadline meets the silence); `26` withholds both, every Address Device and every thread EP0 transfer at the place, until its root port reads disconnected or `FF`. The port byte: bits 6:0 the root port (0 the first device that fits, then latched), bit 7 a device behind a hub at it (any such device: the hub's port is not latched). **`26` takes a root port only**: its end is that root port's disconnect, which a device behind a hub never shows, so `26` with bit 7 is refused (`qemu.inj.hang.refused`, the trigger's value) and nothing is armed. `arg` bits 3:0 the count (0 one, `F` for ever; `26` is never spent), bits 6:4 the outcome acted out when the watchdog writes its abort, which QEMU ignores: 0 a Command Ring Stopped naming the withheld TRB; 1 the TRB turned into the layer's own No Op, then Command Aborted naming it and Command Ring Stopped at the next TRB; 2 the same without the Command Aborted (a clean stop); 3 Command Aborted and Command Ring Stopped both naming the withheld TRB; 4 the doorbell rung, QEMU completing the command, then Command Ring Stopped at the next TRB; 5 nothing (rung 2 reads CRR set: `cmd.abort.stuck`, the reset); 6 Command Ring Stopped at a position the ring cannot hold (divergence 4). The layer's own No Op is retired by the layer (`qemu.inj.noop.retired`), never registered as the engine's rewrite. **`26` with `arg` bit 7 is armed by the device's own behaviour**: it does nothing until a thread control transfer to a device at the place reaches its deadline with no doorbell of the layer's withheld (`qemu.inj.armed`: port, slot) - with the sibling project's audio simulator that is its first unanswered SET_INTERFACE - and from then on hangs the place as above, across every recovery, until the disconnect (`qemu.inj.disarm`: port). A recovery's HCRST, every invalidation of the command engine and every rebuild of the command ring (the start's, a recovery's, the restore's) drop any withheld command, the layer's own No Op marker and the outcome's events not yet delivered, never the arming. **For `24` and `25`, `arg` bit 7 withholds the recovery command that follows** (task 50.30 step 3, design record 17 section 4.15.16 C): each primary withholding latches its slot, and the first command placed afterwards that is that slot's Disable Slot - for `25` also its Stop Endpoint of DCI 1, the late path's, except under outcome 7 - is withheld once, through the same watchdog and outcome, the settlement's own Disable Slot included (an ordinary one refused under the debt consumes nothing); a Stop Endpoint of any other DCI never matches. The latch outlives the primary's count and is dropped by `FF`, a re-arm, every rebuild or invalidation of the command ring and every start, so a later device given the slot never inherits it. Noted `qemu.inj.hang.recovery` (fault, slot, TRB type, outcome) with a debugcon line. **`25` with bit 7 and outcome 7** also arms a mark deadline about a second (10 ticks of the tolerance clock) after the primary: the controller thread's own EP0 wait for that slot, at its next look once the deadline has passed, marks the device's cycle (`HcdTolCycleMark`, reason refused code, DCI 1; `qemu.inj.hang.mark`, slot and whether marked), the wait abandons the transfer, and the cycle's Disable Slot is the recovery command withheld, acted out as outcome 1 (a Stop of EP0 the teardown makes first goes out). Noted `qemu.inj.hang.armed` (fault, port, by behaviour, arg), `qemu.inj.hang` (fault, port, slot, outcome) and `qemu.inj.outcome` (outcome, events) |
+| `2C` | The port switchover's step (task 50.34) | the argument's bits, read at a start that reaches the step and only then: the paragraph "The port switchover's injections" above |
+| `2D` | The query-stop under a debt, a driver-path exercise (task 50.30 step 3, design record 17 section 4.15.16 E) | armed only on a started controller in interrupt mode 4 on 2000, XP or XP x64 with isolation applying, no exercise active, no real request inside its bracket and none terminal since the start; otherwise `qemu.inj.qstop.refused` (1 not started, 2 not mode 4 on NT 5, 3 no isolation, 4 active, 5 a request in its bracket, 6 closed by a stop or a removal) and nothing is armed (`qemu.inj.qstop.armed`, `arg`). The next command one of `24` to `2B` withholds takes it (`qemu.inj.qstop.trigger`: slot, TRB type, `arg`); then the controller thread itself calls the driver's own query (`HcdMsg4QueryStop`; `qemu.inj.qstop`, its status) and, after the hold, its cancel when the query released the message (`HcdMsg4CancelStop`; `qemu.inj.qcancel`, the lost reason after it), with no IRP: no PnP state is touched and nothing below the FDO sees it, so a reading is a driver-path exercise, never a rebalance. `arg` bits 3:0 the hold in seconds between the query and the cancel (0 the next turn of the thread), bits 6:4 the delay in 100 ms units between the withholding and the query (both minimums: a service pass in progress runs to its end first), bit 7 the test window: the withholding raises the qemu-only route bit `80`, so the withheld command's wait leaves at its next look (`cmd.left` with route bits `80`) and the debt it forms is held, its settlement kept from running while the thread serves the other devices, until the exercise ends; with bit 7 a debt that did not form, or names another command, ends the exercise with no call (`qemu.inj.qstop.nodebt`: debt state, its slot, the withheld slot), an unsuccessful arrangement. Every real request that could overlap a call - the controller's START, query-stop, cancel-stop, query-remove, cancel-remove, stop, surprise removal and removal, every SET_POWER, the power work item's direct transition toward sleep and its shutdown branch - enters a bracket first: an exercise armed or triggered is ended there with no call; one in a call or queried is ended by the thread before the request goes on, by the cancel for a request that may come back, by a hand-off with no reconnection for a stop or a removal (`qemu.inj.qstop.end`: how - 1 the cancel or none owed, 2 the hand-off, 3 no debt, 4 aborted, 5 by the bracket - and whether the query released; `qemu.inj.qstop.waited`, ms; `qemu.inj.qstop.real`: the kind - the PnP minor, `40` + D-state, `50` + S-state, `60` direct, `61` shutdown - the state it found and its answer). `FF` does not end an exercise |
+| `30` to `35` | The retry of a controller stopped after repeated failures (task 50.31, design record 38 section 17) | taken on a failed controller too. `30` every recovery attempt begun is refused at its first step without touching the controller, charged as a refused attempt, until `arg` runs of failures are spent (a run ends at terminal 2; `0` one, `FF` until `FF` CLEAR); `31` the commit's USBSTS read answers all ones for the next `arg` armed tries (`0` one, `FF` until CLEAR), no other read touched; `32` the sampling's PORTSC reads answer all ones from the next pass until CLEAR (the port byte one root port, `0` every one); `33` the next armed try's commit is not attempted for `arg` x 100 ms on the tolerance clock (`0` 5 s; `FF` is 25.5 s, not until CLEAR), the thread's passes going on and nothing held for it, so that a stop, removal, cancel, suspend or shutdown begun meanwhile meets the commit; `34` the next `arg` recovery attempts (`0` one, `FF` until CLEAR) have their capability decode's first read answer all ones, so the attempt refuses at the decode with the capability guard left set and later attempts meet the guard; `35` in the next `arg` sweeps (`0` one, `FF` until CLEAR) the leave generation is advanced between the first and the second port hold, so the sweep is discarded. Noted `qemu.inj.retry.armed` (fault, `arg`), `qemu.inj.retry.fail`, `qemu.inj.retry.ones`, `qemu.inj.retry.hold`, `qemu.inj.retry.early` and `qemu.inj.retry.sweep`. The latch itself is made with the existing codes (`05` four times inside the window for terminal 3, `05` with `30` for terminal 2, `09` armed until CLEAR for a controller left running) |
 | `FF` | CLEAR | every emulated answer and the lost-interrupt window off, and no further `08` to `12` injection; one already in flight runs to its end (the driver's Reset Endpoint, or the slot's Disable Slot), so no endpoint is left Stopped under a driver that believes it Halted |
 
 Codes `08` to `12` (hex) are 35-T.2 to 35-T.4's, record 17 section 5's rows
@@ -8408,12 +8897,14 @@ XhciQemuInject /t REG_DWORD /d 0x01020000 /f` where `reg.exe` exists; Windows
 read there looks at that key alone, because the controller's driver key is
 opened through `IoOpenDeviceRegistryKey`, which waits behind the PnP manager,
 and from the controller thread it once waited for ever with a stick's I/O in
-flight (2000, 2026-11-12, `runs/run-49.md`, 49.24). A value left in the driver
+flight (2000, 2026-11-12, `runs/run-49.md`, 49.24); since task 50.38 the
+read is not on the controller thread at all. A value left in the driver
 key is still read once at the start, and latched there, so on these systems a
 kit that writes the trigger to the driver key no longer fires anything; on
 98 SE and ME either key works, the machine-wide one winning, as for every
 value. Wait a second or two after each write before
-reading the result. The expected outcome of each fault, transient and
+reading the result; where a step depends on the command having been taken,
+wait for its `qemu inject: fired` line on the debug console instead. The expected outcome of each fault, transient and
 persistent, is record 17 section 5's second table; the 35-V legs read them
 with a HID device and a Bulk-Only copy running.
 
@@ -9409,7 +9900,7 @@ it rests on (`runs/run-49.md`, "49.4", development host A, QEMU 11.1.2):
   and say `whpx` is what it runs on (`query-accelerators`). Where it does
   not, the script stops with QEMU's own message, having started no leg:
   "WHPX cannot run this guest here ... A WHPX leg does not fall back to
-  TCG; -ForceTcg runs it under TCG (the cross-check)." QEMU is given one
+  TCG; -ForceTcg runs it under TCG." QEMU is given one
   `-accel` and never a list (it tries a second when the first cannot
   start), and a second one from a guest's `Extra` is refused. Each start
   asks QEMU again which accelerator it runs on and is ended if that is not
@@ -9418,15 +9909,21 @@ it rests on (`runs/run-49.md`, "49.4", development host A, QEMU 11.1.2):
   every start ran with), `accelOwn` (the leg's own) and `accelForced`, each
   start its own `accel`, `cmdline-<start>.txt` the whole command line, and
   the matrix's table an Accel column taken from each leg's record.
-- **The periodic cross-check: `-ForceTcg`.** `run-leg.ps1 -Leg
+- **`-ForceTcg`, an operator's switch with no schedule.** `run-leg.ps1 -Leg
   w10x64-console -ForceTcg` (or `release-matrix.ps1 -ForceTcg`, which hands
   it to every leg) runs a WHPX leg under TCG, with the leg's `TcgMinutes`
   and `TcgStallSeconds` as its deadline and its longest silence on COM1
   (under TCG the 10 x64 uninstall wrote nothing for 47 minutes while it
-  removed the package from the driver store). Run both Windows 10 legs so
-  at every release cut, on the cut's package, and again after a change of
-  the emulator, of the leg scripts or of the Windows 10 images, and after
-  a WHPX failure that is not explained. Nothing forces WHPX onto a TCG leg.
+  removed the package from the driver store). It is for a host where WHPX
+  cannot run the Windows 10 guests, which refuses those legs otherwise,
+  and for telling the accelerator's part from the package's after a WHPX
+  reading that is not explained. No cut asks for it: the TCG cross-check
+  of the two Windows 10 legs at every cut was dropped by roadmap-usb4 task
+  50.2 (owner, 2026-11-14: "can remove those cross check for Win 10
+  TCG"; at the `3.5.0.0` legs it was started and stopped at his word), and
+  the WHPX legs' readings, the remove's among them, count by themselves.
+  The switch was kept, not retired, for those two uses. Nothing forces
+  WHPX onto a TCG leg.
 - `Whpx` on a guest in `release.config.psd1` is that host's `-accel` value
   for WHPX where plain `whpx` does not start (`whpx,kernel-irqchip=off` on
   the hosts the older launchers were written for; "Windows 2000 SMP Stress
@@ -9463,7 +9960,7 @@ the poller's setup is typed into the Run box and started elevated,
   package staged without the project's key has no catalog, Windows 10 x64
   refuses it, and the leg is listed as not in the package.
 
-**The controller's remove keeps a TCG reading.** It is the one step the
+**The controller's remove, read under either accelerator.** It is the one step the
 two accelerators did not agree on in the kits these legs replace: on
 2026-11-11 the remove asked for a restart in all four WHPX legs and in
 neither TCG leg, and at the `3.4.3.0` legs TCG asked too. What asks is
@@ -9515,9 +10012,12 @@ copy, the uninstall and the list after it. After a remove that asked for
 a restart the uninstall may stop with exit 4 ("removed, restart
 pending"); the guest must find those words in the installer's log
 (`uninstall-pending`), and runs the uninstall again after the next cold
-start (`uninstall-again`), before the last start's list. A WHPX leg's
-record says of the remove "recorded only: this step keeps a TCG reading",
-and claims none: the reading is the forced-TCG leg's on the same package.
+start (`uninstall-again`), before the last start's list. The record and
+the matrix's table say of the remove "remove: <answer> under <accelerator>"
+(`ctrlRemoveNote`), and under WHPX that is the step's reading by itself
+(roadmap-usb4 task 50.2; until then a WHPX leg's line added "recorded
+only: this step keeps a TCG reading", which only the same leg with
+`-ForceTcg` on the same package gave).
 
 **One leg per system installs with the installer's window**
 (`run-leg.ps1 -Leg <id>-window`). The guest is restored with the CD in,
@@ -10011,13 +10511,21 @@ With an input above 23, `XhciMsiIsaIrq` may also name that input (`24` to `255`,
 
 Every value is read when the controller starts: disable and enable the controller, or restart.
 
-**Why a start was refused** (2000, XP and XP x64). The USB Tree cannot open a controller that did not start, so its
-dump says nothing then. `regedit /e` of the MSI code's state key under `HKLM\HARDWARE`
+**Why a start was refused** (2000, XP and XP x64, and Vista and later, where `4` does not start). From task 50.4
+(design record 15 section 4.5.20) the driver writes why as `XhciMode4Refusal`, a binary value in the controller's own
+key (where `XhciInterruptMode` is read; a record the driver writes, not a setting, so no INF writes it). The USB Tree
+cannot open a controller that did not start, so it reads the record instead: `XHCITR /dump`, when no controller
+opens, lists every controller key that holds one, and the device report of `XHCITR /snapshot` and Save Report shows
+it under the controller, labelled "mode 4" - the reason, the connection's status, the values as the start read them,
+for a claim each IRQ's reason, when it was written, by which build, and the controller's PCI location. The next start
+that mode 4 does not refuse, one that succeeds or one that fails for another cause, marks it cleared, and the same
+places then say so; a start Windows fails before the driver sees it leaves it as it was. 98 SE and ME write nothing (a
+`4` runs as `0` there). `regedit /e` of the MSI code's state key under `HKLM\HARDWARE`
 shows each copy's `History` value: the MSI code's calls of this boot, with the claim
 and every IRQ's reason, a connect refused and its status, a quarantine. A refusal this driver makes before it calls
-the MSI code leaves no history - a value out of range, `XhciMsiAvoid`, the x86 helper not running, a controller
-refused after a quarantine until the restart - and then the Device Manager code and the values set are all there is;
-the newest event shown may then be an earlier attempt's.
+the MSI code leaves no history there - a value out of range, `XhciMsiAvoid`, the x86 helper not running, a controller
+refused after a quarantine until the restart - and the newest event shown may then be an earlier attempt's; the
+driver's own record above says which it was.
 
 Where its legs have been read, all of them in QEMU guests: `runs/run-49.md`, section 49.24 (49.24.1 worker m4c
 on the build of `b38a54473`; 49.24.2 worker m4x on `7e82e5a55`; 49.24.3 worker m4n on `7e82e5a55` for 2000). Anything

@@ -9583,6 +9583,17 @@ driver above, and `hidclass.sys` reads this one as "retry now". And **report
 the PDO missing before anything of the departed device completes**, so PnP's
 REMOVE is already on its way when a client looks.
 
+**Narrowed by task 50.28 (2026-11-16).** The hold is 98 SE's cure, and on
+NT it costs the removal: on 2000 and later a storage class driver that
+sends nothing more after the unplug waits out its own time-out on the
+held request before the removal goes on - about 10 s on XP, about 62 s on
+Vista and 7, 16 to 20 s on 8.1 and 10, about 1 s on 2000 (task 50.26's
+legs, QEMU, the `qemu` flavour). Task 50.28 keeps the hold on 98 SE and
+ME alone (and on every system at `XhciUnplugComplete` `0`); on 2000 and
+later a departed device's requests complete
+`DEVICE_GONE` once its PDO is reported missing (design record 13 section
+10.5.3). The second rule, report first, holds on every system.
+
 ## Prepare a Windows 98 SE image location by location, with Setup's SourcePath where the CD files are: a modal Insert Disk stops all PnP and looks like a driver wedge
 
 Roadmap task 27-V.1, 2026-10-04, the Windows 98 SE golden image for the hub

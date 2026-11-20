@@ -1344,6 +1344,574 @@ static void test_reset_guard(void)
              "bare: a child and the list not read to its end holds");
 }
 
+/* Record 21 section 6.1.6 item 10: the undo's plan over a canned
+ * configuration space - the member at 00:05.0, a dock (upstream port,
+ * downstream port with its NVMe, the chain port) recorded under bus 1. */
+#define FAKE_CFG_MAX 48
+typedef struct {
+    ULONG Count;
+    ULONG Bdf[FAKE_CFG_MAX];
+    ULONG Off[FAKE_CFG_MAX];
+    ULONG Val[FAKE_CFG_MAX];
+    ULONG RefuseBdf;
+} FAKE_CFG;
+
+static void fake_set(FAKE_CFG *f, ULONG bdf, ULONG off, ULONG val)
+{
+    ULONG k;
+
+    for (k = 0; k < f->Count; k++) {
+        if (f->Bdf[k] == bdf && f->Off[k] == off) {
+            f->Val[k] = val;
+            return;
+        }
+    }
+    if (f->Count < FAKE_CFG_MAX) {
+        f->Bdf[f->Count] = bdf;
+        f->Off[f->Count] = off;
+        f->Val[f->Count] = val;
+        f->Count++;
+    }
+}
+
+static BOOLEAN fake_read(PVOID context, ULONG bdf, ULONG offset, PULONG value)
+{
+    FAKE_CFG *f = (FAKE_CFG *)context;
+    ULONG k;
+
+    if (bdf == f->RefuseBdf) {
+        return FALSE;
+    }
+    *value = 0xFFFFFFFFUL;
+    for (k = 0; k < f->Count; k++) {
+        if (f->Bdf[k] == bdf && f->Off[k] == offset) {
+            *value = f->Val[k];
+        }
+    }
+    return TRUE;
+}
+
+static void fake_bridge(FAKE_CFG *f, ULONG bdf, ULONG id, ULONG buses)
+{
+    fake_set(f, bdf, 0x00UL, id);
+    fake_set(f, bdf, 0x08UL, 0x06040000UL);
+    fake_set(f, bdf, 0x0CUL, 0x00010000UL);
+    fake_set(f, bdf, 0x18UL, buses);
+}
+
+static void fake_nvme(FAKE_CFG *f, ULONG bdf)
+{
+    fake_set(f, bdf, 0x00UL, 0x00101B36UL);
+    fake_set(f, bdf, 0x08UL, 0x01080200UL);
+    fake_set(f, bdf, 0x0CUL, 0x00000000UL);
+    fake_set(f, bdf, 0x2CUL, 0x11001AF4UL);
+}
+
+static void test_undo_plan(void)
+{
+    static CM_PORTS_UNIT u;
+    static FAKE_CFG f;
+    ULONG plan[CM_PORTS_UNIT_MAX];
+    ULONG at[CM_PORTS_UNIT_MAX];
+    ULONG k;
+
+    memset(&u, 0, sizeof(u));
+    u.Count = 4;
+    u.N[0].Kind = CM_PORTS_UNIT_BRIDGE;
+    u.N[0].Parent = CM_PORTS_UNIT_MEMBER;
+    u.N[0].DevFn = 0x00UL;
+    u.N[0].Copy[0] = 0x8232104CUL;
+    u.N[0].Copy[0x08 / 4] = 0x06040000UL;
+    u.N[0].Copy[0x18 / 4] = 0x00060201UL;
+    u.N[1] = u.N[0];
+    u.N[1].Parent = 0;
+    u.N[1].Copy[0] = 0x8233104CUL;
+    u.N[1].Copy[0x18 / 4] = 0x00030302UL;
+    u.N[2] = u.N[1];
+    u.N[2].DevFn = 0x08UL;
+    u.N[2].Copy[0x18 / 4] = 0x00060402UL;
+    memset(&u.N[3], 0, sizeof(u.N[3]));
+    u.N[3].Kind = CM_PORTS_UNIT_FN;
+    u.N[3].Parent = 1;
+    u.N[3].DevFn = 0x00UL;
+    u.N[3].Copy[0] = 0x00101B36UL;
+    u.N[3].Copy[CM_PORTS_UNIT_FN_CLASS] = 0x01080200UL;
+    u.N[3].Copy[CM_PORTS_UNIT_FN_SUBSYS] = 0x11001AF4UL;
+
+    /* A proven chain: every node this unit's, at its recorded place. */
+    memset(&f, 0, sizeof(f));
+    f.RefuseBdf = 0xFFFFFFFFUL;
+    fake_set(&f, 0x0028UL, 0x18UL, 0x00090100UL);
+    fake_bridge(&f, 0x0100UL, 0x8232104CUL, 0x00060201UL);
+    fake_bridge(&f, 0x0200UL, 0x8233104CUL, 0x00030302UL);
+    fake_bridge(&f, 0x0208UL, 0x8233104CUL, 0x00060402UL);
+    fake_nvme(&f, 0x0300UL);
+    CmPortsUnitUndoPlan(&u, 1, 0x0028UL, TRUE, fake_read, &f, plan, at);
+    CHECK(plan[0] == CM_PORTS_UNDO_RESET && plan[1] == CM_PORTS_UNDO_RESET &&
+          plan[2] == CM_PORTS_UNDO_RESET && plan[3] == CM_PORTS_UNDO_RESET,
+          "undo plan: a proven chain is undone whole");
+    CHECK(at[0] == 0x0100UL && at[1] == 0x0200UL && at[2] == 0x0208UL &&
+          at[3] == 0x0300UL, "undo plan: each at its recorded place");
+
+    /* The same chain after the member was renumbered (bus 7), a second
+       unit of the same model now answering at the reused bus 1 behind
+       another bridge: nothing proven, nothing written. */
+    fake_set(&f, 0x0028UL, 0x18UL, 0x000A0700UL);
+    CmPortsUnitUndoPlan(&u, 1, 0x0028UL, TRUE, fake_read, &f, plan, at);
+    for (k = 0; k < 4; k++) {
+        CHECK(plan[k] == CM_PORTS_UNDO_UNPROVEN,
+              "undo plan: a same-model unit at a reused bus number is never written");
+    }
+
+    /* Ranges carried down the path: the member now routes buses 1 to 2
+       only, the unit's bridges still read their old numbers (the upstream
+       port 2 to 3, the downstream port 3), and bus 3 now belongs to
+       another member, an identical NVMe answering there. The bridges at
+       buses 1 and 2 are this unit's and reached; bus 3 is not routed by
+       this member: the NVMe is never written. */
+    fake_set(&f, 0x0028UL, 0x18UL, 0x00020100UL);
+    fake_set(&f, 0x0100UL, 0x18UL, 0x00030201UL);
+    CmPortsUnitUndoPlan(&u, 1, 0x0028UL, TRUE, fake_read, &f, plan, at);
+    CHECK(plan[0] == CM_PORTS_UNDO_RESET && plan[1] == CM_PORTS_UNDO_RESET,
+          "undo plan: narrowed ranges: the bridges reached are this unit's");
+    CHECK_EQ(plan[3], CM_PORTS_UNDO_UNPROVEN,
+             "undo plan: a bus outside an ancestor's range is never written");
+    CHECK_EQ(CmPortsUnitPathRouted(&u, 3, 1, 0x0028UL, at, fake_read, &f),
+             CM_PORTS_UNDO_UNPROVEN, "undo path: the same check before the write");
+    fake_set(&f, 0x0028UL, 0x18UL, 0x00090100UL);
+    fake_set(&f, 0x0100UL, 0x18UL, 0x00060201UL);
+
+    /* Partly proven: the member and the upstream port route as recorded,
+       the downstream port now forwards bus 5 - its NVMe's recorded bus 3
+       is not routed by it (a same-model function answering at bus 3 is
+       not this unit's); the proven part alone is undone. */
+    fake_set(&f, 0x0028UL, 0x18UL, 0x00090100UL);
+    fake_set(&f, 0x0200UL, 0x18UL, 0x00050502UL);
+    CmPortsUnitUndoPlan(&u, 1, 0x0028UL, TRUE, fake_read, &f, plan, at);
+    CHECK(plan[0] == CM_PORTS_UNDO_RESET && plan[1] == CM_PORTS_UNDO_RESET &&
+          plan[2] == CM_PORTS_UNDO_RESET,
+          "undo plan: partly proven: the proven bridges undone");
+    CHECK_EQ(plan[3], CM_PORTS_UNDO_UNPROVEN,
+             "undo plan: partly proven: the node behind the unproven route untouched");
+
+    /* The downstream port reset (secondary 0, as after a stopped pass):
+       its NVMe is not reached, not proven. */
+    fake_set(&f, 0x0200UL, 0x18UL, 0x00000000UL);
+    CmPortsUnitUndoPlan(&u, 1, 0x0028UL, TRUE, fake_read, &f, plan, at);
+    CHECK(plan[1] == CM_PORTS_UNDO_RESET && plan[3] == CM_PORTS_UNDO_UNPROVEN,
+          "undo plan: a reset bridge's child is not proven");
+    fake_set(&f, 0x0200UL, 0x18UL, 0x00030302UL);
+
+    /* At a proven place, the same vendor and device with another class:
+       not this unit's node; nothing behind it proven. */
+    fake_set(&f, 0x0100UL, 0x08UL, 0x06040001UL);
+    CmPortsUnitUndoPlan(&u, 1, 0x0028UL, TRUE, fake_read, &f, plan, at);
+    CHECK(plan[0] == CM_PORTS_UNDO_OTHER && plan[1] == CM_PORTS_UNDO_UNPROVEN &&
+          plan[2] == CM_PORTS_UNDO_UNPROVEN && plan[3] == CM_PORTS_UNDO_UNPROVEN,
+          "undo plan: an id match alone is not this unit's node");
+    fake_set(&f, 0x0100UL, 0x08UL, 0x06040000UL);
+
+    /* Nothing at the upstream port's place (all ones): none of this
+       unit's there. */
+    fake_set(&f, 0x0100UL, 0x00UL, 0xFFFFFFFFUL);
+    CmPortsUnitUndoPlan(&u, 1, 0x0028UL, TRUE, fake_read, &f, plan, at);
+    CHECK(plan[0] == CM_PORTS_UNDO_OTHER && plan[1] == CM_PORTS_UNDO_UNPROVEN,
+          "undo plan: nothing answering: nothing of this unit's");
+    fake_set(&f, 0x0100UL, 0x00UL, 0x8232104CUL);
+
+    /* A read refused: tried again. */
+    f.RefuseBdf = 0x0028UL;
+    CmPortsUnitUndoPlan(&u, 1, 0x0028UL, TRUE, fake_read, &f, plan, at);
+    CHECK_EQ(plan[0], CM_PORTS_UNDO_UNREAD, "undo plan: the member not read: tried again");
+    f.RefuseBdf = 0xFFFFFFFFUL;
+
+    /* Another connection than the table's: nothing proven. */
+    CmPortsUnitUndoPlan(&u, 1, 0x0028UL, FALSE, fake_read, &f, plan, at);
+    CHECK(plan[0] == CM_PORTS_UNDO_UNPROVEN && plan[3] == CM_PORTS_UNDO_UNPROVEN,
+          "undo plan: another connection: nothing proven");
+}
+
+/* Record 21 section 6.1.6 (TBSTBYWB9X.1): the unit's copy, its reading at a
+ * pass, and section 6.1.5's reading widened to it. */
+static void test_unit_rules(void)
+{
+    ULONG mem[CM_PORTS_HDR_DWORDS];
+    ULONG up[CM_PORTS_HDR_DWORDS];
+    ULONG c[CM_PORTS_HDR_DWORDS];
+    ULONG fn[CM_PORTS_HDR_DWORDS];
+    ULONG now[CM_PORTS_HDR_DWORDS];
+    ULONG bars[6];
+    ULONG k;
+
+    for (k = 0; k < CM_PORTS_HDR_DWORDS; k++) {
+        mem[k] = 0;
+        up[k] = 0;
+        fn[k] = 0;
+    }
+    /* The member: buses 0/1/9, memory FE000000-FE7FFFFF, I/O and
+     * prefetchable closed. */
+    mem[0] = 0x15EF8086UL;
+    mem[0x18 / 4] = 0x00090100UL;
+    mem[0x1C / 4] = 0x000000F0UL;
+    mem[0x20 / 4] = 0xFE70FE00UL;
+    mem[0x24 / 4] = 0x0000FFF0UL;
+    /* The upstream port: buses 1/2/9, the same memory window. */
+    for (k = 0; k < CM_PORTS_HDR_DWORDS; k++) {
+        up[k] = mem[k];
+    }
+    up[0] = 0x15D38086UL;
+    up[1] = 0x00100007UL;
+    up[0x0C / 4] = 0x00010000UL;
+    up[0x18 / 4] = 0x00090201UL;
+    CHECK_EQ(CmPortsUnitNested(mem, up), TRUE, "unit: nested in the member");
+    for (k = 0; k < CM_PORTS_HDR_DWORDS; k++) {
+        c[k] = up[k];
+    }
+    c[0x18 / 4] = 0x000A0201UL;
+    CHECK_EQ(CmPortsUnitNested(mem, c), FALSE, "unit: subordinate above the parent's");
+    c[0x18 / 4] = 0x00090200UL;
+    CHECK_EQ(CmPortsUnitNested(mem, c), FALSE, "unit: primary not the parent's secondary");
+    c[0x18 / 4] = 0x00090101UL;
+    CHECK_EQ(CmPortsUnitNested(mem, c), FALSE, "unit: secondary not above the parent's");
+    c[0x18 / 4] = 0x00090201UL;
+    c[0x20 / 4] = 0xFE8FFE80UL;
+    CHECK_EQ(CmPortsUnitNested(mem, c), FALSE, "unit: memory window outside the parent's");
+    c[0x20 / 4] = 0xFE70FE00UL;
+    c[0x1C / 4] = 0x0000E0E0UL;
+    CHECK_EQ(CmPortsUnitNested(mem, c), FALSE, "unit: an I/O window the parent does not forward");
+    c[0x1C / 4] = 0x000000F0UL;
+    c[0x24 / 4] = 0xFE3FFE10UL;
+    CHECK_EQ(CmPortsUnitNested(mem, c), TRUE,
+             "unit: a prefetchable window inside the parent's memory window");
+    c[0x24 / 4] = 0xFF3FFF10UL;
+    CHECK_EQ(CmPortsUnitNested(mem, c), FALSE, "unit: a prefetchable window outside");
+    CHECK_EQ(CmPortsUnitNested(NULL, up), FALSE, "unit: no parent");
+
+    CHECK_EQ(CmPortsUnitDisjoint(0x00030200UL, 0x00060400UL), TRUE, "unit: siblings 2-3, 4-6");
+    CHECK_EQ(CmPortsUnitDisjoint(0x00050200UL, 0x00060400UL), FALSE, "unit: siblings 2-5, 4-6");
+    CHECK_EQ(CmPortsUnitDisjoint(0x00060400UL, 0x00030200UL), TRUE, "unit: either order");
+
+    /* A function: a 64-bit memory BAR at FE000000. */
+    fn[0] = 0xA8091B21UL;
+    fn[1] = 0x00100006UL;
+    fn[2] = 0x00000000UL;
+    fn[3] = 0xFE000004UL;
+    fn[4] = 0x00000000UL;
+    fn[9] = 0x0000010AUL;
+    fn[CM_PORTS_UNIT_FN_CLASS] = 0x01080201UL;
+    fn[CM_PORTS_UNIT_FN_SUBSYS] = 0x12341B21UL;
+    CHECK_EQ(CmPortsUnitBarsIn(up, fn), TRUE, "unit: a BAR inside the memory window");
+    fn[3] = 0xFF000004UL;
+    CHECK_EQ(CmPortsUnitBarsIn(up, fn), FALSE, "unit: a BAR outside");
+    fn[3] = 0xFE000004UL;
+    fn[5] = 0x0000E001UL;
+    CHECK_EQ(CmPortsUnitBarsIn(up, fn), FALSE, "unit: an I/O BAR the parent does not forward");
+    fn[5] = 0;
+    fn[4] = 0x00000001UL;
+    CHECK_EQ(CmPortsUnitBarsIn(up, fn), FALSE, "unit: a 64-bit BAR above 4 GB in no window");
+    fn[4] = 0;
+
+    /* A bridge read at a pass. */
+    now[CM_PORTS_UNIT_BR_ID] = up[0];
+    now[CM_PORTS_UNIT_BR_CMD] = 0x00100000UL;
+    now[CM_PORTS_UNIT_BR_TYPE] = 0x00010000UL;
+    for (k = 0; k < 7; k++) {
+        now[CM_PORTS_UNIT_BR_18 + k] = 0;
+    }
+    CHECK_EQ(CmPortsUnitBridgeNow(up, TRUE, now), CM_PORTS_UNIT_RESET, "pass: a bridge reset as a whole");
+    CHECK_EQ(CmPortsUnitBridgeNow(up, FALSE, now), CM_PORTS_UNIT_NOTYET, "pass: not all read");
+    now[CM_PORTS_UNIT_BR_ID] = 0xFFFFFFFFUL;
+    CHECK_EQ(CmPortsUnitBridgeNow(up, TRUE, now), CM_PORTS_UNIT_NOTYET, "pass: not answering");
+    now[CM_PORTS_UNIT_BR_ID] = 0x00000001UL;
+    CHECK_EQ(CmPortsUnitBridgeNow(up, TRUE, now), CM_PORTS_UNIT_NOTYET, "pass: Retry Status");
+    now[CM_PORTS_UNIT_BR_ID] = 0x15EF8086UL;
+    CHECK_EQ(CmPortsUnitBridgeNow(up, TRUE, now), CM_PORTS_UNIT_OTHER, "pass: another id");
+    now[CM_PORTS_UNIT_BR_ID] = up[0];
+    now[CM_PORTS_UNIT_BR_TYPE] = 0x00000000UL;
+    CHECK_EQ(CmPortsUnitBridgeNow(up, TRUE, now), CM_PORTS_UNIT_OTHER, "pass: not type 1");
+    now[CM_PORTS_UNIT_BR_TYPE] = 0x00010000UL;
+    now[CM_PORTS_UNIT_BR_CMD] = up[1];
+    for (k = 0; k < 7; k++) {
+        now[CM_PORTS_UNIT_BR_18 + k] = up[0x18 / 4 + k];
+    }
+    CHECK_EQ(CmPortsUnitBridgeNow(up, TRUE, now), CM_PORTS_UNIT_ASCOPY, "pass: a bridge as its copy");
+    now[CM_PORTS_UNIT_BR_18] = 0x40090201UL;
+    CHECK_EQ(CmPortsUnitBridgeNow(up, TRUE, now), CM_PORTS_UNIT_ASCOPY,
+             "pass: the latency timer is not compared");
+    now[CM_PORTS_UNIT_BR_18 + 2] = 0xFE30FE00UL;
+    CHECK_EQ(CmPortsUnitBridgeNow(up, TRUE, now), CM_PORTS_UNIT_STATE, "pass: another window");
+    now[CM_PORTS_UNIT_BR_18 + 2] = up[0x20 / 4];
+    now[CM_PORTS_UNIT_BR_CMD] = 0x00100000UL;
+    CHECK_EQ(CmPortsUnitBridgeNow(up, TRUE, now), CM_PORTS_UNIT_STATE,
+             "pass: numbered but no decode: part-configured");
+
+    /* A function read at a pass. */
+    for (k = 0; k < CM_PORTS_HDR_DWORDS; k++) {
+        now[k] = fn[k];
+    }
+    CHECK_EQ(CmPortsUnitFnNow(fn, TRUE, now), CM_PORTS_UNIT_ASCOPY, "pass: a function as its copy");
+    now[1] = 0x00100000UL;
+    now[3] = 0x00000004UL;
+    CHECK_EQ(CmPortsUnitFnNow(fn, TRUE, now), CM_PORTS_UNIT_RESET, "pass: a function from reset");
+    now[CM_PORTS_UNIT_FN_SUBSYS] = 0x99991B21UL;
+    CHECK_EQ(CmPortsUnitFnNow(fn, TRUE, now), CM_PORTS_UNIT_OTHER, "pass: another subsystem");
+    now[CM_PORTS_UNIT_FN_SUBSYS] = fn[CM_PORTS_UNIT_FN_SUBSYS];
+    now[CM_PORTS_UNIT_FN_CLASS] = 0x01080202UL;
+    CHECK_EQ(CmPortsUnitFnNow(fn, TRUE, now), CM_PORTS_UNIT_OTHER, "pass: another revision");
+    now[CM_PORTS_UNIT_FN_CLASS] = fn[CM_PORTS_UNIT_FN_CLASS];
+    now[2] = 0x00010000UL;
+    CHECK_EQ(CmPortsUnitFnNow(fn, TRUE, now), CM_PORTS_UNIT_OTHER, "pass: not type 0");
+    now[2] = 0;
+    now[1] = fn[1];
+    now[3] = 0xFE100004UL;
+    CHECK_EQ(CmPortsUnitFnNow(fn, TRUE, now), CM_PORTS_UNIT_STATE, "pass: another BAR");
+    now[3] = fn[3];
+    now[4] = 0x00000001UL;
+    CHECK_EQ(CmPortsUnitFnNow(fn, TRUE, now), CM_PORTS_UNIT_STATE, "pass: another upper half");
+    CHECK_EQ(CmPortsUnitFnNow(fn, FALSE, now), CM_PORTS_UNIT_NOTYET, "pass: a function not read whole");
+
+    CHECK_EQ(CmPortsUnitDoubt(CM_PORTS_UNIT_N_WRITTEN), FALSE, "result: written is no doubt");
+    CHECK_EQ(CmPortsUnitDoubt(CM_PORTS_UNIT_N_ASCOPY), FALSE, "result: as the copy is no doubt");
+    CHECK_EQ(CmPortsUnitDoubt(CM_PORTS_UNIT_N_NONE), FALSE, "result: none yet is not final");
+    CHECK_EQ(CmPortsUnitDoubt(CM_PORTS_UNIT_N_FAILED), TRUE, "result: a write not taken");
+    CHECK_EQ(CmPortsUnitDoubt(CM_PORTS_UNIT_N_OTHER), TRUE, "result: another device or state");
+    CHECK_EQ(CmPortsUnitDoubt(CM_PORTS_UNIT_N_NOANSWER), TRUE, "result: not answering at the bound");
+    CHECK_EQ(CmPortsUnitDoubt(CM_PORTS_UNIT_N_STOPPED), TRUE, "result: stopped");
+    CHECK_EQ(CmPortsUnitDoubt(CM_PORTS_UNIT_N_SKIPPED), TRUE, "result: behind a doubt");
+
+    /* Section 6.1.5's reading widened to the unit. */
+    for (k = 0; k < 6; k++) {
+        bars[k] = 0;
+    }
+    CHECK_EQ(CmPortsUnitLost(CM_PORTS_UNIT_BRIDGE, up[0], TRUE, up[0], 0x00010000UL,
+                             0x00000000UL, 0x00100007UL, NULL),
+             TRUE, "lost: a recorded bridge at secondary bus 0, whatever its command");
+    CHECK_EQ(CmPortsUnitLost(CM_PORTS_UNIT_BRIDGE, up[0], TRUE, up[0], 0x00010000UL,
+                             0x00090201UL, 0x00100007UL, NULL),
+             FALSE, "lost: a recorded bridge numbered");
+    CHECK_EQ(CmPortsUnitLost(CM_PORTS_UNIT_BRIDGE, up[0], TRUE, 0x15EF8086UL, 0x00010000UL,
+                             0, 0, NULL),
+             FALSE, "lost: another id adds nothing");
+    CHECK_EQ(CmPortsUnitLost(CM_PORTS_UNIT_BRIDGE, up[0], FALSE, up[0], 0x00010000UL, 0, 0, NULL),
+             FALSE, "lost: not read adds nothing");
+    CHECK_EQ(CmPortsUnitLost(CM_PORTS_UNIT_BRIDGE, up[0], TRUE, up[0], 0x00010000UL,
+                             0xFFFFFFFFUL, 0, NULL),
+             FALSE, "lost: buses all ones adds nothing");
+    CHECK_EQ(CmPortsUnitLost(CM_PORTS_UNIT_FN, fn[0], TRUE, fn[0], 0, 0, 0x00100000UL, bars),
+             TRUE, "lost: a recorded function from reset");
+    bars[0] = 0xFE000004UL;
+    CHECK_EQ(CmPortsUnitLost(CM_PORTS_UNIT_FN, fn[0], TRUE, fn[0], 0, 0, 0x00100006UL, bars),
+             FALSE, "lost: a recorded function configured");
+
+    /* The verdict widened to the unit: a standing obligation whose upstream
+       port no longer answers (all ones) still has its removal asked. */
+    {
+        CM_PORTS_SUB note;
+        CM_PORTS_SUB lost;
+        ULONG e1[1];
+        ULONG verdict;
+
+        note.Count = 1;
+        note.DevFn[0] = 0x00UL;
+        note.Id[0] = up[0];
+        e1[0] = CmPortsSubRead(up[0], CM_PORTS_SUB_R_ID | CM_PORTS_SUB_R_TYPE |
+                                          CM_PORTS_SUB_R_CMD | CM_PORTS_SUB_R_BUSES,
+                               0xFFFFFFFFUL, 0xFFFFFFFFUL, 0xFFFFFFFFUL, 0xFFFFFFFFUL,
+                               CM_PORTS_SUB_ABSENT_MS);
+        verdict = CmPortsSubVerdict(e1, 1);
+        CHECK(verdict != CM_PORTS_SUBV_LOST,
+              "unit verdict: an upstream port not answering is not lost by section 6.1.5 alone");
+        lost.Count = 0;
+        CmPortsUnitVerdict(TRUE, TRUE, FALSE, 0xFFFFFFFFUL, 0x00UL, up[0], &note,
+                           &verdict, &lost);
+        CHECK_EQ(verdict, CM_PORTS_SUBV_LOST,
+                 "unit verdict: a doubt whose upstream port no longer answers: lost");
+        CHECK(lost.Count == 1 && lost.DevFn[0] == 0x00UL && lost.Id[0] == up[0],
+              "unit verdict: the doubt's entry is the recorded upstream port");
+        CHECK_EQ(CmPortsLostStep(CM_PORTS_RW_RESTORED_HERE, verdict, 2045, FALSE, 0),
+                 CM_PORTS_LOST_REMOVE, "unit verdict: so the removal is asked");
+
+        verdict = CmPortsSubVerdict(e1, 1);
+        lost.Count = 0;
+        CmPortsUnitVerdict(TRUE, FALSE, FALSE, 0xFFFFFFFFUL, 0x00UL, up[0], &note,
+                           &verdict, &lost);
+        CHECK(verdict != CM_PORTS_SUBV_LOST && lost.Count == 0,
+              "unit verdict: no doubt and not answering: today's verdict");
+        verdict = CM_PORTS_SUBV_SETTLED;
+        CmPortsUnitVerdict(TRUE, FALSE, TRUE, up[0], 0x00UL, up[0], &note, &verdict,
+                           &lost);
+        CHECK(verdict == CM_PORTS_SUBV_LOST && lost.Count == 1,
+              "unit verdict: owed and the same device at its place: lost");
+        verdict = CM_PORTS_SUBV_SETTLED;
+        lost.Count = 0;
+        CmPortsUnitVerdict(TRUE, FALSE, TRUE, 0x15EF8086UL, 0x00UL, up[0], &note,
+                           &verdict, &lost);
+        CHECK(verdict == CM_PORTS_SUBV_SETTLED && lost.Count == 0,
+              "unit verdict: another device at its place, no doubt: today's verdict");
+        note.Count = 0;
+        verdict = CM_PORTS_SUBV_UNDECIDED;
+        lost.Count = 0;
+        CmPortsUnitVerdict(TRUE, TRUE, FALSE, 0xFFFFFFFFUL, 0x00UL, up[0], &note,
+                           &verdict, &lost);
+        CHECK(verdict == CM_PORTS_SUBV_LOST && lost.Count == 1 && lost.Id[0] == up[0],
+              "unit verdict: a doubt with no noted entry: named by its own record");
+        /* A later suspend refreshed the note: another id at the same place. */
+        note.Count = 1;
+        note.DevFn[0] = 0x00UL;
+        note.Id[0] = 0x15EF8086UL;
+        verdict = CM_PORTS_SUBV_UNDECIDED;
+        lost.Count = 0;
+        CmPortsUnitVerdict(TRUE, TRUE, FALSE, 0xFFFFFFFFUL, 0x00UL, up[0], &note,
+                           &verdict, &lost);
+        CHECK(verdict == CM_PORTS_SUBV_LOST && lost.Count == 1 &&
+              lost.DevFn[0] == 0x00UL && lost.Id[0] == up[0],
+              "unit verdict: a doubt over a refreshed note: the recorded upstream port named");
+        /* Already lost by another entry: the obligation's own added. */
+        verdict = CM_PORTS_SUBV_LOST;
+        lost.Count = 1;
+        lost.DevFn[0] = 0x08UL;
+        lost.Id[0] = 0x15EF8086UL;
+        CmPortsUnitVerdict(TRUE, TRUE, FALSE, 0xFFFFFFFFUL, 0x00UL, up[0], &note,
+                           &verdict, &lost);
+        CHECK(lost.Count == 2 && lost.Id[1] == up[0],
+              "unit verdict: a doubt already lost elsewhere: its own entry added");
+        CmPortsUnitVerdict(TRUE, TRUE, FALSE, 0xFFFFFFFFUL, 0x00UL, up[0], &note,
+                           &verdict, &lost);
+        CHECK_EQ(lost.Count, 2, "unit verdict: never added twice");
+        note.Count = 1;
+        note.Id[0] = up[0];
+        lost.Count = 0;
+        verdict = CM_PORTS_SUBV_SETTLED;
+        CmPortsUnitVerdict(FALSE, TRUE, FALSE, 0xFFFFFFFFUL, 0x00UL, up[0], &note,
+                           &verdict, &lost);
+        CHECK(verdict == CM_PORTS_SUBV_SETTLED && lost.Count == 0,
+              "unit verdict: nothing owed: today's verdict");
+    }
+
+    /* The slow retry's place: a standing obligation whose member does not
+       read, or reads reset, is asked by its record. */
+    {
+        ULONG sec;
+
+        CHECK_EQ(CmPortsSlowPlace(FALSE, TRUE, 0x02UL, FALSE, 0x02UL, &sec),
+                 CM_PORTS_SLOW_P_READ, "slow place: the member reads: read there");
+        CHECK_EQ(sec, 0x02UL, "slow place: at the secondary bus read now");
+        CHECK_EQ(CmPortsSlowPlace(FALSE, TRUE, 0x03UL, TRUE, 0x02UL, &sec),
+                 CM_PORTS_SLOW_P_READ, "slow place: a doubt whose member reads: read there");
+        CHECK_EQ(sec, 0x03UL, "slow place: the bus read now, not the record");
+        CHECK_EQ(CmPortsSlowPlace(FALSE, FALSE, 0, TRUE, 0x02UL, &sec),
+                 CM_PORTS_SLOW_P_RECORD, "slow place: a doubt, the member unreadable: by the record");
+        CHECK_EQ(sec, 0x02UL, "slow place: at the recorded secondary bus");
+        CHECK_EQ(CmPortsSlowPlace(FALSE, TRUE, 0, TRUE, 0x02UL, &sec),
+                 CM_PORTS_SLOW_P_RECORD, "slow place: a doubt, the member reset: by the record");
+        CHECK_EQ(CmPortsSlowPlace(FALSE, FALSE, 0, FALSE, 0x02UL, &sec),
+                 CM_PORTS_SLOW_P_NOTREAD, "slow place: no doubt, unreadable: nothing asked");
+        CHECK_EQ(CmPortsSlowPlace(FALSE, TRUE, 0, FALSE, 0x02UL, &sec),
+                 CM_PORTS_SLOW_P_RESET, "slow place: no doubt, the member reset: not this retry's case");
+        CHECK_EQ(CmPortsSlowPlace(FALSE, FALSE, 0, TRUE, 0, &sec),
+                 CM_PORTS_SLOW_P_NOTREAD, "slow place: a doubt with no recorded bus: nothing asked");
+        CHECK_EQ(CmPortsSlowPlace(TRUE, TRUE, 0x02UL, TRUE, 0x02UL, &sec),
+                 CM_PORTS_SLOW_P_NOTREAD, "slow place: no configuration space read by rule: nothing asked");
+    }
+
+    /* The bus an obligation's child is named at: the recorded one, whatever
+       the member reads now - a child enumerated at bus 02 is still named
+       when the member reads bus 03. */
+    {
+        ULONG at;
+        static const char kid[] = "PCI\\VEN_8086&DEV_15EF\\BUS_02&DEV_00&FUNC_00";
+
+        CHECK(CmPortsIdLocation(kid, sizeof(kid), &at), "name bus: the child's location parses");
+        CHECK_EQ(CmPortsUnitNameBus(TRUE, 0x02UL, 0x03UL), 0x02UL,
+                 "name bus: a doubt names the child at the recorded bus");
+        CHECK_EQ((CmPortsUnitNameBus(TRUE, 0x02UL, 0x03UL) << 8) | 0x00UL, at,
+                 "name bus: so the BUS_02 child is the one named");
+        CHECK(((CmPortsUnitNameBus(FALSE, 0x02UL, 0x03UL) << 8) | 0x00UL) != at,
+              "name bus: without a doubt, the bus read now (today's)");
+        CHECK_EQ(CmPortsUnitNameBus(TRUE, 0, 0x03UL), 0x03UL,
+                 "name bus: a doubt with no recorded bus: the bus read now");
+    }
+}
+
+/* Record 21 section 6.1.5 item 9 (the slow retry after a refused removal):
+ * the owner's decision of 2026-11-13. */
+static void test_slow_retry(void)
+{
+    /* The slow retry's arming. */
+    CHECK_EQ(CmPortsSlowArm(CM_PORTS_RW_LOST_KEPT, TRUE, 0), TRUE,
+             "arm: refused to the bound");
+    CHECK_EQ(CmPortsSlowArm(CM_PORTS_RW_LOST_KEPT, TRUE, 0xFCUL), TRUE,
+             "arm: refused, then the list unread at the bound");
+    CHECK_EQ(CmPortsSlowArm(CM_PORTS_RW_LOST_KEPT, TRUE, 0xFDUL), FALSE,
+             "arm: an inventory not recovered is not");
+    CHECK_EQ(CmPortsSlowArm(CM_PORTS_RW_LOST_KEPT, FALSE, 0), FALSE,
+             "arm: no query refused is not");
+    CHECK_EQ(CmPortsSlowArm(CM_PORTS_RW_LOST_REMOVED, TRUE, 0), FALSE,
+             "arm: removed is not");
+    CHECK_EQ(CmPortsSlowArm(CM_PORTS_RW_RESTORED, TRUE, 0), FALSE,
+             "arm: a settled end is not");
+    CHECK_EQ(CmPortsSlowArm(CM_PORTS_RW_RESTORED_HERE, TRUE, 0xFEUL), TRUE,
+             "arm: refused, then the switch undecided at the bound");
+    CHECK_EQ(CmPortsSlowArm(CM_PORTS_RW_RESTORED, TRUE, 0xFCUL), TRUE,
+             "arm: refused, then the list unread at the bound (restored by Windows)");
+    CHECK_EQ(CmPortsSlowArm(CM_PORTS_RW_RESTORED_HERE, FALSE, 0xFEUL), FALSE,
+             "arm: undecided with no refusal is not");
+    CHECK_EQ(CmPortsSlowArm(CM_PORTS_RW_LOST_REMOVED, TRUE, 0xFCUL), FALSE,
+             "arm: removed is not, whatever the code");
+
+    /* Due once a minute, never during a suspend or for a member gone. */
+    CHECK_EQ(CmPortsSlowDue(TRUE, TRUE, FALSE, FALSE, TRUE, CM_PORTS_SUB_SLOW_MS), TRUE,
+             "due: a minute on");
+    CHECK_EQ(CmPortsSlowDue(TRUE, TRUE, FALSE, FALSE, TRUE, CM_PORTS_SUB_SLOW_MS - 1),
+             FALSE, "due: not before");
+    CHECK_EQ(CmPortsSlowDue(FALSE, TRUE, FALSE, FALSE, TRUE, CM_PORTS_SUB_SLOW_MS),
+             FALSE, "due: not armed");
+    CHECK_EQ(CmPortsSlowDue(TRUE, FALSE, FALSE, FALSE, TRUE, CM_PORTS_SUB_SLOW_MS),
+             FALSE, "due: the member gone");
+    CHECK_EQ(CmPortsSlowDue(TRUE, TRUE, TRUE, FALSE, TRUE, CM_PORTS_SUB_SLOW_MS),
+             FALSE, "due: asleep");
+    CHECK_EQ(CmPortsSlowDue(TRUE, TRUE, FALSE, TRUE, TRUE, CM_PORTS_SUB_SLOW_MS),
+             FALSE, "due: a suspend taking its copies");
+    CHECK_EQ(CmPortsSlowDue(TRUE, TRUE, FALSE, FALSE, FALSE, CM_PORTS_SUB_SLOW_MS),
+             FALSE, "due: another standby since");
+
+    /* The arming's lifetime: a departure between the check's reads and
+     * the arming (with or without a return since) stops it. */
+    CHECK_EQ(CmPortsSlowAlive(TRUE, 5, 5), TRUE, "alive: active, no departure");
+    CHECK_EQ(CmPortsSlowAlive(FALSE, 5, 6), FALSE, "alive: departed");
+    CHECK_EQ(CmPortsSlowAlive(TRUE, 5, 6), FALSE,
+             "alive: departed and back again (no re-enumeration post): not armed");
+    CHECK_EQ(CmPortsSlowAlive(FALSE, 5, 5), FALSE, "alive: inactive");
+    CHECK_EQ(CmPortsSlowArm(CM_PORTS_RW_LOST_KEPT, TRUE, 0) &&
+                 CmPortsSlowAlive(TRUE, 7, 8),
+             FALSE, "arm: refused to the bound, but the member left meanwhile");
+    /* A refusal is the connection's it was made on: one returned from a
+     * query made before a departure is not recorded (the token read at the
+     * query, again at its answer), and a departure forgets one recorded
+     * (cmWkSlowDrop), so the bound's arming on the next connection finds
+     * no refusal without a query of its own. */
+    CHECK_EQ(CmPortsSlowAlive(TRUE, 3, 4), FALSE,
+             "refusal: the answer came after a departure and a return: not recorded");
+    CHECK_EQ(CmPortsSlowArm(CM_PORTS_RW_LOST_KEPT, FALSE, 0), FALSE,
+             "refusal forgotten at the departure: the new connection's bound does not arm");
+    CHECK_EQ(CmPortsRefusalKeep(TRUE, 4, 4, 9, 9, FALSE, FALSE), TRUE,
+             "refusal: the same connection and resume: recorded");
+    CHECK_EQ(CmPortsRefusalKeep(TRUE, 4, 4, 9, 9, TRUE, FALSE), FALSE,
+             "refusal: answered while a suspend takes its copies (evidence just cleared): not recorded");
+    CHECK_EQ(CmPortsRefusalKeep(TRUE, 4, 4, 9, 10, FALSE, TRUE), FALSE,
+             "refusal: answered after the suspend (asleep): not recorded");
+    CHECK_EQ(CmPortsRefusalKeep(TRUE, 4, 4, 9, 11, FALSE, FALSE), FALSE,
+             "refusal: answered after the next resume (epoch moved): not recorded");
+    CHECK_EQ(CmPortsRefusalKeep(TRUE, 4, 5, 9, 9, FALSE, FALSE), FALSE,
+             "refusal: another connection since: not recorded");
+
+    /* The worker's wait for it: what is left, never zero. */
+    CHECK_EQ(CmPortsSlowWait(0), CM_PORTS_SUB_SLOW_MS, "wait: a whole minute");
+    CHECK_EQ(CmPortsSlowWait(59000), 1000UL, "wait: what is left");
+    CHECK_EQ(CmPortsSlowWait(CM_PORTS_SUB_SLOW_MS), 1UL, "wait: due, never zero");
+    CHECK_EQ(CmPortsSlowWait(0xFFFFFFF0UL), 1UL, "wait: long past, never zero");
+}
+
 static void test_resume_race(void)
 {
     CM_PORTS_RWS s;
@@ -2245,6 +2813,9 @@ int main(void)
     test_ep_restore();
     test_sub_lost();
     test_reset_guard();
+    test_slow_retry();
+    test_unit_rules();
+    test_undo_plan();
     test_resume_race();
     test_keep_present();
     test_tunnel_ids();

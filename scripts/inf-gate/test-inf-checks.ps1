@@ -124,13 +124,14 @@ function Get-InfSelfTestNamedInputs {
 
 function Get-InfSelfTestListedInputs {
     # The files of the INF self-tests' set that git lists (task 45.51):
-    # every one under scripts\inf-gate\ and every INF directly in src\,
-    # tracked (a tracked one deleted included) or untracked and not ignored,
+    # every one under scripts\inf-gate\, every INF directly in src\ and,
+    # since task 50.3, every published xhci98.inf under releases\, tracked
+    # (a tracked one deleted included) or untracked and not ignored,
     # repository-relative. $null when git cannot list -Root.
     param([string]$Root)
     # Local to this function: git's warnings on stderr are not errors here.
     $ErrorActionPreference = "Continue"
-    $listed = & git -C $Root -c core.quotePath=false ls-files -z --cached --others --exclude-standard -- "scripts/inf-gate" ":(glob,icase)src/*.inf" 2>$null
+    $listed = & git -C $Root -c core.quotePath=false ls-files -z --cached --others --exclude-standard -- "scripts/inf-gate" ":(glob,icase)src/*.inf" ":(glob,icase)releases/**/xhci98.inf" 2>$null
     if ($LASTEXITCODE -ne 0) { return $null }
     return @((($listed | Out-String) -split [char]0) | Where-Object { $_.Trim() -ne "" } | ForEach-Object { $_.Trim().Replace('/', '\') })
 }
@@ -326,6 +327,8 @@ $script:partTable = @{
     "the two install paths" = 6
     "the log's two per-device values" = 6
     "the id source: src\xhci_hub.h" = 6
+    "the value rows by published version: every published INF" = 1
+    "the value rows by published version: strict both ways, and the table's own history" = 5
 }
 $script:stepIndex = -1
 $script:inPart = $true
@@ -592,7 +595,10 @@ try {
         @{ Why = "an ignored INF";                    File = "src\ignored.inf";                Moves = $false },
         @{ Why = "an INF under a src\ subfolder";     File = "src\sub\other.inf";              Moves = $false },
         @{ Why = "another script";                    File = "scripts\other.ps1";              Moves = $false },
-        @{ Why = "a file elsewhere";                  File = "elsewhere\x.txt";                Moves = $false }
+        @{ Why = "a file elsewhere";                  File = "elsewhere\x.txt";                Moves = $false },
+        @{ Why = "a published INF added (task 50.3)"; File = "releases\9.9.9.9\nt-x86\xhci98.inf"; Moves = $true },
+        @{ Why = "another published INF";             File = "releases\9.9.9.9\release-x64\xhci98.inf"; Moves = $true },
+        @{ Why = "a published release's other file";  File = "releases\9.9.9.9\nt-x86\xhciuas.inf"; Moves = $false }
     )
     foreach ($c in $dgCases) {
         $f = Join-Path $dg $c.File
@@ -1174,35 +1180,66 @@ try {
     }
 
     # Roadmap-hcd task 34.3's switch, anchored on the interval after it on
-    # each path. **Its default is 0 since task 36.42** (owner, 2026-10-09):
-    # shipping 1 again would be an INF edit that moves every switchable
-    # connector off a working USB 2.0 controller on install, and the
-    # unconditional DWORD would write a user's 1 back to 0 at an update.
+    # each path. **Its default is 1 again from task 50.34** (owner,
+    # 2026-11-17; design record 16 section 21): the driver holds it on 2000
+    # and later while Windows Setup runs, so shipping 0 now would be an INF
+    # edit that leaves an integrated install without the switchover, and
+    # the unconditional DWORD would write a user's 0 back to 1 at an update.
     # Task 36.3's routing row and task 35-T.7's three rows sit between it and
     # the interval, so the anchor carries them; $tailFor9x and $tailForNt are
     # the same block ending in each path's own successor line, which keeps
     # the two paths apart.
-    $tolRows   = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`nHKR,,XhciIntelNoRouteIrq,0x00010003,1`r`nHKR,,XhciTolerance,0x00010003,1`r`nHKR,,XhciIntervalCap,0x00010003,1`r`nHKR,,XhciAvgTrbEsit,0x00010003,0`r`nHKR,,XhciMaxTransferKB,0x00010003,1024`r`nHKR,,XhciInterruptMode,0x00010003,0`r`nHKR,,XhciMsiStrategy,0x00010003,0`r`nHKR,,XhciMsiIsaIrq,0x00010003,0`r`nHKR,,XhciMsiShare,0x00010003,8`r`nHKR,,XhciMsiPools,0x00010003,0`r`nHKR,,XhciMsiInputFirst,0x00010003,0`r`nHKR,,XhciMsiInputLast,0x00010003,0`r`nHKR,,XhciMsiInputBudget,0x00010003,0`r`nHKR,,XhciPollIdleMs,0x00010003,50`r`nHKR,,XhciPollActiveMs,0x00010003,1`r`nHKR,,XhciPollFineTimer,0x00010003,0`r`nHKR,,XhciWideMap,0x00010003,0`r`nHKR,,XhciSelectiveSuspend,0x00010003,0`r`nHKR,,XhciSilentInstall,0x00010003,0`r`nHKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`nHKR,,XhciAccept096,0x00010003,1`r`nHKR,,XhciCommandCheck,0x00010003,1`r`nHKR,,XhciStreamDequeueRepair,0x00010003,1`r`nHKR,,XhciAcpiTables,0x00010003,1`r`n; The BOS read at High and Full Speed (design record 13 section 8.4.1), a`r`n; device kept across a resume's re-initialization (task 45.23) and across`r`n; its SuperSpeed link's recovery (task 45.41): on is each one's default`r`n; (absent, or anything but a DWORD 0, is on; src\hcd_ctl.c), written since`r`n; task 45.50 so that every value is in the key, ready to change.`r`n; XhciResumeKeepBot (task 49.34, design record 20 section 4.3.4, M18) is`r`n; the one value the driver reads that no section here writes: its default`r`n; is not the same on every Windows (a Bulk-Only drive kept after a`r`n; hibernation on 2000, on no other Windows), 2000 and XP install from the`r`n; same sections, and the driver gives that default when the value is`r`n; absent (src\xhci_bot.c, XhciBotKeepDefault; the gate's VAL-BOTABSENT).`r`nHKR,,XhciUsb2Bos,0x00010003,1`r`nHKR,,XhciResumeKeep,0x00010003,1`r`nHKR,,XhciLinkKeep,0x00010003,1`r`n; A SuperSpeed link that keeps failing sent to USB 2.0 (issue 29, design`r`n; record 13 section 21): 1, the default, sends it; 0 gives it up after the`r`n; same count. Absent, or anything but a DWORD 0, is 1 (src\hcd_ctl.c).`r`nHKR,,XhciSsFlapFallback,0x00010003,1`r`n; The event ring's size (task 47.30; design record 13 sections 11.10 and`r`n; 11.10.1): 256 the one-page ring, written by a fresh install from 3.5.0.0`r`n; (an update keeps a 1024 an earlier release wrote); any other value the`r`n; larger ring. Absent is 256; a controller below xHCI 1.0 always uses 256.`r`nHKR,,XhciEventRingTrbs,0x00010003,256`r`n; The Bulk-Only form's own instance id (roadmap-usb4 UASBOT.1; design record`r`n; 13 section 10.7): 1 gives a drive that offers UAS too a devnode of its own`r`n; where the bus offers it as Bulk-Only; 0 the one devnode of the releases`r`n; before. Absent, or anything but a DWORD 0, is 1 (src\hcd_ctl.c).`r`nHKR,,XhciBulkOnlyOwnId,0x00010003,1`r`n; The staging pool's budget in KiB (task 48.33; design record 13 section`r`n; 11.11.1), from 256 to 16384: every transfer's data passes through`r`n; buffers of the driver's own. Absent reads as 2048 (src\hcd_ctl.c).`r`nHKR,,XhciStagePoolKiB,0x00010003,2048`r`n; Every transfer's data staged through buffers of the driver's own (task`r`n; 48.33; design record 13 section 11.11): 1; 0, the default, maps the`r`n; programs' own buffers for the controller, as 3.4.2.0 did. Absent reads`r`n; as 0, any other DWORD as 1 (src\hcd_ctl.c).`r`nHKR,,XhciDmaStaging,0x00010003,0`r`n; Linux's xHCI controller quirks (roadmap-hcd task 38.10; design record 20`r`n; section 6.1): 0 off, 1 Linux's listed controllers, 2 every controller`r`n; where the record offers it. Absent reads as the default written here.`r`nHKR,,XhciMsiAvoid,0x00010003,1`r`nHKR,,XhciStreamsOff,0x00010003,1`r`nHKR,,XhciResumeReinit,0x00010003,1`r`nHKR,,XhciIntelShutdownToEhci,0x00010003,1`r`nHKR,,XhciShutdownReset,0x00010003,0`r`nHKR,,XhciSuspendHaltDelay,0x00010003,1`r`nHKR,,XhciSuspendHaltTimeout,0x00010003,1`r`nHKR,,XhciAsmediaFlowControl,0x00010003,1`r`nHKR,,XhciTiIntervalCap,0x00010003,1`r`nHKR,,XhciStuckLinkReset,0x00010003,1`r`nHKR,,XhciStreamRingPad,0x00010003,1`r`nHKR,,XhciControlLinkNoOp,0x00010003,1`r`nHKR,,XhciIsochSpuriousSuccess,0x00010003,1`r`nHKR,,XhciAmdSuspendBitClear,0x00010003,1`r`n"
+    $tolRows   = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`nHKR,,XhciIntelNoRouteIrq,0x00010003,1`r`nHKR,,XhciTolerance,0x00010003,1`r`nHKR,,XhciIntervalCap,0x00010003,1`r`nHKR,,XhciAvgTrbEsit,0x00010003,0`r`nHKR,,XhciMaxTransferKB,0x00010003,1024`r`nHKR,,XhciInterruptMode,0x00010003,0`r`nHKR,,XhciMsiStrategy,0x00010003,0`r`nHKR,,XhciMsiIsaIrq,0x00010003,0`r`nHKR,,XhciMsiShare,0x00010003,8`r`nHKR,,XhciMsiPools,0x00010003,0`r`nHKR,,XhciMsiInputFirst,0x00010003,0`r`nHKR,,XhciMsiInputLast,0x00010003,0`r`nHKR,,XhciMsiInputBudget,0x00010003,0`r`nHKR,,XhciPollIdleMs,0x00010003,50`r`nHKR,,XhciPollActiveMs,0x00010003,1`r`nHKR,,XhciPollFineTimer,0x00010003,0`r`nHKR,,XhciWideMap,0x00010003,0`r`nHKR,,XhciSelectiveSuspend,0x00010003,0`r`nHKR,,XhciSilentInstall,0x00010003,0`r`nHKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`nHKR,,XhciAccept096,0x00010003,1`r`nHKR,,XhciCommandCheck,0x00010003,1`r`nHKR,,XhciCancelStatus,0x00010003,1`r`nHKR,,XhciDeviceIsolation,0x00010003,1`r`nHKR,,XhciUnplugComplete,0x00010003,1`r`nHKR,,XhciFailedRetrySec,0x00010003,5`r`nHKR,,XhciStreamDequeueRepair,0x00010003,1`r`nHKR,,XhciAcpiTables,0x00010003,1`r`n; The BOS read at High and Full Speed (design record 13 section 8.4.1), a`r`n; device kept across a resume's re-initialization (task 45.23) and across`r`n; its SuperSpeed link's recovery (task 45.41): on is each one's default`r`n; (absent, or anything but a DWORD 0, is on; src\hcd_ctl.c), written since`r`n; task 45.50 so that every value is in the key, ready to change.`r`n; XhciResumeKeepBot (task 49.34, design record 20 section 4.3.4, M18) is`r`n; the one value the driver reads that no section here writes: its default`r`n; is not the same on every Windows (a Bulk-Only drive kept after a`r`n; hibernation on 2000, on no other Windows), 2000 and XP install from the`r`n; same sections, and the driver gives that default when the value is`r`n; absent (src\xhci_bot.c, XhciBotKeepDefault; the gate's VAL-BOTABSENT).`r`nHKR,,XhciUsb2Bos,0x00010003,1`r`nHKR,,XhciResumeKeep,0x00010003,1`r`nHKR,,XhciLinkKeep,0x00010003,1`r`n; A SuperSpeed link that keeps failing sent to USB 2.0 (issue 29, design`r`n; record 13 section 21): 1, the default, sends it; 0 gives it up after the`r`n; same count. Absent, or anything but a DWORD 0, is 1 (src\hcd_ctl.c).`r`nHKR,,XhciSsFlapFallback,0x00010003,1`r`n; The event ring's size (task 47.30; design record 13 sections 11.10 and`r`n; 11.10.1): 256 the one-page ring, written by a fresh install from 3.5.0.0`r`n; (an update keeps a 1024 an earlier release wrote); any other value the`r`n; larger ring. Absent is 256; a controller below xHCI 1.0 always uses 256.`r`nHKR,,XhciEventRingTrbs,0x00010003,256`r`n; The Bulk-Only form's own instance id (roadmap-usb4 UASBOT.1; design record`r`n; 13 section 10.7): 1 gives a drive that offers UAS too a devnode of its own`r`n; where the bus offers it as Bulk-Only; 0 the one devnode of the releases`r`n; before. Absent, or anything but a DWORD 0, is 1 (src\hcd_ctl.c).`r`nHKR,,XhciBulkOnlyOwnId,0x00010003,1`r`n; The staging pool's budget in KiB (task 48.33; design record 13 section`r`n; 11.11.1), from 256 to 16384: every transfer's data passes through`r`n; buffers of the driver's own. Absent reads as 2048 (src\hcd_ctl.c).`r`nHKR,,XhciStagePoolKiB,0x00010003,2048`r`n; Every transfer's data staged through buffers of the driver's own (task`r`n; 48.33; design record 13 section 11.11): 1; 0, the default, maps the`r`n; programs' own buffers for the controller, as 3.4.2.0 did. Absent reads`r`n; as 0, any other DWORD as 1 (src\hcd_ctl.c).`r`nHKR,,XhciDmaStaging,0x00010003,0`r`n; Linux's xHCI controller quirks (roadmap-hcd task 38.10; design record 20`r`n; section 6.1): 0 off, 1 Linux's listed controllers, 2 every controller`r`n; where the record offers it. Absent reads as the default written here.`r`nHKR,,XhciMsiAvoid,0x00010003,1`r`nHKR,,XhciStreamsOff,0x00010003,1`r`nHKR,,XhciResumeReinit,0x00010003,1`r`nHKR,,XhciIntelShutdownToEhci,0x00010003,1`r`nHKR,,XhciShutdownReset,0x00010003,0`r`nHKR,,XhciSuspendHaltDelay,0x00010003,1`r`nHKR,,XhciSuspendHaltTimeout,0x00010003,1`r`nHKR,,XhciAsmediaFlowControl,0x00010003,1`r`nHKR,,XhciTiIntervalCap,0x00010003,1`r`nHKR,,XhciStuckLinkReset,0x00010003,1`r`nHKR,,XhciStreamRingPad,0x00010003,1`r`nHKR,,XhciControlLinkNoOp,0x00010003,1`r`nHKR,,XhciIsochSpuriousSuccess,0x00010003,1`r`nHKR,,XhciAmdSuspendBitClear,0x00010003,1`r`n; A controller whose stream Set TR Dequeue moves another stream (task 50.20;`r`n; design record 17 section 4.12.10), a value of this driver's own in the`r`n; same form: 0 off, 1 the listed controllers (8086:1E31), 2 every one.`r`nHKR,,XhciStreamDequeueAvoid,0x00010003,1`r`n"
     $tailFor9x = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]"
     $tailForNt = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32"
     Write-Step "the Intel port switchover's switch, on both paths"
     Assert-RuleFires "portswitch-no-9x" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,0`r`n" + $tailFor9x, $tailFor9x)
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailFor9x, $tailFor9x)
     }
     Assert-RuleFires "portswitch-no-nt" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,0`r`n" + $tailForNt, $tailForNt)
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailForNt, $tailForNt)
     }
-    Assert-RuleFires "portswitch-default-on-nt" "VAL-DEFAULT" {
-        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,0`r`n" + $tailForNt,
-                             "HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailForNt)
+    Assert-RuleFires "portswitch-default-off-nt" "VAL-DEFAULT" {
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailForNt,
+                             "HKR,,XhciIntelPortSwitch,0x00010003,0`r`n" + $tailForNt)
     }
-    Assert-RuleFires "portswitch-default-on-9x" "VAL-DEFAULT" {
-        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,0`r`n" + $tailFor9x,
-                             "HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailFor9x)
+    Assert-RuleFires "portswitch-default-off-9x" "VAL-DEFAULT" {
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailFor9x,
+                             "HKR,,XhciIntelPortSwitch,0x00010003,0`r`n" + $tailFor9x)
     }
     Assert-RuleFires "portswitch-clobber" "VAL-TYPE" {
-        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,0`r`n" + $tailFor9x,
-                             "HKR,,XhciIntelPortSwitch,0x00010001,0`r`n" + $tailFor9x)
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailFor9x,
+                             "HKR,,XhciIntelPortSwitch,0x00010001,1`r`n" + $tailFor9x)
+    }
+    # Task 50.34's setting on both paths, and the guard's note on the NT
+    # paths only (VAL-NTONLY: 98 SE and ME have no first-session guard).
+    $pswSet = "HKR,,XhciIntelPortSwitchSetup,0x00010003,0`r`n"
+    $pswRdy = "HKR,,XhciIntelPortSwitchReady,0x00010003,0`r`n"
+    $pswOn  = "HKR,,XhciIntelPortSwitch,0x00010003,1`r`n"
+    Write-Step "the port switchover's setting and the guard's note"
+    Assert-RuleFires "pswsetup-no-9x" "VAL-MISSING" {
+        param($t) $t.Replace($pswSet + $pswOn + $tailFor9x, $pswOn + $tailFor9x)
+    }
+    Assert-RuleFires "pswsetup-no-nt" "VAL-MISSING" {
+        param($t) $t.Replace($pswSet + $pswRdy + $pswOn + $tailForNt, $pswRdy + $pswOn + $tailForNt)
+    }
+    Assert-RuleFires "pswsetup-default-nt" "VAL-DEFAULT" {
+        param($t) $t.Replace($pswSet + $pswRdy + $pswOn + $tailForNt,
+                             "HKR,,XhciIntelPortSwitchSetup,0x00010003,1`r`n" + $pswRdy + $pswOn + $tailForNt)
+    }
+    Assert-RuleFires "pswready-no-nt" "VAL-MISSING" {
+        param($t) $t.Replace($pswRdy + $pswOn + $tailForNt, $pswOn + $tailForNt)
+    }
+    Assert-RuleFires "pswready-armed-nt" "VAL-DEFAULT" {
+        param($t) $t.Replace($pswRdy + $pswOn + $tailForNt,
+                             "HKR,,XhciIntelPortSwitchReady,0x00010003,1`r`n" + $pswOn + $tailForNt)
+    }
+    Assert-RuleFires "pswready-clobber-nt" "VAL-TYPE" {
+        param($t) $t.Replace($pswRdy + $pswOn + $tailForNt,
+                             "HKR,,XhciIntelPortSwitchReady,0x00010001,0`r`n" + $pswOn + $tailForNt)
+    }
+    Assert-RuleFires "pswready-on-9x" "VAL-NTONLY" {
+        param($t) $t.Replace($pswSet + $pswOn + $tailFor9x, $pswSet + $pswRdy + $pswOn + $tailFor9x)
     }
 
     # Roadmap-hcd task 35-T.7's three values (design record 17 sections 4.7
@@ -1252,6 +1289,10 @@ try {
         @{ Key = "hubspeed";  Row = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`n"; Wrong = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,0`r`n"; Clob = "HKR,,XhciUsb2HubSpeedFallback,0x00010001,1`r`n" },
         @{ Key = "accept096"; Row = "HKR,,XhciAccept096,0x00010003,1`r`n"; Wrong = "HKR,,XhciAccept096,0x00010003,0`r`n"; Clob = "HKR,,XhciAccept096,0x00010001,1`r`n" },
         @{ Key = "cmdcheck"; Row = "HKR,,XhciCommandCheck,0x00010003,1`r`n"; Wrong = "HKR,,XhciCommandCheck,0x00010003,0`r`n"; Clob = "HKR,,XhciCommandCheck,0x00010001,1`r`n" },
+        @{ Key = "cancelst"; Row = "HKR,,XhciCancelStatus,0x00010003,1`r`n"; Wrong = "HKR,,XhciCancelStatus,0x00010003,2`r`n"; Clob = "HKR,,XhciCancelStatus,0x00010001,1`r`n" },
+        @{ Key = "isolate"; Row = "HKR,,XhciDeviceIsolation,0x00010003,1`r`n"; Wrong = "HKR,,XhciDeviceIsolation,0x00010003,0`r`n"; Clob = "HKR,,XhciDeviceIsolation,0x00010001,1`r`n" },
+        @{ Key = "unplugcpl"; Row = "HKR,,XhciUnplugComplete,0x00010003,1`r`n"; Wrong = "HKR,,XhciUnplugComplete,0x00010003,0`r`n"; Clob = "HKR,,XhciUnplugComplete,0x00010001,1`r`n" },
+        @{ Key = "failretry"; Row = "HKR,,XhciFailedRetrySec,0x00010003,5`r`n"; Wrong = "HKR,,XhciFailedRetrySec,0x00010003,0`r`n"; Clob = "HKR,,XhciFailedRetrySec,0x00010001,5`r`n" },
         @{ Key = "deqrepair"; Row = "HKR,,XhciStreamDequeueRepair,0x00010003,1`r`n"; Wrong = "HKR,,XhciStreamDequeueRepair,0x00010003,0`r`n"; Clob = "HKR,,XhciStreamDequeueRepair,0x00010001,1`r`n" },
         @{ Key = "acpitables"; Row = "HKR,,XhciAcpiTables,0x00010003,1`r`n"; Wrong = "HKR,,XhciAcpiTables,0x00010003,0`r`n"; Clob = "HKR,,XhciAcpiTables,0x00010001,1`r`n" },
         @{ Key = "usb2bos"; Row = "HKR,,XhciUsb2Bos,0x00010003,1`r`n"; Wrong = "HKR,,XhciUsb2Bos,0x00010003,0`r`n"; Clob = "HKR,,XhciUsb2Bos,0x00010001,1`r`n" },
@@ -1275,7 +1316,8 @@ try {
         @{ Key = "ringpad"; Row = "HKR,,XhciStreamRingPad,0x00010003,1`r`n"; Wrong = "HKR,,XhciStreamRingPad,0x00010003,0`r`n"; Clob = "HKR,,XhciStreamRingPad,0x00010001,1`r`n" },
         @{ Key = "ctlnoop"; Row = "HKR,,XhciControlLinkNoOp,0x00010003,1`r`n"; Wrong = "HKR,,XhciControlLinkNoOp,0x00010003,0`r`n"; Clob = "HKR,,XhciControlLinkNoOp,0x00010001,1`r`n" },
         @{ Key = "isochspur"; Row = "HKR,,XhciIsochSpuriousSuccess,0x00010003,1`r`n"; Wrong = "HKR,,XhciIsochSpuriousSuccess,0x00010003,0`r`n"; Clob = "HKR,,XhciIsochSpuriousSuccess,0x00010001,1`r`n" },
-        @{ Key = "amdbitclr"; Row = "HKR,,XhciAmdSuspendBitClear,0x00010003,1`r`n"; Wrong = "HKR,,XhciAmdSuspendBitClear,0x00010003,0`r`n"; Clob = "HKR,,XhciAmdSuspendBitClear,0x00010001,1`r`n" }
+        @{ Key = "amdbitclr"; Row = "HKR,,XhciAmdSuspendBitClear,0x00010003,1`r`n"; Wrong = "HKR,,XhciAmdSuspendBitClear,0x00010003,0`r`n"; Clob = "HKR,,XhciAmdSuspendBitClear,0x00010001,1`r`n" },
+        @{ Key = "deqavoid"; Row = "HKR,,XhciStreamDequeueAvoid,0x00010003,1`r`n"; Wrong = "HKR,,XhciStreamDequeueAvoid,0x00010003,0`r`n"; Clob = "HKR,,XhciStreamDequeueAvoid,0x00010001,1`r`n" }
     )
     # Task 49.34 (design record 20 section 4.3.4, M18): XhciResumeKeepBot is
     # written by no path; a line writing it at either number, on either
@@ -3007,6 +3049,10 @@ try {
         @{ Key = "hubspeed";  Row = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`n"; Wrong = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,0`r`n" },
         @{ Key = "accept096"; Row = "HKR,,XhciAccept096,0x00010003,1`r`n"; Wrong = "HKR,,XhciAccept096,0x00010003,0`r`n" },
         @{ Key = "cmdcheck"; Row = "HKR,,XhciCommandCheck,0x00010003,1`r`n"; Wrong = "HKR,,XhciCommandCheck,0x00010003,0`r`n" },
+        @{ Key = "cancelst"; Row = "HKR,,XhciCancelStatus,0x00010003,1`r`n"; Wrong = "HKR,,XhciCancelStatus,0x00010003,2`r`n" },
+        @{ Key = "isolate"; Row = "HKR,,XhciDeviceIsolation,0x00010003,1`r`n"; Wrong = "HKR,,XhciDeviceIsolation,0x00010003,0`r`n" },
+        @{ Key = "unplugcpl"; Row = "HKR,,XhciUnplugComplete,0x00010003,1`r`n"; Wrong = "HKR,,XhciUnplugComplete,0x00010003,0`r`n" },
+        @{ Key = "failretry"; Row = "HKR,,XhciFailedRetrySec,0x00010003,5`r`n"; Wrong = "HKR,,XhciFailedRetrySec,0x00010003,0`r`n" },
         @{ Key = "deqrepair"; Row = "HKR,,XhciStreamDequeueRepair,0x00010003,1`r`n"; Wrong = "HKR,,XhciStreamDequeueRepair,0x00010003,0`r`n" },
         @{ Key = "acpitables"; Row = "HKR,,XhciAcpiTables,0x00010003,1`r`n"; Wrong = "HKR,,XhciAcpiTables,0x00010003,0`r`n" },
         @{ Key = "usb2bos"; Row = "HKR,,XhciUsb2Bos,0x00010003,1`r`n"; Wrong = "HKR,,XhciUsb2Bos,0x00010003,0`r`n" },
@@ -3030,7 +3076,8 @@ try {
         @{ Key = "ringpad"; Row = "HKR,,XhciStreamRingPad,0x00010003,1`r`n"; Wrong = "HKR,,XhciStreamRingPad,0x00010003,0`r`n" },
         @{ Key = "ctlnoop"; Row = "HKR,,XhciControlLinkNoOp,0x00010003,1`r`n"; Wrong = "HKR,,XhciControlLinkNoOp,0x00010003,0`r`n" },
         @{ Key = "isochspur"; Row = "HKR,,XhciIsochSpuriousSuccess,0x00010003,1`r`n"; Wrong = "HKR,,XhciIsochSpuriousSuccess,0x00010003,0`r`n" },
-        @{ Key = "amdbitclr"; Row = "HKR,,XhciAmdSuspendBitClear,0x00010003,1`r`n"; Wrong = "HKR,,XhciAmdSuspendBitClear,0x00010003,0`r`n" }
+        @{ Key = "amdbitclr"; Row = "HKR,,XhciAmdSuspendBitClear,0x00010003,1`r`n"; Wrong = "HKR,,XhciAmdSuspendBitClear,0x00010003,0`r`n" },
+        @{ Key = "deqavoid"; Row = "HKR,,XhciStreamDequeueAvoid,0x00010003,1`r`n"; Wrong = "HKR,,XhciStreamDequeueAvoid,0x00010003,0`r`n" }
     )) {
         Assert-RuleFires ("amd64-" + $tv.Key + "-missing") "VAL-MISSING" {
             param($t) $t.Replace($tv.Row, "")
@@ -3271,6 +3318,111 @@ try {
                 "`n`n--- expected ---`n" + ($expected64 -join "`n") +
                 "`n`n--- actual ---`n" + ($actual64 -join "`n"))
         }
+    }
+
+    #
+    # Roadmap-usb4 task 50.3: the value rows by published version. Every
+    # published xhci98.inf from 2.4.0.0 on (releases\ listed, so a new
+    # release joins by itself), gated with its own version: no VAL-* rule
+    # fires, and from 3.4.1.0, the first release no later rule refuses, the
+    # whole gate passes. A default changed without its Was entry, or a row
+    # whose Since is too early, fails here at the next build.
+    #
+    Write-Step "the value rows by published version: every published INF"
+    $pubRoot = Join-Path $repo "releases"
+    $pubInfs = @()
+    foreach ($pd in @(Get-ChildItem -LiteralPath $pubRoot -Directory | Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' })) {
+        if ([version]$pd.Name -lt [version]"2.4.0.0") { continue }
+        foreach ($pf in @(Get-ChildItem -LiteralPath $pd.FullName -Recurse -File -Filter "xhci98.inf")) {
+            $pRel = $pf.FullName.Substring($pd.FullName.Length + 1)
+            $pubInfs += [pscustomobject]@{ Version = $pd.Name; Path = $pf.FullName; Rel = $pRel
+                                            Arch = $(if ($pRel -match '(^|\\)(release|debug|nt)-x64\\') { "amd64" } else { "x86" }) }
+        }
+    }
+    Assert-True ($pubInfs.Count -ge 30 -and @($pubInfs | Where-Object { $_.Version -eq "3.4.3.0" }).Count -eq 3) `
+        ("history : the published INFs were not found under releases\ ({0} found)." -f $pubInfs.Count)
+    foreach ($pi in $pubInfs) {
+        $r = Invoke-Gate -Path $pi.Path -Extra @("-Arch", $pi.Arch, "-PublishedVersion", $pi.Version)
+        $valFails = @([regex]::Matches($r.Output, 'FAIL \[VAL-[A-Z0-9]+\][^\r\n]*') | ForEach-Object { $_.Value })
+        Assert-True ($valFails.Count -eq 0) ("history : releases\{0}\{1} ({2}) fails a value rule at its own version:`n  {3}" -f $pi.Version, $pi.Rel, $pi.Arch, ($valFails -join "`n  "))
+        if ([version]$pi.Version -ge [version]"3.4.1.0") {
+            Assert-True ($r.ExitCode -eq 0) ("history : releases\{0}\{1} ({2}) does not pass the gate at its own version:`n{3}" -f $pi.Version, $pi.Rel, $pi.Arch, $r.Output)
+        }
+    }
+
+    # Strict both ways: an INF held to another release's table fails it,
+    # and with no -PublishedVersion the current table is the one held.
+    Write-Step "the value rows by published version: strict both ways, and the table's own history"
+    $pub343 = Join-Path $repo "releases\3.4.3.0\98-me\xhci98.inf"
+    $pub350 = Join-Path $repo "releases\3.5.0.0\98-me\xhci98.inf"
+    $pub343x64 = Join-Path $repo "releases\3.4.3.0\nt-x64\xhci98.inf"
+    foreach ($hc in @(
+        @{ Why = "3.4.3.0's INF held to 3.5.0.0"; Path = $pub343; Arch = "x86"; Extra = @("-PublishedVersion", "3.5.0.0")
+           Want = @("FAIL [VAL-DEFAULT] [Xhci.AddReg] line \d+ defaults 'XhciEventRingTrbs' to '1024', not '256'", "FAIL [VAL-MISSING] the Windows 98 install path ([Xhci.Dev]) writes no 'XhciStreamDequeueRepair'") },
+        @{ Why = "3.4.3.0's INF with no version (this tree's table)"; Path = $pub343; Arch = "x86"; Extra = @()
+           Want = @("FAIL [VAL-DEFAULT] [Xhci.AddReg] line \d+ defaults 'XhciEventRingTrbs' to '1024', not '256'", "FAIL [VAL-MISSING] the Windows 98 install path ([Xhci.Dev]) writes no 'XhciMsiShare'") },
+        @{ Why = "3.5.0.0's INF held to 3.4.3.0"; Path = $pub350; Arch = "x86"; Extra = @("-PublishedVersion", "3.4.3.0")
+           Want = @("FAIL [VAL-DEFAULT] [Xhci.AddReg] line \d+ defaults 'XhciEventRingTrbs' to '256', not '1024'. '1024' is the default an INF published at 3.4.3.0 writes") },
+        @{ Why = "3.4.3.0's 64-bit INF held to 3.5.0.0"; Path = $pub343x64; Arch = "amd64"; Extra = @("-PublishedVersion", "3.5.0.0")
+           Want = @("FAIL [VAL-MISSING] the Windows XP x64 install path ([Xhci.Dev.NTamd64]) writes no 'XhciMsiStrategy'") },
+        @{ Why = "a version below the history"; Path = $pub343; Arch = "x86"; Extra = @("-PublishedVersion", "2.3.1.0")
+           Want = @("FAIL [VAL-HISTORY] -PublishedVersion 2.3.1.0 is older than 2.4.0.0") }
+    )) {
+        $r = Invoke-Gate -Path $hc.Path -Extra (@("-Arch", $hc.Arch) + $hc.Extra)
+        Assert-True ($r.ExitCode -ne 0) ("history : {0}: the gate passed." -f $hc.Why)
+        # Matched with every white space taken out of both: the captured
+        # output is wrapped at the host's width wherever it falls.
+        $flat = $r.Output -replace '\s', ''
+        foreach ($w in $hc.Want) {
+            $pat = [regex]::Escape(($w -replace '\s', '')).Replace('\\d\+', '\d+')
+            Assert-True ($flat -match $pat) ("history : {0}: expected '{1}'. Output was:`n{2}" -f $hc.Why, $w, $r.Output)
+        }
+    }
+    # A later default substituted into an INF that claims a published
+    # version fails at that version, whatever version this tree carries:
+    # 3.5.0.0's INF with task 50.34's XhciIntelPortSwitch 1 put in its NT
+    # path, held to 3.5.0.0, where the history says 0 (and the same INF
+    # untouched passes, above).
+    $sub350 = Join-Path $script:work "pub350-psw1.inf"
+    $sub350From = "HKR,,XhciIntelPortSwitch,0x00010003,0"
+    $sub350Text = [System.IO.File]::ReadAllText($pub350)
+    Assert-True ($sub350Text.Contains($sub350From)) "history : 3.5.0.0's INF no longer writes '$sub350From', so the substitution case would mutate nothing."
+    $sub350Last = $sub350Text.LastIndexOf($sub350From)
+    [System.IO.File]::WriteAllText($sub350, ($sub350Text.Substring(0, $sub350Last) + "HKR,,XhciIntelPortSwitch,0x00010003,1" +
+        $sub350Text.Substring($sub350Last + $sub350From.Length)), (New-Object System.Text.ASCIIEncoding))
+    $r = Invoke-Gate -Path $sub350 -Extra @("-Arch", "x86", "-PublishedVersion", "3.5.0.0")
+    $sub350Want = "FAIL [VAL-DEFAULT] [Xhci.AddReg.NT] line \d+ defaults 'XhciIntelPortSwitch' to '1', not '0'. '0' is the default an INF published at 3.5.0.0 writes"
+    $sub350Pat = [regex]::Escape(($sub350Want -replace '\s', '')).Replace('\\d\+', '\d+')
+    Assert-True ($r.ExitCode -ne 0 -and ($r.Output -replace '\s', '') -match $sub350Pat) `
+        ("history : 3.5.0.0's INF with a later XhciIntelPortSwitch default, held to 3.5.0.0, did not fail VAL-DEFAULT. Output was:`n" + $r.Output)
+    # 3.5.0.0's 64-bit INF writes none of the x86-only pool values, at its
+    # version as at this tree's (VAL-MSG4POOL stays whatever the version).
+    $r = Invoke-Gate -Path (Join-Path $repo "releases\3.5.0.0\nt-x64\xhci98.inf") -Extra @("-Arch", "amd64", "-PublishedVersion", "3.5.0.0")
+    Assert-True ($r.ExitCode -eq 0) ("history : 3.5.0.0's 64-bit INF does not pass at its version:`n" + $r.Output)
+    # The table's own history: a copy of the gate with one row's Since
+    # taken out, or a Was out of order, fails VAL-HISTORY on every run (here
+    # on a published INF, which needs nothing beside it).
+    $hgDir = Join-Path $script:work "history-gate"
+    New-Item -ItemType Directory -Force -Path (Join-Path $hgDir "scripts\inf-gate") | Out-Null
+    Copy-Item -LiteralPath (Join-Path $repo "scripts\common.ps1") -Destination (Join-Path $hgDir "scripts\common.ps1")
+    $hgText = [System.IO.File]::ReadAllText($gate)
+    $hgSaved = $gate
+    foreach ($hm in @(
+        @{ Why = "a row with no Since"; From = "Name    = `"XhciStreamDequeueRepair`"`r`n        Since   = `"3.5.0.0`"`r`n"; To = "Name    = `"XhciStreamDequeueRepair`"`r`n"; Says = "row for 'XhciStreamDequeueRepair' has no Since" },
+        @{ Why = "a Since that is no version"; From = "Since   = `"3.4.1.0`""; To = "Since   = `"3.4.x`""; Says = "row for 'XhciAcpiTables' has a Since that is not a version" },
+        @{ Why = "a Was before its Since"; From = "@{ Before = `"3.5.0.0`"; Default = `"1024`" }"; To = "@{ Before = `"3.4.0.0`"; Default = `"1024`" }"; Says = "row for 'XhciEventRingTrbs' has Was entries that are not each after its Since" }
+    )) {
+        Assert-True ($hgText.Contains($hm.From)) ("history : {0}: the gate no longer holds '{1}', so the case would mutate nothing." -f $hm.Why, $hm.From)
+        $hgGate = Join-Path $hgDir "scripts\inf-gate\check-inf.ps1"
+        [System.IO.File]::WriteAllText($hgGate, $hgText.Replace($hm.From, $hm.To), (New-Object System.Text.ASCIIEncoding))
+        $gate = $hgGate
+        try {
+            $r = Invoke-Gate -Path $pub350 -Extra @("-Arch", "x86", "-PublishedVersion", "3.5.0.0")
+        } finally {
+            $gate = $hgSaved
+        }
+        Assert-True ($r.ExitCode -ne 0 -and ($r.Output -replace '\s', '') -match ([regex]::Escape((("FAIL [VAL-HISTORY] this gate's " + $hm.Says) -replace '\s', '')))) `
+            ("history : {0}: VAL-HISTORY did not fire. Output was:`n{1}" -f $hm.Why, $r.Output)
     }
 
 } finally {

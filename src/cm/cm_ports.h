@@ -563,6 +563,210 @@ ULONG CmPortsLostStep(ULONG outcome, ULONG verdict, ULONG elapsedMs,
                       BOOLEAN tried, ULONG sinceTryMs);
 
 /*
+ * Record 21 section 6.1.5 item 9: the slow retry. CmPortsSlowArm: a wait
+ * that ended with its note unresolved after Windows refused a query this
+ * resume (`refused`) is asked again: lost, not removed (`outcome`), or the
+ * end code (`code`) 0xFE (undecided at the bound) or 0xFC (the list
+ * unreadable); never removed, settled, or 0xFD (an inventory this section
+ * does not recover). CmPortsSlowDue:
+ * an armed member is asked again once CM_PORTS_SUB_SLOW_MS have passed
+ * since the arming or the last expiry consumed (`sinceMs`), only while it
+ * is active, the worker awake, no suspend taking its copies and the marks'
+ * epoch the arming's (`epochSame`). CmPortsSlowWait: the worker's wait
+ * for an armed retry `sinceMs` into its minute: what is left of it, never
+ * zero. CmPortsSlowAlive: the arming is made only for a member still
+ * active whose lifetime token (advanced at every departure from the
+ * active set, `before` read before the check's unlocked reads, `now` under
+ * the arming's lock) is unchanged: a departure and a return since never
+ * carry an old refusal onto a new connection.
+ */
+#define CM_PORTS_SUB_SLOW_MS        60000UL
+BOOLEAN CmPortsSlowArm(ULONG outcome, BOOLEAN refused, ULONG code);
+BOOLEAN CmPortsSlowDue(BOOLEAN armed, BOOLEAN active, BOOLEAN asleep,
+                       BOOLEAN stopping, BOOLEAN epochSame, ULONG sinceMs);
+ULONG CmPortsSlowWait(ULONG sinceMs);
+BOOLEAN CmPortsSlowAlive(BOOLEAN active, ULONG before, ULONG now);
+/* CmPortsSlowPlace: where a due retry reads, from the member's own bridge
+ * (`noCfg`: no configuration space is read by rule; `live`: its bus
+ * numbers read, not all ones; `secNow` its secondary bus then) and a
+ * standing unit obligation (record 21 section 6.1.6 item 11: `doubt`,
+ * `secRecorded` the member's secondary bus as copied at the suspend):
+ * CM_PORTS_SLOW_P_NOTREAD (nothing asked, the retry stays),
+ * CM_PORTS_SLOW_P_RESET (the member's own bridge reset since: not this
+ * retry's case), CM_PORTS_SLOW_P_READ (section 6.1.5's reading at
+ * `*sec` = `secNow`), CM_PORTS_SLOW_P_RECORD (an obligation whose member
+ * does not read, or reads reset: asked by its record at `*sec` =
+ * `secRecorded`, the removal naming the child devnode by its instance id
+ * before anything is asked). */
+#define CM_PORTS_SLOW_P_NOTREAD     0UL
+#define CM_PORTS_SLOW_P_RESET       1UL
+#define CM_PORTS_SLOW_P_READ        2UL
+#define CM_PORTS_SLOW_P_RECORD      3UL
+ULONG CmPortsSlowPlace(BOOLEAN noCfg, BOOLEAN live, ULONG secNow,
+                       BOOLEAN doubt, ULONG secRecorded, PULONG sec);
+/* CmPortsUnitNameBus: the bus a recovery's removal names the member's
+ * child at (its instance id's BUS_ form): under a standing unit obligation
+ * (`doubt`) the member's secondary bus as recorded with the place list
+ * (`secRecorded`, the bus the child devnode was enumerated at), whatever
+ * the member reads now (`secNow`, the bus the reading used); otherwise,
+ * or with no recorded bus, `secNow`. */
+ULONG CmPortsUnitNameBus(BOOLEAN doubt, ULONG secRecorded, ULONG secNow);
+/* CmPortsRefusalKeep: a recovery query's refusal is recorded only for the
+ * connection and the resume it was admitted in - the member still active
+ * at the lifetime token read at the admission (`lifeAt`, `lifeNow`), the
+ * marks' epoch the admission's (`epochAt`, `epochNow`), no suspend taking
+ * its copies and the worker awake. */
+BOOLEAN CmPortsRefusalKeep(BOOLEAN active, ULONG lifeAt, ULONG lifeNow,
+                           ULONG epochAt, ULONG epochNow, BOOLEAN stopping,
+                           BOOLEAN asleep);
+
+/*
+ * Record 21 section 6.1.6 (TBSTBYWB9X.1): a dock's or switched
+ * enclosure's own switch put back after a standby on 98 SE.
+ *
+ * The unit (a switch unit, no chain): the member's one upstream port, its
+ * downstream ports, the functions behind them; at most CM_PORTS_UNIT_MAX
+ * nodes, CM_PORTS_UNIT_DS_MAX downstream ports. A node's copy: a bridge's
+ * sixteen header dwords (00h to 3Ch); a function's CM_PORTS_EP_DWORDS in
+ * CM_PORTS_EP_OFFSET's order, then 08h (class and revision) at
+ * CM_PORTS_UNIT_FN_CLASS and 2Ch (subsystem) at CM_PORTS_UNIT_FN_SUBSYS.
+ *
+ * CmPortsUnitNested: a bridge's copy nested in its parent's (the member's
+ * or the upstream port's): primary the parent's secondary, secondary above
+ * it, subordinate not above the parent's subordinate; each open window (I/O
+ * 1Ch/30h, memory 20h, prefetchable 24h/28h/2Ch) inside the parent's window
+ * of the same kind, a prefetchable one alternatively inside the parent's
+ * memory window (halves compared as pairs). CmPortsUnitDisjoint: two
+ * siblings' bus ranges share no bus. CmPortsUnitBarsIn: every BAR of a
+ * function's copy that holds an address starts inside a window of its
+ * parent of the fitting kind (a memory BAR in the memory or the
+ * prefetchable window; the start only).
+ *
+ * The reading at a pass, a bridge (CmPortsUnitBridgeNow: `now` its 00h,
+ * 04h, 0Ch and 18h to 30h, CM_PORTS_UNIT_BR_* indices, `reads` whether all
+ * were read) or a function (CmPortsUnitFnNow: `now` in the copy's layout),
+ * against the copy: CM_PORTS_UNIT_NOTYET (not all read, or the id not
+ * answering), _OTHER (another id, header type, class, revision or
+ * subsystem), _RESET (reset as a whole: CmPortsHdrEligible / CmPortsEpReset),
+ * _ASCOPY (a bridge's bus numbers' low 24 bits, 1Ch's lower half, 20h to
+ * 30h and the command's enables as the copy's; a function's BAR addresses
+ * and command enables as the copy's), _STATE (anything else).
+ *
+ * The node results (logged): CM_PORTS_UNIT_N_*; a result is final once not
+ * _NONE; CmPortsUnitDoubt: whether a final result is a doubt.
+ *
+ * CmPortsUnitLost: section 6.1.5's reading widened to the unit - a
+ * recorded node read at its place under a parent that reads configured:
+ * a bridge of the recorded id with a type 1 header at secondary bus 0 (the
+ * criterion of item 7's guard, whatever its command), or a function of the
+ * recorded id from reset (CmPortsEpReset), is lost.
+ *
+ * CmPortsUnitVerdict: section 6.1.5's verdict (`verdict`, `lost`) widened
+ * by a unit owing its removal (`owes`): LOST, with the unit's upstream
+ * port (`devfn`, its recorded id `upId`) among the entries, (a) while the
+ * obligation stands (`doubt`), from the unit's own record alone, whatever
+ * the suspend's note now holds, the place reads, or the verdict already
+ * says (an upstream port that no longer answers, or a note a later suspend
+ * refreshed, does not keep the removal from being asked; the removal
+ * itself names the child devnode by its instance id before anything is
+ * asked; a full list gives its last entry up for it); (b) otherwise when
+ * the note holds that entry and the place reads the same device now
+ * (`reads`, `idNow`). Left as it is otherwise, and in (b) when already
+ * LOST.
+ */
+#define CM_PORTS_UNIT_MAX           24UL
+#define CM_PORTS_UNIT_DS_MAX        7UL
+#define CM_PORTS_UNIT_BOUND_MS      6000UL
+#define CM_PORTS_UNIT_MEMBER        0xFFUL
+#define CM_PORTS_UNIT_BRIDGE        1UL
+#define CM_PORTS_UNIT_FN            2UL
+#define CM_PORTS_UNIT_FN_CLASS      10UL
+#define CM_PORTS_UNIT_FN_SUBSYS     11UL
+#define CM_PORTS_UNIT_BR_ID         0UL
+#define CM_PORTS_UNIT_BR_CMD        1UL
+#define CM_PORTS_UNIT_BR_TYPE       2UL
+#define CM_PORTS_UNIT_BR_18         3UL     /* 18h to 30h: indices 3 to 9 */
+#define CM_PORTS_UNIT_BR_DWORDS     10UL
+#define CM_PORTS_UNIT_NOTYET        0UL
+#define CM_PORTS_UNIT_OTHER         1UL
+#define CM_PORTS_UNIT_RESET         2UL
+#define CM_PORTS_UNIT_ASCOPY        3UL
+#define CM_PORTS_UNIT_STATE         4UL
+#define CM_PORTS_UNIT_N_NONE        0UL
+#define CM_PORTS_UNIT_N_WRITTEN     1UL
+#define CM_PORTS_UNIT_N_FAILED      2UL
+#define CM_PORTS_UNIT_N_OTHER       3UL
+#define CM_PORTS_UNIT_N_NOANSWER    4UL
+#define CM_PORTS_UNIT_N_ASCOPY      5UL
+#define CM_PORTS_UNIT_N_STOPPED     8UL
+#define CM_PORTS_UNIT_N_SKIPPED     9UL
+typedef struct _CM_PORTS_UNIT_NODE {
+    ULONG Kind;             /* CM_PORTS_UNIT_BRIDGE or _FN               */
+    ULONG Parent;           /* its parent's index; CM_PORTS_UNIT_MEMBER  */
+    ULONG DevFn;            /* device 7:3, function 2:0 on the parent's
+                               secondary bus                             */
+    ULONG Copy[CM_PORTS_HDR_DWORDS];
+} CM_PORTS_UNIT_NODE;
+typedef struct _CM_PORTS_UNIT {
+    ULONG Count;
+    CM_PORTS_UNIT_NODE N[CM_PORTS_UNIT_MAX];
+} CM_PORTS_UNIT;
+BOOLEAN CmPortsUnitNested(const ULONG *parent, const ULONG *child);
+BOOLEAN CmPortsUnitDisjoint(ULONG busesA, ULONG busesB);
+BOOLEAN CmPortsUnitBarsIn(const ULONG *parent, const ULONG *fn);
+ULONG CmPortsUnitBridgeNow(const ULONG *copy, BOOLEAN reads, const ULONG *now);
+ULONG CmPortsUnitFnNow(const ULONG *copy, BOOLEAN reads, const ULONG *now);
+BOOLEAN CmPortsUnitDoubt(ULONG result);
+BOOLEAN CmPortsUnitLost(ULONG kind, ULONG recordedId, BOOLEAN reads,
+                        ULONG id, ULONG typeDword, ULONG buses, ULONG cmd,
+                        const ULONG *bars);
+VOID CmPortsUnitVerdict(BOOLEAN owes, BOOLEAN doubt, BOOLEAN reads,
+                        ULONG idNow, ULONG devfn, ULONG upId,
+                        const CM_PORTS_SUB *note, PULONG verdict,
+                        CM_PORTS_SUB *lost);
+
+/*
+ * Record 21 section 6.1.6 item 10: the undo's plan - which nodes of a
+ * unit are proven to be this unit, reached through its own bridges as the
+ * configuration space routes now, before anything is written.
+ * CmPortsUnitUndoPlan walks the table from the member down (a node's
+ * parent comes before it): a node's place is proven only when its parent
+ * is the member (`memberBdf`) or a bridge of the table itself proven and
+ * identified as this unit's, and the whole path routes it now
+ * (CmPortsUnitPathRouted: the member reads secondary `unitSec`, every
+ * bridge of the path, at its proven place, reads the secondary bus its
+ * copy recorded, inside the range every bridge above it routes - the
+ * ranges intersected level by level - and the node's own bus lies inside
+ * that intersection: so its bus reaches it through the member and this
+ * unit's own bridges alone); at a proven place the node is
+ * identified by more than its vendor and device: its class and revision,
+ * its header's layout, and a function's subsystem, all as copied.
+ * `sameLife`: the member's connection is the one the table was made on
+ * (otherwise nothing is proven). `rd` reads one dword (FALSE: refused).
+ * `plan[k]`: CM_PORTS_UNDO_RESET (proven and identified: this unit's node,
+ * to be put back to reset at `bdf[k]`), _OTHER (a proven place holding
+ * another device, or none: nothing of this unit's there), _UNPROVEN (its
+ * routing not proven - a parent reading another bus, not answering, not
+ * this unit's, or a later suspend's connection: left untouched),
+ * _UNREAD (a read refused: tried again). A second unit of the same model
+ * at a reused bus number is never proven: its bus is routed by bridges
+ * that are not this member and this unit's own.
+ */
+#define CM_PORTS_UNDO_RESET         1UL
+#define CM_PORTS_UNDO_OTHER         2UL
+#define CM_PORTS_UNDO_UNPROVEN      3UL
+#define CM_PORTS_UNDO_UNREAD        4UL
+typedef BOOLEAN (*CM_PORTS_CFG_READ)(PVOID context, ULONG bdf, ULONG offset,
+                                     PULONG value);
+ULONG CmPortsUnitPathRouted(const CM_PORTS_UNIT *u, ULONG k, ULONG unitSec,
+                            ULONG memberBdf, const ULONG *bdf,
+                            CM_PORTS_CFG_READ rd, PVOID context);
+VOID CmPortsUnitUndoPlan(const CM_PORTS_UNIT *u, ULONG unitSec,
+                         ULONG memberBdf, BOOLEAN sameLife,
+                         CM_PORTS_CFG_READ rd, PVOID context, PULONG plan,
+                         PULONG bdf);
+
+/*
  * Record 21 section 6.1.5 item 7: whether a bridge may be re-enumerated,
  * from what its secondary bus and its child devnodes read now.
  * CmPortsResetFn, one function (`reads`: CM_PORTS_SUB_R_ID, _TYPE and

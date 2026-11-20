@@ -16,6 +16,186 @@ history; those cut folders stay as they were written.
 columns because it is read on the target machine, in Windows 98 Notepad or DOS
 EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
+## 3.6.0.0 - 2026-11-20
+
+### Fixed
+- Fixed: UAS drives under Windows' own UAS driver (Windows 8 and later, or
+  carried back to Windows 7) now appear as disks.
+- **Intel 7 Series USB 3 controller, a UAS drive on xHCI98's own UAS
+  driver:** a request the drive refuses, such as a monitoring program's
+  (HWMonitor, Speccy, HWiNFO), no longer disconnects the drive. The UAS
+  driver resets it in place, and its requests carry on after a pause of
+  about a second (`XhciStreamDequeueAvoid`).
+- **Windows 98 SE, a UAS drive on xHCI98's own UAS driver:** a reset of the
+  drive could stop half-way and leave it not answering. Fixed.
+- **Windows ME, `XhciDmaStaging` `1`:** when a USB controller stops
+  answering while Windows is starting, Windows ME now finishes starting.
+- **A UAS-only drive on a controller that cannot stream** is no longer
+  hidden for good while the driver sends it to USB 2.0. After about 20
+  seconds it is listed with no driver, and the USB Tree says why.
+- **98 SE and ME:** a Thunderbolt or USB4 drive that Windows would not let
+  go after a standby is asked for again about once a minute. It comes back
+  once Windows allows it, instead of only after a restart.
+- **XP x64:** the USB Tree's device report shows each device's IRQ and
+  other resources.
+- 98 SE / ME: restarting a USB controller (USB Tree) or removing it
+  (Device Manager) could end in "A fatal exception 0E" a little later.
+  Fixed.
+- **Windows 2000 and later: a USB drive unplugged during a copy** need
+  not wait for its driver's own time-out before it is removed
+  (`XhciUnplugComplete`).
+- **After a standby or hibernation that starts a stopped controller
+  afresh,** its earlier failed recoveries no longer count against a
+  later fault; the limit of three recoveries in a window of at least
+  ten minutes stays.
+- 98 SE / ME: after a Thunderbolt or USB4 drive had been used, removing the
+  Thunderbolt / USB4 controller in Device Manager could end in "A fatal
+  exception 0E" a little later. Fixed.
+- **Setup no longer stops at a device whose driver entry was deleted
+  by hand** from the registry. Where it would update or install the
+  device otherwise, it still does when the device's entry shows it is
+  this package's (on 98 SE and ME, a device Windows lists); otherwise
+  it leaves the device and says what to do.
+
+### Changed
+- **The USB Tree**
+  - The notice of a port on hold is off unless you tick "Warn when a USB
+    port is put on hold" in View > Settings..., on the xHCI98 USB Tree tab.
+  - "Tell me when a device can run faster" is now "Warn when a device can
+    run faster".
+  - A port on hold is shown as "(on hold)" also with the driver's logging
+    off.
+  - Save Report also lists the values of each USB device's driver
+    keys. Read it before you share it.
+  - The details pane, Edit > Copy and Save Report keep their lines
+    within 79 columns, but for a value too long to break and the
+    deepest levels of the tree.
+  - A snapshot of a busy controller no longer holds up an eject.
+- **The installer and the USB Tree's settings:** seven new rows,
+  `XhciStreamDequeueAvoid`, `XhciCmWakeOrder`, `XhciFailedRetrySec`,
+  `XhciDeviceIsolation`, `XhciUnplugComplete`, `XhciCancelStatus` and
+  `XhciIntelPortSwitchSetup`, and in the USB Tree's settings
+  `XhciIntelPortSwitchReady`.
+- **Windows 2000 and later:** a cancelled USB transfer reports the
+  status Windows' own USB stack reports (`XhciCancelStatus`).
+- **Intel 7-, 8- and 9-series and C610/X99 chipsets: a new install turns the
+  port switchover on, and it waits for Windows Setup.** This holds for every
+  install route, an integrated CD and the F6 floppy included, so the shared
+  (usually blue) connectors can run at USB 3 speed. On Windows 2000 and
+  later the connectors are not moved while Windows Setup is in progress, nor
+  in the Windows session in which the switchover is first turned on; they
+  move at a later start of Windows. On Windows 98 SE and ME they move at the
+  driver's first start. `XhciIntelPortSwitchSetup` overrides this (`1` move
+  them anyway, `2` never). An update keeps the setting you have.
+
+### New
+- **Windows 98 SE: a dock, or an enclosure with its own PCIe switch, left
+  plugged in across a standby is kept.** Its drive keeps its letter instead
+  of being removed and found again after the wake.
+- **The USB Tree restarts a controller** (right-click it, Restart
+  Controller).
+- **A controller that has stopped after repeated failures is tried
+  again** by the driver itself, first after about 5 seconds
+  (`XhciFailedRetrySec`). The USB Tree shows it, with the device
+  involved where the driver recorded it, and when the next try comes.
+- **A device that stops answering can be removed alone**, its port
+  held and the other devices kept working, where its request can be
+  stopped and the device removed cleanly; a hub still resets the
+  controller. On the Intel 7 Series (`8086:1E31`) by default, on
+  other controllers at `XhciDeviceIsolation` `2`, at your own risk.
+
+### Known limitations
+- On an Intel 7 Series USB 3 controller, a UAS drive under Windows' own UAS
+  driver can disconnect and reconnect when a monitoring program queries it.
+  Set XhciForceBulkOnly to 1 or use xHCI98's UAS driver to avoid it.
+- Windows ME: Stand by and Hibernate are refused while a file is open on a
+  TB / USB4 NVMe drive (Windows says the Stor98 controller cannot enter a
+  low-power state). Close the files / programs using the drive first.
+- Windows 98 SE: with two USB audio devices connected, close the
+  recording program before you unplug or disable the device it records
+  from. Otherwise Windows can stop with a fault in WDMAUD. It happens
+  without xHCI98 too.
+- Windows XP, the free USB Audio 2.0 driver (uac2): plugging in a USB audio
+  device can, rarely, end in a blue screen (STOP 0x7E). If it happens to
+  you, use the device maker's own driver instead.
+- Windows 7: after the USB controller is restarted (disabled and enabled, or
+  updated) without restarting Windows, a USB disk that was already plugged
+  in may not get its drive letter back, although Windows says the device is
+  ready to use. Unplug the disk and plug it in again. Scan for hardware
+  changes in Device Manager does not bring it back; do not initialize or
+  format the disk in Disk Management.
+- Windows ME: when a USB device keeps failing and the controller is reset
+  several times in a row, Windows can stop responding at its 'Unsafe Removal
+  of Device' message. Unplug the failing device; if Windows has already
+  stopped responding, restart the computer.
+- Windows 98 SE and ME: the USB Tree does not restart a USB controller while
+  a USB storage device is connected to it (unplug it first), nor while
+  Windows has a drive the tool cannot place - a drive in MS-DOS
+  compatibility mode (System Properties, Performance), for one: restart
+  Windows instead. Nor does it while a network adapter on the controller may
+  be carrying a network drive in use: disconnect the network drives first.
+  It does not restart a controller that has stopped after repeated failures;
+  unplug the device involved, wait for the driver's next attempt, or restart
+  Windows.
+- Windows 2000 from the F6 floppy: on some ACPI computers the graphical part
+  of Setup may restart repeatedly. If it does, use a CD with the driver
+  integrated (INTEGRATE.TXT), or add the driver after Setup with SETUP.EXE.
+
+### Installing/Updating
+
+- **Use `SETUP.EXE`.** Registry values are kept. Device Manager's Update
+  Driver also works on every system: point it at `98-me\`, `nt-x86\` or
+  `nt-x64\`.
+- **Vista x64 to 10 x64:** the x64 drivers are test-signed, so test-signing
+  mode must be on, **and must stay on while the Thunderbolt 3 / USB4 driver
+  is installed**. On 8, 8.1 and 10 that also means Secure Boot must be off.
+- **Windows 98 SE and ME:** the free and non-free drivers are copied to
+  `C:\XHCI98\USBDRV\`; the ones you tick are also added to Windows' driver
+  search path. When Windows asks for a driver for another such device, point
+  it at that device's folder there. If the installer reports a controller
+  "not reached in this run", restart Windows and run it again.
+
+### Choose from 3 downloads
+
+Each zip holds everything in the one before it.
+- **`xhci98-3.6.0.0.zip`:** the xHCI98 drivers (USB 3, UAS, Thunderbolt 3 /
+  USB4, Thunderbolt networking), Stor98, the installer and the tools. It
+  also has NUSB 3.3's seven Windows 98 SE storage files in `USBDRV\NUSB33\`,
+  offered by the installer on 98 SE if you don't already have NUSB. If you
+  have NUSB already installed, it will be kept.
+- **`xhci98-3.6.0.0-free.zip`:** adds the free USB class drivers (audio,
+  MIDI, webcam, Ethernet, serial, printing etc.) from usb-wdm-free
+  (https://github.com/yeokm1/usb-wdm-free) 0.1.12 in `USBDRV\FREE\`. **These
+  are experimental:** they may not work with every device and can make
+  Windows unstable. Please report their problems to that project.
+  - Every device name these drivers show now carries "(wdm-free)", so a
+    device on one of them can be told from one on a maker's driver. A
+    device keeps its old name until its driver is updated.
+  - On Windows 98 SE, choose the preferred playback device again after the
+    update (Control Panel, Multimedia, Audio).
+  - Realtek USB Ethernet (`rtl815x`): the forced 10 and 100 Mb/s speeds on
+    the Advanced tab now take effect; flow control offers "Transmit only";
+    receive checksum offload can be turned on for the RTL8157 and RTL8159
+    (2000 to 7, off by default).
+  - CDC network adapters (`cdcnet`): reinstalling keeps the protocol chosen
+    on the Advanced tab.
+- **`xhci98-3.6.0.0-nonfree.zip`:** also adds a pack of other manufacturers'
+  USB Ethernet, HID, serial and audio drivers from usb-wdm-nonfree
+  (https://github.com/yeokm1/usb-wdm-nonfree) 1.4.0 in `USBDRV\NONFREE\`.
+
+All free/non-free drivers are optional and installed only if you select
+them.
+
+### Disclaimer
+
+This is a fairly new driver. It may have bugs or edge cases that are not yet
+accounted for given the large xHCI/USB 3/4/TB specifications and the many
+host controller implementations and devices. **USB4/TB/NVMe features and the
+usb-wdm-free drivers are even more experimental, so use them at your own
+risk!**
+
+Appreciate all issue reports!
+
 ## 3.5.0.0 - 2026-11-14
 
 ### Fixed

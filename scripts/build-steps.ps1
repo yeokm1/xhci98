@@ -13,7 +13,7 @@ header check, Python on PATH and then the connection manager snapshot's
 field tables, on the x86 run XHCITR and XHCIPERF rebuilt and their
 self-tests, the XHCIINST, XHCIMARK and XHCIDI self-tests when their EXEs
 are there, the host suite and on the x86 run Stor98's unit suite. With
--All (build-driver.cmd's "all" run) the tools are rebuilt first on both
+-All (build-driver.cmd's "all" or "cut" run) the tools are rebuilt first on both
 architectures - XHCIMARK, XHCIINST, then XHCIDI on its own (its build's
 exit 2, no Open Watcom, a failure there), and on amd64 XHCITR and XHCIPERF
 as well - and a tool self-test whose EXE is still not there fails instead
@@ -37,7 +37,7 @@ The build's architecture, x86 or amd64: the x86 run alone rebuilds XHCITR
 and XHCIPERF and runs Stor98's unit suite.
 
 .PARAMETER All
-build-driver.cmd's "all" run: every tool whose self-test the block runs is
+build-driver.cmd's "all" or "cut" run: every tool whose self-test the block runs is
 built in it first, and a self-test whose EXE is missing fails, naming the
 build to run (task 49.26). Without it such a step is passed over
 ("absent") and listed in absent.txt.
@@ -243,7 +243,7 @@ function Invoke-BuildSteps {
     # temporary folder under -LogDir; -Write takes each line printed.
     # Returns the exit code (0, 1 or 2) and leaves each step's State
     # (passed, failed, inconclusive, absent, not run), Code and Elapsed.
-    # -RequireExe (an "all" run): a step whose IfExists is not there fails,
+    # -RequireExe (an "all" or "cut" run): a step whose IfExists is not there fails,
     # naming its Builder, instead of being passed over.
     param([object[]]$Steps, [int]$Max, [string]$LogDir, [string]$Root, [scriptblock]$Write,
           [switch]$RequireExe)

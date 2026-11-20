@@ -45,6 +45,212 @@ int di_ieq(const char *a, const char *b)
     return di_upper(*a) == di_upper(*b);
 }
 
+static int di_nieq(const char *a, const char *b, unsigned n)
+{
+    unsigned i;
+    for (i = 0; i < n; i++) {
+        if (di_upper(a[i]) != di_upper(b[i])) {
+            return 0;
+        }
+        if (a[i] == '\0') {
+            return 1;
+        }
+    }
+    return 1;
+}
+
+int di_stale_id(const char *devid)
+{
+    static const char *const kinds[4] = {
+        "ROOT_HUB", "HUB", "HUB30", "COMPOSITE"
+    };
+    const char *s;
+    unsigned n = 0;
+    unsigned k;
+    int i;
+
+    if (devid == 0 || !di_nieq(devid, "USB\\XHCI98_", 11)) {
+        return 0;
+    }
+    s = devid + 11;
+    while (s[n] != '\0' && s[n] != '\\' && s[n] != '&') {
+        n++;
+    }
+    if (s[n] == '\0') {
+        return 0;
+    }
+    for (i = 0; i < 4; i++) {
+        for (k = 0; kinds[i][k] != '\0'; k++) {
+        }
+        if (k == n && di_nieq(s, kinds[i], n)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int di_driver_text(unsigned long type, char *buf, unsigned long cb,
+                   unsigned size)
+{
+    unsigned long n = 0;
+
+    if (type != DI_REG_SZ || cb == 0UL || cb >= (unsigned long)size) {
+        return 0;
+    }
+    while (n < cb && buf[n] != '\0') {
+        n++;
+    }
+    if (n == 0UL || (n != cb && n + 1UL != cb)) {
+        return 0;
+    }
+    buf[n] = '\0';
+    return 1;
+}
+
+int di_driver_value_ok(const char *value)
+{
+    const char *bs = 0;
+    const char *p;
+    unsigned i;
+
+    if (value == 0) {
+        return 0;
+    }
+    for (p = value; *p != '\0'; p++) {
+        if (*p == '\\') {
+            if (bs != 0) {
+                return 0;
+            }
+            bs = p;
+        } else if (bs == 0 &&
+                   !((*p >= '0' && *p <= '9') || (*p >= 'A' && *p <= 'Z') ||
+                     (*p >= 'a' && *p <= 'z') || *p == '_')) {
+            return 0;
+        }
+    }
+    if (bs == 0 || bs == value) {
+        return 0;
+    }
+    for (i = 1; i <= 4; i++) {
+        if (bs[i] < '0' || bs[i] > '9') {
+            return 0;
+        }
+    }
+    return bs[5] == '\0';
+}
+
+static int di_join(char *out, unsigned size, const char *a, const char *b)
+{
+    unsigned n = 0;
+    unsigned i;
+    for (i = 0; a[i] != '\0'; i++) {
+        if (n + 1 >= size) {
+            if (size != 0) {
+                out[0] = '\0';
+            }
+            return 0;
+        }
+        out[n++] = a[i];
+    }
+    for (i = 0; b[i] != '\0'; i++) {
+        if (n + 1 >= size) {
+            out[0] = '\0';
+            return 0;
+        }
+        out[n++] = b[i];
+    }
+    if (size == 0) {
+        return 0;
+    }
+    out[n] = '\0';
+    return 1;
+}
+
+int di_enum_path(char *out, unsigned size, const char *devid)
+{
+    return di_join(out, size, "Enum\\", devid);
+}
+
+int di_class_path(char *out, unsigned size, const char *driver)
+{
+    return di_join(out, size, "System\\CurrentControlSet\\Services\\Class\\",
+                   driver);
+}
+
+int di_class_parent(char *out, unsigned size, const char *driver)
+{
+    char cls[DI_PATH_MAX + 1];
+    unsigned n = 0;
+
+    while (driver[n] != '\0' && driver[n] != '\\') {
+        if (n + 1 >= sizeof cls) {
+            if (size != 0) {
+                out[0] = '\0';
+            }
+            return 0;
+        }
+        cls[n] = driver[n];
+        n++;
+    }
+    cls[n] = '\0';
+    if (driver[n] != '\\' || n == 0) {
+        if (size != 0) {
+            out[0] = '\0';
+        }
+        return 0;
+    }
+    return di_join(out, size, "System\\CurrentControlSet\\Services\\Class\\",
+                   cls);
+}
+
+const char *di_class_child(const char *driver)
+{
+    const char *p;
+    for (p = driver; *p != '\0'; p++) {
+        if (*p == '\\') {
+            return p + 1;
+        }
+    }
+    return 0;
+}
+
+int di_listed(const char *child, const char *name, unsigned long endRc)
+{
+    if (name != 0) {
+        return di_ieq(name, child) ? 1 : 0;
+    }
+    return endRc == DI_REG_NO_MORE_ITEMS ? 0 : -1;
+}
+
+const char *di_stale_final(int present)
+{
+    if (present < 0) {
+        return DI_KEPT_LIST;
+    }
+    return present > 0 ? DI_KEPT_DEVNODE : 0;
+}
+
+const char *di_stale_check(const char *devid, unsigned long devnode,
+                           int driverRead, const char *driver, int keyState)
+{
+    if (!di_stale_id(devid)) {
+        return DI_KEPT_DEVICE;
+    }
+    if (devnode != 0UL) {
+        return DI_KEPT_DEVNODE;
+    }
+    if (!driverRead || !di_driver_value_ok(driver)) {
+        return DI_KEPT_DRIVER;
+    }
+    if (keyState > 0) {
+        return DI_KEPT_KEY;
+    }
+    if (keyState < 0) {
+        return DI_KEPT_KEY_UNREADABLE;
+    }
+    return 0;
+}
+
 static int di_copy(char *out, unsigned size, const char *s, unsigned n)
 {
     unsigned i;
@@ -349,10 +555,11 @@ static int di_line_is(const DI_TOK *t, int n, const char *key, int words)
  * The job file (record 27 section 4.1), one record a line, in this order:
  *
  *   XHCIDI-JOB 1
- *   JOB install | remove | probe
+ *   JOB install | remove | removestale | probe
  *   RESULT <result file>
  *   HWND <decimal>
- *   DEVICE <device id>            install and remove
+ *   DEVICE <device id>            install, remove and removestale (one of
+ *                                 the package's own bus ids)
  *   INF <inf path>                install
  *   FLAGS <flag> [<flag> [<flag>]]  install, optional: force, quiet,
  *                                 nocopy (each at most once)
@@ -412,6 +619,8 @@ int di_parse(const char *cmdline, const char *jobtext, const char *own_version,
         cmd->job = DI_JOB_INSTALL;
     } else if (di_tok_is(&t[1], "remove")) {
         cmd->job = DI_JOB_REMOVE;
+    } else if (di_tok_is(&t[1], "removestale")) {
+        cmd->job = DI_JOB_REMOVESTALE;
     } else if (di_tok_is(&t[1], "probe")) {
         cmd->job = DI_JOB_PROBE;
     } else {
@@ -440,7 +649,8 @@ int di_parse(const char *cmdline, const char *jobtext, const char *own_version,
             return DI_PARSE_COMMAND;
         }
         if (!di_copy(cmd->devid, sizeof cmd->devid, t[1].p, t[1].n) ||
-            !di_devid_ok(cmd->devid)) {
+            !di_devid_ok(cmd->devid) ||
+            (cmd->job == DI_JOB_REMOVESTALE && !di_stale_id(cmd->devid))) {
             cmd->devid[0] = '\0';
             cmd->job = DI_JOB_NONE;
             cmd->why = "device-id";
@@ -750,7 +960,8 @@ const char *di_err_name(unsigned err)
 const char *di_verdict(int job, unsigned err, unsigned long flags)
 {
     int restart = (flags & (DI_FL_NEEDRESTART | DI_FL_NEEDREBOOT)) != 0;
-    if (job != DI_JOB_INSTALL && job != DI_JOB_REMOVE) {
+    if (job != DI_JOB_INSTALL && job != DI_JOB_REMOVE &&
+        job != DI_JOB_REMOVESTALE) {
         return DI_V_FAILED;
     }
     if (err == DI_OK) {
@@ -873,6 +1084,10 @@ const char *di_out_job(DI_OUT *out, const DI_CMD *cmd)
         break;
     case DI_JOB_REMOVE:
         di_field(out, "remove", 0);
+        di_field(out, cmd->devid, 0);
+        break;
+    case DI_JOB_REMOVESTALE:
+        di_field(out, "removestale", 0);
         di_field(out, cmd->devid, 0);
         break;
     case DI_JOB_PROBE:

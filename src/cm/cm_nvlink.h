@@ -33,9 +33,10 @@
  * and is only a locator; the proof exists only while this image is loaded
  * in this boot, so stor98 accepts the table only when the proof's cookie
  * and address equal the locator's and the table's (R5). The image is
- * resident for the boot on 98 SE and ME (no DriverUnload from DriverEntry,
- * R4), so the provider never goes; were it unloaded, the unload would
- * delete the proof first. The
+ * resident for the boot on 98 SE and ME (the device object DriverEntry
+ * makes there and never deletes, R4, design record 21 section 7.9), so the
+ * provider never goes; were it unloaded, the unload would delete the proof
+ * first. The
  * order (residency, proof opened first, proof, locator) is
  * CmNvlinkPublish9x's. Every read of the proof is counted, as NT counts
  * its callback's queries: until stor98 has read it, no receiver exists

@@ -49,7 +49,9 @@ static void tr_ch(TR_TEXT *t, char c)
         t->Overflow = 1;
         return;
     }
-    if (c == '\n') {
+    /* A line end already CR LF (a text written by this module, carried
+     * again, as an elevated run's answer is) keeps its one CR. */
+    if (c == '\n' && !(t->Len > 0 && t->Buf[t->Len - 1] == '\r')) {
         if (t->Len + 2 >= t->Cap) {
             t->Overflow = 1;
             return;
@@ -282,6 +284,21 @@ void tr_copy(char *dst, const char *src, size_t cap)
         dst[i] = src[i];
     }
     dst[i] = '\0';
+}
+
+void tr_copy_lead(char *dst, const char *src, size_t cap, TR_LEAD_FN lead)
+{
+    size_t k;
+
+    if (cap == 0) {
+        return;
+    }
+    k = strlen(src);
+    if (k >= cap) {
+        k = tr_char_floor(src, cap - 1, lead);
+    }
+    memcpy(dst, src, k);
+    dst[k] = '\0';
 }
 
 static int tr_up(int c)
@@ -1617,7 +1634,8 @@ void tr_ver_line(int state, TR_U32 running, const TR_U32 *file, char *out,
         tr_copy(inst, "not read", sizeof(inst));
     }
     if (state == TR_VER_SAME) {
-        tr_sprintf(out, cap, "%s running, the installed file's", run);
+        tr_sprintf(out, cap, "%s running; the installed file is the same.",
+                   run);
     } else {
         tr_sprintf(out, cap, "%s running; the installed file is %s. Restart "
                    "Windows to run the installed driver.", run, inst);
@@ -2296,6 +2314,23 @@ int tr_parse_args(int argc, char **argv, TR_OPTS *o, char *err, size_t cap)
             o->Eject = 1;
             tr_copy(o->EjectId, id + 3, sizeof(o->EjectId));
             alone++;
+        } else if (tr_switch(a, "restart")) {
+            /* Task 50.32 (record 25 section 27): a controller's restart. */
+            const char *id;
+            if (i + 1 >= argc) {
+                tr_copy(err, "/restart needs id=<instance id>.", cap);
+                return 1;
+            }
+            id = argv[++i];
+            if (!(tr_up((unsigned char)id[0]) == 'I' &&
+                  tr_up((unsigned char)id[1]) == 'D' && id[2] == '=') ||
+                id[3] == '\0' || strlen(id + 3) >= TR_ID_CHARS) {
+                tr_copy(err, "/restart needs id=<instance id>.", cap);
+                return 1;
+            }
+            o->Restart = 1;
+            tr_copy(o->RestartId, id + 3, sizeof(o->RestartId));
+            alone++;
         } else if (tr_switch(a, "result")) {
             if (i + 1 >= argc || !tr_res_name_ok(argv[i + 1])) {
                 tr_copy(err, "/result needs the window's answer name.", cap);
@@ -2377,7 +2412,8 @@ int tr_parse_args(int argc, char **argv, TR_OPTS *o, char *err, size_t cap)
             tr_copy(o->SetOnId, argv[++i], sizeof(o->SetOnId));
         } else {
             tr_sprintf(err, cap, "Unknown switch %s. Use: XHCITR [/tray] "
-                       "[/eject id=<instance id>] [/setlevel xhci98=<0-4> "
+                       "[/eject id=<instance id>] [/restart id=<instance "
+                       "id>] [/setlevel xhci98=<0-4> "
                        "xhcicm=<0-4>] [/set Name=Value ... [/on <instance "
                        "id>] [/yes]] [/set /show] [/report <file>] [/acpi <folder>], "
                        "or XHCITR /snapshot, /dump or /probe (XHCITR "
@@ -2386,8 +2422,8 @@ int tr_parse_args(int argc, char **argv, TR_OPTS *o, char *err, size_t cap)
         }
     }
     if (alone > 1 || (alone == 1 && o->Tray)) {
-        tr_copy(err, "/eject, /setlevel, /set, /report, /acpi and /selftest "
-                "are each used alone.", cap);
+        tr_copy(err, "/eject, /restart, /setlevel, /set, /report, /acpi and "
+                "/selftest are each used alone.", cap);
         return 1;
     }
     if (o->Set && (o->SetShow + o->SetRequest + (o->SetCount > 0 ? 1 : 0)) !=
@@ -2407,10 +2443,11 @@ int tr_parse_args(int argc, char **argv, TR_OPTS *o, char *err, size_t cap)
         tr_copy(err, "/set /request is the Settings window's own run.", cap);
         return 1;
     }
-    if ((o->Result && !o->Eject && !o->SetLevel && !o->SetRequest) ||
-        (o->Confirmed && !o->Eject)) {
-        tr_copy(err, "/result goes with /eject or /setlevel, /confirmed with "
-                "/eject only.", cap);
+    if ((o->Result && !o->Eject && !o->SetLevel && !o->SetRequest &&
+         !o->Restart) ||
+        (o->Confirmed && !o->Eject && !o->Restart)) {
+        tr_copy(err, "/result goes with /eject, /restart or /setlevel, "
+                "/confirmed with /eject or /restart.", cap);
         return 1;
     }
     return 0;
@@ -2420,13 +2457,20 @@ void tr_report_node(TR_TEXT *t, int depth, const char *label,
                     const char *details)
 {
     int k;
-    int bol = 1;
 
     for (k = 0; k < depth; k++) {
         tr_put(t, "  ");
     }
     tr_put(t, label);
     tr_ch(t, '\n');
+    tr_report_lines(t, depth, details);
+}
+
+void tr_report_lines(TR_TEXT *t, int depth, const char *details)
+{
+    int k;
+    int bol = 1;
+
     if (details == NULL) {
         return;
     }
@@ -2454,8 +2498,14 @@ void tr_report_node(TR_TEXT *t, int depth, const char *label,
 size_t tr_report_node_bytes(int depth, const char *label,
                             const char *details)
 {
+    return (size_t)depth * 2 + strlen(label) + 2 +
+           tr_report_lines_bytes(depth, details);
+}
+
+size_t tr_report_lines_bytes(int depth, const char *details)
+{
     size_t lead = (size_t)(depth + 2) * 2 + 2;
-    size_t n = (size_t)depth * 2 + strlen(label) + 2;
+    size_t n = 0;
     int bol = 1;
 
     if (details != NULL) {
@@ -2568,8 +2618,43 @@ void tr_letters_text(const char *set, char *out, size_t cap)
     }
 }
 
-void tr_unit_label(const char *unitName, const char *diskNames,
-                   const char *letters, char *out, size_t cap)
+size_t tr_char_floor(const char *s, size_t n, TR_LEAD_FN lead)
+{
+    size_t i = 0;
+    size_t step;
+
+    if (lead == NULL) {
+        return n;
+    }
+    while (i < n && s[i] != '\0') {
+        step = lead((unsigned char)s[i]) && s[i + 1] != '\0' ? 2 : 1;
+        if (i + step > n) {
+            break;
+        }
+        i += step;
+    }
+    return i;
+}
+
+/* s into out, cut between characters by lead, and with dots a cut s ends
+ * in "..." (the tray's form). */
+static void label_cut(char *out, const char *s, size_t cap, int dots,
+                      TR_LEAD_FN lead)
+{
+    size_t k;
+
+    if (!dots || cap < 5 || strlen(s) < cap) {
+        tr_copy_lead(out, s, cap, lead);
+        return;
+    }
+    k = tr_char_floor(s, cap - 4, lead);
+    memcpy(out, s, k);
+    memcpy(out + k, "...", 4);
+}
+
+static void unit_label_at(const char *unitName, const char *diskNames,
+                          const char *letters, int dots, TR_LEAD_FN lead,
+                          char *out, size_t cap)
 {
     char text[TR_LETTERS_TEXT_BYTES];
     char suffix[TR_LETTERS_TEXT_BYTES + 4];
@@ -2580,7 +2665,7 @@ void tr_unit_label(const char *unitName, const char *diskNames,
         return;
     }
     if (diskNames == NULL || diskNames[0] == '\0') {
-        tr_copy(out, unitName, cap);
+        label_cut(out, unitName, cap, dots, lead);
         return;
     }
     tr_letters_text(letters != NULL ? letters : "", text, sizeof(text));
@@ -2590,7 +2675,8 @@ void tr_unit_label(const char *unitName, const char *diskNames,
         suffix[0] = '\0';
     }
     if (strlen(suffix) + 4 > cap - 1) {
-        tr_copy(out, diskNames, cap);   /* no room for the letters at all */
+        /* no room for the letters at all */
+        label_cut(out, diskNames, cap, dots, lead);
         return;
     }
     room = cap - 1 - strlen(suffix);
@@ -2598,13 +2684,53 @@ void tr_unit_label(const char *unitName, const char *diskNames,
     if (len <= room) {
         memcpy(out, diskNames, len);
     } else {
-        len = room - 3;
+        len = tr_char_floor(diskNames, room - 3, lead);
         memcpy(out, diskNames, len);
         memcpy(out + len, "...", 3);
         len += 3;
     }
     out[len] = '\0';
     tr_copy(out + len, suffix, cap - len);
+}
+
+void tr_unit_label(const char *unitName, const char *diskNames,
+                   const char *letters, TR_LEAD_FN lead, char *out,
+                   size_t cap)
+{
+    unit_label_at(unitName, diskNames, letters, 0, lead, out, cap);
+}
+
+int tr_tray_label_chars(int width, int whyChars)
+{
+    int n;
+    int fit;
+
+    if (width <= 0) {
+        return TR_TRAY_LABEL_MAX;
+    }
+    n = width * 3 / 32;
+    /* 14: "Safely remove "; 3: the " (" and ")" around a reason. */
+    fit = (width - 48) / 6 - 14 - (whyChars > 0 ? whyChars + 3 : 0);
+    if (fit < n) {
+        n = fit;
+    }
+    if (n > TR_TRAY_LABEL_MAX) {
+        n = TR_TRAY_LABEL_MAX;
+    }
+    if (n < TR_TRAY_LABEL_MIN) {
+        n = TR_TRAY_LABEL_MIN;
+    }
+    return n;
+}
+
+void tr_tray_label(const char *unitName, const char *diskNames,
+                   const char *letters, int chars, TR_LEAD_FN lead,
+                   char *out, size_t cap)
+{
+    if (chars > 0 && (size_t)chars + 1 < cap) {
+        cap = (size_t)chars + 1;
+    }
+    unit_label_at(unitName, diskNames, letters, 1, lead, out, cap);
 }
 
 void tr_disk_line(const char *name, const char *letters, char *out,
@@ -2962,11 +3088,12 @@ int tr_usb_answer9x(TR_U32 cr, const char *what, char *out, size_t cap)
 }
 
 /* n bytes of s into out at *o, always terminated; 0 when they did not
- * all fit (what fits is kept). */
-static int tr_emit(char *out, size_t cap, size_t *o, const char *s, size_t n)
+ * all fit (what fits is kept, ending between characters by lead). */
+static int tr_emit(char *out, size_t cap, size_t *o, const char *s, size_t n,
+                   TR_LEAD_FN lead)
 {
     if (*o + n + 1 > cap) {
-        n = cap - 1 - *o;
+        n = tr_char_floor(s, cap - 1 - *o, lead);
         memcpy(out + *o, s, n);
         *o += n;
         out[*o] = '\0';
@@ -2978,7 +3105,8 @@ static int tr_emit(char *out, size_t cap, size_t *o, const char *s, size_t n)
     return 1;
 }
 
-void tr_wrap(const char *in, char *out, size_t cap, int width)
+void tr_wrap(const char *in, char *out, size_t cap, int width,
+             TR_LEAD_FN lead)
 {
     size_t o = 0;
     const char *p = in;
@@ -3004,7 +3132,8 @@ void tr_wrap(const char *in, char *out, size_t cap, int width)
                     s--;
                 }
                 if (s == p) {
-                    cut = p + width;    /* one word longer than the line */
+                    /* one word longer than the line */
+                    cut = p + tr_char_floor(p, (size_t)width, lead);
                     resume = cut;
                 } else {
                     cut = s;
@@ -3017,18 +3146,18 @@ void tr_wrap(const char *in, char *out, size_t cap, int width)
                     }
                 }
             }
-            if (!tr_emit(out, cap, &o, p, (size_t)(cut - p))) {
+            if (!tr_emit(out, cap, &o, p, (size_t)(cut - p), lead)) {
                 return;
             }
             p = resume;
-            if (p < end && !tr_emit(out, cap, &o, "\r\n", 2)) {
+            if (p < end && !tr_emit(out, cap, &o, "\r\n", 2, NULL)) {
                 return;
             }
         } while (p < end);
         if (*end == '\0') {
             break;
         }
-        if (!tr_emit(out, cap, &o, "\r\n", 2)) {
+        if (!tr_emit(out, cap, &o, "\r\n", 2, NULL)) {
             return;
         }
         p = end;
@@ -3039,6 +3168,245 @@ void tr_wrap(const char *in, char *out, size_t cap, int width)
             p++;
         }
     }
+}
+
+/*
+ * Task 50.39 (record 25 section 28): the details pane's and Save Report's
+ * width. Each line of `in` is written to t as it is when it is at most
+ * `width` columns wide, and so is a line that begins with TR_FIT_WHOLE (a
+ * value read as it is: a name, an id, a serial number), the mark dropped.
+ * A wider line is broken, and each further line is put under its first
+ * value: the column after a short "Label:" and the spaces after it
+ * (tr_fit_hang), else under the line's own indent, never further in than
+ * half the width. A break is made after a clause's end (the space after a
+ * ',', ';', '.' or ':') that falls in the line's second half, else at the
+ * last space that fits; never inside the label, before its first word or
+ * inside a quoted string. A word or a quoted string wider than a line is
+ * written whole and the line broken after it. Only spaces and line ends
+ * change: the words, their order and their punctuation are kept. Lines may
+ * end CR LF, LF or CR; t writes CR LF.
+ */
+#define TR_FIT_LABEL    24      /* the longest label a value is put under */
+
+/* The column a wider line's further lines start at. */
+static size_t tr_fit_hang(const char *s, size_t n, size_t lead, int width)
+{
+    size_t half = (size_t)width / 2;
+    size_t k;
+    size_t v;
+
+    for (k = lead; k < n && k <= lead + TR_FIT_LABEL; k++) {
+        if (s[k] == ',' || s[k] == ';' || s[k] == '.' || s[k] == '"') {
+            break;
+        }
+        if (s[k] == ':' && k > lead && k + 1 < n && s[k + 1] == ' ') {
+            v = k + 1;
+            while (v < n && s[v] == ' ') {
+                v++;
+            }
+            if (v < n && v <= half) {
+                return v;
+            }
+            break;
+        }
+    }
+    return lead < half ? lead : half;
+}
+
+/* 1 when s[k] lies inside a quoted string of s[0..k). */
+static int tr_fit_quoted(const char *s, size_t k)
+{
+    size_t i;
+    int in = 0;
+
+    for (i = 0; i < k; i++) {
+        if (s[i] == '"') {
+            in = !in;
+        }
+    }
+    return in;
+}
+
+static void tr_fit_put(TR_TEXT *t, const char *s, size_t n)
+{
+    while (n > 0 && s[n - 1] == ' ') {
+        n--;
+    }
+    while (n-- > 0) {
+        tr_ch(t, *s++);
+    }
+}
+
+static void tr_fit_line(TR_TEXT *t, const char *s, size_t n, int width)
+{
+    size_t w = (size_t)width;
+    size_t lead = 0;
+    size_t hang;
+    size_t pos = 0;
+    size_t at = 0;              /* the column the current line starts at */
+    size_t k;
+
+    while (lead < n && s[lead] == ' ') {
+        lead++;
+    }
+    hang = tr_fit_hang(s, n, lead, width);
+    while (at + (n - pos) > w) {
+        size_t avail = w - at;
+        size_t low = pos == 0 ? (hang > lead ? hang : lead) : pos;
+        size_t best = 0;
+
+        /* low: a break lies past it (the label and the first word stay) */
+        for (k = pos + 1; k <= pos + avail && k < n; k++) {
+            if (s[k] == ' ' && k > low && at + (k - pos) >= w / 2 &&
+                (s[k - 1] == ',' || s[k - 1] == ';' || s[k - 1] == '.' ||
+                 s[k - 1] == ':') && !tr_fit_quoted(s, k)) {
+                best = k;
+            }
+        }
+        for (k = pos + avail; best == 0 && k > low; k--) {
+            if (k < n && s[k] == ' ' && !tr_fit_quoted(s, k)) {
+                best = k;
+            }
+        }
+        for (k = pos + avail + 1; best == 0 && k < n; k++) {
+            if (s[k] == ' ' && k > low && !tr_fit_quoted(s, k)) {
+                best = k;       /* a word wider than the line, whole */
+            }
+        }
+        if (best == 0) {
+            break;
+        }
+        tr_fit_put(t, s + pos, best - pos);
+        pos = best;
+        while (pos < n && s[pos] == ' ') {
+            pos++;
+        }
+        if (pos >= n) {
+            return;
+        }
+        tr_ch(t, '\n');
+        for (k = 0; k < hang; k++) {
+            tr_ch(t, ' ');
+        }
+        at = hang;
+    }
+    tr_fit_put(t, s + pos, n - pos);
+}
+
+/* A field's paragraph: a "Label:" line and the lines under its value
+ * that follow it, the text already wrapped by its maker. When one of its
+ * lines is wider than the width, that line and the rest of the paragraph
+ * are joined and fitted again as one, so that the paragraph does not end
+ * in short pieces; a paragraph that fits is not touched. A line without a
+ * label, a line marked whole and a new field are never joined. */
+#define TR_FIT_PARA     2048    /* the longest paragraph joined */
+
+static size_t tr_fit_lead(const char *s, size_t n)
+{
+    size_t k = 0;
+
+    while (k < n && s[k] == ' ') {
+        k++;
+    }
+    return k;
+}
+
+void tr_fit_text(TR_TEXT *t, const char *in, int width)
+{
+    char para[TR_FIT_PARA];
+    size_t pn = 0;              /* a paragraph being joined, its bytes   */
+    size_t phang = 0;           /* its value's column                    */
+    int pend = 0;               /* its last line had a line end          */
+    size_t fhang = 0;           /* the value's column of the field the
+                                   last line belongs to, 0 none          */
+    const char *p = in;
+
+    if (width < 20) {
+        width = 20;
+    }
+    while (*p != '\0') {
+        const char *end = p;
+        int whole = *p == TR_FIT_WHOLE;
+        size_t n;
+        size_t lead;
+        size_t hang;
+        int labelled;
+
+        if (whole) {
+            p++;
+        }
+        while (*end != '\0' && *end != '\r' && *end != '\n') {
+            end++;
+        }
+        n = (size_t)(end - p);
+        lead = tr_fit_lead(p, n);
+        hang = tr_fit_hang(p, n, lead, width);
+        labelled = !whole && hang > lead;
+        if (pn > 0) {
+            if (!whole && !labelled && lead == phang && n > lead &&
+                pn + 1 + (n - lead) < sizeof(para)) {
+                para[pn++] = ' ';
+                memcpy(para + pn, p + lead, n - lead);
+                pn += n - lead;
+                pend = *end != '\0';
+                goto next;
+            }
+            tr_fit_line(t, para, pn, width);
+            if (pend) {
+                tr_ch(t, '\n');
+            }
+            pn = 0;
+        }
+        if (whole) {
+            fhang = 0;
+        } else if (labelled) {
+            fhang = hang;
+        } else if (lead != fhang || n == lead) {
+            fhang = 0;
+        }
+        if (!whole && n > (size_t)width && fhang > 0 && n < sizeof(para)) {
+            memcpy(para, p, n);
+            pn = n;
+            phang = fhang;
+            pend = *end != '\0';
+            goto next;
+        }
+        if (whole || n <= (size_t)width) {
+            const char *q;
+            for (q = p; q < end; q++) {
+                tr_ch(t, *q);
+            }
+        } else {
+            tr_fit_line(t, p, n, width);
+        }
+        if (*end != '\0') {
+            tr_ch(t, '\n');
+        }
+next:
+        if (*end == '\0') {
+            break;
+        }
+        if (*end == '\r') {
+            end++;
+        }
+        if (*end == '\n') {
+            end++;
+        }
+        p = end;
+    }
+    if (pn > 0) {
+        tr_fit_line(t, para, pn, width);
+        if (pend) {
+            tr_ch(t, '\n');
+        }
+    }
+}
+
+int tr_report_width(int depth)
+{
+    int w = TR_TEXT_COLS - ((depth + 2) * 2 + 2);
+
+    return w < 20 ? 20 : w;
 }
 
 int tr_held_for_eject(TR_U32 problem, int w2k)
@@ -3839,7 +4207,8 @@ int tr_name_generic(const char *name)
 }
 
 void tr_fast_name(char *out, size_t cap, const char *label,
-                  const char *product, unsigned int vid, unsigned int pid)
+                  const char *product, unsigned int vid, unsigned int pid,
+                  TR_LEAD_FN lead)
 {
     size_t len;
 
@@ -3847,7 +4216,7 @@ void tr_fast_name(char *out, size_t cap, const char *label,
         return;
     }
     if (label != NULL && label[0] != '\0' && !tr_name_generic(label)) {
-        tr_copy(out, label, cap);
+        tr_copy_lead(out, label, cap, lead);
         return;
     }
     if (product != NULL) {
@@ -3860,7 +4229,7 @@ void tr_fast_name(char *out, size_t cap, const char *label,
         }
         if (len > 0) {
             if (len > cap - 1) {
-                len = cap - 1;
+                len = tr_char_floor(product, cap - 1, lead);
             }
             memcpy(out, product, len);
             out[len] = '\0';
@@ -3868,7 +4237,7 @@ void tr_fast_name(char *out, size_t cap, const char *label,
         }
     }
     if (label != NULL && label[0] != '\0') {
-        tr_copy(out, label, cap);   /* a class name, better than none */
+        tr_copy_lead(out, label, cap, lead);   /* a class name, better than none */
         return;
     }
     tr_sprintf(out, cap, "USB device %04X:%04X", vid & 0xFFFFU, pid & 0xFFFFU);
@@ -4306,7 +4675,7 @@ int tr_stor_due(const TR_STOR_Q *q, const TR_STOR_GATE *g)
 }
 
 void tr_stor_text(char *title, size_t tcap, char *text, size_t cap,
-                  const TR_STOR_GRP *g, int removal)
+                  const TR_STOR_GRP *g, int removal, TR_LEAD_FN lead)
 {
     char a[TR_STOR_NAME];
     char b[TR_STOR_NAME];
@@ -4347,13 +4716,13 @@ void tr_stor_text(char *title, size_t tcap, char *text, size_t cap,
     }
     tr_copy(a, g->Name[0], sizeof(a));
     if (strlen(a) > room) {
-        a[room - 3] = '\0';
+        a[tr_char_floor(a, room - 3, lead)] = '\0';
         strcat(a, "...");
     }
     if (named == 2) {
         tr_copy(b, g->Name[1], sizeof(b));
         if (strlen(b) > room) {
-            b[room - 3] = '\0';
+            b[tr_char_floor(b, room - 3, lead)] = '\0';
             strcat(b, "...");
         }
         tr_sprintf(text, cap, "%s%s%s%s", a, more > 0 ? ", " : " and ", b,
@@ -4429,18 +4798,20 @@ int tr_fast_click_balloon(int nt, unsigned long major, unsigned long minor)
     return !(nt && major == 5UL && minor == 0UL);
 }
 
-/* `lead`, then `text` broken at its spaces so that a line passes 79
+/* `first`, then `text` broken at its spaces so that a line passes 79
  * columns only for a word longer than that, the continuation lines
- * indented by `indent` spaces. */
-static void tr_fast_wrapped(TR_TEXT *t, const char *lead, const char *text,
-                            int indent)
+ * indented by `indent` spaces; a word longer than the line's room is cut
+ * between characters by lead. */
+static void tr_fast_wrapped(TR_TEXT *t, const char *first, const char *text,
+                            int indent, TR_LEAD_FN lead)
 {
     char line[96];
     size_t len;
+    size_t n;
     int sep;
     const char *w = text;
 
-    tr_copy(line, lead, sizeof(line));
+    tr_copy(line, first, sizeof(line));
     len = strlen(line);
     sep = len > 0 && line[len - 1] != ' ';
     while (*w != '\0') {
@@ -4458,11 +4829,13 @@ static void tr_fast_wrapped(TR_TEXT *t, const char *lead, const char *text,
         if (sep && len < sizeof(line) - 1) {
             line[len++] = ' ';
         }
-        for (; w < e; w++) {
-            if (len < sizeof(line) - 1) {
-                line[len++] = *w;
-            }
+        n = (size_t)(e - w);
+        if (n > sizeof(line) - 1 - len) {
+            n = tr_char_floor(w, sizeof(line) - 1 - len, lead);
         }
+        memcpy(line + len, w, n);
+        len += n;
+        w = e;
         sep = 1;
         while (*w == ' ') {
             w++;
@@ -4474,22 +4847,25 @@ static void tr_fast_wrapped(TR_TEXT *t, const char *lead, const char *text,
 
 void tr_fast_entry(TR_TEXT *t, const char *name, unsigned int vid,
                    unsigned int pid, const char *portLine,
-                   const char *hubName, const TR_FAST *f)
+                   const char *hubName, const TR_FAST *f, TR_LEAD_FN lead)
 {
-    char lead[160];
+    char big[400];
+    char head[160];
 
-    tr_sprintf(lead, sizeof(lead), "%s (%04X:%04X)", name, vid & 0xFFFFU,
+    tr_sprintf(big, sizeof(big), "%s (%04X:%04X)", name, vid & 0xFFFFU,
                pid & 0xFFFFU);
-    tr_fast_wrapped(t, "", lead, 2);
-    tr_fast_wrapped(t, "  ", portLine, 4);
+    tr_copy_lead(head, big, sizeof(head), lead);
+    tr_fast_wrapped(t, "", head, 2, lead);
+    tr_fast_wrapped(t, "  ", portLine, 4, lead);
     if (hubName != NULL) {
-        tr_sprintf(lead, sizeof(lead), "Behind %s (%s)", hubName,
+        tr_sprintf(big, sizeof(big), "Behind %s (%s)", hubName,
                    tr_fast_speed(f->HubNow));
-        tr_fast_wrapped(t, "  ", lead, 4);
+        tr_copy_lead(head, big, sizeof(head), lead);
+        tr_fast_wrapped(t, "  ", head, 4, lead);
     }
     tr_printf(t, "  Runs at:    %s\n", tr_fast_speed(f->Now));
     tr_printf(t, "  Can run at: %s\n", tr_fast_speed(f->Can));
-    tr_fast_wrapped(t, "  Try:", tr_fast_try(f->Where), 7);
+    tr_fast_wrapped(t, "  Try:", tr_fast_try(f->Where), 7, lead);
 }
 
 void tr_fast_menu(char *out, size_t cap, int count)
@@ -4994,6 +5370,18 @@ static void tr_irq_flags(char *out, size_t cap, TR_U32 flags)
 int tr_res_text(TR_TEXT *t, TR_U32 type, const unsigned char *d, size_t n,
                 int alloc, int is64)
 {
+    return tr_res_text_m4(t, type, d, n, alloc, is64, 0);
+}
+
+void tr_res_claimed_text(TR_TEXT *t, TR_U32 claimed)
+{
+    tr_printf(t, "    IRQ           %lu, claimed by xhci98 for its message "
+                 "interrupt\n", (unsigned long)claimed);
+}
+
+int tr_res_text_m4(TR_TEXT *t, TR_U32 type, const unsigned char *d, size_t n,
+                   int alloc, int is64, TR_U32 claimed)
+{
     size_t head;
     size_t range;
     TR_U32 count;
@@ -5072,6 +5460,10 @@ int tr_res_text(TR_TEXT *t, TR_U32 type, const unsigned char *d, size_t n,
                  * negative number. */
                 tr_printf(t, "    IRQ           message-signalled (%ld)\n",
                           (long)tr_r32(d + 12));
+            } else if (claimed != 0) {
+                tr_printf(t, "    IRQ           %lu (%s), not in use in "
+                             "XhciInterruptMode 4\n",
+                          (unsigned long)tr_r32(d + 12), f);
             } else {
                 tr_printf(t, "    IRQ           %lu (%s)\n",
                           (unsigned long)tr_r32(d + 12), f);

@@ -161,4 +161,135 @@
                                  XHQ_PORTS_MAX)
 #define XHQ_ASK_BYTES           32768UL /* the reader's first buffer */
 
+/*
+ * IOCTL_XHCI98_HOLDS (roadmap-usb4 task 50.7; design record 13 section
+ * 8.12.1; design record 25 section 24 item 1): the tolerance's hold of
+ * every location (XHCI_TOL_LOC.Hold, XHCI_TOL_HOLD_*), asked of the same
+ * device as the query, at every XhciLogVerbosity value: a hold is what the
+ * USB Tree tells the user, not the log. A request of its own rather than a
+ * part of the query, whose new version a reader of version 3 would refuse
+ * whole. CTL_CODE(FILE_DEVICE_UNKNOWN 0x22, 0xA4A, METHOD_BUFFERED,
+ * FILE_ANY_ACCESS); no input; no access rights needed.
+ *   - output buffer < XHH_HDR_BYTES: STATUS_BUFFER_TOO_SMALL, nothing;
+ *   - output buffer < the whole answer: STATUS_SUCCESS with the header
+ *     alone, XHH_O_BYTES the size needed;
+ *   - otherwise STATUS_SUCCESS, the whole answer: the header, then root
+ *     port n's hold at byte n - 1 of the root part (XHH_O_ROOT bytes), then
+ *     the hub locations in the driver's order (XHH_O_HUB bytes; location i
+ *     is hub object i / XHH_O_HUB_PORTS, port i % XHH_O_HUB_PORTS + 1).
+ * A driver from before it answers STATUS_INVALID_DEVICE_REQUEST. The bytes
+ * are read with no lock, as the snapshot's windows read them: each whole,
+ * the set not one instant.
+ */
+#define XHH_IOCTL               0x00222928UL
+#define XHH_MAGIC               0x48434858UL    /* 'XHCH' */
+#define XHH_VERSION             1UL
+#define XHH_HDR_BYTES           32UL
+#define XHH_O_MAGIC             0UL
+#define XHH_O_VERSION           4UL
+#define XHH_O_BYTES             8UL     /* the whole answer */
+#define XHH_O_FLAGS             12UL    /* XHH_F_* */
+#define XHH_O_ROOT              16UL    /* root locations, 0 not started */
+#define XHH_O_HUB               20UL    /* hub locations, 0 not started */
+#define XHH_O_HUB_PORTS         24UL    /* hub locations per hub object */
+#define XHH_O_RESERVED          28UL
+#define XHH_F_STARTED           0x01UL
+#define XHH_ROOT_MAX            255UL   /* XHCI_TOL_ROOT_PORTS */
+#define XHH_HUB_MAX             224UL   /* XHCI_TOL_HUB_LOCS */
+#define XHH_MAX_BYTES           (XHH_HDR_BYTES + XHH_ROOT_MAX + XHH_HUB_MAX)
+
+/*
+ * The recovery-status request (task 50.30, step 1; design record 17
+ * section 4.15.8, design record 25 section 26 item 1): why the controller
+ * was last reset and where it stands, beside the holds request and for the
+ * same reason - a new query version would make every installed reader of
+ * version 3 refuse the whole answer. CTL_CODE(FILE_DEVICE_UNKNOWN 0x22,
+ * 0xA4B, METHOD_BUFFERED, FILE_ANY_ACCESS); no input; no access rights;
+ * answered at every logging level.
+ *   - output buffer < XHR_HDR_BYTES: STATUS_BUFFER_TOO_SMALL, nothing;
+ *   - output buffer < XHR_MAX_BYTES: STATUS_SUCCESS with the header alone,
+ *     XHR_O_BYTES the size to ask for (XHR_LIFE_BYTES from a driver that
+ *     serves the lifetime part), XHR_F_LIFETIME clear;
+ *   - output buffer < XHR_LIFE_BYTES: STATUS_SUCCESS, the earlier whole
+ *     answer: the header, XHR_REC_MAX records of XHR_REC_BYTES (newest
+ *     first, XHR_O_RECORDS of them valid, the rest zero), then XHR_COUNTS
+ *     words of the counts by reason; XHR_O_BYTES XHR_MAX_BYTES,
+ *     XHR_F_LIFETIME clear;
+ *   - otherwise STATUS_SUCCESS, the whole answer: the earlier one, then the
+ *     lifetime part (task 50.32), XHR_O_BYTES XHR_LIFE_BYTES,
+ *     XHR_F_LIFETIME set.
+ * A controller not started answers the header with XHR_F_STARTED clear and
+ * nothing else filled but the lifetime part. A driver from before it
+ * answers STATUS_INVALID_DEVICE_REQUEST. Read with no lock but the
+ * snapshot's windows' rule: each word whole, the set copied at one moment
+ * under the controller lock, the lifetime part and XHR_F_STARTED inside
+ * the door gate that every start and stop holds.
+ *
+ * The lifetime part (task 50.32; design record 25 section 27 item 4): the
+ * system time at the image's DriverEntry, its two words as returned, and
+ * the image-wide number of the start this FDO last began (CountersStart,
+ * 0 for none). Two answers whose three words differ were made by
+ * different starts; equal words do not show the same start. A reader of
+ * the earlier layout asks with XHR_MAX_BYTES and keeps its whole answer.
+ */
+#define XHR_IOCTL               0x0022292CUL
+#define XHR_MAGIC               0x52434858UL    /* 'XHCR' */
+#define XHR_VERSION             1UL
+#define XHR_HDR_BYTES           64UL
+#define XHR_O_MAGIC             0UL
+#define XHR_O_VERSION           4UL
+#define XHR_O_BYTES             8UL     /* the whole answer */
+#define XHR_O_FLAGS             12UL    /* XHR_F_* */
+#define XHR_O_TERMINAL          16UL    /* 0 running, 1 owed, 2 and 3
+                                           latched, 4 and 5 contained, 6
+                                           the lost message */
+#define XHR_O_RECOVERIES        20UL    /* recoveries begun, this start */
+#define XHR_O_CALLS             24UL    /* reset requests, this start */
+#define XHR_O_INVOLVED          28UL    /* records naming the newest's place */
+#define XHR_O_ISO_VALUE         32UL    /* XhciDeviceIsolation read */
+#define XHR_O_ISO_LISTED        36UL
+#define XHR_O_ISO_APPLIES       40UL
+#define XHR_O_RETRY_VALUE       44UL    /* XhciFailedRetrySec in effect:
+                                           0, or 2 to 600 (task 50.31) */
+#define XHR_O_RETRY_TRY         48UL    /* tries since the backing off last
+                                           ended, held at 65534; the next
+                                           try's number is this plus 1 */
+#define XHR_O_RETRY_NEXT_S      52UL    /* about, seconds (the nominal
+                                           tick); 0 due; XHR_NONE none */
+#define XHR_O_CLOCK             56UL    /* the tolerance clock, ticks */
+#define XHR_O_RECORDS           60UL    /* valid records, newest first */
+#define XHR_F_STARTED           0x01UL
+#define XHR_F_ISOLATION         0x02UL  /* the isolation fields are served */
+#define XHR_F_RETRY             0x04UL  /* the retry fields are served */
+/* Task 50.31 (design record 38 sections 15.1 and 15.2, the owner's
+ * decision of 2026-11-19): with XHR_F_RETRY, the driver has seen this
+ * controller and will not try it again by itself (EXCLUDED: its common
+ * buffer pinned, closed off, or its interrupts lost). */
+#define XHR_F_RETRY_NEVER       0x08UL
+#define XHR_F_LIFETIME          0x10UL  /* the lifetime part follows the
+                                           counts (task 50.32) */
+#define XHR_NONE                0xFFFFFFFFUL
+#define XHR_REC_MAX             4UL
+#define XHR_REC_BYTES           36UL
+#define XHR_R_REASON            0UL     /* XHCI_WHY_* (xhci_tol.h) */
+#define XHR_R_EXTRA             4UL
+#define XHR_R_SLOT              8UL
+#define XHR_R_ROOT              12UL    /* root port, 0 none named */
+#define XHR_R_ROUTE             16UL    /* Route String */
+#define XHR_R_VIDPID            20UL    /* (idVendor << 16) | idProduct */
+#define XHR_R_CLOCK             24UL    /* the tolerance clock at it */
+#define XHR_R_RECOVERIES        28UL    /* recoveries begun before it */
+#define XHR_R_FLAGS             32UL    /* XHR_RF_* */
+#define XHR_RF_LATCH            0x01UL  /* the record named at the latch */
+#define XHR_COUNTS              26UL    /* XHCI_WHY_COUNTERS */
+#define XHR_O_COUNTS            (XHR_HDR_BYTES + XHR_REC_MAX * XHR_REC_BYTES)
+#define XHR_MAX_BYTES           (XHR_O_COUNTS + XHR_COUNTS * 4UL)
+#define XHR_O_LIFE_TIME_LO      XHR_MAX_BYTES           /* 312 */
+#define XHR_O_LIFE_TIME_HI      (XHR_MAX_BYTES + 4UL)   /* 316 */
+#define XHR_O_LIFE_START        (XHR_MAX_BYTES + 8UL)   /* 320 */
+#define XHR_LIFE_WORDS          3UL
+#define XHR_LIFE_BYTES          (XHR_MAX_BYTES + XHR_LIFE_WORDS * 4UL)
+#define XHR_REC_WORDS           9UL     /* one record's words, as passed in */
+#define XHR_TICK_MS             100UL   /* XHCI_TOL_TICK_MS */
+
 #endif /* XHCI_QRY_H */

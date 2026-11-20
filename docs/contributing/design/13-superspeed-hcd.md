@@ -417,7 +417,14 @@ removal settles every port from whatever state it is in, and the PDOs are
 reported missing. After a reset the device objects go without commands and
 the ports are rescanned; a port waiting in `Gone` keeps waiting for the PDO
 it reported, by that PDO's serial, so a later device on the port is not
-enumerated before the earlier PDO is deleted. On the root hub's removal a
+enumerated before the earlier PDO is deleted. (Task 50.30, design record
+17 section 4.15.4, where `XhciDeviceIsolation` applies: an Address Device
+the controller aborts cleanly fails
+the attempt with the cause `UNANSWERED`, its one retry follows a port
+reset, and its
+last failure holds the place, so a rescan after a recovery does not try
+the device again; a place is released by its unplug or a controller
+start.) On the root hub's removal a
 powered controller gives each slot back with Disable Slot, and an unpowered
 one leaves the records for its first powered pass to disable; every port then
 starts again from `Empty` when the root hub starts again.
@@ -3995,6 +4002,13 @@ stream handle, which the page says Windows 8's stack does not support, are
 served as the private interface serves them; a select, `RESET_PORT` and
 removal as there.
 
+A Windows 8 client never declares record 17 section 4.12.10's stream
+recovery (`OPEN_STATIC_STREAMS` has no field for it), so on every
+controller, the Intel 7 Series one that section flags included, its
+endpoints take the paths above unchanged (the owner's choice of
+2026-11-15). Only the private open's `Flags` (`xhci98_streams.h`) carries
+the declaration and the bus's acknowledgment.
+
 **`URB_FUNCTION_CLOSE_STATIC_STREAMS` (`0x36`)**, a `_URB_PIPE_REQUEST`
 with the endpoint's handle: `Length` at least
 `sizeof(struct _URB_PIPE_REQUEST)` (0x18 x86, 0x28 amd64) before
@@ -4323,6 +4337,110 @@ which pipe and stream each used, whether `USBD_SHORT_TRANSFER_OK` was set
 (bit 1 of the flags byte) and what each ended with - and any
 `xfer.short.err`. Pure half: `test\test_usbdx.c`, `test_notes`; counter
 places: `test\test_snap.c`.
+
+#### 6.13.12 A short read on a 0x602 PDO is a success (task 50.25, 2026-11-16)
+
+**Why.** Under this bus Windows 8's `uaspstor` started a UAS drive with
+streams and no disk appeared, on 8 x64 and, carried back with Windows 8's
+USB 3 stack by a third party, on 7 x64: the field report of 6.13.11,
+reproduced in the emulator once QEMU's `usb-uas` could run that driver
+(the usb4-emu switches `x-bot-alt0` and `x-clear-halt`; `runs/run-50.md`,
+"50.25"). The notes 6.13.11 added name the cause (runtime, this driver's
+log at level 3): every read `uaspstor` posts on the status pipe is 1024
+bytes with `TransferFlags` 01 - IN, without `USBD_SHORT_TRANSFER_OK` -
+and the drive's sense IU is 16 bytes, so the bus completed each one
+`USBD_STATUS_ERROR_SHORT_TRANSFER` (`80000900`; `xfer.short.err=01050201`,
+`uas.urb.len=04000010`, `uas.urb.st=80000900`, `XferShortRefused` 7).
+`uaspstor` retried; no command ever completed and no disk was reported.
+The owner's decision (2026-11-16): fixed in `3.6.0.0`, as the first
+change of task 50.25.
+
+**What the documentation says.** Microsoft's reference page
+"_URB_BULK_OR_INTERRUPT_TRANSFER (usb.h)" (learn.microsoft.com, read
+2026-11-16) defines `USBD_SHORT_TRANSFER_OK` as "set to direct the host
+controller not to return an error when it receives a packet from the
+device that is shorter than the maximum packet size for the endpoint",
+and says of EHCI and of UHCI and OHCI what the next page says. That page
+names no xHCI rule; another does. "USB Bandwidth Allocation"
+(learn.microsoft.com, the USB pages, read 2026-11-16), section "USB
+transfer and packet sizes", under "Maximum packet size restriction on read
+transfer buffers", verbatim as published:
+
+- "On xHCI host controllers, USBD_SHORT_TRANSFER_OK ignored for bulk and
+  interrupt endpoints."
+- "On EHCI host controllers, USBD_SHORT_TRANSFER_OK is ignored for bulk
+  and interrupt endpoints."
+- "On UHCI and OHCI host controllers, if USBD_SHORT_TRANSFER_OK isn't set
+  for a bulk or interrupt transfer, a short packet transfer halts the
+  endpoint and an error code is returned for the transfer."
+
+**What Windows 8's stack does** (runtime, read in QEMU's trace and in the
+guest, the same drive and the same client; no binary read): under Windows
+8's own `USBXHCI`, `UCX01000` and `USBHUB3` on 8 x64, and under the same
+stack carried back to 7 x64, those 16-byte status reads complete as
+successes: the disk appears and every copy compares equal.
+
+**What this bus did.** The controller ends such a TD with Short Packet, a
+success, so the endpoint is not halted and no reset is owed; only the
+URB's status was rewritten (`HcdIoDeferred`, the rule since the HCD
+began, Windows 2000 DDK `usbdi.h:282-284`), and the next transfer ran as
+usual - the UHCI and OHCI answer without their halt.
+
+**The rule.** On a PDO whose `GUID_USBD_INTERFACE_V1` was answered at
+`0x602`, every bulk or interrupt IN transfer submitted from then on
+completes as a success when it ends short, whatever
+`USBD_SHORT_TRANSFER_OK` says (`XhciUsbdxShortOk`, pure; the endpoint's
+direction decides IN, as it does for the map; `hcdFill`). Every other
+transfer is unchanged: the flag allows a short end as before, and without
+it a short end is `USBD_STATUS_ERROR_SHORT_TRANSFER`. Control and
+isochronous transfers are untouched. `XferShortRefused` and
+`xfer.short.err` keep their meaning: they count only the refusals that
+remain.
+
+The rule is the PDO's, not a client's. The bus cannot tell which driver
+in the PDO's stack sent a URB, so once any driver on that stack - a
+function driver or a filter - has queried the V1 interface, every later
+bulk or interrupt IN on the PDO gets the rule, a legacy function driver's
+under such a filter included. No in-box stack of that shape is known;
+strict attribution per client would need a mark the URB does not carry.
+The mark is `Usbdx602` (`hcd.h`), set when the query is answered (6.13.2)
+and cleared at the device's `IRP_MN_REMOVE_DEVICE` with the notes
+(`hcdPdoNotesReset`). The handle's `Unregister` does not clear it:
+`USBSTOR` on 8 opens a handle at its start and closes it (6.13.3), and
+its PDO's later reads are a `0x602` stack's still.
+
+**Whose PDOs change.** The query is sent only by a driver built on
+Windows 8's `usbdex` (`USBD_CreateHandle`): on 8 and 8.1 `uaspstor`,
+`USBSTOR` and KMDF clients created "WithParameters" (`winusb` among them;
+6.13.3), on 10 those and `USBAUDIO` (6.14.2), and a driver built with that
+kit and carried back to an earlier system, such as the carried-back
+`uaspstor` on 7. `hidusb`, the `usbaudio` of 8 and 8.1, `usbccgp` (not used
+under this bus) and the class drivers of 98 SE to 7 never send it: 6.13.4's
+byte scan of the 235 files of 98 SE, ME, 2000 SP4, XP SP3, XP x64, Vista
+and 7, NUSB 3.3 and 3.6 and SweetLow's packs finds the GUID in none, and
+this package's own drivers (`xhciuas.sys`, the hub, the composite parent)
+do not ask it. Reach is by the drivers on the PDO, not by the system: a
+third-party driver built with Windows 8's kit is reached wherever it runs.
+Each PDO that changes gets the answer Microsoft's page gives for xHCI and
+that Windows 8's own stack was seen to give.
+
+**Why not wider.** Microsoft's xHCI and EHCI sentences would also support
+completing every client's short read as a success, which is what Windows
+2000 to 7 give a client on an EHCI controller. That would change the
+answer for clients on 98 SE to 7 that this bus has served since `2.0.0.0`
+(USBSTOR, this package's xhciuas, third-party drivers), some of which may
+rely on the error; no reading here needs it, so it is left as it is.
+
+**The vectors** (`test\test_usbdx.c`, `test_short_ok`): all sixteen
+combinations of the flag, the direction, bulk or interrupt, and the PDO's
+mark, and five named cases (a legacy PDO's bulk IN without the flag
+refused as before; a `0x602` PDO's bulk IN allowed; its control or
+isochronous IN and its OUT unchanged; the flag alone).
+
+**Legs** (`runs/run-50.md`, "50.25"): `uaspstor` on this bus on 8 x64, the
+disk present and a copy-compare; the carried-back `uaspstor` on 7 x64;
+USBSTOR and xhciuas on XP and 7 unchanged (no change in `xfer.short.err`,
+the same compare results).
 
 ### 6.14 Windows 10: what 22H2 asks of the bus, read again (task 43.33 (a) and (b), 2026-10-22; draft)
 
@@ -4765,6 +4883,394 @@ As 6.12.11's list for 8, read for 10 (each row's label is its reading's):
    5.12) without a guest. **Decided 2026-10-22 (owner): the documented
    policy is accepted**, the guest is not built, and 43.32 is closed with
    its two TCG machines (record 23 section 5.12, "Settled").
+
+### 6.15 The status a cancelled URB carries (task 50.26, 2026-11-16)
+
+Status: design reviewed and accepted 2026-11-16; built on branch
+`w50-cancelst`, its legs in `runs/run-50.md`, "50.26"; revised
+2026-11-17, before the merge, so that only the fields a completion wrote
+are encoded (section 6.15.3). The owner's decision of 2026-11-16
+(roadmap-usb4 50.26): in this phase, a registry value in the form of the
+other settings chooses the status a cancelled transfer's URB and its
+isochronous packets carry. After the readings of section 6.15.6 the owner
+decided, the same day: the name `XhciCancelStatus` stands; its default is
+`1`, each system's own stack's value - L on 98 SE and ME, as before,
+and E on 2000 and later; for 2000, whose own stacks give both, E; and no
+added USB 2.0 stack on 98 SE is looked for.
+
+#### 6.15.1 What is known
+
+Two values carry the one name `USBD_STATUS_CANCELED`. Call them L and E:
+
+| | Value | Where it is defined | `USBD_SUCCESS` | `USBD_ERROR` | `USBD_HALTED` |
+|---|---|---|---|---|---|
+| L | `0x00010000` | Windows 98 DDK `INC_WIN98_USBDI.H:312`; Windows 2000 DDK `usbdi.h:312` | true | false | false |
+| E | `0xC0010000` | WDK 7.1 `inc\api\usb.h:472` | false | true | true |
+
+The macros are the same in both generations (2000 DDK `usbdi.h:193`,
+`:205`, `:211`; WDK 7.1 `usb.h:318`, `:330`, `usbdi.h:43`); which header
+first carried E is not established from the kits here. `xhci98.sys` gives
+L on every system (`HCD_USBD_CANCELED`, `hcd.h:226`;
+`XHCI_USBD_STATUS_CANCELED`, `xhci_xfer.h:103`; `XHCI_PIPE_USBD_CANCELED`,
+`xhci_pipe.h:797`). usbport of 2000 SP4 and NUSB selects E when it cancels
+a transfer itself (static, `usbport-miniport-abi.md`, the cancellation
+read beside `CompletedLength`), and a probe above NUSB's USB 2.0 stack on
+98 SE read E at run time (50.17's legs and a sibling project's), where the
+same probe above `xhci98.sys` `3.5.0.0` read L. The IRP was
+`STATUS_CANCELLED` in both of those readings, though not on every stack:
+the old UHCI stacks complete a transfer ended by `ABORT_PIPE` with
+`STATUS_SUCCESS` (section 6.15.6). Nothing is reported from the field.
+
+What a client does with the URB status decides whether the value matters:
+one that tests the IRP first, or `USBD_SUCCESS` after a failed IRP, sees no
+difference; one that compares with one header's constant, takes
+`USBD_SUCCESS` alone, or reads an isochronous packet's status, can. This
+project's own clients are of the first kind: `xhciuas.sys` requires a
+successful IRP and `USBD_SUCCESS` (`uas_xport.c:1183`, `uas_fdo.c:77`),
+the bus's composite request does the same (`hcd_urb.c:3678`), and the hub
+and enumeration paths take only an exact success (`hcd_hub.c:1598`,
+`hcd_enum.c:1647`); none compares with either cancelled value.
+
+#### 6.15.2 The setting
+
+`XhciCancelStatus`, a `DWORD` in the controller's key or machine-wide in
+`Services\USB` (the machine-wide value wins, as for every value:
+`hcdReadDword`, `hcd_ctl.c`), read once in `hcdReadValues` at each start
+of the controller, so a change takes effect at its next start:
+
+- `1`, the default (owner, 2026-11-16): each system's own stack's value,
+  from section 6.15.6's readings: L on 98 SE and ME, E on 2000 and
+  later.
+- `0`: L on every system, as every release before `3.6.0.0`.
+- `2`: E on every system.
+- Absent, another type, or any other number: the default.
+
+The policy is `XhciPipeCancelPick` (`xhci_pipe.c`), given whether the
+value was read as a `DWORD`, the value, and whether the system is NT,
+told by `IoIsWdmVersionAvailable(1, 0x10)`, the test the driver makes
+everywhere else for it (no new detection). Mode `1`'s readings are data
+in one place, the two-row table `xhciPipeCancelOwn` there (98 SE and ME;
+2000 and later), so a later reading or decision changes no logic. A
+machine updated from `3.5.0.0` has no value: the update's INF writes `1`
+(the no-overwrite flag writes a value that is absent), and the driver
+reads absent as `1` too, so the effective value stays L on 98 SE and ME
+and becomes E on 2000 and later. The settings contract, as every value of
+the driver has one:
+
+- **The INFs**: both write it at `1` with the no-overwrite flag
+  (`0x00010003`), in the controller sections after `XhciCommandCheck`
+  (`xhci98.inf`'s 9x and NT sections, `xhci98-amd64.inf`'s), so an
+  update keeps a value set; the INF gate requires the row at `1` on every
+  path (`check-inf.ps1`'s table, `Since` `3.6.0.0`), with its footprints
+  and self-tests.
+- **The installer** (`xhciinst/inst_core.c`, after `XhciCommandCheck`,
+  group "Advanced: faults and checks"): not asked by the console
+  questions, `0` to `2` accepted by `/set` and the Settings dialog
+  (`Settable` 0x7), written machine-wide (`INST_LOC_MW`) like every value
+  there; its meaning, its caution (read at the controller's start, so a
+  restart; `0` and `2` for a driver that misbehaves at `1`) and one label
+  per value, all the owner's (section 6.15.9): `1` as each Windows' own
+  USB stack reports it, `0` the earlier value everywhere, `2` the later
+  value everywhere.
+- **XHCITR** (`xhcitr/tr_set.c`, after `XhciCommandCheck`): the USB tab's
+  advanced view, `TRS_AP_CTRL` (taken when the controller starts again),
+  `TRS_EFF_LIST` over `0` to `2` (any other number is read as the
+  default), `1` when absent and as installed; its labels are the
+  installer's (`instValues[]`).
+- **tuning.md**: the table's row (minimum `0`, maximum `2`, `1` when
+  absent and as installed) and a section of its own, saying that it is
+  read when the controller starts, so the controller is restarted after a
+  change; the machine-wide value wins, as the page says of every value.
+
+The start notes it once (`urb.cancel.value`: the value read, or
+`FFFFFFFF` for none or another type; `urb.cancel.out`: the status chosen).
+No counter word is added: the choice is fixed for the start and the log
+lines carry it; the snapshot's counters are unchanged (block of 326
+words). The chosen status is also copied into each device PDO when the
+PDO is created and when a start's enumeration revives a dormant one, so a
+PDO whose controller is gone (an orphan, `Controller` NULL, `hcd_pdo.c`)
+still encodes with the value it was started under.
+
+#### 6.15.3 One status inside, encoded at the completion
+
+Inside the driver nothing changes: every producer keeps the canonical L,
+the transfer engine and the pure core never read the setting, and the
+abort mechanism is as it is (`HCD_XFER_CANCEL_STATUS`: a record marked
+`CancelRequested` ends with the abort's own `CancelStatus` - a resume's
+`DEV_NOT_RESPONDING`, a departure's `DEVICE_GONE` - and with L only when
+that is 0).
+
+The value is changed in one place, at the outward boundary: just before
+each `IoCompleteRequest` that can complete a URB IRP of a device PDO.
+Those are the seven sites task 49.29's per-request log already marks with
+`HCD_QEMU_URB_OUT` (`hcd_cfg.c:272`, `:6992`; `hcd_entry.c:66`;
+`hcd_io.c:3119`, `:3652`, `:3918`, `:3980`). The macro becomes
+`HCD_URB_OUT` in every flavour and calls `HcdUrbOut` (`hcd_urb.c`), which
+for a URB IRP at a device PDO (the test `hcdQemuUrbOf` makes today), at
+the six sites whose own path wrote the URB's fields (`ours`, below; not
+`hcd_entry.c:66`), rewrites L to the PDO's chosen status in the URB header, and, for
+`URB_FUNCTION_ISOCH_TRANSFER`, in each packet the URB's own length holds
+(`HcdIoIsoRefused`'s bound); every other status, the lengths and
+`ErrorCount` are left as they are; then, in the qemu flavour, it writes the
+log line as today, so the log shows what the client receives. Where the
+chosen status is L (`0`, and `1` on 98 SE and ME) it returns before
+touching the URB. The decision and the walk are one pure
+function, `XhciPipeUrbCancelOut` (`xhci_pipe.c`), given whether the IRP
+is a URB IRP, whether it is at a device PDO, whether the completion wrote
+the fields (`ours`), the URB, the PDO's value and the pointer width;
+`HcdUrbOut` only reads the first two from the IRP's
+current stack location, after checking that `CurrentLocation` is one of
+the IRP's own (1 to `StackCount`), and `hcd_urb.c` asserts the URB
+layout the walk uses (`FIELD_OFFSET` of the header's `Length`,
+`Function` and `Status`, and of the isochronous URB's `NumberOfPackets`,
+`ErrorCount` and `IsoPacket`, per pointer width) against the DDK's. The rewrite maps only L, so it is
+idempotent, and an IRP status is never changed.
+
+Encoding at the completion rather than at each writer is chosen because
+the URB is written early on some paths and read back before it completes:
+`HcdIoRefuseLater` writes the header when it queues the refusal and the
+tick's DPC derives the IRP status from it (`hcd_io.c:3975`); a held
+request's header says `DEVICE_GONE` until its release writes L. With one
+canonical value until the last moment, those read-backs are unchanged.
+
+Only what the completion wrote is encoded (revised 2026-11-17, before the
+merge). L is a client's value too: a client that reuses the URB of a
+cancelled transfer hands it in with L still in its header and packets, and
+a completion that does not write them would otherwise turn the client's
+own L into E. Of the seven sites, six complete URBs whose fields their own
+path wrote: the done list writes the header (`hcd_io.c:3026`) and, through
+`hcdIsoComplete`, every packet of an isochronous URB, whose
+`NumberOfPackets` the dispatch accepted only within its `Length`
+(`hcd_urb.c:608`), so every packet the walk can reach; the deferred
+refusals (`HcdIoRefuseLater`, `hcdRefusedCancel`, `hcdRefusedDpc`) write
+the header, and `HcdIoIsoRefused` the packets within the walk's own bound;
+a held request's release writes the header, its packets written before it
+was held, by the drain or by `HcdIoIsoRefused`; and `hcdCfgComplete`
+writes the header of every URB it completes, none of them isochronous
+(`hcd_cfg.c:6992` completes no URB at all). The seventh, `HcdCompleteIrp`
+(`hcd_entry.c:66`), completes what the dispatch refuses or answers at
+once: `hcdUrbComplete`'s refusals write the header with an invalid-request
+status, the answers write success, and some refusals write nothing - the
+composite parent's unsupported request (`HcdCompositePdoInternalIoctl`),
+a closing PDO, a request without a URB; it writes no packet, and none of
+its callers writes L (its `STATUS_CANCELLED` completions are of
+idle-notification IRPs, not URB IRPs). So `HcdUrbOut` takes `ours`:
+`HCD_URB_OUT` passes 1 at the six sites, `HcdCompleteIrp` passes 0 and so
+only writes the qemu flavour's out line, and the pure function returns at
+once when `ours` is 0. Of the three ways to be right, this is the
+smallest: keeping the client's fields at each refusal would touch every
+refusal that ends in `HcdCompleteIrp` and every one added later, and
+marking each field as written would add a mark to every writer, whereas
+the sites already divide at one function. A new completion site of a URB
+IRP whose path writes L must use `HCD_URB_OUT`, never `HcdCompleteIrp`.
+
+Two internal changes go with it, so that both values are taken as
+cancelled wherever the driver tests one:
+
+- A pure predicate, `XhciPipeUsbdIsCancel` (`xhci_pipe.c`), true for L and
+  E, used at `hcdCfgComplete`'s URB-less branch (`hcd_cfg.c:266`),
+  `HcdBotXferEnd`'s classification (`hcd_bot.c:333`) and
+  `hcdIsoComplete`'s whole-URB test (`hcd_io.c:1599`). Today each sees L
+  only; the predicate keeps them right whichever value reaches them.
+- `XhciPipeNtStatus` (`xhci_pipe.c:1768`) maps E to `STATUS_CANCELLED` as
+  it maps L; today E falls to the error-class default,
+  `STATUS_UNSUCCESSFUL`.
+
+#### 6.15.4 Every path, what it writes today, and where it is encoded
+
+| Path | Function | Writes today | Leaves through |
+|---|---|---|---|
+| Ordinary completion, bulk, interrupt, control on a ring, staged and promoted chunks | the done list's loop in `hcd_io.c` (header at `:3026`, IRP at `:3117`) | L from `HCD_XFER_CANCEL_STATUS` (`:3003`), from the record's (`XhciXpipeRecStatus`, `:2962`), from a stopped TD's event (`xhci_xfer.c:261`, `:266`) or a staging end (`hcdStageMustEnd`, `hcd_stage.c:658`, `:660`) | `hcd_io.c:3119` |
+| Isochronous packets | `hcdIsoComplete` (`hcd_io.c:1564`) after `XhciXferIsoFinalise` (`xhci_xfer.c:4129`) | answered packets their own status; unanswered ones the transfer's, L when stopped; `ErrorCount` the packets not successful | `hcd_io.c:3119`, packets rewritten there |
+| A failure before the ring had it, a refusal, a waiting IRP flushed | `HcdIoRefuseLater` (`hcd_io.c:3873`) from `hcdRefuse`, `hcdWaitingRefuse`, `HcdIoHoldUnreadable`, `hcd_cfg.c:476` | header and packets (`HcdIoIsoRefused`) at the queueing | `hcd_io.c:3980` (the tick) |
+| A refusal cancelled before its tick | `hcdRefusedCancel` (`hcd_io.c:3903`) | L, packets L | `hcd_io.c:3918` |
+| A refusal whose IRP was cancelled at the tick | `hcdRefusedDpc` (`hcd_io.c:3926`) | L, packets L | `hcd_io.c:3980` |
+| A held request of a departed device, released or cancelled | `hcdParkedComplete` (`hcd_io.c:3646`) | header L; packets as the drain wrote them (answered as answered, the rest `DEVICE_GONE`, record 13 section 18) | `hcd_io.c:3652`; its `DEVICE_GONE` packets stay |
+| Configuration, interface, control on the thread, a deferral cancelled | `hcdCfgComplete` (`hcd_cfg.c:250`) | the thread's status (L from `hcd_cfg.c:321`, `:339`, `:352`, `:420`) | `hcd_cfg.c:272` |
+| Streams opened or closed | `hcdCfgStreamsRequest` (`hcd_cfg.c:6954`), a request of this bus's own interface, not a URB | an IRP status only | `hcd_cfg.c:6992`, not rewritten |
+| Refused or answered at the dispatch | `hcdUrbComplete` and `HcdCompleteIrp` (`hcd_urb.c:250`, `hcd_entry.c:62`) | invalid-request statuses or success, never L; some refusals no header; never a packet | `hcd_entry.c:66` with `ours` 0: logged, not rewritten |
+| A held request of a departed device claimed at its PDO's report, on 2000 and later (task 50.28, section 10.5.3) | `HcdIoGoneFinish` (`hcd_io.c`) | `DEVICE_GONE`: the header as `HcdIoPark` wrote it, packets as the drain wrote them; `CANCELED`: as `hcdParkedComplete` | `HCD_URB_OUT`, `ours` 1; its `DEVICE_GONE` header stays |
+
+No other `IoCompleteRequest` of the bus completes a URB IRP (the others are
+power, door and hub-FDO IRPs: `hcd_power.c`, `hcd_susp.c`, `hcd_door.c`,
+`hcd_hubfdo.c`). A new completion site of a URB IRP must use
+`HCD_URB_OUT`, as it must today for the qemu flavour's log; the macro's
+comment says so.
+
+#### 6.15.5 What is left alone
+
+- When and by whom each request completes: no completion moves, no new
+  lock or IRQL, no completion routine added; issue 25's order (the held
+  requests completed inside ME's REMOVE, section 18) is untouched.
+- An abort's own status: `DEV_NOT_RESPONDING`, `DEVICE_GONE` and every
+  other non-cancel status are not L and are never rewritten.
+- The IRP's status, `Information`, `TransferBufferLength`, packet lengths
+  and `ErrorCount`.
+- The internal constants, which stay L (the miniport ABI note's "do not
+  fix either constant" stays true inside).
+- `xhciuas.sys`, `xhcicm.sys`, the hub and enumeration paths: unchanged,
+  for the reasons of section 6.15.1. The bus's own composite request reads
+  the encoded value after a failed IRP and is unaffected at either value.
+- A URB the bus refuses or answers at the dispatch (`HcdCompleteIrp`)
+  keeps what its client put in the fields the bus did not write there -
+  the header of a refusal with an IRP status only, and every isochronous
+  packet - L included (section 6.15.3, "Only what the completion wrote").
+  The deferred refusals write their headers and packets.
+
+#### 6.15.6 What each system's own stack returns (runtime, 2026-11-16)
+
+Mode `1` is defined from these readings, taken in QEMU guests with no
+`xhci98.sys` by a probe driver (a sibling project's, used unchanged,
+bound by hardware id to QEMU's `usb-mtp`, `46F4:0004`, at Full Speed,
+hot-plugged on each controller) above each system's own stack: a pending
+bulk IN and a pending interrupt IN, each ended by `IoCancelIrp` and by
+an `ABORT_PIPE` URB, with the IRP status, the URB status and the bytes
+(0 in every row). Each reading was taken twice per controller, the same
+both times, on 2000 to 10 and on the UHCI stacks of 98 SE and ME; once on
+their OHCI stacks. The stack files were read in each guest:
+
+| System and its own stack | Controller | IRP, cancel | IRP, abort | URB status, both ways |
+|---|---|---|---|---|
+| 98 SE: `UHCD.SYS`, `USBD.SYS`, `USBHUB.SYS` 4.10.2222 | UHCI | `C0000120` | `00000000` | L |
+| 98 SE: `OPENHCI.SYS` 4.10.2222 | OHCI | `C0000120` | `C0000120` | L |
+| ME: `UHCD.SYS`, `USBD.SYS`, `USBHUB.SYS` 4.90.3000 | UHCI | `C0000120` | `00000000` | L |
+| ME: `OPENHCI.SYS` 4.90.3000 | OHCI | `C0000120` | `C0000120` | L |
+| 2000 SP4: `uhcd.sys` 5.0.2195.6655 (the old USBD stack) | UHCI | `C0000120` | `00000000` | L |
+| 2000 SP4: usbport 5.0.2195.6681, `usbehci` 5.0.2195.6709 | EHCI | `C0000120` | `C0000120` | E |
+| XP SP3: usbport, `usbuhci`, `usbehci` 5.1.2600.5512 | UHCI, EHCI | `C0000120` | `C0000120` | E |
+| Vista SP2: usbport 6.0.6002.18005 | UHCI, EHCI | `C0000120` | `C0000120` | E |
+| 7 SP1: usbport 6.1.7601.17514 | UHCI, EHCI | `C0000120` | `C0000120` | E |
+| 8.1: `USBXHCI`, `ucx01000` 6.3.9600.17393; usbport 6.3.9600.17195 | xHCI; EHCI, UHCI | `C0000120` | `C0000120` | E |
+| 10 22H2: `USBXHCI` 19041.2546; usbport 19041.1 | xHCI; EHCI, UHCI | `C0000120` | `C0000120` | E |
+
+The dividing line is the stack's generation, not the system: the old
+UHCD/OpenHCI and USBD stacks give L, usbport and USBXHCI give E. Earlier
+the same day the probe read E above the USB 2.0 stack added to 98 SE
+(NUSB's EHCI) and L above `xhci98.sys` `3.5.0.0`. Every abort request's
+own IRP completed `00000000` (its URB status was not logged). Two side
+readings, recorded and not imitated: after an `ABORT_PIPE` the old UHCI
+stacks complete the transfer's IRP `STATUS_SUCCESS` with its URB at L
+(OHCI, usbport and USBXHCI give `STATUS_CANCELLED`); on 2000's `uhcd` the
+abort's IRP completes before the transfer, on every usbport and USBXHCI
+stack after it. And an unplug with a bulk read pending gives, per stack:
+
+| Stack | IRP status | URB status |
+|---|---|---|
+| 98 SE, ME and 2000 `uhcd` (UHCI) | `C000009C` | `80000800` |
+| 98 SE and ME `OPENHCI` | `C0000120` | L |
+| usbport UHCI on XP, Vista, 7, 8.1, 10 | `C0000001` | `C0000005` |
+| 2000 and XP usbport EHCI | `C000009D` | `C0007000` |
+| Vista, 7, 8.1, 10 EHCI; 8.1 and 10 `USBXHCI` | `C0000120` | E |
+
+This task changes only the cancelled status; the bus's own statuses at an
+unplug (section 10.5) are unchanged. Not read: x64 builds
+(x86 guests only: the same stack's x86 build is taken for each x64
+system, 5.2's usbport for XP's and 8's USBXHCI for 8.1's, an inference);
+a pending control request (the device answers at once); an unplug with an
+interrupt read pending; other client drivers (one client observing); and
+isochronous requests, so for packets the comparison is unmeasured. Kits
+and logs on development host A: `E:\xhci98-vm\p50\cancelst\m9x\` (98 SE
+and ME: `runs\`, `e9-*.log`) and `E:\xhci98-vm\p50\cancelst\mnt\` (2000 to
+10: `<os>\debugcon-a.log`, the `bin-done` and `int-done` lines).
+
+What `xhci98.sys` gives an isochronous URB follows section 6.15.3 at
+every value: where the value chosen is L (0, and 1 on 98 SE and ME) a
+cancelled URB's header and each packet no event answered carry L; where
+it is E (2, and 1 on 2000 and later) both carry E; a packet the
+controller answered keeps its own status (success, an underrun stored as
+success, or its error), and a held request's `DEVICE_GONE` packets stay.
+Mode `1` takes the packets' value from the header's row, there being no
+separate reading. The audio legs of section 6.15.8 are the evidence for
+packets.
+
+#### 6.15.7 Host tests
+
+In `test_pipe.c`: `XhciPipeUsbdIsCancel` true for L and E and false for
+success, `DEVICE_GONE`, `DEV_NOT_RESPONDING`, `STALL_PID` and the rest;
+`XhciPipeNtStatus` giving `STATUS_CANCELLED` for both; the policy
+(`XhciPipeCancelPick`) on 98 SE and ME and on NT: L for `0`, E for `2`,
+and for `1`, absent, another type and out-of-range numbers the system's
+own value, L on 98 SE and ME and E on NT; the status encoding (`XhciPipeUsbdOut`) mapping L alone,
+idempotent, every other status, an abort's own among them, unchanged.
+The bounded encoder itself, `XhciPipeUrbCancelOut`, is driven on URB
+images inside guard bytes, on both pointer widths: not a URB IRP, not at
+a device PDO, a NULL URB, the value `0` and a PDO's zeroed copy (no byte
+changed); with `ours` 1, a mixed isochronous table (answered successes, an underrun
+stored as success, answered errors, a held request's `DEVICE_GONE`,
+unanswered L packets: only the L ones and the header change, offsets,
+lengths, `NumberOfPackets` and `ErrorCount` unchanged); a second pass
+(nothing changes); a `NumberOfPackets` above what the URB's `Length`
+holds, and one of `FFFFFFFF` (the `Length` bounds the walk); a truncated
+packet capacity (a partial packet is not one); a `NumberOfPackets` below
+what `Length` holds; a `Length` below the isochronous fixed fields (the
+header only, the counts never read); a non-isochronous URB (the header
+only, whatever lies where packets would); an abort's status in the
+header (kept); `ours` 0, a request refused at the dispatch whose client
+left L from an earlier cancelled transfer in its header and every packet
+- an unsupported isochronous request (header not written), one refused
+as malformed (header `INVALID_PARAMETER`, packets not written) and a
+bulk one - at E: not a byte changed; the same isochronous image at
+`ours` 1: the header and its four packets; every case checking the guard
+bytes and, where it says so, the count of bytes changed. The qemu log's counter
+(`XhciPipeUrbIsoCount`) is checked on the same images. The INF gate's
+self-tests, `test_inst` and XHCITR's settings test take the new row.
+
+#### 6.15.8 Legs
+
+The default `1` keeps 98 SE and ME as they were and changes 2000 and
+later, so the legs are of two kinds (the coordinator's plan of
+2026-11-16, from the owner's decisions):
+
+- **2000 SP4, XP, XP x64, 7, and 8.1 or 10: the default is the change.**
+  Each guest is read at the default and again at `0` (the earlier
+  behaviour), with HID and a pending interrupt read at a stop and an
+  unplug, storage with `usbstor` and with `xhciuas.sys` (and Windows'
+  own UAS driver on 8 and later) copy-compare and a cancel, audio start,
+  stop and unplug, a composite device, a hub unplug with devices below,
+  and standby and resume; any difference in what a class driver does
+  after a cancel - an extra reset, a stuck device, an error dialog, a
+  different removal - is reported before anything is merged. 2000 SP4 is
+  a primary target and XP does not stand in for it; its evidence is VM
+  evidence.
+- **98 SE and ME: the default is no change.** The same set at the
+  default, compared with the merged build (issue 25's audio sequence
+  above all), then a shorter set at `2`, reported as what it shows, any
+  class driver's misbehaviour there going into the texts' caution.
+- **Value `1` against `0` and `2`**, the probe of section 6.15.6 above
+  `xhci98.sys` and the qemu flavour's per-request log: the header L on 98
+  SE and ME and E from 2000 on at the default, L everywhere at `0`, E
+  everywhere at `2`. For packets the qemu flavour's out line of an
+  isochronous URB adds its `ErrorCount` and how many packets carry each
+  cancelled value (qemu flavour only, changing nothing), so an audio stop
+  or unplug reads the chosen value in the unanswered packets and the
+  answered ones unchanged.
+- **The update**, from `3.5.0.0` with no value, on 98 SE and on 7: the
+  value written `1` by the update and the effective status L on 98 SE, E
+  on 7.
+
+#### 6.15.9 The owner's decisions
+
+Decided 2026-11-16: the name `XhciCancelStatus`; the default `1`; mode
+`1` on 2000 E; no added USB 2.0 stack on 98 SE looked for (an earlier
+answer the same day made `2` the default, revised to `1` before it was
+built). The texts of the installer's table, which XHCITR shows too, the
+same day:
+
+- The meaning: "the status a cancelled USB transfer reports to its
+  device's driver: the earlier value, 0x00010000, which Windows 98 SE and
+  ME report, or the later, 0xC0010000, which Windows 2000 and later
+  report".
+- The caution, with `0` and `2`: "read when the controller starts:
+  restart it after a change. 0 and 2 are for a driver that misbehaves at
+  1."
+- The choices: `0` "the earlier value everywhere", `1` "as each Windows'
+  own USB stack reports it", `2` "the later value everywhere".
+
+tuning.md describes the same choices in its own words and, as the user
+documents name an earlier release only where an update needs it, says
+once that earlier releases reported the earlier value everywhere, so that
+after an update 2000 and later report the later one unless the value is
+`0`.
 
 ## 7. The Windows 98 export evidence (task 25.3)
 
@@ -5836,6 +6342,112 @@ system buffer is non-paged already). Answering request 1 for `usbui.dll` and
 request 3 for the tool from one dispatcher keeps the "8-entry table" refusal
 semantics.
 
+#### 8.8.1 A busy controller: the window answered without the power gate (50.32 (eject wait), 2026-11-20)
+
+**The problem** (`runs/run-50.md`, "50.32 (eject wait)"). `hcdDoorSnapshot` takes the door gate and then waits on
+the power gate, which the controller thread holds for its whole service pass (`hcdThread`, `HcdEnumService`) and an
+in-place recovery holds for its whole length (`hcdRecover`). A snapshot window asked while the thread is busy - a
+command waiting out its deadline, a recovery, up to about 21 s where the 50.30 handling applies - therefore waits
+for the thread, and while it waits it keeps the door gate, so every other door request of every process (the query,
+holds and recovery-status requests, Windows' own Advanced tab) waits behind it. Measured on 98 SE and 2000 with the
+thread held 20 s: the USB Tree's eject confirmation, asked 2 s after a `/dump` began, appeared only when the thread
+let go. Save Report and the Quick save run a snapshot child, and `3.5.0.0`'s tray read its holds through the
+snapshot every 10 s, so the cascade does not need a user to ask for a snapshot.
+
+**The change.** No window waits for the thread any longer; one asked while the power gate is held is answered from
+memory and says so.
+
+1. **Which answer carries the bit, and its value.** The snapshot header's `Status` (`XHCI_SNAPSHOT_HEADER`,
+   `src\xhci.h`), the answer that waited: `XHCI_SNAPSHOT_S_BUSY`, `0x00000040`. Taken there: `TRUNCATED` 0x01,
+   `BAD_REQUEST` 0x02, `BAD_EXTENSION` 0x04, `BAD_REGION` 0x08, `PAST_END` 0x10, `NO_MMIO` 0x20; nothing else in
+   the header changes, so the schema stays 5. Not the recovery-status answer's flags (`XHR_F_*`; 0x08
+   `RETRY_NEVER` and 0x10 `LIFETIME` are taken there since 50.31 and 50.32): that answer never waits for the
+   thread, and a flag there would tell the window nothing about a snapshot it is not taking.
+2. **Who sets it, when, under which lock.** The door, per window, under the door gate, in `hcdDoorSnapshot`, which
+   no longer waits on the power gate unbounded. It first tries the gate without waiting (`HcdPowerGateTry`, a new
+   routine beside `HcdPowerGateEnter`: one `KeWaitForSingleObject` on the gate's event with the given relative
+   time-out, 0 for no wait; any return but `STATUS_SUCCESS` - the time-out, or Windows 98's unsatisfied
+   `0xFFFFFFFF` - means not held and nothing to release). Not held, it waits up to 500 ms
+   (`HCD_DOOR_BUSY_WAIT_MS`), so a snapshot asked during an ordinary pass of a few milliseconds is not marked; still
+   not held, the window is answered busy. So that a dump of many windows during one long hold does not wait 500 ms
+   at each, the power gate counts its releases (`HcdPowerGateLeave` adds 1 to `PowerGateLeaves` before it sets the
+   event; only the holder writes it), and the door keeps the count it saw at its last busy answer
+   (`DoorBusyLeaves`, with `DoorBusyKnown`; both under the door gate; all three outside the extension a start
+   zeroes, set to 0 once when the controller object is made): a window that finds the gate held and the count
+   unchanged - the same hold - is answered busy at once, after the no-wait try. The count is read without a lock (an
+   aligned `ULONG`; a stale read, or the count wrapping to the same value, can only skip one grace wait or cost one
+   more, never grant the gate or allow a register read). "Only the holder writes" carries the existing
+   qualification of `HcdWaitEvent`: on 98 SE and ME a gate caller may go on unowned after 100 unsatisfied returns,
+   and then two parties may add to the count at once; that too can only move a grace wait. The 500 ms is the
+   grace wait, not a bound on the whole request: the door gate's own wait, the controller lock and the copy come on
+   top. Nothing is set anywhere else and nothing needs clearing: the next window that gets the gate is answered as
+   before, with no bit.
+   The readers the Tree has of this answer: `tr_snap.c`'s `dump_region` (the extension and PORTSC), `read_slots`,
+   `read_words` (contexts, trace) and `read_hcd`, which this change teaches the bit; and `log_window`,
+   `tr_snap_window`, `hold_read_path` and the legacy `log_hcd` in `xhcitr.c` and `tr_log.c`, which check selected
+   bits only and pass it through.
+3. **What a busy window holds.** The memory regions (the extension, the slots, the contexts, the trace) are copied
+   as before, under the controller lock and the door gate (which keeps a start or a stop out, so nothing they read
+   is freed). That lock does not exclude every writer: the thread writes the port records' fields without it (the
+   HCD region's own note above `hcdDoorHcd`), and a recovery rewrites extension state outside it
+   (`xhci_init.c`). A busy window is therefore taken **while those writers run**, and a record in it can mix two
+   steps of the work under way - within one window, not only between windows, and with no change of the
+   `TearDetector`, which counts neither. That is the contract of a busy window: a reading of the moment, marked as
+   such, not a consistent record; the reader says so. Registers are not read: the door's MMIO predicate is false for the window, so PORTSC answers `NO_MMIO`
+   with `BUSY` (the same refusal a controller out of D0 gets) and the HCD region's live DNCTRL word is
+   `XHCI_SNAPSHOT_HCD_NOT_READ`, as with selective suspend off. The routing record (36.3), which is copied under both
+   gates so one window never mixes two runs, is not copied: its words are `XHCI_SNAPSHOT_HCD_NOT_READ`.
+4. **What the Tree shows, and when.** The reader (`xhcitr\tr_snap.c`) admits `BUSY` beside `TRUNCATED` and
+   `PAST_END` for the slots, word and HCD regions, decodes them as before, and says once per controller that the
+   controller was busy and its records are of a moment of work under way, naming what was not read. The gate can
+   come free, or be taken, between two windows of one dump, so each register read is judged by its own window:
+   PORTSC by the PORTSC window, the live DNCTRL word and the routing record by the HCD window. Both busy, the
+   paragraph and the summary line say the registers and the routing were not read; one of them busy, they name
+   that one; neither (only a memory region was busy), they say only that the records may be mixed. The PORTSC
+   part says the controller was busy instead of "no usable register mapping"; the routing decode is skipped with a
+   line saying why. That text appears wherever the
+   snapshot's text does: `/snapshot`, `/dump`, Save Snapshot, the snapshot part of Save Report and `/report`, and
+   the Quick save's report and snapshot set. The window and the tray show nothing new: they take no snapshot of
+   their own (holds by XHH, the log by XHQ since 50.7 and revision 12), and no live "busy" indication is part of
+   this change. The guide (`xhcitr\README.TXT`) says that Save Report and the Quick save wait while a device is
+   being reset: their descriptor reads (section 8.11) still wait for the thread.
+5. **An older Tree with this driver.** Unbusy windows are the same bytes. A busy window: the reader does not wait
+   any longer; `3.5.0.0`'s and older readers refuse a slots, word or HCD window with an unknown status bit ("the
+   driver refused the read, status 00000040"), so that part of their dump is missing, and say "no usable register
+   mapping" for PORTSC. `3.5.0.0`'s tray, whose hold watch reads the HCD region and the extension through the
+   snapshot (and this Tree's fallback for a driver without the holds request, `hold_read_path`), checks only
+   `BAD_REQUEST`, `BAD_EXTENSION` and `BAD_REGION`: it takes a busy answer's hold bytes as a reading, a reading of
+   the moment (point 3), and may announce from it; it no longer holds the door gate behind the thread. The driver
+   cannot make that reader refuse the bit. **This Tree with an older driver**: the bit never comes; the reader
+   waits as before.
+6. **98 SE and ME, 2000 and later, x86 and x64.** The same code everywhere. `KeWaitForSingleObject` with a relative
+   time-out is in both import allowlists (`all`, every site) and is already used with one at PASSIVE_LEVEL on 98 SE
+   (`hcd_enum.c`, the deadline waits). On 98 SE and ME an unsatisfied `0xFFFFFFFF` return reads as busy: the window
+   is answered from memory and the gate, never owned, is not released.
+
+**Cost.** A snapshot whose PORTSC window is answered busy has no PORTSC readings, and one whose HCD window is answered
+busy has no live DNCTRL word and no routing record - when the thread is busy for the whole dump, none of them, the
+moment they would be most interesting; one taken after the thread lets go has them. A window may still keep the door gate up
+to 500 ms once per hold. The descriptor waits of section 8.11 (Save Report's strings and BOS, the details pane with
+Descriptors on, the tree read's rare qualifier and product-string reads) and a stop's or restart's wait for the
+thread are not changed: those still freeze the window or tray that asks, as before. The change lets the snapshot's
+text say what it could not read; it adds no live "busy" indication to the window.
+
+**Legs** (98 SE and 2000, the rendezvous of fault 0x23 holding the thread inside the power gate; read on 2026-11-20,
+`runs/run-50.md`, "50.32 (eject wait)"). Read: a `/dump` with its console output kept during a hold - the busy text,
+PORTSC and the routing record not read, the live DNCTRL word not read - and unheld, with the PORTSC table and the
+routing decode back and no busy text (DNCTRL there reads "not read (selective suspend off, or no MMIO)" in these
+guests, held or not); the held dump ending after one grace wait (0.57 to 0.75 s), every later window of the hold
+answered at once; the eject's confirmation asked 2 s after a held `/dump` began, shown within 2 s, on 2000 (on 98 SE
+the `/dump` and the eject started together inside the hold, and the confirmation was shown within 2 s); an eject
+confirmed while the thread was held, after a busy `/dump`, carried to "Windows has stopped" when the thread let go,
+on both; unheld, the eject's confirmation, `/report`, the icon's menus, the window and its Refresh as before;
+`3.5.0.0`'s Tree and an older build's with the new driver, held and unheld. A dump whose PORTSC and HCD windows
+differ (the gate free or taken between windows) is read by the reader's self-test only. Not read: the 2 s eject
+sequence on 98 SE, an eject confirmed while a `/dump` is still running, Save Snapshot, `/snapshot` without `/c` and
+the Quick save, held or unheld, Save Report held, overlap on SMP (the 2000 base runs one processor), 98 SE's
+unowned-gate case, which cannot be made to happen at will, and any x64 system.
+
 What does change in the tool: (a) its software-key finder, which accepts a
 key on `NTMPDriver = xhci98.sys` or the miniport's `InfSection`
 (`xhcisnap.c` about lines 1466-1640), learns the HCD INFs' section names (the
@@ -6298,6 +6910,35 @@ the USBUSER pass-through of section 8.8, which stays byte-compatible for
     The largest answer grows by 8 bytes and 255 (20,311 bytes).
   - A reader of version 3 takes versions 1 and 2; a version 2 reader
     refuses version 3 (it asks for 80 bytes and is given 64).
+
+#### 8.12.1 The holds request (roadmap-usb4 task 50.7)
+
+`IOCTL_XHCI98_HOLDS` (`xhci_qry.h` `XHH_*`, function `0xA4A`, the code
+`0x00222928`, buffered, any access, no input), asked of the same device
+as the query, answers every location's tolerance hold (record 17 section
+4.5, `XHCI_TOL_LOC.Hold`) at every `XhciLogVerbosity` value, so the USB
+Tree knows a held port with logging off (design record 25 section 24
+item 1); a hold is what the tool tells the user, not the log, as the
+query's PCI, transport and ports parts are served at every level. A
+32-byte header (magic `XHCH`, version 1, the whole size, a started flag,
+the root locations `R` - the port map's count, at most 255 - the hub
+locations `H` - 224 - and the hub locations per hub object, 14), then `R`
+bytes, root port n's hold at byte n - 1, then `H` bytes in the driver's
+hub-location order; nothing while the controller is not started. A buffer
+under 32 bytes is refused; one under the whole gets the header alone, its
+size word the size needed. `hcdDoorHolds` reads the bytes under the door
+gate with no spin lock, as the snapshot's windows read them: the thread
+writes them with none (`hcdTolHold`, the charges and observations,
+`hcd_hub.c`'s reuse), so each byte is read whole and the set is not one
+instant; memory only, no register, so a controller in D3 is not woken.
+`XhciHoldsAnswer` (`xhci_qry.c`, pure) composes it, `tr_xhh_parse`
+(`xhcitr\tr_log.c`) reads it; `test_xhq` holds both. A request of its own
+rather than a version 4 of the query: a version 3 reader (`3.5.0.0`'s
+XHCITR) refuses version 4 whole (`tr_xhq_parse`) and asks its header
+with 88 bytes, which a longer header answers with its first 64 only, so
+an older tool would lose the log, the counters, the transport line and
+the running version against this driver. A driver from before it answers
+`STATUS_INVALID_DEVICE_REQUEST`, and the tool reads the windows as before.
 
 ### 8.13 The firmware tables request (task 46.21, design record 25 section 21 item 9)
 
@@ -6921,22 +7562,34 @@ subtree rooted at the departing device, the hubs taken deepest first
    `IRP_MN_SURPRISE_REMOVAL` then `IRP_MN_REMOVE_DEVICE`, and Windows 98 sends
    `IRP_MN_REMOVE_DEVICE` alone (its out-of-sequence remove, 26-A.2). A PDO
    reported missing is deleted at its `REMOVE_DEVICE`, never before.
-3. **Stop the endpoints and park the URBs - not complete them.** Leaf first,
-   with the slots still enabled, each device's running endpoints are stopped
-   (Stop Endpoint) and every URB IRP of the departed device - queued, on the
-   ring, or waiting for a transfer record - is released from the hardware
-   and **held on its PDO**, cancellable (`HcdIoPark`, `src\hcd_io.c`). A held
-   IRP is completed `STATUS_CANCELLED` / `USBD_STATUS_CANCELED` only at one
-   of three events (`HcdIoParkedRelease`):
-   - the client cancels it;
-   - the client's ABORT_PIPE covers it. Every URB IRP is stamped at dispatch
-     with its PDO's 64-bit submission sequence (`HcdIoStamp`), and an
-     ABORT_PIPE records its own stamp as its pipe's horizon
-     (`HcdIoAbortMark`). An ABORT_PIPE on a departed PDO is answered without
-     a device record. A request at or below its pipe's horizon is completed
-     at once rather than held, so a request the teardown reaches after the
-     abort is not stranded;
-   - the PDO's stop, surprise removal or removal.
+3. **Stop the endpoints, then end the URBs or hold them, by system.**
+   Leaf first, with the slots still enabled, each device's running
+   endpoints are stopped (Stop Endpoint) and every URB IRP of the departed
+   device - queued, on the ring, or waiting for a transfer record - is
+   released from the hardware. Then (task 50.28, section 10.5.3):
+   - **On Windows 2000 and later it is completed at once,**
+     `STATUS_DEVICE_NOT_CONNECTED` / `USBD_STATUS_DEVICE_GONE`, since its
+     PDO was reported missing in step 2; a request a client's ABORT_PIPE
+     already covers completes `STATUS_CANCELLED` / `USBD_STATUS_CANCELED`
+     instead. A drain that runs before its PDO is reported missing
+     (`hcdDropAll`) holds the request as below until that report, which
+     completes it `DEVICE_GONE` once PnP has been told; a contained
+     controller's requests are held as below on every system (section
+     10.5.3, point 5).
+   - **On Windows 98 SE and ME, and on every system with
+     `XhciUnplugComplete` at `0`, it is held on its PDO**, cancellable
+     (`HcdIoPark`, `src\hcd_io.c`), not completed. A held IRP is
+     completed `STATUS_CANCELLED` / `USBD_STATUS_CANCELED` only at one of
+     three events (`HcdIoParkedRelease`):
+     - the client cancels it;
+     - the client's ABORT_PIPE covers it. Every URB IRP is stamped at
+       dispatch with its PDO's 64-bit submission sequence (`HcdIoStamp`),
+       and an ABORT_PIPE records its own stamp as its pipe's horizon
+       (`HcdIoAbortMark`). An ABORT_PIPE on a departed PDO is answered
+       without a device record. A request at or below its pipe's horizon
+       is completed at once rather than held, so a request the teardown
+       reaches after the abort is not stranded;
+     - the PDO's stop, surprise removal or removal.
    An HCRST that took the slots stops nothing; its URBs are drained as each
    record is freed.
 4. **Release the hardware leaf-first.** Disable Slot for each device in
@@ -6965,7 +7618,11 @@ it (`26e7cb6`); a read that never fails does (`f99f184`), and the REMOVE then
 came within about a second on each unplug read. A request held for a device
 that stopped answering is also what the hub drivers this bus stands in for
 do. Windows 2000 reads the same order cleanly (SURPRISE_REMOVAL and REMOVE
-within about a second, a stick pulled mid-copy included).
+within about a second, a stick pulled mid-copy included). That reason is
+98 SE's, and from task 50.28 the hold is kept on 98 SE and ME alone
+(section 10.5.3): on 2000 and later a held request made a storage client
+that sent nothing more after the unplug wait out its own time-out before
+the removal went on, about 10 s on XP to about 62 s on Vista and 7.
 
 A root port going down sweeps everything behind it by the same walk; a device
 pulled mid-transfer behind a live hub is the one-node case. A reconnect on
@@ -7085,6 +7742,24 @@ enumeration.
 transfer without an event (the bench reading above). The 43.49 series
 re-run on 98 SE with no controller reset is the runtime check of this
 change.
+
+**Revised by task 50.30 (design, 2026-11-17; design record 17 section
+4.15.5).** A field report showed the present device's case: a device
+that stopped answering control requests while plugged in, whose RESET
+verdict here spent the controller's window and latched it. Step 3 changes:
+where `XhciDeviceIsolation` makes the new handling apply (record 17
+section 4.15.11; the default `1` applies it only on the controllers its
+table lists, which the rule lists after a reading on real hardware; the
+one entry, `8086:1E31`, was listed by the owner on 2026-11-20 without
+one, record 17 section 4.15.10), a path that
+reads present no longer keeps the reset for a device that is not a hub: a
+published device is marked failed alone, cycled and charged to its place
+as a departing one is, a device with no PDO yet is left to its enumeration
+(whose last failure then holds the place). A hub keeps the reset. Steps 1
+and 4 keep their rule: a stop or a retire that fails keeps the reset with
+the scratch tainted. Every reset request gains a reason (record 17
+section 4.15.8) at every value. Where the handling does not apply this
+section reads as above.
 
 #### 10.5.2 A departed PDO's start on Windows 98 SE and ME (task 47.10, 2026-11-06)
 
@@ -7291,7 +7966,8 @@ the enable after it (the dormant group retired, its START), read for
 `pdo.ghost` there. And Windows 2000 SP4 once, the mouse series for a few
 cycles, as the NT regression: its STARTs refused as before, no
 `pdo.ghost`. Real hardware is not read: DEPART.1's never-completed
-request on metal stays in "Planned work".
+request on metal stayed in "Planned work" until the owner dropped it on
+2026-11-09 (`roadmap-usb4.md`, the decisions table, "Phase 48").
 
 **What the legs read (2026-11-06, `runs/run-47.md`, "47.10").** The
 `qemu` flavour of `bfddd4d4` on the q35 98 SE and ME bases, task 43.49's
@@ -7306,6 +7982,596 @@ this driver's own refusal). No controller reset on either. ME stopped
 once, after 160 cycles, at a device pulled while its class driver's start
 was under way (point 6's case, not a ghost). Not read: the stick, the
 split device, the 98 SE disable and enable, the Windows 2000 series.
+
+**A second way in (MEBOOTDROP.1, record 17 section 4.13.10).** On 98
+SE and ME a PDO a containment's drop took off the bus while its class
+driver's start was under way - point 6's case, reached by a
+containment - is carried in the relations while PnP holds it stopped,
+and its next START is decided by point 1 unchanged: a device or
+function PDO becomes a ghost. That START also ends the carry and asks
+for the relations again, so the removal that follows comes after the
+ghost has let `hidusb.sys`'s own start reach its started state.
+
+#### 10.5.3 A departed device's requests on Windows 2000 and later (task 50.28, 2026-11-16)
+
+Status: design reviewed and revised once, then accepted (2026-11-16);
+built on branch `w50-gone`; its legs are `runs/run-50.md` 50.28. The owner's
+decisions of 2026-11-16 (roadmap-usb4 50.28): on Windows 2000 and later a
+departed device's pending transfers of every kind are completed at once
+as gone, not held; Windows 98 SE and ME keep section 10.5's rule as it
+is; the holds of a contained controller stay; and a registry value
+restores the earlier rule (point 13), with two positions only. The cut of
+`3.6.0.0` waits for it.
+
+**1. What was read.** Found in task 50.26's legs (the `qemu` flavour, QEMU
+TCG, q35, `qemu-xhci`), the same at every value of `XhciCancelStatus` and
+so older than it: a drive unplugged during a copy under `usbstor` (and
+in some repeats under Windows' UAS driver or `xhciuas.sys`) left the copy
+and the removal waiting for the class driver's own time-out - about 10 s
+on XP and XP x64 (8 to 10 s), about 62 s on Vista and 7 (Vista: 63, 63
+and 63 s where a request was in flight at the unplug, 1, 1, 1 and 4 s
+where none was), 16 to 20 s on 8.1 and 10 with the removal at about
+21 s, about 1 s on 2000. On 8.1 the `qemu` trace shows why (runtime): the
+drain holds the class driver's outstanding transfers; the class driver
+sends nothing more; and nothing completes until its own time-out cancels
+them, 16.5 s for `uaspstor` (with storport's event 129) and 20.4 s for
+`usbstor`, the SURPRISE_REMOVAL reaching the PDO only after that. The fast
+case is a client that submitted a request after the freeze: that request
+is refused `DEVICE_GONE` at the next tick, and the client then cancels
+the rest itself. `usbstor` has one bulk transfer out at a time, so it is
+nearly always slow; `uaspstor`, with several streams, sometimes fast. Why
+8.1's PnP holds the surprise removal behind the outstanding request is
+inside Windows' storage and PnP code and is not read. 98 SE and ME were
+not slow in their legs (not timed to the second). The hold is older than
+`3.5.0.0`: it has been in place since Phase 27. In QEMU no transfer is
+ever in flight at a detach (its xHC drops a detached slot's queued
+transfers with no event; static, the mirror in `external/qemu`,
+`hcd-xhci.c`, `xhci_detach_slot`); on real hardware a TD running at the
+unplug may end with a Transaction Error before the freeze and complete
+with that error, which is not held. Not read.
+
+What the systems' own stacks give a bulk read pending at an unplug is
+section 6.15.6's table (runtime): `STATUS_DEVICE_NOT_CONNECTED` /
+`USBD_STATUS_DEVICE_GONE` under 2000's and XP's usbport EHCI, cancelled
+(`C0000120`, `0xC0010000`) under Vista's to 10's EHCI and 8.1's and 10's
+`USBXHCI`, `C0000001` / `C0000005` under usbport UHCI; when each completed
+against the surprise removal was not timed. Microsoft's documentation
+says that a bus driver fails a departed USB device's requests, not with
+which status: "Because the bus supports removal notification, the parent
+bus driver is notified when the device disappears and the bus driver
+fails all subsequent attempts to access the device" ("Handling an
+IRP_MN_SURPRISE_REMOVAL Request"); and for Windows' own USB 3 stack the
+host controller driver's purge "completes all outstanding I/O requests on
+the endpoint", after which it "fails subsequent I/O requests until UCX
+calls the client driver's EVT_UCX_ENDPOINT_START" (`EVT_UCX_ENDPOINT_PURGE`).
+No document read sets one status for 2000 to 10, the usbport-era
+systems' timing for this case, or what a class driver does with such a
+failure before its SURPRISE_REMOVAL; point 8's client readings are this
+project's own (section 6.7, static; this driver's sources), not a
+documented contract.
+
+**2. Which requests.** Every URB IRP the departure's drain reaches at its
+two hold points - `HcdIoDeferred`, a record finished `DEVICE_GONE` (on the
+ring, in staging, a refill held, a record that never reached the ring),
+and `hcdWaitingRefuse`, an IRP waiting for a record - of every transfer
+kind: a control transfer on EP0's ring, interrupt, bulk, a stream's
+transfer and isochronous. The command URBs the thread serves (a function
+or device PDO's select, SELECT_INTERFACE, RESET_PIPE and the rest,
+`hcd_cfg.c`) are completed `DEVICE_GONE` at the device's flush on every
+system already (`HcdCfgFlushDevice`), not held; unchanged. The bus's own
+records that carry no IRP - enumeration's `Ep0Xfer`, which `hcdDrainOne`
+skips, a hub's status-change transfer and the medium check's, each retired
+by its own callback (`HcdHubXferRetired`, `HcdBotXferRetired`) - never
+reach a hold point, and nothing here takes them.
+
+**3. When: after PnP has been told.** A request of a departed device is
+completed only once its PDO is both unlisted (`Listed` 0, so
+`GET_PORT_STATUS` reads its port disconnected, `hcdPortStatus`) and
+reported to PnP (`IoInvalidateDeviceRelations` issued for it,
+`hcdInvalidateFor`), in that order, both inside `HcdDevicePdoGone`
+(point 6). The second is an asynchronous request: PnP's relations query
+and the SURPRISE_REMOVAL come later, and a client sees its failure before
+its SURPRISE_REMOVAL, which is the point of the change. What the order
+keeps is `lessons.md`'s second rule, report first, on every system: no
+completion of a departed device's request comes before the invalidation
+is issued, and none while `GET_PORT_STATUS` still reads the port connected
+and enabled, which would send `usbstor`'s reset rounds (section 6.7) to a
+device that has gone.
+
+In section 10.5's teardown the report (step 2, `hcdReportGone`) comes
+before the drain (step 3), so each request completes as the drain reaches
+it - at once. That serves every `HCD_GO_UNPLUG` departure: an unplug at a
+root port or behind a hub, a hub's subtree, CYCLE_PORT, an enumeration's
+own failure and a link error's drop. `hcdDropAll` - an invalidation after
+HCRST, a resume's re-initialization for the devices it does not keep
+(record 20 section 4.3.2), the controller's stop, a containment - drains
+every device first (`hcdDrainAll`) and reports each PDO only as its port
+is dropped, in the same thread pass: a request it drains is held, as on
+98 SE, and the report's sweep completes it once the invalidation is
+issued. The reports cover every device that can carry a request
+(`hcdDropAll`'s root ports, hub ports and remaining slot records;
+`hcdResumeInvalidate`'s departing devices the same way); a group kept
+dormant (`HcdDevicePdoDormantAll`) has no request pending. Considered and
+not taken: testing only at the two hold points, which is smaller but
+completes `hcdDropAll`'s requests before their PDO is reported.
+
+**4. The status.** The IRP `STATUS_DEVICE_NOT_CONNECTED` (`0xC000009D`),
+the URB `USBD_STATUS_DEVICE_GONE` (`0xC0007000`); an isochronous URB's
+packets as the drain wrote them, each answered packet its own status and
+the rest `DEVICE_GONE` (`HcdIoIsoRefused`). Three exceptions, each as
+today's paths decide it:
+
+- a request a client's ABORT_PIPE covers (its stamp at or below its
+  pipe's horizon, or every pipe's) completes `STATUS_CANCELLED` /
+  `USBD_STATUS_CANCELED`, the abort keeping its precedence as section
+  18.4 kept it - at the hold point and at the report's claim alike
+  (point 6);
+- a request whose IRP is already cancelled, or whose PDO is closing (a
+  stop or removal under way), is completed as `HcdIoPark`'s decline path
+  completes it today: a record the ring had at once with
+  `STATUS_DEVICE_NOT_CONNECTED`, any other at the next tick with
+  `STATUS_CANCELLED` or `STATUS_DELETE_PENDING` (`hcdRefusedDpc`);
+- a record that never reached the ring, and a waiting IRP, complete at
+  the next tick (`HcdIoRefuseLater`), never inline, since that call may be
+  inside the client's own submission.
+
+`DEVICE_GONE` rather than cancelled, though Vista's to 10's own stacks
+give cancelled: it is the owner's word ("as gone"); it is what 2000's and
+XP's own EHCI stacks give; it is the status these requests already
+complete with on the decline path, read before the surprise removal in
+every fast repeat of 50.26's 8.1 legs; and point 8's clients read it as
+gone, where a cancelled status is also what a client's own cancel and
+time-out produce. `DEVICE_GONE` is never rewritten by `XhciCancelStatus`,
+so the new completions do not depend on that setting (point 10).
+
+**5. What stays held, and containment's precedence.**
+
+- **98 SE and ME**: everything section 10.5 and section 18.5 hold, as
+  today (the hold, the abort horizon, `HcdIoIsoRelease`'s latch); and on
+  every system at the registry value's second position (point 13).
+- **A contained controller, on every system** (record 17 section 4.6): a
+  new request (`HcdIoHoldUnreadable`), a queued command URB
+  (`hcdCfgHoldUnreadable`), and every transfer its drop drains
+  (`HcdEnumContain`, `hcdDropAll`) - **including a request of a PDO already
+  reported and marked before the containment.** The sequence that needs
+  it: an ordinary departure reports the PDO and marks it (point 6); the
+  teardown's Stop Endpoint fails and leaves the requests on the rings for
+  the invalidation (`hcdDeviceStop`, section 10.5.1's rule); the recovery
+  is refused and the controller is contained; the containment's drain then
+  reaches those requests on a PDO whose report has passed, and which no
+  second report can revise (the first cleared `dev->Pdo`). So containment
+  is an input of the hold decision itself, ahead of the mark: a hold point
+  that reads the controller contained holds the request whatever the PDO's
+  mark says, and the report's sweep does not run on a contained
+  controller. These requests are released as today - the client's cancel
+  or abort, the PDO's stop or removal, or an unproven stop of the
+  controller with staging on (`HcdIoParkCloseAll`, task 48.33). Record 17 section 4.6's "never
+  `STATUS_DEVICE_NOT_CONNECTED` on a listed device" and section 6.8 are
+  unchanged.
+- **A ghost PDO's holds** (section 10.5.2): 98 SE and ME only.
+- **A controller whose mastering could not be proven stopped, with
+  `XhciDmaStaging` 0** (`HcdIoDeviceDrain`'s early return): its requests
+  reach no hold point and stay pending, as today.
+- **A drain on a PDO that stays listed and is never reported missing**
+  keeps the hold until its stop or removal, as today. None is known
+  (point 3).
+
+How a hold point reads containment without a new lock order: `Unreadable`
+is set under the controller lock (`hcdContain`, step 1) before the
+containment's drain (step 3), once per lifetime, and cleared only by a
+start. Each hold point takes its snapshot under the controller lock it
+already holds before the hold - `HcdIoDeferred` as it takes the record off
+the done list, `hcdDrainOne` as it flushes the waiting list for
+`hcdWaitingRefuse` - and passes it to `HcdIoPark` as an argument, which
+reads it under the cancel spin lock with the rest. Every record the
+containment's drain finishes is put on the done list under the controller
+lock after `Unreadable` was set there, so its snapshot reads it set. A
+record taken off the done list before the containment is a departure's and
+is decided as one, even if the controller is contained by the time it
+reaches its hold: the snapshot is the decision's boundary, and the promise
+is for the requests the containment's drain finishes, not for departures
+already under way. The waiting list's departure drain runs on the
+controller thread, or at the stop once that thread is joined, so no
+containment comes between its snapshot and its hold. No path takes the
+controller lock inside the cancel spin lock.
+
+**6. How the driver tells, and the mechanism.** "Windows 2000 and later"
+is `IoIsWdmVersionAvailable(1, 0x10)` answering true (WDM 1.10 is 2000's;
+98 SE's 1.00 and ME's 1.05 answer false), the test the driver makes
+everywhere for it (`hcdPdoGhostStart`, `XhciPipeCancelPick`,
+`HcdIoRefusedInit`'s `IsoReleaseOn`). It is PASSIVE_LEVEL only, so it is
+asked at the controller's start, where the registry value of point 13 is
+read (`hcdReadValues`), and a pure policy function (`xhci_pipe.c`, as
+`XhciPipeCancelPick`) turns the system and the value into the
+controller's effective policy, at once or held. That policy is copied
+into each device PDO at its creation and at a dormant PDO's revival, the
+two places `XhciCancelStatus`'s chosen status is copied
+(`hcd_pdo.c`, `CancelOut`), as `GoneNowOn`, so a PDO decides with the
+policy of the start it belongs to. The amd64 binary, which runs on NT 5.2
+and later only, has the policy at once unless the value says held. Then:
+
+- `HcdIoPark`'s `departed` argument becomes a kind: a contained
+  controller's new request or a ghost's (`HcdIoHoldUnreadable`, as 0
+  today); a contained controller's queued command (`hcdCfgHoldUnreadable`,
+  a departure's hold for section 18.7, as 1 today, never ended by a
+  report); and the drain's two hold points, whose hold is a departure's
+  that a report ends. The last kind is marked in the IRP's
+  `IoStatus.Information` with a second value beside `HCD_PARK_DEPARTED`,
+  which `HcdIoIsoRelease` takes as a departure's too. It also takes the
+  containment snapshot of point 5.
+- **The hold decision**, in `HcdIoPark` under the cancel spin lock, in this
+  order: the PDO closing, the IRP cancelled or the controller's holds
+  closed (`ParkClosed`) - declined, the caller completes it (today); an
+  abort covers it, or on 98 SE and ME the isochronous latch - completed
+  `CANCELED` here (today); the drain's kind, on a PDO marked reported
+  (`GoneNow`), on a controller not contained - **new:** not held, and the
+  caller completes it `DEVICE_GONE` through its decline branch; anything
+  else - held (today), which is where a contained controller's request
+  goes whatever the mark. `HcdIoPark` keeps its return convention: 1 when
+  held or completed here, its `UrbsPending` count then this file's to
+  return; 0 for the caller to complete and return the count.
+- **The report** (`HcdDevicePdoGone`, `hcd_pdo.c`), in this order:
+  1. Under `PdoListLock`, each PDO of the group is unlinked and `Listed`
+     cleared, as today, and each one reported to PnP rather than deleted
+     there (it goes to `GonePdos` or `RemovedPdos`) is referenced
+     (`ObReferenceObject` on its device object, as `hcdInvalidateFor`
+     references a hub PDO), so its extension stays readable to step 4
+     whatever PnP does meanwhile (`hcdDeletePdo`'s rule).
+  2. The lock is released; selective suspend's settles and the deletion
+     of PDOs PnP never saw run as today.
+  3. `hcdInvalidateFor`, as today, when PnP is to be asked; a PDO whose
+     parent PnP has already let go of (`MissingReported`) is missing to
+     PnP without it.
+  4. Then, for each referenced PDO with `GoneNowOn` set, on a controller
+     not contained (`Unreadable` read on the controller thread, where both
+     the containment and the report run, or at the stop): under the cancel
+     spin lock, `GoneNow` is set (once, never cleared: a PDO reported
+     missing is never listed again, and a dormant revival selects only a
+     listed PDO) and each IRP held with the drain's mark is decided and
+     **claimed** - unlinked from `ParkedIrps`, its cancel routine cleared,
+     `ParkedCount` lowered - with its verdict recorded in it: `CANCELED`
+     when an abort covers it (`hcdAbortedLocked`, read here under the same
+     lock), otherwise `DEVICE_GONE`. An IRP of a closing PDO is not
+     claimed: the closing's release (`hcdPdoQuiesce` or `hcdDeletePdo`,
+     which set `Closing` before they take the lock) completes it
+     `CANCELED`, as today. An IRP whose cancel routine has run is no
+     longer listed (`hcdParkedCancel` unlinked it under this lock).
+  5. With no lock held, each claimed IRP is completed with its recorded
+     verdict - `DEVICE_GONE`: the URB's header as `HcdIoPark` wrote it, its
+     packets as the drain wrote them, the IRP `STATUS_DEVICE_NOT_CONNECTED`;
+     `CANCELED`: as `hcdParkedComplete` does - through `HCD_URB_OUT`, and
+     its `UrbsPending` count returned once, after `IoCompleteRequest`
+     returns, which keeps the PDO until then; then each reference is
+     dropped. The reference keeps the extension's storage readable, not
+     what `hcdDeletePdo` frees; the steps after the lock touch only the
+     extension, the claimed IRPs and their recorded verdicts.
+
+  **The claim is the ownership boundary.** An abort recorded before the
+  claim wins (the claim reads its horizon and completes `CANCELED`); an
+  abort recorded after it finds the IRP unlisted, cannot reclaim it, and
+  succeeds as on any departed PDO (`HcdIoAbortMark` and
+  `HcdIoParkedRelease` are separate critical sections, so a horizon
+  recorded before a claim whose release runs after it is still honoured by
+  the claim). A client's cancel before the claim takes the IRP through
+  `hcdParkedCancel` (`CANCELLED`); after it, the routine is cleared and
+  the cancel has no effect.
+
+  **Against a drain on another processor.** A hold point that runs between
+  step 1 and step 4 reads `GoneNow` clear and holds the request; step 4
+  claims it, after step 3. A hold point after step 4 reads `GoneNow` set
+  and declines the hold, after step 3 too. The mark and the hold are both
+  under the cancel spin lock, so a request is either listed before the
+  mark (and claimed) or decided after it (and not held): none is left
+  held on a marked PDO, none is completed before the invalidation, none
+  twice. In the unplug's order step 4 finds nothing held and only marks
+  the PDO; the drain that follows completes each request as it goes. A
+  SURPRISE_REMOVAL that reaches the PDO between step 3 and step 4 closes
+  it (`hcdPdoQuiesce`): its release and the claim each unlink under the
+  cancel spin lock, so whichever comes first owns an IRP - the claim, and
+  the quiesce waits for its still-counted completion; or the closing, and
+  the claim leaves the rest to it.
+
+**7. Why Windows 2000 is included, though it was not slow.** The owner's
+decision is 2000 and later. The hold costs 2000 nothing today, since its
+SURPRISE_REMOVAL comes within about a second and releases it
+(`runs/run-27.md`; 50.26's legs), so for 2000 the change buys nothing and
+carries the risks of point 8. It is taken, as an implementation choice
+subject to 2000's HID and audio legs, because:
+
+- 2000's own usbport EHCI completes a bulk read pending at an unplug
+  exactly as this change does, `STATUS_DEVICE_NOT_CONNECTED` /
+  `USBD_STATUS_DEVICE_GONE` (section 6.15.6, runtime), so its class
+  drivers meet what they meet under their own stack;
+- the 98 SE hazard is not in this project's reading of 2000: its
+  `hidusb.sys` completes `STATUS_DEVICE_NOT_CONNECTED` with no reset and its
+  `hidclass.sys` stops reading on it (section 6.7, static);
+- one rule for every NT system: the NT code path is one, and a split
+  inside NT would be a second rule needing legs of its own.
+
+Neither reading proves every transfer kind's earlier completion safe; the
+legs are the evidence.
+
+**8. Each transfer kind, and what each client does.** Section 6.7's
+readings are static, from the binaries read on 2026-10-06; nothing new was
+read for this task, and no Microsoft document read describes these
+drivers' behaviour before their SURPRISE_REMOVAL.
+
+- **Interrupt (HID).** `hidusb.sys` from 2000 on completes a read failing
+  `STATUS_DEVICE_NOT_CONNECTED` with no reset. `hidclass.sys`: 2000's stops
+  reading; XP's has no case for it, so it takes its back-off of 1 s growing
+  to 5 s and reads again, each read refused `DEVICE_GONE` at the next
+  tick until the SURPRISE_REMOVAL - a few retries at most, not 98 SE's loop
+  at once. Vista's to 10's `hidclass.sys` is not read. The keyboard and
+  tablet legs read it.
+- **Bulk (`usbstor`).** `DEVICE_GONE` is among "every other failure": the
+  request completes `SRB_STATUS_BUS_RESET` to the class driver, whose retry
+  is refused at the next tick, and the reset work item ends its rounds at
+  a port that reads not connected - which `GET_PORT_STATUS` reads by then
+  (point 3). Expected: the copy fails at once and the removal follows, as
+  in the fast repeats. Read by the legs.
+- **Streams.** Windows' UAS driver (`uaspstor`, 8 to 10): the fast repeats
+  of 50.26's 8.1 legs read it taking `STATUS_DEVICE_NOT_CONNECTED` on its
+  streams before the surprise removal and cancelling the rest itself.
+  `xhciuas.sys` (source, `uas_xport.c`): a failure it did not cancel faults
+  its slot and queues recovery, whose device reset ends every request
+  `SRB_STATUS_BUS_RESET` and sends `RESET_PORT`, which a departed PDO
+  refuses `STATUS_NO_SUCH_DEVICE` at once (`hcdResetPortIoctl`); the FDO is
+  then Dead, every request after it `SRB_STATUS_NO_DEVICE`, and no cycle is
+  owed (the bus had the reset); its SURPRISE_REMOVAL marks it Gone.
+- **Isochronous (`usbaudio.sys`).** A failed isochronous completion marks
+  the pin, and its next submission sends ABORT_PIPE, waits for the pin's
+  requests, resets the pipe and streams again, with no counter (section
+  6.7: 98 SE, 2000 and XP read). Each new request is refused at the next
+  tick, so it loops until the SURPRISE_REMOVAL - the loop ME showed under
+  section 18.3's candidates 1 and 3 (the REMOVE about 2 s later instead of
+  0.3 s, several hundred refused requests a second). What it does to NT's
+  removal is not read; the audio legs time it. Should it delay the
+  removal, the fallback, a change of this design to put for review, keeps
+  isochronous requests held on NT in **both** places a departure's hold
+  ends: the hold decision does not decline an isochronous request, and
+  the report's sweep does not claim one; such a request is then released
+  only by its client's cancel or abort or its PDO's closing, as today.
+- **Control on EP0's ring** (descriptors, class and vendor requests sent
+  as transfers): ended at once as the rest; a class driver's start waiting
+  on one sees the failure sooner.
+- **The hubs and composite parents inside `xhci98.sys`.** A hub's
+  status-change transfer and the medium check's carry no IRP (point 2).
+  The composite parent's own SELECT_CONFIGURATION never reaches the thread
+  or a ring: `HcdCompositePdoInternalIoctl` answers it in `hcdCompSelect`,
+  which validates it against the parent's copy, publishes a record and
+  completes it synchronously, configuring nothing (section 10.14.2), so no
+  hold point and no sweep meets it; a function PDO's select goes through
+  the thread, completed `DEVICE_GONE` at the flush (point 2). A function
+  PDO's transfers are its own, and its group is reported together
+  (`HcdDevicePdoGone`), each function PDO swept on its own.
+- **`xhcicm.sys` and the network drivers `xhcinet.sys` and `xhcinet6.sys`**
+  send no URB (`IOCTL_INTERNAL_USB_SUBMIT_URB` appears only in the bus's
+  own sources).
+- **The drivers of the download's `usb-wdm-free` set**: its network
+  drivers (`ax88772`, `ax88179`, `cdcnet` among them) read
+  `STATUS_DEVICE_NOT_CONNECTED` and `USBD_STATUS_DEVICE_GONE` as gone
+  (source, their `DeviceGone`); the others are not read. No leg covers
+  them.
+- **Other makers' drivers** (the non-free set, and any a user installs):
+  no documentation and nothing read. The registry value (point 13) is
+  their way back.
+
+**9. Ordering against the rest, and which step owns the IRP.** No
+completion moves earlier than the hardware's release: a hold point runs
+only once the record has left the hardware - `HcdIoDeferred` after its
+unmap or staging's copy, `hcdWaitingRefuse` before the ring ever had it -
+and after the teardown's Stop Endpoint, or after HCRST has taken the slot;
+a report's completions are of requests already held, so already off the
+hardware (the guarantee section 18.7 gives `HcdIoIsoRelease`'s).
+
+- **ABORT_PIPE.** An abort that covers a request takes precedence at the
+  hold point and at the claim (points 4 and 6). An abort after the request
+  completed finds nothing held and succeeds, recording its horizon, as on
+  any departed PDO.
+- **A client's cancel racing the completion.** One owner at each step,
+  never two completions: a record on the ring - `hcdCancel` only marks
+  it, and `HcdIoDeferred` clears the routine (`hcdCancelOff`, which waits
+  out a routine already running) before it completes the IRP; a waiting
+  IRP - `hcdWaitingTake` clears `hcdWaitCancel` under the controller lock,
+  and one whose routine is already running is left to that routine, which
+  completes it `CANCELLED` at the next tick; a refusal at the next tick -
+  `hcdRefusedCancel` and the tick's DPC each take it off `RefusedIrps`
+  under the cancel spin lock; a held IRP - `hcdParkedCancel`, an abort's
+  release, a closing's release and the report's claim each unlink it and
+  clear its routine under the cancel spin lock, so a listed IRP is never
+  owned by its routine and another path at once. An IRP completed inline
+  has no cancel routine set. Each IRP's `UrbsPending` count is returned
+  once, by whichever path completes it, after its completion returns.
+  Nothing completes while a spin lock is held: the claim's completions
+  wait until both `PdoListLock` and the cancel spin lock are released (the
+  claim in step 4 takes the cancel spin lock alone).
+- **Requests submitted after the freeze**: refused `DEVICE_GONE` at the
+  next tick, as on every system today (`HcdIoSubmit`, `hcdGoneLater`,
+  `HcdCfgQueue`), the containment's admission hold keeping its precedence
+  there as today; a client resubmitting from its completion routine is
+  paced to one request a tick and never recurses.
+- **The PDO's SURPRISE_REMOVAL, STOP and REMOVE** (`hcdPdoQuiesce`): as
+  today.
+
+**10. With 50.26's setting.** `XhciCancelStatus` rewrites only the
+cancelled value `0x00010000` (section 6.15.3), so a `DEVICE_GONE`
+completion is the same at every value. A request an abort covers, and a
+client's own cancel of a refusal before its tick, carry the cancelled
+value as encoded by the setting (`0xC0010000` at its default on 2000 and
+later). The two settings are independent; this task's legs run at
+`XhciCancelStatus`'s default.
+
+The report's completions are one more site of section 6.15.4's table
+(2026-11-17, at the merge of 50.26's encoder fix): `HcdIoGoneFinish`
+completes through `HCD_URB_OUT`, `ours` 1, because its own path wrote the
+fields the encoder may rewrite - a `DEVICE_GONE` claim's header by
+`HcdIoPark` and its packets by the drain, a `CANCELED` claim's header by
+`hcdParkedComplete`. So a `DEVICE_GONE` claim keeps its header and has
+its unanswered cancelled packets encoded, and a `CANCELED` claim's header
+is encoded too, as at the other sites; `test_pipe`'s cancel-encoding
+vectors hold both images, bulk and isochronous, and the same image
+through `ours` 0 left alone.
+
+**11. What verifies it.** Host vectors (`test\test_pipe.c`) for the pure
+halves: the policy (system and value to at once or held, every value of
+point 13); the hold decision over every combination of the hold's kind,
+the PDO closing, the IRP cancelled, the controller's holds closed, an
+abort covering it, the isochronous latch and an isochronous URB, the mark
+and the containment snapshot - declined, completed cancelled, not held,
+held - a contained controller never "not held", a marked PDO's request
+held when contained; and the claim's verdict over the mark kind, closing,
+an abort covering it and the containment (`CANCELED`, `DEVICE_GONE`, not
+claimed), with the isochronous fallback's switch in both. Pure vectors do
+not verify list ownership or the counts, and no host harness here runs
+`hcd_io.c`'s lists, so those are verified in guests by the `qemu` flavour:
+
+- its per-request log (task 49.29): every IRP that went in comes out
+  exactly once, with the status the decision gave; a second completion of
+  one IRP is bugcheck `0x44` on every system, with or without Driver
+  Verifier;
+- each PDO's REMOVE completing, which `hcdPdoQuiesce` waits for until its
+  `UrbsPending` is 0: a count not returned is a REMOVE that never ends;
+- the sweep's own trace line per PDO: claimed `DEVICE_GONE`, claimed
+  `CANCELED`, left to a closing. As built (2026-11-17, after the legs, whose
+  build logged only the first two and only when it claimed one): the
+  `qemu` flavour's word line `hcd: departed PDO reported: serial, gone,
+  cancelled, left`, written for each PDO whose claim took or left
+  anything - its serial, then how many it claimed `DEVICE_GONE` and
+  `CANCELED`, and how many it left held: a closing PDO's, and any hold
+  without the drain's mark, each completed by its PDO's closing or by an
+  abort or a cancel before it. A PDO whose policy holds, or a contained
+  controller's, writes none;
+- two seeded test values, `qemu` flavour only and written by no INF, bits
+  4 and 5 of `XhciQemuStageFault` beside its others (`HCD_STAGE_QEMU_*`),
+  each call site compiled only under `XHCI_FLAVOUR_QEMU`, so no published
+  build carries either: a delay
+  between a departed PDO's `HcdIoAbortMark` and its `HcdIoParkedRelease`
+  (at PASSIVE_LEVEL only), and a delay between the report's step 3 and
+  step 4, so that an abort, a cancel, a closing and a late drain can be
+  made to land between the mark and the release and between the
+  invalidation and the claim.
+
+  As built for the ownership legs (2026-11-17, `runs/run-50.md` 50.28.10),
+  in the `qemu` flavour only: the per-request log gains an event line
+  (`urb: event seq/irp/event/serial`) at each step that decides a held
+  request's owner - the hold point's verdict, the claim's mark and its
+  verdict per IRP, a release by an abort, a closing, an unproven stop or a
+  9x select, a client's cancel, an abort's horizon recorded and the end of
+  each seeded delay - written under the cancel spin lock where the decision
+  is taken, in the log's own sequence; and `XhciQemuStageFault` gains bits
+  6 and 7 (the abort delay 6 s and the report's delay 75 s, so the claim
+  can land inside an abort's delay and a storage client's own time-out
+  inside a report's), 20 (an invalidation's drop drains each device after
+  its report, not every device first), 21 (with 20, between the relations
+  request and the claim) and 22 (a report records an every-pipe abort
+  horizon before its delay and releases what it covers after the claim, as
+  an abort whose handle cannot be placed would, for a system whose clients
+  send no abort in that window).
+
+**12. Log.** No counter word is added to the published block. The `qemu`
+flavour's per-request log shows each completion's status; the report's
+sweep traces its three counts per PDO; and the start notes the value
+read and the policy taken (`urb.gone.value`, `urb.gone.policy`), as
+`XhciCancelStatus`'s start notes do.
+
+**13. The registry value (owner, 2026-11-16).** Added, with two positions:
+the default, completed at once on Windows 2000 and later and held on 98 SE
+and ME; and held on every system, as before. No position completes at
+once on 98 SE or ME, which is 27-V.1's `hidclass.sys` loop. Drafts for the
+owner to word (the meaning and the first choice revised 2026-11-17: not
+every transfer ends, so a removal can still wait - an abort's and a
+closing's precedence, a contained controller's holds and the requests of
+a controller whose mastering could not be proven stopped with
+`XhciDmaStaging` 0 are exceptions; and the endless retry was read on 98 SE
+alone):
+
+- Name: `XhciUnplugComplete`, a `DWORD` in the controller's key or
+  machine-wide in `Services\USB` (the machine-wide value wins, as for
+  every value). `1`, the default: at once on 2000 and later, held on 98 SE
+  and ME. `0`: held on every Windows. Absent, another type or any other
+  number: the default, as `XhciCancelStatus` reads its own.
+- Its meaning, for the installer's table (which XHCITR shows too): "what
+  happens to the transfers a USB device still has outstanding when it is
+  unplugged: on Windows 2000 and later they are ended once Windows has
+  been told the device is gone, so a drive's removal need not wait for its
+  driver's time-out, though some stay held, such as those of a controller
+  closed off after a fault; on Windows 98 SE and ME they are held until the
+  device's driver cancels them or Windows removes the device".
+- The caution: "read when the controller starts: restart it after a
+  change. 0 is for a driver that misbehaves at 1."
+- The choices: `1` "ended on unplug on Windows 2000 and later", `0` "held
+  on every Windows, as earlier releases did".
+
+It is no hidden setting (owner, 2026-11-14): both INFs write it at `1`
+with the no-overwrite flag in the controller sections beside
+`XhciCancelStatus`, and the INF gate requires the row on every path
+(`check-inf.ps1`'s table, `Since` `3.6.0.0`, its footprints and
+self-tests); the installer (`inst_core.c`, group "Advanced: faults and
+checks", `/set` and the Settings dialog, `0` and `1`, machine-wide) and
+XHCITR (`tr_set.c`, the USB tab's advanced view, taken when the controller
+starts again) carry it with the owner's texts; `tuning.md` has its row and
+a section of its own. The start reads it once (`hcdReadValues`), so a
+change takes effect at the controller's next start, and the policy is
+copied into each PDO at its creation and at a dormant PDO's revival
+(point 6).
+
+**14. Legs** (roadmap-usb4 50.28; the `qemu` flavour unless said; times
+host-measured from the unplug, on the debugcon channel, to the copy's
+failure, the SURPRISE_REMOVAL at the PDO and the REMOVE):
+
+- 2000, XP, XP x64, Vista, 7, 8.1 and 10, at the default: a drive under
+  `usbstor`, under Windows' UAS driver where there is one and under
+  `xhciuas.sys`, unplugged during a copy several times each and once
+  behind a hub; a keyboard and a tablet unplugged; an audio device
+  unplugged while playing; a replug after each - against the BEFORE times
+  of point 1, read again with five repeats where 50.26's legs lack them.
+- The same storage unplug on at least 2000, 7 and 10 at the value's `0`:
+  the earlier times, as before.
+- 98 SE and ME, at the default and at `0` (the same rule): the HID unplug
+  of 27-V.1 (the REMOVE within about a second), a stick during a copy, and
+  issue 25's audio sequence.
+- **The non-empty sweep**, which an unplug does not reach (it reports
+  before it drains): an invalidation by the `qemu` flavour's injection
+  (`XhciQemuInject`, a controller halt) with a keyboard and a tablet (whose
+  interrupt reads are always pending), a drive during a copy and audio
+  playing, on 2000 and on one NT 6 system; a resume's re-initialization
+  (hibernate and resume with the devices not kept) on one system that
+  hibernates; an abort, a cancel and a closing landed between the mark and
+  the release and between the invalidation and the claim with the two
+  seeded delays of point 11; a containment after an ordinary departure
+  whose Stop Endpoint failed, where a seeded injection reaches it, read for
+  the held requests staying held. The controller's stop is not reached on
+  NT in the emulator (Windows removes the children before it disables a
+  controller); it drains through the same `hcdDropAll` as the
+  invalidation.
+- Any class driver that takes the earlier completion badly - an extra
+  reset, a stuck device, an error dialog, a slower removal - is reported
+  before anything is merged.
+
+**What was run, and what was reduced** (`runs/run-50.md` 50.28, to
+2026-11-17). Every leg above was read except five, which the owner accepted
+on 2026-11-17 as a stated reduction; they stay listed as not shown (50.28.12):
+the earlier times on XP x64 (no amd64 comparison build) and the fifth valid
+earlier repeat on 2000; audio unplugged while playing on 98 SE (issue 25:
+every valid unplug while playing freezes 98 SE); a failed teardown Stop
+Endpoint before a containment (no injection reaches it); the controller's
+stop on NT (not reached in the emulator, as said above); a client's own abort
+before a claim on an NT 6 system (read on 7 only with the `qemu` flavour's
+forced horizon). The last three run (50.28.11): `xhciuas.sys` with a drive
+copying at the unplug on 2000, Vista and 10, three trials each, and two more
+on 7; a stick behind a hub copying at the unplug on XP x64 and Vista, three
+each - each failing at once, no double completion, the device back at the
+replug; and ME at the value's `0` with a stick's bulk request in flight at the
+unplug, five trials: the request held until its client cancelled it and
+completed once, never early, the REMOVE only after ME's "Disk Write Error"
+box was answered (in two trials the keys sent ended at a black screen with no
+REMOVE, not attributed).
+
+**15. Not established.** Why 8.1's and 10's PnP holds the surprise removal
+behind an outstanding request; what real controllers do with a TD running
+at an unplug, so how often metal shows the slow case; Vista's to 10's
+`hidclass.sys` and NT `usbaudio.sys` before their SURPRISE_REMOVAL with
+the requests failed (the legs read them); other makers' drivers.
 
 ### 10.6 The ids the targets' INFs match
 
@@ -7641,7 +8907,9 @@ USB 2.0 (`HcdHoldRequestUsb2`, Phase 29's executor: an accepted request is
 queued for the thread's next pass, the device given no PDO and left
 Present until the hold's PED write and disconnect take it as an unplug,
 or, if the hold is refused then, refused in place with its PDOs created
-there; a refused request leaves it refused in place), and on a root port
+there; a refused request leaves it refused in place; a hold whose drive
+never reaches the companion ends after a bound and the drive, where it
+comes back, is refused in place, 10.7.4), and on a root port
 with no companion or behind a SuperSpeed hub it is refused in place; each place is
 counted. Under UAS the VID/PID hardware ids
 stay, so a device a `usbstor.inf` lists by hand still binds `usbstor.sys`
@@ -8166,6 +9434,263 @@ another drive letter, and the old entry stays non-present (10.13.6). One
 that met the Code 10 gets the new entry with no manual step. One whose
 plain entry was moved to `usbstor` by hand keeps running Bulk-Only where
 UAS is offered, as XHCITR's existing note says.
+
+#### 10.7.4 A send-back that never reaches USB 2.0 (roadmap-usb4 task 50.5, was STREAMSOFFHOLD.1)
+
+**The problem** (`runs/run-49.md`, 49.38's 2000 leg, read in the code
+under 49.39). A UAS-only drive at SuperSpeed on a controller that cannot
+stream (`XhciStreamsOff`, or a controller without streams) on a
+companion-paired root port is offered to 29-A.5's hold
+(`hcdXportRefusal`, `HcdHoldRequestUsb2`, reason
+`HCD_HOLD_REASON_UAS_NO_STREAMS`): PED is written, the device record is
+fed a disconnect (its PDOs never listed) and the SuperSpeed port is held,
+not served, until the release rules of 29-A.5 end it - the held device seen
+on the companion and then leaving (a paired hold), the companion's first
+departure after a connect (issue 29's flap hold), or a controller start or
+reset (every kind; the only end of an unidentified hold). A drive that
+never connects on the companion meets none of them: it is invisible, "no
+device connected" at both ports, until it is replugged into another
+connector or the controller restarts; and a drive unplugged during the
+hold leaves that connector's SuperSpeed port held for every later device.
+QEMU's `qemu-xhci` ignores the PED write (`hcd-xhci.c`, `xhci_port_write`:
+PED is neither written nor cleared there, and a PLS write of RxDetect is
+ignored too), so in the emulator its `usb-uas` stays trained at U0 on the
+held port and never moves to the companion: the case 49.38 met.
+
+**The rule.** A hold of reason `HCD_HOLD_REASON_UAS_NO_STREAMS` (the only
+reason `HcdHoldRequestUsb2` is asked with; issue 29's flap holds keep
+their own rules and never time out) whose companion has been watched idle,
+without a break, for the bound is ended, and the drive, if it comes back
+on the re-armed link, is refused in place.
+
+1. **Watched idle** (`hcdHoldTimeService`, each powered pass right after
+   `hcdHoldService`, before the root ports' change bits are taken; thread
+   only). The service reads the companion's PORTSC. The companion is idle
+   when the read is readable, CCS, CSC and OCA are clear and PP is set;
+   its port object has no device record and its machine is Empty; no
+   over-current episode, unpowered hold, warm reset or recovery disconnect
+   is in progress there (`TolOc.Phase`, `XhciTolLocUnpowered`,
+   `LinkRecovering`, `RecoveryDisc`); and the hold has seen no connect
+   since its last departure (`ConnectSeen` 0). Anything else restarts the
+   clock (`HCD_HOLD.QuietAt` = now). An all-ones read restarts it as well
+   and goes to the port's unreadable escalation (`hcdPortUnreadable`, as
+   every inspection's). The clock also restarts when the hold begins
+   (`hcdHoldService`, after the PED write), at every PORTSC change the
+   companion's inspection acknowledges (`hcdPortChanged`, any change bit,
+   whatever `XhciHoldCompanionPortsc` decides), and whenever the
+   controller's power epoch (`PowerEpoch`, which moves at every exit from
+   D0, stop, recovery and reset, `HcdSuspControllerDownLocked`) differs
+   from the one stamped with `QuietAt` (`HCD_HOLD.QuietEpoch`): the
+   tolerance clock does not advance across a sleep, so a tick difference
+   cannot show one, and the bound counts only time watched in one powered
+   session.
+2. **The bound.** `HCD_HOLD_TIMEOUT_MS`, 10000, as
+   `XHCI_TOL_TICKS(HCD_HOLD_TIMEOUT_MS)` (224 ticks): at least 10 s, about
+   22 s at the clock's nominal 100 ms period (each tick credited 45 ms,
+   record 17 section 4.9's convention), compared as an unsigned elapsed
+   difference `(now - QuietAt) >= bound`, which a wrap of the count does
+   not disturb. A device that answers the send-back falls back from
+   Rx.Detect after eight detections without terminations, "to transition to
+   USB 2.0 after 80 ms" (USB 3.2 7.5.3.6, p.167; `xhci-data-structures.md`,
+   "The SS.Disabled rule"), and then connects on USB 2.0 (10.18.1), so the
+   bound is a hundred times that and more. A bus policy number, no registry
+   value (owner, 2026-11-14: no hidden settings); the bound confirmed by the
+   owner, 2026-11-15.
+3. **Seen elsewhere.** The pairing of a SuperSpeed port with its USB 2.0
+   companion is a convention (`xhci-programming.md`, "Port Topology
+   Classification"): on a board that pairs otherwise the drive connects on
+   another USB 2.0 port and runs there, and a re-armed SuperSpeed port
+   would take it back at its next USB 2.0 bus reset (USB 3.2 7.5.1.2), the
+   ping-pong the hold exists to prevent. So every device descriptor the
+   bus reads at any root or hub port of the controller from a device whose
+   speed class (`HcdDeviceSpeedClass`) is Low, Full or High Speed
+   (`hcdPerform`'s 18-byte read, beside `hcdHoldCompanionSaw` and outside
+   its root-only rule) is compared by vendor and product id with each such
+   hold's held ids (`Hold.Held.Vendor` and `Product`, which
+   `hcdReadIdentity` fills from the device descriptor the enumeration kept
+   before any string read, so they are there whatever `Held.Valid` says),
+   and a match sets `HCD_HOLD.SeenElsewhere`: that hold never times out,
+   and ends only by 29-A.5's own rules, as before. Vendor and product id
+   alone: a second unit of the same model keeps the hold as it is today,
+   the conservative side. And since such an arrival may still be waiting
+   for its enumeration when the bound runs out, the time-out is postponed
+   (to a later pass, the clock not restarted) while any connection work
+   is owed or in flight below SuperSpeed on the controller: a USB 2.0 root
+   port with its change bit owed (`PortChange`) or reading CSC, a root or
+   hub port whose machine is between Empty and its rest
+   (`XhciEnumAtRest`), a port deferred for the settle, or a hub with a
+   port look owed (`Changed`) or a status-change report completed and not
+   yet collected (`HubXferDone`). A hub whose own status-change report has
+   not come in yet cannot be seen; that residual is recorded, not covered.
+4. **The time-out** (`XhciHoldQuietDue`, pure, `xhci_link.c`): the hold
+   active (Used, not Pending, its pure hold not ended), of the reason
+   above, its kind PAIRED or UNIDENTIFIED (ORPHAN cannot arise for this
+   reason; FLAP is excluded by the reason), `SeenElsewhere` clear, the
+   companion idle now, nothing owed below SuperSpeed (item 3), and the
+   clock past the bound. Then the SuperSpeed port's PORTSC is read; an
+   all-ones read releases nothing - the hold stays whole and watched, the
+   read goes to the port's unreadable escalation, and the decision is made
+   afresh at a later pass. Readable, the release is made at once with that
+   read (`hcdHoldReleaseAt`, the readable half of `hcdHoldRelease`, split
+   out so the time-out never leaves a release owed for a later,
+   unconditional retry): PLS = RxDetect and LWS written where
+   `XhciLinkDecide(WANT_RELEASE)` asks for it, nothing written where the
+   link is still trained (QEMU) or in another readable state, and the
+   hold ended either way (`HoldsReleased` counts it, as every release).
+   Then, in the same step, the refusal's record is written (item 5), a
+   note goes to the log ring (`hold.timeout`, port << 8 | companion) with
+   a debug line, and the port is marked changed (`hcdPortInspectAgain`).
+5. **The refusal's record** (`HCD_HOLD_TO`, one per root port,
+   `HoldTo[XHCI_MAX_ROOT_PORTS]` in the controller, the thread's alone: no
+   capacity of its own to run out; a port holds one record at most, the
+   latest): written only by item 4's release, with the held vendor and
+   product id, the held serial's form and key (below) and the tick; never
+   by a flap release or any other. Its states:
+   - **ARMED** (the link re-armed, or found trained, at `At`): at the
+     port's next connect fed to its machine (`hcdPortChanged`, before
+     `hcdFeed` of the connect) it becomes LATCHED, however late that
+     inspection is served (other ports' enumerations in the same pass may
+     take long; an arrival waiting to be served is not a late arrival). It
+     lapses only at the time-out service's look past
+     `XHCI_TOL_TICKS(HCD_HOLD_TIMEOUT_MS)` of `At` with the port read empty
+     (readable, CCS and CSC clear): the drive did not come back (it was
+     unplugged during the hold, or its own port stays in eSS.Disabled,
+     item 6), so a later device is asked to the hold afresh, not refused
+     for a hold it never had. An empty read inside the window does not
+     clear it: during the hold the port's link is disabled, so the drive's
+     unplug then is not seen at all, and right after the re-arm a drive
+     still there reads empty too until its link trains again, so an empty
+     port inside the window cannot tell an unplugged drive from one coming
+     back. A different unit of the model plugged in inside the window is
+     latched and then told apart by its serial (LATCHED, below).
+   - **LATCHED** (the connection that followed the re-arm): at each PDO
+     creation on that port, `hcdXportRefusal` (`HcdHoldToRefuse`,
+     `XhciHoldToMatch`) compares the device's vendor and product id, and
+     then its serial, with the record's. A match is refused in place, as on
+     a root port with no companion: the `XHCI98_NOXPORT` hardware and
+     device ids and no compatible id (10.7.1), counted in
+     `XportHoldsNotTaken`, never asked to the hold. A mismatch drops the
+     record (another device was plugged in meanwhile) and the device is
+     decided as ever. Another unit of the held model whose serial proves
+     it another is a mismatch too (`hold.timeout.other` in the log ring,
+     port << 8 | the record's form << 4 | the device's): it is asked to the
+     hold as any drive, and takes its USB 2.0 fallback where it has one.
+     The serials compared are the ones each PDO creation read before
+     anything else (`HcdDeviceReadSerial`: `dev->SerialState` and
+     `SerialId`), the held drive's kept with the hold's claim
+     (`HcdHoldRequestUsb2`, `HCD_HOLD.SerialForm` and `SerialKey`) and
+     copied to the record at the time-out, as one of four forms
+     (`XHCI_HOLD_TO_SER_*`): an instance id (`HCD_SERIAL_OK`), kept as a
+     32-bit key (`XhciHoldToSerialKey`, FNV-1a over the id's bytes, so the
+     record stays small on every root port; two different ids with one
+     key, rare but not impossible, are taken as one serial); no serial
+     (`HCD_SERIAL_NONE`: the device descriptor's `iSerialNumber` is 0); a
+     serial whose text is not known (`HCD_SERIAL_REFUSED`, a string that
+     is no instance id - which a malformed or truncated reply is too - and
+     `HCD_SERIAL_FAILED`, every read failed: an `iSerialNumber` that is
+     not 0 either way); and unknown (not read). They prove another unit
+     (`XhciHoldToSameUnit`) only when one has an `iSerialNumber` and the
+     other none (the device descriptors differ, which one drive's never
+     do), or when both are instance ids with different keys. Otherwise
+     the device may be the held drive and is refused: the same serial
+     (the drive itself, or a unit sold with its serial, which the bus
+     cannot tell from it), no serial on either side (two units of one model
+     with no serial cannot be told apart, as 29-A.5's identity already
+     rules, `XhciLinkSameDevice`), a serial whose text is not known on
+     either side (the held drive's own serial read whole once and
+     malformed the other time is one), or one unknown. That residual is
+     the safe side the record can take: not refusing it would offer the
+     drive whose
+     send-back just timed out to the hold again, invisible for the bound
+     again and then the same question, with nothing to end the round; and a
+     unit refused so is refused for that connection only - its unplug
+     clears the record (below), and plugged in again it is asked to the
+     hold as any drive. The latch is taken at the connect, before the
+     device's descriptors, strings and retries, so an enumeration that
+     takes long cannot outlive it; it holds across every later
+     re-enumeration of that connection (a failed PDO creation tried again
+     by `hcdHoldResolve`, a cycle, a tolerance re-enumeration), so the same
+     connection is never held again.
+   - **Cleared** when the port reads physically empty or reports a
+     connection change (`CCS` clear, or `CSC`: the place in
+     `hcdPortChanged` that clears `HoldRecoverFails`, the existing meaning
+     of "another connection"), for a LATCHED record; an ARMED one is not
+     cleared there, since the re-trained link's own connection change is
+     the arrival it waits for. A link that drops and comes back under the
+     same drive is such a change too, and the drive is then offered to the
+     hold once more (invisible for the bound again, then refused again):
+     a stay is a connection, as `HoldRecoverFails` already counts it. A
+     controller start or reset clears every record with the holds
+     (`hcdHoldsForget`). A hold begun on the port (a new send-back) clears
+     its record too.
+6. **Where the drive comes back.** Re-arming the downstream port restores
+   its receiver terminations; whether the drive trains again is the
+   drive's. In QEMU it is still trained (the PED write was ignored) and
+   the inspection asked for reads it connected: an Empty machine with CCS
+   set is fed a connect (`XhciLinkPortFeed`), the record latches and the
+   drive is listed, refused in place. On hardware a drive whose upstream
+   port went back to Rx.Detect trains and arrives as a connection change,
+   the same way. One whose upstream port stays in eSS.Disabled (USB 3.2
+   7.5.1.2: it leaves that only on a VBUS change, a USB 2.0 bus reset with
+   its count below three, or its own direction) does not come back: it
+   stays invisible until it is replugged, as it was, but the connector is
+   no longer held, and the record lapses unused. No power cycle is
+   attempted: port power may be ganged with other ports on a board, which
+   the bus cannot read.
+7. **What the user sees.** A listed device with no driver that matches
+   automatically, as every refused-in-place drive already is (Windows'
+   own new-hardware handling then runs; its wording is the system's), and
+   in XHCITR the transport line "none (the device offers UAS alone, at
+   SuperSpeed on a controller that cannot stream)" and, new, a note under
+   it (record 25 section 19 item 3a). Confirmed by the owner, 2026-11-15:
+   no null-driver INF for the no-transport ids, and the drive is not kept
+   unlisted. Read in the emulator on 2000 SP4 and 98 SE under task 50.5:
+   the time-out, the refusal, the note and a replug held again
+   (`runs/run-50.md`, "50.5").
+8. **A later replug.** The drive unplugged clears the record, so plugged in
+   again it is offered to the hold again; on a connector where it reaches
+   USB 2.0 it runs there, and where it does not it is invisible for the
+   bound again and then refused in place again. Nothing is remembered of
+   the drive beyond the connection.
+9. **Windows 98 SE and ME, and NT.** The same code on every target: the
+   hold, the bound and the refusal are the bus's, below every class
+   driver. Windows' handling of a devnode with no driver differs by system,
+   as for every refused drive.
+
+**Not changed.** The hold's other rules and their counters; a hold whose
+drive does reach the companion (its connect restarts the clock and stops
+it while the drive is there, and the release by its departure is as
+before); issue 29's flap holds; `HCD_HOLD_RECOVER_TRIES`, `HoldAsked`,
+`HoldRefused` and `hcdHoldResolve`; the transport decision; the settle: a
+hold whose companion saw no connect is "in flight" for the first answer
+(`XhciEnumHoldInFlight`) until it ends, which it now does by the bound (the
+release's inspection is owed in `PortChange`, so the settle does not
+complete before it).
+
+**Host vectors** (`test_link`): `XhciHoldQuietDue` - due only past the
+bound and not one tick before, the wrap of the count, each blocking input
+alone (not idle, seen elsewhere, pending, the flap reason, the orphan and
+none kinds); the record's steps (`XhciHoldToConnect`,
+`XhciHoldToExpire`, `XhciHoldToCreate`, `XhciHoldToDepart`): ARMED latching
+at a connect however late, lapsing only empty past its window, refusing
+nothing; LATCHED refusing a match and dropped by a mismatch, kept across
+re-enumerations, never lapsing by time, cleared by a departure; ARMED kept
+across the arrival's change. The serial (`test_hold_timeout_serial`,
+`XhciHoldToSerialKey`, `XhciHoldToSameUnit`, `XhciHoldToMatch`): a drive
+unplugged during its hold and another unit of its model, another serial,
+plugged in inside the window - latched, not refused, the record gone; the
+held drive back with its own serial refused, across re-enumerations; no
+serial on either side refused, its unplug clearing the record and the
+next plug not refused; another model never refused; ARMED refusing nothing
+whoever it meets; the held drive's serial read whole once and of unknown
+text the other time, either way round, refused; no serial against one
+not refused; every pair of the four forms.
+
+**Legs** (`runs/run-50.md`, "50.5"): QEMU's `qemu-xhci` with streams on,
+`XhciStreamsOff` 2 on the controller and `usb-uas` on a SuperSpeed port
+with a companion, on 98 SE and 2000. Seen elsewhere and the eSS.Disabled
+case have host vectors only: the emulator moves no drive to another port
+and keeps every device trained.
 
 ### 10.8 When and how the bus splits a device
 
@@ -12190,7 +13715,8 @@ the allowance binds for requests of 4 ms or more at one TD a microframe
 records**: the allowance of 120 holds three of those URBs whatever the
 record count, and a fourth record already waited beside them for ring
 room (`RingWait`). What lifts that case is a larger event ring
-(ISORING.4, section 11.8 point 9, kept in "Planned work"). More records
+(ISORING.4, section 11.8 point 9, then kept in "Planned work"; done as
+`roadmap-usb4.md` task 47.30, section 11.10). More records
 lift the Full Speed case, the High Speed `bInterval` 4 case and short
 requests at High Speed, and they cost the event budget (below).
 
@@ -14323,9 +15849,11 @@ SuperSpeed hub alike, is to drop the device and enumerate it afresh:
 To the storage stack that is a surprise removal and a new disk: requests
 in flight fail, cached writes not yet on the medium are lost ("Delayed
 Write Failed"), and every handle opened on the old volume fails for good.
-The transfers the teardown ends are held on the old PDO until PnP's
-surprise removal reaches it (`HcdIoPark`, `hcd_io.c`), so its class driver
-sees no error until then. Read on q35 XP with `3.3.0.0` and a test-only
+On 98 SE and ME the transfers the teardown ends are held on the old PDO
+until PnP's removal reaches it (`HcdIoPark`, `hcd_io.c`), so its class
+driver sees no error until then; on 2000 and later they are completed
+`DEVICE_GONE` as the teardown ends them (section 10.5.3, task 50.28),
+which until then held them there too. Read under that hold on q35 XP with `3.3.0.0` and a test-only
 SuperSpeed hub model that fails a downstream link (`runs/run-45.md`,
 "45.41"): the drive under a copy loop is dropped about 2 s after the link
 fails, every copy fails for about 16 s, and the drive comes back as a new

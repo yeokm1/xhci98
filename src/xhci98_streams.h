@@ -124,10 +124,30 @@ typedef struct _XHCI98_STREAMS_REQUEST {
     ULONG StreamsRequested;     /* in:  1..XHCI98_STREAMS_MAX (OPEN)      */
     ULONG StreamsGranted;       /* out: 1..StreamsRequested (OPEN)        */
     ULONG Status;               /* out: XHCI98_STREAMS_*                  */
-    ULONG Reserved;             /* in:  0                                 */
+    ULONG Flags;                /* in: 15:0 XHCI98_STREAMS_F_CLIENT_*; out:
+                                 * 31:16 XHCI98_STREAMS_F_ACK_*, written
+                                 * by a bus from 3.6.0.0 on (was
+                                 * Reserved, in: 0)                     */
     /* out (OPEN): StreamPipeHandle[n] is Stream ID n's handle for
      * n = 1..StreamsGranted; [0] and the rest are NULL. */
     PVOID StreamPipeHandle[XHCI98_STREAMS_MAX + 1];
 } XHCI98_STREAMS_REQUEST, *PXHCI98_STREAMS_REQUEST;
+
+/*
+ * Flags (design record 17 section 4.12.10). The client sets its half before
+ * every OPEN_STREAMS, the bus's half 0; a bus that knows the field writes
+ * its half on every open it serves, so a bus before it, which leaves the
+ * field as it was, never looks like one that acknowledged.
+ *   XHCI98_STREAMS_F_CLIENT_RECOVERS  in: the client runs the stream
+ *                                     recovery of 4.12.10 itself;
+ *   XHCI98_STREAMS_F_ACK_CONTRACT     out: this endpoint is held to it - a
+ *                                     cancel or abort that takes a TD off a
+ *                                     stream holds the endpoint until the
+ *                                     client's RESET_PIPE or RESET_PORT.
+ */
+#define XHCI98_STREAMS_F_CLIENT_MASK     0x0000FFFFUL
+#define XHCI98_STREAMS_F_CLIENT_RECOVERS 0x00000001UL
+#define XHCI98_STREAMS_F_ACK_MASK        0xFFFF0000UL
+#define XHCI98_STREAMS_F_ACK_CONTRACT    0x00010000UL
 
 #endif /* XHCI98_STREAMS_H */

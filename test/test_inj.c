@@ -14,6 +14,7 @@
  */
 
 #include <stdio.h>
+#include <string.h>
 #include "../src/xhci.h"
 #include "../src/xhci_inj.h"
 #include "../src/xhci_pipe.h"
@@ -69,13 +70,15 @@ static void test_trigger(void)
 
     /* Every code: built (01 to 1A hex - 13 is 36.12's device clear, 14 to
      * 17 are 36.22's bulk faults, 18 and 19 38.10's interface switch, 1A
-     * issue 26's Stop race - and FF) or unknown. A refused one is
-     * consumed. */
+     * issue 26's Stop race - task 50.31's 30 to 35, and FF) or unknown. A
+     * refused one is consumed. */
     for (f = 0; f < 256; f++) {
         ULONG want;
         char what[64];
 
-        if ((f >= 1 && f <= 0x1F) || f == XHCI_INJ_CLEAR) {
+        if ((f >= 1 && f <= 0x2C) || f == XHCI_INJ_QUERY_STOP ||
+            (f >= 0x30 && f <= 0x35) ||
+            f == XHCI_INJ_CLEAR) {
             want = XHCI_INJ_TAKE_FIRE;
         } else {
             want = XHCI_INJ_TAKE_UNKNOWN;
@@ -369,7 +372,8 @@ static void test_needs_live(void)
         want = (f == XHCI_INJ_LOST_IRQ || f == XHCI_INJ_PED ||
                 f == XHCI_INJ_OC || f == XHCI_INJ_HCH ||
                 f == XHCI_INJ_DEAD || f == XHCI_INJ_DEAD_NOPROOF ||
-                (f >= 0x08 && f <= 0x1F)) ? 1UL : 0UL;
+                (f >= 0x08 && f <= 0x2C) || f == XHCI_INJ_QUERY_STOP) ? 1UL
+                                                                 : 0UL;
         sprintf(what, "fault %lu needs a live controller", f);
         CHECK_EQ(XhciInjNeedsLive(f), want, what);
     }
@@ -450,7 +454,18 @@ static void test_codes(void)
              "1E a restart before the command (49.39)");
     CHECK_EQ(XHCI_INJ_REPAIR_RACE, 0x1F,
              "1F a restart inside c1's repair (49.39)");
-    CHECK_EQ(XHCI_INJ_LAST_BUILT, XHCI_INJ_REPAIR_RACE, "1F the last built");
+    CHECK_EQ(XHCI_INJ_ENUM_DESC, 0x20,
+             "20 a bad bMaxPacketSize0 at a root port (50.7)");
+    CHECK_EQ(XHCI_INJ_STREAM_UNTRUSTED, 0x21,
+             "21 the stream flag and the resync switch (50.20)");
+    CHECK_EQ(XHCI_INJ_RECYCLE_CFG, 0x22, "22 the recycle's Configure (50.20)");
+    CHECK_EQ(XHCI_INJ_RENDEZVOUS, 0x23, "23 a rendezvous (50.20)");
+    CHECK_EQ(XHCI_INJ_LAST_BUILT, XHCI_INJ_PSW_STEP,
+             "2C the last built (50.34)");
+    CHECK_EQ(XhciInjKind(XHCI_INJ_STREAM_UNTRUSTED), XHCI_INJ_KIND_OTHER,
+             "21 is the layer's own");
+    CHECK_EQ(XhciInjKind(XHCI_INJ_ENUM_DESC), XHCI_INJ_KIND_OTHER,
+             "20 is the layer's own");
     CHECK_EQ(XhciInjKind(XHCI_INJ_REPAIR_RACE), XHCI_INJ_KIND_OTHER,
              "1F is the layer's own");
     CHECK_EQ(XhciInjKind(XHCI_INJ_STALE_DEQUEUE), XHCI_INJ_KIND_OTHER,
@@ -1045,9 +1060,561 @@ static void test_bulk(void)
     CHECK_EQ(XhciInjHaltStateOf(XHCI_INJ_BULK_SHORT), 0, "SHORT does not");
 }
 
+/* Task 50.30 step 2 (design record 17 section 4.15.9): faults 24 to 2B. */
+static void test_hang(void)
+{
+    XHCI_INJ_HANG h;
+    XHCI_TRB ev[2];
+    ULONG rewrite;
+    ULONG ring;
+
+    memset(&h, 0, sizeof(h));
+    CHECK_EQ(XHCI_INJ_LAST_BUILT, 0x2C, "the last built is 2C (task 50.34)");
+    CHECK_EQ(XHCI_INJ_PSW_STEP, 0x2C, "2C: the port switchover's step");
+    CHECK_EQ(XHCI_INJ_ADDRESS_HANG, 0x24, "24 hex");
+    CHECK_EQ(XHCI_INJ_DEVICE_HANG, 0x26, "26 hex");
+    CHECK_EQ(XhciInjHangCmdType(XHCI_INJ_ADDRESS_HANG), 11, "Address Device");
+    CHECK_EQ(XhciInjHangCmdType(XHCI_INJ_DEVICE_HANG), 11, "... and for 26");
+    CHECK_EQ(XhciInjHangCmdType(XHCI_INJ_CFGEP_HANG), 12, "Configure Endpoint");
+    CHECK_EQ(XhciInjHangCmdType(XHCI_INJ_EVAL_HANG), 13, "Evaluate Context");
+    CHECK_EQ(XhciInjHangCmdType(XHCI_INJ_RESETEP_HANG), 14, "Reset Endpoint");
+    CHECK_EQ(XhciInjHangCmdType(XHCI_INJ_SETDEQ_HANG), 16, "Set TR Dequeue");
+    CHECK_EQ(XhciInjHangCmdType(XHCI_INJ_RESETDEV_HANG), 17, "Reset Device");
+    CHECK_EQ(XhciInjHangCmdType(XHCI_INJ_EP0_HANG), 0, "25: EP0 only");
+
+    /* 24 at root port 3, twice, outcome 5. */
+    XhciInjHangArm(&h, XHCI_INJ_ADDRESS_HANG, 3, 0x52);
+    CHECK_EQ(h.Armed, 1, "armed at once");
+    CHECK_EQ(h.Outcome, XHCI_INJ_OUT_NOTHING, "outcome 5");
+    CHECK_EQ(XhciInjHangCmd(&h, 11, 2, 0), 0, "another port: sent");
+    CHECK_EQ(XhciInjHangCmd(&h, 11, 3, 0x1), 0, "behind a hub: sent");
+    CHECK_EQ(XhciInjHangCmd(&h, 12, 3, 0), 0, "another command: sent");
+    CHECK_EQ(XhciInjHangEp0(&h, 3, 0), 0, "24 leaves EP0 alone");
+    /* The check before the submit spends nothing: a submit refused or
+     * busy leaves the count and the place as they were. */
+    CHECK_EQ(XhciInjHangCmdFits(&h, 11, 3, 0), 1, "fits");
+    CHECK_EQ(XhciInjHangCmdFits(&h, 11, 3, 0), 1, "... and again: unspent");
+    CHECK_EQ(XhciInjHangCmdFits(&h, 12, 3, 0), 0, "another command: no");
+    CHECK_EQ(XhciInjHangCmdFits(&h, 11, 2, 0), 0, "another port: no");
+    CHECK_EQ(h.Left, 2, "the count untouched by the checks");
+    CHECK_EQ(h.Withheld, 0, "nothing withheld by the checks");
+    CHECK_EQ(XhciInjHangCmd(&h, 11, 3, 0), 1, "withheld");
+    CHECK_EQ(XhciInjHangCmd(&h, 11, 3, 0), 1, "withheld again");
+    CHECK_EQ(XhciInjHangCmd(&h, 11, 3, 0), 0, "the count spent");
+    CHECK_EQ(XhciInjHangCmdFits(&h, 11, 3, 0), 0, "spent: no longer fits");
+    h.HoldNext = 1;
+    h.HoldType = 11;
+    h.HoldSlot = 4;
+    XhciInjHangEnd(&h);
+    CHECK_EQ(h.HoldNext + h.HoldType + h.HoldSlot, 0,
+             "CLEAR ends a submit's mark");
+    /* Port 0: the first that fits, then latched. */
+    XhciInjHangArm(&h, XHCI_INJ_CFGEP_HANG, 0, 0x0F);
+    CHECK_EQ(XhciInjHangCmd(&h, 12, 5, 0), 1, "the first that fits");
+    CHECK_EQ(XhciInjHangCmd(&h, 12, 4, 0), 0, "latched to port 5");
+    CHECK_EQ(XhciInjHangCmd(&h, 12, 5, 0), 1, "persistent");
+    /* Behind a hub. */
+    XhciInjHangArm(&h, XHCI_INJ_RESETDEV_HANG, 0x81, 1);
+    CHECK_EQ(XhciInjHangCmd(&h, 17, 1, 0), 0, "at the root port: sent");
+    CHECK_EQ(XhciInjHangCmd(&h, 17, 1, 0x2), 1, "behind its hub: withheld");
+
+    /* 26 armed by behaviour: the field report's emulation. */
+    XhciInjHangArm(&h, XHCI_INJ_DEVICE_HANG, 3, 0xD1);
+    CHECK_EQ(h.ByBehaviour, 1, "bit 7: by behaviour");
+    CHECK_EQ(h.Armed, 0, "... not yet armed");
+    CHECK_EQ(XhciInjHangCmd(&h, 11, 3, 0), 0, "Address Device sent");
+    CHECK_EQ(XhciInjHangEp0(&h, 3, 0), 0, "EP0 rung");
+    CHECK_EQ(XhciInjHangGone(&h, 3), 0, "a disconnect before it arms: kept");
+    CHECK_EQ(XhciInjHangLate(&h, 2, 0, 0), 0, "another port's deadline");
+    CHECK_EQ(XhciInjHangLate(&h, 3, 0, 1), 0,
+             "a deadline the layer made does not arm");
+    CHECK_EQ(XhciInjHangLate(&h, 3, 0, 0), 1, "the device's own silence arms");
+    CHECK_EQ(XhciInjHangLate(&h, 3, 0, 0), 0, "once");
+    CHECK_EQ(XhciInjHangEp0(&h, 3, 0), 1, "EP0 withheld");
+    CHECK_EQ(XhciInjHangCmd(&h, 11, 3, 0), 1, "Address Device withheld");
+    CHECK_EQ(XhciInjHangCmd(&h, 11, 3, 0), 1, "... after every recovery");
+    CHECK_EQ(XhciInjHangCmd(&h, 11, 3, 0), 1, "... until its disconnect");
+    CHECK_EQ(XhciInjHangCmd(&h, 12, 3, 0), 0, "Configure Endpoint sent");
+    CHECK_EQ(XhciInjHangGone(&h, 4), 0, "another port's disconnect");
+    CHECK_EQ(XhciInjHangGone(&h, 3), 1, "its disconnect ends it");
+    CHECK_EQ(h.Fault, 0, "... ended");
+    CHECK_EQ(XhciInjHangCmd(&h, 11, 3, 0), 0, "a replug enumerates");
+    /* The ring given up: the layer's addresses on it go, the arming stays. */
+    XhciInjHangArm(&h, XHCI_INJ_DEVICE_HANG, 3, 0xD1);
+    CHECK_EQ(XhciInjHangLate(&h, 3, 0, 0), 1, "armed by behaviour");
+    h.HoldNext = 1;
+    h.HoldType = 11;
+    h.HoldSlot = 2;
+    h.HeldPA = 0x1000;
+    h.NoOpPA = 0x1000;
+    h.StopOwedPA = 0x1010;
+    XhciInjHangRingGone(&h);
+    CHECK_EQ(h.HoldNext + h.HoldType + h.HoldSlot, 0, "the mark gone");
+    CHECK_EQ(h.HeldPA, 0, "the withheld TRB gone");
+    CHECK_EQ(h.NoOpPA, 0, "the layer's No Op marker gone");
+    CHECK_EQ(h.StopOwedPA, 0, "the Stopped owed gone");
+    CHECK_EQ(h.Fault, XHCI_INJ_DEVICE_HANG, "the fault stays");
+    CHECK_EQ(h.Armed, 1, "... armed");
+    CHECK_EQ(h.Port, 3, "... at its place");
+    CHECK_EQ(XhciInjHangCmd(&h, 11, 3, 0), 1, "and still hangs the place");
+    /* 26 takes a root port only: behind a hub it is refused. */
+    XhciInjHangArm(&h, XHCI_INJ_DEVICE_HANG, 0x83, 0xD1);
+    CHECK_EQ(h.Fault, 0, "26 behind a hub: refused");
+    CHECK_EQ(XhciInjHangCmd(&h, 11, 3, 0x1), 0, "... nothing withheld");
+    CHECK_EQ(XhciInjHangLate(&h, 3, 0x1, 0), 0, "... nothing armed");
+    XhciInjHangArm(&h, XHCI_INJ_ADDRESS_HANG, 0x83, 0x01);
+    CHECK_EQ(h.Fault, XHCI_INJ_ADDRESS_HANG, "24 behind a hub: armed");
+    CHECK_EQ(XhciInjHangCmd(&h, 11, 3, 0x1), 1, "... and withheld once");
+    /* 26 by count. */
+    XhciInjHangArm(&h, XHCI_INJ_DEVICE_HANG, 2, 0x01);
+    CHECK_EQ(h.Armed, 1, "by count: armed at once");
+    CHECK_EQ(XhciInjHangCmd(&h, 11, 2, 0), 1, "withheld");
+    CHECK_EQ(XhciInjHangCmd(&h, 11, 2, 0), 1, "not spent: until disconnect");
+    XhciInjHangEnd(&h);
+    CHECK_EQ(XhciInjHangCmd(&h, 11, 2, 0), 0, "CLEAR");
+
+    /* The outcomes. */
+    CHECK_EQ(XhciInjHangEvents(0, 0x1000, 0x1010, 0x9000, ev, &rewrite,
+                               &ring), 1, "0: one event");
+    CHECK_EQ(ev[0].Param0, 0x1000, "... at the withheld TRB");
+    CHECK_EQ((ev[0].Status >> 24), 24, "... Command Ring Stopped");
+    CHECK_EQ(XHCI_TRB_GET_TYPE(ev[0].Control), 33, "a Command Completion");
+    CHECK_EQ(rewrite + ring, 0, "... no rewrite, no doorbell");
+    CHECK_EQ(XhciInjHangEvents(1, 0x1000, 0x1010, 0x9000, ev, &rewrite,
+                               &ring), 2, "1: two events");
+    CHECK_EQ(rewrite, 1, "... the layer's own No Op first");
+    CHECK_EQ((ev[0].Status >> 24), 25, "... Command Aborted");
+    CHECK_EQ(ev[1].Param0, 0x1010, "... then Stopped at the next TRB");
+    CHECK_EQ(XhciInjHangEvents(2, 0x1000, 0x1010, 0x9000, ev, &rewrite,
+                               &ring), 1, "2: one event");
+    CHECK_EQ(rewrite, 1, "... rewritten");
+    CHECK_EQ(ev[0].Param0, 0x1010, "... Stopped at the next: a clean stop");
+    CHECK_EQ(XhciInjHangEvents(3, 0x1000, 0x1010, 0x9000, ev, &rewrite,
+                               &ring), 2, "3: two events");
+    CHECK_EQ(ev[0].Param0 == 0x1000 && ev[1].Param0 == 0x1000, 1,
+             "... Aborted and Stopped at the same TRB");
+    CHECK_EQ(rewrite, 0, "... the engine's to rewrite");
+    CHECK_EQ(XhciInjHangEvents(4, 0x1000, 0x1010, 0x9000, ev, &rewrite,
+                               &ring), 0, "4: none now");
+    CHECK_EQ(ring, 1, "... the doorbell rung");
+    CHECK_EQ(XhciInjHangEvents(5, 0x1000, 0x1010, 0x9000, ev, &rewrite,
+                               &ring), 0, "5: nothing");
+    CHECK_EQ(ring + rewrite, 0, "... nothing at all");
+    CHECK_EQ(XhciInjHangEvents(6, 0x1000, 0x1010, 0x9000, ev, &rewrite,
+                               &ring), 1, "6: one event");
+    CHECK_EQ(ev[0].Param0, 0x9000, "... at a position the ring cannot hold");
+}
+
+/* Task 50.30 step 3 (design record 17 section 4.15.16 C, revision 34):
+ * rendezvous point 3 lets the thread go for a route's bit standing or
+ * latched since it was reached; points 1 and 2 never for a route. */
+static void test_rv_route(void)
+{
+    CHECK_EQ(XhciInjRvRouteLets(XHCI_INJ_RV_RECOVERY, 0, 0), 0,
+             "point 3, no route: held");
+    CHECK_EQ(XhciInjRvRouteLets(XHCI_INJ_RV_RECOVERY, 0x10, 0), 1,
+             "point 3, a power route standing");
+    CHECK_EQ(XhciInjRvRouteLets(XHCI_INJ_RV_RECOVERY, 0, 0x10), 1,
+             "point 3, a power route raised and lowered since");
+    CHECK_EQ(XhciInjRvRouteLets(XHCI_INJ_RV_RECOVERY, 0x02, 0x02), 1,
+             "point 3, a removal standing and latched");
+    CHECK_EQ(XhciInjRvRouteLets(XHCI_INJ_RV_RECOVERY, 0x80, 0), 1,
+             "point 3, the test's own route bit while it stands");
+    CHECK_EQ(XhciInjRvRouteLets(XHCI_INJ_RV_CANCEL, 0x10, 0x10), 0,
+             "point 1: never for a route");
+    CHECK_EQ(XhciInjRvRouteLets(XHCI_INJ_RV_RECYCLE, 0x10, 0x10), 0,
+             "point 2: never for a route");
+    CHECK_EQ(XhciInjRvRouteLets(0, 0xFF, 0xFF), 0, "no point");
+}
+
+/* Task 50.30 step 3 (design record 17 section 4.15.16 C): bit 7 of 0x24
+ * and 0x25 withholds the recovery command that follows the primary, and
+ * 0x25's outcome 7 arms a mark deadline for the thread's own wait. */
+static void test_hang_recovery(void)
+{
+    XHCI_INJ_HANG h;
+
+    memset(&h, 0, sizeof(h));
+    CHECK_EQ(XHCI_INJ_RV_RECOVERY, 3, "23's point 3: the recovery's entry");
+    CHECK_EQ(XHCI_INJ_OUT_MARK, 7, "outcome 7");
+    CHECK_EQ(XhciInjHangActOutcome(XHCI_INJ_OUT_MARK), XHCI_INJ_OUT_FETCHED,
+             "7 acted out as the clean abort");
+    CHECK_EQ(XhciInjHangActOutcome(XHCI_INJ_OUT_NOTHING), XHCI_INJ_OUT_NOTHING,
+             "every other outcome as itself");
+
+    /* Without bit 7 nothing is latched. */
+    XhciInjHangArm(&h, XHCI_INJ_ADDRESS_HANG, 3, 0x11);
+    CHECK_EQ(h.Recovery, 0, "24 without bit 7: no recovery");
+    CHECK_EQ(XhciInjHangCmd(&h, 11, 3, 0), 1, "the primary withheld");
+    XhciInjHangLatch(&h, 4, 100);
+    CHECK_EQ(h.RecSlot, 0, "nothing latched");
+    CHECK_EQ(XhciInjHangRecoveryFits(&h, 10, 4, 0), 0,
+             "its Disable Slot goes out");
+
+    /* 24 with bit 7, outcome 1, once. */
+    XhciInjHangArm(&h, XHCI_INJ_ADDRESS_HANG, 3, 0x91);
+    CHECK_EQ(h.Recovery, 1, "24 with bit 7: armed for the recovery");
+    CHECK_EQ(h.Outcome, XHCI_INJ_OUT_FETCHED, "outcome 1");
+    CHECK_EQ(XhciInjHangRecoveryFits(&h, 10, 4, 0), 0,
+             "before the primary: nothing latched");
+    CHECK_EQ(XhciInjHangCmd(&h, 11, 3, 0), 1, "the primary withheld");
+    XhciInjHangLatch(&h, 4, 100);
+    CHECK_EQ(h.RecSlot, 4, "its slot latched");
+    CHECK_EQ(h.MarkSlot, 0, "24 arms no mark deadline");
+    CHECK_EQ(XhciInjHangCmdFits(&h, 11, 3, 0), 0, "the primary count spent");
+    CHECK_EQ(XhciInjHangRecoveryFits(&h, 10, 4, 0), 1,
+             "the slot's Disable Slot fits, the count spent or not");
+    CHECK_EQ(XhciInjHangRecoveryFits(&h, 10, 5, 0), 0, "another slot's: no");
+    CHECK_EQ(XhciInjHangRecoveryFits(&h, 15, 4, 1), 0,
+             "24: a Stop Endpoint is not its recovery");
+    CHECK_EQ(XhciInjHangRecoveryFits(&h, 12, 4, 0), 0,
+             "a Configure Endpoint: no");
+    /* A refused or busy submission consumes nothing: the check is free. */
+    CHECK_EQ(XhciInjHangRecoveryFits(&h, 10, 4, 0), 1, "still fits");
+    CHECK_EQ(XhciInjHangRecoveryTake(&h, 10, 5, 0), 0,
+             "another slot's doorbell: not taken");
+    CHECK_EQ(h.RecSlot, 4, "... the latch stands");
+    CHECK_EQ(XhciInjHangRecoveryTake(&h, 10, 4, 0), 1,
+             "withheld at its doorbell");
+    CHECK_EQ(h.RecSlot, 0, "one shot: consumed");
+    CHECK_EQ(XhciInjHangRecoveryTake(&h, 10, 4, 0), 0, "not a second time");
+    CHECK_EQ(h.Withheld, 3,
+             "the earlier primary, this primary and the recovery counted");
+
+    /* 25 with bit 7: the late path's Stop of DCI 1, or the Disable Slot. */
+    XhciInjHangArm(&h, XHCI_INJ_EP0_HANG, 2, 0x91);
+    CHECK_EQ(XhciInjHangEp0(&h, 2, 0), 1, "the EP0 doorbell withheld");
+    XhciInjHangLatch(&h, 6, 200);
+    CHECK_EQ(XhciInjHangRecoveryFits(&h, 15, 6, 2), 0,
+             "a Stop of another DCI never matches");
+    CHECK_EQ(XhciInjHangRecoveryFits(&h, 15, 6, 1), 1, "the Stop of DCI 1");
+    CHECK_EQ(XhciInjHangRecoveryFits(&h, 10, 6, 0), 1, "or the Disable Slot");
+    CHECK_EQ(XhciInjHangRecoveryTake(&h, 15, 6, 1), 1, "the first one taken");
+    CHECK_EQ(XhciInjHangRecoveryFits(&h, 10, 6, 0), 0,
+             "the one that follows goes out");
+
+    /* The drops: the ring given up, CLEAR, a re-arm. */
+    XhciInjHangArm(&h, XHCI_INJ_EP0_HANG, 2, 0x9F);
+    CHECK_EQ(XhciInjHangEp0(&h, 2, 0), 1, "withheld");
+    XhciInjHangLatch(&h, 6, 0);
+    XhciInjHangRingGone(&h);
+    CHECK_EQ(h.RecSlot, 0, "the ring given up: the latch dropped");
+    CHECK_EQ(XhciInjHangRecoveryFits(&h, 10, 6, 0), 0,
+             "a later device in the slot inherits nothing");
+    CHECK_EQ(h.Recovery, 1, "bit 7 stays armed for the next primary");
+    CHECK_EQ(XhciInjHangEp0(&h, 2, 0), 1, "the next primary");
+    XhciInjHangLatch(&h, 7, 0);
+    CHECK_EQ(h.RecSlot, 7, "latched again");
+    XhciInjHangEnd(&h);
+    CHECK_EQ(h.RecSlot + h.Recovery + h.MarkSlot, 0, "CLEAR drops everything");
+    XhciInjHangArm(&h, XHCI_INJ_EP0_HANG, 2, 0x9F);
+    (VOID)XhciInjHangEp0(&h, 2, 0);
+    XhciInjHangLatch(&h, 7, 0);
+    XhciInjHangArm(&h, XHCI_INJ_EP0_HANG, 2, 0x91);
+    CHECK_EQ(h.RecSlot, 0, "a re-arm drops the latch");
+    /* 0x26 and the other codes take no bit 7 for a recovery. */
+    XhciInjHangArm(&h, XHCI_INJ_CFGEP_HANG, 2, 0x91);
+    CHECK_EQ(h.Recovery, 0, "27: no recovery latch");
+    XhciInjHangArm(&h, XHCI_INJ_DEVICE_HANG, 2, 0x91);
+    CHECK_EQ(h.Recovery, 0, "26: bit 7 is by behaviour");
+    CHECK_EQ(h.ByBehaviour, 1, "... as before");
+
+    /* 25 outcome 7: the mark deadline, for its slot, once, after its tick. */
+    XhciInjHangArm(&h, XHCI_INJ_EP0_HANG, 2, 0xF1);
+    CHECK_EQ(h.Outcome, XHCI_INJ_OUT_MARK, "outcome 7");
+    CHECK_EQ(XhciInjHangEp0(&h, 2, 0), 1, "the EP0 doorbell withheld");
+    XhciInjHangLatch(&h, 6, 0xFFFFFFFAUL);
+    CHECK_EQ(h.MarkSlot, 6, "the deadline armed for slot 6");
+    CHECK_EQ(XhciInjHangMarkDue(&h, 6, 0xFFFFFFFAUL), 0, "not at once");
+    CHECK_EQ(XhciInjHangMarkDue(&h, 6, 0x00000002UL), 0,
+             "not before its tick, across the clock's wrap");
+    CHECK_EQ(XhciInjHangMarkDue(&h, 5, 0x00000010UL), 0,
+             "never for another slot's wait");
+    CHECK_EQ(h.MarkSlot, 6, "... which leaves it armed");
+    CHECK_EQ(XhciInjHangMarkDue(&h, 6, 0x00000004UL), 1,
+             "due at its tick, about a second in");
+    CHECK_EQ(XhciInjHangMarkDue(&h, 6, 0x00000005UL), 0, "once");
+    CHECK_EQ(XhciInjHangRecoveryFits(&h, 15, 6, 1), 0,
+             "outcome 7: the teardown's Stop of EP0 goes out");
+    CHECK_EQ(XhciInjHangRecoveryTake(&h, 15, 6, 1), 0,
+             "... and consumes nothing");
+    CHECK_EQ(XhciInjHangRecoveryFits(&h, 10, 6, 0), 1,
+             "the cycle's Disable Slot is the recovery command");
+    CHECK_EQ(XhciInjHangRecoveryTake(&h, 10, 6, 0), 1, "withheld");
+    XhciInjHangLatch(&h, 6, 100);
+    XhciInjHangRingGone(&h);
+    CHECK_EQ(XhciInjHangMarkDue(&h, 6, 200), 0,
+             "the ring given up: the deadline dropped");
+    XhciInjHangLatch(&h, 6, 100);
+    XhciInjHangEnd(&h);
+    CHECK_EQ(XhciInjHangMarkDue(&h, 6, 200), 0, "CLEAR: dropped");
+    XhciInjHangArm(&h, XHCI_INJ_EP0_HANG, 2, 0x71);
+    (VOID)XhciInjHangEp0(&h, 2, 0);
+    XhciInjHangLatch(&h, 6, 100);
+    CHECK_EQ(h.MarkSlot + h.RecSlot, 0,
+             "outcome 7 without bit 7: neither latch nor deadline");
+}
+
+/* Task 50.30 step 3 (record 17 section 4.15.16 E): fault 2D's exercise -
+ * the decoding, each refusal of the arming, the trigger's one shot, each
+ * condition of each commit, bit 7's debt check, the bracket's three
+ * answers for each state, a terminal request's hand-off with no cancel
+ * and another's cancel, Busy blocking a commit and not a nested bracket. */
+static void qs_queried(PXHCI_INJ_QSTOP q, ULONG arg, ULONG released)
+{
+    XhciInjQsStart(q);
+    q->Busy = 0;
+    XhciInjQsArm(q, arg);
+    (void)XhciInjQsTrigger(q, 3, 0x1000, 100);
+    (void)XhciInjQsStep(q, 200, 1, 1);
+    XhciInjQsQueried(q, released, 200);
+}
+
+static void test_query_stop(void)
+{
+    XHCI_INJ_QSTOP q;
+    XHCI_INJ_TRIGGER t;
+    ULONG s;
+
+    /* The code and its argument. */
+    CHECK_EQ(XHCI_INJ_QUERY_STOP, 0x2D, "2D the query-stop exercise");
+    CHECK_EQ(XHCI_INJ_QS_HOLD(0xFF), 15, "bits 3:0 the hold in seconds");
+    CHECK_EQ(XHCI_INJ_QS_DELAY(0xFF), 7, "bits 6:4 the delay in 100 ms");
+    CHECK_EQ(XHCI_INJ_QS_DELAY(0x80), 0, "bit 7 is not the delay's");
+    CHECK_EQ(XhciInjKind(XHCI_INJ_QUERY_STOP), XHCI_INJ_KIND_OTHER,
+             "2D is the layer's own");
+    CHECK_EQ(XhciInjNeedsLive(XHCI_INJ_QUERY_STOP), 1UL,
+             "2D refused on a failed controller");
+    XhciInjTriggerStart(&t, 0, 0);
+    CHECK_EQ(XhciInjTake(&t, 1, XHCI_INJ_VALUE(1, 0x2D, 0, 0x93)),
+             XHCI_INJ_TAKE_FIRE, "2D fires");
+    CHECK_EQ(XhciInjTake(&t, 1, XHCI_INJ_VALUE(2, 0x2C, 0, 0)),
+             XHCI_INJ_TAKE_FIRE, "2C fires, task 50.34's");
+    CHECK_EQ(XhciInjTake(&t, 1, XHCI_INJ_VALUE(3, 0x2E, 0, 0)),
+             XHCI_INJ_TAKE_UNKNOWN, "2E unknown");
+
+    /* The arming's refusals, each alone, in their order. */
+    memset(&q, 0xA5, sizeof(q));
+    XhciInjQsStart(&q);
+    q.Busy = 0;
+    CHECK_EQ(q.State, XHCI_INJ_QS_IDLE, "a start: IDLE");
+    CHECK_EQ(q.Closed, 0, "a start: not closed");
+    CHECK_EQ(XhciInjQsArmRefusal(&q, 0, 1, 1), XHCI_INJ_QS_R_STOPPED,
+             "refused: not started");
+    CHECK_EQ(XhciInjQsArmRefusal(&q, 1, 0, 1), XHCI_INJ_QS_R_MODE,
+             "refused: not mode 4 on NT 5 (interrupt mode 0)");
+    CHECK_EQ(XhciInjQsArmRefusal(&q, 1, 1, 0), XHCI_INJ_QS_R_ISOLATION,
+             "refused: isolation does not apply");
+    CHECK_EQ(XhciInjQsArmRefusal(&q, 1, 1, 1), XHCI_INJ_QS_R_OK, "armed");
+    XhciInjQsArm(&q, 0x93);
+    CHECK_EQ(q.State, XHCI_INJ_QS_ARMED, "ARMED");
+    CHECK_EQ(XhciInjQsArmRefusal(&q, 1, 1, 1), XHCI_INJ_QS_R_ACTIVE,
+             "refused: an exercise already active");
+    XhciInjQsStart(&q);
+    q.Busy = 1;
+    CHECK_EQ(XhciInjQsArmRefusal(&q, 1, 1, 1), XHCI_INJ_QS_R_BUSY,
+             "refused: a real request in its bracket");
+    q.Busy = 0;
+    q.Closed = 1;
+    CHECK_EQ(XhciInjQsArmRefusal(&q, 1, 1, 1), XHCI_INJ_QS_R_CLOSED,
+             "refused: closed by a stop or a removal");
+    XhciInjQsStart(&q);
+    CHECK_EQ(q.Closed, 0, "a start reopens it");
+
+    /* The trigger: one shot, its slot and TRB kept, the delay in Due. */
+    XhciInjQsStart(&q);
+    q.Busy = 0;
+    CHECK_EQ(XhciInjQsTrigger(&q, 3, 0x1000, 100), 0,
+             "nothing armed: no trigger");
+    XhciInjQsArm(&q, 0xF3);
+    CHECK_EQ(XhciInjQsTrigger(&q, 3, 0x1000, 100), 1,
+             "the withholding takes it");
+    CHECK_EQ(q.State, XHCI_INJ_QS_TRIGGERED, "TRIGGERED");
+    CHECK_EQ(q.HeldSlot, 3, "the withheld command's slot");
+    CHECK_EQ(q.HeldPA, 0x1000, "... and its TRB");
+    CHECK_EQ(q.Due, 107, "the delay: 7 x 100 ms");
+    CHECK_EQ(XhciInjQsTrigger(&q, 4, 0x2000, 101), 0, "one shot");
+    CHECK_EQ(q.HeldSlot, 3, "the second withholding takes nothing");
+
+    /* The query's commit, condition by condition. */
+    CHECK_EQ(XhciInjQsStep(&q, 106, 1, 1), XHCI_INJ_QS_NONE,
+             "not before the delay");
+    q.Busy = 1;
+    CHECK_EQ(XhciInjQsStep(&q, 107, 1, 1), XHCI_INJ_QS_NONE,
+             "Busy blocks the commit");
+    q.Busy = 0;
+    q.Closed = 1;
+    CHECK_EQ(XhciInjQsStep(&q, 107, 1, 1), XHCI_INJ_QS_NONE,
+             "closed: no commit");
+    q.Closed = 0;
+    CHECK_EQ(XhciInjQsStep(&q, 107, 0, 1), XHCI_INJ_QS_NONE,
+             "not ready (stopped, out of D0, suspended, a route's bit)");
+    CHECK_EQ(q.State, XHCI_INJ_QS_TRIGGERED, "... and still triggered");
+    CHECK_EQ(XhciInjQsStep(&q, 107, 1, 1), XHCI_INJ_QS_QUERY,
+             "the query, with the debt standing");
+    CHECK_EQ(q.State, XHCI_INJ_QS_CALLING, "CALLING in the commit's hold");
+    CHECK_EQ(XhciInjQsStep(&q, 500, 1, 1), XHCI_INJ_QS_NONE,
+             "nothing new while the call runs");
+
+    /* Bit 7's debt check. */
+    XhciInjQsStart(&q);
+    XhciInjQsArm(&q, 0x80);
+    (void)XhciInjQsTrigger(&q, 3, 0x1000, 100);
+    CHECK_EQ(XhciInjQsDebtFits(&q, 0, 3, 0x1000), 0, "no debt");
+    CHECK_EQ(XhciInjQsDebtFits(&q, 1, 4, 0x1000), 0, "another slot's");
+    CHECK_EQ(XhciInjQsDebtFits(&q, 1, 3, 0x1010), 0, "another command's");
+    CHECK_EQ(XhciInjQsDebtFits(&q, 1, 3, 0x1000), 1, "the withheld one's");
+    CHECK_EQ(XhciInjQsStep(&q, 100, 1, 0), XHCI_INJ_QS_NODEBT,
+             "bit 7, no debt formed: ended, no call");
+    CHECK_EQ(q.State, XHCI_INJ_QS_IDLE, "IDLE");
+    XhciInjQsArm(&q, 0x00);
+    (void)XhciInjQsTrigger(&q, 3, 0x1000, 100);
+    CHECK_EQ(XhciInjQsStep(&q, 100, 1, 0), XHCI_INJ_QS_QUERY,
+             "bit 7 clear: no debt asked for");
+
+    /* The query recorded, the hold, the cancel. */
+    qs_queried(&q, 0x82, 1);
+    CHECK_EQ(q.State, XHCI_INJ_QS_QUERIED, "QUERIED");
+    CHECK_EQ(q.Released, 1, "released kept");
+    CHECK_EQ(q.Due, 220, "the hold: 2 s");
+    CHECK_EQ(XhciInjQsStep(&q, 219, 1, 1), XHCI_INJ_QS_NONE,
+             "the hold runs");
+    CHECK_EQ(XhciInjQsStep(&q, 220, 0, 0), XHCI_INJ_QS_CANCEL,
+             "the cancel at the hold's end, whatever else");
+    CHECK_EQ(q.State, XHCI_INJ_QS_CALLING, "CALLING");
+    XhciInjQsEnded(&q);
+    CHECK_EQ(q.State, XHCI_INJ_QS_IDLE, "ended: IDLE");
+    CHECK_EQ(q.Released, 0, "... nothing released");
+    qs_queried(&q, 0x80, 0);
+    CHECK_EQ(XhciInjQsStep(&q, 200, 1, 1), XHCI_INJ_QS_CANCEL,
+             "hold 0: the next turn");
+    CHECK_EQ(q.Released, 0, "a refused query: no cancel is owed");
+    qs_queried(&q, 0x8F, 1);
+    q.Due = 0xFFFFFFF0UL;
+    CHECK_EQ(XhciInjQsStep(&q, 0xFFFFFFE0UL, 1, 1), XHCI_INJ_QS_NONE,
+             "before the hold's end, near the wrap");
+    CHECK_EQ(XhciInjQsStep(&q, 0x00000004UL, 1, 1), XHCI_INJ_QS_CANCEL,
+             "the hold's end across the clock's wrap");
+
+    /* The bracket's answers, state by state. */
+    XhciInjQsStart(&q);
+    q.Busy = 0;
+    CHECK_EQ(XhciInjQsBracket(&q, 0), XHCI_INJ_QS_BR_NOTHING,
+             "IDLE: nothing");
+    CHECK_EQ(q.Busy, 1, "Busy raised");
+    CHECK_EQ(q.Abort, 1, "Abort set");
+    CHECK_EQ(q.Closed, 0, "not terminal: not closed");
+    XhciInjQsLeave(&q);
+    CHECK_EQ(q.Busy, 0, "Busy lowered");
+    XhciInjQsLeave(&q);
+    CHECK_EQ(q.Busy, 0, "never below 0");
+    XhciInjQsArm(&q, 0x83);
+    CHECK_EQ(q.Abort, 0, "an arming clears Abort");
+    CHECK_EQ(XhciInjQsBracket(&q, 0), XHCI_INJ_QS_BR_ENDED,
+             "ARMED: ended by the bracket");
+    CHECK_EQ(q.State, XHCI_INJ_QS_IDLE, "... IDLE, no call");
+    XhciInjQsLeave(&q);
+    XhciInjQsArm(&q, 0x83);
+    (void)XhciInjQsTrigger(&q, 3, 0x1000, 100);
+    CHECK_EQ(XhciInjQsBracket(&q, 1), XHCI_INJ_QS_BR_ENDED,
+             "TRIGGERED: ended by the bracket (the delay-to-query closure)");
+    CHECK_EQ(q.State, XHCI_INJ_QS_IDLE, "... IDLE");
+    CHECK_EQ(q.Closed, 1, "terminal: closed");
+    CHECK_EQ(XhciInjQsArmRefusal(&q, 1, 1, 1), XHCI_INJ_QS_R_BUSY,
+             "no arming inside a bracket");
+    XhciInjQsLeave(&q);
+    CHECK_EQ(XhciInjQsArmRefusal(&q, 1, 1, 1), XHCI_INJ_QS_R_CLOSED,
+             "no arming after a terminal request, until a start");
+    XhciInjQsStart(&q);
+    XhciInjQsArm(&q, 0x83);
+    (void)XhciInjQsTrigger(&q, 3, 0x1000, 100);
+    (void)XhciInjQsStep(&q, 200, 1, 1);
+    CHECK_EQ(XhciInjQsBracket(&q, 0), XHCI_INJ_QS_BR_WAIT,
+             "CALLING: waited for");
+    CHECK_EQ(q.State, XHCI_INJ_QS_CALLING, "the committed call is finished");
+    XhciInjQsQueried(&q, 1, 210);
+    CHECK_EQ(XhciInjQsStep(&q, 210, 1, 1), XHCI_INJ_QS_CANCEL,
+             "then the cancel at once, inside the hold");
+    XhciInjQsEnded(&q);
+    XhciInjQsLeave(&q);
+
+    /* A terminal request: the hand-off, no cancel. */
+    qs_queried(&q, 0x85, 1);
+    CHECK_EQ(XhciInjQsBracket(&q, 1), XHCI_INJ_QS_BR_WAIT,
+             "QUERIED: waited for");
+    CHECK_EQ(q.Terminal, 1, "terminal");
+    CHECK_EQ(q.Released, 1, "released, read before the step for the note");
+    s = XhciInjQsStep(&q, 201, 1, 1);
+    CHECK_EQ(s, XHCI_INJ_QS_HANDOFF, "terminal: the hand-off, no cancel");
+    CHECK_EQ(q.State, XHCI_INJ_QS_IDLE, "... IDLE");
+    CHECK_EQ(XhciInjQsStep(&q, 300, 1, 1), XHCI_INJ_QS_NONE,
+             "and no call after it");
+    /* Another request: the cancel. */
+    qs_queried(&q, 0x85, 1);
+    CHECK_EQ(XhciInjQsBracket(&q, 0), XHCI_INJ_QS_BR_WAIT, "waited for");
+    CHECK_EQ(XhciInjQsStep(&q, 201, 1, 1), XHCI_INJ_QS_CANCEL,
+             "not terminal: the cancel, inside the hold");
+
+    /* Busy blocks a commit (above), never a nested bracket. */
+    XhciInjQsEnded(&q);
+    XhciInjQsStart(&q);
+    q.Busy = 0;
+    CHECK_EQ(XhciInjQsBracket(&q, 0), XHCI_INJ_QS_BR_NOTHING, "the outer");
+    CHECK_EQ(XhciInjQsBracket(&q, 0), XHCI_INJ_QS_BR_NOTHING,
+             "a nested one does not wait for the outer");
+    CHECK_EQ(q.Busy, 2, "both counted");
+    XhciInjQsLeave(&q);
+    XhciInjQsLeave(&q);
+    CHECK_EQ(q.Busy, 0, "both lowered");
+    q.State = XHCI_INJ_QS_TRIGGERED;
+    q.Abort = 1;
+    CHECK_EQ(XhciInjQsStep(&q, 0, 1, 1), XHCI_INJ_QS_ENDED,
+             "triggered and aborted: ended by the thread, no call");
+    q.Busy = 1;
+    XhciInjQsStart(&q);
+    CHECK_EQ(q.Busy, 1, "a start leaves Busy");
+}
+
+/* Task 50.31 (design record 38 section 17): faults 30 to 35, a range of
+ * their own apart from the last built, taken on a failed controller. */
+static void test_retry_codes(void)
+{
+    XHCI_INJ_TRIGGER t;
+    ULONG f;
+    ULONG seq;
+
+    CHECK_EQ(XHCI_INJ_RETRY_FAIL, 0x30, "30 hex");
+    CHECK_EQ(XHCI_INJ_RETRY_SWEEP_BREAK, 0x35, "35 hex");
+    CHECK(XHCI_INJ_RETRY_FIRST > XHCI_INJ_LAST_BUILT + 3,
+          "clear of the last built (2C) and of 2D to 2F");
+    XhciInjTriggerStart(&t, 0, 0);
+    seq = 1;
+    for (f = 0x2C; f <= 0x37; f++) {
+        ULONG want;
+
+        want = ((f >= XHCI_INJ_RETRY_FIRST && f <= XHCI_INJ_RETRY_LAST) ||
+                f == XHCI_INJ_QUERY_STOP || f == XHCI_INJ_PSW_STEP)
+                   ? XHCI_INJ_TAKE_FIRE
+                   : XHCI_INJ_TAKE_UNKNOWN;
+        CHECK_EQ(XhciInjTake(&t, 1, XHCI_INJ_VALUE(seq, f, 0, 0)), want,
+                 "30 to 35, 2C and 2D fire; the rest of 2C to 37 is unknown here");
+        seq++;
+    }
+    for (f = XHCI_INJ_RETRY_FIRST; f <= XHCI_INJ_RETRY_LAST; f++) {
+        CHECK_EQ(XhciInjNeedsLive(f), 0,
+                 "a retry code is taken on a failed controller");
+    }
+    CHECK_EQ(XhciInjNeedsLive(XHCI_INJ_HCH), 1, "HCH still needs it");
+}
+
 int main(void)
 {
     test_encoding();
+    test_query_stop();
+    test_retry_codes();
+    test_hang();
+    test_hang_recovery();
+    test_rv_route();
     test_reset_slow();
     test_trigger();
     test_lost_count();

@@ -1154,6 +1154,237 @@ static void test_hub_disable_retry(void)
     }
 }
 
+/* Task 50.5 (design record 13 section 10.7.4): the send-back's time-out and
+ * the refusal's record a time-out leaves. */
+static void test_hold_timeout(void)
+{
+    XHCI_LINK_HOLD h;
+    XHCI_LINK_IDENTITY held;
+    ULONG refuse;
+    ULONG i;
+
+    held.Valid = 1;
+    held.Vendor = 0x46F4;
+    held.Product = 0x0003;
+    held.SerialLength = 2;
+    for (i = 0; i < XHCI_LINK_SERIAL_CHARS; i++) {
+        held.Serial[i] = 0;
+    }
+    held.Serial[0] = 'A';
+    held.Serial[1] = 'B';
+    (VOID)XhciHoldBegin(&h, 5, 1, &held);
+    CHECK_EQ(XhciHoldQuietDue(&h, 1, 1, 100, 100 + 223, 224), 0,
+             "one tick before the bound: kept");
+    CHECK_EQ(XhciHoldQuietDue(&h, 1, 1, 100, 100 + 224, 224), 1,
+             "at the bound: due");
+    CHECK_EQ(XhciHoldQuietDue(&h, 1, 1, 0xFFFFFFF0UL, 0x11CUL, 224), 1,
+             "across the count's wrap, 300 ticks: due");
+    CHECK_EQ(XhciHoldQuietDue(&h, 1, 1, 0xFFFFFFF0UL, 0x10UL, 224), 0,
+             "across the wrap, 32 ticks: kept");
+    CHECK_EQ(XhciHoldQuietDue(&h, 0, 1, 0, 1000, 224), 0,
+             "not eligible (seen elsewhere, work owed, another reason)");
+    CHECK_EQ(XhciHoldQuietDue(&h, 1, 0, 0, 1000, 224), 0,
+             "the companion not idle");
+    CHECK_EQ(XhciHoldQuietDue(NULL, 1, 1, 0, 1000, 224), 0, "no hold");
+    XhciHoldCompanionConnect(&h);
+    CHECK_EQ(XhciHoldQuietDue(&h, 1, 1, 0, 1000, 224), 0,
+             "a connect seen on the companion");
+    (VOID)XhciHoldCompanionDisconnect(&h);
+    CHECK_EQ(XhciHoldQuietDue(&h, 1, 1, 0, 1000, 224), 1,
+             "another device's departure: watched again");
+    held.SerialLength = 0;
+    CHECK_EQ(XhciHoldBegin(&h, 5, 1, &held), XHCI_HOLD_UNIDENTIFIED,
+             "no serial: unidentified");
+    CHECK_EQ(XhciHoldQuietDue(&h, 1, 1, 0, 1000, 224), 1,
+             "an unidentified hold times out too");
+    (VOID)XhciHoldBeginFlap(&h, 5, 1);
+    CHECK_EQ(XhciHoldQuietDue(&h, 1, 1, 0, 1000, 224), 0,
+             "issue 29's flap hold never times out");
+    (VOID)XhciHoldBegin(&h, 5, 0, &held);
+    CHECK_EQ(XhciHoldQuietDue(&h, 1, 1, 0, 1000, 224), 0, "an orphan: no");
+    h.Kind = XHCI_HOLD_NONE;
+    CHECK_EQ(XhciHoldQuietDue(&h, 1, 1, 0, 1000, 224), 0, "an ended hold");
+
+    CHECK_EQ(XhciHoldToConnect(XHCI_HOLD_TO_ARMED), XHCI_HOLD_TO_LATCHED,
+             "ARMED: the connect latches, however late it is served");
+    CHECK_EQ(XhciHoldToConnect(XHCI_HOLD_TO_LATCHED), XHCI_HOLD_TO_LATCHED,
+             "LATCHED: a re-enumeration's connect");
+    CHECK_EQ(XhciHoldToConnect(XHCI_HOLD_TO_NONE), XHCI_HOLD_TO_NONE,
+             "none stays none");
+    CHECK_EQ(XhciHoldToExpire(XHCI_HOLD_TO_ARMED, 100, 100 + 225, 224, 1),
+             XHCI_HOLD_TO_ARMED, "ARMED past its window, the port connected");
+    CHECK_EQ(XhciHoldToExpire(XHCI_HOLD_TO_ARMED, 100, 100 + 224, 224, 0),
+             XHCI_HOLD_TO_ARMED, "ARMED empty inside its window");
+    CHECK_EQ(XhciHoldToExpire(XHCI_HOLD_TO_ARMED, 100, 100 + 225, 224, 0),
+             XHCI_HOLD_TO_NONE, "ARMED empty past its window: lapsed");
+    CHECK_EQ(XhciHoldToExpire(XHCI_HOLD_TO_LATCHED, 100, 100000, 224, 0),
+             XHCI_HOLD_TO_LATCHED, "LATCHED never lapses by time");
+    CHECK_EQ(XhciHoldToCreate(XHCI_HOLD_TO_LATCHED, 1, &refuse),
+             XHCI_HOLD_TO_LATCHED, "LATCHED and the same ids: kept");
+    CHECK_EQ(refuse, 1, "... and refused in place");
+    CHECK_EQ(XhciHoldToCreate(XHCI_HOLD_TO_LATCHED, 0, &refuse),
+             XHCI_HOLD_TO_NONE, "another device: the record dropped");
+    CHECK_EQ(refuse, 0, "... and decided as ever");
+    CHECK_EQ(XhciHoldToCreate(XHCI_HOLD_TO_ARMED, 1, &refuse),
+             XHCI_HOLD_TO_ARMED, "ARMED refuses nothing");
+    CHECK_EQ(refuse, 0, "... no refusal");
+    CHECK_EQ(XhciHoldToDepart(XHCI_HOLD_TO_LATCHED), XHCI_HOLD_TO_NONE,
+             "a departure clears LATCHED");
+    CHECK_EQ(XhciHoldToDepart(XHCI_HOLD_TO_ARMED), XHCI_HOLD_TO_ARMED,
+             "the arrival's own change keeps ARMED");
+}
+
+/* The refusal record's serial (task 50.5, the merge review): a drive
+ * unplugged during its hold leaves an ARMED record; another unit of its
+ * model plugged in inside the window is refused only when the serials
+ * cannot tell them apart. The record's steps as the driver takes them
+ * (hcd_enum.c: hcdHoldTimeService, hcdHoldToDepart, hcdHoldToConnect,
+ * HcdHoldToRefuse). */
+static ULONG hold_to_create(ULONG *state, ULONG heldVidPid, ULONG heldForm,
+                            ULONG heldKey, ULONG vidPid, ULONG form,
+                            ULONG key)
+{
+    ULONG refuse;
+    ULONG match;
+
+    match = XhciHoldToMatch(heldVidPid, heldForm, heldKey, vidPid, form,
+                            key);
+    *state = XhciHoldToCreate(*state, match == XHCI_HOLD_TO_MATCH ? 1UL : 0UL,
+                              &refuse);
+    return refuse;
+}
+
+static void test_hold_timeout_serial(void)
+{
+    const ULONG vp = 0x000346F4UL;
+    ULONG ka;
+    ULONG kb;
+    ULONG st;
+    ULONG f[4];
+    ULONG i;
+    ULONG j;
+
+    ka = XhciHoldToSerialKey("A1B2C3", 127);
+    kb = XhciHoldToSerialKey("A1B2C4", 127);
+    CHECK(ka != kb, "two serials, two keys");
+    CHECK_EQ(XhciHoldToSerialKey("A1B2C3", 127), ka, "one serial, one key");
+    CHECK_EQ(XhciHoldToSerialKey("A1B2C3XYZ", 6), ka,
+             "the key stops at the room");
+    CHECK(XhciHoldToSerialKey("", 127) != ka, "the empty id differs");
+    CHECK_EQ(XhciHoldToSerialKey(NULL, 127), XhciHoldToSerialKey("", 127),
+             "no id: the empty key");
+
+    /* Drive A (serial A1B2C3) times out: ARMED. A is unplugged during the
+     * hold, so no arrival follows; the port reads empty inside the window
+     * (nothing changes) and B, same model, serial A1B2C4, is plugged in. */
+    st = XHCI_HOLD_TO_ARMED;
+    st = XhciHoldToExpire(st, 100, 100 + 50, 224, 0);
+    CHECK_EQ(st, XHCI_HOLD_TO_ARMED, "A gone, inside the window: ARMED");
+    st = XhciHoldToDepart(st);
+    CHECK_EQ(st, XHCI_HOLD_TO_ARMED, "B's connection change: still ARMED");
+    st = XhciHoldToConnect(st);
+    CHECK_EQ(st, XHCI_HOLD_TO_LATCHED, "B's connect latches");
+    CHECK_EQ(XhciHoldToMatch(vp, XHCI_HOLD_TO_SER_ID, ka, vp,
+                             XHCI_HOLD_TO_SER_ID, kb),
+             XHCI_HOLD_TO_OTHER_UNIT, "B: the held model, another serial");
+    CHECK_EQ(hold_to_create(&st, vp, XHCI_HOLD_TO_SER_ID, ka, vp,
+                            XHCI_HOLD_TO_SER_ID, kb),
+             0, "B is not refused: asked to the hold as any drive");
+    CHECK_EQ(st, XHCI_HOLD_TO_NONE, "... and the record is gone");
+    CHECK_EQ(hold_to_create(&st, vp, XHCI_HOLD_TO_SER_ID, ka, vp,
+                            XHCI_HOLD_TO_SER_ID, ka),
+             0, "no record left: A itself later is not refused by it");
+
+    /* A comes back itself after the re-arm: refused, and kept so across
+     * its re-enumerations. */
+    st = XhciHoldToConnect(XHCI_HOLD_TO_ARMED);
+    CHECK_EQ(hold_to_create(&st, vp, XHCI_HOLD_TO_SER_ID, ka, vp,
+                            XHCI_HOLD_TO_SER_ID, ka),
+             1, "A, the same serial: refused in place");
+    CHECK_EQ(hold_to_create(&st, vp, XHCI_HOLD_TO_SER_ID, ka, vp,
+                            XHCI_HOLD_TO_SER_ID, ka),
+             1, "... again at a re-enumeration of that connection");
+    CHECK_EQ(st, XHCI_HOLD_TO_LATCHED, "... the record kept");
+
+    /* No serial on either side: two units of one model cannot be told
+     * apart, so B is refused in place - and its unplug clears the record,
+     * so plugged in again it is asked to the hold afresh. */
+    st = XhciHoldToConnect(XHCI_HOLD_TO_ARMED);
+    CHECK_EQ(hold_to_create(&st, vp, XHCI_HOLD_TO_SER_NONE, 0, vp,
+                            XHCI_HOLD_TO_SER_NONE, 0),
+             1, "no serials: refused, as the held drive would be");
+    st = XhciHoldToDepart(st);
+    CHECK_EQ(st, XHCI_HOLD_TO_NONE, "its unplug clears the record");
+    CHECK_EQ(hold_to_create(&st, vp, XHCI_HOLD_TO_SER_NONE, 0, vp,
+                            XHCI_HOLD_TO_SER_NONE, 0),
+             0, "plugged in again: not refused");
+
+    /* Another model is never refused, whatever the serials. */
+    st = XHCI_HOLD_TO_LATCHED;
+    CHECK_EQ(XhciHoldToMatch(vp, XHCI_HOLD_TO_SER_ID, ka, vp + 1,
+                             XHCI_HOLD_TO_SER_ID, ka),
+             XHCI_HOLD_TO_IDS_DIFFER, "another model, one serial");
+    CHECK_EQ(hold_to_create(&st, vp, XHCI_HOLD_TO_SER_ID, ka, vp + 1,
+                            XHCI_HOLD_TO_SER_ID, ka),
+             0, "... not refused, the record dropped");
+    CHECK_EQ(st, XHCI_HOLD_TO_NONE, "... gone");
+
+    /* An ARMED record refuses nothing and stays, whoever it meets. */
+    st = XHCI_HOLD_TO_ARMED;
+    CHECK_EQ(hold_to_create(&st, vp, XHCI_HOLD_TO_SER_ID, ka, vp,
+                            XHCI_HOLD_TO_SER_ID, kb),
+             0, "ARMED: nothing refused");
+    CHECK_EQ(st, XHCI_HOLD_TO_ARMED, "ARMED: kept");
+
+    /* The whole table of forms (the keys one where both are IDs). */
+    f[0] = XHCI_HOLD_TO_SER_UNKNOWN;
+    f[1] = XHCI_HOLD_TO_SER_NONE;
+    f[2] = XHCI_HOLD_TO_SER_ID;
+    f[3] = XHCI_HOLD_TO_SER_OTHER;
+    for (i = 0; i < 4; i++) {
+        for (j = 0; j < 4; j++) {
+            ULONG want;
+
+            if (f[i] != XHCI_HOLD_TO_SER_UNKNOWN &&
+                f[j] != XHCI_HOLD_TO_SER_UNKNOWN &&
+                (f[i] == XHCI_HOLD_TO_SER_NONE) !=
+                    (f[j] == XHCI_HOLD_TO_SER_NONE)) {
+                want = 0;   /* one has an iSerialNumber, the other none */
+            } else {
+                want = 1;
+            }
+            CHECK_EQ(XhciHoldToSameUnit(f[i], ka, f[j], ka), want,
+                     "the forms' table");
+        }
+    }
+    CHECK_EQ(XhciHoldToSameUnit(XHCI_HOLD_TO_SER_ID, ka, XHCI_HOLD_TO_SER_ID,
+                                kb),
+             0, "two IDs, two keys: two units");
+    CHECK_EQ(XhciHoldToSameUnit(XHCI_HOLD_TO_SER_OTHER, 0,
+                                XHCI_HOLD_TO_SER_OTHER, 0),
+             1, "two serials of unknown text: one unit as far as known");
+    /* The held drive's serial read whole once and malformed (REFUSED) or
+     * not at all (FAILED) the other time, either way round: its text
+     * unknown, so it is still the held drive and refused - no new hold. */
+    st = XhciHoldToConnect(XHCI_HOLD_TO_ARMED);
+    CHECK_EQ(hold_to_create(&st, vp, XHCI_HOLD_TO_SER_ID, ka, vp,
+                            XHCI_HOLD_TO_SER_OTHER, 0),
+             1, "held read whole, back malformed: refused");
+    st = XhciHoldToConnect(XHCI_HOLD_TO_ARMED);
+    CHECK_EQ(hold_to_create(&st, vp, XHCI_HOLD_TO_SER_OTHER, 0, vp,
+                            XHCI_HOLD_TO_SER_ID, ka),
+             1, "held read malformed, back whole: refused");
+    /* An iSerialNumber against none: the device descriptors differ. */
+    st = XhciHoldToConnect(XHCI_HOLD_TO_ARMED);
+    CHECK_EQ(hold_to_create(&st, vp, XHCI_HOLD_TO_SER_NONE, 0, vp,
+                            XHCI_HOLD_TO_SER_OTHER, 0),
+             0, "held with no serial, a unit with one: not refused");
+    CHECK_EQ(st, XHCI_HOLD_TO_NONE, "... the record gone");
+    CHECK_EQ(XhciHoldToSameUnit(XHCI_HOLD_TO_SER_ID, ka,
+                                XHCI_HOLD_TO_SER_UNKNOWN, 0),
+             1, "the new serial unread: may be the held drive");
+}
+
 int main(void)
 {
     test_flap();
@@ -1168,6 +1399,8 @@ int main(void)
     test_hold_kinds();
     test_port_feed();
     test_hold_portsc();
+    test_hold_timeout();
+    test_hold_timeout_serial();
     test_e460_port13();
     test_resume_from_resume();
 

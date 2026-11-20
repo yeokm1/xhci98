@@ -150,7 +150,378 @@
  * TD, else any other - so the endpoint runs between the difference and the
  * resend. */
 #define XHCI_INJ_REPAIR_RACE     31UL
-#define XHCI_INJ_LAST_BUILT      31UL
+/* Task 50.7 (record 17 section 5; record 25 section 24 item 4), hex 20:
+ * the next `arg` (0 one, 255 until CLEAR) 8-byte device-descriptor reads
+ * of an enumeration at the root port in bits 15:8 (0 any) answered with
+ * bMaxPacketSize0 0, the transfer itself real: the DESC8 check fails
+ * (XHCI_ENUM_FAIL_DESCRIPTOR) as for a device with a bad descriptor, and
+ * with arg 2 its one retry too, so the port rests in Failed, with no cycle,
+ * recovery or hold - the "failed enumeration" the USB Tree's fallback note
+ * is for. */
+#define XHCI_INJ_ENUM_DESC       32UL
+/* Task 50.20 (record 17 section 4.12.10), hex 21: arg bit 0, the
+ * controller flagged as the Intel 7 Series xHCI is (stream opens of a
+ * declaring client acknowledged to the contract); arg bit 1, the QEMU stream
+ * resync (4.12.4) off on every endpoint. Unlike every other fault, read at
+ * the controller's start (HcdInjStreamStart) and only then, since the flag
+ * must stand before the streams open; fired at run time it changes nothing
+ * (noted qemu.inj.streamflag.ignored). */
+#define XHCI_INJ_STREAM_UNTRUSTED 33UL
+#define XHCI_INJ_SU_FLAG         0x01UL
+#define XHCI_INJ_SU_RESYNC_OFF   0x02UL
+/* Task 50.20, hex 22: RESET_PIPE's recycle Configure Endpoint (the endpoint
+ * recycle of record 17 section 4.12.10; fault 19 reaches only a switch's)
+ * answered and never issued, once: arg bits 3:0 the attempt (0 the next, N
+ * the Nth from now), bit 4 clear refused with Resource Error, set with no
+ * completion and the controller reset requested; port byte (15:8) the DCI
+ * (0 any). Noted qemu.inj.recycle (slot, DCI, attempt, code). */
+#define XHCI_INJ_RECYCLE_CFG     34UL
+#define XHCI_INJ_RC_NOCOMPLETE   0x10UL
+/* Task 50.20, hex 23: a rendezvous - the bus holds at point `arg` (1 a
+ * cancel's take-off, before its completions are delivered; 2 RESET_PIPE
+ * between the device's clear and the recycle; 3, task 50.30 step 3, a
+ * requested recovery's entry, before it takes the power gate, released at
+ * once as well when any route's bit is raised - standing, or raised since
+ * the point was reached, revision 34 of record 17 section 4.15.16 C - and
+ * noted qemu.inj.rv.route), notes qemu.inj.rv.reached
+ * with a count, and waits, at most 60 s, polling the key every 100 ms,
+ * until 23 comes again with arg 0 (the release); arg 0 with nothing held
+ * disarms. */
+#define XHCI_INJ_RENDEZVOUS      35UL
+#define XHCI_INJ_RV_CANCEL       1UL
+#define XHCI_INJ_RV_RECYCLE      2UL
+#define XHCI_INJ_RV_RECOVERY     3UL
+/*
+ * Task 50.30, step 2 (design record 17 section 4.15.9): a device, or the
+ * controller's command engine, that stops answering. Each withholds the
+ * doorbell of the next command of its kind (or of the thread's next EP0
+ * transfer) for a device at the place - 15:8 the root port, 0 the first
+ * that fits, bit 15 a device behind a hub at it - so the engine's watchdog
+ * or the thread's deadline meets a real silence; at the watchdog's abort
+ * the layer acts out the outcome the argument chooses (bits 6:4); bits 3:0
+ * the count, 15 persistent. 0x26 with bit 7 is armed by the device's own
+ * behaviour: nothing until a thread control transfer at the place reaches
+ * its deadline unwithheld; from then every Address Device and thread EP0
+ * transfer at the place is withheld until the place's root port reads
+ * disconnected, or CLEAR. 0x26 takes a root port only: its lifetime is
+ * that port's disconnect, and a hub's downstream port has no such hook
+ * here, so a place behind a hub (bit 15) is refused and nothing is armed.
+ * For 0x24 and 0x25, bit 7 (step 3, design record 17 section 4.15.16 C)
+ * withholds the recovery command that follows as well: each primary
+ * withholding latches its slot, and the first command placed afterwards
+ * that is that slot's Disable Slot - or, for 0x25, its Stop Endpoint of
+ * DCI 1 - is withheld once, through the same watchdog and outcome, the
+ * settlement's included. 0x25 with bit 7 and outcome 7 also arms a mark
+ * deadline about a second after the primary: the thread's own EP0 wait
+ * marks the cycle once it has passed (HcdInjWaitLook), and the recovery
+ * command - then the cycle's Disable Slot alone, a teardown Stop of EP0
+ * going out - is acted out as outcome 1.
+ */
+#define XHCI_INJ_ADDRESS_HANG    36UL /* 0x24: Address Device withheld     */
+#define XHCI_INJ_EP0_HANG        37UL /* 0x25: the thread's EP0 doorbell   */
+#define XHCI_INJ_DEVICE_HANG     38UL /* 0x26: both, until its disconnect  */
+#define XHCI_INJ_CFGEP_HANG      39UL /* 0x27: Configure Endpoint          */
+#define XHCI_INJ_RESETEP_HANG    40UL /* 0x28: Reset Endpoint              */
+#define XHCI_INJ_SETDEQ_HANG     41UL /* 0x29: Set TR Dequeue Pointer      */
+#define XHCI_INJ_EVAL_HANG       42UL /* 0x2A: Evaluate Context            */
+#define XHCI_INJ_RESETDEV_HANG   43UL /* 0x2B: Reset Device                */
+/* Task 50.34 (design record 16 section 21.10), hex 2C: the Intel port
+ * switchover's step, with the qemu flavour's stand-in for a listed
+ * controller (XhciQemuPswModel): arg bit 0 the SOFTWARE hive read as not
+ * loaded yet, bit 1 the guard's routine not there, bit 2 the session key's
+ * create refused, bit 3 ReadyAtStart's reading refused, bit 4 its write
+ * refused, bit 5 the guard's XhciIntelPortSwitchReady write refused. Read
+ * at a start, and only by a start that reaches the step (HcdInjPswStep), as
+ * hex 21 is read at the start alone; fired at run time it changes nothing
+ * (noted qemu.inj.psw.ignored). */
+#define XHCI_INJ_PSW_STEP        44UL /* 0x2C                              */
+#define XHCI_INJ_PSW_HIVE        0x01UL
+#define XHCI_INJ_PSW_ROUTINE     0x02UL
+#define XHCI_INJ_PSW_OPEN        0x04UL
+#define XHCI_INJ_PSW_READ_S      0x08UL
+#define XHCI_INJ_PSW_WRITE_S     0x10UL
+#define XHCI_INJ_PSW_WRITE_G     0x20UL
+#define XHCI_INJ_HG_FOREVER      0x0FUL
+#define XHCI_INJ_HG_COUNT(arg)   ((arg) & 0x0FUL)
+#define XHCI_INJ_HG_OUTCOME(arg) (((arg) >> 4) & 0x07UL)
+#define XHCI_INJ_HG_BIT7         0x80UL
+#define XHCI_INJ_HG_BEHIND       0x80UL /* in the port byte              */
+
+/* The outcomes acted out at the abort (record 17 section 4.15.9). */
+#define XHCI_INJ_OUT_STOP_HERE   0UL /* Stopped naming the withheld TRB    */
+#define XHCI_INJ_OUT_FETCHED     1UL /* No Op, Aborted, Stopped at next    */
+#define XHCI_INJ_OUT_FETCHED_NA  2UL /* No Op, Stopped at next             */
+#define XHCI_INJ_OUT_ABORT_HERE  3UL /* Aborted and Stopped, same TRB      */
+#define XHCI_INJ_OUT_RACE        4UL /* doorbell rung: QEMU completes it   */
+#define XHCI_INJ_OUT_NOTHING     5UL /* no stop event                      */
+#define XHCI_INJ_OUT_DIVERGE     6UL /* Stopped at an impossible position  */
+#define XHCI_INJ_OUT_MARK        7UL /* 0x25 bit 7: a cycle mark in the
+                                      * wait; the recovery acted as 1     */
+/* The mark deadline of outcome 7, in tolerance clock ticks (100 ms). */
+#define XHCI_INJ_HG_MARK_TICKS   10UL
+
+typedef struct _XHCI_INJ_HANG {
+    ULONG Fault;        /* 0 none                                         */
+    ULONG Port;         /* the root port, 0 the first that fits           */
+    ULONG Behind;       /* 1: a device behind a hub at Port               */
+    ULONG Outcome;      /* XHCI_INJ_OUT_*                                 */
+    ULONG Left;         /* withholdings left, XHCI_INJ_HG_FOREVER for ever */
+    ULONG ByBehaviour;  /* 0x26 armed by the device's own silence         */
+    ULONG Armed;        /* withholding now                                */
+    ULONG HoldNext;     /* the command being submitted fits: its doorbell
+                         * is withheld if it is the one rung             */
+    ULONG HoldType;     /* ... its TRB type                               */
+    ULONG HoldSlot;     /* ... its slot                                   */
+    ULONG HeldPA;       /* the withheld command's TRB, 0 none             */
+    ULONG NoOpPA;       /* the layer's own No Op (outcomes 1, 2), 0 none  */
+    ULONG StopOwedPA;   /* outcome 4: the Stopped owed after its completion */
+    ULONG Withheld;     /* withholdings made                              */
+    /* Step 3 (bit 7 of 0x24 and 0x25): the recovery command's latch. */
+    ULONG Recovery;     /* bit 7 armed                                    */
+    ULONG RecSlot;      /* the slot latched at the primary, 0 none        */
+    ULONG HoldRec;      /* the marked submit is that recovery command     */
+    ULONG MarkSlot;     /* outcome 7: the slot whose wait is marked, 0 none */
+    ULONG MarkTick;     /* ... once the tolerance clock reaches this      */
+} XHCI_INJ_HANG, *PXHCI_INJ_HANG;
+
+/* Armed from a trigger (fault 0x24 to 0x2B; port byte; argument); 0x26
+ * with the port byte's bit 7 (behind a hub) is refused: Fault stays 0. */
+VOID XhciInjHangArm(PXHCI_INJ_HANG h, ULONG fault, ULONG port, ULONG arg);
+
+/* Everything ended (CLEAR, or the place's disconnect for 0x26). */
+VOID XhciInjHangEnd(PXHCI_INJ_HANG h);
+
+/* The command ring given up (an invalidation, a rebuild at start or
+ * recovery, the restore, an HCRST): every address the layer holds on it -
+ * the submit's mark, the withheld TRB, its own No Op, the Stopped owed -
+ * goes with it, so none matches a later command placed at the same
+ * address in a new ring generation. The fault, its place, its count and a
+ * 0x26 armed by behaviour stay. */
+VOID XhciInjHangRingGone(PXHCI_INJ_HANG h);
+
+/* The command TRB type the fault withholds; 0 for 0x25 (EP0 only). */
+ULONG XhciInjHangCmdType(ULONG fault);
+
+/* Step 3: a primary withholding made for `slot` at tolerance tick `now`.
+ * With bit 7 the recovery command's latch takes the slot (a later primary
+ * replaces it); for 0x25 with outcome 7 the mark deadline is armed too. */
+VOID XhciInjHangLatch(PXHCI_INJ_HANG h, ULONG slot, ULONG now);
+
+/* Whether a command of TRB type `type` for `slot` (`epId` its Endpoint ID,
+ * for a Stop Endpoint) is the latched recovery command: that slot's
+ * Disable Slot, or for 0x25 its Stop Endpoint of DCI 1 - but not under
+ * outcome 7, whose recovery command is the cycle's Disable Slot alone.
+ * Nothing is spent: the hook before the submit asks this. */
+ULONG XhciInjHangRecoveryFits(const XHCI_INJ_HANG *h, ULONG type, ULONG slot,
+                              ULONG epId);
+
+/* The same at the doorbell of the command placed: 1 when it is withheld,
+ * the latch consumed (one shot). */
+ULONG XhciInjHangRecoveryTake(PXHCI_INJ_HANG h, ULONG type, ULONG slot,
+                              ULONG epId);
+
+/* Outcome 7's deadline, looked at by the thread's wait for `slot` at tick
+ * `now`: 1 once, when it is armed for that slot and has passed (disarmed
+ * in the same call); 0 for another slot or before the tick. */
+ULONG XhciInjHangMarkDue(PXHCI_INJ_HANG h, ULONG slot, ULONG now);
+
+/* The outcome acted out at a withheld command's abort: outcome 7 acts as
+ * outcome 1 (the clean abort), every other as itself. */
+ULONG XhciInjHangActOutcome(ULONG outcome);
+
+/* Record 17 section 4.15.16 C (revision 34): 1 when rendezvous `point`
+ * lets the thread go for a route - point 3 alone, with a bit standing in
+ * CmdWaitLeave (`standing`) or raised since the point was reached
+ * (`latched`); points 1 and 2 never. */
+ULONG XhciInjRvRouteLets(ULONG point, ULONG standing, ULONG latched);
+
+/* Whether a device at root port `port` (route `route`) is the place. */
+ULONG XhciInjHangFits(PXHCI_INJ_HANG h, ULONG port, ULONG route);
+
+/* A command of TRB type `type` for a device at (port, route): 1 when it
+ * would be withheld. Nothing is spent: the hook before the submit asks
+ * this, and the count is spent only at the doorbell of the command
+ * actually placed (XhciInjHangCmd), so a refused or busy submission spends
+ * nothing and leaves nothing for a later doorbell. */
+ULONG XhciInjHangCmdFits(PXHCI_INJ_HANG h, ULONG type, ULONG port,
+                         ULONG route);
+
+/* The same, at that doorbell: 1 when it is withheld, the count spent. */
+ULONG XhciInjHangCmd(PXHCI_INJ_HANG h, ULONG type, ULONG port, ULONG route);
+
+/* The thread's EP0 doorbell for a device at (port, route): 1 withheld. */
+ULONG XhciInjHangEp0(PXHCI_INJ_HANG h, ULONG port, ULONG route);
+
+/* The thread's deadline passed for a device at (port, route), its doorbell
+ * not withheld by the layer: 1 when that arms 0x26 by behaviour. */
+ULONG XhciInjHangLate(PXHCI_INJ_HANG h, ULONG port, ULONG route,
+                      ULONG withheld);
+
+/* Root port `port` read disconnected: 1 when that ends a 0x26. */
+ULONG XhciInjHangGone(PXHCI_INJ_HANG h, ULONG port);
+
+/* The outcome's events at the abort, into ev[] (at most 2), in order:
+ * Command Completion Events naming heldPA, nextPA or badPA. *rewrite 1
+ * when the withheld TRB is to become the layer's No Op first; *ring 1 when
+ * the doorbell is to be rung instead (outcome 4). Returns the count. */
+ULONG XhciInjHangEvents(ULONG outcome, ULONG heldPA, ULONG nextPA,
+                        ULONG badPA, XHCI_TRB *ev, PULONG rewrite,
+                        PULONG ring);
+
+/* One Command Completion Event (completion code cc, pointer pa). */
+VOID XhciInjCommandEvent(XHCI_TRB *ev, ULONG pa, ULONG cc);
+
+/*
+ * Task 50.30 step 3 (design record 17 section 4.15.16 E), hex 2D: the
+ * query-stop under a debt, a driver-path exercise. Armed by the trigger,
+ * taken by the next command a hang fault (24 to 2B) withholds; then the
+ * controller thread itself calls the driver's own query (HcdMsg4QueryStop)
+ * and, after the hold, its cancel (HcdMsg4CancelStop) - no IRP, no work
+ * item. Argument: bits 3:0 the hold in seconds between the query and its
+ * cancel (0 the next turn), bits 6:4 the delay in 100 ms units between the
+ * trigger and the query, bit 7 the test window: the withholding raises the
+ * qemu-only route bit HCD_LEAVE_QTEST, which holds the debt until the end.
+ * Kept apart from XHCI_INJ_LAST_BUILT, which is 2C, task 50.34's.
+ */
+#define XHCI_INJ_QUERY_STOP      45UL /* 0x2D */
+#define XHCI_INJ_QS_HOLD(arg)    ((arg) & 0x0FUL)
+#define XHCI_INJ_QS_DELAY(arg)   (((arg) >> 4) & 0x07UL)
+#define XHCI_INJ_QS_WINDOW       0x80UL
+#define XHCI_INJ_QS_TICKS_PER_S  10UL   /* tolerance ticks of 100 ms */
+
+/* The exercise's state (XHCI_INJ_QSTOP.State). */
+#define XHCI_INJ_QS_IDLE         0UL
+#define XHCI_INJ_QS_ARMED        1UL  /* waiting for a withholding       */
+#define XHCI_INJ_QS_TRIGGERED    2UL  /* waiting for its delay           */
+#define XHCI_INJ_QS_CALLING      3UL  /* the thread is in a driver call  */
+#define XHCI_INJ_QS_QUERIED      4UL  /* the query made; the hold runs   */
+
+/* XhciInjQsArmRefusal's reasons (qemu.inj.qstop.refused). */
+#define XHCI_INJ_QS_R_OK         0UL
+#define XHCI_INJ_QS_R_STOPPED    1UL  /* the controller not started      */
+#define XHCI_INJ_QS_R_MODE       2UL  /* not interrupt mode 4 on NT 5    */
+#define XHCI_INJ_QS_R_ISOLATION  3UL  /* isolation does not apply        */
+#define XHCI_INJ_QS_R_ACTIVE     4UL  /* an exercise already active      */
+#define XHCI_INJ_QS_R_BUSY       5UL  /* a real request in its bracket   */
+#define XHCI_INJ_QS_R_CLOSED     6UL  /* a stop or a removal closed it   */
+
+/* XhciInjQsStep's actions, one a turn of the thread. */
+#define XHCI_INJ_QS_NONE         0UL
+#define XHCI_INJ_QS_QUERY        1UL  /* CALLING: the query is made      */
+#define XHCI_INJ_QS_NODEBT       2UL  /* IDLE: bit 7 and no debt formed  */
+#define XHCI_INJ_QS_CANCEL       3UL  /* CALLING: the cancel if released */
+#define XHCI_INJ_QS_HANDOFF      4UL  /* IDLE: a terminal request's, no
+                                       * reconnection                    */
+#define XHCI_INJ_QS_ENDED        5UL  /* IDLE: aborted before any call   */
+
+/* XhciInjQsBracket's answers. */
+#define XHCI_INJ_QS_BR_NOTHING   0UL  /* no exercise                     */
+#define XHCI_INJ_QS_BR_ENDED     1UL  /* armed or triggered: ended here  */
+#define XHCI_INJ_QS_BR_WAIT      2UL  /* a call made: wait for IDLE      */
+
+/*
+ * The exercise, under the controller lock and the injection lock inside it.
+ * Busy counts the real requests inside their bracket; Closed is set by a
+ * terminal one (a stop, a surprise removal, a removal, a START of a started
+ * controller) and cleared only by a start; Abort by every bracket, cleared
+ * at an arming. HeldSlot and HeldPA: the withheld command the trigger took.
+ * Released: the query returned success with the message released.
+ */
+typedef struct _XHCI_INJ_QSTOP {
+    ULONG State;
+    ULONG Arg;
+    ULONG Abort;
+    ULONG Terminal;
+    ULONG Released;
+    ULONG Due;          /* a tolerance tick: the delay's or the hold's end */
+    ULONG Busy;
+    ULONG Closed;
+    ULONG HeldSlot;
+    ULONG HeldPA;
+} XHCI_INJ_QSTOP, *PXHCI_INJ_QSTOP;
+
+/* A start: IDLE, not closed, nothing armed; Busy kept (the START's own
+ * bracket is inside it). */
+VOID XhciInjQsStart(PXHCI_INJ_QSTOP q);
+
+/* Whether a firing of 2D may arm: XHCI_INJ_QS_R_OK, or the first refusal
+ * in the order the reasons are numbered. `mode4` is mode 4 on NT 5. */
+ULONG XhciInjQsArmRefusal(const XHCI_INJ_QSTOP *q, ULONG started,
+                          ULONG mode4, ULONG isolation);
+
+/* Armed with `arg`: ARMED, no abort, nothing released or held. */
+VOID XhciInjQsArm(PXHCI_INJ_QSTOP q, ULONG arg);
+
+/* A command withheld (its slot and TRB) at tick `now`: 1 when that takes
+ * the arming (one shot): TRIGGERED, the delay's end in Due. */
+ULONG XhciInjQsTrigger(PXHCI_INJ_QSTOP q, ULONG slot, ULONG pa, ULONG now);
+
+/* Bit 7's debt check: a debt stands (`owed` not clear) and names the
+ * withheld command (its slot and TRB). */
+ULONG XhciInjQsDebtFits(const XHCI_INJ_QSTOP *q, ULONG owed, ULONG slot,
+                        ULONG pa);
+
+/*
+ * The thread's step at tick `now`, committed in the caller's one hold of
+ * both locks: XHCI_INJ_QS_*, the state changed with it. `ready`: the
+ * controller started, in D0, not suspended in D0, not suspended, and no
+ * stop, removal, power, direct or shutdown route's bit standing; `debt`:
+ * XhciInjQsDebtFits. TRIGGERED: the query once the delay has passed, not
+ * aborted, Busy 0, not closed and ready - with bit 7 only while `debt`,
+ * else NODEBT, no call. QUERIED: HANDOFF for an abort by a terminal
+ * request, CANCEL for one by any other or once the hold has passed.
+ */
+ULONG XhciInjQsStep(PXHCI_INJ_QSTOP q, ULONG now, ULONG ready, ULONG debt);
+
+/* The query made: QUERIED, `released` kept, the hold's end in Due. */
+VOID XhciInjQsQueried(PXHCI_INJ_QSTOP q, ULONG released, ULONG now);
+
+/* The cancel's end (made or, for a refused query, not needed): IDLE. */
+VOID XhciInjQsEnded(PXHCI_INJ_QSTOP q);
+
+/* A real request's bracket entered: Busy raised, Abort set, and for a
+ * terminal request Closed and Terminal; ARMED or TRIGGERED ended here
+ * (BR_ENDED, IDLE), CALLING or QUERIED waited for (BR_WAIT), IDLE
+ * nothing. Never waits for Busy, so a nested request cannot wait for the
+ * one enclosing it. */
+ULONG XhciInjQsBracket(PXHCI_INJ_QSTOP q, ULONG terminal);
+
+/* A real request's handling ended: Busy lowered. */
+VOID XhciInjQsLeave(PXHCI_INJ_QSTOP q);
+
+#define XHCI_INJ_LAST_BUILT      44UL
+
+/*
+ * Task 50.31 (design record 38 section 17), hex 30 to 35: the retry of a
+ * controller stopped after repeated failures. A range of their own, apart
+ * from XHCI_INJ_LAST_BUILT's (2C is task 50.34's, 2D the query-stop's
+ * above, 2E and 2F left free), and taken on a failed controller, which is where
+ * they act (XhciInjNeedsLive answers 0 for them).
+ *   30 RETRY_FAIL         every recovery attempt refused at its first step,
+ *                         charged as a refusal, until `arg` runs of three
+ *                         are spent (0 one, 255 until CLEAR)
+ *   31 RETRY_ONES         the commit's USBSTS read answers all ones for the
+ *                         next `arg` armed tries (0 one)
+ *   32 RETRY_PORTSC_ONES  the sweep's PORTSC reads answer all ones until
+ *                         CLEAR (port byte one port, 0 every one)
+ *   33 RETRY_HOLD         the next armed try's commit not attempted for
+ *                         `arg` ticks (0: 50), nothing blocked
+ *   34 RECOVER_EARLY      the next `arg` attempts' capability decode answers
+ *                         all ones (0 one)
+ *   35 RETRY_SWEEP_BREAK  the next `arg` sweeps (0 one) find the leave
+ *                         generation moved between their first two port
+ *                         holds
+ */
+#define XHCI_INJ_RETRY_FAIL         0x30UL
+#define XHCI_INJ_RETRY_ONES         0x31UL
+#define XHCI_INJ_RETRY_PORTSC_ONES  0x32UL
+#define XHCI_INJ_RETRY_HOLD         0x33UL
+#define XHCI_INJ_RECOVER_EARLY      0x34UL
+#define XHCI_INJ_RETRY_SWEEP_BREAK  0x35UL
+#define XHCI_INJ_RETRY_FIRST        XHCI_INJ_RETRY_FAIL
+#define XHCI_INJ_RETRY_LAST         XHCI_INJ_RETRY_SWEEP_BREAK
+#define XHCI_INJ_RETRY_HOLD_TICKS   50UL /* 33's default: 5 s nominal    */
+
 #define XHCI_INJ_CLEAR           0xFFUL  /* every injection ended            */
 
 /* XhciInjTake's verdicts. */
@@ -276,6 +647,8 @@ VOID XhciInjTriggerStart(PXHCI_INJ_TRIGGER t, ULONG found, ULONG value);
 /* One read of the value: XHCI_INJ_TAKE_*. A fresh sequence is consumed
  * whatever its verdict, so a refused command is not retried. */
 ULONG XhciInjTake(PXHCI_INJ_TRIGGER t, ULONG found, ULONG value);
+
+/* Task 50.30 step 2: declared with XHCI_INJ_HANG above. */
 
 /* Every answer off. */
 VOID XhciInjRegsClear(PXHCI_INJ_REGS r);

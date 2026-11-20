@@ -555,8 +555,10 @@ to `3.3.0.0`), was retired with task 45.45: every tool refuses the word.
 `docs/contributing/design/08-build-flavours-and-the-log-channel.md` is the
 source, section 14 for the retirement.
 
-`build-driver.cmd`'s default is `release`; `all` means the two and is what a
-release cut uses; `both` and `debug` are refused by name. In the import
+`build-driver.cmd`'s default is `release`; `all` means the two; `cut` is what a
+release cut uses since roadmap-usb4 task 50.1, the release flavour alone with
+every self-test in full and every tool built, as `all` runs them; `both` and
+`debug` are refused by name. In the import
 allowlist's `FLAVORS` column the word for every flavour is `all`, and `both`
 and `debug` are refused. The DDK's own words, `free` and `checked`, survive
 only where the DDK itself requires them; `build-driver.cmd` makes that

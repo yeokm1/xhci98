@@ -348,9 +348,11 @@ INF)"); the 32-bit INF, whose NT 5.x models section is the undecorated
 one that the store leaves out on 6.x, went into both images unchanged.
 For Setup from a 64-bit `boot.wim` the test signature asks for test
 signing in that medium's boot configuration as on the installed system
-(record 19). Kept for later (roadmap-usb4, "Planned - The XP x64
-Property Pages"): XP x64 and Server 2003 x64 in a folder of their own,
-which would give back the tabs `usbui.dll` draws there.
+(record 19). Then kept for later (roadmap-usb4, "Planned - The XP x64
+Property Pages", XP64UI.1): XP x64 and Server 2003 x64 in a folder of
+their own, which would give back the tabs `usbui.dll` draws there;
+dropped by the owner on 2026-11-09 (roadmap-usb4's decisions table,
+"Phase 48").
 
 What `SETUP.EXE` still does after an integrated install (the text of
 `INTEGRATE.TXT`, section 8.2): XHCIPFW, placed by the installer alone

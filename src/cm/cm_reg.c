@@ -78,6 +78,7 @@ static const PCWSTR cmValueNames[CM_VAL_COUNT] = {
 #define CM_VALUE_GEN4_ELR L"XhciCmGen4LinkRecovery"
 #define CM_VALUE_SLEEP_ENTRY L"XhciCmSleepEntry"
 #define CM_VALUE_WAKE_POWER_UP L"XhciCmWakePowerUp"
+#define CM_VALUE_WAKE_ORDER L"XhciCmWakeOrder"
 /* Record 33 section 9.1: absent is 1, as the NT 5.x install paths write it
  * since task 45.50; read on NT 5.x alone. XhciCmRingInterrupt: absent is
  * 0, as the NT install paths write it. */
@@ -202,6 +203,19 @@ static VOID cmQuery(HANDLE key, PCWSTR name, PCM_TAKE take, ULONG text)
     }
 }
 
+#if defined(XHCI_FLAVOUR_QEMU)
+/* A qemu-only test value from the machine-wide key alone (task 50.27's
+ * XhciQemuThreadRefCm); 0 when absent or not a REG_DWORD. IRQL:
+ * PASSIVE_LEVEL. */
+ULONG CmRegQemuDword(PCWSTR name)
+{
+    CM_TAKE take;
+
+    cmQueryAt(RTL_REGISTRY_SERVICES, (PWSTR)CM_MACHINE_KEY, name, &take, 0);
+    return take.Found ? take.Dword : 0UL;
+}
+#endif
+
 /* ---- The interrupt gate (design record 21 section 6.2.1) ---- */
 
 ULONG CmIrqGate;
@@ -313,6 +327,7 @@ VOID CmReadValues(PCM_NHI nhi)
 
     CmValuesDefault(&nhi->Values);
     nhi->ValuesRead = 1;
+    nhi->PowerRel = 0;
     /* 98 SE and ME away from S0 (task 46.14): no registry access, the
      * defaults stand (such a start goes no further than inert). */
     admitted = CmRegEnter(nhi);
@@ -369,6 +384,8 @@ VOID CmReadValues(PCM_NHI nhi)
     nhi->QemuFailD0 = take.Found ? take.Dword : 0;
     cmQuery(key, L"XhciCmQemuFailReenum", &take, 0);
     nhi->QemuFailReenum = take.Found ? take.Dword : 0;
+    cmQuery(key, L"XhciCmQemuUnitStop", &take, 0);
+    nhi->QemuUnitStop = take.Found ? take.Dword : 0;
     cmQuery(key, L"XhciCmQemuOscNoClear", &take, 0);
     nhi->QemuOscNoClear = take.Found ? take.Dword : 0;
     cmQuery(key, L"XhciCmQemuEcamFault", &take, 0);
@@ -384,6 +401,9 @@ VOID CmReadValues(PCM_NHI nhi)
     CmValuesTakeSleepEntry(&nhi->Values, take.Found, take.Dword);
     cmQuery(key, CM_VALUE_WAKE_POWER_UP, &take, 0);
     CmValuesTakeWakePowerUp(&nhi->Values, take.Found, take.Dword);
+    /* Record 21 section 6.3.2 (task 50.10): the wake order's switch. */
+    cmQuery(key, CM_VALUE_WAKE_ORDER, &take, 0);
+    CmValuesTakeWakeOrder(&nhi->Values, take.Found, take.Dword);
     if (CmBreqGate != 0) {
         cmQuery(key, CM_VALUE_BRIDGE_REQ, &take, 0);
         CmValuesTakeBridgeReq(&nhi->Values, take.Found, take.Dword);
@@ -391,5 +411,6 @@ VOID CmReadValues(PCM_NHI nhi)
     if (key != NULL) {
         ZwClose(key);
     }
+    nhi->PowerRel = nhi->Values.WakeOrder;
     CmRegLeave(nhi);
 }

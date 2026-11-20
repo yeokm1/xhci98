@@ -66,10 +66,12 @@ void tr_red_state(const TR_RED_IN *in, TR_RED *out);
  * when others hold, at most cap - 1 characters (cap is the shell's szTip:
  * 64 below shell32 5.0, 128 from it), "xHCI98 USB Tree: " first when
  * prefix is set. The fixed words and the suffix are kept and the name is
- * cut to the room left, ending "..."; with fewer than 4 characters of
- * room a generic word stands for it. Empty when Count is 0. */
+ * cut to the room left, ending "...", between characters by lead (a test
+ * of a double-byte character's first byte, as tr_unit_label's; NULL: every
+ * byte a character); with fewer than 4 characters of room a generic word
+ * stands for it. Empty when Count is 0. */
 #define TR_RED_PREFIX   "xHCI98 USB Tree: "
 void tr_red_tip(const TR_RED_IN *in, const TR_RED *r, int prefix,
-                char *out, size_t cap);
+                TR_LEAD_FN lead, char *out, size_t cap);
 
 #endif /* TR_RED_H */

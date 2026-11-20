@@ -31,6 +31,8 @@ static volatile const char HcdFlavourMarker[] = HCD_FLAVOUR_NAME;
 static volatile const char HcdVersionString[] = "xhci98 " XHCI_VER_STR;
 
 PDRIVER_OBJECT HcdDriverObject;
+ULONG HcdImageTimeLow;
+ULONG HcdImageTimeHigh;
 
 static LONG hcdFdoSerial;
 
@@ -63,7 +65,11 @@ NTSTATUS HcdCompleteIrp(PIRP irp, NTSTATUS status, ULONG_PTR information)
 {
     irp->IoStatus.Status = status;
     irp->IoStatus.Information = information;
-    HCD_QEMU_URB_OUT(irp);
+    /* Task 50.26: every URB this completes was refused or answered at the
+     * dispatch, its header written with another status or not at all and
+     * its packets never, so 0x00010000 here is the client's own and keeps
+     * its value (record 13 section 6.15.3). */
+    HcdUrbOut(irp, 0UL);
     IoCompleteRequest(irp, IO_NO_INCREMENT);
     return status;
 }
@@ -77,6 +83,7 @@ NTSTATUS HcdPassDown(PHCD_CONTROLLER hc, PIRP irp)
 NTSTATUS
 DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 {
+    LARGE_INTEGER now;
     ULONG i;
 
     UNREFERENCED_PARAMETER(RegistryPath);
@@ -86,6 +93,11 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     }
 
     HcdDriverObject = DriverObject;
+    /* Task 50.32: the image's start time, its two words copied, no
+     * arithmetic (xhci_qry.h, the lifetime part). */
+    KeQuerySystemTime(&now);
+    HcdImageTimeLow = now.LowPart;
+    HcdImageTimeHigh = (ULONG)now.HighPart;
     HcdPoolInit();
     /* Task 48.33: the boot ledger of the DMA memory controllers could
      * name (hcd_dma.c), before any controller is added. */
@@ -115,6 +127,9 @@ static VOID NTAPI hcdUnload(PDRIVER_OBJECT DriverObject)
     /* An idle callback thread a stop abandoned leaves the image only
      * after its callback has returned (design record 14 section 4.4). */
     HcdSuspDriverUnload();
+    /* Task 50.27 (record 15 section 4.5.21): the library's copy ended
+     * last, once nothing of the driver can call it. */
+    HcdMsgNtEnd();
 }
 
 static NTSTATUS NTAPI hcdAddDevice(PDRIVER_OBJECT DriverObject,

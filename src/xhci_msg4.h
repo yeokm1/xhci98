@@ -4,8 +4,8 @@
  * walk of one CM_RESOURCE_LIST from the PnP manager's resource map that
  * finds another device's interrupt on this controller's vector (the veto
  * of strategy 1), the image's refusal table, the stray-entry brake of
- * strategy 1, the stranded-event judge, and the packing of a refused
- * claim's reasons.
+ * strategy 1, the stranded-event judge, the packing of a refused
+ * claim's reasons, and a refused start's record (task 50.4).
  *
  * The kernel halves are hcd_msg4.c (the lifetime) and hcd_msgnt.c
  * (msi4nt, 2000 to XP x64).
@@ -264,5 +264,61 @@ ULONG XhciMsg4JudgeTick(PXHCI_MSG4_JUDGE j, ULONG claims, ULONG now);
 /* The picker's reason for each IRQ 0 to 15, a byte each, into four
  * words: IRQ 4n in bits 7:0 of word n. */
 VOID XhciMsg4PackReasons(const UCHAR *reasons16, PULONG words4);
+
+/* ------------------------------------------------------------------ */
+/* A refused start's record, XhciMode4Refusal (section 4.5.20)         */
+/* ------------------------------------------------------------------ */
+
+/* REG_BINARY in the controller's driver key: XHCI_M4REC_WORDS
+ * little-endian ULONGs. XHCITR's tr_snap.c reads the same layout. */
+#define XHCI_M4REC_MAGIC                0x46523458UL    /* "X4RF"          */
+#define XHCI_M4REC_VERSION              1UL
+#define XHCI_M4REC_WORDS                55UL
+#define XHCI_M4REC_BYTES                (XHCI_M4REC_WORDS * 4UL)
+#define XHCI_M4REC_AT_STATE             2UL
+#define XHCI_M4REC_AT_POLL              10UL    /* IntrModeRead..IntrPin  */
+#define XHCI_M4REC_POLL_WORDS           6UL
+#define XHCI_M4REC_AT_CONNECT           16UL    /* MsiConnectStatus       */
+#define XHCI_M4REC_AT_MSG4              17UL    /* Msg4Strategy..         */
+#define XHCI_M4REC_MSG4_WORDS           38UL
+
+/* Word 2. */
+#define XHCI_M4REC_CLEARED              0UL     /* by a later start       */
+#define XHCI_M4REC_REFUSED              1UL
+
+/* What a value read holds (XhciMsg4RecordState). */
+#define XHCI_M4REC_ABSENT               0UL
+#define XHCI_M4REC_IS_CLEARED           1UL
+#define XHCI_M4REC_IS_REFUSED           2UL
+#define XHCI_M4REC_FOREIGN              3UL     /* not a record read here */
+
+typedef struct _XHCI_M4REC_IN {
+    ULONG State;            /* XHCI_M4REC_CLEARED or _REFUSED              */
+    ULONG TimeLo;           /* the system time, as KeQuerySystemTime       */
+    ULONG TimeHi;
+    ULONG Status;           /* the start's NTSTATUS                        */
+    ULONG System;           /* XHCI_MSG4_SYS_*                             */
+    ULONG Flavour;          /* XHCI_SNAPSHOT_FLAVOUR_*                     */
+    ULONG DriverVersion;    /* XHCI_VER_PACKED                             */
+    ULONG Location;         /* bit 31 known, bits 15:0 XhciMsg4Bdf         */
+    const ULONG *Poll;      /* XHCI_M4REC_POLL_WORDS counter words         */
+    ULONG ConnectStatus;    /* MsiConnectStatus                            */
+    const ULONG *Msg4;      /* XHCI_M4REC_MSG4_WORDS counter words         */
+} XHCI_M4REC_IN;
+
+/* 1 when a start is one mode 4 refused: it failed, no delivery stands,
+ * and its reason is one of mode 4's refusals (22 to 27, 30, 31, 33, 34). */
+ULONG XhciMsg4IsStartRefusal(ULONG failed, ULONG delivery, ULONG reason);
+
+/* The record into words[XHCI_M4REC_WORDS]. A cleared record keeps the
+ * header (words 0 to 4, 6 and 7) and is 0 elsewhere, whatever `in`
+ * carries. */
+VOID XhciMsg4RecordBuild(const XHCI_M4REC_IN *in, PULONG words);
+
+/* What a value holds: `present` 0 is ABSENT; a value not REG_BINARY
+ * (`binary` 0), shorter than the record, of another magic or version, or
+ * of an unknown state is FOREIGN. */
+ULONG XhciMsg4RecordState(ULONG present, ULONG binary, const UCHAR *data,
+                          ULONG length);
 
 #endif /* XHCI_MSG4_H */

@@ -1,7 +1,7 @@
 # xhci98 - Release Notes
 
-This file describes package version `3.5.0.0`, dated 2026-11-14 (`DriverVer`
-`11/14/2026,3.5.0.0` in every INF of the package, Stor98's included).
+This file describes package version `3.6.0.0`, dated 2026-11-20 (`DriverVer`
+`11/20/2026,3.6.0.0` in every INF of the package, Stor98's included).
 "What's new" lists what the newest releases change; older releases are in
 `releases/history.md`. Where this file and `docs/contributing/roadmap-hcd.md`,
 `docs/contributing/build-and-test.md` or `xhciqual/README.md` disagree, the
@@ -67,7 +67,211 @@ What it is not:
 
 ## What's new
 
+### What `3.6.0.0` changes
+
+xHCI98 development will soon continue in a GitHub organisation under
+shared community ownership. Watch this space for more information when we
+have it. Barring any major problems, this should be the final release
+here. You can continue to use xHCI98 and to report issues here; they will
+be handled in the successor.
+
+USB:
+
+- **The USB Tree restarts a controller** (right-click it, Restart
+  Controller).
+- **A controller that has stopped after repeated failures is tried
+  again** by the driver itself, first after about 5 seconds, each
+  later wait twice the one before, up to ten minutes. A device
+  unplugged from or plugged into one of the controller's own ports
+  can bring the next try sooner. Every device on it is then found
+  again. The USB Tree shows the controller, the port and device
+  involved where the driver recorded them, and when the next try
+  comes (`XhciFailedRetrySec`, `0` off).
+- **A device that stops answering is removed alone** on the Intel 7
+  Series controller (`8086:1E31`): its port is held until it is
+  unplugged or the controller restarts, and the other devices on the
+  controller keep working, where the whole controller was reset
+  before. If its request cannot be stopped or the device cannot be
+  removed cleanly, and for a hub that stops answering, the controller
+  is still reset. On other controllers this needs
+  `XhciDeviceIsolation` `2`, at your own risk; `0` turns it off.
+  If a device on this controller behaves worse than before, set
+  `XhciDeviceIsolation` to `0`.
+- **Windows 2000 and later: the transfers of an unplugged USB device
+  end once Windows is told it is gone** (`XhciUnplugComplete`), so the
+  removal of a drive unplugged during a copy, the copy and a window
+  on the drive need not wait for its driver's own time-out. Some are
+  still held, such as those of a controller closed off after a fault.
+- **Windows 2000 and later: a cancelled USB transfer reports the
+  status Windows' own USB stack reports** (`0xC0010000`, where earlier
+  releases reported `0x00010000`; `XhciCancelStatus`).
+- 98 SE / ME: restarting a USB controller (USB Tree) or removing it
+  (Device Manager) could end in "A fatal exception 0E" a little later.
+  Fixed.
+- Fixed: UAS drives under Windows' own UAS driver (Windows 8 and later,
+  or carried back to Windows 7) now appear as disks.
+- **Intel 7 Series USB 3 controller (`8086:1E31`), a UAS drive on
+  xHCI98's own UAS driver:** a request the drive refuses, such as a
+  monitoring program's (HWMonitor, Speccy, HWiNFO), no longer
+  disconnects the drive and finds it again. The UAS driver resets it in
+  place, and its requests carry on after a pause of about a second
+  (`XhciStreamDequeueAvoid`, [tuning.md](tuning.md#a-controller-that-moves-another-uas-stream-xhcistreamdequeueavoid)).
+  Under Windows' own UAS driver the drive can still disconnect (see
+  [Known limitations](#windows-2000-xp-and-later)).
+- **Windows 98 SE, a UAS drive on xHCI98's own UAS driver:** a reset of
+  the drive after a request it refused could stop half-way and leave the
+  drive not answering. The UAS driver now sets aside what a reset needs
+  when the drive starts.
+- **A UAS-only drive on a controller that cannot stream**
+  (`XhciStreamsOff`) is sent to the USB 2.0 side of its connector. If it
+  does not appear there, it is now listed after about 20 seconds with no
+  driver, instead of staying hidden. The USB Tree says why: "This drive
+  runs only as UAS, which needs streams at SuperSpeed, and streams are not
+  available on this controller, so Windows has no driver for it here. Try
+  a USB 2.0 port or hub: if the drive supports USB 2.0, it may work
+  there."
+- **Intel 7-, 8- and 9-series and C610/X99 chipsets: a new install turns
+  the port switchover on**, on every Windows, so that the shared (usually
+  blue) connectors can move to the USB 3 controller. On Windows 2000 and
+  later they are not moved while Windows says Setup is in progress, while
+  that cannot be read, in Windows PE, or before Windows reports its
+  installation complete, nor in the Windows session in which the
+  switchover is first turned on; they can move at a later start of
+  Windows, once none of these holds them. On Windows 98 SE and ME they move
+  at the driver's first start, unless `XhciIntelPortSwitchSetup` is `2`.
+  An update keeps the setting you have
+  ([the port switchover](#intel-7--8--and-9-series-chipsets-the-port-switchover)).
+- **Windows ME, `XhciDmaStaging` `1`:** when a USB controller stops
+  answering while Windows is starting, Windows ME now finishes starting.
+  The device that was starting stays at Code 10 until Windows is
+  restarted (see [Known limitations](#windows-me)).
+
+Thunderbolt and USB4:
+
+- **Windows 98 SE: a dock, or an enclosure with its own PCIe switch, left
+  plugged in across a standby is kept.** Its drive keeps its letter
+  instead of being removed and found again a few seconds after the wake.
+  A daisy chain is still removed and found again. Data written to a file
+  left open across the standby is still lost: close the files first.
+- **98 SE and ME:** a Thunderbolt or USB4 drive that Windows would not let
+  go after a standby (while its "data lost" message was still open, for
+  example) is asked for again about once a minute. It comes back once
+  Windows allows it, instead of only after a restart.
+- 98 SE / ME: after a Thunderbolt or USB4 drive had been used, removing
+  the Thunderbolt / USB4 controller in Device Manager could end in "A
+  fatal exception 0E" a little later. Fixed.
+
+Setup:
+
+- **A device whose driver entry was deleted by hand from the registry no
+  longer stops Setup.** On 2000 and later the missing entry no longer
+  keeps Setup from updating a device that runs this package's driver,
+  where Setup would update it otherwise. On 98 SE and ME, for a device
+  Windows lists that the package has a driver for, Setup installs it where
+  it would otherwise if the device's own entry shows it is this package's;
+  if the entry does not show that, Setup leaves it: "Skip (driver entry
+  missing)", with a step to remove it in Device Manager. There, in a run
+  that installs the USB drivers, Setup also tries to remove this package's
+  own old root hub, hub and composite entries whose driver entry is
+  missing and which Windows did not list when last checked, up to 32 a
+  run; one it keeps is a step, with its reason ("Windows set it up again"
+  or "it could not be checked"). Run Setup again after the restart.
+
+The USB Tree:
+
+- **The notice of a port on hold is off unless you tick "Warn when a USB
+  port is put on hold"** (View > Settings..., the xHCI98 USB Tree tab).
+  Off, the tool's icon does not watch the ports. A notice Windows hid
+  behind its own is shown again.
+- "Tell me when a device can run faster" is now "Warn when a device can
+  run faster".
+- A port on hold is shown as "(on hold)" also with the driver's logging
+  off (`XhciLogVerbosity` `0`).
+- **XP x64:** the device report (Save Report, `XHCITR /snapshot`) shows
+  each device's IRQ and other resources.
+- **Save Report also lists the values of each USB device's driver
+  keys.** The data of a value whose name suggests a secret (a password
+  or a key) is left out by its name alone, so the report can still
+  hold private data a driver recorded: read it before you share it.
+- The details pane, Edit > Copy and Save Report keep their lines
+  within 79 columns, but for a value too long to break and the
+  deepest levels of the tree.
+- The icon's menu cuts a long device name short with "...", to fit
+  the screen; the window keeps the whole name. In View > Settings...,
+  "Changed, waiting for a restart:" scrolls when its names do not fit.
+- **A snapshot of a controller that is busy resetting a device no
+  longer holds up an eject or another request:** after a short wait
+  it is answered from memory, marked busy, with what it could not
+  read. While a USB device that stopped answering is being reset,
+  Save Report and Quick save wait until the reset has finished.
+- **Intel 7-, 8- and 9-series:** each Intel controller's details say
+  whether the shared connectors were moved at its start, or what held
+  them, and where the settings in force were set.
+
+Settings:
+
+- `XhciStreamDequeueAvoid` (new): `1` (the default) on the Intel 7 Series
+  controller, `2` on every controller, `0` off. It applies only to a
+  drive run by xHCI98's own UAS driver. Setup and the USB Tree's settings
+  show it.
+- `XhciIntelPortSwitchSetup` (new): `0` (the default) automatic, `1`
+  bypass (move the connectors whatever Windows says; a device in use on
+  them is disconnected at that start), `2` never move them while the
+  switchover is on (with `XhciIntelPortSwitch` `0` this setting is not
+  read, and the hand-back at shutdown remains). Setup and the USB Tree's
+  settings show it.
+- `XhciIntelPortSwitchReady` (new): the driver's own note that the
+  switchover has been on for a controller, so that its connectors can move
+  from the next restart of Windows. The USB Tree's settings show it for
+  each controller the switchover applies to. Setting it to `0` prepares a
+  fresh Windows session, not the one running: before you capture an image
+  of Windows for other computers, set it to `0` on each such controller as
+  the last step and capture before the controller starts again, or set it
+  in the image offline ([tuning.md](tuning.md#the-intel-789-series-port-switchover-xhciintelportswitch)).
+- `XhciCmWakeOrder` (new): Thunderbolt / USB4, Windows 7 to 10: after
+  standby or hibernation, power up a drive only after its controller. `0`
+  (the default) no, `1` yes. A test switch: leave it at 0. Setup and the
+  USB Tree's settings show it.
+- `XhciFailedRetrySec` (new): when a controller has stopped after
+  repeated failures, the seconds, `2` to `600`, before the driver
+  tries it again by itself; later waits double up to ten minutes.
+  `5` (the default); `0` never, as earlier releases. Setup and the
+  USB Tree's settings show it.
+- `XhciDeviceIsolation` (new): a device that stops answering while
+  plugged in: `1` (the default) removed alone and its port put on
+  hold, the other devices kept working, where its request can be
+  stopped and the device removed cleanly (a hub excepted), on the
+  listed controller, the Intel 7 Series (`8086:1E31`), and as `0` on
+  other controllers; `2` on every controller, at your own risk; `0`
+  the whole controller reset, as earlier releases. Setup and the USB
+  Tree's settings show it.
+- `XhciUnplugComplete` (new): `1` (the default) on Windows 2000 and
+  later the transfers of an unplugged USB device end once Windows is
+  told it is gone; `0` they are held, as earlier releases. Setup and
+  the USB Tree's settings show it.
+- `XhciCancelStatus` (new): the status a cancelled USB transfer
+  reports: `1` (the default) as each Windows' own USB stack reports
+  it, `0` the earlier value everywhere, as earlier releases, `2` the
+  later value everywhere. Setup and the USB Tree's settings show it.
+
+Other drivers:
+
+- usb-wdm-free 0.1.12: every device name its drivers show now carries
+  "(wdm-free)", so a device on one of them can be told from one on a
+  maker's driver. A device keeps its old name until its driver is
+  updated. On Windows 98 SE choose the preferred playback device again
+  after the update (Control Panel, Multimedia, Audio). See its release
+  notes (https://github.com/yeokm1/usb-wdm-free/releases).
+  - Realtek USB Ethernet (`rtl815x`): the forced 10 and 100 Mb/s speeds
+    on the Advanced tab now take effect; flow control offers
+    "Transmit only"; receive checksum offload can be turned on for the
+    RTL8157 and RTL8159 (2000 to 7, off by default).
+  - CDC network adapters (`cdcnet`): reinstalling keeps the protocol
+    chosen on the Advanced tab.
+
 ### What `3.5.0.0` changes
+
+The full list is the `3.5.0.0` entry of `releases/history.md`.
 
 USB:
 
@@ -292,38 +496,6 @@ Installer:
 - The USB Tree: optional USB drive notices; a Thunderbolt networking node;
   `/eject` with the ID of a device inside a Thunderbolt or USB4 device stops
   that whole device.
-
-### What `3.4.2.0` changes
-
-The full list is the `3.4.2.0` entry of `releases/history.md`.
-
-- **2000, XP and XP x64: a USB 3 controller the BIOS gives no interrupt**
-  (some HP laptops of 2012 with the Intel 7 Series controller) gets the
-  line the chipset routes it to, or is polled, where XP stopped it at Code
-  12 and Windows 2000 stopped at start ([Known limitations](#known-limitations)).
-- **ME:** unplugging a USB audio device while it plays no longer stops
-  Windows.
-- **A UAS drive's refused SMART read** could leave the drive waiting for
-  good, its volume lost and Windows frozen; the driver now recovers it.
-- **A drive that offers UAS and Bulk-Only, used as Bulk-Only,** has a
-  Device Manager entry of its own for that, so it no longer stops at Code
-  10 (`XhciBulkOnlyOwnId`, [USB storage](#usb-storage-uas-and-bulk-only)).
-- **Stor98:** 4 KiB-sector drives work on every system (with a limit: see
-  [Known limitations](#known-limitations)); a drive above 2 TiB has its size
-  on 7.
-- **UAS, per drive:** `XhciUasNoAtaPassThrough` and `XhciUasFastReset`
-  ([tuning.md](tuning.md)).
-- **The USB Tree's Settings window** shows and changes the drivers'
-  settings; **Quick save** saves a report and a snapshot with no questions
-  ([The xHCI98 USB Tree](#the-xhci98-usb-tree)).
-- **XP x64 and Server 2003 x64:** Setup copies `usbui.dll` from Windows'
-  own files when it is missing, for the Advanced and Power tabs; answer
-  Windows' "Windows Logo testing" box with Continue Anyway.
-- **98 SE:** the uninstall also removes Windows Setup's records of the INFs
-  it placed.
-- XHCIQUAL: `--edd` ([EDD reports](edd-reports.md)).
-- usb-wdm-free 0.1.9; usb-wdm-nonfree v1.3.0 adds Microsoft's USB smart
-  card reader driver for 2000 and XP, copied only.
 
 ### Older releases
 
@@ -681,6 +853,10 @@ Limits:
 - **On Windows 2000, plug the USB keyboard and stick in before Setup
   starts:** text mode uses only the devices present when the driver first
   reports them (it waits up to 5 seconds for them).
+- **Windows 2000 from the F6 floppy: on some ACPI computers the graphical
+  part of Setup may restart repeatedly.** If it does, use a CD with the
+  driver integrated (INTEGRATE.TXT), or add the driver after Setup with
+  SETUP.EXE.
 - Pressing F6 needs the BIOS's own USB keyboard support, and the floppy
   must be drive A: as the BIOS sees it.
 - **A USB floppy drive works for F6 only if Setup knows it:** the Mitsumi
@@ -844,6 +1020,21 @@ has every command.
   disk on it is offered. On 98 SE and ME the stop removes the device from
   Device Manager, and Refresh can start it again until it is unplugged; on
   XP and later Windows holds it stopped (Code 47) until it is unplugged.
+- **Restarting a controller:** right-click one of this driver's
+  controllers and choose Restart Controller. Windows stops it and starts
+  it again in one request (not Device Manager's Disable and Enable); on 98
+  SE and ME the tool removes it and has Windows find it again. The tool
+  lists every device that will disconnect and asks first. A controller
+  that has stopped after repeated failures shows it on its line, with the
+  port and device involved where the driver recorded them and when the
+  driver will try it again by itself, and the icon's menu offers its
+  restart. On 2000 to 10 it needs administrator rights (on
+  2000 and XP through Run As, on Vista and later the tool asks for them).
+  If Windows asks for the computer to be restarted instead, the tool says
+  so and does nothing more. On 98 SE and ME, unplug the USB storage
+  devices on the controller first; the tool does not restart a controller
+  while Windows has a drive it cannot place (one in MS-DOS compatibility
+  mode, for one).
 - **Settings** (View > Settings..., or the icon's menu) shows the drivers'
   settings with Setup's meanings, choices and defaults, a tab each for the
   USB driver, the Thunderbolt and USB4 driver and Stor98, and changes them
@@ -864,13 +1055,15 @@ has every command.
   Thunderbolt or USB4 device was removed unexpectedly." warns of a device
   removed without being stopped first; it does not say whether data was
   lost. Optional USB drive notices say when a USB drive is connected or
-  removed.
+  removed. With "Warn when a USB port is put on hold" ticked (off unless
+  you tick it), a balloon says when the driver puts a port on hold after
+  repeated failures (on 98 SE, a pop-up).
 - **"Can run faster":** when a USB device that can run at SuperSpeed runs
   slower on this driver's controller (on a USB 2.0 port, behind a USB 2.0
   hub, fallen back to USB 2.0, or a 10 Gbit/s device at 5 Gbit/s), or a High
   Speed device runs at Full Speed behind a Full Speed hub, a balloon names it
   and the icon turns red. Click the balloon for the port, the speed and what
-  to try. "Tell me when a device can run faster" turns it off for you;
+  to try. "Warn when a device can run faster" turns it off for you;
   Setup's box, or `INSTALL /faster` and `/nofaster`, sets it for the
   computer. "Watch Windows' own USB ports too" (off by default) also watches
   the ports of the computer's own EHCI, OHCI or UHCI controllers (not on 98
@@ -894,7 +1087,17 @@ has every command.
   ones Linux lists, such as the ASMedia ASM1042), a disk that offers both
   runs Bulk-Only at SuperSpeed; a UAS-only disk is sent back to the USB 2.0
   side of its connector and runs UAS at High Speed (or is refused if it has
-  none; behind a SuperSpeed hub it is refused in place).
+  none; behind a SuperSpeed hub it is refused in place). If it does not
+  appear on the USB 2.0 side within about 20 seconds, it is listed with no
+  driver, and the USB Tree says why.
+- **The Intel 7 Series controller (`8086:1E31`) and UAS.** When a UAS
+  drive refuses a request (a monitoring program's, for example), the
+  driver does not send this controller the command that can make it mix
+  up the drive's streams. xHCI98's UAS driver resets the drive in place
+  instead, and its requests carry on after a pause of about a second
+  (`XhciStreamDequeueAvoid`). It applies only to a drive run by xHCI98's
+  own UAS driver: see [Known limitations](#windows-2000-xp-and-later) for
+  Windows' own.
 - **A disk used as Bulk-Only has a Device Manager entry of its own**
   (`XhciBulkOnlyOwnId`): Windows installs its Bulk-Only driver there, and
   the disk keeps its UAS entry where it runs UAS. A disk installed as
@@ -941,19 +1144,36 @@ those connectors start on the USB 2.0 controller. There they still work,
 at USB 2.0 speed, wherever a driver for that controller runs (NUSB's or
 SweetLow's on 98 SE and ME, Windows' own on 2000 and later).
 
-**The switchover is off by default** (`XhciIntelPortSwitch` `0`). SETUP.EXE
-proposes to turn it on when it finds one of these controllers at a first
-install; an update keeps the value it had. To turn it on or off, use the
-USB Tree's View > Settings..., or `XHCITR /set XhciIntelPortSwitch=1` (or
-`=0`), and restart Windows. On, the driver moves those connectors to the
-xHCI controller at each
-start and resume, and hands them back when the controller is disabled or
-removed or the machine shuts down. A standby keeps them where they are.
+**A new install turns the switchover on** (`XhciIntelPortSwitch` `1`), and
+SETUP.EXE proposes it at a first install on these boards; an update keeps
+the value it had (`0` from `2.3.0.0` to `3.5.0.0`, unless it was set to
+`1`). To turn it on or off, use the USB Tree's View > Settings..., or
+`XHCITR /set XhciIntelPortSwitch=1` (or `=0`), and restart Windows.
+
+On Windows 98 SE and ME the driver moves those connectors to the xHCI
+controller at its first start, unless `XhciIntelPortSwitchSetup` is `2`.
+On Windows 2000 and later it does not move
+them while Windows says Setup is in progress or that cannot be read, in
+Windows PE, or (Vista and later) before Windows reports its installation
+complete, nor in the Windows session in which the switchover was first
+turned on for the controller: they can move at a later start of Windows,
+once none of these holds them. The USB Tree's details for each Intel
+controller say whether they were moved at its start, or what held them. If
+they keep waiting after Windows Setup has finished, set
+`XhciIntelPortSwitchSetup` to `1` and restart Windows; a device in use on
+them is disconnected when they move ([tuning.md](tuning.md#the-intel-789-series-port-switchover-xhciintelportswitch)).
+
+Where the driver moved them at its start, it moves them again at each
+resume, and hands them back when the controller is disabled or removed or
+the machine shuts down; a standby keeps them where they are. Where a start
+held them, the driver writes nothing to them until the controller's next
+start, at shutdown included: they stay where the firmware put them.
 
 - **A USB 3 stick that copies only at USB 2.0 speed on a blue connector** is
-  most likely still on the USB 2.0 controller, as after an install by hand
-  or an update from an earlier version: turn the switchover on as above. (A
-  USB 2.0 hub or cable in between gives the same speed.)
+  most likely still on the USB 2.0 controller, as after an update from an
+  earlier version or while the switchover waits (the USB Tree says why):
+  turn the switchover on as above. (A USB 2.0 hub or cable in between gives
+  the same speed.)
 - **A device on a blue connector moves when the controller starts or
   stops:** it is disconnected on one side and found again on the other. A
   drive in use loses its drive letter and writes in flight are at risk, so
@@ -991,6 +1211,15 @@ transfer, port or controller fault:
   checked as after any surprise removal;
 - an over-current on a root port is waited out and the port powered again;
 - a controller that halts is recovered, every device on it found again;
+- a controller that has stopped after repeated failures is tried again
+  by the driver itself, first after about 5 seconds, each later wait
+  twice the one before, up to ten minutes (`XhciFailedRetrySec`);
+- a device (not a hub) that stops answering is removed alone where its
+  request can be stopped and the device removed cleanly, its port held
+  until it is unplugged or the controller restarts, and the other
+  devices on the controller keep working; otherwise the controller is
+  reset (`XhciDeviceIsolation`: at `1`, the default, on the Intel 7
+  Series, `8086:1E31`; at `2` on every controller, at your own risk);
 - after a few tries on one port (three), the next fault there removes the
   device and holds the port until the device is unplugged;
 - a controller that stops answering is closed off; if the driver cannot
@@ -1000,7 +1229,7 @@ transfer, port or controller fault:
   button** ([Known limitations](#known-limitations)).
 
 `XhciTolerance` `0` turns most of this off. The details are in
-[tuning.md](tuning.md#controller-faults-xhcitolerance-xhciintervalcap-xhciavgtrbesit).
+[tuning.md](tuning.md#controller-faults-xhcitolerance-xhcifailedretrysec-xhciintervalcap-xhciavgtrbesit).
 If a USB device stops on your machine, send two reports (one while it
 works, one after it stops) as [below](#reporting-a-problem), with the
 controller's PCI id; if it still stops, the same with `XhciAvgTrbEsit` `1`.
@@ -1134,7 +1363,7 @@ Close the files open on the device first, as for any removable disk. Then:
 
 ### NVMe drives behind Thunderbolt or USB4 (Stor98)
 
-This download bundles Stor98 `3.5.0.0`.
+This download bundles Stor98 `3.6.0.0`.
 
 <!-- The cut replaces the line above with "This download bundles Stor98
 `<version>`." or "This download bundles no Stor98."
@@ -1243,7 +1472,7 @@ The values you are most likely to want:
 | `XhciForceBulkOnly` | `1` uses Bulk-Only instead of UAS | `0` |
 | `XhciMaxTransferKB` | The largest UAS command, `64` to `2048` KiB (`64` for a drive that fails at larger ones) | `1024` |
 | `XhciImodInterval250ns` | The interrupt moderation interval, in 250 ns units: lower is faster storage and more interrupts; raise it towards `4000` if audio stutters under storage load | `160` |
-| `XhciIntelPortSwitch` | The Intel port switchover ([above](#intel-7--8--and-9-series-chipsets-the-port-switchover)) | `0` (Setup writes `1` at a first install on these boards) |
+| `XhciIntelPortSwitch` | The Intel port switchover ([above](#intel-7--8--and-9-series-chipsets-the-port-switchover)) | `1` (an update keeps the value it had) |
 | `XhciResumeKeep` | Devices on root ports kept across a resume that starts the controller afresh | `1` |
 | `XhciCmMode` | Thunderbolt and USB4: `0` off, `1` automatic | `1` |
 | `XhciCmApprove` | `1` approves every device, `0` none ([Approval](#approval-and-what-it-lets-a-device-do)) | `1` |
@@ -1282,11 +1511,14 @@ To send a report:
 - **For a controller question**, the DOS report `QUALREP.BAT`
   ([XHCIQUAL](#xhciqual-checking-a-machines-controller-optional)).
 - The report and the snapshot name the system (Windows version, processor,
-  memory, make, model and BIOS where Windows records them) but never the
-  computer's name, your user name, the domain or a serial number, so they
-  can be pasted into a public issue. If your firmware's strings were
-  customised, read the top of the file first. `/nosysinfo` leaves the system
-  out.
+  memory, make, model and BIOS where Windows records them) but not the
+  computer's name, your user name, the domain or its serial number. They
+  also list the values of each USB device's driver keys, where a driver
+  can keep private data under any name (a serial number, a network name
+  or a user name): the data of a value whose name suggests a password or
+  a key is left out, but read the report before you paste it into a public
+  issue. If your firmware's strings were customised, read the top of the
+  file first. `/nosysinfo` leaves the system out.
 - The log cannot capture a crash: a machine that has stopped is not running
   for anything to read.
 
@@ -1342,6 +1574,15 @@ sends the log to DebugView; use it only when asked.
   only hold signatures, which 98 SE and ME do not check.
 - **The xHCI98 drivers show no version on Windows 98's Driver tab**, only
   the file date; the four-part version is under Driver File Details.
+- **The USB Tree does not restart a USB controller while a USB storage
+  device is connected to it** (unplug it first), nor while Windows has a
+  drive the tool cannot place - a drive in MS-DOS compatibility mode
+  (System Properties, Performance), for one: restart Windows instead. Nor
+  does it while a network adapter on the controller may be carrying a
+  network drive in use: disconnect the network drives first. It does not
+  restart a controller that has stopped after repeated failures; unplug
+  the device involved, wait for the driver's next attempt, or restart
+  Windows.
 
 ### Windows 98 SE
 
@@ -1352,13 +1593,18 @@ sends the log to DebugView; use it only when asked.
   with a microphone), whatever its driver: Windows' own USB stack does the
   same. The taskbar clock stops and only a restart ends it. **Plug the device
   in before switching on and leave it plugged in until shutdown**; if Windows
-  freezes at a plug, restart with the device plugged in. For a webcam whose
+  freezes at a plug, restart with the device plugged in. Restarting its
+  controller in the USB Tree plugs it in again too. For a webcam whose
   microphone you do not need, usb-wdm-free's `NOAUD98.INF` gives the
   microphone no driver, and the camera keeps working. USBView walked while a
   USB audio device is attached can freeze the machine too.
-- **Stop audio playback before unplugging a USB audio device.** Unplugged
-  while Windows' own USB audio driver plays it, the device can freeze
-  Windows.
+- **Stop audio playback and recording before unplugging a USB audio
+  device.** Unplugged while Windows' own USB audio driver plays or records
+  it, the device can freeze Windows.
+- **Windows 98 SE: with two USB audio devices connected, close the
+  recording program before you unplug or disable the device it records
+  from.** Otherwise Windows can stop with a fault in WDMAUD. It happens
+  without xHCI98 too.
 - **A device that holds a shared IRQ with no working driver makes Windows
   crawl or freeze once this driver is installed** (ME is expected to do the
   same). Windows keeps such a line masked while no driver uses it; once one
@@ -1406,9 +1652,13 @@ sends the log to DebugView; use it only when asked.
   in; no Remove and no restart are needed. Setup gives this step when it
   finds such a drive.
 - On Windows ME, with XhciDmaStaging set to 1, if a USB controller stops
-  answering while Windows is starting and a device on it was plugged in at
-  power-on, Windows ME may not finish starting; unplug the device or the
-  dock and start again.
+  answering while Windows is starting, a device on it that was starting
+  shows Code 10 in Device Manager and does not work until Windows is
+  restarted.
+- **Windows ME: when a USB device keeps failing and the controller is reset
+  several times in a row, Windows can stop responding at its 'Unsafe Removal
+  of Device' message.** Unplug the failing device; if Windows has already
+  stopped responding, restart the computer.
 
 ### Windows 2000, XP and later
 
@@ -1426,11 +1676,18 @@ sends the log to DebugView; use it only when asked.
   reached the desktop, "Last Known Good Configuration" at F8 undoes it,
   otherwise only "Standard PC" starts Windows 2000 there. On these computers
   the BIOS leaves the USB 3 ports on the USB 2.0 controllers under XP and XP
-  x64: `XhciIntelPortSwitch` must be `1` (Setup sets it at a first install;
-  after an install by hand or an update it may be `0`) ([tuning.md](tuning.md#an-interrupt-where-the-firmware-gives-none-xhciintelnorouteirq)).
+  x64: `XhciIntelPortSwitch` must be `1` (a new install writes it; after an
+  update from an earlier version it may be `0`) ([tuning.md](tuning.md#an-interrupt-where-the-firmware-gives-none-xhciintelnorouteirq)).
 - **2000 from the F6 floppy needs three files from its own CD**, and **XP
   from the F6 floppy may need a PS/2 keyboard**
   ([the F6 floppy](#installing-windows-2000-or-xp-or-using-the-recovery-console-the-f6-floppy)).
+- **Windows 2000 from the F6 floppy: on some ACPI computers the graphical
+  part of Setup may restart repeatedly.** If it does, use a CD with the
+  driver integrated (INTEGRATE.TXT), or add the driver after Setup with
+  SETUP.EXE.
+- On an Intel 7 Series USB 3 controller, a UAS drive under Windows' own UAS
+  driver can disconnect and reconnect when a monitoring program queries it.
+  Set XhciForceBulkOnly to 1 or use xHCI98's UAS driver to avoid it.
 - **32-bit Vista and 7: the install asks for a restart**, and the controller
   does not start until it is done (also after a reinstall when Windows does
   not ask).
@@ -1442,6 +1699,12 @@ sends the log to DebugView; use it only when asked.
   ([test-signing mode](#64-bit-vista-to-10-test-signing-mode)). On 8, 8.1 and
   10 Secure Boot must be off too.
 - **Vista and 7: the controller's Advanced tab shows no bandwidth.**
+- **Windows 7: after the USB controller is restarted (disabled and enabled,
+  or updated) without restarting Windows, a USB disk that was already
+  plugged in may not get its drive letter back**, although Windows says the
+  device is ready to use. Unplug the disk and plug it in again. Scan for
+  hardware changes in Device Manager does not bring it back; do not
+  initialize or format the disk in Disk Management.
 - **2000 to 8.1: a USB Audio 2.0 or 3.0 device that already shows as "USB
   Audio Device" keeps Windows' own USB Audio 1.0 driver**: Windows does not
   choose again for a device it already installed. Unplug the device, restart
@@ -1449,6 +1712,9 @@ sends the log to DebugView; use it only when asked.
   `cmd /c "set devmgr_show_nonpresent_devices=1&& devmgmt.msc"`, choose View,
   Show hidden devices, update the greyed "USB Audio Device" to `uac2`, then
   plug the device in.
+- **Windows XP, the free USB Audio 2.0 driver (uac2): plugging in a USB
+  audio device can, rarely, end in a blue screen (STOP 0x7E).** If it
+  happens to you, use the device maker's own driver instead.
 
 ### Every system
 
@@ -1457,6 +1723,20 @@ sends the log to DebugView; use it only when asked.
   checked as after any surprise removal; after three on one port the device
   stays gone until it is unplugged
   ([When a device keeps failing](#when-a-device-or-the-controller-keeps-failing)).
+- If every device on one USB controller disappears, open the xHCI98 USB
+  Tree: it shows the controller as stopped after repeated failures and,
+  where the driver recorded it, the port and device involved. Unplug that
+  device and leave it unplugged for a few seconds. The driver may try the
+  controller again by itself (the Tree shows the next attempt); it does not
+  when automatic retries are off (`XhciFailedRetrySec` 0), and unplugging a
+  device behind a hub does not bring an attempt sooner. Otherwise restart
+  the controller from the USB Tree (right-click it, Restart Controller; on
+  98 SE and ME it does not restart a controller that has stopped after
+  repeated failures) or in Device Manager (disable and enable it), or
+  restart Windows. A controller shown as closed off is never tried again and
+  should not be restarted: save your work and restart Windows. Programs that
+  were using a device may need to open it again. On Windows ME, a device
+  that does not come back may need to be unplugged and plugged in again.
 - **After the driver closes off a controller it could not prove stopped,
   do not disable the controller (that hangs), and save your work: Windows
   may not be able to shut down or restart afterwards, so if it does not
@@ -1515,11 +1795,14 @@ sends the log to DebugView; use it only when asked.
   at the wake** (on Windows 7 to 10, a drive plugged in after Windows
   started: the next item). On Windows 98 SE and ME, stop and
   unplug the drive first; a drive that was connected when Windows started
-  cannot be stopped, so shut down instead. On Windows 98 SE, if a drive on
-  a dock stays plugged in during standby, it disconnects when the computer
-  wakes and comes back a few seconds later. Before standby, close all files
-  on that drive. If a file is still open, the drive may not come back until you
-  restart Windows. For important data, eject the drive before standby. On a
+  cannot be stopped, so shut down instead. On Windows 98 SE, a drive on a
+  dock, or in an enclosure with its own PCIe switch, that stays plugged in
+  during standby is kept. Otherwise (a daisy chain, for example) it
+  disconnects when the computer wakes and comes back a few seconds later.
+  Before standby, close all files on that drive: data written to a file
+  left open is lost, and a drive that disconnects with a file open may not
+  come back until you restart Windows. For important data, eject the drive
+  before standby. On a
   computer whose firmware does not restore the Thunderbolt or USB4
   connection at resume, stop the drive before standby or hibernation.
 - **On Windows 7 to 10, standby or hibernation disconnects a Thunderbolt or
@@ -1528,6 +1811,9 @@ sends the log to DebugView; use it only when asked.
   again at the wake; any file being written to it is lost. Stop the drive
   before sleeping (Safely Remove, or the xHCI98 USB Tree); after the wake,
   unplug it and plug it in again.
+- Windows ME: Stand by and Hibernate are refused while a file is open on a
+  TB / USB4 NVMe drive (Windows says the Stor98 controller cannot enter a
+  low-power state). Close the files / programs using the drive first.
 - **Windows ME (and rarely 98 SE): with a Thunderbolt dock or chain attached
   at power-on, the first start after the install can stop with a fatal
   exception 0E.**

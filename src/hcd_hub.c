@@ -578,7 +578,11 @@ static ULONG hcdHubQuiesceBelow(PHCD_CONTROLLER hc, PHCD_PORT q,
         }
         for (dci = 1; dci < 32; dci++) {
             pipe = (dci == 1) ? &dev->Ep0Pipe : dev->Pipes[dci];
-            if (pipe == NULL || hc->Hc.ControllerFailed) {
+            /* Task 50.30 step 3: a frozen device's pipes are paused
+             * above, but it gets no Stop but its teardown's (section
+             * 4.15.5a, "The failed device is frozen"). */
+            if (pipe == NULL || hc->Hc.ControllerFailed ||
+                HCD_DEV_FROZEN(dev)) {
                 continue;
             }
             XhciControllerLockAcquire(&hc->Hc, &oldIrql);
@@ -595,7 +599,8 @@ static ULONG hcdHubQuiesceBelow(PHCD_CONTROLLER hc, PHCD_PORT q,
             }
             if (code != XHCI_CC_SUCCESS &&
                 code != XHCI_CC_CONTEXT_STATE_ERROR) {
-                HcdSvcRequestReset(&hc->Hc);
+                HcdSvcRequestResetWhy(&hc->Hc, XHCI_WHY_TEARDOWN_STOP,
+                                      dev->SlotId, 0, dci);
             }
         }
     }
@@ -623,6 +628,13 @@ static VOID hcdHubReleaseBelow(PHCD_CONTROLLER hc, PHCD_USB_DEVICE *devs,
 
     for (i = 0; i < count; i++) {
         dev = devs[i];
+        if (HCD_DEV_FROZEN(dev)) {
+            /* Task 50.30 step 3 (section 4.15.5a, "The failed device is
+             * frozen"): no doorbell for it, and its pipes stay paused for
+             * its teardown - a stopped endpoint of it is never rung
+             * again here. */
+            continue;
+        }
         for (dci = 1; dci < 32; dci++) {
             pipe = (dci == 1) ? &dev->Ep0Pipe : dev->Pipes[dci];
             if (pipe == NULL) {
@@ -630,8 +642,8 @@ static VOID hcdHubReleaseBelow(PHCD_CONTROLLER hc, PHCD_USB_DEVICE *devs,
             }
             state = hcdHubEpState(hc, dev, dci);
             XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-            if (!dev->Gone && state == XHCI_EP_STATE_STOPPED &&
-                !pipe->SuspendPause) {
+            if (!dev->Gone && !HCD_DEV_FROZEN(dev) &&
+                state == XHCI_EP_STATE_STOPPED && !pipe->SuspendPause) {
                 /* Not a device selective suspend holds: its own restart
                  * rings it (design record 14 section 3.2; 36.30). */
                 if (pipe->Queue->Count != 0) {
@@ -784,6 +796,12 @@ ULONG HcdHubPortReset(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     ULONG waited;
     ULONG progress;
 
+    /* Task 50.30 step 3 (design record 17 section 4.15.4, item 4): a
+     * place held because its device stopped answering is not reset. */
+    if (HcdTolHeldUnanswered(hc, HcdHubPort(hc, hub, n))) {
+        *speedClass = XHCI_SPEED_UNKNOWN;
+        return 0;
+    }
     if (hub->Usb3) {
         return HcdSsHubPortReset(hc, hub, n, speedClass);
     }
@@ -1022,9 +1040,13 @@ static VOID hcdHubSelf(PHCD_CONTROLLER hc, PHCD_HUB hub)
  * Whether a failure on the device on port q may be counted: 1 unless some
  * port on its path confirms the device has left (reviewed and revised
  * after d54eef0). Each hub port above it is read with GET_STATUS; a reply that
- * says disconnected, disabled, or with a connect or enable change raised
- * is a confirmed departure, as is a hub already departing (Draining, or no
- * device). A hub that does not answer confirms nothing for its port - its
+ * says disconnected, disabled, or with a connect change raised
+ * (XhciHubPortGone, the serial deferral's predicate too) is a confirmed
+ * departure, as is a hub already departing (Draining, or no device). An
+ * enable change alone on a connected, enabled port is not (design record
+ * 17 section 4.15.16 D): it stays set until cleared, so an earlier error's
+ * can outlive a later reset that enabled the port, and QEMU's hub raises it
+ * at a reset that enables a disabled port. A hub that does not answer confirms nothing for its port - its
  * own departure, if that is why, is confirmed further up - and neither does
  * a pending status-change report or Changed bit, which may name another
  * port. The root port the path starts at confirms a departure when it reads
@@ -1058,10 +1080,7 @@ ULONG HcdHubPathPresent(PHCD_CONTROLLER hc, PHCD_PORT q)
             return 1;
         }
         if (HcdHubPortStatus(hc, hub, q->Number, &status, &change) &&
-            ((status & XHCI_HUB_PORT_CONNECTION) == 0 ||
-             (status & XHCI_HUB_PORT_ENABLE) == 0 ||
-             (change & (XHCI_HUB_C_PORT_CONNECTION |
-                        XHCI_HUB_C_PORT_ENABLE)) != 0)) {
+            XhciHubPortGone(status, change)) {
             return 0;
         }
         q = hub->Upstream;
@@ -1466,6 +1485,7 @@ VOID HcdHubRearm(PHCD_CONTROLLER hc, PHCD_HUB hub)
     ULONG offset;
     ULONG answer;
     ULONG armed;
+    ULONG frozen;
     ULONG i;
 
     dev = hub->Device;
@@ -1504,7 +1524,13 @@ VOID HcdHubRearm(PHCD_CONTROLLER hc, PHCD_HUB hub)
 
     answer = XHCI_XFER_BUSY;
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-    if (!dev->Gone && !pipe->Closed && !pipe->Halted) {
+    /* Task 50.30 step 3 (section 4.15.5a, "The failed device is
+     * frozen"): a frozen hub's status pipe is neither published nor rung,
+     * and not given up for polling either, whose control transfers the
+     * frozen hub refuses; its teardown or the reset its mark keeps ends
+     * it. */
+    frozen = HCD_DEV_FROZEN(dev) ? 1UL : 0UL;
+    if (!dev->Gone && !pipe->Closed && !pipe->Halted && !frozen) {
         answer = XhciXferSubmitNormal(pipe->Queue, pipe->Ring, &nreq, 1,
                                       &dev->HubXfer, dev, trbs,
                                       XHCI_XFER_MAX_CONTROL_TRBS);
@@ -1514,7 +1540,7 @@ VOID HcdHubRearm(PHCD_CONTROLLER hc, PHCD_HUB hub)
         }
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
-    if (answer != XHCI_XFER_OK) {
+    if (answer != XHCI_XFER_OK && !frozen) {
         hub->Polled = 1;
         XHCI_DBG_VALUE("hcd: hub status pipe refused, polling, hub",
                        hub->Index);

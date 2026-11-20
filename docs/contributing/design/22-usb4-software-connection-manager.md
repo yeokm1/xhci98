@@ -4999,7 +4999,9 @@ reference is held on the physical device object, so the stamp, the ids
 and the match below are what stand between a record and a device object
 reused at the same address (an NHI removed while no instance of this
 driver ran). The record lives no longer than the image: for the boot on
-98 SE and ME (no `DriverUnload`), and on NT while any device object of
+98 SE and ME (since task 50.40 by a device object that is never deleted,
+design record 21 section 7.9; before it the image went 18 to 43 s after
+the last NHI's removal), and on NT while any device object of
 this driver - a bridge filter among them - keeps the image loaded. An
 image unloaded between the two instances, a reboot, a restart that takes
 longer than 120 s (a Device Manager disable left a while, say), a change
@@ -5926,6 +5928,27 @@ not readable here]; the registers are record 21 section 6.5's capability,
 read through `HalGetBusData` at the suspend while the bridge is in D0.
 Not built: the owner chose Q1's (a), which needs no recognition, and a log
 line alone was not worth a configuration read at every suspend.
+
+**The wake order (tasks 50.10 and 50.11, 2026-11-15).** Record 21 section
+6.3.2 gives Windows 7 to 10 an order this section said no driver could: with
+`XhciCmWakeOrder` 1 the device directly behind a tunnel port answers
+`PowerRelations` with the NHI, so it, and everything behind it, is powered
+up only after the NHI's S0. On the normal path this driver completes that S0
+after `TbtU4Resume` has rebuilt the tunnel and the bounded settle of section
+11.1.14 has run; a failed resume completes it without that, and there the
+order gives nothing (record 21 section 6.3.1's recovery stays). That clears
+task 49.13's case on a hot-plug tunnel port without a power controller (the
+emulator's ASM4242 model): the enclosure's own switch was restored while the
+tunnel was down and got back only its bus numbers, so the drive was lost;
+ordered, the switch and the drive are restored through a live tunnel and
+kept, the write in flight with them [runtime: the emulator, Windows 7 x86
+and x64 in standby and hibernation, Windows 10 x86 in hibernation alone;
+`runs/run-50.md`, "50.11"]. The port itself is never related (decision U15),
+so task 43.71's mechanism, the slot turned off by Windows' PCI driver at the
+port's own resume where the slot has a power controller, is unchanged and
+unread with the order, as are the Intel ADL model's integrated tunnel root
+ports and the stop before the sleep. The value is 0 by default (owner,
+2026-11-15), and at 0 everything here stands as written.
 
 #### 11.1.9 The XP x64 and 7 x64 shutdown stall
 

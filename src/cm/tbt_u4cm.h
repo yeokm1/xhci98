@@ -503,6 +503,18 @@ typedef struct _TBT_U4_PORT {
      * Enter Sleep or wake enables could not be put back on this port's
      * device router: its obligations are not met (HELD). */
     BOOLEAN SleepCancelFailed;
+    /* Record 21 section 6.1.6 item 6 (TBSTBYWB9X.1): the device router's
+     * identity as TbtU4Suspend found it on a port with a PCIe tunnel up
+     * (kept beside the router record, which a connection zeroes), and
+     * ResumeSame, set at the end of a successful TbtU4Resume only when the
+     * router enumerated there then reads that identity again, its UUID read
+     * now; valid while the port's Generation is still ResumeSameGen. */
+    BOOLEAN SuspIdValid;
+    ULONG SuspVendor;
+    ULONG SuspDevice;
+    ULONG SuspUuid[4];
+    BOOLEAN ResumeSame;
+    ULONG ResumeSameGen;
 } TBT_U4_PORT, *PTBT_U4_PORT;
 
 /* A router below depth 1 a predecessor configured (section 7.1). */
@@ -1177,6 +1189,12 @@ LONG TbtU4Resume(PTBT_U4CM cm);
  * running when a budget runs out - after which TbtU4Resume stops, marks
  * what is left HELD and returns the failure path. */
 ULONG TbtU4ResumeBoundUs(ULONG obligations, ULONG tickUs);
+/* Record 21 section 6.1.6 item 6: TRUE when port `port` (1-based) holds,
+ * since the last successful TbtU4Resume and with no connection or teardown
+ * since, the device router it held at the suspend - the same vendor,
+ * device and UUID, the UUID read after the resume - with its PCIe tunnel
+ * up. The caller's thread is the domain's. */
+BOOLEAN TbtU4PortResumeSame(PTBT_U4CM cm, ULONG port);
 
 /* Stop (section 11): rings stopped, nothing on the fabric changed.
  * Idempotent. */

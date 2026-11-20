@@ -90,6 +90,9 @@
 #define XHCI_TOL_HOLD_REENUMS       1UL     /* powered                       */
 #define XHCI_TOL_HOLD_REPOWERS      2UL     /* unpowered                     */
 #define XHCI_TOL_HOLD_OC_WAIT       3UL     /* unpowered, OCA never cleared  */
+/* Task 50.30 step 3 (design record 17 section 4.15.4, item 4): powered,
+ * its device stopped answering; released as REENUMS is. */
+#define XHCI_TOL_HOLD_UNANSWERED    4UL
 
 /* What a location's charge was for (XhciTolLocCharge). */
 #define XHCI_TOL_CHARGE_REENUM      0UL
@@ -269,6 +272,88 @@ ULONG XhciTolHaltConfirmed(ULONG epState);
 
 #define XHCI_TOL_STOP_REST      0UL     /* *state: the context's state now */
 #define XHCI_TOL_STOP_GIVEUP    1UL
+/* Task 50.30 step 3 (design record 17 section 4.15.5a, the
+ * hcdCfgStopBounded row): a Stop answered aborted (25) or left
+ * (XHCI_TOL_CMD_LEFT) is not a give-up: answered at once, with no restop
+ * and no state read; the caller requests the mandatory reset itself. */
+#define XHCI_TOL_STOP_ABORTED   2UL
+
+/*
+ * Task 50.30 step 3 (section 4.15.3): the result the thread's command
+ * wait gives a command it left for a stop, a removal or a power transition
+ * (the HCD's HCD_CMD_LEFT is this value). Not a completion code (those are
+ * 0 to 255). XhciTolCmdVerdict: whether a command's result is an abort
+ * verdict - aborted cleanly (25) or left - which section 4.15.5a's rows
+ * own as such, never as a refusal. Pure.
+ */
+#define XHCI_TOL_CMD_LEFT       0x100UL
+ULONG XhciTolCmdVerdict(ULONG code);
+
+/*
+ * Task 50.30 step 3 (section 4.15.5a, "The failed device is frozen" and
+ * "The verdict survives the wrappers"). XhciTolFrozenAdmits: whether a
+ * command naming a frozen device's slot is still submitted - the
+ * teardown's own Stop Endpoint and Disable Slot alone (`teardown`: issued
+ * by the device's teardown, hcdDeviceStop and hcdDisableSlotId, or by the
+ * settlement), never a Stop Endpoint of another caller, whatever its type
+ * (reviewed and revised: the type alone once admitted them all).
+ * XhciTolFaultStep:
+ * hcdCfgFault's step before its present-device reset, for a device that
+ * carries a mark (`marked`: an abort verdict, a left command, or failed
+ * alone already): none without one; a hub keeps the reset (section 4.15.0
+ * item 2); any other device fails alone - cycled now if published, OWED
+ * when its cycle is already queued (`cycled`), left to its enumeration
+ * step if it has no PDO yet. XhciTolLateAlone: whether hcdEp0Late's
+ * verdict fails a present device alone (section 4.15.5): the handling
+ * applying, the device not found leaving, read present, and the verdict a
+ * cycle or, before its PDO, its enumeration step's failure. Pure.
+ */
+#define XHCI_TOL_FAULT_NONE     0UL     /* no mark: today's rules          */
+#define XHCI_TOL_FAULT_RESET    1UL     /* a hub with the mark: the reset  */
+#define XHCI_TOL_FAULT_CYCLE    2UL     /* failed alone, cycled now        */
+#define XHCI_TOL_FAULT_OWED     3UL     /* failed alone, its cycle queued  */
+#define XHCI_TOL_FAULT_STEP     4UL     /* failed alone, its enumeration's */
+ULONG XhciTolFrozenAdmits(ULONG type, ULONG teardown);
+ULONG XhciTolFaultStep(ULONG marked, ULONG hub, ULONG published,
+                       ULONG cycled);
+ULONG XhciTolLateAlone(ULONG isolate, ULONG left, ULONG present,
+                       ULONG verdict);
+/* Whether the thread's pass fails a device a left or aborted command
+ * named (section 4.15.3, "Who settles a left command", the first case, and
+ * the reconciliation after a Restore State): only once the debt is clear
+ * (`debtClear`, ordinary admission open again), a device not gone, not
+ * failed alone already, carrying CmdLeft or AbortVerdict, or
+ * AdmitRefused (`admitRefused`: a command naming it that admission
+ * refused under another command's debt, XhciTolAdmitMarks). Pure. */
+ULONG XhciTolMarkedFails(ULONG debtClear, ULONG gone, ULONG failedAlone,
+                         ULONG cmdLeft, ULONG abortVerdict,
+                         ULONG admitRefused);
+/*
+ * Task 50.30 step 3 (reviewed and revised): whether an ordinary command
+ * that admission refused under a left command's debt marks the device
+ * its slot names (AdmitRefused). Nothing of it was submitted, but its
+ * caller may already have changed the device's state for it (a pipe
+ * paused for a Reset Endpoint), and with the debt standing no reset that
+ * caller requests goes out before the clearing; the mark makes the
+ * device owned and reconciled as a left command's is. `hasRecord`: a
+ * device record holds the slot. Not an Enable Slot or a slotless command
+ * (no device), and not a Disable Slot, whose record the teardown
+ * quarantines as owed for the settlement. Pure.
+ */
+ULONG XhciTolAdmitMarks(ULONG trbType, ULONG hasRecord);
+/*
+ * Task 50.30 step 3 (reviewed and revised): whether such a refusal owes
+ * the reset, deferred under the debt (CMD_KEPT, the TRB type): a Stop
+ * Endpoint outside the teardown's scope (`teardown`: CmdTeardown), whose
+ * caller cannot proceed as though the endpoint were at rest and whose
+ * endpoint is left as it was - section 4.15.3's table keeps the reset
+ * for a Stop that did not complete, whichever caller issued it, so no
+ * caller (selective suspend's stop among them) has to request it
+ * itself. The teardown's own refused Stop is not: its record is
+ * quarantined as owed, and the settlement stops and disables it. Pure.
+ */
+ULONG XhciTolAdmitOwesReset(ULONG trbType, ULONG hasRecord,
+                            ULONG teardown);
 
 typedef ULONG (*XHCI_TOL_STOP_CMD)(PVOID context);
 typedef ULONG (*XHCI_TOL_STOP_STATE)(PVOID context);
@@ -439,10 +524,13 @@ ULONG XhciTolLateStopped(ULONG stopCode, ULONG epState, ULONG done);
  * any value when left); hub the record is a hub's; published it has its
  * PDO and its group's serial. Gone: LEFT. Present, or a hub: RESET. A
  * published device: CYCLE. One with no PDO yet: LEFT, its enumeration's
- * failed step tearing it down.
+ * failed step tearing it down. Task 50.30 step 3 (design record 17 section
+ * 4.15.5): `isolate`, the new handling applies - then gone is LEFT, a hub
+ * RESET, and any other device, present or not, CYCLE when published and
+ * LEFT when not; with `isolate` clear the rows above.
  */
 ULONG XhciTolLateVerdict(ULONG left, ULONG present, ULONG hub,
-                         ULONG published);
+                         ULONG published, ULONG isolate);
 
 /*
  * Last, a LEFT or CYCLE verdict only: retired the stopped record was taken
@@ -752,6 +840,15 @@ ULONG XhciTolSaveCommit(ULONG published);
  * controller with a recovery still owed resumes as before. */
 ULONG XhciTolResumeRefused(ULONG terminal);
 
+/* The run of failed recoveries (RecoveryFailuresConsecutive, `failures`)
+ * after a resume that succeeded (design record 17 section 4.6, revision
+ * 37): `reinitialized` 1 when it succeeded through a reinitialization,
+ * which cleared ControllerFailed as a recovery that succeeds does, so the
+ * run is over and the count 0; else, a restore or nothing done, the count
+ * as it was. Left counted, a later fault would get fewer recoveries than
+ * the run allows. At every XhciTolerance value. */
+ULONG XhciTolResumeFailures(ULONG failures, ULONG reinitialized);
+
 /* The shutdown latch (roadmap-hcd 37.3; design record 13 section 5.8). Not
  * a tolerance behaviour: it applies at every XhciTolerance value.
  *
@@ -868,6 +965,12 @@ typedef struct _XHCI_TOL_STATS {
     ULONG CmdDiverged;
     ULONG CmdFatal;
     ULONG MaskFails;
+    /* Task 50.30 step 3 (design record 17 sections 4.15.3 and 4.15.4),
+     * words 46 and 47: the thread's own reset requests a left command's
+     * debt suppressed; the link actions a place held with reason 4 did
+     * not take (hcdPortChanged, the hub's port path). */
+    ULONG ResetLeftSuppressed;
+    ULONG HeldLinkSkips;
     ULONG Codes[256];       /* Transfer Event completion codes, by count    */
 } XHCI_TOL_STATS, *PXHCI_TOL_STATS;
 
@@ -897,5 +1000,576 @@ VOID XhciTolStart(PXHCI_TOL_STATE st, ULONG vendorDevice,
 
 /* Count one Transfer Event completion code. */
 VOID XhciTolCountCode(PXHCI_TOL_STATS stats, ULONG code);
+
+/*
+ * Task 50.30, step 1 (design record 17 section 4.15.8): why each controller
+ * reset was requested. Every request names a reason, the place and the slot
+ * involved where known, and an extra byte; every request is counted by
+ * reason, and the one that marks the controller failed - the one a recovery
+ * begins from - is also kept in a ring of the last four, which the snapshot,
+ * the recovery-status request and the USB Tree read. Recording only: no
+ * decision reads any of it. The codes are a protocol (the snapshot and the
+ * recovery-status request carry them), so a code is never reused.
+ */
+#define XHCI_WHY_NONE               0UL
+#define XHCI_WHY_CMD_KEPT           1UL
+#define XHCI_WHY_CMD_NO_VERDICT     2UL
+#define XHCI_WHY_ENGINE_ABORT_STUCK 3UL
+#define XHCI_WHY_ENGINE_DIVERGED    4UL
+#define XHCI_WHY_HEALTH             5UL
+#define XHCI_WHY_EVENT_RING         6UL
+#define XHCI_WHY_INTERRUPTS         7UL
+#define XHCI_WHY_POLL_RETIRE        8UL
+#define XHCI_WHY_DISABLE_SLOT       9UL
+#define XHCI_WHY_EP0_RECOVERY       10UL
+#define XHCI_WHY_EP0_LATE           11UL
+#define XHCI_WHY_CREATE_LATE        12UL
+#define XHCI_WHY_SLOT_ID            13UL
+#define XHCI_WHY_PORTSC_DEAD        14UL
+#define XHCI_WHY_WARM_RESET         15UL
+#define XHCI_WHY_TEARDOWN_STOP      16UL
+#define XHCI_WHY_CFG_FAULT          17UL
+#define XHCI_WHY_STREAMS            18UL
+#define XHCI_WHY_BOT_XFER           19UL
+#define XHCI_WHY_RESUME_FAILED      20UL
+#define XHCI_WHY_INJECTED           21UL
+#define XHCI_WHY_HUB_UNANSWERED     22UL
+#define XHCI_WHY_CMD_FATAL          23UL
+#define XHCI_WHY_XFER_FATAL         24UL
+#define XHCI_WHY_COUNT              25UL    /* codes 0 to 24                 */
+#define XHCI_WHY_COUNTERS           26UL    /* an even number of ULONGs      */
+#define XHCI_WHY_RING               4UL
+
+/* One reset request that began a recovery. Eight ULONGs. */
+typedef struct _XHCI_RESET_REC {
+    ULONG Reason;           /* XHCI_WHY_*                                  */
+    ULONG Extra;            /* the reason's own byte (TRB type, code, ...) */
+    ULONG Slot;             /* 0: none named                               */
+    ULONG RootPort;         /* 0: none named                               */
+    ULONG Route;            /* the Route String below the root port        */
+    ULONG VidPid;           /* (idVendor << 16) | idProduct, 0 not read    */
+    ULONG Clock;            /* the tolerance clock at the request          */
+    ULONG Recoveries;       /* recoveries begun before it, this lifetime   */
+} XHCI_RESET_REC, *PXHCI_RESET_REC;
+
+/*
+ * The reasons' state, appended to the extension rather than put in
+ * XHCI_TOL_STATE, so no offset of the extension the harness reads moves;
+ * the snapshot's HCD header gives its place and size. Counts[] by reason;
+ * Rec[] the ring, Next the slot the next record takes, Kept how many are
+ * valid; Latched 1 + the ring slot of the record named at the latch, 0
+ * none; Staged and StagedExtra the reason an engine escalation staged for
+ * the drain's one request (XhciTolWhyStage), StagedLost the escalations
+ * of the same drain that found one staged already; StagedSlot to
+ * StagedVidPid the device the staging site proved (its slot, root port,
+ * route and VID:PID, copied under the lock when it staged, all 0 when it
+ * proved none), appended after Rec[] so no earlier field moves. An even
+ * number of ULONGs.
+ *
+ * Task 50.30 step 3 (design record 17 section 4.15.6, "The spread of
+ * failures, recorded only"): every device failed alone (HcdEnumFailAlone)
+ * counted in SpreadCount and kept in a ring of the last
+ * XHCI_TOL_SPREAD_RING, SpreadNext the next record written - its place
+ * (the port object's number: a root port's, or a hub port's above the
+ * root ports), the hub it hangs from (root port in 31:24, the Route String
+ * in 19:0, 0 for a root port), its VID:PID where read (0 unknown) and the
+ * tolerance clock. Appended after StagedVidPid, so no earlier field moves:
+ * a reader that knows the earlier size reads what it knew. Nothing decides
+ * anything from it. Eighteen ULONGs, so the count stays even. After them,
+ * XhciDeviceIsolation as the start read and decided it (IsolationValue,
+ * IsolationState: XhciTolIsolationState below), two ULONGs.
+ */
+#define XHCI_TOL_SPREAD_RING        4UL
+
+typedef struct _XHCI_TOL_SPREAD_REC {
+    ULONG Place;
+    ULONG Hub;
+    ULONG VidPid;
+    ULONG Clock;
+} XHCI_TOL_SPREAD_REC, *PXHCI_TOL_SPREAD_REC;
+
+typedef struct _XHCI_TOL_WHY {
+    ULONG Counts[XHCI_WHY_COUNTERS];
+    ULONG Next;
+    ULONG Kept;
+    ULONG Latched;
+    ULONG Staged;
+    ULONG StagedExtra;
+    ULONG StagedLost;
+    XHCI_RESET_REC Rec[XHCI_WHY_RING];
+    ULONG StagedSlot;
+    ULONG StagedPort;
+    ULONG StagedRoute;
+    ULONG StagedVidPid;
+    ULONG SpreadCount;
+    ULONG SpreadNext;
+    XHCI_TOL_SPREAD_REC Spread[XHCI_TOL_SPREAD_RING];
+    ULONG IsolationValue;
+    ULONG IsolationState;
+} XHCI_TOL_WHY, *PXHCI_TOL_WHY;
+
+/* Every field cleared: a start. Pure. */
+VOID XhciTolWhyInit(PXHCI_TOL_WHY w);
+
+/* Task 50.30 step 3 (section 4.15.6): one device failed alone recorded in
+ * the spread ring and counted; returns the count, for the note tol.spread
+ * (place in 31:16, the count in 15:0). Recording only. Pure; the caller
+ * holds the controller lock. */
+ULONG XhciTolSpreadAdd(PXHCI_TOL_WHY w, ULONG place, ULONG hub, ULONG vidPid,
+                       ULONG clock);
+
+/* One request counted; when `begins` (it marked the controller failed),
+ * `rec` is also kept in the ring. Returns the note value
+ * (XhciTolWhyNote). Pure; the caller holds the controller lock. */
+ULONG XhciTolWhyRecord(PXHCI_TOL_WHY w, const XHCI_RESET_REC *rec,
+                       ULONG begins);
+
+/* The note form, `ctrl.failed.why` and `ctrl.latched.cause`: reason in
+ * 31:24, root port in 23:16, slot in 15:8, extra in 7:0. Pure. */
+ULONG XhciTolWhyNote(const XHCI_RESET_REC *rec);
+
+/* An engine escalation's reason, staged under the lock for the drain's
+ * request; the first staged stays. `place`, when not NULL, is the device
+ * the staging site has proved - an event matched to a queued TD of that
+ * device's pipe, or to the outstanding command - and only its Slot,
+ * RootPort, Route and VidPid are read; NULL for an event no record owns,
+ * whose Slot ID may have been recycled, so nothing is inferred from it.
+ * Pure. */
+VOID XhciTolWhyStage(PXHCI_TOL_WHY w, ULONG reason, ULONG extra,
+                     const XHCI_RESET_REC *place);
+
+/* A transfer engine's verdict on one event, staged: nothing when `fatal` is
+ * 0; otherwise XHCI_WHY_XFER_FATAL with the event's `code`, naming `place`
+ * only when `matched` - the engine resolved the event onto a TD queued on
+ * that device's pipe (XHCI_XFER_EVENT_RESULT.Matched). A fatal code on an
+ * event inside no TD still escalates, but names no device, whatever pipe
+ * its Slot ID and Endpoint ID reach: the slot may have been recycled.
+ * Returns `fatal`. Pure; the caller holds the controller lock. */
+ULONG XhciTolWhyStageXfer(PXHCI_TOL_WHY w, ULONG fatal, ULONG matched,
+                          ULONG code, const XHCI_RESET_REC *place);
+
+/* The staged reason taken and cleared; XHCI_WHY_EVENT_RING with extra 0
+ * when none was staged. `place`, when not NULL, receives the staged
+ * device's Slot, RootPort, Route and VidPid (0 when none was proved) and
+ * every other field 0. Pure. */
+ULONG XhciTolWhyTake(PXHCI_TOL_WHY w, PULONG extra, PXHCI_RESET_REC place);
+
+/* The latch named: the newest kept record marked as the latch's, copied
+ * to `rec`. Returns 0 when the ring is empty. Pure. */
+ULONG XhciTolWhyLatch(PXHCI_TOL_WHY w, PXHCI_RESET_REC rec);
+
+/* How many kept records name the same place (root port and route, root
+ * port not 0) as the newest; 0 when the newest names none. Pure. */
+ULONG XhciTolWhyInvolved(const XHCI_TOL_WHY *w);
+
+/* Ring slot of the i-th record, newest first (i < Kept). Pure. */
+ULONG XhciTolWhyAt(const XHCI_TOL_WHY *w, ULONG i);
+
+/*
+ * Task 50.30 step 3 (design record 17 section 4.15.3, revision 23): a left
+ * command's debt and its settlement, the decisions alone. The controller's
+ * `CmdLeftOwed` is CLEAR, OWED (the left command may still execute:
+ * nothing is submitted, no input context is built) or SETTLING (the engine
+ * ended it and the thread's pass took the settlement: ordinary admission
+ * still closed, the settlement's own entry admits only the commands on its
+ * list).
+ */
+#define XHCI_LEFT_CLEAR             0UL
+#define XHCI_LEFT_OWED              1UL
+#define XHCI_LEFT_SETTLING          2UL
+
+/* Whether a submission may go out under the debt `state`. `settle`: made
+ * through the settlement's own entry (hcdCmdSettle); `onList`: the command
+ * is the next on the settlement's list. An ordinary submission only with
+ * no debt; the settlement's only in SETTLING and only for its list. Pure. */
+ULONG XhciTolLeftAdmit(ULONG state, ULONG settle, ULONG onList);
+
+/* Whether an input context may be built: only with no debt. Pure. */
+ULONG XhciTolLeftInputOk(ULONG state);
+
+/*
+ * The returned Slot ID's checks, in the record's order, before a left
+ * Enable Slot's cleanup Disable Slot: the completion matched to the left
+ * command by address and generation; its code Success; the Slot ID in 1
+ * to `maxSlotsEn` (CONFIG.MaxSlotsEn); no record owns it (`owned`: a
+ * device, a quarantined or an owed record names it, or SlotDevice[] holds
+ * one); its DCBAA entry zero (both words); not on the settlement's list
+ * already. Returns XHCI_LEFT_SLOT_OK, or the first check that fails - the
+ * value `cmd.left.slot` notes in 7:0. Pure.
+ */
+#define XHCI_LEFT_SLOT_OK           0UL
+#define XHCI_LEFT_SLOT_UNMATCHED    1UL
+#define XHCI_LEFT_SLOT_CODE         2UL
+#define XHCI_LEFT_SLOT_RANGE        3UL
+#define XHCI_LEFT_SLOT_OWNED        4UL
+#define XHCI_LEFT_SLOT_DCBAA        5UL
+#define XHCI_LEFT_SLOT_LISTED       6UL
+ULONG XhciTolLeftSlotCheck(ULONG matched, ULONG code, ULONG slot,
+                           ULONG maxSlotsEn, ULONG owned, ULONG dcbaaLo,
+                           ULONG dcbaaHi, ULONG listed);
+
+/*
+ * How a left command that names no device settles, from its end as the
+ * thread's pass reads it: `trbType` the left command's type; `ended` 1
+ * when a completion matched to it was recorded under the lock, 0 for a
+ * clean abort, a loss, an invalidation before any completion, a suspend's
+ * abandonment or a completion the engine could not match; `code` that
+ * completion's code; `slotCheck` XhciTolLeftSlotCheck's answer for its
+ * Slot ID (read only for an Enable Slot's success). CLEAR: nothing is
+ * owned, the debt clears; DISABLE: the returned slot's Disable Slot goes
+ * through the settlement's entry before the debt clears; RESET: the
+ * reset (CMD_KEPT) is requested as the debt clears and Enable Slot is held
+ * until an HCRST or a start. A No Op owns nothing; any other type naming
+ * no device is reset, as an Enable Slot with no trusted end is. Pure.
+ */
+#define XHCI_LEFT_END_CLEAR         0UL
+#define XHCI_LEFT_END_DISABLE       1UL
+#define XHCI_LEFT_END_RESET         2UL
+ULONG XhciTolLeftSlotlessEnd(ULONG trbType, ULONG ended, ULONG code,
+                             ULONG slotCheck);
+
+/* The debt after a successful Restore State: cleared for a left command
+ * that names a device (its CmdLeft mark carries the rest), kept as
+ * SETTLING for one that names none, since the restore rebuilds the command
+ * ring but disables no slot. A reinitialization clears every debt instead
+ * (no function: it is an HCRST). Pure. */
+ULONG XhciTolLeftAfterRestore(ULONG state, ULONG namesDevice);
+
+/* Whether `reason` (XHCI_WHY_*) is one of the thread's own reset sites,
+ * which a left command's debt suppresses (section 4.15.8's table, the rows
+ * marked "thread"); the engine's, the health poll's and the interrupt
+ * paths' report the controller and are never suppressed. Pure. */
+ULONG XhciTolWhyThread(ULONG reason);
+
+/*
+ * Task 50.30 step 3 (section 4.15.3, revision 23): the debt itself
+ * and its transitions, DDK-free so that the host suite drives the code the
+ * controller thread runs. The controller holds one (HCD_CONTROLLER.Left),
+ * read and written under its lock. Owed: XHCI_LEFT_*. Type, Slot, PA,
+ * Gen: the left command's TRB type, Slot ID, TRB and the engine's command
+ * generation at its submit. Device: it names a device record, whose mark
+ * carries the rest. End: how the engine ended it (XHCI_LEFT_HOW_*), with a
+ * matched completion's Code and SlotId. Listed: the settlement's list
+ * written; SlotlessDone: a slotless end decided. Reset, ResetSlot,
+ * ResetExtra: the reason requested as the debt clears (0 none).
+ * Interrupted, InterruptedType, InterruptedSlot: a settlement command a
+ * route's bit interrupted (the first one's type and slot), which fails
+ * the settlement once every route's bit is clear (XhciLeftDebtPass), or
+ * the stop's teardown or an HCRST settles first.
+ * Overflow: an entry the list could not hold. List[Head..Count): what the
+ * settlement's entry alone may submit. EnableHeld: Enable Slot refused
+ * until an HCRST or a start. Deferred, DeferredExtra, DeferredAt: the
+ * first of the thread's own reset requests made while the debt stood
+ * (XhciLeftDebtDefer) - its reason, extra and place, read when it was
+ * made - kept until the pass requests it once the debt has cleared, or an
+ * HCRST makes it unnecessary; DeferredCount the requests deferred.
+ */
+#define XHCI_LEFT_HOW_NONE          0UL
+#define XHCI_LEFT_HOW_DONE          1UL     /* its completion, matched       */
+#define XHCI_LEFT_HOW_LOST          2UL     /* aborted, lost or invalidated  */
+#define XHCI_LEFT_ENTRY_SLOT        1UL     /* a left Enable Slot's slot     */
+#define XHCI_LEFT_ENTRY_RECORD      2UL     /* a record quarantined as owed  */
+/* XHCI_MAX_SLOTS + 1: every record and one slotless entry (xhci_tol.c
+ * holds the relation at compile time). */
+#define XHCI_LEFT_LIST_MAX          33UL
+
+typedef struct _XHCI_LEFT_ENTRY {
+    ULONG Kind;
+    ULONG Slot;
+} XHCI_LEFT_ENTRY, *PXHCI_LEFT_ENTRY;
+
+typedef struct _XHCI_LEFT_DEBT {
+    ULONG Owed;
+    ULONG Type;
+    ULONG Slot;
+    ULONG PA;
+    ULONG Gen;
+    ULONG Device;
+    ULONG End;
+    ULONG Code;
+    ULONG SlotId;
+    ULONG Listed;
+    ULONG SlotlessDone;
+    ULONG Reset;
+    ULONG ResetSlot;
+    ULONG ResetExtra;
+    ULONG Interrupted;
+    ULONG InterruptedType;
+    ULONG InterruptedSlot;
+    ULONG Overflow;
+    ULONG Head;
+    ULONG Count;
+    XHCI_LEFT_ENTRY List[XHCI_LEFT_LIST_MAX];
+    ULONG EnableHeld;
+    ULONG Deferred;
+    ULONG DeferredExtra;
+    ULONG DeferredCount;
+    XHCI_RESET_REC DeferredAt;
+} XHCI_LEFT_DEBT, *PXHCI_LEFT_DEBT;
+
+/* The debt cleared with everything that went with it; EnableHeld and the
+ * deferred reset kept (XhciLeftDebtClear). Everything, both of those too:
+ * an HCRST or a start (XhciLeftDebtHcrst). Pure. */
+VOID XhciLeftDebtClear(PXHCI_LEFT_DEBT d);
+VOID XhciLeftDebtHcrst(PXHCI_LEFT_DEBT d);
+
+/*
+ * A reset request of the thread's own (XhciTolWhyThread) made while a debt
+ * stands is deferred, never discarded: a mandatory reset - a Stop Endpoint
+ * that failed or was left, a Disable Slot that failed, a tainted scratch -
+ * is still owed when the debt clears. The first one's `reason`, `extra`
+ * and `place` (its Slot, RootPort, Route and VidPid, read by the caller
+ * while the slot's record was valid) are kept, later ones counted. Returns
+ * 1 when deferred (the caller requests nothing now), 0 when the request
+ * goes ahead: no debt, or a reason that reports the controller.
+ * XhciLeftDebtTakeDeferred: the deferred reason taken and cleared (0
+ * none), its extra and place copied out. Pure; the caller holds the
+ * controller lock.
+ */
+ULONG XhciLeftDebtDefer(PXHCI_LEFT_DEBT d, ULONG reason, ULONG extra,
+                        const XHCI_RESET_REC *place);
+ULONG XhciLeftDebtTakeDeferred(PXHCI_LEFT_DEBT d, PULONG extra,
+                               PXHCI_RESET_REC place);
+
+/* Task 50.30 step 3 (section 4.15.5a, "Before the Disable Slot, every
+ * endpoint that may be active"): whether a teardown stops an endpoint
+ * before the Disable Slot - one an open pipe names with work on its ring
+ * (`queued`), or one the device's retained objects name (`retained`: the
+ * rings kept after an aborted Configure Endpoint or replay, a retired
+ * stream block's endpoint), that reads Running (`running`). The ordinary
+ * teardown and the settlement's share it. Pure. */
+ULONG XhciTolTeardownStops(ULONG queued, ULONG retained, ULONG running);
+
+/* Task 50.30 step 3 (section 4.15.5a, the second HcdThreadReaddress
+ * row): the slot whose input context is held (InputHeldSlot, 0 none)
+ * after a Disable Slot of `disabled` the controller confirmed - released
+ * when it names that slot, whoever issued the command (the ordinary
+ * teardown or the settlement), otherwise kept. Pure. */
+ULONG XhciTolInputHeldAfter(ULONG held, ULONG disabled);
+
+/* Whether a left command that names a device owes the reset whatever its
+ * end: a Stop Endpoint (section 4.15.3's table: an aborted Stop leaves the
+ * endpoint as it was, and no teardown can follow it soundly). The list's
+ * writing defers it (CMD_KEPT, the TRB type) beside whatever its caller
+ * requested. A left Disable Slot's record is quarantined as owed and
+ * disabled by the settlement instead. Pure. */
+ULONG XhciTolLeftNamedReset(ULONG trbType);
+
+/*
+ * A route's bit ended a command's wait. An ordinary command's (`settle` 0
+ * and no debt standing) takes the debt OWED with its fields (`lost`: its
+ * loss already came, so the engine has ended it). A settlement command's
+ * (`settle` 1), or any leave while a debt stands, never touches the debt
+ * it settles: Interrupted is set, with the type and slot of the first
+ * command it interrupted, and the state, the left command's fields and
+ * the list are kept. An ordinary Stop Endpoint that names a device
+ * (XhciTolLeftNamedReset) owes the reset whatever its end, so taking
+ * the debt also defers it (CMD_KEPT, the TRB type, `place` the device's,
+ * read by the caller under the lock): recorded at the leave, never only
+ * at the settlement's listing, which a successful Restore State that
+ * clears the debt would come before. Returns
+ * XHCI_LEFT_TOOK_OWED or XHCI_LEFT_TOOK_INTERRUPTED. Pure.
+ */
+#define XHCI_LEFT_TOOK_OWED         1UL
+#define XHCI_LEFT_TOOK_INTERRUPTED  2UL
+ULONG XhciLeftDebtLeave(PXHCI_LEFT_DEBT d, ULONG settle, ULONG type,
+                        ULONG slot, ULONG pa, ULONG gen, ULONG device,
+                        ULONG lost, const XHCI_RESET_REC *place);
+
+/* An entry put on the list. On a full list nothing is dropped silently:
+ * Overflow is set and the reset owed (CMD_KEPT), which the pass turns into
+ * a failed settlement. Returns 1 added, 0 not. XhciLeftDebtListed: whether
+ * `slot` is on the unsettled part of the list. Pure. */
+ULONG XhciLeftDebtAdd(PXHCI_LEFT_DEBT d, ULONG kind, ULONG slot);
+/*
+ * Task 50.30 step 3 (reviewed and revised): the owed records put on the
+ * list child before parent, as the ordinary teardown disables them and
+ * design record 13 requires - a hub's Disable Slot never before those of
+ * the devices whose slots name it as parent or TT hub. `tier[slot]`, for
+ * slots 1 to XHCI_MAX_SLOTS, is the record's own tier (the hubs above it,
+ * kept in the device record, so it survives the hub objects' detachment),
+ * XHCI_LEFT_TIER_NONE for a slot with no owed record: the deepest tier
+ * first, ascending slot within a tier. Returns how many entries the list
+ * could not hold (XhciLeftDebtAdd's overflow). Pure.
+ */
+#define XHCI_LEFT_TIER_NONE         0xFFFFFFFFUL
+ULONG XhciLeftDebtAddRecords(PXHCI_LEFT_DEBT d, const ULONG *tier);
+ULONG XhciLeftDebtListed(const XHCI_LEFT_DEBT *d, ULONG slot);
+
+/*
+ * The settlement pass's next action, read under the lock (`routes`: a
+ * route's bit raised; `genMoved`: the command generation is not the left
+ * command's). NONE: nothing to do now (no debt, a route's bit, or OWED with
+ * the left command not ended). TAKE: OWED and ended - SETTLING from here,
+ * the list written in the same hold. FAIL: a settlement command a
+ * route's bit interrupted, once every bit is clear (revision 24: it is a
+ * failed settlement command, never issued again), or a list that
+ * overflowed - the settlement fails (XhciLeftDebtFail). CLEAR: the list
+ * is empty - the debt
+ * clears, the reset owed requested after it. NEXT: List[Head] goes out.
+ * XhciLeftDebtTake: OWED to SETTLING, End LOST where the generation moved
+ * with no end recorded. Pure.
+ */
+#define XHCI_LEFT_PASS_NONE         0UL
+#define XHCI_LEFT_PASS_TAKE         1UL
+#define XHCI_LEFT_PASS_FAIL         2UL
+#define XHCI_LEFT_PASS_CLEAR        3UL
+#define XHCI_LEFT_PASS_NEXT         4UL
+#define XHCI_LEFT_PASS_TAINTED      5UL
+ULONG XhciLeftDebtPass(const XHCI_LEFT_DEBT *d, ULONG routes, ULONG genMoved);
+VOID XhciLeftDebtTake(PXHCI_LEFT_DEBT d);
+
+/*
+ * The settlement pass's action with the controller's own state: `failed`
+ * (ControllerFailed: the recovery's HCRST settles everything) - NONE;
+ * `tainted` (ScratchTainted: no hardware work may go out until the HCRST,
+ * so no settlement command can) - an entry due to go out (NEXT) is
+ * TAINTED instead, which fails the settlement with no command issued
+ * (XhciLeftDebtFail), so the pass still reaches CLEAR and requests the
+ * reset it owes. Otherwise XhciLeftDebtPass's. With no debt and a
+ * deferred reset kept (a successful Restore State cleared the debt), CLEAR
+ * once no route's bit is raised: the reset requested, nothing settled. An
+ * interrupted settlement is FAIL once the bits are clear, tainted or not
+ * (XhciLeftDebtPass). Pure.
+ */
+ULONG XhciLeftDebtStep(const XHCI_LEFT_DEBT *d, ULONG routes, ULONG genMoved,
+                       ULONG failed, ULONG tainted);
+
+/*
+ * The settlement fails (an entry's command failed, an overflow, an
+ * interrupted settlement command): the first reason is kept (`why`,
+ * `slot`, `extra` where none is owed yet; where none is given, CMD_KEPT
+ * with the interrupted command's slot and TRB type for an interruption,
+ * with `slot` and `extra` otherwise), the interruption ended and the list
+ * emptied (Head = Count). Its caller (hcdLeftService, every failure: an
+ * entry's command, an interruption, an overflow, a tainted scratch)
+ * converts every record still owed to an ordinary quarantine, retained
+ * until the HCRST, and clears the debt with EnableHeld set
+ * (XhciLeftDebtSettleClear) in the same hold, so no failed settlement's
+ * reset waits in a standing debt. No command is retried and nothing is
+ * freed. Pure.
+ */
+VOID XhciLeftDebtFail(PXHCI_LEFT_DEBT d, ULONG why, ULONG slot, ULONG extra);
+
+/*
+ * The debt's clearing as the pass makes it, under the lock: with a debt
+ * standing, the reset it owes (Reset, ResetSlot, ResetExtra; 0 none)
+ * copied out, the debt cleared (XhciLeftDebtClear: EnableHeld and the
+ * deferred reset kept) and EnableHeld set when a reset is owed. Returns 1
+ * when a debt was cleared, 0 with no debt (the outputs 0).
+ * XhciLeftDebtFailClear: a failed settlement's whole transition -
+ * XhciLeftDebtFail, then this - which hcdLeftService makes in one hold
+ * with the owed records' conversion. Pure.
+ */
+ULONG XhciLeftDebtSettleClear(PXHCI_LEFT_DEBT d, PULONG why, PULONG slot,
+                              PULONG extra);
+ULONG XhciLeftDebtFailClear(PXHCI_LEFT_DEBT d, ULONG failWhy,
+                            ULONG failSlot, ULONG failExtra, PULONG why,
+                            PULONG slot, PULONG extra);
+
+/*
+ * The debt after a successful Restore State: cleared for a left command
+ * that names a device (its CmdLeft mark carries the rest); otherwise kept
+ * SETTLING, its end LOST where none was recorded, and its list written
+ * again at the thread's next pass - an owed record listed from its mark,
+ * and an unsettled slotless entry checked again (MaxSlotsEn read again,
+ * revision 23), so SlotlessDone is reopened for one still on the list. An
+ * interruption stays, and keeps the debt SETTLING even for a left command
+ * that names a device, so the pass fails the settlement it interrupted
+ * (revision 24) rather than leaving its owed records unsettled; and so
+ * does a record the debt's teardown quarantined as owed (`owedRecords`,
+ * how many records carry OwedQuarantine), which only the settlement
+ * stops and disables - cleared, the debt would leave it awaiting a reset
+ * nobody owes; and so does a debt with a reset already owed (Reset, or
+ * an overflowed list), so that the pass, not the restore, clears it and
+ * requests that reset. Returns the state before. Pure.
+ */
+ULONG XhciLeftDebtRestored(PXHCI_LEFT_DEBT d, ULONG owedRecords);
+
+/*
+ * Task 50.30 step 3: the engine's clean end of an abort as the waiter's
+ * mark (HCD_CONTROLLER.CmdAbort, under the controller lock): the TRB it
+ * abandoned, its command generation, how (1 a Command Aborted event came,
+ * 2 only the stop event). Cleared when an idle engine is armed for a
+ * submission and at every HCRST, a new lifetime's included - the engine's
+ * generation starts again at 0 there, so an old mark could otherwise match
+ * a new lifetime's command at the same TRB. XhciCmdAbortMatches: a mark set
+ * for this TRB in this generation. Pure.
+ */
+typedef struct _XHCI_CMD_ABORT_MARK {
+    ULONG Set;
+    ULONG PA;
+    ULONG Gen;
+    ULONG How;
+} XHCI_CMD_ABORT_MARK, *PXHCI_CMD_ABORT_MARK;
+VOID XhciCmdAbortClear(PXHCI_CMD_ABORT_MARK m);
+VOID XhciCmdAbortSet(PXHCI_CMD_ABORT_MARK m, ULONG pa, ULONG gen, ULONG how);
+ULONG XhciCmdAbortMatches(const XHCI_CMD_ABORT_MARK *m, ULONG pa, ULONG gen);
+
+/*
+ * Task 50.30 step 3 (design record 17 section 4.15.3, "Which commands keep
+ * the reset"): whether a command of TRB type `trbType` aborted cleanly still
+ * requires the controller reset. Address Device, Evaluate Context,
+ * Configure Endpoint, Reset Device, Reset Endpoint and Set TR Dequeue
+ * Pointer do not (the device is failed alone, section 4.15.5a); Stop
+ * Endpoint, Enable Slot, Disable Slot, No Op and every command naming no
+ * slot do. Pure.
+ */
+ULONG XhciTolAbortKeepsReset(ULONG trbType);
+
+/*
+ * The thread's command wait under the new handling (section 4.15.3): the
+ * verdict of one look, in the record's order. `own` the command's own
+ * completion arrived (CmdDonePA its TRB); `aborted` the engine's clean
+ * abort named its TRB in its generation (CmdAbortPA); `failed` the
+ * controller failed (the engine's or another site's reset); `moved` the
+ * command generation moved (an invalidation); `leaving` a route's bit is
+ * raised (CmdWaitLeave); `expired` the verdict bound passed. Returns
+ * XHCI_WAIT_* (WAIT: look again after a slice). Pure.
+ */
+#define XHCI_WAIT_WAIT              0UL
+#define XHCI_WAIT_OWN               1UL     /* its completion code           */
+#define XHCI_WAIT_ABORTED           2UL     /* 25                            */
+#define XHCI_WAIT_FAILED            3UL     /* 0, nothing requested          */
+#define XHCI_WAIT_LOST              4UL     /* 0, nothing requested          */
+#define XHCI_WAIT_LEFT              5UL     /* HCD_CMD_LEFT, the debt OWED   */
+#define XHCI_WAIT_NO_VERDICT        6UL     /* 0, the reset CMD_NO_VERDICT   */
+ULONG XhciTolWaitVerdict(ULONG own, ULONG aborted, ULONG failed, ULONG moved,
+                         ULONG leaving, ULONG expired);
+
+/*
+ * Task 50.30 step 3 (design record 17 section 4.15.11): XhciDeviceIsolation.
+ * The mode read at a start: 0 today's handling, 1 (absent or any value but
+ * 0 and 2) the handling on listed controllers only, 2 on every controller.
+ * XhciIsolationListed(vendorDevice): the table of controllers on which
+ * mode 1 applies the handling (the PCI ID register as it reads, device
+ * << 16 | vendor: 8086:1E31 is 0x1E318086): 8086:1E31 alone, listed by
+ * the owner on 2026-11-20 without the reading on real hardware section
+ * 4.15.10 asks for. Applies: mode 2, or mode 1 and listed.
+ * Pure.
+ */
+#define XHCI_ISOLATION_OFF          0UL
+#define XHCI_ISOLATION_LISTED       1UL
+#define XHCI_ISOLATION_ALL          2UL
+ULONG XhciTolIsolationMode(ULONG found, ULONG value);
+ULONG XhciIsolationListed(ULONG vendorDevice);
+ULONG XhciTolIsolationApplies(ULONG mode, ULONG listed);
+/*
+ * Task 50.30 step 3 (section 4.15.11, "What a report shows"): what the
+ * start read and decided, kept in XHCI_TOL_WHY after the spread records
+ * (two ULONGs, 88 in all) for the snapshot and the recovery-status
+ * request. IsolationValue: the DWORD read, XHCI_TOL_ISO_NONE when absent
+ * or of another type. IsolationState (XhciTolIsolationState): the mode in
+ * 15:8, listed in bit 1, applies in bit 0. XhciTolIsolationNote: the note
+ * tol.isolate - the value read in 15:8 (0xFF when absent, another type or
+ * above 0xFE), listed in bit 1, applies in bit 0. XhciQemuIsolationListed:
+ * the qemu flavour's table, the emulated controller (section 4.15.9); the
+ * release flavour never reads it. Pure.
+ */
+#define XHCI_TOL_ISO_NONE           0xFFFFFFFFUL
+#define XHCI_TOL_ISO_MODE_SHIFT     8
+ULONG XhciTolIsolationState(ULONG mode, ULONG listed, ULONG applies);
+ULONG XhciTolIsolationNote(ULONG value, ULONG listed, ULONG applies);
+ULONG XhciQemuIsolationListed(ULONG vendorDevice);
 
 #endif /* XHCI_TOL_H */

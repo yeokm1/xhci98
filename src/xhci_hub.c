@@ -172,6 +172,14 @@ ULONG XhciHubResumeBeforeReset(ULONG status)
 }
 
 /* IRQL: any. */
+ULONG XhciHubPortGone(ULONG status, ULONG change)
+{
+    return (status & XHCI_HUB_PORT_CONNECTION) == 0 ||
+           (status & XHCI_HUB_PORT_ENABLE) == 0 ||
+           (change & XHCI_HUB_C_PORT_CONNECTION) != 0;
+}
+
+/* IRQL: any. */
 ULONG XhciHubResumeProgress(ULONG status)
 {
     if ((status & XHCI_HUB_PORT_CONNECTION) == 0) {

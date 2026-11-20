@@ -224,6 +224,39 @@ VOID CmLogNote(PCM_NHI nhi, const char *label, ULONG value)
     CmLogRecord(nhi, label, value, 0);
 }
 
+/*
+ * A record of the image's own, with no NHI to hold it (task 50.27, record
+ * 21 section 4.5.19: the library's end in cmUnload): "label 0xVALUE" on
+ * the qemu flavour's port-0xE9 mirror alone, never to DbgPrint, whose two
+ * call sites stay the thread's and the stop's. Nothing on the release
+ * flavour. PASSIVE_LEVEL.
+ */
+VOID CmLogImageNote(const char *label, ULONG value)
+{
+#if defined(XHCI_FLAVOUR_QEMU)
+    static const char hex[] = "0123456789ABCDEF";
+    UCHAR line[64];
+    ULONG n;
+    ULONG i;
+
+    n = 0;
+    for (i = 0; label[i] != 0 && n < 40; i++) {
+        line[n++] = (UCHAR)label[i];
+    }
+    line[n++] = ' ';
+    line[n++] = '0';
+    line[n++] = 'x';
+    for (i = 0; i < 8; i++) {
+        line[n++] = (UCHAR)hex[(value >> (28 - i * 4)) & 0xFUL];
+    }
+    line[n++] = '\n';
+    cmLogMirrorE9(line, n);
+#else
+    UNREFERENCED_PARAMETER(label);
+    UNREFERENCED_PARAMETER(value);
+#endif
+}
+
 /* One line to the sinks (CmQueryLogEmitLines' callback): NUL-terminated
  * on the stack, printed with a literal format. PASSIVE_LEVEL. */
 static VOID cmLogLine(PVOID context, const UCHAR *bytes, ULONG n)

@@ -585,6 +585,14 @@ run at once", below), instead of one after the other in this tree.
 Leave the switch out only on a machine short of memory or disk for a
 second tree.
 
+**The gated builds are the release flavour alone** (roadmap-usb4 task
+50.1; the owner, 2026-11-14, after the `3.5.0.0` pre-cut: "just release
+build will do"): `scripts\build-driver.cmd cut` and `cut -amd64`, the
+release flavour with every self-test in full and every tool built, as
+`all` runs them, but no qemu build, which a cut never publishes and
+nothing the cut or `-SignOnly` reads. `-WithQemu` (`pre-cut.ps1` and
+`cut-builds.ps1`) builds `all`, release and qemu, as every cut did before.
+
 **The text checks come before the builds** (roadmap-usb4 task 44.1):
 `scripts\check-text.ps1` runs in seconds every text check of the gated
 build and those of the cut that need no build (the cut's own templates and
@@ -618,10 +626,11 @@ powershell -ExecutionPolicy Bypass -File scripts\package\cut-builds.ps1 -X64Tree
 It refuses unless both trees are clean at one commit and no build runs in
 either; each build has its own temporary folder and log
 (`out\cut-build-<arch>.log` in its tree). `-ImportOnly` takes builds run
-by hand (`scripts\build-driver.cmd all` here, `all -amd64` there), and
+by hand (`scripts\build-driver.cmd cut` here, `cut -amd64` there; the
+release record alone is imported, both with `-WithQemu`), and
 `-Serial` runs the two one after the other. The x64 binaries' debug
 directory names the second tree's path, so give it a plain name. A cut
-from one tree, `scripts\build-driver.cmd all` and then `all -amd64`, is
+from one tree, `scripts\build-driver.cmd cut` and then `cut -amd64`, is
 made as before.
 
 **Run `-CheckOnly` next, after the builds** (roadmap-usb4 task 43.9;
@@ -675,7 +684,7 @@ delete any key container the packager's warning names (record 19 section 5).
 
 It takes the version from the INF's `DriverVer`, packages every
 flavour/architecture leg through `make-package.ps1` (the binaries come from a
-prior `scripts\build-driver.cmd all`, plus `scripts\build-driver.cmd all -amd64`
+prior `scripts\build-driver.cmd cut`, plus `scripts\build-driver.cmd cut -amd64`
 for a 64-bit cut) so every gate that protects an install runs, copies only the
 publishable files out of each (the drivers, their INFs, `txtsetup.oem` and,
 on x64, the certificate, and in a `release-` directory the Stor98 built with

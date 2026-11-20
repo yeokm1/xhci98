@@ -174,16 +174,40 @@ for %%S in ("SuperSpeed, 5 Gbit/s, Gen 1x1" "SuperSpeedPlus, 10 Gbit/s, Gen 2x1"
     )
 )
 
+rem Task 50.30: the PORTSC table over canned values - a port unpowered and
+rem empty, one read all ones with its note on the line below the value, and
+rem one with every field at its widest; the 79-column check below reads it.
+set /a CASES+=1
+"%~dp0%TREXE%" /snaptest -selftest-portsc > "%BASE%.portsc.log"
+if not "%errorlevel%"=="0" (
+    echo FAIL: -selftest-portsc exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("     1  00000000   0   0   0   0   0   0 |  0   0   0   0   0   0   0" "     3  7FFFFFFF   1   1   1   1  15  15 |  1   1   1   1   1   1   1" "PP is clear on 1 of 3 ports" "1 of 3 ports report a device connected") do (
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.portsc.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the PORTSC decode does not say %%S
+        set FAILED=1
+    )
+)
+powershell -NoProfile -Command "$l = @(Get-Content -LiteralPath '%BASE%.portsc.log'); $i = [array]::IndexOf($l, '     2  FFFFFFFF'); if ($i -lt 0 -or $l[$i + 1] -ne '        <all ones - the read was refused or the controller is gone>') { exit 1 }; exit 0"
+if errorlevel 1 (
+    echo FAIL: the PORTSC decode's all-ones port is not its value, then its note on a line of its own
+    set FAILED=1
+)
+
 rem Task 35.3's root port enumeration notes, decoded over a canned ring: 35.0's
 rem E460 failure as 2.1.1.0 met it, the same link with 35.1's fallback, and a
-rem spent budget.
+rem spent budget; then task 50.30's causes 8 and 9, at port 13 and at the
+rem widest port, attempt and machine name: a fail or end line too wide for 79
+rem columns is broken after its clause and wrapped under its first value.
 set /a CASES+=1
 "%~dp0%TREXE%" /snaptest -selftest-notes > "%BASE%.notes.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-notes exited %errorlevel%, expected 0
     set FAILED=1
 )
-for %%S in ("port 13 look:  machine Empty, fed connect, link none; PORTSC CCS PED PLS 0, changes CSC PLC" "port 13 reset: attempt 0 came back enabled; PORTSC low 1203: speed ID 4" "ID 4 is unknown, by no mapping" "attempt 1 failed on the speed (no EP0 size for it); no retry follows" "port 13 end:   machine Failed" "port 13 look:  machine Failed, fed nothing" "ID 4 is SuperSpeed, by default ID, unlisted on a USB 3 table" "port 14 prwait: a reset already running ended after 70 ms" "port 14 rate:  5000 Mbit/s" "port  2 rate:  1.5 Mbit/s" "Enable Slot completion 1 (Success), slot 5" "port 14 end:   machine Present" "port 15 quiet: its budget of 8 bursts is spent") do (
+for %%S in ("port 13 look:  machine Empty, fed connect, link none; PORTSC CCS PED PLS 0," "                 changes CSC PLC" "port 13 reset: attempt 0 came back enabled; PORTSC low 1203: speed ID 4" "ID 4 is unknown, by no mapping" "attempt 1 failed on the speed (no EP0 size for it);" "port 13 end:   machine Failed" "port 13 look:  machine Failed, fed nothing" "ID 4 is SuperSpeed, by default ID, unlisted on a USB 3 table" "port 14 prwait: a reset already running ended after 70 ms" "port 14 rate:  5000 Mbit/s" "port  2 rate:  1.5 Mbit/s" "Enable Slot completion 1 (Success), slot 5" "port 14 end:   machine Present" "port 15 quiet: its budget of 8 bursts is spent") do (
     %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.notes.log" > nul
     if errorlevel 1 (
         echo FAIL: the note decode does not say %%S
@@ -191,7 +215,7 @@ for %%S in ("port 13 look:  machine Empty, fed connect, link none; PORTSC CCS PE
     )
 )
 rem Task 49.35: the event ring's choice in words, each route.
-for %%S in ("256 entries, the smaller ring: the controller is xHCI 0.96, below 1.0, which always uses 256; XhciEventRingTrbs 1024 asks for the larger ring" "256 entries, the smaller ring: the controller is xHCI 0.95, below 1.0, which always uses 256; XhciEventRingTrbs, of another type, asks for the larger ring" "1024 entries, the larger ring" "1024 entries, the larger ring: XhciEventRingTrbs 1024 asks for it" "1024 entries, the larger ring: XhciEventRingTrbs, of another type, asks for it" "which always uses 256; XhciEventRingTrbs 4294967295 asks for the larger ring" "1024 entries, the larger ring: XhciEventRing 1024 asks for it (a test build)" "256 entries, the smaller ring: XhciEventRingTrbs 256 asks for it" "256 entries, the smaller ring: XhciEventRing 256 asks for it" "256 entries, the smaller ring: no XhciEventRingTrbs, the default" "256 entries, the smaller ring: automatic below xHCI 1.0 (a test build)" "256 entries, the smaller ring: no memory for the larger one" "(route 9, which this build does not name)") do (
+for %%S in ("  the smaller ring: the controller is xHCI 0.96, below 1.0," "  which always uses 256; XhciEventRingTrbs 1024 asks for the larger ring" "  the smaller ring: the controller is xHCI 0.95, below 1.0," "  which always uses 256; XhciEventRingTrbs," "  of another type, asks for the larger ring" "1024 entries, the larger ring" "  the larger ring: XhciEventRingTrbs 1024 asks for it" "  the larger ring: XhciEventRingTrbs, of another type, asks for it" "which always uses 256; XhciEventRingTrbs 4294967295 asks for the larger ring" "  the larger ring: XhciEventRing 1024 asks for it (a test build)" "  the smaller ring: XhciEventRingTrbs 256 asks for it" "  the smaller ring: XhciEventRing 256 asks for it" "  the smaller ring: no XhciEventRingTrbs, the default" "  the smaller ring: automatic below xHCI 1.0 (a test build)" "  the smaller ring: no memory for the larger one" "256 entries (route 9," "  which this build does not name)" "event ring chosen at the start (task 49.35): 256 entries,") do (
     %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.notes.log" > nul
     if errorlevel 1 (
         echo FAIL: the event ring line does not say %%S
@@ -203,18 +227,46 @@ if not errorlevel 1 (
     echo FAIL: the note decode printed a record not its own
     set FAILED=1
 )
+for %%S in ("  port 13 fail:  attempt 1 failed on the device stopped answering;" "                 no retry follows" "  port 13 fail:  attempt 1 failed on not admitted yet (waiting for a command to" "                 be settled);" "                 a retry follows" "  port 13 end:   machine Failed, cause the device stopped answering," "                 retries used 1" "  port 255 fail:  attempt 255 failed on not admitted yet (waiting for a command" "                 to be settled);" "  port 255 end:   machine ConfigFull, cause not admitted yet (waiting for a" "                 command to be settled)," "                 retries used 255") do (
+    %SystemRoot%\System32\findstr.exe /B /C:%%S "%BASE%.notes.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the note decode's causes 8 and 9 do not say %%S
+        set FAILED=1
+    )
+)
+powershell -NoProfile -Command "$w = Get-Content -LiteralPath '%BASE%.notes.log' | Where-Object { ($_ -match 'fail:  attempt|end:   machine|^ {17}\S') -and $_.Length -gt 79 }; if ($w) { $w; exit 1 }; exit 0"
+if errorlevel 1 (
+    echo FAIL: a fail or end line of the note decode is wider than 79 columns
+    set FAILED=1
+)
+rem Task 50.30: the look, reset, speed, slot and prwait records with every
+rem field at its widest: a line too wide for 79 columns is broken after a
+rem clause of its own and wrapped under its first value.
+for %%S in ("  port 255 look:  machine ConfigFull, fed connect disconnect, link warm reset;" "                 PORTSC CCS PED PR PLS 15, changes CSC PEC WRC OCC PRC PLC CEC" "  port 255 reset: attempt 127 came back enabled; PORTSC low FFFF: speed ID 15," "                 PLS 15, PED, CCS" "  port 255 speed: ID 255 is SuperSpeed," "                 by default ID, unlisted on a USB 3 table" "  port 255 slot:  attempt 255, Enable Slot completion 0 (never completed)," "                 slot 255" "  port 255 prwait: a reset already running NEVER ENDED, given up after 65535 ms") do (
+    %SystemRoot%\System32\findstr.exe /B /C:%%S "%BASE%.notes.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the widest note records do not say %%S
+        set FAILED=1
+    )
+)
 
 rem Task 35.3's HCD region decoded over a canned image: a port Failed on the
 rem speed, a working SuperSpeed port by the fallback, an empty port left out,
 rem and the nonzero counters by name; then task 45.40's identity words, an
-rem Empty port kept for them.
+rem Empty port kept for them; then (task 50.30) a root port at its widest,
+rem each port's speed meaning on its second line.
 set /a CASES+=1
 "%~dp0%TREXE%" /snaptest -selftest-hcd > "%BASE%.hcd.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-hcd exited %errorlevel%, expected 0
     set FAILED=1
 )
-for %%S in ("13  Failed      speed (no EP0 size)" "4  unknown (no mapping)" "notes 5 of 8, 2 refused" "14  Present     none" "4  SuperSpeed (default ID, unlisted on a USB 3 table)" "2 of 3 root ports shown" "SlotsEnabled               4" "PortSpeedSuper             1" "2 of 63 nonzero" "not a shape this build reads" "  17  Failed      speed (no EP0 size)" "1 of 2 root ports shown" "identity: last listed 0BDA:8157 on the serial form; 1 deferred, 1 spent; failed, waits for a new connection" "identity: last listed 0BDA:8157 on the serial form; 2 deferred, 1 spent; bypass for this connection" "2 of 2 root ports shown") do (
+powershell -NoProfile -Command "$l = @(Get-Content -LiteralPath '%BASE%.hcd.log'); $p = @(@('  port  state       cause                tries slot  ID  speed', '        (meaning)'), @('    13  Failed      speed (no EP0 size)      1    0   4  unknown', '        (no mapping)'), @('    14  Present     none                     0    5   4  SuperSpeed', '        (default ID, unlisted on a USB 3 table)'), @('   255  ConfigFull  speed (no EP0 size)  65535  255  15  SuperSpeed', '        (default ID, unlisted on a USB 3 table)')); foreach ($q in $p) { $i = [array]::IndexOf($l, $q[0]); if ($i -lt 0 -or $l[$i + 1] -ne $q[1]) { 'not found: ' + $q[0]; exit 1 } }; exit 0"
+if errorlevel 1 (
+    echo FAIL: the root ports table is not a row, then its meaning on a line of its own
+    set FAILED=1
+)
+for %%S in ("13  Failed      speed (no EP0 size)" "notes 5 of 8, 2 refused" "14  Present     none" "2 of 3 root ports shown" "SlotsEnabled               4" "PortSpeedSuper             1" "2 of 63 nonzero" "not a shape this build reads" "  17  Failed      speed (no EP0 size)" "1 of 2 root ports shown" "identity: last listed 0BDA:8157 on the serial form; 1 deferred," "                  1 spent; failed, waits for a new connection" "identity: last listed 0BDA:8157 on the serial form; 2 deferred," "                  1 spent; bypass for this connection" "2 of 2 root ports shown") do (
     %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.hcd.log" > nul
     if errorlevel 1 (
         echo FAIL: the HCD region decode does not say %%S
@@ -233,14 +285,14 @@ if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-tol exited %errorlevel%, expected 0
     set FAILED=1
 )
-for %%S in ("XhciTolerance    1 (on)" "XhciIntervalCap  1 (AMD controllers and 1002:7316):" "                   applies here, 2 endpoint(s) capped" "XhciAvgTrbEsit   0 (Average TRB Length 1024)" "controller       LATCHED FAILED: the recovery window refused a fourth" "3 of 3 begun inside ten minutes; 1 refused" "begun 300, 200, 100 ticks ago" "BackstopDrains            3" "RetryDiverts              4" "CyclesRefusedCode         2" "    4 USB Transaction Error        5" "   12 Endpoint Not Enabled         2" "  200 vendor-defined error         1" "root port 4        charges 3: re-enumerations 3 of 3" "NOW HELD, re-enumerations spent (powered)" "hub 1 port 2       charges 1" "not served by this driver (an xhci98.sys before 2.2.0.0's" "not a shape this build" "controller: LATCHED FAILED: the recovery window refused a fourth." "controller: CONTAINED: halt and reset did not complete and Bus Master Enable would not clear; DMA not proven stopped, common buffer pinned.") do (
+for %%S in ("XhciTolerance    1 (on)" "XhciIntervalCap  1 (AMD controllers and 1002:7316):" "                   applies here, 2 endpoint(s) capped" "XhciAvgTrbEsit   0 (Average TRB Length 1024)" "controller       LATCHED FAILED: the recovery window refused a fourth" "3 of 3 begun inside at least ten minutes (about 22 minutes" "                   by the clock); 1 refused" "begun 300, 200, 100 ticks ago" "BackstopDrains            3" "RetryDiverts              4" "CyclesRefusedCode         2" "    4 USB Transaction Error        5" "   12 Endpoint Not Enabled         2" "  200 vendor-defined error         1" "root port 4        charges 3: re-enumerations 3 of 3" "NOW HELD, re-enumerations spent (powered)" "hub 1 port 2       charges 1" "not served by this driver (an xhci98.sys before 2.2.0.0's" "not a shape this build" "controller: LATCHED FAILED: the recovery window refused a fourth." "controller: CONTAINED: halt and reset did not complete and Bus Master Enable" "              would not clear; DMA not proven stopped, common buffer pinned.") do (
     %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.tol.log" > nul
     if errorlevel 1 (
         echo FAIL: the tolerance decode does not say %%S
         set FAILED=1
     )
 )
-for %%S in ("2 of 3 begun inside ten minutes; 0 refused" "begun 512, 176 ticks ago" "1 older stamp(s) kept, past the window and not counted") do (
+for %%S in ("2 of 3 begun inside at least ten minutes (about 22 minutes" "                   by the clock); 0 refused" "begun 512, 176 ticks ago" "1 older stamp(s) kept, past the window and not counted") do (
     %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.tol.log" > nul
     if errorlevel 1 (
         echo FAIL: the expired window decode does not say %%S
@@ -252,19 +304,65 @@ if not errorlevel 1 (
     echo FAIL: the tolerance decode printed a zero counter
     set FAILED=1
 )
+rem Task 50.30: the devices failed alone, newest first; a line too wide for
+rem 79 columns is broken before "about" and wrapped under its first value.
+for %%S in ("  failed alone     2 device(s) this start, recorded only" "  failed alone:    place 255 behind root port 255 route FFFFF [ffff:ffff]," "                   about 429496729 s ago" "  failed alone:    place 3 (a root port) [0627:0001], about 10 s ago") do (
+    %SystemRoot%\System32\findstr.exe /B /C:%%S "%BASE%.tol.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the devices failed alone do not say %%S
+        set FAILED=1
+    )
+)
+powershell -NoProfile -Command "$w = Get-Content -LiteralPath '%BASE%.tol.log' | Where-Object { ($_ -match 'failed alone|^ {19}about') -and $_.Length -gt 79 }; if ($w) { $w; exit 1 }; exit 0"
+if errorlevel 1 (
+    echo FAIL: a line of the devices failed alone is wider than 79 columns
+    set FAILED=1
+)
+rem Task 50.30: the reset reasons at their widest - the latch's record, every
+rem reason counted at the most, isolation unset in mode 255 - each line too
+rem wide for 79 columns broken after a clause of its own.
+for %%S in ("  reset requested: ENGINE_ABORT_STUCK at root port 255 route FFFFF slot 255" "                   [ffff:ffff], extra 4294967295, about 429496729 s ago," "                   after 4294967295 recoveries (the latch's record)" "  reset requests   by reason: CMD_KEPT 4294967295, CMD_NO_VERDICT 4294967295," "                              ENGINE_ABORT_STUCK 4294967295," "                              HUB_UNANSWERED 4294967295, CMD_FATAL 4294967295," "                              XFER_FATAL 4294967295" "  isolation        value none (the default 1), mode 255, listed yes," "                   applies yes") do (
+    %SystemRoot%\System32\findstr.exe /B /C:%%S "%BASE%.tol.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the widest reset reasons do not say %%S
+        set FAILED=1
+    )
+)
+
+rem Task 50.31's "Retries" block (design record 38 section 15.3) from a canned
+rem extension image at the place the HCD header's words 954 and 955 give: a
+rem latched controller with a try pending, one due, one trying, one closed
+rem off, one whose interrupts were lost, one off, one with an invalid value;
+rem then an earlier driver's header, one a word short, an image cut short, an
+rem offset past the image, a size below the known fields, an unaligned offset.
+set /a CASES+=1
+"%~dp0%TREXE%" /snaptest -selftest-retry > "%BASE%.retry.log"
+if not "%errorlevel%"=="0" (
+    echo FAIL: -selftest-retry exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("(next attempt in about 4 s, try 2)" "Retries (XhciFailedRetrySec): 5 (read 5)" "state: stopped, next try in about 4 s (try 2)" "level 1, next wait about 10 s" "tries since the waits last reset: 1" "last try: after the wait, about 50 s ago" "last burst: 3 attempt(s), stopped again" "release: unproven proved" "port changes seen: 2; missed passes: 4" "(next attempt in about 0 s, try 2)" "state: due" "last try: after a change at port 3, about 50 s ago" "port-change tries in the last ten minutes: 1 of 3; refused: 1" "state: trying (attempt 2 of the burst)" "burst running: 2 attempt(s)" "state: never (closed off)" "sampling stopped (port 2 read all ones)" "release: pinned" "state: never (interrupts lost)" "Retries (XhciFailedRetrySec): off" "invalid value 601, read as 5" "invalid (not a number), read as 5" "tries this start: 4, 2 recovered" "last burst: 1 attempt(s), recovered" "resume phase failed until the next success" "waits reset after a clean run: 1" "clean run being timed" "Retries          not served by this driver" "Retries          not a shape this build reads" "(208 bytes at +4294967040)" "(200 bytes at +64)" "(208 bytes at +62)") do (
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.retry.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the retry decode does not say %%S
+        set FAILED=1
+    )
+)
 
 rem Task 36.3's interrupt routing record, named from canned HCD headers: the
 rem E7250's repair (INTA moved from PIRQA to PIRQF for IRQ 21), a reviewed
 rem pair not admitted at value 1, a message grant, IRQ 11 on NT, another vendor, a start
 rem refused before the routing step; then a 2.2.0.0 header, an image cut
-rem short and a record count the header cannot hold.
+rem short and a record count the header cannot hold. 50.32 (eject wait): a busy
+rem HCD region, and the busy paragraph and summary line for each outcome of the
+rem PORTSC and HCD windows (the gate free or taken between windows).
 set /a CASES+=1
 "%~dp0%TREXE%" /snaptest -selftest-pirq > "%BASE%.pirq.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-pirq exited %errorlevel%, expected 0
     set FAILED=1
 )
-for %%S in ("decision         22 WROTE" "D20IR before     00003210 (INTA -> PIRQA)" "PIRQ wanted      PIRQF" "D20IR after      00003215 (INTA -> PIRQF)" "level 21, vector 21, flags 0, share 3" "16-23: PIRQA-H wired direct to I/O APIC inputs 16-23" "a message grant: 1 message(s)," "vector FFFFFFFE, flags 2, share 3" "not read: the routing step has not run for this start" "decision         19 STEERED_NT" "below 16: a PIRQx_ROUT byte steering a PIRQ to it" "PIRQF IRQ 11" "came back 80 bytes" "PIRQA IRQ 11, PIRQB IRQ 10" "PIRQE off" "decision         21 NOT_ADMITTED" "decision         12 MESSAGE" "at a return to D0" "decision         3 NOT_REVIEWED" "00:14.0          id not read" "not set (taken as 1: writes on the verified E7250 only)" "xhci98.sys before 2.3.0.0's" "a record of 40 words") do (
+for %%S in ("decision         22 WROTE" "D20IR before     00003210 (INTA -> PIRQA)" "PIRQ wanted      PIRQF" "D20IR after      00003215 (INTA -> PIRQF)" "level 21, vector 21, flags 0, share 3" "16-23: PIRQA-H wired direct to I/O APIC inputs 16-23" "a message grant: 1 message(s)," "vector FFFFFFFE, flags 2, share 3" "not read: the routing step has not run for this start" "decision         19 STEERED_NT" "below 16: a PIRQx_ROUT byte steering a PIRQ to it" "PIRQF IRQ 11" "came back 80 bytes" "PIRQA IRQ 11, PIRQB IRQ 10" "PIRQE off" "decision         21 NOT_ADMITTED" "decision         12 MESSAGE" "at a return to D0" "decision         3 NOT_REVIEWED" "00:14.0          id not read" "not set (taken as 1: writes on the verified E7250 only)" "xhci98.sys before 2.3.0.0's" "a record of 40 words" "not read - the controller was busy" "busy: its registers and its interrupt routing" "busy: its port registers (PORTSC) were not read" "busy: its DNCTRL register and its interrupt routing" "busy while part of this snapshot was taken" "the controller was busy: registers not read; save again" "the controller was busy: PORTSC not read; save again" "the controller was busy: DNCTRL and routing not read; save again" "the controller was busy: records may be mixed; save again") do (
     %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.pirq.log" > nul
     if errorlevel 1 (
         echo FAIL: the routing decode does not say %%S
@@ -284,7 +382,7 @@ if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-xstat exited %errorlevel%, expected 0
     set FAILED=1
 )
-for %%S in ("XhciMaxTransferKB           used as set (1024)" "command size in effect      1048576 bytes; asked 1 times" "a chunk spans at most 32 pages" "bulk data URBs              100, 104857600 bytes, the longest 1048576" "<=1M 100" "URBs of more than one 100, the most 8" "3-8: 100" "at 3000.0 counts a" "approximate where their counters disagree" "gap, retired to published   700, mean 90.0 us, longest 200.0 us" "ring empty, URB unfinished  700, mean 80.0 us, longest 180.0 us" "record 1: its device present, slot 2, 9 sends taken, the last 1.0 s before this dump" "command size 1048576 bytes (the bus's answer), streamed, depth 30" "1: 90 2: 14" "record 2: none has come" "out of 64-2048: the default (4096)" "times are not converted" "not measured by this driver" "came back 192 bytes" "9 records of 46 words" "3 records of 1431655795 words" "its device departed, slot 2" "across two processors 3" "older bus 0, out of contract 1, failed 0" "time-stamp counter is not invariant: its rate changes with" "every time in this section is approximate" "/nosysinfo: whether this processor's time-stamp counter") do (
+for %%S in ("XhciMaxTransferKB           used as set (1024)" "command size in effect      1048576 bytes; asked 1 times" "a chunk spans at most 32 pages" "bulk data URBs              100, 104857600 bytes, the longest 1048576" "<=1M 100" "URBs of more than one 100, the most 8" "3-8: 100" "at 3000.0 counts a" "approximate where their counters disagree" "gap, retired to published   700, mean 90.0 us, longest 200.0 us" "ring empty, URB unfinished  700, mean 80.0 us, longest 180.0 us" "record 1: its device present, slot 2, 9 sends taken," "    the last 1.0 s before this dump" "command size 1048576 bytes (the bus's answer), streamed, depth 30" "1: 90 2: 14" "record 2: none has come" "out of 64-2048: the default (4096)" "times are not converted" "not measured by this driver" "came back 192 bytes" "9 records of 46 words" "3 records of 1431655795 words" "its device departed, slot 2" "across two processors 3" "older bus 0, out of contract 1, failed 0" "time-stamp counter is not invariant: its rate changes with" "every time in this section is approximate" "/nosysinfo: whether this processor's time-stamp counter") do (
     %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.xstat.log" > nul
     if errorlevel 1 (
         echo FAIL: the transfer-size decode does not say %%S
@@ -302,7 +400,7 @@ if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-intr exited %errorlevel%, expected 0
     set FAILED=1
 )
-for %%S in ("value 2; in effect 2 (polling)" "reason               forced polling (XhciInterruptMode 2)" "XhciImodInterval250ns has no effect" "1234, 56 of them found an event; peeks 78, 9 hits" "49 to 63 ms (2 discarded)" "PollService 1, PollServiceGen 7, LineMoved 0," "Interrupt Pin 0, the controller has no line interrupt" "9000 is above 5000, so the driver held it to 5000." "0 is not allowed, so the driver used its default, 1." "went dead; moved to polling at run time" "mask read back down at the move" "proven by PCI Interrupt Disable; attempts 1" "name different deliveries" "7 is reserved, so it runs as 0." "held to the idle period, 20 ms." "watching the line; last armed 100 ms (a watcher's look)" "not placed by this driver's HCD header (808 bytes)" "predates polled delivery" "does not fit its image" "80 counter words at +816 in 1200 bytes" "no helper and no line offered: the start fails (an earlier 2.3.0.0 build)" "but a message was granted: the start fails" "value 3; in effect 3 (a message interrupt only)" "forced message (XhciInterruptMode 3): a message interrupt" "but no message was granted: the start fails" "is xhcihlpr.sys bound?): the start fails" "this Windows has no message interrupts: the start fails") do (
+for %%S in ("value 2; in effect 2 (polling)" "reason               forced polling (XhciInterruptMode 2)" "XhciImodInterval250ns has no effect" "1234, 56 of them found an event; peeks 78, 9 hits" "49 to 63 ms (2 discarded)" "PollService 1, PollServiceGen 7, LineMoved 0," "Interrupt Pin 0, the controller has no line" "                         interrupt" "9000 is above 5000, so the driver held it to 5000." "0 is not allowed, so the driver used its default, 1." "went dead; moved to" "                         polling at run time" "mask read back down at the move" "proven by PCI Interrupt Disable; attempts 1" "name different deliveries" "7 is reserved, so it runs as 0." "held to the idle period, 20 ms." "watching the line;" "                         last armed 100 ms (a watcher's look)" "not placed by this driver's HCD header (808 bytes)" "predates polled delivery" "does not fit its image" "80 counter words at +816 in 1200 bytes" "no helper and no line" "                         offered: the start fails (an earlier 2.3.0.0 build)" "but a message was" "                         granted: the start fails" "value 3; in effect 3 (a message interrupt only)" "forced message (XhciInterruptMode 3): a message" "but no message" "                         was granted: the start fails" "could not be connected (32-bit: is xhcihlpr.sys" "                         bound?): the start fails" "                         has no message interrupts: the start fails") do (
     %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.intr.log" > nul
     if errorlevel 1 (
         echo FAIL: the event delivery decode does not say %%S
@@ -320,7 +418,7 @@ if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-msi exited %errorlevel%, expected 0
     set FAILED=1
 )
-for %%S in ("the helper xhcihlpr.sys (32-bit; xhcimsi.sys before 2.4)" "4 (the connection's table; one is served); capability MSI" "message descriptors in the grant 1" "capability MSI-X" "MmGetSystemRoutineAddress (64-bit)" "REFUSED (its answer failed a check)" "a message with a line beside it" "BOUND; looks 1" "helper version       2.2.0.0" "not asked (helper bound, or 64-bit, and mode not 1 or 3)" "REPLACED: the line choices stripped, the message left (mode 3)" "not set (mode 0's default)" "no IRP for the query); looks 2, last status C0000034" "REPLACED: the message choices stripped, the line left" "1 configuration(s), 1 message and 1 line member(s); 1 stripped" "mode as read         0" "refused for          the answer's identity" "none has run: not applicable" "messages connected     0 (no message connected)" "this driver predates MSI" "100 counter words - not a shape") do (
+for %%S in ("the helper xhcihlpr.sys (32-bit; xhcimsi.sys before" "                         2.4)" "4 (the connection's table; one is served);" "                         capability MSI" "message descriptors in the grant 1" "capability MSI-X" "MmGetSystemRoutineAddress (64-bit)" "REFUSED (its answer failed a check)" "a message with a line beside it" "BOUND; looks 1" "helper version       2.2.0.0" "not asked (helper bound, or 64-bit, and mode not 1 or" "                         3): left alone" "REPLACED: the line choices stripped, the message left" "                         (mode 3)" "not set (mode 0's default)" "no IRP for the query); looks 2, last status C0000034" "REPLACED: the message choices stripped, the line left" "1 configuration(s), 1 message and 1 line member(s);" "                         1 stripped" "mode as read         0" "refused for          the answer's identity" "none has run: not applicable" "messages connected     0 (no message connected)" "this driver predates MSI" "100 counter words - not a shape") do (
     %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.msi.log" > nul
     if errorlevel 1 (
         echo FAIL: the message interrupt decode does not say %%S
@@ -339,6 +437,50 @@ set MSICOUNT=0
 for /f %%N in ('%SystemRoot%\System32\findstr.exe /C:"message interrupts" "%BASE%.msi.log" ^| %SystemRoot%\System32\find.exe /c /v ""') do set MSICOUNT=%%N
 if not "%MSICOUNT%"=="7" (
     echo FAIL: expected 7 message interrupt sections, got %MSICOUNT%
+    set FAILED=1
+)
+
+rem Task 50.4's record of a start XhciInterruptMode 4 refused, from canned
+rem values: a value out of range, the forced IRQ refused at the claim, the
+rem quarantine, Vista, a cleared record, and three that are not records;
+rem and task 50.18's: the first again on 64-bit Windows, and the "message
+rem interrupt, XhciInterruptMode 4" section on 32-bit and 64-bit Windows,
+rem where the second pool's four values read as unused.
+set /a CASES+=1
+"%~dp0%TREXE%" /snaptest -selftest-m4rec > "%BASE%.m4rec.log"
+if not "%errorlevel%"=="0" (
+    echo FAIL: -selftest-m4rec exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("XhciInterruptMode 4 refused the last start, 2026-11-15 10:32" "UTC (status C0000182)" "written by xhci98.sys 3.5.1.0 (release) for the controller at" "PCI 00:04.0" "XhciMsiStrategy 5, XhciMsiIsaIrq -, XhciMsiShare -," "XhciMsiPools - (- not set, or not read)" "is outside its range: the start" "connection status 4 (no vector (no line, or no free" "XhciMsiInputFirst 24, XhciMsiInputLast 0, XhciMsiInputBudget" "claim: IRQ 0, 0 on it; the claim's status 4 (no vector (no" "IRQ 4  used by a device" "IRQ 7  never claimed" "values: not read (refused before they are read)" "controller could not be proven off" "(qemu) for the controller's PCI" "interrupts of its own (use 3): the start fails" "the last start was not refused by XhciInterruptMode 4" "(recorded 2026-11-15 10:32 UTC by xhci98.sys 3.5.1.0)" "XhciMode4Refusal holds 16 bytes this XHCITR cannot read" "or not read); XhciMsiPools not used on 64-bit Windows" "XhciMsiPools           not found (or not read here)" "XhciMsiInputBudget     not found (or not read here)" "XhciMsiPools           not used on 64-bit Windows" "XhciMsiInputBudget     not used on 64-bit Windows" "claimed IRQ            7, 1 on it; the claim's status 0 (OK)" "[end]") do (
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.m4rec.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the mode 4 record decode does not say %%S
+        set FAILED=1
+    )
+)
+set M4COUNT=0
+for /f %%N in ('%SystemRoot%\System32\findstr.exe /C:"connection: not tried" "%BASE%.m4rec.log" ^| %SystemRoot%\System32\find.exe /c /v ""') do set M4COUNT=%%N
+if not "%M4COUNT%"=="4" (
+    echo FAIL: expected 4 connections not tried, got %M4COUNT%
+    set FAILED=1
+)
+set M4COUNT=0
+for /f %%N in ('%SystemRoot%\System32\findstr.exe /C:"not used on 64-bit Windows" "%BASE%.m4rec.log" ^| %SystemRoot%\System32\find.exe /c /v ""') do set M4COUNT=%%N
+if not "%M4COUNT%"=="5" (
+    echo FAIL: expected 5 values unused on 64-bit Windows, got %M4COUNT%
+    set FAILED=1
+)
+set M4COUNT=0
+for /f %%N in ('%SystemRoot%\System32\findstr.exe /C:"not found (or not read here)" "%BASE%.m4rec.log" ^| %SystemRoot%\System32\find.exe /c /v ""') do set M4COUNT=%%N
+if not "%M4COUNT%"=="4" (
+    echo FAIL: expected 4 values not found on 32-bit Windows, got %M4COUNT%
+    set FAILED=1
+)
+set M4COUNT=0
+for /f %%N in ('%SystemRoot%\System32\findstr.exe /C:"XhciMode4Refusal holds 220 bytes this XHCITR cannot read" "%BASE%.m4rec.log" ^| %SystemRoot%\System32\find.exe /c /v ""') do set M4COUNT=%%N
+if not "%M4COUNT%"=="2" (
+    echo FAIL: expected 2 records of another build, got %M4COUNT%
     set FAILED=1
 )
 
@@ -369,7 +511,7 @@ if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-version exited %errorlevel%, expected 0
     set FAILED=1
 )
-for %%S in ("not read: this start refused before it read XhciAccept096" "HCIVERSION     not read: this start refused before step 0c" "XhciAccept096  absent or not a DWORD, so 1; floor 0.96" "xHCI 1.00: XhciAccept096 not applicable" "xHCI 0.96 (HCIVERSION 0096h): accepted below 1.0; TD Size in 1 KiB units" "XhciAccept096  0; floor 1.00" "xHCI 0.96 (HCIVERSION 0096h): below 1.0, refused at XhciAccept096 0 (Code 10)" "XhciQemuHciVersion decoded 0096h in place of the register's 0100h" "HCIVERSION     FFFFh: not decoding, refused (Code 10)" "xHCI 0.95 (HCIVERSION 0095h): below 0.96, refused at every value (Code 10)" "[short]" "[end]") do (
+for %%S in ("not read: this start refused before it read XhciAccept096" "HCIVERSION     not read: this start refused before step 0c" "XhciAccept096  absent or not a DWORD, so 1; floor 0.96" "xHCI 1.00: XhciAccept096 not applicable" "xHCI 0.96 (HCIVERSION 0096h): accepted below 1.0; TD Size in 1 KiB units" "XhciAccept096  0; floor 1.00" "xHCI 0.96 (HCIVERSION 0096h): below 1.0, refused at XhciAccept096 0 (Code 10)" "XhciQemuHciVersion decoded 0096h in place of the register's" "   0100h)" "HCIVERSION     FFFFh: not decoding, refused (Code 10)" "xHCI 0.95 (HCIVERSION 0095h): below 0.96, refused at every value (Code 10)" "[short]" "[end]") do (
     %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.version.log" > nul
     if errorlevel 1 (
         echo FAIL: the version line does not say %%S
@@ -394,7 +536,7 @@ if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-timer exited %errorlevel%, expected 0
     set FAILED=1
 )
-for %%S in ("XhciPollFineTimer      1; in effect ON" "XhciPollFineTimer      not set; in effect off (the default)" "the helper xhcihlpr.sys (32-bit)" "joined (the controller stopped)" "asks for               10000 (100 ns units); held now no" "holds 12, releases 12 (2 forced by a boundary); holds raced 1" "Windows answered       10032 at the last hold, 156250 at the last release" "a power transition (the controller left D0)" "held in this start     4321 ms" "7 crossed a call" "released  40 interval(s), mean 15.5 ms, 38 late" "held      400 interval(s), mean 1.0 ms, 3 late" "MSI not asked (before Vista); timer accepted") do (
+for %%S in ("XhciPollFineTimer      1; in effect ON" "XhciPollFineTimer      not set; in effect off (the default)" "the helper xhcihlpr.sys (32-bit)" "joined (the controller stopped)" "asks for               10000 (100 ns units); held now no" "holds 12, releases 12 (2 forced by a boundary); holds raced 1" "Windows answered       10032 at the last hold, 156250 at the last release" "a power transition (the controller left D0)" "held in this start     4321 ms" "7 crossed a call" "released  40 interval(s), mean 15.5 ms," "              38 late (3 ms or more past the period)" "held      400 interval(s), mean 1.0 ms," "              3 late (3 ms or more past the period)" "MSI not asked (before Vista); timer accepted") do (
     %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.timer.log" > nul
     if errorlevel 1 (
         echo FAIL: the timer decode does not say %%S
@@ -415,8 +557,10 @@ if errorlevel 1 (
 rem Task 38.10's Linux quirks (design record 20 section 6.4) from canned
 rem packed words: every normalization, a value listed and not, the policy
 rem on, off and overridden, each outcome and its reason, codes past the known
-rem ones; the PCI id and revision read and then unread; and a 232-word block
-rem (a driver before 38.10), which prints no section. The lines holding a ?
+rem ones; the PCI id and revision read and then unread; task 50.20's
+rem fifteenth row (XhciStreamDequeueAvoid, word 325) from a 326-word block;
+rem and a 232-word block (a driver before 38.10), which prints no section.
+rem The lines holding a ?
 rem are checked outside the FOR, which would take a ? as a file wildcard.
 set /a CASES+=1
 "%~dp0%TREXE%" /snaptest -selftest-quirks > "%BASE%.quirks.log"
@@ -424,7 +568,7 @@ if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-quirks exited %errorlevel%, expected 0
     set FAILED=1
 )
-for %%S in ("matched against PCI 1B73:1000; revision 04 (never matched)" "matched against no PCI id (none read); revision unread" "XhciMsiAvoid (XHCI_BROKEN_MSI)" "id listed; policy overridden (XhciInterruptMode 3); last none yet" "read none (absent: the default): mode 1, the listed controllers" "id not listed; policy off; last none yet" "read 2 (as read): mode 2, every controller" "id not listed; policy on; last done" "read 2 (a 2 read as 1): mode 1, the listed controllers" "read none (another type: the default): mode 0, off" "read 7 (an unknown number: the default): mode 1, the listed controllers" "id listed; policy on; last skipped (not in D0)" "read 0 (as read): mode 0, off" "id listed; policy off; last none yet" "XhciAsmediaFlowControl (XHCI_ASMEDIA_MODIFY_FLOWCONTROL)" "id listed; policy on; last failed (read back other than written)" "last failed (reason 15)" "last none yet (no PCI id ever read)" "XhciIsochSpuriousSuccess (XHCI_ETRON_HOST, part)" "id listed; policy on; last skipped (HCH not set)" "1002:7316 (ATI Navi10) has no value: XhciIntervalCap's 1 covers it." "messages XhciMsiAvoid refused or stripped 100" "interrupt endpoints capped at Interval 6  108" "shutdown log flushes not acknowledged     117" "QuirkShutFlushUnacked      117" "[end]") do (
+for %%S in ("matched against PCI 1B73:1000; revision 04 (never matched)" "matched against no PCI id (none read); revision unread" "XhciMsiAvoid (XHCI_BROKEN_MSI)" "id listed; policy overridden (XhciInterruptMode 3); last none yet" "read none (absent: the default): mode 1, the listed controllers" "id not listed; policy off; last none yet" "read 2 (as read): mode 2, every controller" "id not listed; policy on; last done" "read 2 (a 2 read as 1): mode 1, the listed controllers" "read none (another type: the default): mode 0, off" "read 7 (an unknown number: the default): mode 1, the listed controllers" "id listed; policy on; last skipped (not in D0)" "read 0 (as read): mode 0, off" "id listed; policy off; last none yet" "XhciAsmediaFlowControl (XHCI_ASMEDIA_MODIFY_FLOWCONTROL)" "id listed; policy on; last failed (read back other than written)" "last failed (reason 15)" "last none yet (no PCI id ever read)" "XhciIsochSpuriousSuccess (XHCI_ETRON_HOST, part)" "id listed; policy on; last skipped (HCH not set)" "1002:7316 (ATI Navi10) has no value: XhciIntervalCap's 1 covers it." "messages XhciMsiAvoid refused or stripped 100" "interrupt endpoints capped at Interval 6  108" "shutdown log flushes not acknowledged     117" "QuirkShutFlushUnacked      117" "XhciStreamDequeueAvoid (no Linux quirk; design record 17 section 4.12.10)" "[end]") do (
     %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.quirks.log" > nul
     if errorlevel 1 (
         echo FAIL: the Linux quirks decode does not say %%S
@@ -442,8 +586,13 @@ if errorlevel 1 (
     set FAILED=1
 )
 for /f %%N in ('%SystemRoot%\System32\findstr.exe /C:"Linux quirks (task 38.10" "%BASE%.quirks.log" ^| %SystemRoot%\System32\find.exe /c /v ""') do set QKCOUNT=%%N
-if not "%QKCOUNT%"=="2" (
-    echo FAIL: expected 2 Linux quirks sections, got %QKCOUNT%
+if not "%QKCOUNT%"=="3" (
+    echo FAIL: expected 3 Linux quirks sections, got %QKCOUNT%
+    set FAILED=1
+)
+for /f %%N in ('%SystemRoot%\System32\findstr.exe /C:"XhciStreamDequeueAvoid (no Linux quirk" "%BASE%.quirks.log" ^| %SystemRoot%\System32\find.exe /c /v ""') do set QKCOUNT=%%N
+if not "%QKCOUNT%"=="1" (
+    echo FAIL: expected XhciStreamDequeueAvoid's row once, from the 326-word block, got %QKCOUNT%
     set FAILED=1
 )
 
@@ -456,7 +605,7 @@ if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-xpipe exited %errorlevel%, expected 0
     set FAILED=1
 )
-for %%S in ("XhciWideMap                 1" "promotion                   on; the register-free check passed" "wide entries                8, 0 in use; claimed 100" "URBs with two TDs at once   100; TDs 900, refills 700" "short 2, error 0, verdict 0; taken off 2" "next TD ready at retirement 650" "not set (the default)" "promotion                   off; the register-free check not run (XhciWideMap off)" "not run (Windows 98 or ME)" "not the register-free 0x80001" "not in this driver" "3 counters in a 948-byte region" "built 2, refused 1; one-TD URBs 300, the largest 513 TRBs" "TDs of 256/257/512/513 TRBs 100 / 101 / 50 / 49" "stage 3 (task 36.25)        not in this driver") do (
+for %%S in ("XhciWideMap                 1" "promotion                   on; the register-free check passed" "wide entries                8, 0 in use; claimed 100" "URBs with two TDs at once   100; TDs 900, refills 700" "short 2, error 0, verdict 0; taken off 2" "next TD ready at retirement 650" "not set (the default)" "promotion                   off; the register-free check not run (XhciWideMap" "                              off)" "the register-free check not run (Windows 98" "                              or ME)" "not the register-free 0x80001" "not in this driver" "3 counters in a 948-byte region" "built 2, refused 1; one-TD URBs 300," "                              the largest 513 TRBs" "TDs of 256/257/512/513 TRBs 100 / 101 / 50 / 49" "stage 3 (task 36.25)        not in this driver") do (
     %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.xpipe.log" > nul
     if errorlevel 1 (
         echo FAIL: the stage 2 decode does not say %%S
@@ -466,11 +615,17 @@ for %%S in ("XhciWideMap                 1" "promotion                   on; the
 
 rem p36-int4: stage B's header words at 237 to 305 after 36.24's stage 2
 rem counters, from a canned header whose word i holds i + 1 (each value
-rem names its word), and a stage B branch build's 273-word header refused.
+rem names its word), the first record again at its widest on its two rows
+rem (task 50.30), and a stage B branch build's 273-word header refused.
 set /a CASES+=1
 "%~dp0%TREXE%" /snaptest -selftest-ssusp > "%BASE%.ssusp.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-ssusp exited %errorlevel%, expected 0
+    set FAILED=1
+)
+powershell -NoProfile -Command "$l = @(Get-Content -LiteralPath '%BASE%.ssusp.log'); $p = @(@('  slot  link        Ss win armed root step  firsts     capable', '        pending    far armedfn    last'), @('   255  SUSPENDING   1   1     1    1  255  0xFFFFFFFF 0xFFFFFFFF', '        0xFFFFFFFF 255 0xFFFFFFFF 0xFFFFFF')); foreach ($q in $p) { $i = [array]::IndexOf($l, $q[0]); if ($i -lt 0 -or $l[$i + 1] -ne $q[1]) { 'not found: ' + $q[0]; exit 1 } }; exit 0"
+if errorlevel 1 (
+    echo FAIL: the selective-suspend table is not two rows a slot
     set FAILED=1
 )
 for %%S in ("XhciWideMap                 206" "DNCTRL                     0x00EE (N1, FUNCTION_WAKE, enabled)" "DnctrlEnables              0x00EF" "DnctrlReadback             0x00F0" "   243  RECOVERING" "   299  ?" "a 1092-byte header, a stage B branch build's" "4294967295 counters in a 1092-byte region") do (
@@ -490,7 +645,7 @@ if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-idplace exited %errorlevel%, expected 0
     set FAILED=1
 )
-for %%S in ("root port 1, route 00001: last listed 0BDA:8157 on the serial form; 2 deferred, 1 spent; failed, waits for a new connection" "root port 3, route 00021: last listed 0BDA:8157 on the serial form; 1 deferred, 1 spent; bypass for this connection" "root port 2, route 00003: last listed 0781:5567 on the location form; 0 deferred, 0 spent" "not kept by this driver (a 2516-byte header" "places: 40 of 5 words at 632 - not a shape") do (
+for %%S in ("root port 1, route 00001: last listed 0BDA:8157 on the serial form;" "    2 deferred, 1 spent; failed, waits for a new connection" "root port 3, route 00021: last listed 0BDA:8157 on the serial form;" "    1 deferred, 1 spent; bypass for this connection" "root port 2, route 00003: last listed 0781:5567 on the location form;" "    0 deferred, 0 spent" "not kept by this driver (a 2516-byte header" "places: 40 of 5 words at 632 - not a shape") do (
     findstr /C:%%S "%BASE%.idplace.log" > nul
     if errorlevel 1 (
         echo FAIL: the identity-place decode does not say %%S
@@ -507,7 +662,7 @@ if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-xport exited %errorlevel%, expected 0
     set FAILED=1
 )
-for %%S in ("slot  2, root port 3, route 00000: UAS (the device offers Bulk-Only and UAS; UAS chosen)" "slot  5, root port 1, route 00002: Bulk-Only (the device offers UAS too; XhciForceBulkOnly is set on this controller)" "slot  7, root port 20, route 00021: UAS (interface 1) (the only transport the device offers); and 1 more storage interface" "slot  9, root port 2, route 00000: Bulk-Only (the device offers no UAS setting)" "not kept by this driver (a 1224-byte header" "device records: 33 of 10 words at 309 - not a shape") do (
+for %%S in ("slot  2, root port 3, route 00000: UAS (the device offers Bulk-Only and UAS;" "           UAS chosen)" "slot  5, root port 1, route 00002: Bulk-Only (the device offers UAS too;" "           XhciForceBulkOnly is set on this controller)" "slot  7, root port 20, route 00021: UAS (interface 1) (the only transport the" "           device offers); and 1 more storage interface" "slot  9, root port 2, route 00000: Bulk-Only (the device offers no UAS" "           setting)" "not kept by this driver (a 1224-byte header" "device records: 33 of 10 words at 309 - not a shape") do (
     %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.xport.log" > nul
     if errorlevel 1 (
         echo FAIL: the transport decode does not say %%S
@@ -536,6 +691,16 @@ for %%S in ("controller tolerance" "interrupt routing" "transfer size" "event de
     )
 )
 
+rem Task 50.30: no line the decodes above print passes 79 columns - the rows
+rem of their tables (a number first) excepted, but for the PORTSC, root
+rem ports and selective-suspend tables, reshaped to fit (the PORTSC note and
+rem a port's speed meaning on lines of their own, two rows a slot) and held
+rem to it - so a later line too wide fails here.
+powershell -NoProfile -Command "$w = Get-ChildItem -LiteralPath '%RUNDIR%' -Filter 'report.*.log' | Where-Object { $_.Name -match '^report\.(notes|hcd|tol|pirq|xstat|intr|msi|m4rec|counters|version|timer|quirks|xpipe|ssusp|idplace|xport|hcdbad|slots|portsc)\.log$' } | ForEach-Object { $n = $_.Name; Get-Content -LiteralPath $_.FullName | Where-Object { $_.Length -gt 79 -and -not ($_ -match '^ +\d+  ' -and $n -notmatch '^report\.(portsc|hcd|ssusp)\.log$') } | ForEach-Object { $n + ': ' + $_ } }; if ($w) { $w; exit 1 }; exit 0"
+if errorlevel 1 (
+    echo FAIL: a decode line above is wider than 79 columns
+    set FAILED=1
+)
 
 rem Task 36.47's system block: the OS names over canned GetVersionEx answers,
 rem the cleaning of registry text, then this host's own block as a dump's
@@ -968,6 +1133,10 @@ rem range-size field left at 9x's 20. It decodes as Device Manager showed it,
 rem as do NT's (2000 to 7: count 0 with one range after the header); a size
 rem neither has stays raw. The IRQ descriptors 2000 (32 bytes), XP and XP x64
 rem (36) and 7 (36, message-signalled) handed back decode as 11, 10 and MSI.
+rem Task 50.21: XP x64's descriptors for a native x64 caller, padded to a
+rem multiple of 8 - the field report's 40-byte IRQ, and I/O, DMA and bus
+rem numbers built to the same rule - decode too; an IRQ 4 bytes past any
+rem padding stays raw.
 set /a CASES+=1
 "%~dp0%TREXE%" /snaptest -selftest-res > "%BASE%.res.log"
 if not "%errorlevel%"=="0" (
@@ -991,6 +1160,19 @@ for %%S in ("IRQ          11, shared, level" "IRQ          10, shared, level" "-
         echo FAIL: the IRQ descriptors do not decode to %%S
         set FAILED=1
     )
+)
+for %%S in ("IRQ          16, shared, level" "type 4, 44 bytes in a layout this tool does not" "DMA          channel 5" "bus number   2-3") do (
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.res.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the x64 descriptors do not decode to %%S
+        set FAILED=1
+    )
+)
+%SystemRoot%\System32\findstr.exe /C:"I/O          E000-E01F" "%BASE%.res.log" | %SystemRoot%\System32\find.exe /c "E000" | %SystemRoot%\System32\findstr.exe /X "2" > nul
+if errorlevel 1 (
+    echo FAIL: the two x64 I/O descriptors did not both decode to E000-E01F
+    type "%BASE%.res.log"
+    set FAILED=1
 )
 %SystemRoot%\System32\findstr.exe /C:"[end]" "%BASE%.res.log" > nul
 if errorlevel 1 (

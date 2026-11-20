@@ -258,6 +258,12 @@ typedef struct _CM_REENUM_PORT {
      * NowMs then. The thread's alone. */
     ULONG WpuRelEpoch;
     ULONG WpuRelAt;
+    /* The wake order (design record 21 section 6.3.2, task 50.10): the
+     * port's secondary and subordinate bus numbers as the thread's last
+     * pass read them (0: not read, or the port not this domain's alone),
+     * written under cmRegLock. */
+    ULONG PrSec;
+    ULONG PrSub;
 } CM_REENUM_PORT, *PCM_REENUM_PORT;
 
 /* Children of one tunnel port remembered on 98 as already seen, so that
@@ -529,6 +535,14 @@ typedef struct _CM_REENUM {
     ULONG WpuRelRefused;
     ULONG WpuOnCounted;
     ULONG WpuPendCounted;   /* added, its value not read yet               */
+    /* The wake order (design record 21 section 6.3.2, task 50.10), the
+     * thread's: the epoch its system S0 last completed in, the epoch its
+     * resume was last released by success in, and its pass's clock. */
+    ULONG PrS0Epoch;
+    ULONG PrResumeOkEpoch;
+    ULONG PrS0NoDev;        /* the device D0 of the S0 in progress failed  */
+    ULONG PrPassed;
+    ULONG PrLastPass;
 } CM_REENUM, *PCM_REENUM;
 
 VOID CmReenumStart(struct _CM_NHI *nhi);
@@ -749,9 +763,15 @@ VOID CmCfgwkHold(struct _CM_CFGWK *w, ULONG members);
  * operation waits for Windows' restore of their bridge's bus numbers.
  * PASSIVE_LEVEL. */
 VOID CmCfgwkSuspend(struct _CM_CFGWK *w);
-/* ... and the resume, however it ended: the parked operations taken again.
- * <= DISPATCH_LEVEL. */
-VOID CmCfgwkResumed(struct _CM_CFGWK *w);
+/* ... and the resume, however it ended: the parked operations taken again;
+ * `same` the members whose port's device router the resume found the same
+ * as at the suspend (record 21 section 6.1.6 item 6; 0 after a failed
+ * resume). <= DISPATCH_LEVEL. */
+VOID CmCfgwkResumed(struct _CM_CFGWK *w, ULONG same);
+/* Record 21 section 6.1.6 item 5 b: the members in `members` lost their
+ * connection's continuity (a link-down, a tunnel down): a unit's copy
+ * taken before is not written. <= DISPATCH_LEVEL; NULL accepted. */
+VOID CmCfgwkConnLost(struct _CM_CFGWK *w, ULONG members);
 ULONG CmCfgwkRetired(struct _CM_CFGWK *w);
 /* The members with a re-enumeration call admitted before the hold and
  * not yet returned: the removal-only request for one waits until it has.

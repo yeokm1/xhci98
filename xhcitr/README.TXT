@@ -54,7 +54,10 @@ The details of each device end with its resources: the memory and I/O
 ranges, the IRQ and (on Windows 2000 and later) the bus numbers Windows
 gave it, and its PCI location. A device with a problem code also shows
 what it asked for, so a device that wants an IRQ and was given none is
-easy to spot.
+easy to spot. A controller that runs on XhciInterruptMode 4 with an IRQ
+the driver took for it (XhciMsiStrategy 0) does not use the IRQ Windows
+gave it: that IRQ is marked "not in use", and the IRQ taken is listed
+under it.
 
 For a USB controller the xhci98 driver runs, and for a Thunderbolt or
 USB4 controller, the Device Manager entry says when the entry was
@@ -63,16 +66,48 @@ running; SETUP.EXE then updates it. Every Device Manager entry also
 shows, where Windows recorded them, the INF file it was installed from,
 the hardware or compatible ID Windows matched, and the provider.
 
+File > Save Report also lists, under each USB device, the values of its
+driver key and of the driver keys of the entries Windows made below it,
+whatever driver each has: the device's functions and interfaces, and
+the entries their drivers made in turn (an input device's mouse or
+keyboard entry, for example), up to four levels below the USB device. A
+hub's own key is listed, and the devices on its ports are listed under
+their own ports. A driver can keep its own settings and counts there,
+so the report carries them. Every value is listed with its name, type
+and size, and with its data unless the data is left out as below:
+numbers in decimal and hex, text as text up to 512 characters, and
+other data in hex, the first 256 bytes. The data of a value is left out
+when its name, case ignored, holds KEY, PASSWORD, PASSWD, PASSPHRASE,
+PWD, SECRET, CREDENTIAL, PSK, TOKEN, LICENSE, SSID, PIN, PINCODE,
+WPAPSK, or PIN and CODE with one or more characters that are not
+letters between them, at the start of a word (or anywhere in a word
+written in capitals alone), with nothing after it but, in this order
+and each only if there: an S; digits or other characters that are not
+letters; one of the words HASH, HASHES, HEX, VALUE, MATERIAL or LIST,
+with an S or none; and digits or other characters that are not
+letters. A letter here is an ASCII letter, A to Z or a to z, and a
+name's words are split at each character that is not a letter and
+where a small letter is followed by a capital. A name that is, whole,
+HotKey or ShortcutKey, with an S or none, is shown. So EncryptionKey,
+Key0, PasswordHash1, PasswordHashes, WPAPsk, "Pin Code" and
+USERPASSWORD are left out, and HotKey, KeyIndex and TokenCount are
+shown. That test goes by the name alone: data stored under any other
+name, or inside other data, is shown, so the report can still hold
+private data that a driver recorded, such as a password or a
+cryptographic key kept under another name, a network name or address,
+a serial number or a user name: read it before you share it. Nothing
+is changed.
+
 When a device keeps failing, the xhci98 driver stops trying its port
 for a while: the port is on hold. The port's line in the tree then ends
 "(on hold)" and its details say what to do: unplug the device and plug
 it in again (a port switched off by the driver comes back only when the
 controller restarts: restart Windows, or disable and enable the
 controller in Device Manager). A held port of a hub is named at its
-controller. While the tool's icon is in the notification area it also
-says so in a balloon (on 98 SE, a pop-up), once for each hold; on
-Windows 2000 and later only while "Warn when a device is removed
-unexpectedly" is ticked, as it is unless you clear it.
+controller. With "Warn when a USB port is put on hold" ticked on the
+Settings window's xHCI98 USB Tree tab, the tool's icon also says so in a
+balloon (on 98 SE, a pop-up), once for each hold. It is off unless you
+tick it; off, the icon does not watch the ports at all.
 
   File > Refresh (F5)      reads everything again
   File > Save Report...    writes the whole tree with every detail, the
@@ -91,11 +126,17 @@ unexpectedly" is ticked, as it is unless you clear it.
   View > Settings...       the drivers' settings (below)
   Action > Safely Remove   stops the selected USB stick or disk, or
                            Thunderbolt or USB4 device
+  Action > Restart Controller...
+                           restarts the selected xHCI98 USB controller
+                           (below)
   Action > Properties      opens the device in Device Manager
                            (Windows 2000 and later)
 
 A right click on the tree opens the Action menu. The window remembers its
 size and the View settings.
+
+While a USB device that stopped answering is being reset, Save Report
+and Quick save wait until the reset has finished.
 
 Stopping a Thunderbolt or USB4 device
 -------------------------------------
@@ -160,6 +201,30 @@ administrator rights: when it runs without them it says so and offers
 Vista and later, the Run As dialog on 2000 and XP) for that one stop. If
 you cancel, nothing is stopped.
 
+Restarting a controller
+-----------------------
+
+Restart Controller (right-click one of xHCI98's USB controllers, or the
+Action menu) asks Windows to stop the controller and start it again. It
+is one request, not Device Manager's Disable followed by Enable, and it
+leaves nothing disabled. The tool lists every device that will
+disconnect and asks first. A controller that has stopped after repeated
+failures says so on its line, with the port and device involved where
+the driver recorded them, and the tray icon's menu offers its restart.
+On Windows 2000 and XP it needs an administrator, and the tool offers
+Run As; on Vista and later it asks for administrator rights. If Windows
+asks for the computer to be restarted instead, the tool says so and
+does nothing more. A controller shown as closed off is not restarted:
+restart Windows. XHCITR /restart "id=<instance id>" does the same from
+a command line.
+
+On 98 SE and ME the tool removes the controller and has Windows find it
+again. Unplug every USB storage device on the controller first. It does
+not restart a controller while Windows has a drive, other than a floppy
+drive (A: or B:), that it cannot place, such as one in MS-DOS
+compatibility mode (System Properties, Performance), or one that has
+stopped after repeated failures: restart Windows instead.
+
 The drivers' logs
 -----------------
 
@@ -189,11 +254,14 @@ The driver's snapshot
 
 The snapshot is the xhci98 driver's own report: a device report (each
 xHCI controller's and this package's Device Manager entries, status,
-problem code and resources, and the installed driver files' sizes,
-versions and SHA-256 hashes) and a dump of the driver's state (its log,
-the devices in their slots, each root port's enumeration and, at level
-3, the port registers). It replaces XHCISNAP and its SNAPON.BAT,
-SNAPGET.BAT and SNAPOFF.BAT, which the package no longer carries.
+problem code and resources, the installed driver files' sizes, versions
+and SHA-256 hashes, and the values of each USB device's driver keys as
+Save Report lists them, with any text holding this computer's names
+left out) and
+a dump of the driver's state (its log, the devices in their slots, each
+root port's enumeration and, at level 3, the port registers). It
+replaces XHCISNAP and its SNAPON.BAT, SNAPGET.BAT and SNAPOFF.BAT, which
+the package no longer carries.
 
 File > Save Report and /report end with the snapshot's text for each
 xHCI controller the xhci98 driver runs, and the state of each TB / USB4
@@ -310,10 +378,12 @@ Each tab is shown only where its driver is installed:
   Stor98               the bundled Stor98's
   xHCI98 USB Tree      this tool's own settings, for you alone, each in
                        force at once: Start at login, Warn when a device
-                       is removed unexpectedly (2000 and later), Tell me
+                       is removed unexpectedly (2000 and later), Warn
                        when a device can run faster, Watch Windows' own
-                       USB ports too, the quick-save hotkey and its sound
-                       (also in the View menu, but for the last two)
+                       USB ports too, USB drive notices, Warn when a USB
+                       port is put on hold, the quick-save hotkey and its
+                       sound (also in the View menu, but for the last
+                       four)
 
 The list shows the common settings; tick "Show advanced settings" for
 the rest, which you should change only if the release notes advise it.
@@ -351,10 +421,40 @@ machine-wide value is set. A Stor98 setting is one value for every
 Stor98 drive. Stor98's tab is read-only where its settings are shared
 with a Stor98 that Setup did not install.
 
-Changing XhciIntelPortSwitch asks first: at Windows' next start the
-shared connectors move to xhci98 (or back to the USB 2.0 controller), so
-a device on them is found again then; do not have a drive on them busy
-when you restart.
+Changing XhciIntelPortSwitch asks first. Turned on, the shared
+connectors can move to xhci98 at a later start of the driver, and a
+device on them is then found again on xhci98: do not have a drive on them
+busy when you restart. On Windows 98 SE and ME they move at the driver's
+next start (unless XhciIntelPortSwitchSetup is 2). On Windows 2000 and
+later they are not moved while Windows says Setup is in progress or that
+cannot be read, in Windows PE, or (Vista and later) while Windows'
+installation state is not complete or cannot be read when the controller
+starts, nor in the Windows session in which the switchover was first
+turned on for the controller; they can move at a later start of Windows,
+once none of these holds them. Turned off, they stay at the next start of
+Windows where the computer's firmware puts them, except that at shutdown
+the driver may still hand them back to the USB 2.0 controller
+(XhciIntelShutdownToEhci). XhciIntelPortSwitchSetup (Show advanced
+settings) is the Setup check's own setting: 1 moves them whatever Windows
+says, 2 never moves them while the switchover is on (with the switchover
+off, the shutdown hand-back above remains). Each Intel controller's
+details say whether the
+connectors were moved at its start, or what held them, and where the
+settings in force were set.
+
+XhciIntelPortSwitchReady (Show advanced settings, Windows 2000 and later,
+each controller the switchover applies to under "Applies to": a listed
+Intel controller, or any Intel one while XhciIntelPortSwitch is 2 for
+it) is the driver's own note that the switchover has been on for that
+controller; the driver sets it, and it is never machine-wide. A 0
+prepares a fresh Windows session; the session running now is not changed
+by it. Before you
+capture an image of this Windows to install on other computers, set it to
+0 on every such controller (or XHCITR /set XhciIntelPortSwitchReady=0) as
+the last step, and capture the image before the controller starts again:
+any further start of it, even without a restart of Windows, sets it back
+to 1. A computer installed from the image then does not move the
+connectors in its first session.
 
 Most settings take effect when the driver next starts. After Apply the
 tool says which, and offers to restart Windows now (save your work first:
@@ -465,9 +565,9 @@ device instead. A hub is
 never listed itself: the USB 2.0 half of a USB 3 hub always runs at High
 Speed.
 
-"Tell me when a device can run faster" in the View menu and the Settings
-window turns this on or off for you. The installer's box of the
-same name (or INSTALL /faster and /nofaster) sets it for the computer;
+"Warn when a device can run faster" in the View menu and the Settings
+window turns this on or off for you. The installer's box for the same
+notice (or INSTALL /faster and /nofaster) sets it for the computer;
 your own choice overrides that. It is on by default on every Windows:
 Windows' own "can perform faster" notices do not appear under xhci98.sys.
 
@@ -529,6 +629,9 @@ From a command line
                                ID and exits; the ID of a device inside
                                a Thunderbolt/USB4 device (its drive,
                                say) stops that whole device
+  XHCITR /restart id=<id>      restarts the xHCI98 USB controller with
+                               that Device Manager instance ID, after
+                               asking, and exits
   XHCITR /acpi <folder>        writes this computer's firmware (ACPI)
                                tables in <folder> and exits
   XHCITR /setlevel xhci98=<n> xhcicm=<n>

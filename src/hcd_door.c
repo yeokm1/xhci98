@@ -62,6 +62,10 @@
 #include "xhci_acpi.h"
 #include "xhci_verpk.h"
 
+/* The snapshot carries the port switchover's record word for word. */
+XHCI_C_ASSERT(door_psw_record,
+              XHCI_SNAPSHOT_HCD_PSW_COUNT == XHCI_PSW_REC_WORDS);
+
 /* CTL_CODE(FILE_DEVICE_USB = 0x22, fn, METHOD_BUFFERED, FILE_ANY_ACCESS);
  * design record 13 sections 8.1 and 8.3. */
 #define HCD_IOCTL_ROOT_HUB_NAME    0x00220408UL /* the controller           */
@@ -124,6 +128,12 @@
 
 /* Open pipes a connection answer carries at most; usbview asks for 30. */
 #define HCD_DOOR_PIPES             30UL
+
+/* 50.32 (eject wait), design record 13 section 8.8.1: how long a snapshot
+ * window waits for a held power gate, once per hold, before it is answered
+ * busy - longer than an ordinary pass of the thread, short beside the door
+ * gate it keeps meanwhile. */
+#define HCD_DOOR_BUSY_WAIT_MS      500UL
 
 #if defined(XHCI_FLAVOUR_QEMU)
 #define HCD_SNAPSHOT_FLAVOUR XHCI_SNAPSHOT_FLAVOUR_QEMU
@@ -1562,12 +1572,15 @@ static VOID hcdDoorQryWord(PHCD_CONTROLLER hc, PUCHAR buf, ULONG word)
  * thread's plain writes (xhci_counters.h). The header's tolerance words
  * place XHCI_EXTENSION.Tol in the extension region rather than copy it
  * (35-T.8); its terminal reason is read here, under the lock that
- * ControllerFailed and the window are written under. Controller lock held,
- * the same as the slots region. IRQL: DISPATCH_LEVEL.
+ * ControllerFailed and the window are written under. `gated`: the power
+ * gate is held for this window (0: the window is answered busy, 50.32
+ * (eject wait), and the routing record, which needs both gates, is not
+ * copied). Controller lock held, the same as the slots region. IRQL:
+ * DISPATCH_LEVEL.
  */
 static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
                        PUCHAR payload, ULONG capacity, ULONG offset,
-                       ULONG mmio)
+                       ULONG mmio, ULONG gated)
 {
     const ULONG *counters;
     const ULONG *pirq;
@@ -1617,9 +1630,32 @@ static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
     for (i = 0; i < count; i++) {
         switch (XhciSnapHcdLocate(ports, first + i, &record, &word)) {
         case XHCI_SNAPSHOT_HCD_IN_HEAD:
-            /* Task 49.39's times end the header now, after issue 26's
-             * failure records; the class drivers write both under this
-             * lock (hcd_urb.c). */
+            /* Task 50.34's words end the header: the port switchover's
+             * record of this start, written at the start only (PswRec),
+             * and its write's status. */
+            if (word >= XHCI_SNAPSHOT_HCD_PSW_AT) {
+                value = hc->PswRec[word - XHCI_SNAPSHOT_HCD_PSW_AT];
+                break;
+            }
+            if (word == XHCI_SNAPSHOT_HCD_PSW_WRITE) {
+                value = hc->PswRecWrite;
+                break;
+            }
+            if (word == XHCI_SNAPSHOT_HCD_PSW_WORDS) {
+                value = XhciSnapHcdHead(ports, word);
+                break;
+            }
+            /* Task 50.30 step 1's two words, after 49.39's
+             * times: where the reasons' block is in the extension and its
+             * size; then task 50.31's two, the retry block's. Taken first,
+             * or the times' arithmetic below would read them as a third
+             * record past UasTele[]. */
+            if (word >= XHCI_SNAPSHOT_HCD_WHY_AT) {
+                value = XhciSnapHcdHead(ports, word);
+                break;
+            }
+            /* Task 49.39's times, after issue 26's failure records; the
+             * class drivers write both under this lock (hcd_urb.c). */
             if (word >= XHCI_SNAPSHOT_HCD_UTIME_AT) {
                 record = (word - XHCI_SNAPSHOT_HCD_UTIME_AT) /
                          XHCI_SNAPSHOT_HCD_UTIME_RECORD_WORDS;
@@ -1724,10 +1760,12 @@ static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
              * not this lock. This copy runs under both gates, so one
              * window never mixes two runs; a header split across two
              * windows could, which the snapshot reader's first window
-             * (the whole header) never does. */
+             * (the whole header) never does. Without the power gate (a
+             * busy window, 50.32 (eject wait)) it is not copied. */
             if (word >= XHCI_SNAPSHOT_HCD_PIRQ_AT &&
                 word < XHCI_SNAPSHOT_HCD_XSTAT_WORDS) {
-                value = pirq[word - XHCI_SNAPSHOT_HCD_PIRQ_AT];
+                value = gated ? pirq[word - XHCI_SNAPSHOT_HCD_PIRQ_AT]
+                              : XHCI_SNAPSHOT_HCD_NOT_READ;
                 break;
             }
             value = (word == XHCI_SNAPSHOT_HCD_TERMINAL)
@@ -1803,7 +1841,9 @@ typedef char hcdSnapshotHubLocPorts[XHCI_TOL_HUB_LOC_PORTS ==
  * three answers usbport gave for the miniport's nonzero returns - and 0 with
  * the outcome in the header otherwise. The caller holds the door gate, so
  * no start or stop runs under the copy; the power gate is taken inside it,
- * the order the gates always nest in. IRQL: PASSIVE_LEVEL.
+ * the order the gates always nest in, when it is free or comes free within
+ * the grace wait, and otherwise the window is answered busy
+ * (XHCI_SNAPSHOT_S_BUSY; 50.32 (eject wait)). IRQL: PASSIVE_LEVEL.
  */
 static ULONG hcdDoorSnapshot(PHCD_CONTROLLER hc, const UCHAR *guid,
                              PUCHAR params, ULONG paramLength)
@@ -1823,6 +1863,7 @@ static ULONG hcdDoorSnapshot(PHCD_CONTROLLER hc, const UCHAR *guid,
     ULONG slots;
     ULONG valid;
     ULONG mmio;
+    ULONG gated;
     ULONG i;
     KIRQL oldIrql;
 
@@ -1877,9 +1918,28 @@ static ULONG hcdDoorSnapshot(PHCD_CONTROLLER hc, const UCHAR *guid,
     /* MMIO only on a started controller in D0: the door gate keeps the
      * mapping, and the power gate, held from this check to the last register
      * read, keeps a suspend from falling between the two (task 26-A.8) -
-     * every path that changes DevicePower or SuspendedInD0 holds it. */
-    HcdPowerGateEnter(hc);
-    mmio = (hc->ControllerStarted && hc->BarVa != NULL &&
+     * every path that changes DevicePower or SuspendedInD0 holds it.
+     * 50.32 (eject wait), design record 13 section 8.8.1: the gate is no
+     * longer waited for without a bound, since the controller thread holds
+     * it for its whole pass and a recovery for its whole length, and this
+     * wait kept the door gate from every other door request meanwhile.
+     * Free, it is taken at once; held, it is waited for HCD_DOOR_BUSY_WAIT_MS
+     * unless the same hold was found before (no release counted since);
+     * still held, the window is answered busy: from memory, no register,
+     * no routing record. */
+    gated = HcdPowerGateTry(hc, 0);
+    if (!gated && !(hc->DoorBusyKnown &&
+                    hc->DoorBusyLeaves == hc->PowerGateLeaves)) {
+        gated = HcdPowerGateTry(hc, HCD_DOOR_BUSY_WAIT_MS);
+    }
+    if (gated) {
+        hc->DoorBusyKnown = 0;
+    } else {
+        hc->DoorBusyKnown = 1;
+        hc->DoorBusyLeaves = hc->PowerGateLeaves;
+        header->Status |= XHCI_SNAPSHOT_S_BUSY;
+    }
+    mmio = (gated && hc->ControllerStarted && hc->BarVa != NULL &&
             hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0 &&
             ext->HcInfoStatus == XHCI_HC_OK)
                ? 1UL
@@ -1950,7 +2010,8 @@ static ULONG hcdDoorSnapshot(PHCD_CONTROLLER hc, const UCHAR *guid,
     } else if (requestRegion == XHCI_SNAPSHOT_REGION_SLOTS) {
         hcdDoorSlots(hc, header, payload, capacity, requestOffset);
     } else if (requestRegion == XHCI_SNAPSHOT_REGION_HCD) {
-        hcdDoorHcd(hc, header, payload, capacity, requestOffset, mmio);
+        hcdDoorHcd(hc, header, payload, capacity, requestOffset, mmio,
+                   gated);
     } else if (requestRegion == XHCI_SNAPSHOT_REGION_CONTEXTS) {
         hcdDoorRegionWords(hc, header, payload, capacity, requestOffset,
                            hcdDoorContextsWord);
@@ -1961,13 +2022,27 @@ static ULONG hcdDoorSnapshot(PHCD_CONTROLLER hc, const UCHAR *guid,
         header->Status |= XHCI_SNAPSHOT_S_BAD_REGION;
     }
     XhciControllerLockRelease(ext, oldIrql);
-    HcdPowerGateLeave(hc);
+    if (gated) {
+        HcdPowerGateLeave(hc);
+    }
     return HCD_UU_OK;
 }
 
 /* ----------------------------------------------------------------------- */
 /* The query request (xhci_qry.h; record 13 section 8.12)                   */
 /* ----------------------------------------------------------------------- */
+
+/* In the qemu flavour the dump's reads of D0h to DCh print as diagnostic
+ * reads in the routing registers' trace (hcd_svc.c), so a harness tells
+ * them from the switchover's; the model, on or off, does not stand in for
+ * this reader. */
+#if defined(XHCI_FLAVOUR_QEMU)
+#define HCD_DOOR_PCI_READ(hc, out, offset)                                  \
+    HcdSvcConfigReadAs(&(hc)->Hc, (out), (offset), 4, HCD_PSW_ACC_DIAG)
+#else
+#define HCD_DOOR_PCI_READ(hc, out, offset)                                  \
+    HcdSvcConfigSpace(&(hc)->Hc, TRUE, (out), (offset), 4)
+#endif
 
 /*
  * The controller's configuration space 00h to FFh into out, one DWORD per
@@ -1989,7 +2064,7 @@ static ULONG hcdDoorPci(PHCD_CONTROLLER hc, PUCHAR out)
     lastInformation = hc->ConfigLastInformation;
     state = XHQ_PCI_READ;
     for (offset = 0; offset < XHQ_PCI_BYTES; offset += 4) {
-        if (HcdSvcConfigSpace(&hc->Hc, TRUE, out + offset, offset, 4) !=
+        if (HCD_DOOR_PCI_READ(hc, out + offset, offset) !=
             MP_STATUS_SUCCESS) {
             state = XHQ_PCI_FAILED;
             break;
@@ -2091,6 +2166,180 @@ static NTSTATUS hcdDoorQuery(PHCD_CONTROLLER hc, PUCHAR buf, ULONG outLen,
         }
     }
     XhciControllerLockRelease(ext, oldIrql);
+    HcdDoorGateLeave(hc);
+    if (rc == XHQ_ANS_TOO_SMALL) {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    *info = written;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * IOCTL_XHCI98_HOLDS (xhci_qry.h XHH_*; roadmap-usb4 task 50.7, design
+ * record 13 section 8.12.1): every location's tolerance hold, at every
+ * XhciLogVerbosity value. Under the door gate, so no start or stop runs
+ * meanwhile, and with no spin lock: the thread writes the hold bytes with
+ * none (hcd_enum.c, hcdTolHold; hcd_hub.c's reuse), as the snapshot's
+ * windows read them, so each byte is read whole and the set is not one
+ * instant. Memory only, no register: a controller in D3 is not woken.
+ * IRQL: PASSIVE_LEVEL, the caller inside HcdIoEnter.
+ */
+static NTSTATUS hcdDoorHolds(PHCD_CONTROLLER hc, PUCHAR buf, ULONG outLen,
+                             PULONG_PTR info)
+{
+    PXHCI_EXTENSION ext;
+    UCHAR holds[XHH_ROOT_MAX + XHH_HUB_MAX];
+    ULONG written;
+    ULONG started;
+    ULONG root;
+    ULONG hub;
+    ULONG rc;
+    ULONG i;
+
+    *info = 0;
+    if (buf == NULL || outLen < XHH_HDR_BYTES) {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    ext = &hc->Hc;
+    HcdDoorGateEnter(hc);
+    started = (hc->ControllerStarted &&
+               ext->Signature == XHCI_EXTENSION_SIGNATURE &&
+               ext->TrailingSignature == XHCI_EXTENSION_TRAILING)
+                  ? 1UL
+                  : 0UL;
+    root = 0;
+    hub = 0;
+    if (started) {
+        root = ext->PortMap.PortCount;
+        if (root > XHCI_TOL_ROOT_PORTS) {
+            root = XHCI_TOL_ROOT_PORTS;
+        }
+        hub = XHCI_TOL_HUB_LOCS;
+        for (i = 0; i < root; i++) {
+            holds[i] = *(volatile UCHAR *)&ext->Tol.RootLoc[i].Hold;
+        }
+        for (i = 0; i < hub; i++) {
+            holds[root + i] = *(volatile UCHAR *)&ext->Tol.HubLoc[i].Hold;
+        }
+    }
+    rc = XhciHoldsAnswer(buf, outLen, started, root, hub,
+                         XHCI_TOL_HUB_LOC_PORTS, holds, &written);
+    HcdDoorGateLeave(hc);
+    if (rc == XHQ_ANS_TOO_SMALL) {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    *info = written;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * The recovery-status request (task 50.30, step 1; xhci_qry.h XHR_*,
+ * design record 17 section 4.15.8): the terminal, the reset reasons' ring
+ * newest first with the latch's record marked, the involvement count and
+ * the counts by reason, copied under the controller lock so the set is one
+ * moment. The isolation fields are served (XHR_F_ISOLATION, task 50.30
+ * step 3, below), and since task 50.31 the retry fields (XHR_F_RETRY,
+ * design record 38 section 15.1). Task 50.32 (design record 25 section
+ * 27 item 4): the lifetime part - the image's start time and the start
+ * number this FDO last drew, both outside Hc - copied inside the door
+ * gate with XHR_F_STARTED, whether or not the controller is started, so
+ * an answer never falls inside a start or a stop. Memory only, no
+ * register: a controller in D3 is not woken. IRQL: PASSIVE_LEVEL, the
+ * caller inside HcdIoEnter.
+ */
+static NTSTATUS hcdDoorRecovery(PHCD_CONTROLLER hc, PUCHAR buf, ULONG outLen,
+                                PULONG_PTR info)
+{
+    ULONG life[XHR_LIFE_WORDS];
+    PXHCI_EXTENSION ext;
+    ULONG head[XHR_HDR_BYTES / 4 - 3];
+    ULONG recs[XHR_REC_MAX * XHR_REC_WORDS];
+    ULONG counts[XHR_COUNTS];
+    const XHCI_RESET_REC *r;
+    KIRQL oldIrql;
+    ULONG written;
+    ULONG kept;
+    ULONG rc;
+    ULONG at;
+    ULONG i;
+
+    *info = 0;
+    if (buf == NULL || outLen < XHR_HDR_BYTES) {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    ext = &hc->Hc;
+    for (i = 0; i < XHR_HDR_BYTES / 4 - 3; i++) {
+        head[i] = 0;
+    }
+    for (i = 0; i < XHR_REC_MAX * XHR_REC_WORDS; i++) {
+        recs[i] = 0;
+    }
+    for (i = 0; i < XHR_COUNTS; i++) {
+        counts[i] = 0;
+    }
+    head[(XHR_O_RETRY_NEXT_S - XHR_O_FLAGS) / 4] = XHR_NONE;
+    HcdDoorGateEnter(hc);
+    life[0] = HcdImageTimeLow;
+    life[1] = HcdImageTimeHigh;
+    life[2] = hc->CountersStart;
+    if (hc->ControllerStarted && ext->Signature == XHCI_EXTENSION_SIGNATURE &&
+        ext->TrailingSignature == XHCI_EXTENSION_TRAILING) {
+        XhciControllerLockAcquire(ext, &oldIrql);
+        /* Task 50.30 step 3 (design record 17 section 4.15.11): the
+         * isolation fields are served - the value the start read
+         * (XHR_NONE absent), whether the controller is listed and whether
+         * the new handling applies. */
+        head[(XHR_O_FLAGS - XHR_O_FLAGS) / 4] =
+            XHR_F_STARTED | XHR_F_ISOLATION | XHR_F_RETRY;
+        head[(XHR_O_ISO_VALUE - XHR_O_FLAGS) / 4] = ext->Why.IsolationValue;
+        head[(XHR_O_ISO_LISTED - XHR_O_FLAGS) / 4] =
+            (ext->Why.IsolationState & 2UL) != 0 ? 1UL : 0UL;
+        head[(XHR_O_ISO_APPLIES - XHR_O_FLAGS) / 4] =
+            (ext->Why.IsolationState & 1UL) != 0 ? 1UL : 0UL;
+        /* Task 50.31 (design record 38 section 15.1): the value in effect,
+         * the tries since the backing off ended, the seconds to the next. */
+        if (HcdRetryStatusLocked(
+                hc, &head[(XHR_O_RETRY_VALUE - XHR_O_FLAGS) / 4],
+                &head[(XHR_O_RETRY_TRY - XHR_O_FLAGS) / 4],
+                &head[(XHR_O_RETRY_NEXT_S - XHR_O_FLAGS) / 4])) {
+            head[(XHR_O_FLAGS - XHR_O_FLAGS) / 4] |= XHR_F_RETRY_NEVER;
+        }
+        head[(XHR_O_TERMINAL - XHR_O_FLAGS) / 4] =
+            XhciTolTerminalEx(ext->ControllerFailed, ext->Tol.Unreadable,
+                              ext->Tol.Window.Refused,
+                              ext->RecoveryFailuresConsecutive,
+                              XHCI_RECOVERY_MAX_ATTEMPTS,
+                              (hc->Msg4Lost != 0) ? 1UL : 0UL);
+        head[(XHR_O_RECOVERIES - XHR_O_FLAGS) / 4] = ext->RecoveryAttempts;
+        head[(XHR_O_CALLS - XHR_O_FLAGS) / 4] = ext->ResetControllerCalls;
+        head[(XHR_O_INVOLVED - XHR_O_FLAGS) / 4] =
+            XhciTolWhyInvolved(&ext->Why);
+        head[(XHR_O_CLOCK - XHR_O_FLAGS) / 4] = ext->Tol.Clock;
+        kept = ext->Why.Kept;
+        if (kept > XHR_REC_MAX) {
+            kept = XHR_REC_MAX;
+        }
+        head[(XHR_O_RECORDS - XHR_O_FLAGS) / 4] = kept;
+        for (i = 0; i < kept; i++) {
+            at = XhciTolWhyAt(&ext->Why, i);
+            r = &ext->Why.Rec[at];
+            recs[i * XHR_REC_WORDS + 0] = r->Reason;
+            recs[i * XHR_REC_WORDS + 1] = r->Extra;
+            recs[i * XHR_REC_WORDS + 2] = r->Slot;
+            recs[i * XHR_REC_WORDS + 3] = r->RootPort;
+            recs[i * XHR_REC_WORDS + 4] = r->Route;
+            recs[i * XHR_REC_WORDS + 5] = r->VidPid;
+            recs[i * XHR_REC_WORDS + 6] = r->Clock;
+            recs[i * XHR_REC_WORDS + 7] = r->Recoveries;
+            recs[i * XHR_REC_WORDS + 8] =
+                (ext->Why.Latched == at + 1) ? XHR_RF_LATCH : 0UL;
+        }
+        for (i = 0; i < XHR_COUNTS && i < XHCI_WHY_COUNTERS; i++) {
+            counts[i] = ext->Why.Counts[i];
+        }
+        XhciControllerLockRelease(ext, oldIrql);
+    }
+    rc = XhciRecoveryAnswer(buf, outLen, head, recs, counts, life, &written);
     HcdDoorGateLeave(hc);
     if (rc == XHQ_ANS_TOO_SMALL) {
         return STATUS_BUFFER_TOO_SMALL;
@@ -2238,6 +2487,14 @@ NTSTATUS HcdDoorControllerIoctl(PHCD_CONTROLLER hc, PIRP irp)
 
     case XHQ_IOCTL:
         status = hcdDoorQuery(hc, buf, outLen, &info);
+        break;
+
+    case XHH_IOCTL:
+        status = hcdDoorHolds(hc, buf, outLen, &info);
+        break;
+
+    case XHR_IOCTL:
+        status = hcdDoorRecovery(hc, buf, outLen, &info);
         break;
 
     case XHA_IOCTL:
@@ -2743,7 +3000,7 @@ static NTSTATUS hcdDoorPend(PHCD_CONTROLLER hc, const HCD_DOOR_NODE *node,
         /* Its handle's CLEANUP ran while this dispatch was on its way:
          * nothing more is queued for it (HcdDoorCleanup). */
         refusal = STATUS_CANCELLED;
-    } else if (dev->Gone) {
+    } else if (dev->Gone || HCD_DEV_FROZEN(dev)) {
         refusal = STATUS_DEVICE_NOT_CONNECTED;
     }
     if (refusal != STATUS_SUCCESS) {
@@ -2923,7 +3180,8 @@ static VOID hcdDoorServeOne(PHCD_CONTROLLER hc, PIRP irp)
     (VOID)XhciHubDescPlan(buf, stack->Parameters.DeviceIoControl.InputBufferLength,
                           stack->Parameters.DeviceIoControl.OutputBufferLength,
                           HCD_SCRATCH_CONTROL_BYTES, &plan);
-    if (dev->Gone) {
+    if (dev->Gone || HCD_DEV_FROZEN(dev)) {
+        /* A frozen device (task 50.30 step 3) is refused as gone. */
         hcdDoorFinish(irp, STATUS_DEVICE_NOT_CONNECTED, 0);
         return;
     }

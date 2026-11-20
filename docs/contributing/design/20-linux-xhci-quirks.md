@@ -1444,8 +1444,8 @@ at every shutdown on 8086:1E31, 9C31 and 9CB1, so the connectors are
 EHCI's when the machine powers off: on some 7-series desktop boards a
 machine left with them on xHCI powers itself back on. Here the shutdown's
 release writes back only what a route of this driver wrote, so with
-`XhciIntelPortSwitch` 0, the default, connectors the firmware routed to
-xHCI stayed there through the shutdown.
+`XhciIntelPortSwitch` 0 (the INFs' value from `2.3.0.0` to `3.5.0.0`),
+connectors the firmware routed to xHCI stayed there through the shutdown.
 
 The change: at the shutdown's D3 (not at a sleep's), on a listed
 controller, both registers are written 0 **whatever `XhciIntelPortSwitch`
@@ -1459,6 +1459,17 @@ gains this exception, and `implementation-invariants.md` names the write.
 0 or 1 only: the registers are Intel's and exist only on the PCH
 generations record 16 lists, so a 2 is read as 1 and logged (section 6.1).
 Default 1. The project's B490 (1E31) and E7250 (9CB1) are listed.
+
+**Suppressed in a held lifetime from task 50.34** (record 16 section 21.6;
+owner, Q7): `HcdQuirkShutdown` first asks `XhciPswShutdownAllowed` of the
+latched switchover lifetime; a lifetime whose start the switchover's
+Windows Setup step held (`XHCI_PSW_DECIDE_SETUP_HELD`) gets no write and
+the log note `quirk.shutdown.held`, and its snapshot row the reason "the
+port switchover held this lifetime". An off or routed lifetime keeps the
+write as above. A held lifetime therefore powers off with the connectors
+where the firmware routed them, which on a board whose firmware routes
+them to the xHCI is the state this write exists to avoid (accepted, record
+16 section 21.6).
 
 ### 4.5 Q5, `XhciShutdownReset` (`XHCI_SPURIOUS_WAKEUP`), off by default
 
@@ -2447,7 +2458,10 @@ authority and this section says so.
 
 ### 13.2 The values, the match and the revision
 
-Fourteen REG_DWORDs in the controller's driver key, read through
+Fourteen REG_DWORDs in the controller's driver key (and, since task
+50.20, a fifteenth of this driver's own in the same table and form,
+`XhciStreamDequeueAvoid`: design record 17 section 4.12.10; its packed
+word is counter word 325), read through
 `HcdReadValueDword` at each start (`HcdQuirkStart`, after
 `XhciInitController`); `XhciMsiAvoid` is read earlier in the same start, in
 `hcdSettleDelivery`, and on NT 6 also at AddDevice after the attach

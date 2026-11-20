@@ -382,14 +382,15 @@ static void pfw_version(TR_TEXT *t, const TR_DVAL *v)
         return;
     }
     /* Up to 64 characters: on the name's line where they fit in 79
-     * columns, else on a line of their own. */
+     * columns, else on a line of their own; the line holding them
+     * kept whole by the window and Save Report (task 50.39). */
     for (i = 0; i < v->Len && v->Data[i] != 0; i++) {
         ;
     }
     if (i > 55) {
-        tr_printf(t, "  %s\n    \"", name);
+        tr_printf(t, "  %s\n\001    \"", name);
     } else {
-        tr_printf(t, "  %-18s \"", name);
+        tr_printf(t, "\001  %-18s \"", name);
     }
     for (i = 0; i < v->Len && v->Data[i] != 0; i++) {
         unsigned char c = v->Data[i];
@@ -948,7 +949,7 @@ void tr_diag_head(TR_TEXT *t)
               "selected copies all of it.\n\n");
 }
 
-void tr_diag_wrap(TR_TEXT *t, int indent, const char *s)
+void tr_diag_wrap(TR_TEXT *t, int indent, const char *s, TR_LEAD_FN lead)
 {
     size_t n = strlen(s);
     size_t at = 0;
@@ -957,17 +958,21 @@ void tr_diag_wrap(TR_TEXT *t, int indent, const char *s)
     char part[80];
 
     while (at < n) {
-        k = n - at > room ? room : n - at;
+        k = n - at > room ? tr_char_floor(s + at, room, lead) : n - at;
         memcpy(part, s + at, k);
         part[k] = 0;
+        /* A datum: kept whole by the window and Save Report (task
+         * 50.39). */
+        tr_put(t, "\001");
         pad(t, indent);
         tr_printf(t, "%s\n", part);
         at += k;
     }
 }
 
-void tr_diag_nhi(TR_TEXT *t, const char *name, const char *id)
+void tr_diag_nhi(TR_TEXT *t, const char *name, const char *id,
+                 TR_LEAD_FN lead)
 {
-    tr_diag_wrap(t, 2, name);
-    tr_diag_wrap(t, 4, id);
+    tr_diag_wrap(t, 2, name, lead);
+    tr_diag_wrap(t, 4, id, NULL);
 }

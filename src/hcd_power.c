@@ -95,6 +95,18 @@ static ULONG hcdResumeContained(PHCD_CONTROLLER hc)
 XHCI_C_ASSERT(hcd_shut_state, PowerSystemShutdown == 6 &&
                                   XHCI_TOL_SYSTEM_SHUTDOWN == 6UL);
 
+/* Task 50.31 (design record 38 section 5.4): every resume path breaks a
+ * clean run, whether or not a thread pass saw the sleep. The power gate
+ * held; IRQL: PASSIVE_LEVEL. */
+static VOID hcdRetryResumeBreak(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    HcdRetryPowerLocked(hc, 0);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+}
+
 /*
  * The controller suspended: selective suspend's epoch moves and PowerDown
  * is set first, under the controller lock (from then until the thread
@@ -113,6 +125,10 @@ static VOID hcdSuspendSettled(PHCD_CONTROLLER hc)
     /* Task 45.23 (design record 20 section 4.3.3): pending from here to
      * this suspend's resume's end (hcdResume, HcdEnumService). */
     hc->ResumePhase = XHCI98_RESUME_PENDING;
+    /* Task 50.31 (design record 38 sections 5.4 and 9): the clean run
+     * broken, and a latched resume's mark cleared where the phase becomes
+     * PENDING. */
+    HcdRetryPowerLocked(hc, 1);
     /* Task 49.34 (design record 20 section 4.3.4, M9): the sleep this
      * suspend serves, which the Bulk-Only keep's switch is read for. */
     hc->SuspendSleep = (ULONG)hc->Common.SystemPower;
@@ -148,8 +164,12 @@ static VOID hcdResume(PHCD_CONTROLLER hc)
 {
     KIRQL oldIrql;
     ULONG restores;
+    ULONG reinits;
+    ULONG failures;
 
     restores = hc->Hc.Quirk.Restores;
+    /* XhciResumeController advances it before its reinitialization. */
+    reinits = hc->Hc.ResumeReinits;
     /* Task 45.63: the controller runs again, so the suspend's proof ends;
      * and this resume begins PENDING, whatever a D0 the bus failed before
      * it left (hcdD0Refused): it ends RUNNING or FAILED below or at the
@@ -176,6 +196,27 @@ static VOID hcdResume(PHCD_CONTROLLER hc)
         return;
     }
     hc->ResumeInvalidating = 0;
+    /* Design record 17 section 4.6 (revision 37): a reinitialization that
+     * succeeded cleared ControllerFailed, as a recovery that succeeds does,
+     * so a run of failed recoveries below its bound - one owed, paced or
+     * deferred, when the suspend came - ends here as it would there. Left
+     * counted, a later, unrelated fault got one or two recoveries where the
+     * run allows three. A restore (never of a latched controller) or a
+     * resume that found nothing programmed keeps the count. */
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    failures = hc->Hc.RecoveryFailuresConsecutive;
+    hc->Hc.RecoveryFailuresConsecutive = XhciTolResumeFailures(
+        failures, (hc->Hc.ResumeReinits != reinits) ? 1UL : 0UL);
+    if (hc->Hc.RecoveryFailuresConsecutive != failures) {
+        XhciLogNoteLocked(&hc->Hc, "ctrl.run.resumed", failures);
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (!hc->ResumeSlotsInvalidated && hc->Hc.Quirk.Restores != restores) {
+        /* Task 50.30 step 3 (design record 17 section 4.15.3): a Restore
+         * State that succeeded, not an HCRST - a left command's debt
+         * across it. */
+        HcdEnumLeftRestored(hc);
+    }
     hc->ResumeKeepReady = hc->ResumeSlotsInvalidated;
     hc->ResumeKeepPending = (hc->ResumeKeepReady && hc->ResumeKeepOn) ? 1L
                                                                       : 0L;
@@ -377,6 +418,9 @@ static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
         HcdPowerGateLeave(hc);
         PoStartNextPowerIrp(irp);
         IoCompleteRequest(irp, IO_NO_INCREMENT);
+#if defined(XHCI_FLAVOUR_QEMU)
+        HcdInjRealLeave(hc);
+#endif
         HcdIoLeave(hc);
         return;
     }
@@ -391,8 +435,14 @@ static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
         /* Task 36.3: and may have put the xHCI's interrupt route back. */
         HcdPirqResume(hc);
         hc->TolStartGen++;
+        hcdRetryResumeBreak(hc);
         if (!hcdResumeContained(hc)) {
             hcdResumeMsg4(hc);
+        } else {
+            /* Task 50.31 (design record 38 section 9): with tries enabled
+             * and every row true, a latched controller is taken to D0
+             * without reinitializing; otherwise today's refusal stands. */
+            (VOID)HcdRetryResumeLatched(hc);
         }
     }
     hc->Common.DevicePower = PowerDeviceD0;
@@ -408,6 +458,11 @@ static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
                           stack->Parameters.Power.State);
     PoStartNextPowerIrp(irp);
     IoCompleteRequest(irp, IO_NO_INCREMENT);
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* Record 17 section 4.15.16 E: the D0's bracket, where its finish
+     * completes it. */
+    HcdInjRealLeave(hc);
+#endif
     HcdIoLeave(hc);
 }
 
@@ -434,10 +489,28 @@ static ULONG hcdDirectTransitionGated(PHCD_CONTROLLER hc);
 static VOID hcdDirectTransition(PHCD_CONTROLLER hc)
 {
     ULONG flush;
+    ULONG leaving;
 
+    /* Task 50.30 step 3 (design record 17 section 4.15.3): toward sleep or
+     * shutdown, the thread's command wait ends before the gate. */
+    leaving = hc->PowerDirectWant != PowerDeviceD0;
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* Record 17 section 4.15.16 E: before the route's bit; nested in the
+     * system IRP's own, so it waits only for an exercise, never for that
+     * IRP. */
+    if (leaving) {
+        HcdInjRealEnter(hc, HCD_INJ_REAL_DIRECT, 0);
+    }
+#endif
+    if (leaving) {
+        HcdEnumLeaveRaise(hc, HCD_LEAVE_DIRECT);
+    }
     HcdPowerGateEnter(hc);
     flush = hcdDirectTransitionGated(hc);
     HcdPowerGateLeave(hc);
+    if (leaving) {
+        HcdEnumLeaveClear(hc, HCD_LEAVE_DIRECT);
+    }
     /* A resume this route made waits for its keep as a D0 does (task
      * 45.23), before the system IRP completes and the children follow. */
     hcdResumeKeepWait(hc);
@@ -446,6 +519,11 @@ static VOID hcdDirectTransition(PHCD_CONTROLLER hc)
     if (flush) {
         HcdQuirkShutdownFlush(hc);
     }
+#if defined(XHCI_FLAVOUR_QEMU)
+    if (leaving) {
+        HcdInjRealLeave(hc);
+    }
+#endif
 }
 
 /* The body of hcdDirectTransition, the power gate held. Returns 1 when a
@@ -488,8 +566,12 @@ static ULONG hcdDirectTransitionGated(PHCD_CONTROLLER hc)
         HcdPswRoute(hc);
         HcdPirqResume(hc);
         hc->TolStartGen++;
+        hcdRetryResumeBreak(hc);
         if (!hcdResumeContained(hc)) {
             hcdResumeMsg4(hc);
+        } else {
+            /* Task 50.31: as hcdD0Finish's (design record 38 section 9). */
+            (VOID)HcdRetryResumeLatched(hc);
         }
         HcdPollGrant(hc);
         return 0;
@@ -521,12 +603,26 @@ static VOID NTAPI hcdPowerWork(PVOID Context)
         hcdDirectTransition(hc);
     }
     if (kind == HCD_POWER_WORK_SHUT) {
+#if defined(XHCI_FLAVOUR_QEMU)
+        HcdInjRealEnter(hc, HCD_INJ_REAL_SHUT, 0);
+#endif
+        /* Task 50.30 step 3: as a device IRP's, below. */
+        HcdEnumLeaveRaise(hc, HCD_LEAVE_SHUT);
         HcdPowerGateEnter(hc);
         hcdShutFlush(hc);
         HcdPowerGateLeave(hc);
+        HcdEnumLeaveClear(hc, HCD_LEAVE_SHUT);
+#if defined(XHCI_FLAVOUR_QEMU)
+        HcdInjRealLeave(hc);
+#endif
     }
     PoStartNextPowerIrp(irp);
     IoCompleteRequest(irp, IO_NO_INCREMENT);
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* Record 17 section 4.15.16 E: every kind here completes the system
+     * IRP, whose bracket ends with it. */
+    HcdInjRealLeave(hc);
+#endif
     HcdIoLeave(hc);
 }
 
@@ -623,6 +719,9 @@ static VOID NTAPI hcdSystemDeviceDone(PDEVICE_OBJECT DeviceObject,
     if (KeGetCurrentIrql() == PASSIVE_LEVEL) {
         PoStartNextPowerIrp(systemIrp);
         IoCompleteRequest(systemIrp, IO_NO_INCREMENT);
+#if defined(XHCI_FLAVOUR_QEMU)
+        HcdInjRealLeave(hc);
+#endif
         HcdIoLeave(hc);
     } else {
         hcdPowerDefer(hc, systemIrp, HCD_POWER_WORK_SYSTEM);
@@ -693,6 +792,9 @@ static NTSTATUS NTAPI hcdSystemDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     if (!NT_SUCCESS(Irp->IoStatus.Status) || !hc->ControllerStarted ||
         want == hc->Common.DevicePower) {
         PoStartNextPowerIrp(Irp);
+#if defined(XHCI_FLAVOUR_QEMU)
+        HcdInjRealLeave(hc);
+#endif
         HcdIoLeave(hc);
         return STATUS_SUCCESS;
     }
@@ -706,6 +808,9 @@ NTSTATUS HcdControllerPower(PHCD_CONTROLLER hc, PIRP irp)
     PIO_STACK_LOCATION stack;
     NTSTATUS status;
     ULONG flush;
+#if defined(XHCI_FLAVOUR_QEMU)
+    ULONG bracketed;
+#endif
 
     stack = IoGetCurrentIrpStackLocation(irp);
     XHCI_DBG_VALUE("hcd: power minor, type, state",
@@ -717,6 +822,25 @@ NTSTATUS HcdControllerPower(PHCD_CONTROLLER hc, PIRP irp)
         PoStartNextPowerIrp(irp);
         return HcdCompleteIrp(irp, STATUS_DELETE_PENDING, 0);
     }
+
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* Record 17 section 4.15.16 E: every IRP_MN_SET_POWER meets fault 2D's
+     * exercise ended, for the whole of the driver's handling of it: the
+     * bracket is left where a D0's finish completes it, at each end of a
+     * system IRP, and for a device IRP to D1 to D3 once it is forwarded. */
+    bracketed = 0;
+    if (stack->MinorFunction == IRP_MN_SET_POWER) {
+        bracketed = 1;
+        HcdInjRealEnter(
+            hc,
+            (stack->Parameters.Power.Type == DevicePowerState)
+                ? (HCD_INJ_REAL_DEVICE |
+                   ((ULONG)stack->Parameters.Power.State.DeviceState & 0xFUL))
+                : (HCD_INJ_REAL_SYSTEM |
+                   ((ULONG)stack->Parameters.Power.State.SystemState & 0xFUL)),
+            0);
+    }
+#endif
 
     if (stack->MinorFunction == IRP_MN_SET_POWER &&
         stack->Parameters.Power.Type == DevicePowerState &&
@@ -741,6 +865,10 @@ NTSTATUS HcdControllerPower(PHCD_CONTROLLER hc, PIRP irp)
 
     if (stack->MinorFunction == IRP_MN_SET_POWER) {
         flush = 0;
+        /* Task 50.30 step 3 (design record 17 section 4.15.3): a device
+         * IRP to D1 to D3 ends the thread's command wait before the gate,
+         * which the enumeration holds; lifted when the IRP leaves it. */
+        HcdEnumLeaveRaise(hc, HCD_LEAVE_POWER);
         HcdPowerGateEnter(hc);
         if (hc->ControllerStarted &&
             hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0) {
@@ -768,6 +896,7 @@ NTSTATUS HcdControllerPower(PHCD_CONTROLLER hc, PIRP irp)
         hc->SuspendedInD0 = 0;
         hc->Common.DevicePower = stack->Parameters.Power.State.DeviceState;
         HcdPowerGateLeave(hc);
+        HcdEnumLeaveClear(hc, HCD_LEAVE_POWER);
         /* Task 38.10: their records to the sink, bounded, with the gate
          * left so the thread's pass can run (record 20 section 6.4); before
          * the D3 IRP goes down. */
@@ -784,6 +913,13 @@ NTSTATUS HcdControllerPower(PHCD_CONTROLLER hc, PIRP irp)
     PoStartNextPowerIrp(irp);
     IoSkipCurrentIrpStackLocation(irp);
     status = PoCallDriver(hc->LowerDevice, irp);
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* A device IRP to D1 to D3: nothing of the driver's runs for it after
+     * its forwarding, and the controller now reads suspended. */
+    if (bracketed) {
+        HcdInjRealLeave(hc);
+    }
+#endif
     HcdIoLeave(hc);
     return status;
 }

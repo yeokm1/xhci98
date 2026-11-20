@@ -188,6 +188,10 @@ VOID XhciWriteDoorbell(PXHCI_EXTENSION ext, ULONG slot, ULONG value)
     if (slot != 0 && HcdInjDoorbell(ext, slot, value)) {
         return;
     }
+    /* Task 50.30 step 2: a command the controller never fetches. */
+    if (slot == 0 && HcdInjCmdDoorbell(ext)) {
+        return;
+    }
 #endif
     XhciWrite32(ext, ext->HcInfo.DoorbellOffset + slot * XHCI_DB_STRIDE, value);
     HcdSvcDoorbell(ext, slot, value);

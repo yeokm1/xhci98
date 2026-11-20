@@ -30,6 +30,9 @@ ULONG XhciOwnCommandEvent(ULONG code)
     if (code == XHCI_OWN_CC_SUCCESS) {
         return XHCI_OWN_EV_CMD_SUCCESS;
     }
+    if (code == XHCI_OWN_CC_ABORTED || code == XHCI_OWN_CMD_LEFT) {
+        return XHCI_OWN_EV_CMD_REMOVED;
+    }
     return XHCI_OWN_EV_CMD_REFUSED;
 }
 
@@ -81,6 +84,11 @@ ULONG XhciOwnSelectStep(PXHCI_OWN_SELECT s, ULONG event, PULONG answer)
             s->Phase = XHCI_OWN_PH_SETIF;
             return XHCI_OWN_A_STALE_CLEARED | XHCI_OWN_A_FREE_OLD_STREAMS |
                    XHCI_OWN_A_SET_INTERFACE;
+        case XHCI_OWN_EV_CMD_REMOVED:
+            /* Not a refusal: the new rings may be installed and the old
+             * ones still named; both kept until the slot goes. */
+            return xhciOwnEnd(s, answer, XHCI_OWN_ANS_COMMAND,
+                              XHCI_OWN_A_PIN_NEW | XHCI_OWN_A_PIN_OLD);
         case XHCI_OWN_EV_CMD_UNKNOWN:
         default:
             break;
@@ -133,6 +141,9 @@ ULONG XhciOwnSelectStep(PXHCI_OWN_SELECT s, ULONG event, PULONG answer)
              * device's toggles restarted before anything reopens. */
             s->Phase = XHCI_OWN_PH_RECLEARS;
             return XHCI_OWN_A_FREE_NEW | XHCI_OWN_A_CLEAR_OLD;
+        case XHCI_OWN_EV_CMD_REMOVED:
+            return xhciOwnEnd(s, answer, XHCI_OWN_ANS_STALL,
+                              XHCI_OWN_A_PIN_NEW | XHCI_OWN_A_PIN_OLD);
         case XHCI_OWN_EV_CMD_UNKNOWN:
         default:
             break;

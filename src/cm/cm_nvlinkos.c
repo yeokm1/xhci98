@@ -38,9 +38,14 @@
  * VMMREG.H's) reached by the same INT 20h dynalink cm_cfgmg.c uses for
  * CONFIGMG, from the NHI's thread, a passive thread of the system VM. The
  * proof key's query handler runs from this image whenever the key is read,
- * so the image is resident (no DriverUnload on 98 SE and ME, from
- * DriverEntry, R4) before the key is made; were it ever unloaded, the
- * unload would delete the key first. x86 only.
+ * so the image is resident before the key is made (R4: the device object
+ * DriverEntry makes on 98 SE and ME and never deletes, cm_entry.c, design
+ * record 21 section 7.9; until task 50.40 the missing DriverUnload alone
+ * was taken for it, and the image went after the last NHI's removal with
+ * the key still answered from it); were it ever unloaded, the unload would
+ * delete the key first. The key is not withdrawn at an NHI's removal: it
+ * names this boot's table, which outlives every NHI (record 21 section
+ * 7.9). x86 only.
  *
  * IRQL: as cm_nvlink.h; the callback at the caller's IRQL (stor98 calls
  * it at PASSIVE_LEVEL from HwFindAdapter), touching nothing but an
@@ -636,13 +641,14 @@ typedef struct _CM_NV_PUBCTX {
 #define CM_NV_T_OPEN_KEY    24
 #define CM_NV_T_CREATE_DYN  32
 
-/* R4's residency, set in DriverEntry on 98 SE and ME (cm_entry.c): no
+/* R4's residency, set in DriverEntry on 98 SE and ME (cm_entry.c, record
+ * 21 section 7.9): the device object that is never deleted, and no
  * DriverUnload, so the image that answers the proof and writes the table
  * stays loaded for the boot whatever its PnP devices do. */
 static BOOLEAN cmNvPubResident(PVOID context)
 {
     UNREFERENCED_PARAMETER(context);
-    return (BOOLEAN)(CmDriverObject != NULL &&
+    return (BOOLEAN)(CmDriverObject != NULL && CmResidentObject != NULL &&
                      CmDriverObject->DriverUnload == NULL);
 }
 

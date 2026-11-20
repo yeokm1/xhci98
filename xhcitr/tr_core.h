@@ -459,8 +459,8 @@ void tr_ver_text(TR_U32 packed, char *out, size_t cap);
 
 /* The details line (section 18 item 4), without the label, for a state
  * not TR_VER_UNKNOWN: "3.2.0.0 running; the installed file is 3.3.0.0.
- * Restart Windows to run the installed driver." or "3.3.0.0 running, the
- * installed file's"; "older than 3.3.0.0" for a running 0. */
+ * Restart Windows to run the installed driver." or "3.3.0.0 running; the
+ * installed file is the same."; "older than 3.3.0.0" for a running 0. */
 void tr_ver_line(int state, TR_U32 running, const TR_U32 *file, char *out,
                  size_t cap);
 
@@ -659,6 +659,8 @@ typedef struct _TR_OPTS {
     int SetOn;                  /* /on <instance id>                       */
     int SetYes;                 /* /yes: a change that asks first goes on  */
     char SetOnId[TR_ID_CHARS];
+    int Restart;                /* /restart id=: the controller's restart  */
+    char RestartId[TR_ID_CHARS]; /* (record 25 section 27, task 50.32)     */
 } TR_OPTS;
 
 /* /set Name=Value [Name=Value ...] [/on <instance id>], /set /show, and
@@ -677,7 +679,9 @@ typedef struct _TR_OPTS {
  * 0-4 and nothing else (tr_level_arg); /acpi its folder. Returns 0 with
  * opts filled, 1 refused with why in err. /eject, /setlevel, /report,
  * /acpi and /selftest stand alone; /result goes with /eject or /setlevel, /confirmed with /eject
- * only (the elevated runs of sections 6.6 and 7.5). */
+ * only (the elevated runs of sections 6.6 and 7.5). Task 50.32: /restart
+ * id=<instance id> stands alone too, and takes /result and /confirmed
+ * (its elevated or Run As run, section 27 item 9). */
 int tr_parse_args(int argc, char **argv, TR_OPTS *o, char *err, size_t cap);
 
 /* ---- small text helpers ---------------------------------------------- */
@@ -707,9 +711,41 @@ void tr_letters_text(const char *set, char *out, size_t cap);
 /* What the user sees for a unit: its disks' names with their letters
  * ("Samsung SSD 970 EVO (E:)", "QEMU NVMe Ctrl (E:, F:)"), or, with no
  * disk (diskNames empty), the unit's own name. The letters are kept whole:
- * names too long for the rest of out end in "...". */
+ * names too long for the rest of out end in "...". With lead, a test of a
+ * double-byte character's first byte (the caller's code page), a cut falls
+ * between characters, never inside one, and can be a byte shorter; with
+ * lead NULL every byte is a character (record 25 section 28 item 9). */
+typedef int (*TR_LEAD_FN)(unsigned char c);
 void tr_unit_label(const char *unitName, const char *diskNames,
-                   const char *letters, char *out, size_t cap);
+                   const char *letters, TR_LEAD_FN lead, char *out,
+                   size_t cap);
+
+/* The one cut between characters every name's cut uses (record 25 section
+ * 28 items 5, 9 and 10). tr_char_floor: the most bytes of s, at most n,
+ * that end between two characters; with lead NULL every byte is one, n
+ * itself; a lead byte with no byte after it is a character of its own; s
+ * holds at least n bytes before its end. tr_copy_lead: tr_copy, the copy
+ * ending between characters (with lead NULL, tr_copy's bytes). */
+size_t tr_char_floor(const char *s, size_t n, TR_LEAD_FN lead);
+void tr_copy_lead(char *dst, const char *src, size_t cap, TR_LEAD_FN lead);
+
+/* The tray menu's own cut of a label (task 50.39, record 25 section 28
+ * item 5). tr_tray_label_chars: the most characters the tray gives a
+ * device's label on a work area width pixels wide - 60 at 640 and in
+ * proportion to the width, and no more than leaves the item ("Safely
+ * remove ", the label and " (<reason>)", the reason whyChars long, 0 for
+ * none) within the width at 6 pixels a character after 48 for the menu's
+ * margins; never under TR_TRAY_LABEL_MIN, and TR_TRAY_LABEL_MAX, the
+ * label's bound before, for a width not read (0 or less). tr_tray_label:
+ * tr_unit_label at that length (out holds at most cap - 1 of it), the
+ * letters kept whole, except that a name with no disks, or disks whose
+ * letters leave no room, is cut with "..." too; lead as tr_unit_label's. */
+#define TR_TRAY_LABEL_MIN       24
+#define TR_TRAY_LABEL_MAX       159
+int tr_tray_label_chars(int width, int whyChars);
+void tr_tray_label(const char *unitName, const char *diskNames,
+                   const char *letters, int chars, TR_LEAD_FN lead,
+                   char *out, size_t cap);
 
 /* One disk in the confirmation: "Disk drive <name>, volume E:" (volumes
  * for more than one, nothing after the name for none). */
@@ -855,9 +891,27 @@ TR_U32 tr_eject_cr(TR_U32 cr, TR_U32 vetoType);
 int tr_usb_answer9x(TR_U32 cr, const char *what, char *out, size_t cap);
 
 /* Text for a console: every line longer than width broken at the last
- * space before it (a word longer than the line is cut); LF or CR LF in,
- * CR LF out. out always terminated. */
-void tr_wrap(const char *in, char *out, size_t cap, int width);
+ * space before it (a word longer than the line is cut, between characters
+ * by lead, as tr_copy_lead cuts); LF or CR LF in, CR LF out. out always
+ * terminated. */
+void tr_wrap(const char *in, char *out, size_t cap, int width,
+             TR_LEAD_FN lead);
+
+/* Task 50.39 (record 25 section 28): every line of the details pane and of
+ * Save Report's own text at most TR_TEXT_COLS columns. tr_fit_text writes
+ * in to t, each line wider than width broken between words (after a
+ * clause's end where one fits in the line's second half) and its further
+ * lines put under its first value; a word wider than a line is kept whole.
+ * Only spaces change. */
+#define TR_TEXT_COLS            79
+/* A line that begins with this is a value as read (a name, an id, a serial
+ * number) and is written whole, the mark dropped. */
+#define TR_FIT_WHOLE            '\001'
+void tr_fit_text(TR_TEXT *t, const char *in, int width);
+/* The width a node's details are fitted to in Save Report at depth, so
+ * that with tr_report_lines's lead they stay within TR_TEXT_COLS (at
+ * least 20). */
+int tr_report_width(int depth);
 
 /* ---- start at login (record 25 section 7.4, revision 8) ------------------ */
 
@@ -1046,9 +1100,11 @@ int tr_name_generic(const char *name);
  * devnode, when it has one tr_name_generic does not match; else its
  * product string with the spaces at either end taken off, when any is
  * left; else the class-name label; else "USB device VID:PID". label and
- * product may be NULL. */
+ * product may be NULL. A name too long for out is cut between characters
+ * by lead, as tr_copy_lead cuts (record 25 section 28 item 10). */
 void tr_fast_name(char *out, size_t cap, const char *label,
-                  const char *product, unsigned int vid, unsigned int pid);
+                  const char *product, unsigned int vid, unsigned int pid,
+                  TR_LEAD_FN lead);
 
 /* The device_qualifier answers by key (item 1): Val 1 High Speed capable,
  * 0 Full Speed only, -1 not settled yet, Tries the requests that got no
@@ -1101,10 +1157,12 @@ int tr_fast_click_balloon(int nt, unsigned long major, unsigned long minor);
 
 /* The box's entry for one device (item 6): its name and VID:PID, the port
  * line, the hub line when hubName is not NULL, the speeds and what to
- * try; lines of 79 columns at most. */
+ * try; lines of 79 columns at most. A line cut to its buffer, and a word
+ * longer than a line, end between characters by lead, as tr_copy_lead
+ * cuts (record 25 section 28 item 11). */
 void tr_fast_entry(TR_TEXT *t, const char *name, unsigned int vid,
                    unsigned int pid, const char *portLine,
-                   const char *hubName, const TR_FAST *f);
+                   const char *hubName, const TR_FAST *f, TR_LEAD_FN lead);
 
 /* The menu line (the tooltip while red is tr_red.h's, section 7.2.1). */
 void tr_fast_menu(char *out, size_t cap, int count);
@@ -1344,9 +1402,10 @@ int tr_stor_due(const TR_STOR_Q *q, const TR_STOR_GATE *g);
 
 /* A group's balloon (item 10): title (at least 64 bytes) and text (cap
  * 256 for szInfo), every name of it counted, two named at most, a name
- * cut so that the text fits. removal: "removed" rather than "connected". */
+ * cut so that the text fits, between characters by lead (as tr_copy_lead
+ * cuts). removal: "removed" rather than "connected". */
 void tr_stor_text(char *title, size_t tcap, char *text, size_t cap,
-                  const TR_STOR_GRP *g, int removal);
+                  const TR_STOR_GRP *g, int removal, TR_LEAD_FN lead);
 
 /* The tick's poll (item 3): each xhci98 controller's storage part size
  * (XHQ_O_XPORT_BYTES), TR_STOR_POLL_NONE where it gave none, by the
@@ -1467,6 +1526,18 @@ const char *tr_port_tag(int haveV2, TR_U32 proto);
 int tr_res_text(TR_TEXT *t, TR_U32 type, const unsigned char *d, size_t n,
                 int alloc, int is64);
 
+/* Task 50.18: tr_res_text, and with claimed nonzero (the IRQ an xhci98
+ * controller's XhciInterruptMode 4 claimed, tr_log.h tr_msg4_claimed_irq)
+ * an allocated line IRQ says it is not in use: "IRQ           16 (level,
+ * shared), not in use in XhciInterruptMode 4". Every other descriptor
+ * reads as tr_res_text has it. */
+int tr_res_text_m4(TR_TEXT *t, TR_U32 type, const unsigned char *d, size_t n,
+                   int alloc, int is64, TR_U32 claimed);
+
+/* The claimed IRQ's own line under the resources: "IRQ           7,
+ * claimed by xhci98 for its message interrupt". */
+void tr_res_claimed_text(TR_TEXT *t, TR_U32 claimed);
+
 /* ---- the report ---------------------------------------------------------- */
 
 /* One node of the report: its label at depth, then its details indented
@@ -1478,6 +1549,12 @@ void tr_report_node(TR_TEXT *t, int depth, const char *label,
  * included: a TR_TEXT of this Cap holds the node whole. */
 size_t tr_report_node_bytes(int depth, const char *label,
                             const char *details);
+
+/* The details part of tr_report_node alone, for more lines under a node
+ * already written (task 50.29: its driver keys), and its bytes, the
+ * terminating NUL included. */
+void tr_report_lines(TR_TEXT *t, int depth, const char *details);
+size_t tr_report_lines_bytes(int depth, const char *details);
 
 /* ---- the elevated stop of a unit not marked removable (section 6.6) ------ */
 

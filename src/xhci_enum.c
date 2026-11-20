@@ -299,6 +299,10 @@ ULONG XhciEnumStep(PXHCI_ENUM_PORT port, const XHCI_ENUM_EVENT *event,
 
     case XHCI_ENUM_ENABLE_SLOT:
         if (event->Kind == XHCI_ENUM_EV_COMMAND_DONE) {
+            if (!ok && event->Value == XHCI_ENUM_SLOT_NOT_ADMITTED) {
+                /* Design record 17 section 4.15.16 B. */
+                return xhciEnumFail(port, XHCI_ENUM_FAIL_DEFERRED, action);
+            }
             if (!ok || event->SlotId == 0) {
                 return xhciEnumFail(port, XHCI_ENUM_FAIL_NO_SLOT, action);
             }
@@ -457,6 +461,103 @@ ULONG XhciEnumStep(PXHCI_ENUM_PORT port, const XHCI_ENUM_EVENT *event,
 /* The retry after a failure, as an event of its own so the caller decides
  * when - after the slot has been given back and the port re-read. The
  * event carries the retry limit in Value. */
+ULONG XhciEnumUnanswered(PXHCI_ENUM_PORT port)
+{
+    if (port == NULL || port->State != XHCI_ENUM_FAILED) {
+        return 0;
+    }
+    port->FailCause = XHCI_ENUM_FAIL_UNANSWERED;
+    return 1;
+}
+
+ULONG XhciEnumDeferResumable(const XHCI_ENUM_PORT *port, ULONG hasDevice,
+                             ULONG connNow, ULONG connAtDefer, ULONG placeOk)
+{
+    if (port == NULL) {
+        return 0;
+    }
+    return (port->State == XHCI_ENUM_FAILED &&
+            port->FailCause == XHCI_ENUM_FAIL_DEFERRED &&
+            port->SlotId == 0 && !port->PdoExists && !hasDevice &&
+            connNow == connAtDefer && placeOk)
+               ? 1UL
+               : 0UL;
+}
+
+VOID XhciEnumDefersRenew(PXHCI_ENUM_DEFERS defers)
+{
+    defers->GenNow++;
+    defers->Count = 0;
+}
+
+ULONG XhciEnumDeferCurrent(const XHCI_ENUM_DEFERS *defers,
+                           const XHCI_ENUM_DEFER *defer)
+{
+    return (defer->Owed && defer->Gen == defers->GenNow) ? 1UL : 0UL;
+}
+
+ULONG XhciEnumDeferDrop(PXHCI_ENUM_DEFERS defers, PXHCI_ENUM_DEFER defer)
+{
+    ULONG current;
+
+    current = XhciEnumDeferCurrent(defers, defer);
+    if (current && defers->Count != 0) {
+        defers->Count--;
+    }
+    defer->Owed = 0;
+    return current;
+}
+
+VOID XhciEnumDeferTake(PXHCI_ENUM_DEFERS defers, PXHCI_ENUM_DEFER defer,
+                       ULONG conn)
+{
+    XhciEnumDeferDrop(defers, defer);
+    defer->Owed = 1;
+    defer->Gen = defers->GenNow;
+    defer->Conn = conn;
+    defers->Count++;
+}
+
+ULONG XhciEnumDefersOpen(const XHCI_ENUM_DEFERS *defers, ULONG debtClear,
+                         ULONG enableHeld, ULONG failed, ULONG halted,
+                         ULONG stopping, ULONG rootStarted)
+{
+    return (defers->Count != 0 && debtClear && !enableHeld && !failed &&
+            !halted && !stopping && rootStarted)
+               ? 1UL
+               : 0UL;
+}
+
+ULONG XhciEnumDeferServe(PXHCI_ENUM_DEFERS defers, PXHCI_ENUM_DEFER defer,
+                         const XHCI_ENUM_PORT *port, ULONG hasDevice,
+                         ULONG connNow, ULONG placeOk)
+{
+    ULONG keep;
+
+    if (!defer->Owed) {
+        return XHCI_ENUM_DEFER_NONE;
+    }
+    if (!XhciEnumDeferCurrent(defers, defer)) {
+        defer->Owed = 0;
+        return XHCI_ENUM_DEFER_STALE;
+    }
+    keep = XhciEnumDeferResumable(port, hasDevice, connNow, defer->Conn,
+                                  placeOk);
+    XhciEnumDeferDrop(defers, defer);
+    return keep ? XHCI_ENUM_DEFER_RESUME : XHCI_ENUM_DEFER_DROP;
+}
+
+ULONG XhciEnumRetriesFor(ULONG cause, ULONG retries)
+{
+    if (cause == XHCI_ENUM_FAIL_DEFERRED) {
+        return 0;
+    }
+    if (cause == XHCI_ENUM_FAIL_UNANSWERED && retries > 1UL) {
+        return 1;
+    }
+    return retries;
+}
+
 ULONG XhciEnumRetryUpTo(PXHCI_ENUM_PORT port, ULONG retries,
                         PXHCI_ENUM_ACTION action)
 {
@@ -668,6 +769,13 @@ ULONG XhciEnumAnswerCarries(ULONG parentSerial, ULONG answering,
                             ULONG letGo)
 {
     return (parentSerial == answering && !letGo) ? 1UL : 0UL;
+}
+
+ULONG XhciEnumStopCarry(ULONG marked, ULONG stopped, ULONG removeReceived,
+                        ULONG missingReported)
+{
+    return (marked && stopped && !removeReceived && !missingReported) ? 1UL
+                                                                       : 0UL;
 }
 
 /* ------------------------------------------------------------------ */

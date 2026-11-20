@@ -48,6 +48,14 @@
                                          * timeout, never sent             */
 #define XHCI_OWN_EV_CLEARS_DONE     8UL /* every CLEAR_FEATURE completed   */
 #define XHCI_OWN_EV_CLEARS_FAILED   9UL /* one did not, however it failed  */
+/* Task 50.30 step 3 (design record 17 section 4.15.5a, the ordinary
+ * configuration's row): the command answered 25 or left (the HCD's
+ * HCD_CMD_LEFT, XHCI_TOL_CMD_LEFT) - not a refusal: whatever it named, old
+ * and new, is kept until the device's teardown has completed its Disable
+ * Slot, nothing is rolled back, and the device is removed. */
+#define XHCI_OWN_EV_CMD_REMOVED     10UL
+#define XHCI_OWN_CC_ABORTED         25UL
+#define XHCI_OWN_CMD_LEFT           0x100UL
 
 /* Where a select stands: what it waits for next. */
 #define XHCI_OWN_PH_END             0UL

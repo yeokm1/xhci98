@@ -889,4 +889,6 @@ issue 17; `docs/using/release-notes.md`.
 
 # Planned work
 
-Moved to `roadmap-usb4.md`, section "Planned work", on 2026-10-15 (owner).
+Moved to `roadmap-usb4.md`, section "Planned work", on 2026-10-15 (owner);
+that section was removed on 2026-11-20 (`roadmap-usb4.md`, the decisions
+table, "Phase 50, the planned items dropped").

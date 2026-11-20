@@ -12,6 +12,11 @@ rem   test_packet  - the usbport miniport ABI (src\xhci_usbport.h) and the
 rem                  extension structures usbport allocates for the miniport
 rem   test_ring    - TRB encoding, ring wrap/cycle, ring-full detection, and
 rem                  the event-ring consumer (src\xhci_ring.c)
+rem   test_cmd     - the command engine (src\xhci_cmd.c) with the controller
+rem                  sequence's two command-ring rebuilds (src\xhci_init.c),
+rem                  over a modelled controller: the abort's event orderings,
+rem                  the kept aborted TRB's lifetime, the divergences, and the
+rem                  restart after a rewrite, wrap included (task 50.30)
 rem   test_caps    - the extended-capability walk, port classification, and
 rem                  PSI speed decoding (src\xhci_caps.c)
 rem   test_port    - PORTSC write construction, the logical-port map and the
@@ -48,6 +53,9 @@ rem                  MaxPSASize, the companion's MaxStreams, the grant and the
 rem                  array size, the block layout, the Stream Context, the
 rem                  Endpoint Context's stream fields, Set TR Dequeue with a
 rem                  Stream ID, the doorbell value and the event's stream
+rem   test_sdeq    - task 50.20's field captures as vectors (record 17
+rem                  section 4.12.10): the flagged decisions, the debt, and
+rem                  4.12.8's give-up and the location's hold as the control
 rem   test_xport   - the mass-storage transport policy (src\xhci_xport.c, task
 rem                  31-A.3): Bulk-Only or UAS for an interface offering
 rem                  either, and the hardware and compatible ids that follow
@@ -71,7 +79,17 @@ rem                  the device-id gate, the board exemption, the
 rem                  XhciIntelPortSwitch rule, and the route and release over
 rem                  a modelled config space - write order, values, refusals;
 rem                  value 2's bypass, the accepted-write set and the
-rem                  lifetime that releases only it (task 35.5)
+rem                  lifetime that releases only it (task 35.5); the hold
+rem                  while Windows Setup runs (task 50.34, design record
+rem                  16 section 21): each reading's classification, the
+rem                  1296 Setup combinations against a rule stated apart,
+rem                  the PE tests, the image state, the setting, the
+rem                  first-session guard over a modelled registry through
+rem                  every failure and recovery, the held lifetime's no
+rem                  access, the shutdown predicate and the record
+rem   test_trpsw   - the xHCI98 USB Tree's words for that record
+rem                  (xhcitr\tr_pswt.c, task 50.34): each decision and
+rem                  verdict, the keys, the readings, a foreign record
 rem   test_poll    - polled event delivery (src\xhci_poll.c, tasks 36.6 to
 rem                  36.8): the three values, the delivery and its reason,
 rem                  the deadlines, the poller's ownership machine and roles,
@@ -101,6 +119,13 @@ rem                  values, the tolerance clock's ticks at each interval's
 rem                  boundary, the interval cap with fast polling, the soft
 rem                  retry, cycle and halt decisions, the backstop, location
 rem                  budgets, the recovery window and the all-ones episode
+rem   test_retry   - a controller stopped after repeated failures, tried
+rem                  again (src\xhci_retry.c, task 50.31, design record 38):
+rem                  the value, the waits and their backing off, the clean
+rem                  run, the machine and its burst, the port episodes and
+rem                  their continuity, the storm limit, the admission, the
+rem                  leave flag's table, the latched resume's phase, the
+rem                  sweep's holds, the status word and the block's shape
 rem   test_hub    - the hub class's pure half (src\xhci_hub.c): the hub
 rem                  descriptor, the status-change bitmap, the port decision,
 rem                  the reset progress and speed bits, the depth and multi-TT
@@ -162,6 +187,11 @@ rem                  13-L.2 retired the ring-0 file sink and those functions
 rem                  with it, and test_log.c had said so for
 rem                  two days while this summary had not.)
 rem
+rem   test_dbg     - the qemu flavour's trace line builder (src\xhci_dbg.c):
+rem                  every line that fits byte for byte as before, a longer
+rem                  one split into marked pieces of at most 127 bytes that
+rem                  rebuild it, the word dump's lines
+rem
 rem   test_own     - endpoint ring ownership (src\xhci_own.c, task 38.10,
 rem                  design record 20 section 5): every step of an interface
 rem                  switch under every command, SET_INTERFACE, clear and
@@ -203,6 +233,20 @@ rem                  unclassified row fails the build), the installed
 rem                  defaults held to the INFs, the system rules, the values
 rem                  offered, the driver's reading, the apply summary and its
 rem                  exit code, the elevated run's request and its bounds
+rem   test_trrst   - XHCITR's restart of a controller, the pure half
+rem                  (xhcitr\tr_rst.c, task 50.32, design record 25
+rem                  section 27 stage 1): the start's evidence from the
+rem                  lifetime part, the four-part answer row by row and
+rem                  its exit codes, the digest, the checks' order
+rem   test_trreg   - XHCITR's listing of a USB device's driver key
+rem                  (xhcitr\tr_reg.c, task 50.29, design record 25
+rem                  section 25): every value type, the limits the suite
+rem                  names at and past their bounds, a value that changes
+rem                  size between the calls, a key that does not open, the
+rem                  count past the limits and its errors, the names
+rem                  withheld (read against a guard page), the device
+rem                  report's screening and its windows, and the walk over
+rem                  one device's devnodes
 rem   test_trctx   - XHCITR's stream contexts and trace reading (xhcitr\tr_ctx.c)
 rem   test_trred   - the red tray icon's decision and tooltip (xhcitr\tr_red.c,
 rem                  task 43.57, design record 25 section 7.2.1): each
@@ -564,6 +608,13 @@ set "SUITEPARTIAL="
 call :run test_membuf "test_membuf.c ..\src\xhci_mem.c"
 call :run test_packet "test_packet.c"
 call :run test_ring "test_ring.c ..\src\xhci_ring.c"
+rem test_cmd compiles src\xhci_cmd.c and src\xhci_init.c into its own file by
+rem #include, unchanged, and answers their outward calls itself - the
+rem registers of src\xhci_pci.c, the timer and reset services of
+rem src\hcd_svc.h, the slot layer - with a modelled controller that executes
+rem the command ring (task 50.30, design record 17 section 4.15.9). It links
+rem the pure files the two reach.
+call :run test_cmd "test_cmd.c ..\src\xhci_ring.c ..\src\xhci_xfer.c ..\src\xhci_tol.c ..\src\xhci_log.c ..\src\xhci_xpipe.c ..\src\xhci_caps.c ..\src\xhci_mem.c ..\src\xhci_port.c ..\src\xhci_quirk.c ..\src\xhci_stage.c"
 call :run test_caps "test_caps.c ..\src\xhci_caps.c"
 rem test_port links xhci_caps.c too, since Phase 5: the root-hub map is derived
 rem from the port classification, so XhciRootHubBuild asks XhciPortIsManaged
@@ -614,7 +665,11 @@ call :run test_sshub "test_sshub.c ..\src\xhci_sshub.c ..\src\xhci_hub.c ..\src\
 rem test_stream links nothing else: the stream plan, the block layout and
 rem the encoders are pure computations over registers' and descriptors'
 rem values (task 31-A.1).
-call :run test_stream "test_stream.c ..\src\xhci_stream.c"
+call :run test_stream "test_stream.c ..\src\xhci_stream.c ..\src\xhci_quirk.c"
+rem test_sdeq links the ring, the transfer engine's stop placement and the
+rem location budget beside the stream half, as test_xfer does, and xhciuas's
+rem pure core for its stream recovery (task 50.20).
+call :run test_sdeq "test_sdeq.c ..\src\xhci_stream.c ..\src\xhci_quirk.c ..\src\xhci_xfer.c ..\src\xhci_ring.c ..\src\xhci_tol.c ..\src\xhci_xpipe.c ..\src\uas\uas_iu.c"
 rem test_xport links nothing else: the transport choice and its ids are pure
 rem computations over descriptor bytes and three flags (task 31-A.3).
 call :run test_xport "test_xport.c ..\src\xhci_xport.c"
@@ -626,7 +681,7 @@ rem Windows 8's client contract served by the bus - the interface's and
 rem the capability block's checks, the capability answers, the URB sizes
 rem and fills, the stream URBs' checks and the exact grant against the
 rem plan - is pure computation over sizes, speeds and bytes (task 43.29).
-call :run test_usbdx "test_usbdx.c ..\src\xhci_usbdx.c ..\src\xhci_stream.c"
+call :run test_usbdx "test_usbdx.c ..\src\xhci_usbdx.c ..\src\xhci_stream.c ..\src\xhci_quirk.c"
 rem test_silent links nothing else: the gate, the list's admission and the
 rem descriptor walk are pure computations over registry values and bytes
 rem (task 38.2).
@@ -648,12 +703,19 @@ rem helper's channel are pure (36.15, design records 15 and 18).
 call :run test_msi "test_msi.c ..\src\xhci_msi.c ..\src\xhci_hlpr.c"
 rem test_snap links xhci_xstat.c beside it: the snapshot's HCD region layout -
 rem where each word lies and what the header says - is pure (task 35.3), and
-rem so is the arithmetic of the transfer-size readings it carries (36.21).
-call :run test_snap "test_snap.c ..\src\xhci_snap.c ..\src\xhci_xstat.c"
+rem so is the arithmetic of the transfer-size readings it carries (36.21);
+rem xhci_tol.c and xhci_pipe.c give it the reasons' block as a snapshot
+rem carries it (task 50.30 step 1).
+call :run test_snap "test_snap.c ..\src\xhci_snap.c ..\src\xhci_xstat.c ..\src\xhci_tol.c ..\src\xhci_pipe.c"
 rem test_tol links xhci_pipe.c for fast polling's composition with the
-rem interval cap; the rest of controller tolerance's decisions, the clock's
-rem arithmetic and the budgets are pure (35-T.9, design record 17).
-call :run test_tol "test_tol.c ..\src\xhci_tol.c ..\src\xhci_pipe.c"
+rem interval cap, and xhci_enum.c for a deferred enumeration served after a
+rem debt's clearing (design record 17 section 4.15.16 B); the rest of
+rem controller tolerance's decisions, the clock's arithmetic and the budgets
+rem are pure (35-T.9, design record 17).
+call :run test_tol "test_tol.c ..\src\xhci_tol.c ..\src\xhci_pipe.c ..\src\xhci_enum.c"
+rem test_retry links xhci_tol.c for the tolerance clock's comparison; the
+rem retry's decisions are pure (task 50.31, design record 38).
+call :run test_retry "test_retry.c ..\src\xhci_retry.c ..\src\xhci_tol.c ..\src\xhci_pipe.c"
 rem test_strict links nothing else: strict mode's command precondition table
 rem (xHCI 1.2 section 4.6) is a pure function, checked here at every cell -
 rem each command type, DW3 bit 9, slot state and EP State.
@@ -676,6 +738,11 @@ rem with it; the HCD's own suites take it up (26-A.9).
 rem It named ZwCreateFile/ZwWriteFile too until task 13-L.2 retired
 rem the ring-0 file sink and those imports with it.
 call :run test_log "test_log.c ..\src\xhci_log.c"
+rem test_dbg includes src\xhci_dbg.c itself, with DBG and XHCI_DBG_LIVE
+rem defined first, as the qemu flavour builds it but without XHCI_DBG_E9:
+rem the line builders and the split of a long line are pure, and their
+rem port writes under the line flag are the guest's to show.
+call :run test_dbg "test_dbg.c"
 rem test_desc links xhci_ctx.c: the walk recovers a bInterval and the context
 rem encoder is what turns it into an Interval, so the two halves of task 9-A.2
 rem are one subject and a vector that stopped at the table would not have tested
@@ -783,7 +850,19 @@ call :run test_tr "test_tr.c ..\xhcitr\tr_core.c ..\xhciinst\inst_core.c ..\xhci
 rem test_trset links XHCITR's Settings rows (xhcitr\tr_set.c, task 47.35,
 rem design record 25 section 22) with Setup's table, which they reuse, and
 rem reads the INFs from ..\src to hold the installed defaults.
-call :run test_trset "test_trset.c ..\xhcitr\tr_set.c ..\xhcitr\tr_core.c ..\xhciinst\inst_core.c ..\xhcimark\mark_core.c"
+call :run test_trset "test_trset.c ..\xhcitr\tr_set.c ..\xhcitr\tr_core.c ..\xhciinst\inst_core.c ..\xhcimark\mark_core.c ..\src\xhci_psw.c"
+rem test_trpsw links the driver's own record reader beside the Tree's
+rem words for it: the port switchover's decision as the Tree says it is
+rem pure over the record's bytes (task 50.34).
+call :run test_trpsw "test_trpsw.c ..\xhcitr\tr_pswt.c ..\src\xhci_psw.c"
+rem test_trreg links XHCITR's listing of a driver key (xhcitr\tr_reg.c,
+rem task 50.29, design record 25 section 25) over a modelled
+rem RegEnumValueA.
+call :run test_trreg "test_trreg.c ..\xhcitr\tr_reg.c ..\xhcitr\tr_core.c ..\xhciinst\inst_core.c ..\xhcimark\mark_core.c"
+rem test_trrst links XHCITR's restart of a controller, the pure half
+rem (xhcitr\tr_rst.c, task 50.32, design record 25 section 27): the start's
+rem evidence, the four-part answer and its exit codes, the digest, the checks.
+call :run test_trrst "test_trrst.c ..\xhcitr\tr_rst.c ..\xhcitr\tr_log.c ..\xhcitr\tr_pci.c ..\xhcitr\tr_core.c ..\src\cm\cm_query.c ..\xhciinst\inst_core.c"
 rem test_mark runs the mark service's pure half through its own
 rem self-test (xhcimark\mark_core.c, mk_selftest; since task 45.12 the
 rem bridge inventory and the bridge marks of design record 33 section

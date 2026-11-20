@@ -615,8 +615,9 @@ The questions as they were put:
   is no longer offered, ticked or placed, and `/xhcipfw` is refused there
   (section 11.3). 98 SE and ME keep `XHCIPFW.VXD`; no 64-bit system is
   offered either. The owner's option (c), a step in the PCI root bus's
-  stack for 8, 8.1 and 10 with its timing read first, is planned work
-  (`roadmap-usb4.md`, PFW8.1). Q9's rule stands on the systems still
+  stack for 8, 8.1 and 10 with its timing read first, was planned work
+  (`roadmap-usb4.md`, PFW8.1), since built as section 11.5 (tasks 45.9,
+  47.14 and 48.27). Q9's rule stands on the systems still
   offered it.
 
 ## 10. Verification
@@ -827,7 +828,8 @@ dwords), all `REG_DWORD`, written before the others.
   of four, on 8.1 and 10 at one of six each (`runs/run-44.md` "44.72"
   and "44.72 (continued)"). So this place holds on 2000 to 7 only, the
   systems it is offered on (section 11.3); a place for 8 to 10 is the
-  first alternative below, its timing not read (planned work, PFW8.1).
+  first alternative below, its timing not read then (planned work,
+  PFW8.1; since section 11.5).
 - **Safe Mode and recovery**: a boot-start driver loads in Safe Mode
   whatever `SafeBoot` lists, so `DriverEntry` reads `InitSafeBootMode`
   first and, in any Safe Mode, writes `XhciPfwSkipped` with a "safe mode" bit and
@@ -950,8 +952,8 @@ absent. The readme, `README.md` and the release notes say that on a board
 that leaves the USB4 ports' windows above 4 GB these systems cannot use
 the devices behind those ports, and that 8 may not start there at all
 (section 11.1's table: 8 x86 without the step reaches no Start screen
-[emu]). A step that runs early enough there is planned work
-(`roadmap-usb4.md`, PFW8.1).
+[emu]). A step that runs early enough there was planned work
+(`roadmap-usb4.md`, PFW8.1), since built as section 11.5.
 
 **"Above 4G Decoding" on** (`runs/run-44.md`, "44.56"): with the
 firmware's option on, the 32-bit Vista to 10 stop at start with `0x7B` once
@@ -1314,8 +1316,9 @@ driver's object at line 14 606, the upper filter's at 14 609, the step's
 close at 31 192 before the probe at 32 334) [emu], so the lower filter
 was not what stopped 45.9's starts; the difference left is the
 service's `ImagePath`, absent in 45.9's install and written here [inf].
-The filter role's use on 10 (section 11.5.2 gives 10 none) stays planned
-work, its design and code (PFW8.1).
+The filter role's use on 10 (section 11.5.2 gives 10 none) stayed planned
+work, its design and code (PFW8.1), until task 48.27 (sections 11.5.6
+and 11.5.7).
 
 #### 11.5.6 10 in the filter role (task 48.27, put to the owner)
 

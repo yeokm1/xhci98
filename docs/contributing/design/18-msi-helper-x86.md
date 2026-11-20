@@ -2642,6 +2642,24 @@ The parked branch `w48-mode4` carries an earlier form of this section
 for the two affinity routines only, citing task 48.41; this one replaces
 it (record 15 section 4.5.12).
 
+### 15.17 `ZwCreateKey` for the port switchover's first-session check (task 50.34)
+
+Design record 16 section 21.5.1's guard creates a volatile key under the
+controller's driver key at every start that reaches it, and the x86
+`xhci98.sys` cannot import `ZwCreateKey` (it loads on 98 SE and ME, whose
+kernel's export of it has no evidence row). It asks the helper's routine
+service for it as the mode-4 names above are asked (`HcdMsgNtFindRoutine`,
+`hcd_ctl.c` `hcdPswGuardOp`), at the start's decision, at PASSIVE_LEVEL,
+on 2000 and later only, and keeps the address for the controller's
+lifetime: it is the kernel's own routine, not one of the helper's, so it
+outlives a release of the helper's reference. Where the helper does not
+answer (not installed, not yet loaded - the session of an install made
+while 2000 or XP runs, section 15.5 - or older than the routine service),
+the guard holds that start and arms nothing; on x86 a helper that never
+answers holds every automatic start, and the setting's bypass is the way
+out (record 16 sections 21.5.1 and 21.5.3). No x86 allowlist row is
+added; the amd64 image imports it (`nt52-amd64-export`).
+
 ## 16. Revision 14: the filter on Windows 2000, XP and XP x64 (task 47.33)
 
 **What it answers.** On the HP EliteBook 2570p and 8470p (Intel 7-series,

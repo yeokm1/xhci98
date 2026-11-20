@@ -67,7 +67,9 @@
  * quarantined: unless the command's own tag has come back meanwhile, the
  * LOGICAL UNIT RESET finds no tag and is not sent, and recovery goes on to
  * the device reset. UAS_CTR_ABORTS and UAS_CTR_LUN_RESETS count the TMFs
- * sent.
+ * sent. The worker's requests to the bus and its command phase's storage
+ * are made at the engine's first start and reused (task 50.38, design
+ * record 17 section 4.12.11): the worker allocates nothing of its own.
  *
  * IRQL: as uas.h states per entry; completion routines and the timer DPC
  * at DISPATCH_LEVEL; the lock is held by no caller of any function here
@@ -106,6 +108,11 @@ typedef struct _UAS_ICMD {
     PSCSI_REQUEST_BLOCK Srb;
     PUCHAR Buffer;
     UCHAR Sense[UAS_ICMD_SENSE];
+    BOOLEAN Recovery;           /* task 50.20: the worker's command phase */
+    BOOLEAN Answered;           /* task 50.20: ended by a parsed final IU */
+    BOOLEAN Own;                /* task 50.38: the engine's recovery
+                                 * command, given back, never freed      */
+    USHORT IrpSize;             /* task 50.38: its own-pool carrier's    */
 } UAS_ICMD, *PUAS_ICMD;
 
 static VOID uasPump(PUAS_FDO fdo);
@@ -145,13 +152,38 @@ static VOID uasActSubmit(PUAS_ACT a, PUAS_XFER x)
 }
 
 /* Lock held. A busy transfer this driver means to cancel: marked, and held
- * against reuse until the IoCancelIrp call has returned. */
+ * against reuse until the IoCancelIrp call has returned. Task 50.20
+ * (design record 17 section 4.12.10): on a contract device a stream
+ * transfer's cancel also owes the device the stream recovery - the barrier
+ * the pump stops at, set in this same hold, before the IRP is cancelled or
+ * its slot finished - and gates its endpoint; a cancel made while a
+ * recovery runs belongs to that recovery and asks for no new one. */
 static VOID uasActCancel(PUAS_ACT a, PUAS_XFER x)
 {
+    PUAS_FDO fdo;
+    ULONG which;
+    ULONG so;
+
     if (x->Busy && !x->Cancelling && a->CancelCount < UAS_XFERS + 1) {
         x->Cancelling = TRUE;
         x->CancelRefs++;
         a->Cancel[a->CancelCount++] = x;
+        fdo = x->Fdo;
+        so = UasStreamOnCancel(fdo->StreamContract && fdo->Started,
+                               (fdo->Streamed && x->Slot != NULL &&
+                                (x->Kind == UAS_XFER_STATUS ||
+                                 x->Kind == UAS_XFER_DATA)) ? 1UL : 0UL,
+                               fdo->Recovering);
+        if ((so & UAS_SO_OWE) != 0) {
+            which = (x->Kind == UAS_XFER_STATUS) ? UAS_STREAM_STATUS
+                    : x->Slot->DataIn             ? UAS_STREAM_DATA_IN
+                                                  : UAS_STREAM_DATA_OUT;
+            fdo->StreamOwed = TRUE;
+            fdo->StreamGated |= 1UL << which;
+        }
+        if ((so & UAS_SO_ASK) != 0) {
+            a->Recover = TRUE;
+        }
     }
 }
 
@@ -723,6 +755,14 @@ static VOID uasFinish(PUAS_FDO fdo, PUAS_SLOT slot)
         srb->DataTransferLength = slot->Transferred;
     }
     srb->SrbStatus = st;
+    /* Task 50.20: an internal command learns whether the device answered -
+     * a SENSE or RESPONSE IU parsed - rather than an end recovery or
+     * teardown gave it (FinalSrbStatus). */
+    if (request != NULL &&
+        request->Tail.Overlay.DriverContext[UAS_CTX_EVENT] != NULL) {
+        ((PUAS_ICMD)request->Tail.Overlay.DriverContext[UAS_CTX_EVENT])
+            ->Answered = (BOOLEAN)(slot->FinalSrbStatus == 0);
+    }
     UasFreeMdl(slot->DataMdl);
     slot->DataMdl = NULL;
 
@@ -912,7 +952,12 @@ static VOID uasPump(PUAS_FDO fdo)
         failIrp = NULL;
         fail = 0;
         KeAcquireSpinLock(&fdo->Lock, &irql);
-        if (!fdo->Started || fdo->Recovering || fdo->Slots == NULL) {
+        /* Task 50.20: StreamOwed is a barrier as Recovering is; the
+         * worker's command phase (RecoveryCommands) lets its own marked
+         * requests alone past both. */
+        if (!fdo->Started || fdo->Slots == NULL ||
+            UasPumpBarrier(fdo->Recovering, fdo->StreamOwed,
+                           fdo->RecoveryCommands, fdo->Dead || fdo->Gone)) {
             KeReleaseSpinLock(&fdo->Lock, irql);
             return;
         }
@@ -946,6 +991,10 @@ static VOID uasPump(PUAS_FDO fdo)
                       irp->Tail.Overlay.DriverContext[UAS_CTX_SRB];
             if ((!fdo->Holding ||
                  irp->Tail.Overlay.DriverContext[UAS_CTX_EVENT] != NULL) &&
+                (!fdo->RecoveryCommands ||
+                 (irp->Tail.Overlay.DriverContext[UAS_CTX_EVENT] != NULL &&
+                  ((PUAS_ICMD)irp->Tail.Overlay.DriverContext[UAS_CTX_EVENT])
+                      ->Recovery)) &&
                 (pdo == NULL || !pdo->QueueLocked ||
                  (srb->SrbFlags & SRB_FLAGS_BYPASS_LOCKED_QUEUE) != 0) &&
                 !uasCancelling(irp)) {
@@ -1608,6 +1657,8 @@ static BOOLEAN uasWaitAllFree(PUAS_FDO fdo)
  * is not waited for: when the waiter gives up it is marked aborted, its
  * transfers cancelled, and it releases its own tag once idle (uasCheckDone).
  */
+static BOOLEAN uasTmfOk(ULONG code);
+
 static ULONG uasTmf(PUAS_FDO fdo, ULONG function, ULONG lun, ULONG taskTag)
 {
     PUAS_SLOT slot;
@@ -1662,6 +1713,10 @@ static ULONG uasTmf(PUAS_FDO fdo, ULONG function, ULONG lun, ULONG taskTag)
      * is then no longer live in the device. */
     answered = (BOOLEAN)(slot->State == UAS_SLOT_FINAL && !slot->Failed);
     code = answered ? slot->ResponseCode : UAS_RC_TMF_FAILED;
+    /* Task 50.20: no proof of an ended task for the stream recovery. */
+    if (answered && !uasTmfOk(code) && fdo->StreamContract) {
+        fdo->StreamTmfFailed = TRUE;
+    }
     /* The event is on this stack: nothing may signal it after this. An
      * unanswered TMF may still be live in the device under its tag. */
     slot->TmfDone = NULL;
@@ -1699,8 +1754,11 @@ static VOID uasReleaseQuarantine(PUAS_FDO fdo)
     fdo->Quarantined = 0;
 }
 
-static NTSTATUS uasResumeRequest(PUAS_FDO fdo, ULONG op, ULONG value,
-                                 PXHCI98_RESUME_STATE rs);
+static NTSTATUS uasResumeAsk(PUAS_FDO fdo, ULONG op, ULONG value,
+                             PXHCI98_RESUME_STATE rs, BOOLEAN worker);
+
+/* qemu flavour's test (UAS_QT_CYCLE_UNKNOWN): an op no bus knows. */
+#define UAS_RESUME_OP_UNKNOWN   0xFFUL
 
 /*
  * Task 45.41 (design record 13 section 15, L5): the cycle a failed reset
@@ -1710,13 +1768,15 @@ static NTSTATUS uasResumeRequest(PUAS_FDO fdo, ULONG op, ULONG value,
  * IOCTL_INTERNAL_USB_CYCLE_PORT. A request that could not be sent for want
  * of an IRP stays owed: the timer queues the recovery worker each second
  * while it is, and the worker asks again. Nothing is owed once the engine
- * has stopped or the device is gone. PASSIVE_LEVEL.
+ * has stopped or the device is gone. Both requests go on the worker's own
+ * IRP (task 50.38). PASSIVE_LEVEL, the recovery worker.
  */
 static VOID uasCycleOwed(PUAS_FDO fdo)
 {
     XHCI98_RESUME_STATE rs;
     NTSTATUS status;
     BOOLEAN owed;
+    ULONG op;
     KIRQL irql;
 
     KeAcquireSpinLock(&fdo->Lock, &irql);
@@ -1728,12 +1788,14 @@ static VOID uasCycleOwed(PUAS_FDO fdo)
     if (!owed) {
         return;
     }
-    status = uasResumeRequest(fdo, XHCI98_RESUME_OP_CYCLE, 0, &rs);
+    op = ((fdo->QemuTest & UAS_QT_CYCLE_UNKNOWN) != 0)
+             ? UAS_RESUME_OP_UNKNOWN : XHCI98_RESUME_OP_CYCLE;
+    status = uasResumeAsk(fdo, op, 0, &rs, TRUE);
     if (status == STATUS_INSUFFICIENT_RESOURCES) {
         return;
     }
     if (!NT_SUCCESS(status)) {
-        status = UasSyncIoctl(fdo, IOCTL_INTERNAL_USB_CYCLE_PORT);
+        status = UasRecoveryIoctl(fdo, IOCTL_INTERNAL_USB_CYCLE_PORT, NULL);
         if (status == STATUS_INSUFFICIENT_RESOURCES) {
             return;
         }
@@ -1751,9 +1813,12 @@ static VOID uasCycleOwed(PUAS_FDO fdo)
  * FALSE, with the FDO Dead, when transfers did not come back or the reset
  * failed.
  */
+static BOOLEAN uasRecoveryPhase(PUAS_FDO fdo);
+
 static BOOLEAN uasResetDevice(PUAS_FDO fdo)
 {
     NTSTATUS status;
+    BOOLEAN contract;
     BOOLEAN sent;
     KIRQL irql;
 
@@ -1768,7 +1833,7 @@ static BOOLEAN uasResetDevice(PUAS_FDO fdo)
         KeAcquireSpinLock(&fdo->Lock, &irql);
         fdo->Counters[UAS_CTR_PORT_RESETS]++;
         KeReleaseSpinLock(&fdo->Lock, irql);
-        status = UasSyncIoctl(fdo, IOCTL_INTERNAL_USB_RESET_PORT);
+        status = UasRecoveryIoctl(fdo, IOCTL_INTERNAL_USB_RESET_PORT, NULL);
         sent = (BOOLEAN)(status != STATUS_INSUFFICIENT_RESOURCES);
     }
     KeAcquireSpinLock(&fdo->Lock, &irql);
@@ -1791,7 +1856,26 @@ static BOOLEAN uasResetDevice(PUAS_FDO fdo)
      * are safe again. */
     uasReleaseQuarantine(fdo);
     fdo->FastArmed = FALSE;
+    /* Task 50.20: and the bus gave every endpoint a new context - the
+     * stream recovery owes nothing more. */
+    contract = fdo->StreamContract;
+    if (contract) {
+        fdo->StreamOwed = FALSE;
+        fdo->StreamGated = 0;
+        fdo->StreamTmfFailed = FALSE;
+    }
     KeReleaseSpinLock(&fdo->Lock, irql);
+    if (contract && (fdo->QemuTest & UAS_QT_NO_PHASE) == 0 &&
+        !uasRecoveryPhase(fdo)) {
+        /* No device answer after a successful RESET_PORT: Dead, and the
+         * cycle owed explicitly, since the bus had the reset. */
+        KeAcquireSpinLock(&fdo->Lock, &irql);
+        fdo->Dead = TRUE;
+        fdo->CycleOwed = (BOOLEAN)(fdo->Started && !fdo->Gone);
+        KeReleaseSpinLock(&fdo->Lock, irql);
+        uasCycleOwed(fdo);
+        return FALSE;
+    }
     return TRUE;
 }
 
@@ -2117,12 +2201,260 @@ static VOID uasRecoveryRequest(PUAS_FDO fdo, PIRP irp)
     uasFailRequest(fdo, irp, st);
 }
 
+/* ------------------------------------------------------------------ */
+/* Task 50.20: the stream recovery (design record 17 section 4.12.10)  */
+/* ------------------------------------------------------------------ */
+
+/* The proof's polls: 10 ms each, one budget of five seconds for the whole
+ * step, which no intermediate answer restarts. */
+#define UAS_STREAM_POLL_MS      10UL
+#define UAS_STREAM_POLLS        500UL
+
+/* Lock held. The proof's inputs, read from the slots, and its verdict. */
+static ULONG uasStreamProofLocked(PUAS_FDO fdo, ULONG budgetGone)
+{
+    PUAS_SLOT slot;
+    PUAS_XFER x;
+    ULONG active;
+    ULONG tmf;
+    ULONG quarantined;
+    ULONG back;
+    ULONG finalBusy;
+    ULONG t;
+    ULONG i;
+
+    active = 0;
+    tmf = 0;
+    quarantined = (fdo->Quarantined != 0) ? 1UL : 0UL;
+    back = (fdo->SharedStatus.CancelRefs == 0 &&
+            !(fdo->SharedStatus.Cancelling && fdo->SharedStatus.Busy))
+               ? 1UL : 0UL;
+    finalBusy = 0;
+    for (t = 1; t <= fdo->Tags.Count; t++) {
+        slot = &fdo->Slots[t];
+        if (slot->State == UAS_SLOT_FREE) {
+            continue;
+        }
+        if (slot->Quarantine) {
+            quarantined = 1;
+        }
+        if (slot->Tmf) {
+            tmf = 1;
+        } else if (slot->State == UAS_SLOT_ACTIVE && !slot->Aborted) {
+            active++;
+        }
+        for (i = 0; i < UAS_XFERS; i++) {
+            x = &slot->Xfer[i];
+            if (x->CancelRefs != 0 || (x->Cancelling && x->Busy)) {
+                back = 0;
+            } else if (x->Busy && slot->State == UAS_SLOT_FINAL) {
+                finalBusy = 1;
+            }
+        }
+    }
+    return UasStreamProof(active, tmf, quarantined,
+                          fdo->StreamTmfFailed ? 1UL : 0UL, back, finalBusy,
+                          budgetGone);
+}
+
+/* PASSIVE_LEVEL, the recovery worker. RESET_PIPE on one endpoint's own
+ * handle: the bus's endpoint recycle (CLEAR_FEATURE(ENDPOINT_HALT), then a
+ * fresh context), with the worker's own URB and IRP (task 50.38). */
+static NTSTATUS uasResetPipe(PUAS_FDO fdo, ULONG which)
+{
+    struct _URB_PIPE_REQUEST *u;
+
+    u = &fdo->RecoveryUrb;
+    UasZero(u, sizeof(*u));
+    u->Hdr.Length = sizeof(struct _URB_PIPE_REQUEST);
+    u->Hdr.Function = URB_FUNCTION_RESET_PIPE;
+    u->PipeHandle = fdo->Streams.Base[which];
+    return UasRecoveryUrb(fdo, (PURB)u);
+}
+
+/*
+ * The worker's step while StreamOwed is set, Recovering held: the bounded
+ * proof, then the endpoint recycle of every gated endpoint (serially, the
+ * pump closed throughout, additions met by the same proof) or the device
+ * reset. Either success ends the obligation. PASSIVE_LEVEL.
+ */
+static VOID uasStreamRecover(PUAS_FDO fdo)
+{
+    ULONG polls;
+    ULONG verdict;
+    ULONG gated;
+    ULONG which;
+    KIRQL irql;
+
+    polls = 0;
+    for (;;) {
+        KeAcquireSpinLock(&fdo->Lock, &irql);
+        verdict = uasStreamProofLocked(fdo,
+                                       polls >= UAS_STREAM_POLLS ? 1UL : 0UL);
+        gated = 0;
+        if (verdict == UAS_SP_RECYCLE) {
+            gated = fdo->StreamGated;
+            fdo->StreamGated = 0;
+            if (gated == 0) {
+                /* Every gated endpoint recycled, nothing added since. */
+                fdo->StreamOwed = FALSE;
+                fdo->StreamTmfFailed = FALSE;
+                KeReleaseSpinLock(&fdo->Lock, irql);
+                return;
+            }
+        }
+        KeReleaseSpinLock(&fdo->Lock, irql);
+        if (verdict == UAS_SP_RESET) {
+            break;
+        }
+        if (verdict == UAS_SP_WAIT) {
+            uasSleepMs(UAS_STREAM_POLL_MS);
+            polls++;
+            continue;
+        }
+        for (which = 0; which < 3; which++) {
+            if ((gated & (1UL << which)) == 0) {
+                continue;
+            }
+            if (!NT_SUCCESS(uasResetPipe(fdo, which))) {
+                verdict = UAS_SP_RESET;
+                break;
+            }
+            KeAcquireSpinLock(&fdo->Lock, &irql);
+            fdo->StreamCounters[UAS_SCTR_RECYCLES]++;
+            KeReleaseSpinLock(&fdo->Lock, irql);
+        }
+        if (verdict == UAS_SP_RESET) {
+            break;
+        }
+        /* Loop: any endpoint gated meanwhile is recycled by the same
+         * proof before the barrier drops. */
+    }
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    fdo->StreamCounters[UAS_SCTR_RESETS]++;
+    KeReleaseSpinLock(&fdo->Lock, irql);
+    (VOID)uasResetDevice(fdo);
+}
+
+static NTSTATUS uasInternalCommandAs(PUAS_FDO fdo, ULONG lun,
+                                     const UCHAR *cdb, ULONG cdbLength,
+                                     PVOID buffer, ULONG length,
+                                     PULONG transferred, PUCHAR scsiStatus,
+                                     PUCHAR sense, PULONG senseLength,
+                                     PUAS_DEADLINE deadline,
+                                     BOOLEAN recovery, BOOLEAN abandon,
+                                     PBOOLEAN answered);
+static VOID uasDeadlineStart(PUAS_DEADLINE d, ULONG ms);
+static ULONG uasLunsHold(PUAS_FDO fdo, PUAS_PDO *luns);
+static VOID uasLunsRelease(PUAS_PDO *luns, ULONG n);
+
+/* The phase's deadline per command and its resource retry's wait. */
+#define UAS_PHASE_DEADLINE_MS   5000UL
+#define UAS_PHASE_RETRY_MS      100UL
+
+/*
+ * After the driver's own successful RESET_PORT on a contract device: one
+ * TEST UNIT READY per open LUN, read past UNIT ATTENTION up to four device
+ * answers, each with its own deadline, through the phase's own admission
+ * while Recovering still holds every other request. FALSE when a LUN gave
+ * no device answer: the caller's failed reset. PASSIVE_LEVEL.
+ */
+static BOOLEAN uasRecoveryPhase(PUAS_FDO fdo)
+{
+    PUAS_PDO luns[UAS_MAX_LUNS];
+    UAS_DEADLINE deadline;
+    UCHAR sense[UAS_ICMD_SENSE];
+    UCHAR cdb[6];
+    UCHAR scsi;
+    ULONG senseLength;
+    ULONG got;
+    ULONG count;
+    ULONG answer;
+    ULONG tries;
+    ULONG fails;
+    ULONG next;
+    ULONG i;
+    BOOLEAN ok;
+    BOOLEAN answered;
+    NTSTATUS status;
+    KIRQL irql;
+
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    fdo->RecoveryCommands = TRUE;
+    KeReleaseSpinLock(&fdo->Lock, irql);
+    count = uasLunsHold(fdo, luns);
+    ok = TRUE;
+    for (i = 0; ok && i < count; i++) {
+        tries = 0;
+        fails = 0;
+        for (;;) {
+            UasZero(cdb, sizeof(cdb));          /* TEST UNIT READY */
+            uasDeadlineStart(&deadline, UAS_PHASE_DEADLINE_MS);
+            status = uasInternalCommandAs(
+                fdo, luns[i]->Lun, cdb, 6, NULL, 0, &got, &scsi, sense,
+                &senseLength, &deadline, TRUE,
+                (BOOLEAN)((fdo->QemuTest & UAS_QT_PHASE_ABANDON) != 0 &&
+                          tries == 0 && fails == 0),
+                &answered);
+            if (status == STATUS_INSUFFICIENT_RESOURCES ||
+                status == STATUS_NO_SUCH_DEVICE) {
+                answer = UAS_RP_A_RESOURCE;     /* never submitted */
+            } else if (status == STATUS_IO_TIMEOUT) {
+                answer = UAS_RP_A_DEADLINE;
+            } else if (!answered) {
+                answer = UAS_RP_A_TRANSPORT;    /* ended with no final IU */
+            } else if (NT_SUCCESS(status)) {
+                answer = UAS_RP_A_GOOD;
+            } else if (scsi == UAS_SCSI_CHECK_CONDITION &&
+                       (UasSenseClass(sense, senseLength) == UAS_SENSE_UA ||
+                        UasSenseClass(sense, senseLength) ==
+                            UAS_SENSE_UA_MEDIUM)) {
+                answer = UAS_RP_A_ATTENTION;
+            } else {
+                answer = UAS_RP_A_OTHER;        /* SENSE or RESPONSE IU */
+            }
+            if (answer == UAS_RP_A_RESOURCE) {
+                fails++;
+            } else if (answer != UAS_RP_A_DEADLINE &&
+                       answer != UAS_RP_A_TRANSPORT) {
+                tries++;
+            }
+            if (answer == UAS_RP_A_ATTENTION) {
+                KeAcquireSpinLock(&fdo->Lock, &irql);
+                fdo->StreamCounters[UAS_SCTR_ATTENTIONS]++;
+                KeReleaseSpinLock(&fdo->Lock, irql);
+            }
+            next = UasRecoveryPhaseNext(answer, tries, fails);
+            if (next == UAS_RP_RETRY) {
+                uasSleepMs(UAS_PHASE_RETRY_MS);
+                continue;
+            }
+            if (next == UAS_RP_AGAIN) {
+                continue;
+            }
+            ok = (BOOLEAN)(next == UAS_RP_DONE);
+            break;
+        }
+    }
+    uasLunsRelease(luns, count);
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    fdo->RecoveryCommands = FALSE;
+    KeReleaseSpinLock(&fdo->Lock, irql);
+    /* qemu flavour's test (task 50.38): the commands have run; their
+     * outcome taken as no device answer. */
+    if ((fdo->QemuTest & UAS_QT_PHASE_FAILS) != 0) {
+        ok = FALSE;
+    }
+    return ok;
+}
+
 /* Lock held. What recovery should look at next. */
 #define UAS_RECOVER_NONE    0
 #define UAS_RECOVER_TIMEOUT 1
 #define UAS_RECOVER_REQUEST 2
 #define UAS_RECOVER_RESET   3
 #define UAS_RECOVER_CLOSE   4
+#define UAS_RECOVER_STREAM  5   /* task 50.20: StreamOwed */
 
 static ULONG uasRecoveryNext(PUAS_FDO fdo, PUAS_SLOT *slotOut,
                              PIRP *irpOut, PUAS_PDO *pdoOut)
@@ -2149,6 +2481,10 @@ static ULONG uasRecoveryNext(PUAS_FDO fdo, PUAS_SLOT *slotOut,
         e = RemoveHeadList(&fdo->RecoveryRequests);
         *irpOut = CONTAINING_RECORD(e, IRP, Tail.Overlay.ListEntry);
         return UAS_RECOVER_REQUEST;
+    }
+    /* Task 50.20: consumed even when the refused command has long gone. */
+    if (fdo->StreamOwed) {
+        return UAS_RECOVER_STREAM;
     }
     for (t = 1; t <= UAS_MAX_TAGS; t++) {
         slot = &fdo->Slots[t];
@@ -2232,6 +2568,9 @@ static VOID uasRecoveryWorker(PVOID context)
         case UAS_RECOVER_REQUEST:
             uasRecoveryRequest(fdo, irp);
             break;
+        case UAS_RECOVER_STREAM:
+            uasStreamRecover(fdo);
+            break;
         default:
             if (uasGiveUp(fdo)) {
                 break;
@@ -2253,12 +2592,13 @@ static VOID uasRecoveryWorker(PVOID context)
 /* Entries                                                            */
 /* ------------------------------------------------------------------ */
 
-/* PASSIVE_LEVEL. The slots, their IRPs, the shared read, the timer, the
- * rundown. */
+/* PASSIVE_LEVEL. The slots, their IRPs, the shared read, the recovery
+ * worker's IRP and command, the timer, the rundown. */
 NTSTATUS UasEngineInit(PUAS_FDO fdo)
 {
     PUAS_SLOT slot;
     PUAS_XFER x;
+    PUAS_ICMD ic;
     CCHAR stack;
     ULONG t;
     ULONG i;
@@ -2291,6 +2631,29 @@ NTSTATUS UasEngineInit(PUAS_FDO fdo)
     if (x->Irp == NULL) {
         goto cleanup;
     }
+    /* Task 50.38 (design record 17 section 4.12.11): the recovery worker's
+     * IRP and its command phase's storage - the command, its SRB and its
+     * carrier IRP of one location, queued and never sent. A start without
+     * them fails as one without its slots. */
+    fdo->RecoveryIrpStack = stack;
+    fdo->RecoveryIrp = UasIrpAlloc(stack, &fdo->RecoveryIrpSize);
+    ic = (PUAS_ICMD)UasAlloc(sizeof(UAS_ICMD));
+    fdo->RecoveryIcmd = ic;
+    fdo->RecoveryIcmdBusy = FALSE;
+    if (fdo->RecoveryIrp == NULL || ic == NULL) {
+        goto cleanup;
+    }
+    ic->Own = TRUE;
+    ic->Srb = (PSCSI_REQUEST_BLOCK)UasAlloc(sizeof(SCSI_REQUEST_BLOCK));
+    ic->Irp = UasIrpAlloc(1, &ic->IrpSize);
+    if ((fdo->QemuTest & UAS_QT_NO_RECOVERY_SET) != 0) {
+        /* qemu flavour's test: this last allocation taken as failed. */
+        UasFree(ic->Irp);
+        ic->Irp = NULL;
+    }
+    if (ic->Srb == NULL || ic->Irp == NULL) {
+        goto cleanup;
+    }
     /* Task 36.21's telemetry send; its absence only leaves the bus without
      * the record. */
     fdo->TeleIrp = UasIrpAlloc(stack, &fdo->TeleIrpSize);
@@ -2308,9 +2671,11 @@ cleanup:
     return STATUS_INSUFFICIENT_RESOURCES;
 }
 
-/* PASSIVE_LEVEL, after UasEngineStop has run the engine down. */
+/* PASSIVE_LEVEL, after UasEngineStop has run the engine down (every
+ * command finished, so the recovery command has been given back). */
 VOID UasEngineFree(PUAS_FDO fdo)
 {
+    PUAS_ICMD ic;
     ULONG t;
     ULONG i;
 
@@ -2329,6 +2694,17 @@ VOID UasEngineFree(PUAS_FDO fdo)
     fdo->TeleIrp = NULL;
     UasFree(fdo->SharedBuffer);
     fdo->SharedBuffer = NULL;
+    /* Task 50.38. */
+    UasFree(fdo->RecoveryIrp);
+    fdo->RecoveryIrp = NULL;
+    ic = (PUAS_ICMD)fdo->RecoveryIcmd;
+    if (ic != NULL) {
+        UasFree(ic->Irp);
+        UasFree(ic->Srb);
+        UasFree(ic);
+        fdo->RecoveryIcmd = NULL;
+    }
+    fdo->RecoveryIcmdBusy = FALSE;
 }
 
 /*
@@ -2358,6 +2734,13 @@ VOID UasEngineStart(PUAS_FDO fdo)
     UasFinalClear(fdo->FinalResets, UAS_FINAL_DIR_IN | UAS_FINAL_DIR_OUT);
     fdo->Recovering = FALSE;
     fdo->RecoveryQueued = FALSE;
+    /* Task 50.20: a start has selected the configuration again and opened
+     * the streams afresh (every endpoint a new context, no task alive):
+     * nothing the last start's stop left is owed. */
+    fdo->StreamOwed = FALSE;
+    fdo->StreamGated = 0;
+    fdo->StreamTmfFailed = FALSE;
+    fdo->RecoveryCommands = FALSE;
     /* Task 45.23: a start ends any sleep hold; a new one is the next
      * sleep's. */
     fdo->Holding = FALSE;
@@ -2754,15 +3137,55 @@ VOID UasEngineCloseLun(PUAS_FDO fdo, PUAS_PDO pdo, UCHAR srbStatus)
     uasPump(fdo);
 }
 
-/* The finish's half of an internal command (uasCompleteRequest). */
-static VOID uasIcmdFree(PUAS_ICMD ic)
+/* The finish's half of an internal command (uasCompleteRequest). Task
+ * 50.38: the engine's recovery command is given back, not freed. */
+static VOID uasIcmdFree(PUAS_FDO fdo, PUAS_ICMD ic)
 {
+    KIRQL irql;
+
+    if (ic->Own) {
+        KeAcquireSpinLock(&fdo->Lock, &irql);
+        fdo->RecoveryIcmdBusy = FALSE;
+        KeReleaseSpinLock(&fdo->Lock, irql);
+        return;
+    }
     if (ic->Irp != NULL) {
         IoFreeIrp(ic->Irp);
     }
     UasFree(ic->Srb);
     UasFree(ic->Buffer);
     UasFree(ic);
+}
+
+/* Task 50.38: the engine's recovery command, its fields as a fresh
+ * allocation's and its carrier initialised; NULL while it is taken.
+ * PASSIVE_LEVEL (the command phase's), no lock held. */
+static PUAS_ICMD uasIcmdTake(PUAS_FDO fdo)
+{
+    PUAS_ICMD ic;
+    PSCSI_REQUEST_BLOCK srb;
+    PIRP irp;
+    USHORT size;
+    KIRQL irql;
+
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    ic = (PUAS_ICMD)fdo->RecoveryIcmd;
+    if (ic == NULL || fdo->RecoveryIcmdBusy) {
+        KeReleaseSpinLock(&fdo->Lock, irql);
+        return NULL;
+    }
+    fdo->RecoveryIcmdBusy = TRUE;
+    KeReleaseSpinLock(&fdo->Lock, irql);
+    srb = ic->Srb;
+    irp = ic->Irp;
+    size = ic->IrpSize;
+    UasZero(ic, sizeof(UAS_ICMD));
+    ic->Srb = srb;
+    ic->Irp = irp;
+    ic->IrpSize = size;
+    ic->Own = TRUE;
+    UasIrpReset(irp, size, 1);
+    return ic;
 }
 
 static VOID uasIcmdDone(PUAS_FDO fdo, PUAS_ICMD ic)
@@ -2775,7 +3198,7 @@ static VOID uasIcmdDone(PUAS_FDO fdo, PUAS_ICMD ic)
     ic->State = UAS_ICMD_DONE;
     KeReleaseSpinLock(&fdo->Lock, irql);
     if (was == UAS_ICMD_ABANDONED) {
-        uasIcmdFree(ic);
+        uasIcmdFree(fdo, ic);
     } else {
         KeSetEvent(&ic->Done, IO_NO_INCREMENT, FALSE);
     }
@@ -2830,6 +3253,25 @@ NTSTATUS UasInternalCommandEx(PUAS_FDO fdo, ULONG lun, const UCHAR *cdb,
                               PUCHAR sense, PULONG senseLength,
                               PUAS_DEADLINE deadline)
 {
+    return uasInternalCommandAs(fdo, lun, cdb, cdbLength, buffer, length,
+                                transferred, scsiStatus, sense, senseLength,
+                                deadline, FALSE, FALSE, NULL);
+}
+
+/* The same; `recovery` marks it as the worker's command phase's (task
+ * 50.20), which alone the pump starts while RecoveryCommands stands.
+ * `abandon`, the qemu flavour's test of task 50.38 (UAS_QT_PHASE_ABANDON):
+ * a recovery command left to its finish as soon as it is queued, and
+ * answered as a resource failure. */
+static NTSTATUS uasInternalCommandAs(PUAS_FDO fdo, ULONG lun,
+                                     const UCHAR *cdb, ULONG cdbLength,
+                                     PVOID buffer, ULONG length,
+                                     PULONG transferred, PUCHAR scsiStatus,
+                                     PUCHAR sense, PULONG senseLength,
+                                     PUAS_DEADLINE deadline,
+                                     BOOLEAN recovery, BOOLEAN abandon,
+                                     PBOOLEAN answered)
+{
     PSCSI_REQUEST_BLOCK srb;
     PUAS_ICMD ic;
     NTSTATUS status;
@@ -2844,28 +3286,43 @@ NTSTATUS UasInternalCommandEx(PUAS_FDO fdo, ULONG lun, const UCHAR *cdb,
     if (senseLength != NULL) {
         *senseLength = 0;
     }
-    if (cdbLength > 16) {
+    if (answered != NULL) {
+        *answered = FALSE;
+    }
+    /* Task 50.38: the phase's commands carry no data (the recovery
+     * command has no buffer). */
+    if (cdbLength > 16 || (recovery && length != 0)) {
         return STATUS_INVALID_PARAMETER;
     }
     left = (deadline != NULL) ? uasDeadlineLeft(deadline) : 0;
     if (deadline != NULL && left == 0) {
         return STATUS_IO_TIMEOUT;
     }
-    ic = (PUAS_ICMD)UasAlloc(sizeof(UAS_ICMD));
-    if (ic == NULL) {
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-    UasZero(ic, sizeof(UAS_ICMD));
-    ic->Srb = (PSCSI_REQUEST_BLOCK)UasAlloc(sizeof(SCSI_REQUEST_BLOCK));
-    ic->Irp = IoAllocateIrp(1, FALSE);
-    ic->Buffer = (length != 0) ? (PUCHAR)UasAlloc(length) : NULL;
-    if (ic->Srb == NULL || ic->Irp == NULL ||
-        (length != 0 && ic->Buffer == NULL)) {
-        uasIcmdFree(ic);
-        return STATUS_INSUFFICIENT_RESOURCES;
+    if (recovery) {
+        /* Task 50.38: the engine's own, made at the start; taken, the
+         * answer an allocation failure gives the phase. */
+        ic = uasIcmdTake(fdo);
+        if (ic == NULL) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+    } else {
+        ic = (PUAS_ICMD)UasAlloc(sizeof(UAS_ICMD));
+        if (ic == NULL) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        UasZero(ic, sizeof(UAS_ICMD));
+        ic->Srb = (PSCSI_REQUEST_BLOCK)UasAlloc(sizeof(SCSI_REQUEST_BLOCK));
+        ic->Irp = IoAllocateIrp(1, FALSE);
+        ic->Buffer = (length != 0) ? (PUCHAR)UasAlloc(length) : NULL;
+        if (ic->Srb == NULL || ic->Irp == NULL ||
+            (length != 0 && ic->Buffer == NULL)) {
+            uasIcmdFree(fdo, ic);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
     }
     KeInitializeEvent(&ic->Done, NotificationEvent, FALSE);
     ic->State = UAS_ICMD_WAITING;
+    ic->Recovery = recovery;
     srb = ic->Srb;
     UasZero(srb, sizeof(SCSI_REQUEST_BLOCK));
     if (length != 0) {
@@ -2897,13 +3354,21 @@ NTSTATUS UasInternalCommandEx(PUAS_FDO fdo, ULONG lun, const UCHAR *cdb,
     if (queued) {
         ic->Irp->Tail.Overlay.DriverContext[UAS_CTX_EVENT] = ic;
         InsertTailList(&fdo->Queue, &ic->Irp->Tail.Overlay.ListEntry);
+        if (abandon) {
+            /* Before the pump can start it, so its finish, whenever it
+             * comes, is the abandoned command's (uasIcmdDone). */
+            ic->State = UAS_ICMD_ABANDONED;
+        }
     }
     KeReleaseSpinLock(&fdo->Lock, irql);
     if (!queued) {
-        uasIcmdFree(ic);
+        uasIcmdFree(fdo, ic);
         return STATUS_NO_SUCH_DEVICE;
     }
     uasPump(fdo);
+    if (abandon) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
     if (deadline == NULL) {
         UasWaitEvent(&ic->Done);
     } else {
@@ -2919,7 +3384,8 @@ NTSTATUS UasInternalCommandEx(PUAS_FDO fdo, ULONG lun, const UCHAR *cdb,
                 break;
             }
             if (left == 0) {
-                /* Its finish frees it. */
+                /* Its finish frees it, or gives the recovery command
+                 * back (uasIcmdFree). */
                 return STATUS_IO_TIMEOUT;
             }
             uasSleepMs(10);
@@ -2929,6 +3395,9 @@ NTSTATUS UasInternalCommandEx(PUAS_FDO fdo, ULONG lun, const UCHAR *cdb,
         UasWaitEvent(&ic->Done);
     }
     *scsiStatus = srb->ScsiStatus;
+    if (answered != NULL) {
+        *answered = ic->Answered;
+    }
     got = srb->DataTransferLength;
     if (got > length) {
         got = length;
@@ -2948,7 +3417,7 @@ NTSTATUS UasInternalCommandEx(PUAS_FDO fdo, ULONG lun, const UCHAR *cdb,
     status = (SRB_STATUS(srb->SrbStatus) == SRB_STATUS_SUCCESS ||
               SRB_STATUS(srb->SrbStatus) == SRB_STATUS_DATA_OVERRUN)
                  ? STATUS_SUCCESS : STATUS_IO_DEVICE_ERROR;
-    uasIcmdFree(ic);
+    uasIcmdFree(fdo, ic);
     return status;
 }
 
@@ -2996,9 +3465,10 @@ static VOID uasPowerUnlock(PUAS_FDO fdo)
 }
 
 /* One IOCTL_XHCI98_RESUME_STATE request; STATUS_SUCCESS only with the bus's
- * success status in the reply. */
-static NTSTATUS uasResumeRequest(PUAS_FDO fdo, ULONG op, ULONG value,
-                                 PXHCI98_RESUME_STATE rs)
+ * success status in the reply. worker: sent on the recovery worker's own
+ * IRP (task 50.38), from the worker alone. PASSIVE_LEVEL, no lock held. */
+static NTSTATUS uasResumeAsk(PUAS_FDO fdo, ULONG op, ULONG value,
+                             PXHCI98_RESUME_STATE rs, BOOLEAN worker)
 {
     NTSTATUS status;
 
@@ -3009,11 +3479,19 @@ static NTSTATUS uasResumeRequest(PUAS_FDO fdo, ULONG op, ULONG value,
     rs->Op = op;
     rs->Value = value;
     rs->Status = XHCI98_RESUME_INVALID;
-    status = UasBusIoctl(fdo, IOCTL_XHCI98_RESUME_STATE, rs);
+    status = worker ? UasRecoveryIoctl(fdo, IOCTL_XHCI98_RESUME_STATE, rs)
+                    : UasBusIoctl(fdo, IOCTL_XHCI98_RESUME_STATE, rs);
     if (NT_SUCCESS(status) && rs->Status != XHCI98_RESUME_SUCCESS) {
         status = STATUS_UNSUCCESSFUL;
     }
     return status;
+}
+
+/* The sleep phase's and the wake check's: an IRP allocated per request. */
+static NTSTATUS uasResumeRequest(PUAS_FDO fdo, ULONG op, ULONG value,
+                                 PXHCI98_RESUME_STATE rs)
+{
+    return uasResumeAsk(fdo, op, value, rs, FALSE);
 }
 
 /* Lock held. Nothing of the engine's own in flight or about to be: every

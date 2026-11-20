@@ -296,6 +296,32 @@ written, says what the exit code means and ends with the attach line: the
   `version.dll` is loaded before any of them, with the redirection on: off,
   the load would find the native 64-bit DLL, which an x86 process cannot
   load.
+- since roadmap-usb4 task 50.29 (design record 25 section 25), after the
+  Thunderbolt networking section, "USB devices' driver keys": each USB
+  device (a devnode whose device id begins `USB\`, on every controller and
+  whatever drives it, reached through no other USB device; root hubs not
+  listed), then the devnodes below it whatever their enumerator - its
+  functions and interfaces, and the HID, disk and other devnodes their
+  drivers made - four levels down and at most 32 devnodes a device, never
+  below a hub (whose devnodes are the devices on its ports, listed as
+  devices of their own); a limit reached, or devnodes not all read, is
+  said on a line of its own. Each entry: its id (instance withheld), its
+  description, its driver key and every value of that key, read only: the
+  name, the type and the size always, and the data unless withheld (below):
+  a number in decimal and hex, a string as text up to 512 characters (a
+  quote in it doubled), a multi-string's strings one to a line, anything
+  else in hex up to 256 bytes, a value of more than 65536 bytes by its
+  size alone, at most 256 values or 64 KB of text a key. The walk is the
+  one Save Report takes under each device (design record 25 section 25
+  item 1), over the configuration manager's tree; on 98 SE and ME read
+  from `HKEY_DYN_DATA`, which holds no tree, each `USB\` devnode is listed
+  on its own and nothing below it is followed. The section has no overall
+  bound: a machine with many USB devices whose drivers keep large keys
+  makes a large file (at most 32 keys of 64 KB a device). `-nokeys` (XHCITR's
+  `/nokeys`) leaves the section out and says where the keys are: Save
+  Report's own run passes it, since the report lists the keys under each
+  device, and so does every controller after the first in a snapshot of
+  every controller.
 
 **Where the device readings come from.** `cfgmgr32.dll`, loaded at run time
 (the import table still names only `KERNEL32.dll` and `ADVAPI32.dll`): the
@@ -329,7 +355,15 @@ header (memory 68 bytes, 32 + 36; IRQ 32 bytes on 2000, 20 + 12, and 36 on
 XP and later, 24 + 12), which the decode now takes, the fields being in the
 header: `FEBF0000-FEBF3FFF` everywhere, IRQ 11 on 2000, 10 on XP and XP x64,
 and on 7 the message-signalled number Device Manager shows (`-selftest-res`
-holds every one of these images). On NT a disabled controller has no
+holds every one of these images). On XP x64 a native x64 caller
+(`XHCITR64`) is handed each descriptor padded to a multiple of 8, the
+alignment of its 64-bit fields - an allocated IRQ of 40 bytes, 24 + 12 and
+4 of padding, in a report from the field of 2026-11-15, which printed it
+raw as "resource type 4, 40 bytes in a layout this tool does not decode" -
+and since roadmap-usb4 task 50.21 the decode takes that padding for every
+NT-shaped type (memory, I/O, DMA, IRQ, bus numbers) when the packed size
+is not already a multiple of 8; 32-bit Windows hands back the packed
+sizes, which read as before. On NT a disabled controller has no
 `\\.\HCD0`, so it gives no dump; the `.DEV` says Code 22 and why. **None of
 it has yet been read on Vista.**
 
@@ -354,6 +388,36 @@ the device id with its instance part withheld as above, the service name,
 the driver key - are still printed, but only in the letters, digits and
 punctuation an id is made of. The same holds on a machine whose computer
 name could not be read.
+
+The driver keys' values (task 50.29) keep that rule: a string, or binary
+data, holding one of the machine's names is "withheld (holds this
+machine's name)". The screen sees the bytes as stored, before anything is
+replaced for printing: the NULs left out (so a name kept as UTF-16 in
+ASCII letters reads whole), every byte of the system's code page kept,
+and the data also read as UTF-16 at either byte alignment and converted
+to that code page, so a user name with letters outside ASCII is found in
+either form. With `-nosysinfo` no string or binary data is printed
+("withheld (not screened)") and the value names keep only an
+identifier's characters, while numbers are still printed. Whatever the
+screening, the data of a value whose name suggests a key or password is
+withheld, its name, type and size printed, by the owner's rule of
+2026-11-17 (design record 25 section 25 item 3): a name holding one of
+the terms (`KEY`, `PASSWORD`, `PWD`, `SECRET`, `PSK`, `WPAPSK`,
+`TOKEN`, `LICENSE`, `SSID`, `PIN`, `PIN` and `CODE` with separators
+between, and the others there), case ignored, at the start of a word or
+anywhere in a word in capitals alone, with nothing after it but, in
+order and each optional: an `S`; characters that are not letters; one
+of the words `HASH` (or `HASHES`), `HEX`, `VALUE`, `MATERIAL` or
+`LIST`, with an `S` or none; and characters that are not letters. A
+letter is an ASCII letter. The whole names `HotKey` and `ShortcutKey`,
+with an `S` or none, are shown. So `EncryptionKey`, `Key0`,
+`PasswordHash1`, `PasswordHashes`, `WPAPsk`, `Pin Code` and
+`USERPASSWORD` are withheld, `HotKey`, `KeyIndex` and `TokenCount`
+shown. Both rules are tests, not a guarantee: the name
+test goes by the value's name alone, so a password or a cryptographic
+key stored under another name, or in an opaque blob, is printed, and the
+screen finds only the names it reads ("Privacy" above). The
+section can still hold private data a driver recorded.
 
 **Exit codes of `-report`:**
 
@@ -560,8 +624,11 @@ the raw speed ID its last reset read with the class and meaning the driver
 gave it, its USB 3 link's warm resets and give-up, and its enumeration notes'
 budget and refusals - and `XHCIHC_COUNTERS`, the counters the device matrix
 reads (63 words up to 2.2.0.2, 96 from 2.2.0.3). A port is printed only when it has something to say, the counters only
-when nonzero, by name. A driver before 2.2.0.0 does not serve the region and
-the report says so. `-selftest-hcd` prints the decode over a canned image.
+when nonzero, by name. Each port's row ends with the speed class, and the
+meaning of its speed ID is the port's second line, so the row stays within
+79 columns (task 50.30). A driver before 2.2.0.0 does not serve the region and
+the report says so. `-selftest-hcd` prints the decode over a canned image,
+the last port at its widest.
 
 The region is versioned on its own, inside the unchanged schema 5: a header
 (version, header bytes, port count, record bytes, the records' offset, counter
@@ -631,7 +698,33 @@ What the report carries:
   completed, on a controller that still reads, and whose Bus Master Enable
   clear was not proven either (at every `XhciTolerance` value, 0 included;
   the containment below then reads pinned). The two latched states and
-  reason 5 end only at a stop and start, and the report says so beside them.
+  reason 5 end only at a stop and start, and the report says so beside them;
+  from `3.6.0.0`, with `XhciFailedRetrySec` not 0, the two latched states
+  also end at the driver's next try (task 50.31), and where one is pending
+  the report prints when it is due and its number in that line's place.
+- **Retries** (task 50.31, design record 38 section 15.3; from `3.6.0.0`):
+  the extension's `XHCI_TOL_RETRY`, at the offset and size the HCD header's
+  words 954 and 955 give. The value read and in effect (off, or invalid
+  and read as 5); the state - watching, stopped with the next try's time
+  and number, due, trying with the burst's attempt, or never (closed off,
+  or interrupts lost); the level and the next wait; the tries since the
+  waits last reset and this start's, with how many recovered; the last
+  try's cause and age and the last burst's attempts and outcome; the
+  release's state (`ReleaseState`: pending, unproven, proved, released,
+  devices left, pinned); a latched resume's FAILED phase; the skips and
+  the waits; the port changes seen, the missed passes and a sampling
+  stopped by an all-ones read; the storm limit's port tries in the last
+  ten minutes and its refusals; the clean runs that reset the waits; and
+  the arming, the leave flag with its generation, and the clean run's
+  timing. Seconds are at the nominal 100 ms tick (record 38 section 5.7):
+  the next wait is the driver's own, the value's seconds doubled up to ten
+  minutes, and the time to the next try is the tick count's figure, where
+  the recovery-status request gives the larger of it and the system
+  time's floor (the image holds no system time to compare). A header that ends before word 956 is an earlier
+  driver's ("not served by this driver"); a block below the fields this
+  build knows, at an offset not 4-aligned or not inside the extension
+  image is refused with its two figures, and nothing else of the report
+  changes. Its lines are drafts until the owner words them.
 - **The recovery window**: how many of the three recoveries it allows were
   begun inside it, how long ago each began in tolerance-clock ticks (100 ms
   nominal, credited at no more than 45 ms each), and how many it refused.
@@ -662,11 +755,63 @@ What the report carries:
   held, and the hold standing now - powered (ended by a stable disconnect or
   a controller start) or unpowered (ended only by a controller start).
 
+From task 50.30 (design record 17 sections 4.15.6, 4.15.8 and 4.15.11) the
+tolerance block ends with the reasons' state (`XHCI_EXTENSION.Why`,
+`XHCI_TOL_WHY`), placed by the HCD header's words
+`XHCI_SNAPSHOT_HCD_WHY_AT` and `_BYTES` and read only from a block long
+enough to hold each part, so an older driver's snapshot prints none of it:
+
+- **`reset requested:`** one line per request a recovery began from, newest
+  first: the reason's name, the root port, route and slot of the device it
+  names, its VID:PID, the reason's extra byte, how long ago and after how
+  many recoveries, the latch's record marked; then **`reset requests by
+  reason:`** the nonzero counts by name, or `none this start`.
+- **`failed alone`** (step 3, section 4.15.6, recorded only): how many
+  devices failed alone this start, then one line per spread record, newest
+  first - the place (a root port, or a hub's port with the root port and
+  route it hangs from), the VID:PID or `[unknown]`, how long ago. Nothing
+  decides anything from these lines.
+- **`isolation`** (section 4.15.11): `XhciDeviceIsolation` as the start
+  read it (`value none (the default 1)` when absent or another type), the
+  mode it decided, whether the controller is listed, and whether the new
+  handling applies. It prints at every value.
+- The place's hold with reason 4 reads `HELD, the device stopped
+  answering`, and the counters by name gain those of step 3, among them
+  `ResetLeftSuppressed`, the thread's reset requests a left command's debt
+  deferred until it cleared.
+
+The reasons' block grows in place (68 words, then 86 with the spread
+records, then 88 with the isolation words), so the fields the extension
+appends after it move; the reader takes every place from the header's words,
+never from a fixed offset, and a block shorter than a part prints that part
+as absent.
+
+From task 50.34 (design record 16 section 21.7; from `3.6.0.0`) the HCD
+region's header ends with the Intel port switchover's latched decision for
+the running controller, after task 50.31's two words: word 956
+(`XHCI_SNAPSHOT_HCD_PSW_WORDS`) the record's word count, 58; word 957
+(`XHCI_SNAPSHOT_HCD_PSW_WRITE`) the NTSTATUS of this start's write of the
+registry record `XhciIntelPortSwitchResult`, or `XHCI_SNAPSHOT_HCD_NOT_READ`
+where the start wrote none, which is wherever the switchover's step did
+not run for the controller (`XhciPswRecordApplies`; among others a
+controller that is not Intel, an unlisted Intel one without
+`XhciIntelPortSwitch` 2, the excluded board, an identity or subsystem that
+could not be read, or the switchover off); and words 958 to 1015 (`XHCI_SNAPSHOT_HCD_PSW_AT`) the record itself, the words of
+`XhciIntelPortSwitchResult` (`src/xhci_psw.h`, `XHCI_PSW_REC_*`), whatever
+became of their write. The header is then 1016 words. The report prints the
+decision after the reasons' block, in the words of the window's "Port
+switch:" line (`xhcitr/tr_pswt.c`, `tr_psw_lines`), with "not saved in the
+registry" where the write failed. A header shorter than 1016 words (an
+earlier driver's, the 956-word header of a build with task 50.31's words
+and not these among them), a count larger than the words the header holds,
+and a controller that is not Intel print nothing.
+
 A driver before 35-T.8 sends the eight-word header and the report says it
 does not serve the tolerance state; an extension image that came back short
 or another size than the driver declared is not decoded, and only the
 terminal reason is printed. `-selftest-tol` prints the decode over a canned
-image.
+image, and `-selftest-retry` the "Retries" block's over canned images in
+each state and each refused shape.
 
 From 2.3.0.0 the HCD region's header carries the interrupt routing quirk's
 record (`XhciIntelIrqRoute`, roadmap task 36.3) after the terminal reason,
@@ -816,6 +961,22 @@ PCI `1B36:000D`, alone - with the Set TR Dequeue commands it completed,
 the resyncs that could not finish and the extra stops QEMU's own restart
 of an endpoint cost. A block shorter than 173 words is a driver from
 before it, and the section is not printed.
+Task 50.20's five come last (320 to 324, `StreamDeqUntrusted`,
+`StreamDeqWithheld`, `StreamDebts`, `StreamContractOpens` and
+`StreamErrorExits`; design record 17 section 4.12.10): 1 when the
+controller is flagged, as `XhciStreamDequeueAvoid` decided at the start
+on any controller (1 on a listed one, the Intel 7 Series xHCI, the
+default; 2 on every one; in the qemu flavour also where fault 33 counted
+it as listed), the stream commands the
+backstop refused (0 unless that design has a defect), the endpoints that
+came to owe a withheld position, the stream opens acknowledged to the
+contract, and the Error exits sent. They print in the counter list; a
+block shorter than 325 words is a driver from before them. Word 325,
+`QuirkStreamDequeueAvoid`, is the packed word of `XhciStreamDequeueAvoid`,
+the setting that decides the flag (0 off, 1 the listed controllers, 2
+every controller), in the form of the Linux quirks' words 199 to 212, and
+prints in the "Linux quirks" block as its fifteenth row; a block shorter
+than 326 words is a driver from before it.
 Task 38.11's three follow (173 to 175, `HciVersions`, `HciAccept096Value`
 and `HciVersionPolicy`; design record 17 section 4.14.7), each FFFFFFFF
 until the start writes it, with a section of their own, **"controller
@@ -966,7 +1127,10 @@ design record 14 section 8.10): `DNCTRL` as read when the window was cut
 read back, and the records of the first eight devices in slot order, of
 any speed (a USB 2.0 device takes a record too, so a later SuperSpeed
 device can be left out; the `Ss` column marks SuperSpeed) - slot, link state,
-the window, armed functions and the last step's outcome.
+the window, armed functions and the last step's outcome, in two rows a
+slot (from `pending` on, the second, under the link state), so the table
+stays within 79 columns (task 50.30). `-selftest-ssusp` prints a record at
+its widest too.
 
 From `3.3.0.0` the HCD header ends with **"storage transport"** (roadmap-usb4
 task 44.35; design record 13 section 10.7, "The decision kept", and design
@@ -988,7 +1152,10 @@ at every level, which also carries the driver's version (design record
 The PORTSC decode is printed on screen whatever the level, because that is what
 the bench reads on the spot. The headline test is per port: a port reporting a
 device connected with `PP` clear is Finding Q read off the register, whatever
-the other ports say.
+the other ports say. A port that read all ones has its value on its row and
+the note saying so on the line below (task 50.30). `-selftest-portsc` prints
+the table over canned values: an unpowered port, one read all ones, and one
+with every field at its widest.
 
 The exit code says whether the `.TXT` is the report. There are four, not two.
 
@@ -1141,6 +1308,28 @@ records, and one that fails or flaps writes `enum.port.quiet` and then
 nothing until it enumerates. The bursts refused are counted per port, in the
 HCD region above. Ports behind a hub are not noted.
 
+### A controller `XhciInterruptMode` 4 refused to start (task 50.4)
+
+A controller that did not start has no door, so nothing above can be read
+from it. When mode 4 refused its start (2000, XP, XP x64, and Vista and
+later), `xhci98.sys` writes `XhciMode4Refusal`, a `REG_BINARY` of 55 words,
+in the controller's driver key, and the next start mode 4 does not refuse
+rewrites it as cleared (design record 15 section 4.5.20; the layout is
+`src/xhci_msg4.h`, `XHCI_M4REC_*`). The tool prints it in two places: in
+the `.DEV`, under each PCI xHCI controller `xhci98.sys` drives whose driver
+key holds one, after its status and problem lines, labelled `mode 4`; and in
+`/dump` (and the dump step of `/snapshot`), when the controller asked for
+does not open, as a list of every one of this driver's keys that holds one,
+by key path, or a line saying none does (not under `/probe`). A refused
+record gives the time it was written (UTC), the start's status, the build
+that wrote it and the controller's PCI location, the reason by the event
+delivery section's name, the connection's status (or "not tried" where the
+start was refused before any connect), the mode-4 values as the start read
+them ("-" for not set or not read; "not read" after a quarantine) and, for
+a claim, the claim's status and each IRQ's reason; a cleared record is one
+line. 98 SE and ME never write one. `-selftest-m4rec` prints the decode over
+canned records, and `snaptest.cmd` holds it.
+
 ## Three things to know before trusting a dump
 
 It is windowed, so it can tear. usbport refuses `ParameterLength > 0x10000`
@@ -1164,6 +1353,17 @@ miniport's extension against the frozen `offsets.txt`, which no current tree
 can regenerate (branch `1.2.0.0` alone; "Three files" above). A dump decoded
 against the wrong table is a wrong reading, not a failed one, and wrong
 readings are how this investigation has lost time before.
+
+A busy controller is not waited for (since 50.32 (eject wait); design record 13 section 8.8.1). A window asked
+while the driver's power gate is held - the controller thread in a long pass, a recovery, a suspend or a resume -
+is answered after at most a short grace wait, from memory, with `XHCI_SNAPSHOT_S_BUSY` (0x40) set: PORTSC and
+the live DNCTRL word are not read, the interrupt-routing record is not copied, and the rest is a reading of the
+moment, which may catch a record in the middle of a change with no tear reported. The report says so once, in a
+paragraph after the coherence line and as a `busy` line in the summary, naming what was not read: the gate can come
+free, or be taken, between two windows of one dump, so PORTSC is judged by the PORTSC window and the DNCTRL word and
+the routing record by the HCD window, and a dump with only a memory window busy says only that its records may be
+mixed. A snapshot taken a minute later has the registers. A reader from before the bit refuses such a window's slots, word and HCD regions ("status 00000040")
+and reads its PORTSC as "no usable register mapping".
 
 One known wart, left alone. Every line of the note ring in the `.TXT` ends
 `0D 0D 0A`: the driver stores `CRLF` in the ring, the tool emits it character

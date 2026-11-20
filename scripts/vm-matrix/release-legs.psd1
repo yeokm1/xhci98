@@ -68,7 +68,8 @@
                roadmap-usb4 49.4; selftest.ps1 holds this file to it). A
                WHPX leg starts cold (QEMU restores no saved state under
                WHPX), is refused where WHPX cannot run its guest, and runs
-               under TCG only with -ForceTcg, the periodic cross-check
+               under TCG only with -ForceTcg, an operator's choice no cut
+               asks for (roadmap-usb4 50.2)
     Cold       $true: the leg always starts cold from the starting point's
                disk, under TCG too, so a WHPX leg forced to TCG is the same
                leg on the other accelerator

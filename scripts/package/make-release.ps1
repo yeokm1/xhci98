@@ -180,9 +180,10 @@ binary staged for each published flavour is checked against the
 job - it marks the checked `qemu` build, and marked the retired `debug` one too.
 
 This script does not build; it publishes what is already built and gated. Run
-`scripts\build-driver.cmd all` first, which builds and gates both flavours,
-release and qemu, so that the one that is never published has still been
-through every gate.
+`scripts\build-driver.cmd cut` first (and `cut -amd64`), which builds and
+gates the release flavour with every self-test in full; nothing here reads the
+qemu flavour, so a cut builds it no more (roadmap-usb4 task 50.1; until then
+`all`, which still builds and gates both).
 
 .PARAMETER Arch
 Which architectures to publish - `x86` or `x64`, which are `make-package.ps1`'s
@@ -320,7 +321,12 @@ cut (measured read-only on 2026-09-05: the 1.0.0.1 INF fails six of them, all
 added by 1.0.1.0). A `-Version` other than `src\xhci98.inf`'s `DriverVer` is
 refused with that reason; to rebuild an older cut's asset, check out the commit
 that cut it and run this mode there, where the gate is the one that cut passed.
-roadmap task 20.1 has the record. Until that fix this mode also required
+roadmap task 20.1 has the record. Since roadmap-usb4 task 50.3 the INF gate's
+per-device value rows are held to the version it is given (`-PublishedVersion`),
+so a published release's xhci98.inf from 2.4.0.0 on passes them at its own
+version; the refusal stays, since the gate's other rules, the UAS and connection
+manager gates (each version-checked against this tree's header) are this
+tree's. Until task 20.1's fix this mode also required
 `out\pkg-<flavour>\` to hash-match the published binaries, a dependency left
 over from when the media carried files the package supplied; since 1.0.0.1
 nothing from the package enters the asset, and the check is gone.
@@ -429,7 +435,8 @@ Make no download 2, and no USBDRV\FREE\ in download 3. While
 scripts\package\wdmfree-pin.txt names no usb-wdm-free release that is what
 every cut does; 3.2.0.0's named v0.1.0, 3.3.0.0's v0.1.4, 3.4.0.0's
 v0.1.7 (v0.1.5 until task 45.44), 3.4.1.0's v0.1.8, 3.4.2.0's and
-3.4.3.0's v0.1.9, and from 3.5.0.0 it names v0.1.10.
+3.4.3.0's v0.1.9, 3.5.0.0's v0.1.10, and 3.6.0.0's v0.1.12 (v0.1.11
+before the owner chose v0.1.12).
 
 .PARAMETER WdmFreeRoot
 The usb-wdm-free checkout, overriding scripts\local\usb-wdm-free
@@ -3533,6 +3540,9 @@ Take them out (and out of history, if committed) before cutting.
             # files on the media, which OS-MEDIA refuses. Weakening the gate or
             # pinning it per version is not the answer (roadmap task 20.1);
             # the tree that cut the older version carries the gate it passed.
+            # Roadmap-usb4 task 50.3 (owner, 2026-11-14) gave the INF gate's
+            # value rows a history by version, and only them; whether this
+            # refusal goes is a decision of its own.
             throw @"
 -UploadSetOnly rebuilds the asset of the current cut only, and $Version is not
 it: src\xhci98.inf's DriverVer is $infVersion.

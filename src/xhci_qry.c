@@ -17,6 +17,12 @@ static VOID xhqPut(UCHAR *buf, ULONG offset, ULONG value)
     buf[offset + 3] = (UCHAR)((value >> 24) & 0xFFUL);
 }
 
+static ULONG xhqGet(const UCHAR *buf, ULONG offset)
+{
+    return (ULONG)buf[offset] | ((ULONG)buf[offset + 1] << 8) |
+           ((ULONG)buf[offset + 2] << 16) | ((ULONG)buf[offset + 3] << 24);
+}
+
 ULONG XhciQryAnswer(UCHAR *out, ULONG room, const XHCI_QRY_IN *in,
                     PULONG info)
 {
@@ -161,5 +167,115 @@ ULONG XhciQryAnswer(UCHAR *out, ULONG room, const XHCI_QRY_IN *in,
         out[at++] = 0;
     }
     *info = whole;
+    return XHQ_ANS_WHOLE;
+}
+
+ULONG XhciHoldsAnswer(UCHAR *out, ULONG room, ULONG started, ULONG root,
+                      ULONG hub, ULONG hubPorts, const UCHAR *holds,
+                      PULONG info)
+{
+    ULONG whole;
+    ULONG i;
+
+    *info = 0;
+    if (out == NULL || room < XHH_HDR_BYTES) {
+        return XHQ_ANS_TOO_SMALL;
+    }
+    if (root > XHH_ROOT_MAX) {
+        root = XHH_ROOT_MAX;
+    }
+    if (hub > XHH_HUB_MAX) {
+        hub = XHH_HUB_MAX;
+    }
+    if (holds == NULL) {
+        root = 0;
+        hub = 0;
+    }
+    whole = XHH_HDR_BYTES + root + hub;
+    for (i = 0; i < XHH_HDR_BYTES; i++) {
+        out[i] = 0;
+    }
+    xhqPut(out, XHH_O_MAGIC, XHH_MAGIC);
+    xhqPut(out, XHH_O_VERSION, XHH_VERSION);
+    xhqPut(out, XHH_O_BYTES, whole);
+    xhqPut(out, XHH_O_FLAGS, started ? XHH_F_STARTED : 0UL);
+    xhqPut(out, XHH_O_ROOT, root);
+    xhqPut(out, XHH_O_HUB, hub);
+    xhqPut(out, XHH_O_HUB_PORTS, hubPorts);
+    if (room < whole) {
+        *info = XHH_HDR_BYTES;
+        return XHQ_ANS_HEADER;
+    }
+    for (i = 0; i < root + hub; i++) {
+        out[XHH_HDR_BYTES + i] = holds[i];
+    }
+    *info = whole;
+    return XHQ_ANS_WHOLE;
+}
+
+/* Task 50.30 step 1 (design record 17 section 4.15.8); task 50.32's
+ * lifetime part and its buffer tiers (design record 25 section 27 item 4):
+ * XHR_F_LIFETIME is this routine's alone, set only where the tail is
+ * written. */
+ULONG XhciRecoveryAnswer(UCHAR *out, ULONG room, const ULONG *head,
+                         const ULONG *recs, const ULONG *counts,
+                         const ULONG *life, PULONG info)
+{
+    ULONG kept;
+    ULONG flags;
+    ULONG i;
+    ULONG j;
+
+    *info = 0;
+    if (out == NULL || room < XHR_HDR_BYTES) {
+        return XHQ_ANS_TOO_SMALL;
+    }
+    for (i = 0; i < XHR_HDR_BYTES; i++) {
+        out[i] = 0;
+    }
+    xhqPut(out, XHR_O_MAGIC, XHR_MAGIC);
+    xhqPut(out, XHR_O_VERSION, XHR_VERSION);
+    kept = 0;
+    if (head != NULL) {
+        for (i = XHR_O_FLAGS; i <= XHR_O_RECORDS; i += 4) {
+            xhqPut(out, i, head[(i - XHR_O_FLAGS) / 4]);
+        }
+        kept = head[(XHR_O_RECORDS - XHR_O_FLAGS) / 4];
+    }
+    flags = xhqGet(out, XHR_O_FLAGS) & ~XHR_F_LIFETIME;
+    xhqPut(out, XHR_O_FLAGS, flags);
+    if (kept > XHR_REC_MAX || recs == NULL) {
+        kept = recs == NULL ? 0 : XHR_REC_MAX;
+    }
+    xhqPut(out, XHR_O_RECORDS, kept);
+    if (room < XHR_MAX_BYTES) {
+        xhqPut(out, XHR_O_BYTES,
+               life != NULL ? XHR_LIFE_BYTES : XHR_MAX_BYTES);
+        *info = XHR_HDR_BYTES;
+        return XHQ_ANS_HEADER;
+    }
+    xhqPut(out, XHR_O_BYTES, XHR_MAX_BYTES);
+    for (i = XHR_HDR_BYTES; i < XHR_MAX_BYTES; i++) {
+        out[i] = 0;
+    }
+    for (i = 0; i < kept; i++) {
+        for (j = 0; j < XHR_REC_WORDS; j++) {
+            xhqPut(out, XHR_HDR_BYTES + i * XHR_REC_BYTES + j * 4,
+                   recs[i * XHR_REC_WORDS + j]);
+        }
+    }
+    for (i = 0; counts != NULL && i < XHR_COUNTS; i++) {
+        xhqPut(out, XHR_O_COUNTS + i * 4, counts[i]);
+    }
+    *info = XHR_MAX_BYTES;
+    if (life == NULL || room < XHR_LIFE_BYTES) {
+        return XHQ_ANS_WHOLE;
+    }
+    for (i = 0; i < XHR_LIFE_WORDS; i++) {
+        xhqPut(out, XHR_O_LIFE_TIME_LO + i * 4, life[i]);
+    }
+    xhqPut(out, XHR_O_BYTES, XHR_LIFE_BYTES);
+    xhqPut(out, XHR_O_FLAGS, flags | XHR_F_LIFETIME);
+    *info = XHR_LIFE_BYTES;
     return XHQ_ANS_WHOLE;
 }

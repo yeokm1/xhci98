@@ -1107,18 +1107,72 @@ static VOID NTAPI cmThread(PVOID context)
 }
 
 /*
+ * Task 50.27 (record 15 section 4.5.21, "The thread starts' join";
+ * hcd_ctl.c's HcdThreadReference): on NT the new thread's object from its
+ * handle, the reference retried at 10 ms until had and the handle closed
+ * only then, so the stop always joins on the object. A NULL object type:
+ * PsThreadType is a data import. Fail-closed: a reference that never
+ * succeeds keeps the start here for good, logged at the first failed
+ * attempt and each attempt counted in ThreadReferenceFailures. Returns the
+ * failed attempts; the qemu flavour's XhciQemuThreadRefCm makes that many
+ * count as failed, each object given back. IRQL: PASSIVE_LEVEL, the
+ * creator.
+ */
+static ULONG cmThrReference(PCM_NHI nhi, HANDLE handle, PVOID *object)
+{
+    LARGE_INTEGER due;
+    NTSTATUS status;
+    ULONG failed;
+#if defined(XHCI_FLAVOUR_QEMU)
+    ULONG inject;
+
+    inject = CmRegQemuDword(L"XhciQemuThreadRefCm");
+    if (inject > 1000) {
+        inject = 1000;
+    }
+#endif
+    failed = 0;
+    for (;;) {
+        *object = NULL;
+        status = ObReferenceObjectByHandle(handle, THREAD_ALL_ACCESS, NULL,
+                                           KernelMode, object, NULL);
+#if defined(XHCI_FLAVOUR_QEMU)
+        if (NT_SUCCESS(status) && inject != 0) {
+            inject--;
+            ObDereferenceObject(*object);
+            *object = NULL;
+            status = STATUS_UNSUCCESSFUL;
+        }
+#endif
+        if (NT_SUCCESS(status)) {
+            break;
+        }
+        failed++;
+        nhi->ThreadReferenceFailures++;
+        if (failed == 1) {
+            CmLogNote(nhi, "cm.thread.ref.fail", (ULONG)status);
+        }
+        CmRelativeMs(&due, 10);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
+    (VOID)ZwClose(handle);
+    return failed;
+}
+
+/*
  * The thread, created and its queue opened. How the stop waits for it
  * differs by target and follows hcd_ctl.c's hcdThreadStart, each half the
  * one measured there: the thread object on NT (WDM 1.10 and later), whose
- * signal alone says the thread has left the image a removal unloads; the
- * event on Windows 98 and ME, where a wait on the thread object faulted.
- * IRQL: PASSIVE_LEVEL.
+ * signal alone says the thread has left the image a removal unloads,
+ * always had (cmThrReference); the event on Windows 98 and ME, where a
+ * wait on the thread object faulted. IRQL: PASSIVE_LEVEL.
  */
 NTSTATUS CmThrStart(PCM_NHI nhi)
 {
     HANDLE handle;
     NTSTATUS status;
     KIRQL irql;
+    ULONG failed;
 
     nhi->ThreadRunning = 0;
     nhi->ThreadObject = NULL;
@@ -1134,23 +1188,16 @@ NTSTATUS CmThrStart(PCM_NHI nhi)
     KeAcquireSpinLock(&nhi->WorkLock, &irql);
     nhi->Accepting = 1;
     KeReleaseSpinLock(&nhi->WorkLock, irql);
-    status = STATUS_SUCCESS;
     if (IoIsWdmVersionAvailable(1, 0x10)) {
-        /* A NULL object type: PsThreadType is a data import. */
-        status = ObReferenceObjectByHandle(handle, THREAD_ALL_ACCESS, NULL,
-                                           KernelMode, &nhi->ThreadObject,
-                                           NULL);
-    }
-    (VOID)ZwClose(handle);
-    if (!NT_SUCCESS(status)) {
-        /* hcd_ctl.c's residual, kept: without the object a removal's
-         * unload cannot be joined, so the start does not proceed; the
-         * thread is told to leave and its event waited for. */
-        nhi->ThreadReferenceFailures++;
-        nhi->ThreadObject = NULL;
-        (VOID)CmThrQueue(nhi, CM_WORK_EXIT, NULL);
-        (VOID)CmWaitEvent(&nhi->ThreadExited, 0);
-        return status;
+        /* Until task 50.27 a failed reference ended the start with only
+         * the thread's event waited for, which left its call into
+         * PsTerminateSystemThread unjoined; retried until had now. */
+        failed = cmThrReference(nhi, handle, &nhi->ThreadObject);
+        if (failed != 0) {
+            CmLogNote(nhi, "cm.thread.ref.retry", failed);
+        }
+    } else {
+        (VOID)ZwClose(handle);
     }
     nhi->ThreadRunning = 1;
     return STATUS_SUCCESS;

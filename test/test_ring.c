@@ -3365,8 +3365,25 @@ static void test_control_link_pad(void)
              "an empty group");
 }
 
+/* Task 50.30 (design record 17 section 4.15.9): which command a Command
+ * Ring Stopped abandons, for the rewrite of an unfetched aborted TRB. */
+static void test_stop_abandoned(void)
+{
+    CHECK_EQ(XhciRingStopAbandoned(0x1000, 0, 0x1000), 0x1000,
+             "the outstanding command, as before");
+    CHECK_EQ(XhciRingStopAbandoned(0x1000, 0x2000, 0x2000), 0x1000,
+             "an outstanding one wins over an aborted one");
+    CHECK_EQ(XhciRingStopAbandoned(0, 0x1000, 0x1000), 0x1000,
+             "aborted, and the stop names it: still executable, abandoned");
+    CHECK_EQ(XhciRingStopAbandoned(0, 0x1000, 0x1010), 0,
+             "aborted, stopped at the next TRB: the position adopted");
+    CHECK_EQ(XhciRingStopAbandoned(0, 0, 0x1000), 0,
+             "no abort kept (another generation, or cleared): nothing");
+}
+
 int main(void)
 {
+    test_stop_abandoned();
     test_control_link_pad();
     test_two_halves();
     test_trb_fields();

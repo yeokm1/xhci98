@@ -14,6 +14,7 @@
 #include "../src/xhci.h"
 #include "../src/xhci_tol.h"
 #include "../src/xhci_pipe.h"
+#include "../src/xhci_enum.h"
 #include "test_harness.h"
 
 #define AMD_ID      0x15B61022UL
@@ -584,7 +585,7 @@ static ULONG late_model(ULONG stopCode, ULONG state, ULONG done, ULONG left,
         return verdict;
     }
     *read = 1;
-    verdict = XhciTolLateVerdict(left, present, hub, published);
+    verdict = XhciTolLateVerdict(left, present, hub, published, 0);
     if (verdict == XHCI_TOL_LATE_RESET) {
         return verdict;
     }
@@ -649,17 +650,17 @@ static void test_late(void)
         }
     }
 
-    CHECK_EQ(XhciTolLateVerdict(1, 1, 0, 1), XHCI_TOL_LATE_LEFT,
+    CHECK_EQ(XhciTolLateVerdict(1, 1, 0, 1, 0), XHCI_TOL_LATE_LEFT,
              "record gone or off its port: its teardown");
-    CHECK_EQ(XhciTolLateVerdict(1, 0, 1, 0), XHCI_TOL_LATE_LEFT,
+    CHECK_EQ(XhciTolLateVerdict(1, 0, 1, 0, 0), XHCI_TOL_LATE_LEFT,
              "a gone hub's record: nothing more either");
-    CHECK_EQ(XhciTolLateVerdict(0, 1, 0, 1), XHCI_TOL_LATE_RESET,
+    CHECK_EQ(XhciTolLateVerdict(0, 1, 0, 1, 0), XHCI_TOL_LATE_RESET,
              "path present: the reset, as before");
-    CHECK_EQ(XhciTolLateVerdict(0, 0, 1, 1), XHCI_TOL_LATE_RESET,
+    CHECK_EQ(XhciTolLateVerdict(0, 0, 1, 1, 0), XHCI_TOL_LATE_RESET,
              "a hub leaving keeps the reset, as hcdCfgFault");
-    CHECK_EQ(XhciTolLateVerdict(0, 0, 0, 1), XHCI_TOL_LATE_CYCLE,
+    CHECK_EQ(XhciTolLateVerdict(0, 0, 0, 1, 0), XHCI_TOL_LATE_CYCLE,
              "a published device leaving: its location cycled");
-    CHECK_EQ(XhciTolLateVerdict(0, 0, 0, 0), XHCI_TOL_LATE_LEFT,
+    CHECK_EQ(XhciTolLateVerdict(0, 0, 0, 0, 0), XHCI_TOL_LATE_LEFT,
              "pre-PDO leaving: its enumeration tears it down");
 
     /* Every row of the second half. */
@@ -676,7 +677,7 @@ static void test_late(void)
                                          : XHCI_TOL_LATE_LEFT;
                     }
                     CHECK_EQ(XhciTolLateVerdict(left, present, hub,
-                                                published),
+                                                published, 0),
                              want, "late verdict row");
                 }
             }
@@ -1206,6 +1207,33 @@ static void test_port_oc(void)
              "the connection after it re-arms");
     CHECK_EQ(l.Reenums, 0, "budget back");
     CHECK_EQ(l.Rearms, 1, "re-arm counted");
+
+    /* Task 50.30 step 3: hold 4, its device stopped answering, is powered
+     * and released by the same stable disconnect. */
+    XhciTolLocInit(&l);
+    XhciTolLocHold(&l, XHCI_TOL_HOLD_UNANSWERED);
+    CHECK_EQ(XhciTolLocUnpowered(&l), 0, "hold 4 is powered");
+    CHECK_EQ(XhciTolLocHeld(0, &l), 1, "held at every tolerance value");
+    CHECK_EQ(XhciTolLocObserveChange(&l, 0, 1, 0, 1, 10), 0, "unplugged");
+    CHECK_EQ(XhciTolLocObserveChange(&l, 0, 1, 0, 0,
+                                     10 + XHCI_TOL_STABLE_DISC_TICKS),
+             0, "stable");
+    CHECK_EQ(XhciTolLocObserveChange(&l, 1, 1, 0, 1,
+                                     20 + XHCI_TOL_STABLE_DISC_TICKS),
+             1, "the connection after it releases hold 4");
+    CHECK_EQ(l.Hold, XHCI_TOL_HOLD_NONE, "released");
+    /* Design record 17 section 4.15.16 A: hcdPortChanged observes each
+     * sample once, before hold 4 is read; a replug inside the interval
+     * (no stable disconnect seen) leaves hold 4 standing, so that sample's
+     * connect stays suppressed. */
+    XhciTolLocInit(&l);
+    XhciTolLocHold(&l, XHCI_TOL_HOLD_UNANSWERED);
+    CHECK_EQ(XhciTolLocObserveChange(&l, 0, 1, 0, 1, 10), 0, "unplugged");
+    CHECK_EQ(XhciTolLocObserveChange(&l, 1, 1, 0, 1,
+                                     10 + XHCI_TOL_STABLE_DISC_TICKS / 2),
+             0, "a fast replug releases nothing");
+    CHECK_EQ(l.Hold, XHCI_TOL_HOLD_UNANSWERED, "hold 4 stands");
+    CHECK_EQ(XhciTolLocHeld(1, &l), 1, "still held");
 
     /* The recovery's own disconnect - an over-current's lost
      * power, its device not back after the power-on wait - is no evidence,
@@ -1975,6 +2003,86 @@ static void test_terminal_resume(void)
     CHECK_EQ(XhciTolResumeRefused(XHCI_TOL_TERMINAL_NONE), 0, "running");
 }
 
+/* The recoveries one fault's run begins, as hcdRecover admits them: while
+ * a recovery is owed (failed, the window not refused, failures below 3)
+ * and the window admits it, each failing. */
+static ULONG resumeRun(PXHCI_TOL_WINDOW w, ULONG tolerance, PULONG failures,
+                       ULONG now)
+{
+    ULONG begun;
+
+    begun = 0;
+    while (XhciTolTerminal(1, 0, w->Refused, *failures, 3) ==
+               XHCI_TOL_TERMINAL_OWED &&
+           XhciTolWindowAdmit(w, tolerance, now + begun)) {
+        begun++;
+        (*failures)++;
+    }
+    return begun;
+}
+
+/* Record 17 section 4.6, revision 37: a run of failed recoveries below its
+ * bound ends at a resume that reinitializes, as at a recovery that
+ * succeeds, so a later, unrelated fault gets the whole run; carried, it got
+ * 3 - c. At both XhciTolerance values; at 1 a fault inside the same window
+ * still meets the window. */
+static void test_resume_run(void)
+{
+    XHCI_TOL_WINDOW w;
+    ULONG tolerance;
+    ULONG c;
+    ULONG i;
+    ULONG failures;
+    ULONG later;
+
+    CHECK_EQ(XhciTolResumeFailures(2, 1), 0, "reinitialized: the run ends");
+    CHECK_EQ(XhciTolResumeFailures(1, 1), 0, "one failure: ends too");
+    CHECK_EQ(XhciTolResumeFailures(0, 1), 0, "none: none");
+    CHECK_EQ(XhciTolResumeFailures(2, 0), 2,
+             "restored or nothing done: the count kept");
+    CHECK_EQ(XhciTolResumeFailures(0, 0), 0, "an ordinary restore");
+
+    later = 100 + XHCI_TOL_RECOVERY_WINDOW_TICKS + 10;
+    for (tolerance = 0; tolerance <= 1; tolerance++) {
+        for (c = 1; c <= 2; c++) {
+            /* c recoveries begun and failed, the next owed. */
+            XhciTolWindowInit(&w);
+            failures = 0;
+            for (i = 0; i < c; i++) {
+                CHECK_EQ(XhciTolWindowAdmit(&w, tolerance, 100 + i), 1,
+                         "begun");
+                failures++;
+            }
+            CHECK_EQ(XhciTolResumeRefused(XhciTolTerminal(1, 0, w.Refused,
+                                                          failures, 3)),
+                     0, "owed: the resume reinitializes");
+            failures = XhciTolResumeFailures(failures, 1);
+            CHECK_EQ(XhciTolTerminal(0, 0, w.Refused, failures, 3),
+                     XHCI_TOL_TERMINAL_NONE, "running, the run ended");
+            /* A later fault, past the window: the whole run. */
+            CHECK_EQ(resumeRun(&w, tolerance, &failures, later), 3,
+                     "the later fault gets three");
+            CHECK_EQ(XhciTolTerminal(1, 0, w.Refused, failures, 3),
+                     XHCI_TOL_TERMINAL_FAILURES, "then the run is spent");
+            /* The count carried, as before revision 37: 3 - c. */
+            XhciTolWindowInit(&w);
+            failures = c;
+            CHECK_EQ(resumeRun(&w, tolerance, &failures, later), 3 - c,
+                     "carried: 3 - c");
+        }
+    }
+
+    /* At 1, two begun, the resume, and a fault inside the same window: the
+     * window, not the run, refuses the fourth begun. */
+    XhciTolWindowInit(&w);
+    CHECK_EQ(XhciTolWindowAdmit(&w, 1, 100), 1, "first begun");
+    CHECK_EQ(XhciTolWindowAdmit(&w, 1, 101), 1, "second begun");
+    failures = XhciTolResumeFailures(2, 1);
+    CHECK_EQ(resumeRun(&w, 1, &failures, 200), 1, "inside: the window's one");
+    CHECK_EQ(XhciTolTerminal(1, 0, w.Refused, failures, 3),
+             XHCI_TOL_TERMINAL_WINDOW, "the window's terminal");
+}
+
 /* Roadmap-hcd 37.3 (record 13 section 5.8): only S5 latches - S1 to S4
  * (SYSTEM_POWER_STATE 2 to 5) keep the hold until the resume, S0 and the
  * unspecified state latch nothing; once latched the commands are always
@@ -2223,6 +2331,64 @@ static void stopScript(STOP_SCRIPT *s, ULONG n, const ULONG *codes,
     s->NStates = n;
 }
 
+static void test_stop_verdict(void)
+{
+    STOP_SCRIPT s;
+    ULONG state;
+    ULONG restops;
+    static const ULONG cAb[1] = { XHCI_CC_COMMAND_ABORTED };
+    static const ULONG cLeft[1] = { XHCI_TOL_CMD_LEFT };
+    static const ULONG cCseAb[2] = { XHCI_CC_CONTEXT_STATE_ERROR,
+                                     XHCI_CC_COMMAND_ABORTED };
+    static const ULONG sStop[1] = { XHCI_EP_STATE_STOPPED };
+    static const ULONG sRunRun[2] = { XHCI_EP_STATE_RUNNING,
+                                      XHCI_EP_STATE_RUNNING };
+
+    CHECK_EQ(XhciTolCmdVerdict(XHCI_CC_COMMAND_ABORTED), 1, "25");
+    CHECK_EQ(XhciTolCmdVerdict(XHCI_TOL_CMD_LEFT), 1, "left");
+    CHECK_EQ(XhciTolCmdVerdict(0), 0, "no completion is not a verdict");
+    CHECK_EQ(XhciTolCmdVerdict(XHCI_CC_SUCCESS), 0, "success");
+    CHECK_EQ(XhciTolCmdVerdict(XHCI_CC_COMMAND_RING_STOPPED), 0, "24");
+    CHECK_EQ(XHCI_TOL_CMD_LEFT > 0xFFUL ? 1UL : 0UL, 1, "not a completion code");
+
+    stopScript(&s, 1, cAb, sStop);
+    CHECK_EQ(stopRun(&s, &state, &restops), XHCI_TOL_STOP_ABORTED,
+             "an aborted Stop: its own result, not a give-up");
+    CHECK_EQ(restops, 0, "...no restop");
+    CHECK_EQ(s.Reads, 0, "...no state read");
+    CHECK_EQ(state, XHCI_EP_STATE_RUNNING, "...never read as at rest");
+    stopScript(&s, 1, cLeft, sStop);
+    CHECK_EQ(stopRun(&s, &state, &restops), XHCI_TOL_STOP_ABORTED,
+             "a left Stop: the same");
+    stopScript(&s, 2, cCseAb, sRunRun);
+    CHECK_EQ(stopRun(&s, &state, &restops), XHCI_TOL_STOP_ABORTED,
+             "a restop answered aborted ends there");
+    CHECK_EQ(restops, 1, "...after the one restop it was");
+    CHECK_EQ(s.Stops, 2, "...and no further Stop");
+
+    CHECK_EQ(XhciTolLateStopped(XHCI_CC_COMMAND_ABORTED,
+                                XHCI_EP_STATE_STOPPED, 1),
+             XHCI_TOL_LATE_RESET,
+             "an aborted late Stop before the completion: the reset");
+    CHECK_EQ(XhciTolLateStopped(XHCI_TOL_CMD_LEFT, XHCI_EP_STATE_STOPPED, 0),
+             XHCI_TOL_LATE_RESET, "a left late Stop: the reset");
+
+    CHECK_EQ(XhciTolLateVerdict(1, 1, 0, 1, 1), XHCI_TOL_LATE_LEFT,
+             "isolate: gone, LEFT");
+    CHECK_EQ(XhciTolLateVerdict(0, 1, 1, 1, 1), XHCI_TOL_LATE_RESET,
+             "isolate: a hub present keeps the reset");
+    CHECK_EQ(XhciTolLateVerdict(0, 0, 1, 1, 1), XHCI_TOL_LATE_RESET,
+             "isolate: a hub leaving keeps the reset");
+    CHECK_EQ(XhciTolLateVerdict(0, 1, 0, 1, 1), XHCI_TOL_LATE_CYCLE,
+             "isolate: a present published device is cycled alone");
+    CHECK_EQ(XhciTolLateVerdict(0, 1, 0, 0, 1), XHCI_TOL_LATE_LEFT,
+             "isolate: a present device with no PDO fails its step");
+    CHECK_EQ(XhciTolLateVerdict(0, 0, 0, 1, 1), XHCI_TOL_LATE_CYCLE,
+             "isolate: a published device leaving, cycled");
+    CHECK_EQ(XhciTolLateVerdict(0, 0, 0, 0, 1), XHCI_TOL_LATE_LEFT,
+             "isolate: pre-PDO leaving");
+}
+
 static void test_stop_rest(void)
 {
     STOP_SCRIPT s;
@@ -2323,9 +2489,1262 @@ static void test_stop_rest(void)
     CHECK_EQ(restops, 0, "halted: no restop");
 }
 
+/* Task 50.30 step 1 (design record 17 section 4.15.8): the reasons are
+ * recorded, never decided on - every function here is pure and nothing it
+ * returns is an admission. */
+/*
+ * Task 50.30 step 1: a transfer engine's fatal verdict staged
+ * (XhciTolWhyStageXfer). The engine's `Fatal` decides the escalation, its
+ * `Matched` alone whether the device is named: a fatal code on an event
+ * inside no TD keeps the reset and XFER_FATAL and names no device, however
+ * fully the caller filled the place of the pipe the event's Slot ID reached.
+ * The three wrapper sites (EP0, an ordinary pipe, an isochronous pipe) share
+ * the helper; each is read by name.
+ */
+static void test_why_xfer(ULONG code, const char *path)
+{
+    XHCI_TOL_WHY w;
+    XHCI_RESET_REC r;
+    XHCI_RESET_REC got;
+    ULONG extra;
+
+    memset(&r, 0, sizeof(r));
+    r.Slot = 3;
+    r.RootPort = 4;
+    r.Route = 0x12;
+    r.VidPid = 0x0D8C0014UL;
+
+    XhciTolWhyInit(&w);
+    CHECK_EQ(XhciTolWhyStageXfer(&w, 1, 1, code, &r), 1, path);
+    memset(&got, 0xA5, sizeof(got));
+    CHECK_EQ(XhciTolWhyTake(&w, &extra, &got), XHCI_WHY_XFER_FATAL, path);
+    CHECK_EQ(extra, code, path);
+    CHECK_EQ(got.Slot, 3, path);
+    CHECK_EQ(got.RootPort, 4, path);
+    CHECK_EQ(got.Route, 0x12, path);
+    CHECK_EQ(got.VidPid, 0x0D8C0014UL, path);
+
+    XhciTolWhyInit(&w);
+    CHECK_EQ(XhciTolWhyStageXfer(&w, 1, 0, code, &r), 1, path);
+    memset(&got, 0xA5, sizeof(got));
+    CHECK_EQ(XhciTolWhyTake(&w, &extra, &got), XHCI_WHY_XFER_FATAL, path);
+    CHECK_EQ(extra, code, path);
+    CHECK_EQ(got.Slot, 0, path);
+    CHECK_EQ(got.RootPort, 0, path);
+    CHECK_EQ(got.Route, 0, path);
+    CHECK_EQ(got.VidPid, 0, path);
+    CHECK_EQ(XhciTolWhyStageXfer(&w, 1, 0, code, NULL), 1, path);
+    CHECK_EQ(XhciTolWhyTake(&w, &extra, &got), XHCI_WHY_XFER_FATAL, path);
+    CHECK_EQ(got.RootPort, 0, path);
+
+    XhciTolWhyInit(&w);
+    CHECK_EQ(XhciTolWhyStageXfer(&w, 0, 1, code, &r), 0, path);
+    CHECK_EQ(w.Staged, 0, path);
+    CHECK_EQ(XhciTolWhyTake(&w, &extra, &got), XHCI_WHY_EVENT_RING, path);
+    CHECK_EQ(got.Slot, 0, path);
+}
+
+/*
+ * Task 50.30 step 3 (design record 17 section 4.15.3, revision 23): a left
+ * command's debt - admission in each state, the input context, the
+ * returned slot's checks in their order, how a slotless left command
+ * settles, and the debt across a successful Restore State.
+ */
+static void test_left(void)
+{
+    /* Admission. */
+    CHECK_EQ(XhciTolLeftAdmit(XHCI_LEFT_CLEAR, 0, 0), 1, "no debt: ordinary");
+    CHECK_EQ(XhciTolLeftAdmit(XHCI_LEFT_CLEAR, 1, 1), 0,
+             "no debt: the settlement's entry refuses");
+    CHECK_EQ(XhciTolLeftAdmit(XHCI_LEFT_OWED, 0, 0), 0, "OWED: ordinary refused");
+    CHECK_EQ(XhciTolLeftAdmit(XHCI_LEFT_OWED, 1, 1), 0,
+             "OWED: the settlement refused too");
+    CHECK_EQ(XhciTolLeftAdmit(XHCI_LEFT_SETTLING, 0, 0), 0,
+             "SETTLING: ordinary still refused");
+    CHECK_EQ(XhciTolLeftAdmit(XHCI_LEFT_SETTLING, 0, 1), 0,
+             "SETTLING: an ordinary caller's listed-looking command refused");
+    CHECK_EQ(XhciTolLeftAdmit(XHCI_LEFT_SETTLING, 1, 0), 0,
+             "SETTLING: the settlement's entry, off its list, refused");
+    CHECK_EQ(XhciTolLeftAdmit(XHCI_LEFT_SETTLING, 1, 1), 1,
+             "SETTLING: the settlement's entry, on its list");
+    CHECK_EQ(XhciTolLeftAdmit(7, 0, 0), 0, "an unknown state admits nothing");
+    CHECK_EQ(XhciTolLeftInputOk(XHCI_LEFT_CLEAR), 1, "input context: no debt");
+    CHECK_EQ(XhciTolLeftInputOk(XHCI_LEFT_OWED), 0, "input context: OWED");
+    CHECK_EQ(XhciTolLeftInputOk(XHCI_LEFT_SETTLING), 0,
+             "input context: SETTLING");
+
+    /* The returned slot's checks, each failing alone, in order. */
+    CHECK_EQ(XhciTolLeftSlotCheck(1, XHCI_CC_SUCCESS, 3, 32, 0, 0, 0, 0),
+             XHCI_LEFT_SLOT_OK, "every check holds");
+    CHECK_EQ(XhciTolLeftSlotCheck(0, XHCI_CC_SUCCESS, 3, 32, 0, 0, 0, 0),
+             XHCI_LEFT_SLOT_UNMATCHED, "an unmatched completion");
+    CHECK_EQ(XhciTolLeftSlotCheck(1, 9, 3, 32, 0, 0, 0, 0),
+             XHCI_LEFT_SLOT_CODE, "a code other than Success");
+    CHECK_EQ(XhciTolLeftSlotCheck(1, XHCI_CC_SUCCESS, 0, 32, 0, 0, 0, 0),
+             XHCI_LEFT_SLOT_RANGE, "Slot ID 0");
+    CHECK_EQ(XhciTolLeftSlotCheck(1, XHCI_CC_SUCCESS, 33, 32, 0, 0, 0, 0),
+             XHCI_LEFT_SLOT_RANGE, "past MaxSlotsEn");
+    CHECK_EQ(XhciTolLeftSlotCheck(1, XHCI_CC_SUCCESS, 32, 32, 0, 0, 0, 0),
+             XHCI_LEFT_SLOT_OK, "MaxSlotsEn itself");
+    CHECK_EQ(XhciTolLeftSlotCheck(1, XHCI_CC_SUCCESS, 3, 32, 1, 0, 0, 0),
+             XHCI_LEFT_SLOT_OWNED, "a slot a record owns");
+    CHECK_EQ(XhciTolLeftSlotCheck(1, XHCI_CC_SUCCESS, 3, 32, 0, 0x1000, 0, 0),
+             XHCI_LEFT_SLOT_DCBAA, "a DCBAA entry set (low)");
+    CHECK_EQ(XhciTolLeftSlotCheck(1, XHCI_CC_SUCCESS, 3, 32, 0, 0, 1, 0),
+             XHCI_LEFT_SLOT_DCBAA, "a DCBAA entry set (high)");
+    CHECK_EQ(XhciTolLeftSlotCheck(1, XHCI_CC_SUCCESS, 3, 32, 0, 0, 0, 1),
+             XHCI_LEFT_SLOT_LISTED, "already on the list");
+    CHECK_EQ(XhciTolLeftSlotCheck(0, 9, 0, 32, 1, 1, 1, 1),
+             XHCI_LEFT_SLOT_UNMATCHED, "the first failing check is named");
+
+    /* A slotless left command's end. */
+    CHECK_EQ(XhciTolLeftSlotlessEnd(XHCI_TRB_TYPE_ENABLE_SLOT, 1,
+                                    XHCI_CC_SUCCESS, XHCI_LEFT_SLOT_OK),
+             XHCI_LEFT_END_DISABLE, "Enable Slot, trusted slot: its Disable Slot");
+    CHECK_EQ(XhciTolLeftSlotlessEnd(XHCI_TRB_TYPE_ENABLE_SLOT, 1,
+                                    XHCI_CC_SUCCESS, XHCI_LEFT_SLOT_OWNED),
+             XHCI_LEFT_END_RESET, "Enable Slot, a check failed: the reset");
+    CHECK_EQ(XhciTolLeftSlotlessEnd(XHCI_TRB_TYPE_ENABLE_SLOT, 1, 9,
+                                    XHCI_LEFT_SLOT_CODE),
+             XHCI_LEFT_END_CLEAR, "Enable Slot answered with an error: cleared");
+    CHECK_EQ(XhciTolLeftSlotlessEnd(XHCI_TRB_TYPE_ENABLE_SLOT, 0, 0,
+                                    XHCI_LEFT_SLOT_UNMATCHED),
+             XHCI_LEFT_END_RESET, "Enable Slot with no trusted end: the reset");
+    CHECK_EQ(XhciTolLeftSlotlessEnd(XHCI_TRB_TYPE_NOOP_COMMAND, 0, 0, 0),
+             XHCI_LEFT_END_CLEAR, "a No Op owns nothing");
+    CHECK_EQ(XhciTolLeftSlotlessEnd(XHCI_TRB_TYPE_NOOP_COMMAND, 1, 5, 0),
+             XHCI_LEFT_END_CLEAR, "a No Op whatever it was");
+    CHECK_EQ(XhciTolLeftSlotlessEnd(12, 1, XHCI_CC_SUCCESS, XHCI_LEFT_SLOT_OK),
+             XHCI_LEFT_END_RESET, "another type naming no device: the reset");
+
+    /* Across a successful Restore State. */
+    CHECK_EQ(XhciTolLeftAfterRestore(XHCI_LEFT_OWED, 1), XHCI_LEFT_CLEAR,
+             "a left command naming a device: cleared, its mark carries on");
+    CHECK_EQ(XhciTolLeftAfterRestore(XHCI_LEFT_OWED, 0), XHCI_LEFT_SETTLING,
+             "a slotless one: kept, as SETTLING");
+    CHECK_EQ(XhciTolLeftAfterRestore(XHCI_LEFT_SETTLING, 0), XHCI_LEFT_SETTLING,
+             "a slotless one already settling: kept");
+    CHECK_EQ(XhciTolLeftAfterRestore(XHCI_LEFT_CLEAR, 0), XHCI_LEFT_CLEAR,
+             "no debt: none");
+}
+
+/* Task 50.30 step 3 (record 17 section 4.15.11): XhciDeviceIsolation. */
+static void test_left_thread(void)
+{
+    ULONG r;
+    ULONG n;
+
+    n = 0;
+    for (r = 0; r < XHCI_WHY_COUNT; r++) {
+        n += XhciTolWhyThread(r);
+    }
+    CHECK_EQ(n, 14, "fourteen reasons are the thread's own");
+    CHECK_EQ(XhciTolWhyThread(XHCI_WHY_NONE), 0, "none");
+    CHECK_EQ(XhciTolWhyThread(XHCI_WHY_CMD_KEPT), 1, "CMD_KEPT, thread");
+    CHECK_EQ(XhciTolWhyThread(XHCI_WHY_CMD_NO_VERDICT), 1, "the give-up");
+    CHECK_EQ(XhciTolWhyThread(XHCI_WHY_DISABLE_SLOT), 1, "DISABLE_SLOT");
+    CHECK_EQ(XhciTolWhyThread(XHCI_WHY_TEARDOWN_STOP), 1, "TEARDOWN_STOP");
+    CHECK_EQ(XhciTolWhyThread(XHCI_WHY_HUB_UNANSWERED), 1, "a hub's");
+    CHECK_EQ(XhciTolWhyThread(XHCI_WHY_BOT_XFER), 1, "the medium check");
+    CHECK_EQ(XhciTolWhyThread(XHCI_WHY_ENGINE_ABORT_STUCK), 0,
+             "the engine's abort: the controller's");
+    CHECK_EQ(XhciTolWhyThread(XHCI_WHY_ENGINE_DIVERGED), 0, "divergence");
+    CHECK_EQ(XhciTolWhyThread(XHCI_WHY_HEALTH), 0, "the health poll");
+    CHECK_EQ(XhciTolWhyThread(XHCI_WHY_EVENT_RING), 0, "the event ring");
+    CHECK_EQ(XhciTolWhyThread(XHCI_WHY_INTERRUPTS), 0, "interrupts");
+    CHECK_EQ(XhciTolWhyThread(XHCI_WHY_POLL_RETIRE), 0, "the poller");
+    CHECK_EQ(XhciTolWhyThread(XHCI_WHY_RESUME_FAILED), 0, "a failed resume");
+    CHECK_EQ(XhciTolWhyThread(XHCI_WHY_INJECTED), 0, "the injection");
+    CHECK_EQ(XhciTolWhyThread(XHCI_WHY_CMD_FATAL), 0, "a fatal command code");
+    CHECK_EQ(XhciTolWhyThread(XHCI_WHY_XFER_FATAL), 0, "a fatal xfer code");
+    CHECK_EQ(XhciTolWhyThread(XHCI_WHY_COUNT), 0, "out of range");
+}
+
+static void test_abort_verdicts(void)
+{
+    CHECK_EQ(XhciTolAbortKeepsReset(XHCI_TRB_TYPE_ADDRESS_DEVICE), 0,
+             "Address Device: the place held, no reset");
+    CHECK_EQ(XhciTolAbortKeepsReset(XHCI_TRB_TYPE_EVALUATE_CONTEXT), 0,
+             "Evaluate Context: removed");
+    CHECK_EQ(XhciTolAbortKeepsReset(XHCI_TRB_TYPE_CONFIGURE_EP), 0,
+             "Configure Endpoint: removed");
+    CHECK_EQ(XhciTolAbortKeepsReset(XHCI_TRB_TYPE_RESET_DEVICE), 0,
+             "Reset Device: removed");
+    CHECK_EQ(XhciTolAbortKeepsReset(XHCI_TRB_TYPE_RESET_EP), 0,
+             "Reset Endpoint: removed");
+    CHECK_EQ(XhciTolAbortKeepsReset(XHCI_TRB_TYPE_SET_TR_DEQUEUE), 0,
+             "Set TR Dequeue: removed");
+    CHECK_EQ(XhciTolAbortKeepsReset(XHCI_TRB_TYPE_STOP_EP), 1,
+             "Stop Endpoint keeps the reset");
+    CHECK_EQ(XhciTolAbortKeepsReset(XHCI_TRB_TYPE_ENABLE_SLOT), 1,
+             "Enable Slot keeps the reset");
+    CHECK_EQ(XhciTolAbortKeepsReset(XHCI_TRB_TYPE_DISABLE_SLOT), 1,
+             "Disable Slot keeps the reset");
+    CHECK_EQ(XhciTolAbortKeepsReset(XHCI_TRB_TYPE_NOOP_COMMAND), 1,
+             "No Op keeps the reset");
+    CHECK_EQ(XhciTolAbortKeepsReset(18), 1, "Force Event: no slot, reset");
+    CHECK_EQ(XhciTolAbortKeepsReset(19), 1, "Negotiate Bandwidth: reset");
+    CHECK_EQ(XhciTolAbortKeepsReset(0), 1, "an unknown type: reset");
+
+    CHECK_EQ(XhciTolWaitVerdict(0, 0, 0, 0, 0, 0), XHCI_WAIT_WAIT, "nothing");
+    CHECK_EQ(XhciTolWaitVerdict(1, 1, 1, 1, 1, 1), XHCI_WAIT_OWN,
+             "its own completion first, whatever else");
+    CHECK_EQ(XhciTolWaitVerdict(0, 1, 0, 0, 1, 1), XHCI_WAIT_ABORTED,
+             "a clean abort before the leave and the bound");
+    CHECK_EQ(XhciTolWaitVerdict(0, 1, 1, 0, 0, 0), XHCI_WAIT_FAILED,
+             "an abort on a failed controller is not clean");
+    CHECK_EQ(XhciTolWaitVerdict(0, 1, 0, 1, 0, 0), XHCI_WAIT_LOST,
+             "an abort of a moved generation is not this command's");
+    CHECK_EQ(XhciTolWaitVerdict(0, 0, 1, 1, 1, 1), XHCI_WAIT_FAILED,
+             "failed before lost, the leave and the bound");
+    CHECK_EQ(XhciTolWaitVerdict(0, 0, 0, 1, 1, 1), XHCI_WAIT_LOST,
+             "lost to an invalidation before the leave");
+    CHECK_EQ(XhciTolWaitVerdict(0, 0, 0, 0, 1, 1), XHCI_WAIT_LEFT,
+             "a route's bit before the bound");
+    CHECK_EQ(XhciTolWaitVerdict(0, 0, 0, 0, 0, 1), XHCI_WAIT_NO_VERDICT,
+             "the bound with none");
+}
+
+/* Task 50.30 step 3: the waiter's abort mark across an idle engine's arm
+ * and a new lifetime, whose command generation starts again at 0. */
+static void test_abort_mark(void)
+{
+    XHCI_CMD_ABORT_MARK m;
+
+    memset(&m, 0, sizeof(m));
+    CHECK_EQ(XhciCmdAbortMatches(&m, 0, 0), 0, "a zeroed mark is none");
+    XhciCmdAbortSet(&m, 0x1000UL, 0, 1);
+    CHECK_EQ(XhciCmdAbortMatches(&m, 0x1000UL, 0), 1, "its TRB, its gen");
+    CHECK_EQ(XhciCmdAbortMatches(&m, 0x1000UL, 1), 0, "another generation");
+    CHECK_EQ(XhciCmdAbortMatches(&m, 0x1010UL, 0), 0, "another TRB");
+    XhciCmdAbortClear(&m);
+    CHECK_EQ(XhciCmdAbortMatches(&m, 0x1000UL, 0), 0,
+             "a new lifetime's command at the same TRB and generation 0: "
+             "the old verdict gone");
+    XhciCmdAbortSet(&m, 0x1000UL, 5, 2);
+    XhciCmdAbortClear(&m);
+    CHECK_EQ(XhciCmdAbortMatches(&m, 0x1000UL, 5), 0,
+             "an idle engine's arm clears it");
+}
+
+/* Task 50.30 step 3: the debt's transitions as the thread and the hooks
+ * make them (XHCI_LEFT_DEBT), driven in the order the controller meets
+ * them - a settlement command interrupted keeps the debt it settles
+ * (corrected after revision 23's first implementation), the list's
+ * overflow, the restore's revalidation. */
+/* Design record 17 section 4.15.16 B: a deferred enumeration is served by
+ * whichever clearing opens admission - the settlement's clean clearing or
+ * a successful Restore State's - through the same decisions hcd_enum.c's
+ * hcdDeferService takes (XhciEnumDefersOpen, XhciEnumDeferServe); a
+ * settlement that ends owing a reset leaves the Enable Slot held, and the
+ * HCRST that follows ends the obligation. */
+static void test_left_defer_open(void)
+{
+    XHCI_LEFT_DEBT d;
+    XHCI_ENUM_DEFERS c;
+    XHCI_ENUM_DEFER o;
+    XHCI_ENUM_PORT p;
+    ULONG why;
+    ULONG slot;
+    ULONG extra;
+
+    memset(&d, 0, sizeof(d));
+    memset(&c, 0, sizeof(c));
+    memset(&o, 0, sizeof(o));
+    memset(&p, 0, sizeof(p));
+    p.State = XHCI_ENUM_FAILED;
+    p.FailCause = XHCI_ENUM_FAIL_DEFERRED;
+    XhciEnumDefersRenew(&c);
+
+    /* The restore's route. */
+    XhciLeftDebtHcrst(&d);
+    (VOID)XhciLeftDebtLeave(&d, 0, XHCI_TRB_TYPE_EVALUATE_CONTEXT, 6, 0x40UL,
+                            4, 1, 0, NULL);
+    XhciEnumDeferTake(&c, &o, 2);
+    CHECK_EQ(XhciEnumDefersOpen(&c, d.Owed == XHCI_LEFT_CLEAR, d.EnableHeld,
+                                0, 0, 0, 1),
+             0, "under the debt: not served");
+    CHECK_EQ(XhciLeftDebtRestored(&d, 0), XHCI_LEFT_OWED, "restored");
+    CHECK_EQ(XhciEnumDefersOpen(&c, d.Owed == XHCI_LEFT_CLEAR, d.EnableHeld,
+                                0, 0, 0, 1),
+             1, "the restore's clearing: served");
+    CHECK_EQ(XhciEnumDeferServe(&c, &o, &p, 0, 2, 1), XHCI_ENUM_DEFER_RESUME,
+             "and the port resumed");
+
+    /* The settlement's clean clearing. */
+    XhciLeftDebtHcrst(&d);
+    (VOID)XhciLeftDebtLeave(&d, 0, XHCI_TRB_TYPE_ADDRESS_DEVICE, 6, 0x50UL,
+                            5, 0, 1, NULL);
+    XhciEnumDeferTake(&c, &o, 2);
+    CHECK_EQ(XhciEnumDefersOpen(&c, d.Owed == XHCI_LEFT_CLEAR, d.EnableHeld,
+                                0, 0, 0, 1),
+             0, "under the debt: not served");
+    CHECK_EQ(XhciLeftDebtSettleClear(&d, &why, &slot, &extra), 1, "settled");
+    CHECK_EQ(why, 0, "with no reset owed");
+    CHECK_EQ(XhciEnumDefersOpen(&c, d.Owed == XHCI_LEFT_CLEAR, d.EnableHeld,
+                                0, 0, 0, 1),
+             1, "the clean clearing: served");
+    CHECK_EQ(XhciEnumDeferServe(&c, &o, &p, 0, 2, 1), XHCI_ENUM_DEFER_RESUME,
+             "and the port resumed");
+
+    /* A settlement that ends owing a reset: held, then the HCRST. */
+    XhciLeftDebtHcrst(&d);
+    (VOID)XhciLeftDebtLeave(&d, 0, XHCI_TRB_TYPE_ADDRESS_DEVICE, 6, 0x60UL,
+                            6, 0, 1, NULL);
+    XhciEnumDeferTake(&c, &o, 2);
+    d.Reset = XHCI_WHY_CMD_KEPT;
+    CHECK_EQ(XhciLeftDebtSettleClear(&d, &why, &slot, &extra), 1, "settled");
+    CHECK_EQ(why, XHCI_WHY_CMD_KEPT, "owing a reset");
+    CHECK_EQ(XhciEnumDefersOpen(&c, d.Owed == XHCI_LEFT_CLEAR, d.EnableHeld,
+                                0, 0, 0, 1),
+             0, "the Enable Slot held: not served");
+    CHECK_EQ(c.Count, 1, "still owed");
+    XhciLeftDebtHcrst(&d);
+    XhciEnumDefersRenew(&c);
+    CHECK_EQ(XhciEnumDefersOpen(&c, d.Owed == XHCI_LEFT_CLEAR, d.EnableHeld,
+                                0, 0, 0, 1),
+             0, "the HCRST: nothing owed");
+    CHECK_EQ(XhciEnumDeferServe(&c, &o, &p, 0, 2, 1), XHCI_ENUM_DEFER_STALE,
+             "the flag stale");
+}
+
+static void test_left_debt(void)
+{
+    XHCI_LEFT_DEBT d;
+    ULONG i;
+
+    memset(&d, 0xA5, sizeof(d));
+    XhciLeftDebtHcrst(&d);
+    CHECK_EQ(d.Owed, XHCI_LEFT_CLEAR, "a start: no debt");
+    CHECK_EQ(d.EnableHeld, 0, "a start: Enable Slot not held");
+    CHECK_EQ(XhciLeftDebtPass(&d, 0, 1), XHCI_LEFT_PASS_NONE, "no debt");
+
+    /* An ordinary command left: OWED with its fields. */
+    CHECK_EQ(XhciLeftDebtLeave(&d, 0, XHCI_TRB_TYPE_CONFIGURE_EP, 4,
+                               0x2040UL, 7, 1, 0, NULL),
+             XHCI_LEFT_TOOK_OWED, "an ordinary leave takes the debt");
+    CHECK_EQ(d.Owed, XHCI_LEFT_OWED, "OWED");
+    CHECK_EQ(XhciLeftDebtPass(&d, 0, 0), XHCI_LEFT_PASS_NONE,
+             "OWED, not ended, the generation unmoved: wait");
+    CHECK_EQ(XhciLeftDebtPass(&d, 1, 1), XHCI_LEFT_PASS_NONE,
+             "a route's bit: nothing");
+    CHECK_EQ(XhciLeftDebtPass(&d, 0, 1), XHCI_LEFT_PASS_TAKE,
+             "the generation moved: taken");
+    XhciLeftDebtTake(&d);
+    CHECK_EQ(d.Owed, XHCI_LEFT_SETTLING, "SETTLING");
+    CHECK_EQ(d.End, XHCI_LEFT_HOW_LOST, "no end recorded: lost");
+    CHECK_EQ(XhciLeftDebtAdd(&d, XHCI_LEFT_ENTRY_RECORD, 3), 1, "listed 3");
+    CHECK_EQ(XhciLeftDebtAdd(&d, XHCI_LEFT_ENTRY_RECORD, 9), 1, "listed 9");
+    d.Listed = 1;
+    CHECK_EQ(XhciLeftDebtPass(&d, 0, 1), XHCI_LEFT_PASS_NEXT, "the head");
+    CHECK_EQ(XhciLeftDebtListed(&d, 9), 1, "9 on the list");
+
+    /* The settlement's Disable Slot of 3 interrupted by a route's bit. */
+    CHECK_EQ(XhciLeftDebtLeave(&d, 1, XHCI_TRB_TYPE_DISABLE_SLOT, 3,
+                               0x3000UL, 8, 1, 0, NULL),
+             XHCI_LEFT_TOOK_INTERRUPTED, "a settlement leave interrupts");
+    CHECK_EQ(d.Owed, XHCI_LEFT_SETTLING, "still SETTLING, not OWED");
+    CHECK_EQ(d.Type, XHCI_TRB_TYPE_CONFIGURE_EP, "the left type kept");
+    CHECK_EQ(d.Slot, 4, "the left slot kept");
+    CHECK_EQ(d.PA, 0x2040UL, "the left TRB kept");
+    CHECK_EQ(d.Gen, 7, "the left generation kept");
+    CHECK_EQ(d.Count, 2, "the list kept");
+    CHECK_EQ(d.Head, 0, "its head kept");
+    CHECK_EQ(d.Interrupted, 1, "interrupted");
+    CHECK_EQ(XhciLeftDebtPass(&d, 1, 1), XHCI_LEFT_PASS_NONE,
+             "interrupted, a bit raised: waits for the stop or an HCRST");
+    CHECK_EQ(XhciLeftDebtLeave(&d, 0, XHCI_TRB_TYPE_NOOP_COMMAND, 0,
+                               0x4000UL, 9, 0, 0, NULL),
+             XHCI_LEFT_TOOK_INTERRUPTED,
+             "no leave ever overwrites a standing debt");
+    CHECK_EQ(d.PA, 0x2040UL, "the left TRB still kept");
+    CHECK_EQ(d.InterruptedSlot, 3, "the first interruption's slot kept");
+    CHECK_EQ(d.InterruptedType, XHCI_TRB_TYPE_DISABLE_SLOT,
+             "and its type");
+
+    /* Revision 24: once every route's bit is clear, an interrupted
+     * settlement is a failed one - never waiting for a stop or an HCRST
+     * that may never come (a query-stop refused). */
+    CHECK_EQ(XhciLeftDebtPass(&d, 0, 1), XHCI_LEFT_PASS_FAIL,
+             "interrupted, the bits clear: a failed settlement");
+    CHECK_EQ(XhciLeftDebtStep(&d, 0, 1, 0, 1), XHCI_LEFT_PASS_FAIL,
+             "tainted too: the failure, no command");
+    CHECK_EQ(XhciLeftDebtStep(&d, 0, 1, 1, 0), XHCI_LEFT_PASS_NONE,
+             "the controller failed: its recovery settles it");
+    XhciLeftDebtFail(&d, 0, 0, 0);
+    CHECK_EQ(d.Reset, XHCI_WHY_CMD_KEPT, "the reset owed: CMD_KEPT");
+    CHECK_EQ(d.ResetSlot, 3, "... the interrupted command's slot");
+    CHECK_EQ(d.ResetExtra, XHCI_TRB_TYPE_DISABLE_SLOT,
+             "... its TRB type");
+    CHECK_EQ(d.Interrupted, 0, "the interruption ended");
+    CHECK_EQ(d.Head, d.Count, "nothing of the list issued again");
+    CHECK_EQ(XhciLeftDebtPass(&d, 0, 1), XHCI_LEFT_PASS_CLEAR,
+             "then cleared, with the reset");
+    XhciLeftDebtClear(&d);
+    d.EnableHeld = 1;
+    CHECK_EQ(d.Owed, XHCI_LEFT_CLEAR, "the debt cleared");
+    /* Still interrupted with a bit raised: the stop's teardown or an
+     * HCRST settles it first. */
+    (VOID)XhciLeftDebtLeave(&d, 0, XHCI_TRB_TYPE_STOP_EP, 2, 0x50UL, 3, 1,
+                            1, NULL);
+    XhciLeftDebtTake(&d);
+    (VOID)XhciLeftDebtLeave(&d, 1, XHCI_TRB_TYPE_STOP_EP, 2, 0x60UL, 4, 1,
+                            0, NULL);
+    CHECK_EQ(XhciLeftDebtPass(&d, 1, 1), XHCI_LEFT_PASS_NONE,
+             "a bit raised: waits");
+    XhciLeftDebtHcrst(&d);
+    CHECK_EQ(d.Owed, XHCI_LEFT_CLEAR, "an HCRST settles it");
+    CHECK_EQ(d.Interrupted, 0, "and the interruption");
+    d.EnableHeld = 1;
+    XhciLeftDebtClear(&d);
+    CHECK_EQ(d.EnableHeld, 1, "clearing the debt keeps the hold");
+    XhciLeftDebtHcrst(&d);
+    CHECK_EQ(d.EnableHeld, 0, "an HCRST ends the hold");
+
+    /* A failed entry's reason is kept before a later one. */
+    (VOID)XhciLeftDebtLeave(&d, 0, XHCI_TRB_TYPE_STOP_EP, 2, 0x10UL, 1, 1, 1, NULL);
+    CHECK_EQ(d.End, XHCI_LEFT_HOW_LOST, "its loss came already: ended");
+    XhciLeftDebtTake(&d);
+    (VOID)XhciLeftDebtAdd(&d, XHCI_LEFT_ENTRY_RECORD, 2);
+    d.Listed = 1;
+    XhciLeftDebtFail(&d, XHCI_WHY_DISABLE_SLOT, 2, 0);
+    XhciLeftDebtFail(&d, XHCI_WHY_TEARDOWN_STOP, 5, 3);
+    CHECK_EQ(d.Reset, XHCI_WHY_DISABLE_SLOT, "the first reason kept");
+    CHECK_EQ(d.ResetSlot, 2, "its slot kept");
+
+    /* The overflow: nothing dropped silently. */
+    XhciLeftDebtHcrst(&d);
+    (VOID)XhciLeftDebtLeave(&d, 0, XHCI_TRB_TYPE_ENABLE_SLOT, 0, 0x20UL, 2,
+                            0, 1, NULL);
+    XhciLeftDebtTake(&d);
+    for (i = 0; i < XHCI_LEFT_LIST_MAX; i++) {
+        CHECK_EQ(XhciLeftDebtAdd(&d, XHCI_LEFT_ENTRY_RECORD, i + 1), 1,
+                 "within the bound");
+    }
+    CHECK_EQ(XhciLeftDebtAdd(&d, XHCI_LEFT_ENTRY_SLOT, 40), 0,
+             "past the bound: refused");
+    CHECK_EQ(d.Overflow, 1, "the overflow recorded");
+    CHECK_EQ(d.Reset, XHCI_WHY_CMD_KEPT, "and the reset owed");
+    d.Listed = 1;
+    CHECK_EQ(XhciLeftDebtPass(&d, 0, 1), XHCI_LEFT_PASS_FAIL,
+             "a truncated list is never settled as if whole");
+    XhciLeftDebtFail(&d, 0, 0, 0);
+    CHECK_EQ(XhciLeftDebtPass(&d, 0, 1), XHCI_LEFT_PASS_CLEAR,
+             "failed: cleared with the reset");
+
+    /* Restore State: a slotless entry still on the list is checked again;
+     * one already settled is not listed again. */
+    XhciLeftDebtHcrst(&d);
+    (VOID)XhciLeftDebtLeave(&d, 0, XHCI_TRB_TYPE_ENABLE_SLOT, 0, 0x30UL, 3,
+                            0, 0, NULL);
+    d.End = XHCI_LEFT_HOW_DONE;
+    d.Code = XHCI_CC_SUCCESS;
+    d.SlotId = 5;
+    XhciLeftDebtTake(&d);
+    (VOID)XhciLeftDebtAdd(&d, XHCI_LEFT_ENTRY_SLOT, 5);
+    d.SlotlessDone = 1;
+    d.Listed = 1;
+    CHECK_EQ(XhciLeftDebtRestored(&d, 0), XHCI_LEFT_SETTLING, "the state before");
+    CHECK_EQ(d.Owed, XHCI_LEFT_SETTLING, "kept SETTLING");
+    CHECK_EQ(d.Listed, 0, "the list written again");
+    CHECK_EQ(d.SlotlessDone, 0, "its slot checked again");
+    CHECK_EQ(d.Count, 0, "the old list gone");
+    CHECK_EQ(XhciLeftDebtPass(&d, 0, 0), XHCI_LEFT_PASS_TAKE,
+             "the next pass lists it");
+    (VOID)XhciLeftDebtAdd(&d, XHCI_LEFT_ENTRY_SLOT, 5);
+    d.SlotlessDone = 1;
+    d.Listed = 1;
+    d.Head = 1;
+    (VOID)XhciLeftDebtRestored(&d, 0);
+    CHECK_EQ(d.SlotlessDone, 1, "a settled slotless entry is not again");
+    XhciLeftDebtHcrst(&d);
+    (VOID)XhciLeftDebtLeave(&d, 0, XHCI_TRB_TYPE_EVALUATE_CONTEXT, 6, 0x40UL,
+                            4, 1, 0, NULL);
+    CHECK_EQ(XhciLeftDebtRestored(&d, 0), XHCI_LEFT_OWED, "before: OWED");
+    CHECK_EQ(d.Owed, XHCI_LEFT_CLEAR, "naming a device: cleared");
+    /* Design record 17 section 4.15.16 B: that clearing opens admission
+     * again (no debt, the Enable Slot not held), which is what serves a
+     * deferred enumeration - the restore's route as the settlement's. */
+    CHECK_EQ(d.EnableHeld, 0, "and the Enable Slot not held: admission open");
+    d.Interrupted = 1;
+    d.Owed = XHCI_LEFT_SETTLING;
+    d.Device = 0;
+    (VOID)XhciLeftDebtRestored(&d, 0);
+    CHECK_EQ(d.Interrupted, 1, "an interruption survives the restore");
+    CHECK_EQ(XhciLeftDebtPass(&d, 0, 0), XHCI_LEFT_PASS_FAIL,
+             "and fails the settlement after it");
+    /* Revision 24: an interrupted settlement of a left command that names
+     * a device is not cleared by the restore either - its owed records
+     * would be left with no settlement - but fails at the next pass. */
+    XhciLeftDebtHcrst(&d);
+    (VOID)XhciLeftDebtLeave(&d, 0, XHCI_TRB_TYPE_CONFIGURE_EP, 6, 0x70UL, 5,
+                            1, 1, NULL);
+    XhciLeftDebtTake(&d);
+    (VOID)XhciLeftDebtAdd(&d, XHCI_LEFT_ENTRY_RECORD, 8);
+    d.Listed = 1;
+    (VOID)XhciLeftDebtLeave(&d, 1, XHCI_TRB_TYPE_DISABLE_SLOT, 8, 0x80UL, 6,
+                            1, 0, NULL);
+    CHECK_EQ(XhciLeftDebtRestored(&d, 0), XHCI_LEFT_SETTLING,
+             "interrupted, naming a device: the state before");
+    CHECK_EQ(d.Owed, XHCI_LEFT_SETTLING, "... kept, not cleared");
+    CHECK_EQ(XhciLeftDebtPass(&d, 0, 0), XHCI_LEFT_PASS_FAIL,
+             "... and failed at the next pass");
+    XhciLeftDebtFail(&d, 0, 0, 0);
+    CHECK_EQ(d.ResetSlot, 8, "the reset names the interrupted slot");
+}
+
+/*
+ * Task 50.30 step 3 (reviewed and revised): a reset the thread
+ * requests while a debt stands is deferred, never discarded, and requested
+ * as the debt clears; a left Stop Endpoint naming a device owes the reset
+ * whatever its end; a tainted scratch fails the settlement with no command
+ * and the pass still reaches the clearing. Driven in the order the
+ * controller thread meets them (hcd_svc.c, hcdLeftService).
+ */
+static void test_left_defer(void)
+{
+    XHCI_LEFT_DEBT d;
+    XHCI_RESET_REC at;
+    XHCI_RESET_REC got;
+    ULONG extra;
+
+    memset(&at, 0, sizeof(at));
+    at.Slot = 4;
+    at.RootPort = 2;
+    at.Route = 0x31;
+    at.VidPid = 0x12345678UL;
+    memset(&d, 0x5A, sizeof(d));
+    XhciLeftDebtHcrst(&d);
+    CHECK_EQ(d.Deferred, 0, "a start: nothing deferred");
+    CHECK_EQ(XhciLeftDebtDefer(&d, XHCI_WHY_TEARDOWN_STOP, 3, &at), 0,
+             "no debt: requested at once");
+    CHECK_EQ(XhciLeftDebtStep(&d, 0, 0, 0, 0), XHCI_LEFT_PASS_NONE,
+             "no debt, nothing deferred: nothing");
+
+    /* The first occurrence: an EP0 late path's Stop left under a debt
+     * another command took, the scratch tainted, its reset deferred. */
+    (VOID)XhciLeftDebtLeave(&d, 0, XHCI_TRB_TYPE_CONFIGURE_EP, 6, 0x100UL, 2,
+                            1, 0, NULL);
+    CHECK_EQ(XhciLeftDebtDefer(&d, XHCI_WHY_ENGINE_DIVERGED, 1, NULL), 0,
+             "the engine's reason is never deferred");
+    CHECK_EQ(XhciLeftDebtDefer(&d, XHCI_WHY_EP0_LATE, 1, &at), 1,
+             "the thread's own: deferred");
+    CHECK_EQ(XhciLeftDebtDefer(&d, XHCI_WHY_TEARDOWN_STOP, 5, NULL), 1,
+             "a second: deferred too");
+    CHECK_EQ(d.Deferred, XHCI_WHY_EP0_LATE, "the first reason kept");
+    CHECK_EQ(d.DeferredExtra, 1, "its extra kept");
+    CHECK_EQ(d.DeferredAt.Slot, 4, "its place read when it was made");
+    CHECK_EQ(d.DeferredCount, 2, "both counted");
+    CHECK_EQ(XhciLeftDebtStep(&d, 0, 0, 0, 1), XHCI_LEFT_PASS_NONE,
+             "tainted, the left command not ended: wait for its end");
+    CHECK_EQ(XhciLeftDebtStep(&d, 0, 1, 1, 1), XHCI_LEFT_PASS_NONE,
+             "the controller failed: the recovery's HCRST settles it");
+    CHECK_EQ(XhciLeftDebtStep(&d, 0, 1, 0, 1), XHCI_LEFT_PASS_TAKE,
+             "tainted, ended: the list is still written");
+    XhciLeftDebtTake(&d);
+    (VOID)XhciLeftDebtAdd(&d, XHCI_LEFT_ENTRY_RECORD, 3);
+    d.Listed = 1;
+    CHECK_EQ(XhciLeftDebtStep(&d, 0, 1, 0, 0), XHCI_LEFT_PASS_NEXT,
+             "untainted: the entry goes out");
+    CHECK_EQ(XhciLeftDebtStep(&d, 0, 1, 0, 1), XHCI_LEFT_PASS_TAINTED,
+             "tainted: no command goes out, the settlement fails");
+    XhciLeftDebtFail(&d, 0, 0, 0);
+    CHECK_EQ(XhciLeftDebtStep(&d, 0, 1, 0, 1), XHCI_LEFT_PASS_CLEAR,
+             "and the pass reaches the clearing, tainted as it is");
+    XhciLeftDebtClear(&d);
+    CHECK_EQ(d.Owed, XHCI_LEFT_CLEAR, "the debt cleared");
+    CHECK_EQ(d.Deferred, XHCI_WHY_EP0_LATE,
+             "the deferred reset survives the clearing until taken");
+    CHECK_EQ(XhciLeftDebtTakeDeferred(&d, &extra, &got), XHCI_WHY_EP0_LATE,
+             "taken at the clearing");
+    CHECK_EQ(extra, 1, "with its extra");
+    CHECK_EQ(got.RootPort, 2, "and its place");
+    CHECK_EQ(got.VidPid, 0x12345678UL, "its VID:PID");
+    CHECK_EQ(d.Deferred, 0, "and gone");
+    CHECK_EQ(XhciLeftDebtTakeDeferred(&d, &extra, &got), 0, "once");
+
+    /* The second occurrence: the settlement's own Disable Slot failed for
+     * an Ep0Abandoned record, the scratch tainted; the failed entry's
+     * reason is the settlement's, and the next step clears. */
+    XhciLeftDebtHcrst(&d);
+    (VOID)XhciLeftDebtLeave(&d, 0, XHCI_TRB_TYPE_DISABLE_SLOT, 7, 0x200UL, 3,
+                            1, 1, NULL);
+    XhciLeftDebtTake(&d);
+    (VOID)XhciLeftDebtAdd(&d, XHCI_LEFT_ENTRY_RECORD, 7);
+    d.Listed = 1;
+    XhciLeftDebtFail(&d, XHCI_WHY_DISABLE_SLOT, 7, 0);
+    CHECK_EQ(XhciLeftDebtStep(&d, 0, 1, 0, 1), XHCI_LEFT_PASS_CLEAR,
+             "a failed settlement Disable Slot that tainted: cleared");
+    CHECK_EQ(d.Reset, XHCI_WHY_DISABLE_SLOT, "with its reset owed");
+
+    /* A device-naming left Stop Endpoint owes the reset whatever its end. */
+    CHECK_EQ(XhciTolLeftNamedReset(XHCI_TRB_TYPE_STOP_EP), 1,
+             "a left Stop Endpoint: the reset");
+    CHECK_EQ(XhciTolLeftNamedReset(XHCI_TRB_TYPE_DISABLE_SLOT), 0,
+             "a left Disable Slot: its owed record is disabled instead");
+    CHECK_EQ(XhciTolLeftNamedReset(XHCI_TRB_TYPE_CONFIGURE_EP), 0,
+             "a left Configure Endpoint: the device fails alone");
+    CHECK_EQ(XhciTolLeftNamedReset(XHCI_TRB_TYPE_RESET_EP), 0,
+             "a left Reset Endpoint: the device fails alone");
+    XhciLeftDebtHcrst(&d);
+    (VOID)XhciLeftDebtLeave(&d, 0, XHCI_TRB_TYPE_STOP_EP, 5, 0x300UL, 4, 1,
+                            0, NULL);
+    XhciLeftDebtTake(&d);
+    CHECK_EQ(XhciLeftDebtDefer(&d, XHCI_WHY_CMD_KEPT, XHCI_TRB_TYPE_STOP_EP,
+                               NULL),
+             1, "the list's writing defers it under SETTLING");
+    d.Listed = 1;
+    CHECK_EQ(XhciLeftDebtStep(&d, 0, 1, 0, 0), XHCI_LEFT_PASS_CLEAR,
+             "an empty list: cleared");
+    CHECK_EQ(d.Deferred, XHCI_WHY_CMD_KEPT, "with the reset owed, not 0");
+
+    /* Reviewed and revised: a teardown's Stop Endpoint left (its caller
+     * requests nothing on LEFT; its Disable Slot's record is owed), then a
+     * successful Restore State before the settlement pass ran. The
+     * obligation is recorded by the leave itself, with the place, so the
+     * restore cannot erase its source - nothing is supplied by hand here.
+     * With no owed record the restore clears the device-naming debt; the
+     * reset survives it and is requested at the next pass with no route's
+     * bit raised. */
+    XhciLeftDebtHcrst(&d);
+    CHECK_EQ(XhciLeftDebtLeave(&d, 0, XHCI_TRB_TYPE_STOP_EP, 5, 0x300UL, 4,
+                               1, 0, &at),
+             XHCI_LEFT_TOOK_OWED, "the teardown's Stop left");
+    CHECK_EQ(d.Deferred, XHCI_WHY_CMD_KEPT,
+             "its reset recorded at the leave");
+    CHECK_EQ(d.DeferredExtra, XHCI_TRB_TYPE_STOP_EP, "... its type");
+    CHECK_EQ(d.DeferredAt.RootPort, 2, "... its place");
+    (VOID)XhciLeftDebtRestored(&d, 0);
+    CHECK_EQ(d.Owed, XHCI_LEFT_CLEAR, "the restore cleared the debt");
+    CHECK_EQ(d.Deferred, XHCI_WHY_CMD_KEPT, "the reset still owed");
+    CHECK_EQ(XhciLeftDebtStep(&d, 1, 0, 0, 0), XHCI_LEFT_PASS_NONE,
+             "a route's bit raised: not yet");
+    CHECK_EQ(XhciLeftDebtStep(&d, 0, 0, 0, 0), XHCI_LEFT_PASS_CLEAR,
+             "the bits clear: requested");
+    XhciLeftDebtHcrst(&d);
+    CHECK_EQ(d.Deferred, 0, "an HCRST makes it unnecessary");
+    /* A record the left teardown quarantined as owed survives a
+     * successful Restore State: the debt is kept SETTLING, so the pass
+     * lists, stops and disables it - never left awaiting a reset nobody
+     * owes. */
+    (VOID)XhciLeftDebtLeave(&d, 0, XHCI_TRB_TYPE_DISABLE_SLOT, 5, 0x310UL,
+                            5, 1, 0, &at);
+    CHECK_EQ(d.Deferred, 0, "a left Disable Slot owes no reset itself");
+    CHECK_EQ(XhciLeftDebtRestored(&d, 1), XHCI_LEFT_OWED, "before: OWED");
+    CHECK_EQ(d.Owed, XHCI_LEFT_SETTLING, "an owed record: kept SETTLING");
+    CHECK_EQ(XhciLeftDebtPass(&d, 0, 0), XHCI_LEFT_PASS_TAKE,
+             "and listed at the next pass");
+    XhciLeftDebtHcrst(&d);
+
+    /* Revision 24: an interrupted settlement fails once the bits clear,
+     * tainted or not; the deferred reset survives the clearing. */
+    (VOID)XhciLeftDebtLeave(&d, 0, XHCI_TRB_TYPE_CONFIGURE_EP, 6, 0x400UL, 5,
+                            1, 1, NULL);
+    XhciLeftDebtTake(&d);
+    (VOID)XhciLeftDebtAdd(&d, XHCI_LEFT_ENTRY_RECORD, 6);
+    d.Listed = 1;
+    d.Interrupted = 1;
+    (VOID)XhciLeftDebtDefer(&d, XHCI_WHY_TEARDOWN_STOP, 2, NULL);
+    CHECK_EQ(XhciLeftDebtStep(&d, 1, 1, 0, 0), XHCI_LEFT_PASS_NONE,
+             "interrupted, a bit raised: waits");
+    CHECK_EQ(XhciLeftDebtStep(&d, 0, 1, 0, 1), XHCI_LEFT_PASS_FAIL,
+             "interrupted, the bits clear, tainted: failed");
+    CHECK_EQ(XhciLeftDebtStep(&d, 0, 1, 0, 0), XHCI_LEFT_PASS_FAIL,
+             "interrupted, the bits clear: failed");
+    XhciLeftDebtFail(&d, 0, 0, 0);
+    XhciLeftDebtClear(&d);
+    CHECK_EQ(d.Deferred, XHCI_WHY_TEARDOWN_STOP,
+             "the deferred reset still owed after the clearing");
+}
+
+/*
+ * Task 50.30 step 3 (reviewed and revised): an ordinary settlement
+ * command's failure, a power route's bit raised at once, and a successful
+ * Restore State. The failure's whole transition is one hold
+ * (XhciLeftDebtFailClear, as hcdLeftService makes it with the owed
+ * records' conversion): the debt is cleared and Enable Slot held before
+ * the lock is let go, and the reset is in the caller's hands - no
+ * standing debt holds it for the restore to clear. Nothing is deferred
+ * by hand here.
+ */
+static void test_settle_failure(void)
+{
+    XHCI_LEFT_DEBT d;
+    ULONG why;
+    ULONG slot;
+    ULONG extra;
+
+    memset(&d, 0, sizeof(d));
+    XhciLeftDebtHcrst(&d);
+    /* A device-naming Configure Endpoint debt, settling one owed record
+     * (slot 7) after the root hub's removal. */
+    (VOID)XhciLeftDebtLeave(&d, 0, XHCI_TRB_TYPE_CONFIGURE_EP, 4, 0x500UL,
+                            1, 1, 1, NULL);
+    CHECK_EQ(d.Deferred, 0, "a Configure Endpoint defers nothing");
+    XhciLeftDebtTake(&d);
+    (VOID)XhciLeftDebtAdd(&d, XHCI_LEFT_ENTRY_RECORD, 7);
+    d.Listed = 1;
+    CHECK_EQ(XhciLeftDebtPass(&d, 0, 1), XHCI_LEFT_PASS_NEXT,
+             "the record's Disable Slot goes out");
+    /* It fails; a power route's bit is raised in the same moment. */
+    CHECK_EQ(XhciLeftDebtFailClear(&d, XHCI_WHY_DISABLE_SLOT, 7, 0, &why,
+                                   &slot, &extra),
+             1, "the failure clears the debt in its own hold");
+    CHECK_EQ(why, XHCI_WHY_DISABLE_SLOT, "the reset handed out");
+    CHECK_EQ(slot, 7, "... naming the record's slot");
+    CHECK_EQ(d.Owed, XHCI_LEFT_CLEAR, "no debt left standing");
+    CHECK_EQ(d.EnableHeld, 1, "Enable Slot held in the same hold");
+    CHECK_EQ(XhciLeftDebtStep(&d, 1, 1, 0, 0), XHCI_LEFT_PASS_NONE,
+             "the raised bit: nothing more to do");
+    /* The restore that follows finds nothing to clear, so nothing of
+     * the reset can be lost to it. */
+    CHECK_EQ(XhciLeftDebtRestored(&d, 0), XHCI_LEFT_CLEAR,
+             "the restore meets no debt");
+    CHECK_EQ(d.EnableHeld, 1, "and Enable Slot stays held");
+
+    /* Siblings: a reset already owed in a standing debt (an overflowed
+     * list, a slotless end owing the reset) is kept by a successful
+     * restore, for the pass to clear and request. */
+    XhciLeftDebtHcrst(&d);
+    (VOID)XhciLeftDebtLeave(&d, 0, XHCI_TRB_TYPE_EVALUATE_CONTEXT, 4,
+                            0x600UL, 2, 1, 1, NULL);
+    XhciLeftDebtTake(&d);
+    d.Reset = XHCI_WHY_CMD_KEPT;
+    d.ResetSlot = 4;
+    CHECK_EQ(XhciLeftDebtRestored(&d, 0), XHCI_LEFT_SETTLING,
+             "a reset owed, naming a device: the state before");
+    CHECK_EQ(d.Owed, XHCI_LEFT_SETTLING, "... kept for the pass");
+    CHECK_EQ(d.Reset, XHCI_WHY_CMD_KEPT, "... with its reset");
+    CHECK_EQ(XhciLeftDebtPass(&d, 0, 0), XHCI_LEFT_PASS_TAKE,
+             "listed again");
+    d.Listed = 1;
+    CHECK_EQ(XhciLeftDebtPass(&d, 0, 0), XHCI_LEFT_PASS_CLEAR,
+             "then cleared");
+    CHECK_EQ(XhciLeftDebtSettleClear(&d, &why, &slot, &extra), 1,
+             "the clearing");
+    CHECK_EQ(why, XHCI_WHY_CMD_KEPT, "the reset requested at last");
+    CHECK_EQ(d.EnableHeld, 1, "Enable Slot held");
+    CHECK_EQ(XhciLeftDebtSettleClear(&d, &why, &slot, &extra), 0,
+             "no debt: nothing");
+    CHECK_EQ(why, 0, "... and no reason");
+}
+
+/* Task 50.30 step 3 (reviewed and revised): the one rule both teardowns
+ * stop endpoints by before a Disable Slot - the ordinary one and the
+ * settlement's of an owed record, which once read open pipes alone. */
+static void test_teardown_stops(void)
+{
+    XHCI_LEFT_DEBT d;
+    ULONG tier[XHCI_MAX_SLOTS + 1];
+    ULONG i;
+
+    /* Reviewed and revised: the settlement disables owed records child
+     * before parent, as the ordinary teardown does, by each record's own
+     * tier - a hub at slot 2 (root port), its child hub at 5, that hub's
+     * device at 3, and another root device at 1: a hub allocated first
+     * has the lower slot, and slot order alone would disable it first. */
+    memset(&d, 0, sizeof(d));
+    XhciLeftDebtHcrst(&d);
+    for (i = 0; i <= XHCI_MAX_SLOTS; i++) {
+        tier[i] = XHCI_LEFT_TIER_NONE;
+    }
+    tier[2] = 0;
+    tier[5] = 1;
+    tier[3] = 2;
+    tier[1] = 0;
+    CHECK_EQ(XhciLeftDebtAddRecords(&d, tier), 0, "all four listed");
+    CHECK_EQ(d.Count, 4, "four entries");
+    CHECK_EQ(d.List[0].Slot, 3, "the deepest device first");
+    CHECK_EQ(d.List[1].Slot, 5, "then its hub");
+    CHECK_EQ(d.List[2].Slot, 1, "then the root tier, by slot");
+    CHECK_EQ(d.List[3].Slot, 2, "the top hub last");
+    CHECK_EQ(d.List[0].Kind, XHCI_LEFT_ENTRY_RECORD, "owed records");
+    XhciLeftDebtHcrst(&d);
+    for (i = 0; i <= XHCI_MAX_SLOTS; i++) {
+        tier[i] = XHCI_LEFT_TIER_NONE;
+    }
+    CHECK_EQ(XhciLeftDebtAddRecords(&d, tier), 0, "none owed");
+    CHECK_EQ(d.Count, 0, "an empty list");
+
+    CHECK_EQ(XhciTolTeardownStops(1, 0, 1), 1,
+             "an open pipe with work, Running: stopped");
+    CHECK_EQ(XhciTolTeardownStops(0, 1, 1), 1,
+             "a retained or retired endpoint only, Running: stopped too");
+    CHECK_EQ(XhciTolTeardownStops(1, 1, 1), 1, "both: stopped once");
+    CHECK_EQ(XhciTolTeardownStops(0, 1, 0), 0,
+             "retained, Stopped or Halted: at rest already");
+    CHECK_EQ(XhciTolTeardownStops(1, 0, 0), 0, "queued, not Running");
+    CHECK_EQ(XhciTolTeardownStops(0, 0, 1), 0,
+             "named by nothing, Running: nothing on it to run");
+}
+
+/* Task 50.30 step 3 (reviewed and revised): the input hold of an aborted
+ * re-address is released by its slot's confirmed Disable Slot whoever
+ * issued it - the settlement's too, which once left it standing and
+ * barred both input builders for every device until an HCRST. */
+static void test_input_held(void)
+{
+    CHECK_EQ(XhciTolInputHeldAfter(5, 5), 0,
+             "its slot disabled: released");
+    CHECK_EQ(XhciTolInputHeldAfter(5, 6), 5,
+             "another slot disabled: still held");
+    CHECK_EQ(XhciTolInputHeldAfter(0, 5), 0, "none held: none");
+    CHECK_EQ(XhciTolInputHeldAfter(0, 0), 0, "slot 0: none");
+}
+
+/* Task 50.30 step 3 (design record 17 sections 4.15.5 and 4.15.5a): the
+ * frozen device's admission, hcdCfgFault's step, the late path's mark. */
+static void test_fail_alone(void)
+{
+    CHECK_EQ(XhciTolFrozenAdmits(XHCI_TRB_TYPE_STOP_EP, 1), 1,
+             "frozen: the teardown's Stop Endpoint");
+    CHECK_EQ(XhciTolFrozenAdmits(XHCI_TRB_TYPE_DISABLE_SLOT, 1), 1,
+             "frozen: the teardown's Disable Slot");
+    /* Reviewed and revised: by type alone every Stop Endpoint passed -
+     * an EP0 recovery's, a hub quiesce's, a configuration path's. */
+    CHECK_EQ(XhciTolFrozenAdmits(XHCI_TRB_TYPE_STOP_EP, 0), 0,
+             "frozen: another caller's Stop Endpoint refused");
+    CHECK_EQ(XhciTolFrozenAdmits(XHCI_TRB_TYPE_DISABLE_SLOT, 0), 0,
+             "frozen: a Disable Slot outside the teardown refused");
+    CHECK_EQ(XhciTolFrozenAdmits(XHCI_TRB_TYPE_RESET_EP, 1), 0,
+             "frozen: no Reset Endpoint, even in the teardown");
+    CHECK_EQ(XhciTolFrozenAdmits(XHCI_TRB_TYPE_CONFIGURE_EP, 1), 0,
+             "frozen: no Configure Endpoint");
+    CHECK_EQ(XhciTolFrozenAdmits(XHCI_TRB_TYPE_EVALUATE_CONTEXT, 1), 0,
+             "frozen: no Evaluate Context");
+    CHECK_EQ(XhciTolFrozenAdmits(XHCI_TRB_TYPE_ADDRESS_DEVICE, 1), 0,
+             "frozen: no Address Device");
+    CHECK_EQ(XhciTolFrozenAdmits(XHCI_TRB_TYPE_RESET_EP, 1), 0,
+             "frozen: no Reset Endpoint");
+    CHECK_EQ(XhciTolFrozenAdmits(XHCI_TRB_TYPE_SET_TR_DEQUEUE, 1), 0,
+             "frozen: no Set TR Dequeue");
+    CHECK_EQ(XhciTolFrozenAdmits(XHCI_TRB_TYPE_RESET_DEVICE, 1), 0,
+             "frozen: no Reset Device");
+
+    CHECK_EQ(XhciTolFaultStep(0, 0, 1, 0), XHCI_TOL_FAULT_NONE,
+             "no mark: today's rules");
+    CHECK_EQ(XhciTolFaultStep(0, 1, 1, 1), XHCI_TOL_FAULT_NONE,
+             "no mark on a hub: today's rules");
+    CHECK_EQ(XhciTolFaultStep(1, 1, 1, 0), XHCI_TOL_FAULT_RESET,
+             "a hub with the mark keeps the reset");
+    CHECK_EQ(XhciTolFaultStep(1, 1, 0, 0), XHCI_TOL_FAULT_RESET,
+             "a hub with no PDO keeps the reset");
+    CHECK_EQ(XhciTolFaultStep(1, 0, 1, 0), XHCI_TOL_FAULT_CYCLE,
+             "published: cycled");
+    CHECK_EQ(XhciTolFaultStep(1, 0, 1, 1), XHCI_TOL_FAULT_OWED,
+             "a second call finds the cycle owed");
+    CHECK_EQ(XhciTolFaultStep(1, 0, 0, 0), XHCI_TOL_FAULT_STEP,
+             "no PDO yet: its enumeration step");
+    CHECK_EQ(XhciTolFaultStep(1, 0, 0, 1), XHCI_TOL_FAULT_STEP,
+             "no PDO yet, whatever the cycle flag");
+
+    CHECK_EQ(XhciTolLateAlone(1, 0, 1, XHCI_TOL_LATE_CYCLE), 1,
+             "present, published: failed alone");
+    CHECK_EQ(XhciTolLateAlone(1, 0, 1, XHCI_TOL_LATE_LEFT), 1,
+             "present, no PDO: failed alone, its step");
+    CHECK_EQ(XhciTolLateAlone(0, 0, 1, XHCI_TOL_LATE_CYCLE), 0,
+             "the handling off: never");
+    CHECK_EQ(XhciTolLateAlone(1, 1, 0, XHCI_TOL_LATE_LEFT), 0,
+             "found leaving: left, not failed");
+    CHECK_EQ(XhciTolLateAlone(1, 0, 0, XHCI_TOL_LATE_CYCLE), 0,
+             "departing behind a hub: not failed alone");
+    CHECK_EQ(XhciTolLateAlone(1, 0, 1, XHCI_TOL_LATE_RESET), 0,
+             "the reset: not failed alone");
+    CHECK_EQ(XhciTolLateAlone(1, 0, 1, XHCI_TOL_LATE_DONE), 0,
+             "done: not failed");
+
+    CHECK_EQ(XhciTolMarkedFails(1, 0, 0, XHCI_TRB_TYPE_CONFIGURE_EP, 0, 0), 1,
+             "a left command's device, the debt clear: failed");
+    CHECK_EQ(XhciTolMarkedFails(1, 0, 0, 0, XHCI_TRB_TYPE_RESET_EP, 0), 1,
+             "an aborted command's device no caller failed: failed");
+    CHECK_EQ(XhciTolMarkedFails(0, 0, 0, XHCI_TRB_TYPE_CONFIGURE_EP, 0, 0), 0,
+             "the debt standing: waits, admission closed");
+    CHECK_EQ(XhciTolMarkedFails(1, 1, 0, XHCI_TRB_TYPE_CONFIGURE_EP, 0, 0), 0,
+             "gone: its teardown owns it");
+    CHECK_EQ(XhciTolMarkedFails(1, 0, 1, XHCI_TRB_TYPE_CONFIGURE_EP, 0, 0), 0,
+             "failed alone already: once");
+    CHECK_EQ(XhciTolMarkedFails(1, 0, 0, 0, 0, 0), 0, "no mark: nothing");
+
+    /* Task 50.30 step 3 (reviewed and revised): device A leaves a
+     * command; device B's RESET_PIPE Reset Endpoint is refused at
+     * admission. B is marked, so its caller's fault fails it alone and,
+     * failing that, the pass does once the debt clears - never a pause
+     * awaiting a reset the debt held back. */
+    CHECK_EQ(XhciTolAdmitMarks(XHCI_TRB_TYPE_RESET_EP, 1), 1,
+             "B's refused Reset Endpoint: B marked");
+    CHECK_EQ(XhciTolFaultStep(1, 0, 1, 0), XHCI_TOL_FAULT_CYCLE,
+             "B marked, published: hcdCfgFault cycles it alone");
+    CHECK_EQ(XhciTolMarkedFails(1, 0, 0, 0, 0, XHCI_TRB_TYPE_RESET_EP), 1,
+             "B marked, no caller failed it: failed at the clearing");
+    CHECK_EQ(XhciTolMarkedFails(0, 0, 0, 0, 0, XHCI_TRB_TYPE_RESET_EP), 0,
+             "... not while the debt stands");
+    CHECK_EQ(XhciTolMarkedFails(1, 0, 1, 0, 0, XHCI_TRB_TYPE_RESET_EP), 0,
+             "... once");
+    CHECK_EQ(XhciTolAdmitMarks(XHCI_TRB_TYPE_STOP_EP, 1), 1,
+             "a refused Stop Endpoint marks");
+    CHECK_EQ(XhciTolAdmitMarks(XHCI_TRB_TYPE_SET_TR_DEQUEUE, 1), 1,
+             "a refused Set TR Dequeue marks");
+    CHECK_EQ(XhciTolAdmitMarks(XHCI_TRB_TYPE_RESET_DEVICE, 1), 1,
+             "a refused Reset Device marks");
+    CHECK_EQ(XhciTolAdmitMarks(XHCI_TRB_TYPE_CONFIGURE_EP, 1), 1,
+             "a refused Deconfigure marks");
+    CHECK_EQ(XhciTolAdmitMarks(XHCI_TRB_TYPE_DISABLE_SLOT, 1), 0,
+             "a refused Disable Slot: its record quarantined as owed");
+    CHECK_EQ(XhciTolAdmitMarks(XHCI_TRB_TYPE_ENABLE_SLOT, 0), 0,
+             "Enable Slot: no device");
+    CHECK_EQ(XhciTolAdmitMarks(XHCI_TRB_TYPE_NOOP_COMMAND, 0), 0,
+             "No Op: no device");
+    CHECK_EQ(XhciTolAdmitMarks(XHCI_TRB_TYPE_RESET_EP, 0), 0,
+             "a slot no record holds: nothing to mark");
+    /* Reviewed and revised: device A's Configure Endpoint debt stands;
+     * B's selective-suspend Stop is refused. Its caller requests no reset
+     * (an uncertain outcome) and A's debt type owes none, so the refusal
+     * itself owes it, deferred to the clearing. */
+    CHECK_EQ(XhciTolAdmitOwesReset(XHCI_TRB_TYPE_STOP_EP, 1, 0), 1,
+             "a refused Stop outside the teardown: the reset owed");
+    CHECK_EQ(XhciTolAdmitOwesReset(XHCI_TRB_TYPE_STOP_EP, 1, 1), 0,
+             "the teardown's refused Stop: its owed record instead");
+    CHECK_EQ(XhciTolAdmitOwesReset(XHCI_TRB_TYPE_RESET_EP, 1, 0), 0,
+             "a refused Reset Endpoint: the device fails alone");
+    CHECK_EQ(XhciTolAdmitOwesReset(XHCI_TRB_TYPE_SET_TR_DEQUEUE, 1, 0), 0,
+             "a refused Set TR Dequeue: the device fails alone");
+    CHECK_EQ(XhciTolAdmitOwesReset(XHCI_TRB_TYPE_STOP_EP, 0, 0), 0,
+             "no record: no endpoint to owe for");
+    {
+        XHCI_LEFT_DEBT d;
+
+        memset(&d, 0, sizeof(d));
+        XhciLeftDebtHcrst(&d);
+        (VOID)XhciLeftDebtLeave(&d, 0, XHCI_TRB_TYPE_CONFIGURE_EP, 4,
+                                0x100UL, 1, 1, 0, NULL);
+        CHECK_EQ(XhciTolLeftNamedReset(d.Type), 0,
+                 "A's debt type owes no reset of its own");
+        CHECK_EQ(XhciLeftDebtDefer(&d, XHCI_WHY_CMD_KEPT,
+                                   XHCI_TRB_TYPE_STOP_EP, NULL),
+                 1, "B's refusal deferred under A's debt");
+        XhciLeftDebtClear(&d);
+        CHECK_EQ(d.Deferred, XHCI_WHY_CMD_KEPT,
+                 "and still owed when A's debt clears");
+    }
+}
+
+static void test_isolation(void)
+{
+    CHECK_EQ(XhciTolIsolationMode(0, 0), XHCI_ISOLATION_LISTED,
+             "absent: the default 1");
+    CHECK_EQ(XhciTolIsolationMode(1, 0), XHCI_ISOLATION_OFF, "0");
+    CHECK_EQ(XhciTolIsolationMode(1, 1), XHCI_ISOLATION_LISTED, "1");
+    CHECK_EQ(XhciTolIsolationMode(1, 2), XHCI_ISOLATION_ALL, "2");
+    CHECK_EQ(XhciTolIsolationMode(1, 3), XHCI_ISOLATION_LISTED,
+             "out of range: the default");
+    CHECK_EQ(XhciTolIsolationMode(1, 0xFFFFFFFFUL), XHCI_ISOLATION_LISTED,
+             "all ones: the default");
+    /* Packed as the PCI ID register reads, device << 16 | vendor: the
+     * field report's Intel controller 8086:1E31 is 0x1E318086, the
+     * emulator 1B36:000D is 0x000D1B36 (reviewed and revised: these two
+     * vectors once had the halves reversed and passed only because the
+     * table was empty). 8086:1E31 is listed by the owner's decision of
+     * 2026-11-20 (design record 17 section 4.15.10); no other id is. */
+    CHECK_EQ(XhciIsolationListed(0x1E318086UL), 1,
+             "the Intel 7 Series, 8086:1E31: listed");
+    CHECK_EQ(XhciIsolationListed(0x80861E31UL), 0,
+             "its halves reversed: not listed");
+    CHECK_EQ(XhciIsolationListed(0x1E308086UL), 0, "8086:1E30: not listed");
+    CHECK_EQ(XhciIsolationListed(0x1E328086UL), 0, "8086:1E32: not listed");
+    CHECK_EQ(XhciIsolationListed(0x8C318086UL), 0,
+             "the 8 Series, 8086:8C31: not listed");
+    CHECK_EQ(XhciIsolationListed(0x9C318086UL), 0, "8086:9C31: not listed");
+    CHECK_EQ(XhciIsolationListed(0x1E311B36UL), 0,
+             "device 1E31 of another vendor: not listed");
+    CHECK_EQ(XhciIsolationListed(0x000D1B36UL), 0,
+             "the emulator not listed in the release table");
+    CHECK_EQ(XhciIsolationListed(0), 0,
+             "an id of 0, the table's end: not listed");
+    CHECK_EQ(XhciIsolationListed(0xFFFFFFFFUL), 0,
+             "all ones, a read of a gone device: not listed");
+    /* A positive vector in the same packing, which the reversed one
+     * would have failed: the qemu flavour's table lists the emulator by
+     * its literal register value, and the reversed halves match
+     * nothing. */
+    CHECK_EQ(XHCI_TOL_QEMU_XHCI_ID, 0x000D1B36UL,
+             "the emulator's id: device 000D << 16 | vendor 1B36");
+    CHECK_EQ(XhciQemuIsolationListed(0x000D1B36UL), 1,
+             "the emulator, as the register reads: listed (qemu table)");
+    CHECK_EQ(XhciQemuIsolationListed(0x1B36000DUL), 0,
+             "the halves reversed: matches nothing");
+    CHECK_EQ(XhciTolQemuStreamQuirk(0x000D1B36UL), 1,
+             "the same packing as the stream quirk's own list");
+    CHECK_EQ(XhciTolIsolationApplies(XHCI_ISOLATION_OFF, 1), 0, "0, listed");
+    CHECK_EQ(XhciTolIsolationApplies(XHCI_ISOLATION_LISTED, 0), 0,
+             "1, not listed: as 0");
+    CHECK_EQ(XhciTolIsolationApplies(XHCI_ISOLATION_LISTED, 1), 1, "1, listed");
+    CHECK_EQ(XhciTolIsolationApplies(XHCI_ISOLATION_ALL, 0), 1, "2, any");
+    /* The release flavour on the listed controller and on unlisted ones,
+     * at each value: the default applies on 8086:1E31 alone. */
+    CHECK_EQ(XhciTolIsolationApplies(XhciTolIsolationMode(0, 0),
+                                     XhciIsolationListed(0x1E318086UL)),
+             1, "absent, 8086:1E31: applies (the default 1)");
+    CHECK_EQ(XhciTolIsolationApplies(XhciTolIsolationMode(1, 1),
+                                     XhciIsolationListed(0x1E318086UL)),
+             1, "1, 8086:1E31: applies");
+    CHECK_EQ(XhciTolIsolationApplies(XhciTolIsolationMode(1, 7),
+                                     XhciIsolationListed(0x1E318086UL)),
+             1, "an unknown number, 8086:1E31: read as 1, applies");
+    CHECK_EQ(XhciTolIsolationApplies(XhciTolIsolationMode(1, 0),
+                                     XhciIsolationListed(0x1E318086UL)),
+             0, "0, 8086:1E31: does not apply");
+    CHECK_EQ(XhciTolIsolationApplies(XhciTolIsolationMode(1, 2),
+                                     XhciIsolationListed(0x1E318086UL)),
+             1, "2, 8086:1E31: applies");
+    CHECK_EQ(XhciTolIsolationApplies(XhciTolIsolationMode(0, 0),
+                                     XhciIsolationListed(0x1E308086UL)),
+             0, "absent, 8086:1E30: does not apply");
+    CHECK_EQ(XhciTolIsolationApplies(XhciTolIsolationMode(1, 1),
+                                     XhciIsolationListed(0x1E308086UL)),
+             0, "1, 8086:1E30: does not apply");
+    CHECK_EQ(XhciTolIsolationApplies(XhciTolIsolationMode(1, 1),
+                                     XhciIsolationListed(0x8C318086UL)),
+             0, "1, 8086:8C31: does not apply");
+    CHECK_EQ(XhciTolIsolationApplies(XhciTolIsolationMode(1, 1),
+                                     XhciIsolationListed(0x000D1B36UL)),
+             0, "1, the emulator in the release flavour: does not apply");
+    CHECK_EQ(XhciTolIsolationApplies(XhciTolIsolationMode(1, 2),
+                                     XhciIsolationListed(0x1E308086UL)),
+             1, "2, 8086:1E30: applies");
+    CHECK_EQ(XhciTolIsolationApplies(XhciTolIsolationMode(1, 0),
+                                     XhciIsolationListed(0x1E308086UL)),
+             0, "0, 8086:1E30: does not apply");
+    /* What hcdTolApplies notes for 8086:1E31 at the INF's 1. */
+    CHECK_EQ(XhciTolIsolationState(XhciTolIsolationMode(1, 1),
+                                   XhciIsolationListed(0x1E318086UL), 1),
+             0x103, "8086:1E31 at 1: mode 1, listed, applying");
+    CHECK_EQ(XhciTolIsolationNote(1, XhciIsolationListed(0x1E318086UL), 1),
+             0x103, "tol.isolate on 8086:1E31 at 1: 0x103");
+    CHECK_EQ(XhciTolIsolationApplies(XhciTolIsolationMode(1, 7),
+                                     XhciIsolationListed(0x11001B73UL)),
+             0, "an unknown number on an unlisted controller: as 0");
+    CHECK_EQ(XhciQemuIsolationListed(XHCI_TOL_QEMU_XHCI_ID), 1,
+             "the qemu flavour lists the emulated controller");
+    CHECK_EQ(XhciQemuIsolationListed(0x1E318086UL), 0, "and no other");
+    /* hcdTolApplies's qemu flavour: listed by either table, so an emulated
+     * controller given the id 8086:1E31 is listed by the release table. */
+    CHECK_EQ(XhciQemuIsolationListed(0x1E318086UL) |
+                 XhciIsolationListed(0x1E318086UL),
+             1, "the qemu flavour on 8086:1E31: listed by the release table");
+    CHECK_EQ(XhciQemuIsolationListed(0x1E308086UL) |
+                 XhciIsolationListed(0x1E308086UL),
+             0, "the qemu flavour on 8086:1E30: listed by neither");
+    CHECK_EQ(XhciTolIsolationApplies(XhciTolIsolationMode(0, 0),
+                                     XhciQemuIsolationListed(XHCI_TOL_QEMU_XHCI_ID)),
+             1, "the qemu flavour on the emulator, absent: applies");
+    CHECK_EQ(XhciTolIsolationApplies(XhciTolIsolationMode(1, 0),
+                                     XhciQemuIsolationListed(XHCI_TOL_QEMU_XHCI_ID)),
+             0, "the qemu flavour on the emulator, 0: does not apply");
+    CHECK_EQ(XhciTolIsolationState(XHCI_ISOLATION_LISTED, 0, 0), 0x100,
+             "the state: mode 1, not listed, not applying");
+    CHECK_EQ(XhciTolIsolationState(XHCI_ISOLATION_ALL, 1, 1), 0x203,
+             "mode 2, listed, applying");
+    CHECK_EQ(XhciTolIsolationNote(1, 0, 0), 0x100, "tol.isolate: 1, no, no");
+    CHECK_EQ(XhciTolIsolationNote(2, 1, 1), 0x203, "2, listed, applies");
+    CHECK_EQ(XhciTolIsolationNote(XHCI_TOL_ISO_NONE, 0, 0), 0xFF00,
+             "absent: 0xFF in 15:8");
+    CHECK_EQ(XhciTolIsolationNote(0x1234, 0, 0), 0xFF00,
+             "above 0xFE: 0xFF");
+}
+
+/*
+ * Task 50.30 step 3 (design record 17 section 4.15.6): the spread records -
+ * each device failed alone counted and kept in a ring of the last four
+ * (place, hub, VID:PID or 0 unknown, clock), cleared at a start, appended
+ * after the reasons' fields so none of them moves.
+ */
+static void test_spread(void)
+{
+    XHCI_TOL_WHY w;
+    ULONG i;
+
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_WHY, SpreadCount), 68 * 4,
+             "appended after the reasons' 68 ULONGs");
+    CHECK_EQ(sizeof(XHCI_TOL_WHY), 88 * 4,
+             "86 ULONGs and the isolation pair, an even count");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_WHY, IsolationValue), 86 * 4,
+             "the isolation pair after the spread records");
+    memset(&w, 0xA5, sizeof(w));
+    XhciTolWhyInit(&w);
+    CHECK_EQ(w.IsolationValue, XHCI_TOL_ISO_NONE, "a start: none read yet");
+    CHECK_EQ(w.IsolationState, 0, "a start: nothing decided yet");
+    CHECK_EQ(w.SpreadCount, 0, "a start: none");
+    CHECK_EQ(w.SpreadNext, 0, "a start: the ring's head");
+    for (i = 0; i < XHCI_TOL_SPREAD_RING; i++) {
+        CHECK_EQ(w.Spread[i].Place | w.Spread[i].Hub | w.Spread[i].VidPid |
+                     w.Spread[i].Clock,
+                 0, "a start: every record cleared");
+    }
+    CHECK_EQ(XhciTolSpreadAdd(&w, 3, 0, 0x046D0A44UL, 100), 1, "the first");
+    CHECK_EQ(w.Spread[0].Place, 3, "its place");
+    CHECK_EQ(w.Spread[0].VidPid, 0x046D0A44UL, "its VID:PID");
+    CHECK_EQ(w.Spread[0].Clock, 100, "its clock");
+    CHECK_EQ(XhciTolSpreadAdd(&w, 0x21, (2UL << 24) | 0x3UL, 0, 110), 2,
+             "behind a hub, VID:PID unknown");
+    CHECK_EQ(w.Spread[1].Hub, (2UL << 24) | 0x3UL, "its hub");
+    CHECK_EQ(w.Spread[1].VidPid, 0, "unknown is 0");
+    (VOID)XhciTolSpreadAdd(&w, 4, 0, 0, 120);
+    (VOID)XhciTolSpreadAdd(&w, 5, 0, 0, 130);
+    CHECK_EQ(w.SpreadNext, 0, "four kept: the ring wrapped");
+    CHECK_EQ(XhciTolSpreadAdd(&w, 6, 0, 0, 140), 5, "the count goes on");
+    CHECK_EQ(w.Spread[0].Place, 6, "the oldest overwritten");
+    CHECK_EQ(w.Spread[1].Place, 0x21, "the others kept");
+    w.SpreadNext = 99;
+    (VOID)XhciTolSpreadAdd(&w, 7, 0, 0, 150);
+    CHECK_EQ(w.Spread[0].Place, 7, "a bad index restarts at the head");
+    w.SpreadCount = 0xFFFFFFFFUL;
+    CHECK_EQ(XhciTolSpreadAdd(&w, 8, 0, 0, 160), 0xFFFFFFFFUL,
+             "the count saturates");
+    CHECK_EQ(XhciTolSpreadAdd(NULL, 8, 0, 0, 160), 0, "no state: nothing");
+    XhciTolWhyInit(&w);
+    CHECK_EQ(w.SpreadCount, 0, "the next start: cleared");
+}
+
+static void test_why(void)
+{
+    XHCI_TOL_WHY w;
+    XHCI_RESET_REC r;
+    XHCI_RESET_REC got;
+    ULONG extra;
+    ULONG i;
+
+    CHECK_EQ(sizeof(XHCI_TOL_WHY) % 8, 0, "an even number of ULONGs");
+    CHECK_EQ(sizeof(XHCI_RESET_REC), 32, "a record is eight ULONGs");
+    CHECK_EQ(XHCI_WHY_COUNT, 25, "codes 0 to 24");
+    CHECK(XHCI_WHY_COUNTERS >= XHCI_WHY_COUNT, "a counter per code");
+    XhciTolWhyInit(&w);
+    CHECK_EQ(w.Kept, 0, "a start keeps none");
+    CHECK_EQ(XhciTolWhyLatch(&w, &got), 0, "no latch named from none");
+    CHECK_EQ(XhciTolWhyInvolved(&w), 0, "none involved");
+
+    memset(&r, 0, sizeof(r));
+    r.Reason = XHCI_WHY_EP0_LATE;
+    r.Slot = 3;
+    r.RootPort = 3;
+    r.Extra = 0x1FF;
+    CHECK_EQ(XhciTolWhyNote(&r), (11UL << 24) | (3UL << 16) | (3UL << 8) |
+                                     0xFFUL, "the note: reason, port, slot, extra");
+    CHECK_EQ(XhciTolWhyRecord(&w, &r, 1), XhciTolWhyNote(&r),
+             "a request that begins a recovery returns its note");
+    CHECK_EQ(w.Counts[XHCI_WHY_EP0_LATE], 1, "counted");
+    CHECK_EQ(w.Kept, 1, "kept in the ring");
+    r.Reason = XHCI_WHY_CMD_NO_VERDICT;
+    (VOID)XhciTolWhyRecord(&w, &r, 0);
+    CHECK_EQ(w.Counts[XHCI_WHY_CMD_NO_VERDICT], 1,
+             "a later request counted ...");
+    CHECK_EQ(w.Kept, 1, "... without overwriting the recovery's first");
+    for (i = 0; i < 3; i++) {
+        r.Extra = 11;
+        (VOID)XhciTolWhyRecord(&w, &r, 1);
+    }
+    CHECK_EQ(w.Kept, 4, "the ring holds four");
+    CHECK_EQ(XhciTolWhyInvolved(&w), 4, "all four at port 3, route 0");
+    r.Reason = XHCI_WHY_HEALTH;
+    r.RootPort = 0;
+    r.Slot = 0;
+    (VOID)XhciTolWhyRecord(&w, &r, 1);
+    CHECK_EQ(w.Kept, 4, "still four: the oldest replaced");
+    CHECK_EQ(w.Rec[XhciTolWhyAt(&w, 0)].Reason, XHCI_WHY_HEALTH,
+             "newest first");
+    CHECK_EQ(w.Rec[XhciTolWhyAt(&w, 3)].Reason, XHCI_WHY_CMD_NO_VERDICT,
+             "the oldest kept is the second request that began one");
+    CHECK_EQ(XhciTolWhyInvolved(&w), 0, "the newest names no place");
+    CHECK_EQ(XhciTolWhyLatch(&w, &got), 1, "the latch named");
+    CHECK_EQ(got.Reason, XHCI_WHY_HEALTH, "... the newest record");
+    CHECK_EQ(w.Latched, XhciTolWhyAt(&w, 0) + 1, "... and marked");
+    (VOID)XhciTolWhyRecord(&w, &r, 1);
+    CHECK_EQ(w.Latched, 0, "a newer recovery clears the latch's mark");
+    r.Reason = 200;
+    (VOID)XhciTolWhyRecord(&w, &r, 0);
+    CHECK_EQ(w.Counts[XHCI_WHY_NONE], 1, "an unknown reason counts as 0");
+
+    XhciTolWhyInit(&w);
+    CHECK_EQ(XhciTolWhyTake(&w, &extra, NULL), XHCI_WHY_EVENT_RING,
+             "nothing staged: the drain's own reason");
+    CHECK_EQ(extra, 0, "... extra 0");
+    XhciTolWhyStage(&w, XHCI_WHY_ENGINE_DIVERGED, 2, NULL);
+    XhciTolWhyStage(&w, XHCI_WHY_CMD_FATAL, 5, NULL);
+    CHECK_EQ(w.StagedLost, 1, "a second stage in one drain counted");
+    CHECK_EQ(XhciTolWhyTake(&w, &extra, NULL), XHCI_WHY_ENGINE_DIVERGED,
+             "the first staged stays");
+    CHECK_EQ(extra, 2, "... with its extra");
+    CHECK_EQ(XhciTolWhyTake(&w, &extra, NULL), XHCI_WHY_EVENT_RING,
+             "taken once: cleared");
+
+    /* The proven place travels from the staging to the drain's request;
+     * an unmatched event's staging names none, and a later staging in the
+     * same drain neither replaces the first's place nor lends it its own. */
+    XhciTolWhyInit(&w);
+    memset(&r, 0, sizeof(r));
+    r.Slot = 5;
+    r.RootPort = 2;
+    r.Route = 0x31;
+    r.VidPid = 0x046D0A44UL;
+    r.Reason = 99;
+    r.Clock = 77;
+    XhciTolWhyStage(&w, XHCI_WHY_XFER_FATAL, 4, &r);
+    memset(&r, 0, sizeof(r));
+    r.Slot = 9;
+    r.RootPort = 7;
+    XhciTolWhyStage(&w, XHCI_WHY_CMD_FATAL, 5, &r);
+    memset(&got, 0xA5, sizeof(got));
+    CHECK_EQ(XhciTolWhyTake(&w, &extra, &got), XHCI_WHY_XFER_FATAL,
+             "the matched transfer's reason");
+    CHECK_EQ(extra, 4, "... its code");
+    CHECK_EQ(got.Slot, 5, "... the matched device's slot");
+    CHECK_EQ(got.RootPort, 2, "... its root port");
+    CHECK_EQ(got.Route, 0x31, "... its route");
+    CHECK_EQ(got.VidPid, 0x046D0A44UL, "... its VID:PID");
+    CHECK_EQ(got.Reason, 0, "only the place is handed back");
+    CHECK_EQ(got.Clock, 0, "... the rest cleared");
+    memset(&got, 0xA5, sizeof(got));
+    CHECK_EQ(XhciTolWhyTake(&w, &extra, &got), XHCI_WHY_EVENT_RING,
+             "taken once");
+    CHECK_EQ(got.Slot, 0, "... and its place with it");
+    CHECK_EQ(got.RootPort, 0, "... no root port left behind");
+    CHECK_EQ(got.VidPid, 0, "... no VID:PID left behind");
+    XhciTolWhyStage(&w, XHCI_WHY_XFER_FATAL, 4, &r);
+    (VOID)XhciTolWhyTake(&w, &extra, NULL);
+    XhciTolWhyStage(&w, XHCI_WHY_XFER_FATAL, 6, NULL);
+    memset(&got, 0xA5, sizeof(got));
+    CHECK_EQ(XhciTolWhyTake(&w, &extra, &got), XHCI_WHY_XFER_FATAL,
+             "an unmatched event's reason");
+    CHECK_EQ(got.Slot, 0, "... names no slot");
+    CHECK_EQ(got.RootPort, 0, "... no place");
+    CHECK_EQ(got.VidPid, 0, "... no device");
+    XhciTolWhyStage(&w, XHCI_WHY_XFER_FATAL, 4, &r);
+    XhciTolWhyInit(&w);
+    CHECK_EQ(w.StagedSlot, 0, "a start clears a staged place");
+    CHECK_EQ(w.StagedPort, 0, "... its root port too");
+
+    test_why_xfer(XHCI_CC_EVENT_LOST, "EP0");
+    test_why_xfer(XHCI_CC_UNDEFINED_ERROR, "an ordinary pipe");
+    test_why_xfer(XHCI_CC_EVENT_LOST, "an isochronous pipe");
+}
+
 int main(void)
 {
     test_proof();
+    test_why();
+    test_spread();
+    test_left();
+    test_left_thread();
+    test_abort_verdicts();
+    test_abort_mark();
+    test_left_debt();
+    test_left_defer_open();
+    test_left_defer();
+    test_teardown_stops();
+    test_settle_failure();
+    test_input_held();
+    test_fail_alone();
+    test_stop_verdict();
+    test_isolation();
     test_quirk_caps();
     test_values();
     test_qemu_stream_quirk();
@@ -2353,6 +3772,7 @@ int main(void)
     test_terminal();
     test_terminal_release();
     test_terminal_resume();
+    test_resume_run();
     test_save_publish();
     test_shut();
     test_start();

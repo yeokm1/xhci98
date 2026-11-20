@@ -3,8 +3,9 @@
  * 4.5.3 to 4.5.9 and 4.5.16; roadmap-usb4 task 49.24): the refusal table
  * and the image kept, the connection's outcome, the readiness flag's one
  * wrapper and the bar on re-enabling, the start's No Op by interrupt, the
- * release, the D3 and D0 steps, the lost connection and the
- * stranded-event watchdog's judge. The seam is hcd_msgnt.c (msi4nt, 2000
+ * release, the D3 and D0 steps, the lost connection, the
+ * stranded-event watchdog's judge, and a refused start's record in the
+ * driver key (section 4.5.20, task 50.4). The seam is hcd_msgnt.c (msi4nt, 2000
  * to XP x64); this file does not include its header. On 98 SE and ME mode
  * 4 runs as 0 (hcd_ctl.c, hcdSettleDelivery).
  *
@@ -15,6 +16,7 @@
 
 #include "hcd.h"
 #include "xhci_hw.h"
+#include "xhci_verpk.h"
 
 /* msi4nt's statuses this file names. */
 #define HCD_MSG4_OK                 0UL
@@ -628,6 +630,11 @@ NTSTATUS HcdMsg4QueryStop(PHCD_CONTROLLER hc)
         XhciLogNote(ext, "msg4.querystop", 0xFFFFFFFDUL);
         return STATUS_UNSUCCESSFUL;
     }
+    /* Task 50.30 step 3 (design record 17 section 4.15.3): the thread's
+     * command wait ends before the gate is taken; lifted on a refusal,
+     * kept on success until the stop raises its own or the cancel
+     * reconnects. */
+    HcdEnumLeaveRaise(hc, HCD_LEAVE_QSTOP);
     HcdPowerGateEnter(hc);
     XhciControllerLockAcquire(ext, &oldIrql);
     hc->Msg4Barred = 1;
@@ -646,6 +653,7 @@ NTSTATUS HcdMsg4QueryStop(PHCD_CONTROLLER hc)
         XhciEnableInterrupts(ext);
         KeLowerIrql(raised);
         HcdPowerGateLeave(hc);
+        HcdEnumLeaveClear(hc, HCD_LEAVE_QSTOP);
         XhciLogNote(ext, "msg4.querystop", 0xFFFFFFFFUL);
         return STATUS_UNSUCCESSFUL;
     }
@@ -671,6 +679,7 @@ NTSTATUS HcdMsg4QueryStop(PHCD_CONTROLLER hc)
                                                        : HCD_MSG4_LOST_REARM);
     }
     HcdPowerGateLeave(hc);
+    HcdEnumLeaveClear(hc, HCD_LEAVE_QSTOP);
     return STATUS_UNSUCCESSFUL;
 }
 
@@ -687,6 +696,7 @@ VOID HcdMsg4CancelStop(PHCD_CONTROLLER hc)
     ULONG reason;
 
     if (!hc->Msg4QueryReleased) {
+        HcdEnumLeaveClear(hc, HCD_LEAVE_QSTOP);
         return;
     }
     HcdPowerGateEnter(hc);
@@ -705,6 +715,8 @@ VOID HcdMsg4CancelStop(PHCD_CONTROLLER hc)
         HcdMsg4LostLatch(hc, HCD_MSG4_LOST_RECONNECT);
     }
     HcdPowerGateLeave(hc);
+    /* Task 50.30 step 3: reconnected (or lost), the gate left. */
+    HcdEnumLeaveClear(hc, HCD_LEAVE_QSTOP);
 }
 
 /* ------------------------------------------------------------------ */
@@ -820,5 +832,160 @@ VOID HcdMsg4TickLocked(PHCD_CONTROLLER hc, PULONG lost)
                           HcdTolNow(hc)) == XHCI_MSG4_JUDGE_TRIP) {
         *lost = 1;
         XhciLogNoteLocked(&hc->Hc, "msg4.stranded.run", hc->Msg4Judge.Run);
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* A refused start's record (section 4.5.20, task 50.4)                */
+/* ------------------------------------------------------------------ */
+
+#define HCD_MSG4_REC_VALUE          L"XhciMode4Refusal"
+
+#if defined(XHCI_FLAVOUR_QEMU)
+#define HCD_MSG4_REC_FLAVOUR        XHCI_SNAPSHOT_FLAVOUR_QEMU
+#elif defined(XHCI_FLAVOUR_RELEASE)
+#define HCD_MSG4_REC_FLAVOUR        XHCI_SNAPSHOT_FLAVOUR_RELEASE
+#else
+#define HCD_MSG4_REC_FLAVOUR        XHCI_SNAPSHOT_FLAVOUR_UNKNOWN
+#endif
+
+/* The record copies the counter block's two runs of words as they lie. */
+XHCI_C_ASSERT(msg4_rec_poll,
+              FIELD_OFFSET(XHCIHC_COUNTERS, IntrPin) -
+                      FIELD_OFFSET(XHCIHC_COUNTERS, IntrModeRead) ==
+                  (XHCI_M4REC_POLL_WORDS - 1) * sizeof(ULONG));
+XHCI_C_ASSERT(msg4_rec_msg4,
+              FIELD_OFFSET(XHCIHC_COUNTERS, Msg4HighFirstRefused) -
+                      FIELD_OFFSET(XHCIHC_COUNTERS, Msg4Strategy) ==
+                  (XHCI_M4REC_MSG4_WORDS - 1) * sizeof(ULONG));
+
+typedef struct _HCD_MSG4_REC_READ {
+    ULONG Present;
+    ULONG Binary;
+    ULONG Length;
+    UCHAR Data[XHCI_M4REC_BYTES];
+} HCD_MSG4_REC_READ, *PHCD_MSG4_REC_READ;
+
+/* The value's type and up to a record's length of its data, whatever the
+ * type (XhciMsg4RecordState judges it). IRQL: PASSIVE_LEVEL. */
+static NTSTATUS NTAPI hcdMsg4RecTake(PWSTR ValueName, ULONG ValueType,
+                                     PVOID ValueData, ULONG ValueLength,
+                                     PVOID Context, PVOID EntryContext)
+{
+    PHCD_MSG4_REC_READ r;
+    PUCHAR from;
+    ULONG n;
+    ULONG i;
+
+    UNREFERENCED_PARAMETER(ValueName);
+    UNREFERENCED_PARAMETER(Context);
+
+    r = (PHCD_MSG4_REC_READ)EntryContext;
+    if (!XhciRegCallSeen(ValueType, ValueLength)) {
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+    }
+    r->Present = 1;
+    r->Binary = (ValueType == REG_BINARY) ? 1UL : 0UL;
+    n = (ValueData != NULL) ? ValueLength : 0;
+    if (n > sizeof(r->Data)) {
+        n = sizeof(r->Data);
+    }
+    from = (PUCHAR)ValueData;
+    for (i = 0; i < n; i++) {
+        r->Data[i] = from[i];
+    }
+    r->Length = n;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * The record says whether this controller's latest start that reached
+ * HcdStartController was refused by mode 4: written for such a start, and
+ * for any other start rewritten as cleared only when it holds a refusal
+ * (or a value this driver cannot read), so a machine that never had one
+ * sees no write. A key that will not open, or a write that fails, changes
+ * nothing of the start. On 98 SE and ME a stored 4 runs as 0 and the
+ * refusal table is never filled, so no start there is a mode-4 refusal and
+ * nothing is read or written. IRQL: PASSIVE_LEVEL, the PnP start's thread.
+ */
+VOID HcdMsg4RecordStart(PHCD_CONTROLLER hc, NTSTATUS status)
+{
+    RTL_QUERY_REGISTRY_TABLE table[2];
+    HCD_MSG4_REC_READ read;
+    ULONG words[XHCI_M4REC_WORDS];
+    XHCI_M4REC_IN in;
+    LARGE_INTEGER now;
+    UNICODE_STRING name;
+    HANDLE key;
+    NTSTATUS written;
+    PUCHAR p;
+    ULONG refused;
+    ULONG state;
+    ULONG system;
+    ULONG bdf;
+    ULONG matches;
+    ULONG i;
+
+    system = HcdMsg4SystemClass();
+    if (system == XHCI_MSG4_SYS_9X) {
+        return;
+    }
+    refused = XhciMsg4IsStartRefusal(NT_SUCCESS(status) ? 0UL : 1UL,
+                                     hc->PollDelivery, hc->PollReason);
+    if (!NT_SUCCESS(IoOpenDeviceRegistryKey(hc->Pdo, PLUGPLAY_REGKEY_DRIVER,
+                                            KEY_READ | KEY_WRITE, &key))) {
+        return;
+    }
+    if (!refused) {
+        p = (PUCHAR)table;
+        for (i = 0; i < sizeof(table); i++) {
+            p[i] = 0;
+        }
+        read.Present = 0;
+        read.Binary = 0;
+        read.Length = 0;
+        table[0].QueryRoutine = hcdMsg4RecTake;
+        table[0].Flags =
+            RTL_QUERY_REGISTRY_REQUIRED | RTL_QUERY_REGISTRY_NOEXPAND;
+        table[0].Name = (PWSTR)HCD_MSG4_REC_VALUE;
+        table[0].EntryContext = &read;
+        (VOID)RtlQueryRegistryValues(RTL_REGISTRY_HANDLE, (PWSTR)key, table,
+                                     NULL, NULL);
+        state = XhciMsg4RecordState(read.Present, read.Binary, read.Data,
+                                    read.Length);
+        if (state == XHCI_M4REC_ABSENT || state == XHCI_M4REC_IS_CLEARED) {
+            (VOID)ZwClose(key);
+            return;
+        }
+    }
+    KeQuerySystemTime(&now);
+    in.State = refused ? XHCI_M4REC_REFUSED : XHCI_M4REC_CLEARED;
+    in.TimeLo = now.LowPart;
+    in.TimeHi = (ULONG)now.HighPart;
+    in.Status = (ULONG)status;
+    in.System = system;
+    in.Flavour = HCD_MSG4_REC_FLAVOUR;
+    in.DriverVersion = XHCI_VER_PACKED;
+    in.Location = 0;
+    if (refused) {
+        bdf = 0;
+        matches = 0;
+        if (HcdCtlMsg4Location(hc, &bdf, &matches)) {
+            in.Location = 0x80000000UL | (bdf & 0xFFFFUL);
+        }
+    }
+    /* Read only for a refused start, when no thread of this controller
+     * runs; a cleared record copies none. */
+    in.Poll = &hc->Counters.IntrModeRead;
+    in.ConnectStatus = hc->Counters.MsiConnectStatus;
+    in.Msg4 = &hc->Counters.Msg4Strategy;
+    XhciMsg4RecordBuild(&in, words);
+    RtlInitUnicodeString(&name, HCD_MSG4_REC_VALUE);
+    written = ZwSetValueKey(key, &name, 0, REG_BINARY, (PVOID)words,
+                            XHCI_M4REC_BYTES);
+    (VOID)ZwClose(key);
+    if (NT_SUCCESS(status)) {
+        XhciLogNote(&hc->Hc, "msg4.record.cleared",
+                    NT_SUCCESS(written) ? 0UL : (ULONG)written);
     }
 }

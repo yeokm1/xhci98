@@ -1,6 +1,159 @@
 # Design Record 25 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
-Status: revision 34, 2026-11-14 (roadmap-usb4 task 49.43's legs: the
+Status: revision 57, 2026-11-20 (section 28 items 10 and 11, the
+owner's decision of 2026-11-20, revised: the "can run
+faster" list's lines, the USB drive notice's names, the console's and
+the recovery details' wraps, the diagnostics' NHI heading, the 98 SE
+and ME storage refusal and the hold notice's, the recovery record's
+and the plain tooltip's names cut
+at a whole character too; xhcitr searched again for a byte cut of a
+device's name);
+revision 56, 2026-11-20 (section 28 items 9 and 10, the
+owner's decision of 2026-11-20, revised: the "can run
+faster" notice's names, the red icon's set and its tooltip cut at a
+whole character too, by the same test);
+revision 55, 2026-11-20 (section 18 item 4 and section 28
+items 7 and 9, the owner's decisions of 2026-11-20, revised: the
+same-version line reads "3.3.0.0 running; the installed
+file is the same."; the tree's own label, and every other place
+`tr_unit_label` serves, cut at a whole character as the tray's is);
+revision 54, 2026-11-20 (section 28 items 3, 5, 6 and 7,
+reviewed and revised: the tray's cut never splits a character of a
+double-byte code page; the depth past which a report node's lines
+pass 79 columns stated);
+revision 53, 2026-11-20 (section 28 items 4 to 8, the owner's
+answers of 2026-11-20, reviewed and revised: Settings' heading a
+borderless read-only box that scrolls; the tray menu's device label cut
+sooner, in proportion to the screen's width; each report node fitted to
+its own width and the details pane's default size kept; the task
+renumbered 50.39);
+revision 52, 2026-11-20 (section 28, task 50.39, reviewed
+and revised: every line of the details pane and of Save Report's own
+text within 79 columns, fitted between words with no word changed;
+what the sweep found, what layout cannot fit, put to the owner);
+revision 51, 2026-11-20 (section 27 item 4, decided by the
+coordinator under the owner's leave of 2026-11-20 to take the
+recommended decision, reviewed and revised: `XHR_F_LIFETIME` moves from
+`0x08` to `0x10`, because design record 38's `XHR_F_RETRY_NEVER` took
+`0x08` (its section 15.1) on task 50.31's branch, merged before this
+one; nothing else changes, and no released driver or tool served or
+read `0x08` as the lifetime flag);
+revision 50, 2026-11-19 (section 27, the owner's decision of
+that day on the answer after a restart Windows refuses in the session,
+given through the coordinator, reviewed and revised: where Windows
+accepted the request, no new start was seen and Windows asks for a
+restart of the computer or has marked the controller, the answer ends
+with H1, a hint naming a program using one of its drives as a
+possibility and the two next steps; on 2000 and later only);
+revision 49, 2026-11-19 (section 27, two more decisions of the
+owner that day, given through the coordinator, reviewed and revised: on
+98 SE and ME a floppy letter - A: or B:, a removable drive - that no
+devnode claims no longer refuses the restart, R13 staying for every
+other unclaimed local letter, with the risk the owner accepted stated;
+and C10 stays dropped, the owner's decision rather than revision 48's
+choice);
+revision 48, 2026-11-19 (section 27, the owner's decision of
+that day, given through the coordinator, reviewed and revised: on 98 SE
+and ME the restart is refused whenever a local drive letter is
+unclaimed (R13), so item 7 step 4's port readings and class table, and
+the refusals and texts that followed from them, are gone and stage 2 is
+settled; the drive rule checked before the storage rule; a USB storage
+device stopped with Safely Remove but still plugged in no longer
+allowed, so the removal record and C10 are gone and R12 and R18 ask for
+it to be unplugged; after a failed removal the parent rescanned once;
+the legs on a guest whose every letter is placed);
+revision 47, 2026-11-19 (section 27, reviewed and revised:
+stage 1's run given a digest that no longer matches refuses with R9, as
+item 6 says, and every run repeats item 5's checks after the shared
+mutex; stage 2's rules for a letter no devnode claims tightened and put
+to the owner, all of them superseded by revision 48);
+revision 46, 2026-11-18 (section 27 revised before code for the
+owner's answer of that day - every uncertain case refuses - reviewed and
+revised: stage 2's reading of the controller for a letter no devnode
+claims, superseded by revision 48; the section split into stage 1, 2000
+and later, which may ship alone, and stage 2, 98 SE and ME);
+revision 45, 2026-11-18 (section 27 revised before code for the
+owner's answers of that day: on 98 SE and ME a letter no devnode claims
+allowed on a reading of the controller, superseded by revision 48; a
+stopped controller there not offered the action; the legs, strings and
+known-limitation line to match);
+revision 44, 2026-11-18 (section 27 revised before code, reviewed
+and revised: the 98 SE and ME drive letters read in guests - every
+protected-mode letter claimed by one devnode, every MS-DOS
+compatibility-mode letter, the system disk among them, by none - with the
+rule's consequence put to the owner; a placed letter on the controller
+refused whatever the storage rule found; a devnode-less storage device
+allowed only on this tool's own recorded safe removal (dropped in
+revision 48); a controller
+stopped after repeated failures not offered the action on 98 SE and ME;
+the 9x preparation failures, an earlier restart mark and the Run As run
+that cannot report back given their answers);
+revision 43, 2026-11-18 (section 27 revised before code for the
+owner's further answers of that day, reviewed and revised: the start
+identity's conclusions positive only - a changed identity with the
+controller started - with the sampling history, the counted attempt, the
+door gate's synchronization and the answer's buffer tiers beside the
+isolation and retry words; the answer's tables total, with exit codes
+that need an accepted request; on 98 SE and ME every drive letter placed
+or the action refused, the network case, storage decided from fetched
+descriptors and ids or refused, a stopped controller restarted only from
+a model taken before it stopped, and every check repeated just before
+the call; Run As on 2000 and XP; the legs widened again);
+revision 42, 2026-11-18 (section 27 revised before code for the
+owner's answers of that day and a review: the stop-and-restart request
+not described as Disable and Enable; on 98 SE and ME the action refused
+while USB storage is on the controller, where Windows or its swap file is
+on one of its drives, or where a drive cannot be placed, the latched
+controller there gated on its reading; the tolerance clock dropped as a
+proof, a small addition to the driver's recovery-status answer proposed
+to number its starts, with request, attempt, completion and state told
+apart; the answer composed of four lines from their own readings, an
+unread restart flag unknown and an earlier one kept; every structure's
+size; the list from a complete fresh walk, scrolling, every devnode in
+its digest; keyboards and mice; the legs widened, T.27 to T.34);
+revision 41, 2026-11-18 (roadmap-usb4 task 50.32's design
+before code, section 27: the calls on 2000 and later and on 98 SE and ME,
+each checked against the kit headers both executables build with; the
+98 SE and ME remove and rescan read in guests under emulation and found
+to work on both, so offered there, with Windows' refusal of a drive in use not to be
+relied on; a restart proved by the driver's tolerance clock, not by
+Windows' answer; the restart of the computer Windows asks for said and
+nothing more; the elevation, the answers and their exit codes, the
+strings as drafts, and legs T.27 to T.32);
+revision 40, 2026-11-17 (section 26 item 11: "Windows completed
+the restart request" told from the driver's recovery by reading the
+recovery-status request again with the devnode, with a defined answer
+for a controller still stopped and for a status that cannot be read;
+the release-note line's restart sentence conditional on the 98 SE and ME
+action; T.21's latch taken from the right legs; revisions 38 to 40
+and section 26 were revisions 37 to 39 and section 25 on their own
+branch until it met revision 37 below, whose section 25 is task
+50.29's);
+revision 39, 2026-11-17 (section 26 revised before code for the
+owner's answers of that day and a review: the recovery status read by a
+request of its own so the query's version 3 stays as it is, the place
+"involved" rather than a cause, the restart's flags not taken for a veto
+and the state refreshed before anything is claimed, containment rechecked
+in the elevated process, the 9x restart a remove and rescan offered only
+after its guest reading; decision T30 revised);
+revision 38, 2026-11-17 (roadmap-usb4 tasks 50.30 to 50.32, a
+design before code: a controller stopped after repeated failures shown
+with its cause and its next try, hold reason 4, and the controller's
+restart by Windows' own device restart, section 26; decision T30);
+revision 37, 2026-11-17 (roadmap-usb4 task 50.29: every value of
+each USB device's driver key, and of the devnodes below the device to
+four levels whatever their enumerator, by one walk for Save Report and
+the device report, read only, section 25; the names whose data is
+withheld, the owner's rule of 2026-11-17, section 25 item 3, closing
+section 13's point);
+revision 36, 2026-11-15 (roadmap-usb4 task 50.7: the holds read
+through a request of their own at every logging level, the fallback note
+where no hold is shown, the hold notice's re-send, section 24 items 1, 4
+and 5);
+revision 35, 2026-11-15 (roadmap-usb4 task 50.5: a note under
+the storage transport line of a drive with no transport, section 19 item
+3a);
+revision 34, 2026-11-14 (roadmap-usb4 task 49.43's legs: the
 fallback note at a root port alone, since the bus reports no failed
 enumeration at a hub's port, and a held port at logging level 0 as it
 reads, section 24 item 4);
@@ -1661,6 +1814,27 @@ DMA and IRQ only, so no bus-number range is listed there; a type that only
 a private arbitrator knows (67 on a PCI bridge, with no data) is listed by
 its number as "Resource type 67 (no data)".
 
+The claimed IRQ of mode 4 (roadmap-usb4 task 50.18, the owner,
+2026-11-15): an `xhci98.sys` controller started under `XhciInterruptMode`
+`4` with an IRQ claimed for its message (`XhciMsiStrategy` `0`, design
+record 15 section 4.5.2) takes its interrupt through that IRQ, and the
+line Windows assigned, which Windows still lists, is left unconnected.
+Its allocated IRQ then reads "IRQ           16 (level, shared), not in
+use in XhciInterruptMode 4", and a line follows it, "IRQ           7,
+claimed by xhci98 for its message interrupt" (at the end of the list
+where Windows gave no IRQ). The claim is read from the controller's
+counter block in its query answer, the one section 19 item 5 reads once
+a refresh: `IntrMode` 4, `IntrReason` 21, `IntrDelivery` MSI or MSI-X,
+`Msg4ClaimStatus` 0, `Msg4Irq` nonzero and `Msg4Lost` 0
+(`tr_msg4_claimed_irq`, `tr_res_text_m4` and `tr_res_claimed_text`,
+host-tested). Every other case reads as before: the other modes, the
+line borrowed under `XhciMsiStrategy` `1` (it is the line in use), a
+refused start, a message lost since, logging level 0 (no counters
+served), a driver before mode 4, and every devnode that is not such a
+controller. The details pane and Save Report's tree carry it; the
+device report's lines (`.DEV`, section 15) are the snapshot engine's
+and are not changed.
+
 ### 7.5 The drivers' logging levels (revision 13)
 
 The owner's decision of 2026-10-16: the tool shows and sets the level of
@@ -2152,7 +2326,9 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
 
 7. **On or off** (`inst_fast_default`, `inst_fast_on` in
    `xhciinst\inst_core.c`, which both tools link; host-tested).
-   - The user's choice: "Tell me when a device can run faster", a
+   - The user's choice: "Warn when a device can run faster" ("Tell me
+     when a device can run faster" until the owner's wording of
+     2026-11-15, revision 36), a
      checkable item in the View menu and in the icon's right-click menu,
      writes the DWORD `FasterNotice` under `HKCU\Software\xHCI98\XHCITR`
      (0 off, 1 on), as "Start at login" writes `TrayAtLogin`.
@@ -2300,7 +2476,7 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
     carry it (the capability is all that is read).
 11. **Windows' own ports** (revision 24; the owner, 2026-10-28: an
     option, off by default). "Watch Windows' own USB ports too", a
-    checkable item under "Tell me when a device can run faster" in the
+    checkable item under "Warn when a device can run faster" in the
     View menu and the icon's right-click menu, greyed while the notice is
     off, writes the DWORD `FasterWindowsPorts` under
     `HKCU\Software\xHCI98\XHCITR` (1 on; absent, 0, another type or
@@ -2852,6 +3028,8 @@ a Gen 1 table, a rate above 5 Gbit/s with LP 0, the VL805's capture).
 | T.18 | 7 x86 (QEMU `usb-uas` with a serial, UAS alone); the transport line on 98 SE | revision 21, section 19 item 7: the transport line and counters for the emulated drive; a stand-in INF binding Windows' `usbstor` to its devnode, the tool's binding check, the binding kept across an unplug and replug; the stand-in removed from the store, the entry uninstalled and the drive plugged in again, on `xhciuas`. The natural case (a drive offering both) is 44-E.5 |
 | T.19 | 98 SE (q35, `XHCIPFW.VXD` installed, the ASM4242 with its windows above 4 GB, the ORICO plugged after the start); 7 x86 or XP (q35, `xhcicm` with the emulator's NHI); 2000 on the Standard PC HAL once 44.53's code is merged | revision 23, section 20: the node's text in the window, Edit > Copy with nothing selected, and the same text in Save Report; on 98 SE `XHCIPFW`'s values and the connection manager's records decoded; on the NT system their NT wording and the slot of item 5 read through the log; on 2000 a hot plug's `cm.chain.irq` records in the slot |
 | T.20 | 98 SE without NUSB, XP, 7 (roadmap-usb4 48.17) | revision 30, section 7.8 item 14: a stick plugged and unplugged with the notice on and off; the name with its letter (XP, 7) or its product string (98 SE, at 10 s, the pop-up and the tooltip); a hub with two sticks unplugged as one balloon; a plug while the Settings window is open; the tray started with a stick in |
+| T.21 to T.25 | 98 SE, ME, 2000, XP, 7 x86 | revision 38, section 26 item 16: a stopped controller's line, cause and next try; the restart as administrator, standard user and elevated; a veto; a contained controller refused; the 9x calls read first; hold reason 4's notes |
+| T.27 to T.34 | 98 SE, ME, 2000, XP, XP x64, Vista and 7 (both), 8, 8.1, 10 | revisions 42 to 46, section 27 item 15 (stage 1 the NT rows, stage 2 the 98 SE and ME rows): the restart's list, refusals, answers, elevation and Run As on each family, the start identity, storage and drive placement, an incomplete walk; the 9x calls' reading of a healthy controller (section 26's T.24) is `runs/run-50.md`, "50.32" |
 
 ## 12. Decisions
 
@@ -3035,6 +3213,26 @@ a Gen 1 table, a rate above 5 Gbit/s with LP 0, the VL805's capture).
   watched only when the user turns the option on; off by default; the
   BOS is asked only from `bcdUSB` 0x0210, once per plug, never on
   xHCI98's ports, and a failure is "unknown, no notice" (item 11).
+- **T30** (owner, 2026-11-17, tasks 50.30 to 50.32; revision 38) A
+  controller stopped after repeated failures is shown as stopped, with
+  the device and place the driver names as its cause and, under task
+  50.31, its next try; the tool restarts a controller by Windows' own
+  device restart (`DIF_PROPERTYCHANGE` with `DICS_PROPCHANGE` on 2000 and
+  later; on 98 SE and ME a query-remove, remove and rescan of the parent,
+  offered there only once a guest reading shows it works on both; owner,
+  2026-11-17, revision 39), asked first, never for a contained
+  controller, rechecked just before the call (section 26). D-1 and T6 stand for the eject and
+  the settings window (section 26 item 14).
+- **T31** (task 50.32; revisions 41 to 46) The restart's calls and
+  answers are section 27's: on 2000 and later the seven SetupAPI routines
+  of its item 2, looked up at run time; on 98 SE and ME `cfgmgr32.dll`'s
+  query-remove, remove and rescan of the parent, under its item 5's
+  checks, and never for a controller stopped after repeated failures there;
+  a completed start claimed only on positive evidence - a changed
+  start identity with the controller started (item 4's driver addition)
+  or, on 98 SE and ME, the devnode's removal and return started - and
+  never a start denied; a restart of the computer Windows asks for said,
+  and nothing more done. Its item 16 lists what is the owner's.
 - **T28** (task 44.62; revision 23) The PCI and bridge diagnostics are
   one tree node, not a window of their own: the details pane already is
   a read-only text with Edit > Copy of the whole, and Save Report
@@ -3064,6 +3262,20 @@ a Gen 1 table, a rate above 5 Gbit/s with LP 0, the VL805's capture).
   dialog after an unplug without an eject, gets the tray's notice too.
   Closed by the owner, 2026-10-22: it does, with the option of section
   7.6 item 8.
+- Revision 37, for the owner: the names whose values' data is withheld
+  (section 25 item 3). As built the fragments match anywhere in a name,
+  and `KEY` and `PIN` as words at a capital, so a diagnostic value loses
+  its data for a word in its name (`HotKey`, `KeyIndex`, a `TokenCount`
+  counter), while a secret under an innocent name, or in a blob, is
+  printed. The options: keep the list; match every fragment as a whole
+  word only; or a shorter list. Closed by the owner, 2026-11-17: the
+  terms are matched as words; a name whose last word is `Key` or `Keys`
+  is withheld unless it is one of a short list of harmless names
+  (`HotKey`), a secret term followed by a word of its form (`Hash`,
+  `Hex`, `Value`, `Material`, `List`) is withheld, and so is a name in
+  capitals alone ending in a term; `HotKey`, `KeyIndex`, `TokenCount`,
+  `Monkey`, `Keyboard` and `*SSIdleTimeout` are shown. Section 25 item 3
+  has the rule, its table and what it lets through.
 
 ## 14. As built
 
@@ -3621,8 +3833,9 @@ and ME the new file even waits beside the old one, named in
      "Driver version: 3.2.0.0 running; the installed file is 3.3.0.0.
      Restart Windows to run the installed driver." ("older than 3.3.0.0
      running" for a driver that does not say); where it is the same,
-     "Driver version: 3.3.0.0 running, the installed file's"; not known,
-     no line;
+     "Driver version: 3.3.0.0 running; the installed file is the same."
+     (the owner's wording, 2026-11-20, revision 55; a driver that does
+     not say is never the same, item 3); not known, no line;
    - Save Report and `/report` carry the details.
    The tray's icon, tooltip and balloons do not change: an update not
    restarted into is not a condition section 7.2.1 turns red for, and
@@ -3679,6 +3892,22 @@ and ME the new file even waits beside the old one, named in
     out. The block is every devnode's, so devices show them too. The
     snapshot's `.DEV` lists the same three values among its driver-key
     values (`InfPath = ...`), as it lists `DriverVersion`.
+11. **The Intel port switchover's line** (task 50.34; record 16 section
+    21.7). An xhci98 controller's details carry, after "Driver version:",
+    "Port switch:" and the words `tr_pswt.c` gives the decision -
+    `tr_psw_lines`, the same words `/snapshot` prints under the tolerance
+    block and the `.DEV` and `/dump` give the registry record - read from
+    the running controller's snapshot (one window of the HCD region at 0:
+    the count at word 956, the record write's status at 957, the record's
+    words from 958; a header shorter than 1016 words is a driver's from
+    before them). A routed decision is said from the record's route
+    outcome (moved, nothing accepted, or not every step), never from the
+    decision alone. Where the driver serves no snapshot (its log off, the
+    controller not started, an older driver), an Intel controller's
+    registry record `XhciIntelPortSwitchResult` is shown instead, opening
+    "As recorded at <time>:", never as the current state; a controller
+    that is not Intel's shows nothing and its key is not read. Save Report
+    and `/report` carry the details, and the line with them.
 
 ## 19. The storage transport (revision 21, task 44.35)
 
@@ -3748,6 +3977,16 @@ devnode's driver disagrees with it.
      "Transport:     not reported by this xhci98.sys"; for any other
      device, nothing (read on 98 SE under `3.2.0.0`'s driver, where the
      tablet showed the line).
+3a. **A drive with no transport** (revision 35, roadmap-usb4 task 50.5).
+    Under the "none" line (`TR_XPORT_WHY_NO_STREAMS`) the details add
+    "Note: This drive runs only as UAS, which needs streams at
+    SuperSpeed, and streams are not available on this controller, so
+    Windows has no driver for it here. Try a USB 2.0 port or hub: if the
+    drive supports USB 2.0, it may work there." (`tr_xport_none_note`),
+    for every such drive, whatever refused it: a send-back to USB 2.0 that
+    never reached the companion and timed out (record 13 section 10.7.4),
+    a root port with no companion, or a SuperSpeed hub. Save Report and
+    `/report` carry it; the tool's self-test holds its text and wrapping.
 4. **The binding check.** Where the transport is UAS and the device's
    devnode (for a composite, the function's) is bound to Windows'
    Bulk-Only driver (`usbstor`, `USBSTOR.SYS` on 98 SE and ME; compared
@@ -4553,15 +4792,18 @@ that day are the ones below.
     separator, Quick save (report + snapshot), a separator, Exit. Refresh
     (the icon polls every second and follows WM_DEVICECHANGE; the window
     keeps its own), Start at login, Warn when a device is removed
-    unexpectedly, Tell me when a device can run faster and Watch Windows'
+    unexpectedly, Warn when a device can run faster and Watch Windows'
     own USB ports too leave it. They stay in the window's View menu and
     are on the Settings window's last tab, "xHCI98 USB Tree", with the
     quick-save hotkey and its sound: each saved for the user and in force
     at the click, as the menu items are; a notice option's scan waits for
     the window to close (its model is held while it is open,
     `setToolRefresh`); Apply is greyed on that tab. Since revision 30
-    the tab also has "USB &drive notices" (section 7.8 item 1). The driver tabs' list takes the room (about ten
-    rows at 640x480). There is no Help button: this section never listed
+    the tab also has "USB &drive notices" (section 7.8 item 1), and since
+    revision 36 "Warn when a USB port is put &on hold" (section 24
+    item 5; both "Warn when ..." labels the owner's wording of
+    2026-11-15: "Both should put as warn." - access keys f and o). The
+    driver tabs' list takes the room (about ten rows at 640x480). There is no Help button: this section never listed
     one.
 17. **Host vectors** (`test\test_trset.c`): every row classified, the
     defaults against the INFs, the system rules on 98 SE, 2000, XP x64 and
@@ -4602,7 +4844,9 @@ that day are the ones below.
     `XhciUasFastReset`; and `XhciEventRingTrbs` (256 or 1024, any other
     value read as the driver reads it, 1024); and, with task 49.39,
     `XhciStreamDequeueRepair` in faults and checks (0 check and log only,
-    1 repair; the owner's texts). `XhciIntelNoRouteIrq` 0 on
+    1 repair; the owner's texts); and, with task 50.20,
+    `XhciStreamDequeueAvoid` in controller quirks (0 off, 1 the listed
+    controller, 2 every controller; draft texts for the owner). `XhciIntelNoRouteIrq` 0 on
     Windows 2000 stays the Tree's alone (item 10 asks first; Setup does
     not offer it there). A risky value carries its caution (what fails,
     and how to set it back) and every row its Default.
@@ -4653,6 +4897,26 @@ that day are the ones below.
     by its instance id and the driver key the window read, which the
     elevated run checks before it writes. Setup does nothing with them:
     no page, no `/set`, no uninstall step.
+    *The controller's own row* (task 50.34; record 16 sections 21.5 and
+    21.5.3): `XhciIntelPortSwitchReady` lives in each controller's own
+    driver key and never machine-wide (`INST_LOC_CTRL`, `TRS_LOC_CTRL`):
+    the machine-wide key is neither read nor written for it, and only the
+    key of a controller the switchover applies to by its identity is
+    (`trs_ready_applies`: a listed Intel controller, or any Intel one while
+    `XhciIntelPortSwitch` 2 is in force for it, read as the driver reads
+    it; never the excluded board or one whose subsystem is not in its
+    hardware id). Another controller is skipped, shows "(the port
+    switchover does not apply to this controller)" when it alone is the
+    scope, and named to `/set` is refused. The row takes the window's
+    selected controller as its scope, as a driver-key row does
+    (`trs_scoped`), in reading, staging and applying. Listed with "Show
+    advanced settings", on 2000 and later, where such a controller is
+    present; 0 and 1
+    offered; the driver reads it at a Windows session's first start of
+    the controller, so a change takes a restart of Windows. It is the
+    image preparation of record 16 section 21.5.3: 0 on each controller
+    before an image is captured. Setup does nothing with it: no page, no
+    `/set`, no uninstall step.
     `test\test_trset.c` holds the rule both ways: every value named by the
     INFs' `HKR` lines, the value definitions of the drivers' sources and
     the mark service's `Parameters` reads, and every value row of
@@ -4811,7 +5075,10 @@ looks, with no driver change.
 
 1. **The reading.** Each xhci98 controller's hold bytes are read through
    the snapshot's own door windows, as `tr_snap.c`'s `print_tol` reads
-   them, read only: the HCD region's first window for the tolerance
+   them, read only (since revision 36, roadmap-usb4 task 50.7, first
+   through the holds request, record 13 section 8.12.1, answered at every
+   logging level; the windows below only where a driver before it
+   refuses that request): the HCD region's first window for the tolerance
    block's place in the extension (header words 8 to 18:
    `XHCI_SNAPSHOT_HCD_TOL_*`), then the extension's window at the block,
    and at most three more where a location lies past it; each location's
@@ -4819,8 +5086,9 @@ looks, with no driver change.
    `tr_tol_hold_offset`, `tr_tol_hold` in `tr_log.c`, pure, and
    `hold_read` in `xhcitr.c`). The door copies memory and reads a
    register only of a started controller in D0 (`hcdDoorSnapshot`), so
-   the reading never wakes a suspended one. At level 0 the door is closed
-   and nothing is known (`HoldState` -1). Read at each refresh of the
+   the reading never wakes a suspended one. At level 0 the door is closed,
+   so with a driver before the holds request nothing is known then
+   (`HoldState` -1); with this one the request answers at level 0 too. Read at each refresh of the
    window's and the report's model, on the thread that refreshes it, as
    its other requests to the controller are (the query's header among
    them, which waits on the same door gate); a tray with no window open
@@ -4845,23 +5113,31 @@ looks, with no driver change.
    after the hub is unplugged, until it reuses that hub object or the
    controller starts (`hcd_hub.c`), so with a hub connected the note can
    still be an earlier hub's. A hub's hold is not announced in a balloon.
-4. **Not known.** Where no hold is known for an xhci98 root port (the
-   door closed or a read failed) and its connection is "the device
-   failed enumeration": "Note: If this keeps failing, unplug the device
-   and plug it in again." The bus reports that connection at a root port
-   alone, while the port's enumeration has failed for good; a hub's port
+4. **No hold shown.** Where an xhci98 root port shows no hold note (none
+   known - an older driver at level 0, or a read failed - or, since
+   revision 36, none there) and its connection is "the device failed
+   enumeration": "Note: If this keeps failing, unplug the device and plug
+   it in again." A hold note keeps priority: a held port shows that note
+   alone. The bus reports that connection at a root port alone, while the
+   port's machine is in Failed - for good once its one retry is spent,
+   and briefly between a failure and that retry, where the conditional
+   advice suits as well (in the emulator it is made with the qemu
+   flavour's fault 20, record 17 section 5); a hub's port
    with no device record is answered as no device connected
    (`hcd_door.c`, `hcdDoorConnection`), so the note never appears at a
    hub's port, although the tool would print it at any xhci98 port so
    reported (`details_uport` in `xhcitr.c`). Until revision 34 this item
    listed a hub's port among its cases; read on XP on 2026-11-14, a hub's
    port whose device failed its enumeration showed "no device connected"
-   and no note (`runs/run-49.md`, "49.43"). The note itself was not read
-   in a guest. Known and left: at logging level 0 the door is closed, so
-   a held port shows "(empty)" with no tag, no note and no notice (item
-   1; read on XP the same day, the held root port reading "no device
-   connected", not a failed enumeration, so the fallback note did not
-   appear there either).
+   and no note (`runs/run-49.md`, "49.43"). Until revision 36, at logging
+   level 0 the door was closed, so a held port showed "(empty)" with no
+   tag, no note and no notice (read on XP on 2026-11-14); the holds
+   request (item 1) answers at level 0, and with a driver before it that
+   is still so. Read under task 50.7 (`runs/run-50.md`, "50.7"): on 2000 SP4
+   and 98 SE at logging level 0, the fallback note at a root port the
+   qemu flavour's fault 20 failed, and a held root port's tag, note and
+   notice (the notice with a diagnostic build of the tool that also logged
+   each watch, never shipped).
 5. **The pop-up.** While the tray runs, every 10 s (`HOLD_POLL_EVERY`
    polls of its one-second timer) a job thread of its own, one at a time
    as the quick save's, reads each xhci98 controller's holds again and
@@ -4893,12 +5169,30 @@ looks, with no driver change.
    failures. Unplug the device and plug it in again.", for holds 2 and 3
    "Port N of <controller> is switched off after repeated failures.
    Restart Windows to turn it on again." (both texts the owner's, the
-   second accepted 2026-11-14). On Windows 2000 and later it follows the
-   removal warning's option, "Warn when a device is removed unexpectedly"
-   (`WarnRemoved`, on by default, section 7.6 item 8); on 98 SE and ME,
-   where that option is not offered, it is always shown, the menu staying
-   as it is (owner, 2026-11-14; `tr_hold_notice_on`). With it off the
-   queue is emptied unshown. An announcement leaves the queue only when
+   second accepted 2026-11-14). **The switch** (owner, 2026-11-15:
+   "Make it switchable and perhaps off by default", taken as one switch,
+   off by default on every Windows; revision 36): the watch and its notice
+   are the user's to turn on, by the tick box "Warn when a USB port is
+   put &on hold" on the Settings window's tool tab (section 22 item 16),
+   under "USB &drive notices", the quick-save rows moving 14 DLU down
+   again: the DWORD `HoldNotice` under `HKCU\Software\xHCI98\XHCITR`
+   (`tr_hold_watch_on`: only a `REG_DWORD` 1 is on; absent, as after an
+   install or an update from `3.5.0.0`, which stored none, off), as the
+   drive notice's (section 7.8 item 1); no computer-wide value, no
+   installer box, no driver value. Off, the tray starts no job, opens no
+   controller and reads nothing for it, and shows no hold balloon; the
+   window's own reading at each refresh (item 1) is not the switch's, so
+   a held port's tag and note show either way. On, it works as above.
+   Turned off, the queue, what it had seen, the re-send watch and an owed
+   re-send are dropped at the click (and at the next watch for a change
+   made elsewhere), so a hold already there when it is turned on again is
+   announced once. The watch's earlier rule - on 2000 and later the
+   removal warning's option, on 98 SE and ME always (owner, 2026-11-14;
+   `tr_hold_notice_on`, kept and host-tested) - is replaced: the removal
+   warning's option no longer touches it. Why off by default (the owner's
+   reason through the coordinator): the watch is periodic kernel activity
+   on every machine with the tray running since `3.5.0.0`, and the notice
+   a convenience. An announcement leaves the queue only when
    its send is taken (`tr_holdq_find`, then `tr_holdq_sent`): the icon
    there and the shell's `Shell_NotifyIcon` call accepted, or on 98 SE
    the tool's pop-up ready. Until the icon is there (at login before it
@@ -4908,9 +5202,20 @@ looks, with no driver change.
    (`TR_HQ_TRIES`, about five minutes); one whose hold has ended or
    changed meanwhile is dropped, never shown. Known limit: a balloon the
    shell accepted and then never showed (one queued behind Windows' own,
-   section 7.7 item 9) is not sent again, the re-send watch being the
-   faster and drive notices' alone; the port's note in the window still
-   says it. A controller's reading is used only within 3 s of the moment
+   section 7.7 item 9) was not sent again until revision 36: the hold
+   notice now has the re-send watch of section 7.7 item 9 (`holdSend`,
+   `holdKind`, `TRAY_BK_HOLD`), stepped by the shell's messages and the
+   one-second tick. A re-send it calls due is owed, and made only at the
+   next watch's results on that job's usable reading of the same
+   controller (fresh, no sleep or device change since its read began, the
+   controller still listed) still showing the same hold at the same
+   location, the icon's balloon taken away first and the text as first
+   sent; a usable reading showing anything else, the controller gone, the
+   balloon shown meanwhile, or no usable reading within `TR_BS_NOSHOW_MS`
+   of falling due drops it (`tr_hold_resend_decide`, host-tested). Any
+   other balloon of the tool's, sent through `tray_balloon_send` or its
+   wrapper, ends it; so does turning the notice off. 98 SE and ME: the
+   pop-up answers no message, so nothing changes there. A controller's reading is used only within 3 s of the moment
    its read returned (`TR_HOLD_FRESH_MS`, so a hold read before another
    controller's door kept the job waiting is not announced after it may
    have ended), and only when no suspend, resume or device change came
@@ -4940,3 +5245,2004 @@ looks, with no driver change.
    an announcement cleared before it is shown, a
    removed controller and an unreadable one, and both bounds. The tool's self-test holds
    `hold_root`, `hold_hub_kinds` and the note's wrapping.
+
+## 25. The USB devices' driver keys (roadmap-usb4 task 50.29, owner 2026-11-17)
+
+The owner, 2026-11-17: Save Report and `/snapshot` list every value of
+each USB device's driver key - name, type and data - read only, in both
+registry layouts, whatever driver the device has, so that one file
+carries what a driver records about its device (some USB audio and
+network drivers keep their own diagnostic values there). The tree window
+does not change, and nothing is written anywhere. Until this revision the
+report read three values of that key beside `DriverVersion` (`InfPath`,
+`MatchingDeviceId`, `ProviderName`, the owner's of 2026-11-13) and the
+`.DEV` seven, the latter for this package's own devnodes only.
+
+"Every value" means: every value's name, type and size, always; and its
+data, within the limits of item 2, unless item 3 withholds it.
+
+1. **What the walk reaches.** Read from the code before this revision:
+   - *The report* lists every controller the tool opens: xhci98's doors
+     (`XHCI98HC<n>` on NT, `HCD<n>`), every `HCD<n>` another stack makes,
+     and on NT every device of the USB host controller interface, Windows'
+     own controllers included (`usb_controllers`). Under each it walks the
+     root hub's ports and every hub's ports below them, to six hubs deep
+     (USB allows five), so a device behind a hub is reached
+     (`usb_scan_hub`). Each connected port's device is matched to its
+     devnode by the driver key name its hub returns (`walk_find_driver`),
+     and the port's details print that devnode's Device Manager entry.
+   - That devnode is the whole device's. A composite device's interfaces
+     have devnodes of their own, children of it with `&MI_nn` in their
+     device id (made by `xhci98.sys` under its `USB\XHCI98_COMPOSITE`
+     parent, record 13 section 10.13, and by Windows' own composite
+     driver on its own controllers). A driver bound to one interface - the
+     audio driver of a USB headset, the network driver of one function -
+     sits on such a child, and the function drivers of a device make
+     devnodes of their own below it in turn, on other enumerators: an
+     input device's HID collections (`HID\...`, bound to the mouse,
+     keyboard or a vendor's HID driver), a storage device's disks
+     (`USBSTOR\...`, or `SCSI\...` under `xhciuas.sys`), a composite
+     function that is itself split again. **The report did not reach any
+     of them**: only the storage transport's note looked at the children,
+     for their service.
+   - *The `.DEV`* lists the PCI xHCI controllers and the devnodes
+     `xhci98.sys` or `xhciuas.sys` drives (controllers, root hubs, hubs,
+     xhci98's composite parents, UAS drives): **a device run by any other
+     driver is not in it at all**, so neither are its interfaces.
+
+   The coverage this revision takes, for both outputs alike, follows the
+   purpose: one file carries what any driver in a USB device's stack
+   records. **A USB device is listed with its own devnode and every
+   devnode below it, whatever its enumerator**, depth first, to
+   `TR_REG_TREE_DEPTH` (4) levels below the device and at most
+   `TR_REG_TREE_NODES` (32) devnodes a device: its functions and
+   interfaces (level 1), a function split again and the HID collections
+   or disks a function's driver made (level 2), and two levels more for a
+   driver that makes devnodes of its own below those. Every enumerator is
+   followed because a devnode below a USB device exists only because the
+   device does, and the driver bound to it - the HID class's mouse or
+   keyboard driver, a disk driver, a vendor's filter - keeps its settings
+   and counts in that devnode's own driver key, so leaving an enumerator
+   out would leave that driver's record out; and none is singled out
+   because no list of enumerators would cover a vendor's own bus.
+   **The walk never goes below a hub**: a hub's devnodes are the devices
+   on its ports, and each is listed as a device of its own (in the report
+   under its own port's node). A hub is told by its device id (a root hub,
+   `ROOT_HUB` in it; xhci98's hubs, `USB\XHCI98_HUB...`, which carry no
+   class id, `tr_reg_hub_id`) or by `USB\Class_09` among its hardware or
+   compatible ids (Windows' own hubs, `tr_node_is_hub`); its own key is
+   listed. Where the walk stops at a limit, or the devnodes below one were
+   not all read, it says so on a line of its own: "(the devnodes below it
+   are not listed: the report follows devnodes 4 levels below a USB
+   device)", "(N more devnodes below this device not listed: the report
+   lists 32 devnodes of one device)", "(the devnodes below it were not all
+   read: error E)", or with no number where the tool's own walk marked a
+   devnode's children incomplete. The two bounds keep one device from
+   crowding the file; the legs have shown one level below a device, a
+   nested function with HID collections below it takes three, and the
+   fourth leaves room for a driver's own children.
+
+   One pure walk serves both outputs (`tr_reg_tree_walk`, item 7), over
+   callbacks: *the report* walks its devnode list (`gw`, the parent of
+   each devnode recorded by the tool's walk), starting at each connected
+   port's device; *the `.DEV`* walks the configuration manager's tree
+   (`CM_Get_Child`, `CM_Get_Sibling`) from the root, and a USB device
+   there is every devnode whose device id begins `USB\` reached through
+   no other USB device - so a device on any controller, present, whatever
+   drives it, and not started included - except the root hubs, which are
+   a controller's, not a device's; the walk takes it and its devnodes, and
+   goes on into a hub's devnodes for the devices on its ports. So each
+   device reaches the same devnodes in both. On 98 SE and ME where
+   `cfgmgr32.dll` does not answer, the `.DEV` reads `HKEY_DYN_DATA`'s
+   list, which holds no tree: each `USB\` devnode is then listed on its
+   own, nothing below it is followed, and the section says so. The `.DEV`
+   can list more devices than the report (a device behind a seventh hub,
+   one the report's port walk did not match to a devnode); a device in
+   both carries the same keys. A devnode is listed once per device that
+   reaches it, and a devnode reaches only one device, its ancestor.
+
+2. **The size limits and how a cut is shown.** Per value: a string up to
+   512 characters, then `..." (the first 512 of N characters)`; a
+   multi-string's strings one to a line, up to 32 strings and 2048
+   characters, then `(N more strings not shown)`; binary data, and every
+   type the tool does not decode, in hexadecimal up to 256 bytes, sixteen
+   to a line with the offset, and a cut one says `N bytes, the first 256
+   shown`. A value is read whole or not at all (the registry offers no
+   partial read): up to 65536 bytes, and a larger one is listed with its
+   name, type and true size and no data (`"Big" = REG_BINARY, 70000
+   bytes: more than 65536, not read`). A
+   value's name is shown up to 128 characters. Per key: at most 256
+   values or 64 KB of text, whichever comes first; the rest are counted
+   by name and size alone and said ("N more values not listed: the report
+   lists 256 values / 64 KB of a key"). A value whose name is too long for
+   the name buffer still counts. A count that an enumeration error ends,
+   or that reaches its own bound of 100000, is a lower bound and is said
+   as one: "(N or more values not listed: ...; the count stopped at value
+   I: error E)", "(N or more values not listed: ..., and counts no further
+   than 100000)", or, when the error comes at the first value counted,
+   "(the values past the report's 256 values / 64 KB of a key were not
+   counted: the count stopped at value I: error E)". The bounds keep one
+   driver's key from crowding out the report. **There is no bound on the
+   whole**: a device takes at most 32 keys of 64 KB of text (about 2 MB
+   with the report's indentation), and a machine with many USB devices
+   whose drivers keep large keys makes a large file; the keys the legs
+   have read take a few hundred bytes to a few KB each.
+
+3. **What is not printed.** A driver key holds a driver's settings and
+   records: numbers, names, paths, a locally administered network address
+   (acceptable, as serial numbers already are in the report). Nothing
+   there is expected to be a credential, but an older wireless adapter's
+   driver could keep its network's keys among its settings, and a vendor's
+   tool a licence key. The rule: **a value whose name says it may hold a
+   secret is listed with its name, type and size, and its data withheld**
+   ("withheld (its name suggests a key or password)"). The rule is the
+   owner's, decided on 2026-11-17 (closing section 13's point; it replaces
+   the wording of this item until then, which matched fragments anywhere
+   in a name and, for a day, a narrower whole-word rule that showed every
+   name ending in `Key` but a few compounds):
+   - **A word of the name** is a run of its letters (ASCII `A` to `Z`,
+     `a` to `z`; a byte from 0x80 up is not a letter). Words are split at
+     every character that is not a letter (a digit, `_`, `-`, a space,
+     `.`, anything else; it belongs to no word) and where a small letter
+     is followed by a capital. So `WepKey1` is the words `Wep` and `Key`,
+     `password_hash` is `password` and `hash`, `K_e_y` is `K`, `e` and
+     `y`, and a name in capitals alone runs its words together into one:
+     `USERPASSWORD`.
+   - **The terms** are `KEY`, `PASSWORD`, `PASSWD`, `PASSPHRASE`, `PWD`,
+     `SECRET`, `CREDENTIAL`, `PSK`, `TOKEN`, `LICENSE`, `SSID` (a wireless
+     network's name, which public databases place on a map), `PIN`,
+     `PINCODE`, `WPAPSK`, and `PIN CODE`: `PIN`, then one or more
+     characters that are not letters, then `CODE` (`Pin Code`, `Pin_Code`;
+     the one term whose letters a separator may part, and only there).
+     **The words of a secret's form** are `HASH` (its plural `HASHES`
+     too), `HEX`, `VALUE`, `MATERIAL` and `LIST`. `WPAPSK`, `PIN CODE` and
+     `HASHES` were added the same day, 2026-11-17, within the owner's
+     decision to withhold secrets, so that three ordinary spellings of
+     names it already meant to withhold are withheld: `WPAPsk` (one word
+     with small letters, where `PSK` does not begin a word), `Pin Code`
+     and `PasswordHashes`.
+   - **A name's data is withheld** when, case ignored, a term's letters
+     stand side by side in the name beginning at the start of a word, or
+     anywhere in a word with no small letter, and after them come, in
+     order: an `S` or none; characters that are not letters, if any; one
+     of the words of a secret's form, its letters side by side, with an
+     `S` or none (`HASH` also as `HASHES`), or none of them; and nothing
+     more but characters that are not letters to the name's end
+     (`PasswordHash1`). So the last word `Key` or `Keys`
+     withholds a name whatever comes before it (`EncryptionKey`,
+     `WepKey1`, `Key0`), as does a secret term at the end
+     (`UserPassword`), a secret term followed by a word of its form
+     (`PasswordHash`, `PasswordHashes`, `WpaPassphraseHex`, `PskValue`,
+     `KeyMaterial`, `SsidList`, `Key1Value`), and a term at the end of a
+     name in capitals alone (`USERPASSWORD`, `WEPKEY`).
+   - **The harmless names**: a name that is, whole and case ignored,
+     `HotKey` or `ShortcutKey`, with an `S` or none, is shown. The list is
+     a draft for the owner and kept short on purpose: `HotKey` is the
+     owner's own example, a keyboard's or a remote control's hot key
+     setting (a key code or a combination, no secret); `ShortcutKey` is
+     the same setting under its other common name. Names that would only
+     name a registry key (`SubKey`, `RegistryKey`) were left out: no
+     driver key read here holds one. A harmless name with anything added
+     (`HotKey1`, `HotKey_`) is not on the list and is withheld.
+
+   The owner's examples of names to be shown - `HotKey`, `KeyIndex`,
+   `TokenCount`, `Monkey`, `Keyboard`, `*SSIdleTimeout` - stay shown:
+   `HotKey` is a harmless name, `KeyIndex` and `TokenCount` end in another
+   word, and `Monkey`, `Keyboard` and `*SSIdleTimeout` have no term at a
+   word's start with nothing after it (`key` in `Monkey` is inside a word
+   with small letters; `SSIdle` is one word). A name of single letters
+   that only spells a term across other characters, `K_e_y` or `K1E2Y`,
+   has no term: the letters of a term stand side by side.
+
+   | Name | Outcome | Why |
+   |---|---|---|
+   | `Password`, `UserPassword`, `TrkPassword`, `PassWord`, `Passwords` | withheld | `PASSWORD` from a word's start to the end, with an `S` or none |
+   | `admin_pwd`, `AdminPwd`, `PASSPHRASE`, `Secret`, `ClientSecret`, `UserCredential`, `Credentials`, `WpaPsk`, `AuthToken`, `License` | withheld | the term ends the name |
+   | `USERPASSWORD`, `WPAPSK`, `WEPKEY`, `MONKEY`, `TURKEY` | withheld | a term at the end of a word in capitals alone |
+   | `password_hash`, `PasswordHash`, `PasswordHash1`, `PasswordHashes`, `PasswordHashes1`, `PASSWORDHASH`, `WpaPassphraseHex`, `PskValue`, `TokenList`, `KeyMaterial`, `Key1Value`, `KeyValue`, `SsidList`, `SSIDList`, `SsidLists` | withheld | a term, then a word of a secret's form (`HASHES` the plural of `HASH`), then digits or none |
+   | `PasswordLength`, `SecretCount`, `LicenseType`, `PasswordHashed` | shown | another word after the term (`Hashed` is not `Hash`) |
+   | `Pass_word`, `PasswordString`, `KeyData` | shown (known residuals) | a term parted by a separator; a word not of a secret's form after the term |
+   | `TokenCount`, `TokenErrors` | **shown** (`TokenCount` an owner example) | `Count`, `Errors` after the term |
+   | `WPAPsk` | withheld | `WPAPSK` at the word's start |
+   | `WPAPskLength`, `WPAPSKLength` | shown | another word after `WPAPSK` |
+   | `LicenseKey`, `ProductKey`, `Product Key`, `CdKey`, `WepKey1`, `Wep_Key_2`, `WpaKey`, `NetworkKey`, `Network Key`, `WirelessNetworkKey`, `DefaultKey`, `PreSharedKey`, `SharedKey`, `PassKey`, `EncryptionKey`, `PrivateKey`, `AuthKey`, `ApiKey`, `SessionKey`, `TrkKey1`, `my-key`, `HotKey1` | withheld | the last word `Key` |
+   | `Key`, `KEY`, `Key0`, `KEY_1`, `Keys` | withheld | `Key` the last word, and the only one |
+   | `HotKey`, `HotKeys`, `HOTKEY`, `ShortcutKey` | **shown** (`HotKey` an owner example) | a harmless name |
+   | `KeyIndex`, `DefaultKeyId`, `WepKeyLength`, `KeyHexagon` | **shown** (`KeyIndex` an owner example) | another word after `Key` (`Hexagon` is not `Hex`) |
+   | `K_e_y`, `K1E2Y`, `K_E_Y`, `K e y` | shown | single letters; no term's letters side by side |
+   | `Keyboard`, `KeyboardDataQueueSize`, `Monkey`, `Turkey` | **shown** (`Keyboard`, `Monkey` owner examples) | no term with nothing after it; `key` inside a word with small letters |
+   | `PIN`, `UserPin`, `PinCode` | withheld | `PIN`, `PINCODE` |
+   | `Pin Code`, `Pin_Code`, `Pin-Code2`, `Pin  Code`, `Pin Codes` | withheld | `PIN CODE` |
+   | `Pin Codec`, `PinCodeLength`, `Pin CodeLength`, `Spin Code` | shown | letters after `Code`; another word after `PinCode`; no `Pin` at a word's start |
+   | `Pinned`, `Spindown`, `SpinUp`, `SpinValue` | shown | no `Pin` at a word's start |
+   | `SSID`, `DesiredSSID`, `Ssid2` | withheld | `SSID` ends the name |
+   | `*SSIdleTimeout`, `*SSIdleTimeoutScreenOff` | **shown** (`*SSIdleTimeout` an owner example) | `SSIdle` one word; the letters after `SSId` |
+   | `*PMWiFiRekeyOffload`, `*SelectiveSuspend` | shown | no term |
+   | `NetworkAddress`, `TrkNetworkAddress`, `DriverDesc`, `MatchingDeviceId`, `InfPath`, `DriverVersion`, `SetupPreferredAudioDevices` | shown | Windows' own values |
+   | `XhciLinkKeep`, `Uac2UsbStats` | shown | this tree's and a driver's own values |
+
+   Against what drivers keep: every value name this tree's INFs write
+   (the `Xhci*`, `XhciCm*` and the NDIS miniport's parameters) and the
+   values Windows writes (`DriverDesc`, `InfPath`, `MatchingDeviceId`,
+   `ProviderName`, `NetworkAddress`, `SetupPreferredAudioDevices`) are
+   shown; so are Microsoft's standardized INF keywords for network
+   adapters `*SSIdleTimeout` and `*SSIdleTimeoutScreenOff` (NDIS
+   selective suspend), which the rule before 2026-11-17 withheld for the
+   letters `SSID` in `SSId`, and the sibling driver's `Uac2*` values (the
+   50.29 XP leg). No public document seen lists a wireless driver's own
+   value names for its keys.
+
+   What the rule lets through, the known residuals: a term followed by a
+   word that is not of a secret's form (`PasswordString`, `KeyData`,
+   `PskBlob`); a term inside a word with small letters, not at its start
+   (`userpassword`, `Mypassword`); a term parted by other characters
+   (`Pass_word`; `PIN CODE` is the one term a separator may part, and no
+   rule passes over separators in general, since the letters of a term
+   stand side by side); and every secret kept under an innocent name or
+   inside an opaque blob. What it withholds that is not a secret: a name in capitals
+   alone ending in a term's letters (`MONKEY`, `TURKEY`), a term followed
+   by a form word in a harmless sense (`KeyValue`), and every name ending
+   in `Key` not on the harmless list (a keyboard's `MuteKey`). The rule
+   reads no character before the name's start or past its end. It is
+   `tr_reg_secret_name`, pure.
+
+   **The rule is a heuristic, and the reports can still hold sensitive
+   data.** It goes by the value's name alone, because the data of a
+   credential looks like any other string: a password or a cryptographic
+   key stored under a name the rule lets through (above), or inside an
+   opaque blob, is printed. The user documentation says so, and that the
+   report is to be read before it is shared.
+
+   Beyond the name rule each output keeps its own privacy rule,
+   unchanged in kind: the report, which already shows serial numbers and
+   instance ids, prints the data as read; the `.DEV`, which is pasted
+   publicly, screens it as it screens every other string (section 15;
+   `docs\contributing\snapshot-reader.md`, "Privacy"): a string, and
+   binary data, holding one of the machine's names is withheld ("withheld
+   (holds this machine's name)"). The screen sees the bytes before
+   anything is replaced for printing: the data as stored with its NULs
+   left out (so a name kept as UTF-16 in ASCII letters reads whole),
+   control bytes as blanks, and every byte of the system's code page kept,
+   since the machine's names are in that code page and may have letters
+   outside ASCII; then, the data read as UTF-16 at either byte alignment
+   and converted to the system's code page (`WideCharToMultiByte`,
+   `CP_ACP`, in the Windows half), so a user name with letters outside
+   ASCII is found in either form. Only after the answer are the bytes
+   outside printable ASCII shown as `?`. A text longer than the screen's
+   2047 characters is screened in windows of 1800 overlapping by 300
+   (`tr_reg_screen_windows`), so a name across a window's edge is whole
+   in one. With `/nosysinfo`, or where the names were not read, no string
+   or binary data is printed ("withheld (not screened)") and the value
+   names keep only the characters of an identifier, while numbers are
+   still printed. The device's instance id stays withheld in the `.DEV`
+   as before.
+
+4. **The format, and the readers of the two files.**
+   - Each value is one line, then any lines of its data, indented under
+     it: `"Name" = REG_SZ "text"`; `"Name" = REG_EXPAND_SZ "text"`, not
+     expanded; `"Name" = REG_DWORD 305419896 (0x12345678)`;
+     `REG_DWORD_BIG_ENDIAN` and `REG_QWORD` likewise (the QWORD's decimal
+     made from its two halves, with no 64-bit arithmetic); `"Name" =
+     REG_MULTI_SZ, 3 strings:` and each string quoted on its own line;
+     `"Name" = REG_BINARY, 4 bytes: 78 56 34 12`, and above 16 bytes the
+     offset lines; `REG_NONE`, `REG_LINK` and the three resource types by
+     name and in hexadecimal; an unknown type as `type 0x0000002A` in
+     hexadecimal. The unnamed value is `(default)`. A string is shown up
+     to its first NUL or its stored size, whichever comes first; a byte
+     outside printable ASCII is shown as `?`, as the `.DEV` shows every
+     string; a quote inside a name or a string is shown doubled (`"say
+     ""hi"""`), so the closing quote is the only single one. A DWORD or
+     QWORD of the wrong size is shown in hexadecimal with its size:
+     `REG_DWORD, 3 bytes (not 4): 01 02 03`.
+   - The report: under each USB device's node, after its details and
+     descriptors, a block "Driver key values (read only)": the key as
+     Windows names it, the values, a count; then for each devnode below
+     the device, in the walk's order, "Interface MI_nn" (a devnode with
+     `&MI_` in its id) or "Devnode below it", with ", level N below the
+     device" from level 2 on, its description, its instance id and its
+     key's block; the walk's own lines (item 1) where they fall. The
+     node's earlier lines are unchanged and in the same order, so a reader
+     of the report that looks for them finds them where it did; the new
+     lines carry the node's `| ` lead like every detail line. The window's
+     details pane is the same function's other caller and does not show
+     the block (`write_report` adds it).
+   - The `.DEV`: a section of its own, "USB devices' driver keys", after
+     "Thunderbolt networking" and before the dump's note, one entry per
+     devnode: "USB device N" for a device, "USB device N, a devnode below
+     it (level L)" for each devnode below it, each with its id (the
+     instance withheld), its description, its key and its values; the
+     walk's own lines; and at the end the count ("N USB device(s) listed,
+     with M devnode(s) below them, of K devnodes looked at"). The `.DEV`
+     has no layout version: it is read by people, by its section headings,
+     and no script of this tree parses it; every earlier section keeps its
+     text and place. The dump's `.TXT` and the snapshot's schema are not
+     touched. Save Report's own snapshot run passes the engine's new
+     `-nokeys` (XHCITR's `/nokeys`, as `/nonet`), so the report does not
+     carry each key twice, and so does every controller after the first
+     in a `/snapshot` of every controller; the section then says where
+     the keys are ("left out of this run: Save Report lists them under
+     each USB device, and a snapshot of every controller in its first
+     controller's device report"). Since both outputs take the same walk,
+     the report under its devices carries everything the section would.
+
+5. **Both bitnesses and both registry families.**
+   - The reading is `RegOpenKeyExA` with `KEY_READ` and `RegEnumValueA`,
+     both in the tool's import allowlist already for both builds, as is
+     `WideCharToMultiByte` (KERNEL32, the screen's UTF-16 view), so the
+     allowlist does not change. `XHCITR64.EXE` reads natively. `XHCITR.EXE`
+     on 64-bit Windows hands the window and `/report` to `XHCITR64.EXE`
+     (the WOW64 hand-off), but runs `/snapshot` itself: under WOW64 the
+     driver keys read the same either way, since
+     `HKLM\SYSTEM\CurrentControlSet` is not one of the keys WOW64
+     redirects. The formatter's sizes are 32-bit counts and its data is
+     bytes, so nothing in it depends on the pointer size.
+   - The key is `SYSTEM\CurrentControlSet\Control\Class\<Driver>` on 2000
+     and later and `System\CurrentControlSet\Services\Class\<Driver>` on
+     98 SE and ME, `<Driver>` the devnode's `Driver` value
+     (`{guid}\nnnn` on NT, `<class name>\nnnn` on 9x), as both files open
+     it today (`driver_key_path`, and `dev_consider`'s NT-then-9x try).
+   - On 98 SE and ME a value is whatever type its writer gave it, and a
+     number an INF or a driver writes there can be four bytes of
+     `REG_BINARY` rather than a `REG_DWORD` (`tr_snap.c`'s `reg_dword`
+     takes either form for that reason). Such a value is shown as what it
+     is, `REG_BINARY, 4 bytes: 01 00 00 00`, never guessed into a number:
+     four bytes of binary data need not be a number. The ANSI calls hand 9x's strings
+     back as stored, which may lack the closing NUL, so a string is
+     bounded by its size; on NT they hand back the system code page's
+     form of each Unicode string. A value name on 9x is at most 255
+     characters and on NT 16383; the name buffer holds the NT bound.
+
+6. **A key that does not open, a value that changes.** A devnode with no
+   `Driver` value has no driver installed and says so ("No driver key: no
+   driver is installed for it."); a key that does not open says "not
+   read: the key did not open (error N)". The values are read one index
+   at a time into a 65536-byte buffer. A read answered "more data" asks
+   again with no buffer for the name and size: a value larger than the
+   buffer is listed as above; one that now fits had grown and shrunk, and
+   is read again; after three reads that each found a different size the
+   value is listed as "its size changed at each of 3 reads; not shown". A
+   value gone between the read and the size query is not listed, and the
+   size query's "no more items" ends the key there, as Windows says it
+   ends; an enumeration
+   that fails with any other error stops the key there and says so ("the
+   reading stopped at value N: error E"), and the count past the limits
+   says its error as item 2 does. A key written to while it is
+   read may show a value twice or miss one, since the indexes move; the
+   block is what each call answered. The type shown is the one the read
+   that returned the data gave.
+
+7. **The pure half** (`xhcitr\tr_reg.c`, host-tested in
+   `test\test_trreg.c`): `tr_reg_secret_name`; `tr_reg_value_text`, one
+   value's lines from its name, type, data, size and a screen (a
+   callback for the text and one that converts UTF-16 to the system's
+   code page); `tr_reg_key_text`, a key's block over a callback with
+   `RegEnumValueA`'s contract, with the limits and every outcome of item
+   6; `tr_reg_screen_windows`, the screen's windows; `tr_reg_tree_walk`,
+   one device's devnodes over child, sibling, hub, block and line
+   callbacks; `tr_reg_hub_id`. The vectors: every type; the bounds the
+   suite names, at and past each (a 512 and a 513 character string, 32
+   and 33 strings, 2048 characters of strings, 256 and 400 bytes, a value
+   of exactly 65536 bytes and one of 65537, the 257th value, the 64 KB
+   text bound, a 200-character name and one of the registry's 16383);
+   a wrong-sized DWORD and QWORD, the 9x four-byte binary number shown as
+   bytes, a string with no NUL and one with data after its NUL, the
+   unnamed value, a value that grows between the size query and the read
+   (once, then at every read), one larger than the buffer, one gone
+   between the calls, a key that does not open, an enumeration error; the
+   count past the limits (exact, a name too long for the buffer, an error
+   at once and later, at, one short of and past its own bound); the name
+   rule's table of item 3, each name with its outcome, and short names,
+   the table's names and 16383-character names (ending in a term, in
+   `Key` after a word, as the one word and in capitals, in a term or a
+   form word cut by the name's end) read against a guard page after the
+   name and against one before it, so a read past a name's end or before
+   its start faults; names handed back by the enumeration as characters
+   and a length with no NUL, each ended at its length;
+   the screening answers (shown, withheld, not screened), a user name in
+   the code page and in UTF-16 at either alignment in binary data, a name
+   in a value's name, the windows' edges on texts up to 65536 characters
+   and through a key; quotes doubled; and the walk over a fake tree: a
+   composite device with a nested function and HID devnodes below it, the
+   depth and devnode limits, a hub by flag and by id, devnodes not all
+   read (an error and the tool's own mark), a block and a line that fail,
+   and every devnode's key listed through the walk. Beyond the
+   vectors, the bounds of the 256-value, 64 KB and 32-devnode limits are
+   not tested past the cases named. The Windows half is
+   `xhcitr\tr_regw.c`: the open, the enumeration callback and the UTF-16
+   conversion. `xhcitr.c` adds the report's walk and blocks and
+   `/nokeys`; `tr_snap.c` adds the `.DEV`'s walk and section and
+   `-nokeys`.
+
+8. **The user documentation.** `xhcitr\README.TXT` says what Save Report
+   and the snapshot's device report now contain, that every value is
+   listed by name, type and size and its data unless withheld, that the
+   name test is a test by name alone, and that the report can still hold
+   private data (a draft for the owner); `docs\contributing\snapshot-reader.md`
+   describes the `.DEV`'s new section, its walk, its size and its privacy
+   rule.
+
+## 26. A controller stopped after repeated failures, and restarting a controller (roadmap-usb4 tasks 50.30 to 50.32, owner 2026-11-17)
+
+Design before code, 2026-11-17. The driver's half is design record 17
+section 4.15: a device that stops answering fails alone (task 50.30),
+every reset request records its reason, its device's place and its slot,
+and a controller that has latched failed is tried again (task 50.31). The
+field report read for it (record 17 section 4.15.1) had a controller
+latch and every device on it lost while the tool showed the controller as
+started with empty ports, and no path in the tool restarted it (the later
+saves follow restarts made outside the tool). This section is what the tool shows of a
+stopped controller and the place involved, and task 50.32's restart (owner,
+2026-11-17: "by Windows' own restart of the device, as Device Manager's
+disable and enable", not a driver request).
+
+1. **The reading.** The query request stays at version 3: its readers in
+   every installed tool (`tr_xhq_parse`, `tr_xhq_driver`) accept versions
+   1 to 3 and read a header-sized block first. The driver's new
+   recovery-status request (record 13 section 8.12; record 17 section
+   4.15.8), beside the holds request, answers at every logging level a
+   bounded block: the terminal value (1 a recovery owed, 2 three failed
+   in a row, 3 the window refused, 4 and 5 contained, 6 the lost
+   message), the ring of the last four reset records (reason, extra,
+   slot, root port, route string, VID:PID where read, how long ago in
+   seconds, about), how many of the window's records involved the same
+   place, `XhciDeviceIsolation` (value, listed, applies) and task 50.31's
+   state (the value, the try number, the seconds to the next try, about,
+   or none). The tool reads it with the query's header at each refresh,
+   on the same thread and door gate, and in the report. A driver before
+   it answers `STATUS_INVALID_DEVICE_REQUEST`: the tool then shows what
+   `XHQ_F_FAILED` alone allows (item 2's first line, no detail) and offers
+   no restart of a failed controller (item 9). An older tool with this
+   driver sees the query as before. Pure readers in `tr_core.c` with host
+   vectors.
+2. **The controller's line and details.** Drafts for the owner. The
+   texts step 1 built (`xhcitr\tr_log.c`, as at `407ec3258`: the tree
+   line's suffixes, the status lines, the "involved" lines and the line
+   naming no device, the restart line "Restart it from Device Manager,
+   or restart Windows.", the place and name forms and the reasons in
+   words) are approved as drafted (owner, 2026-11-17); the texts of this
+   item that step 1 did not build stay drafts. A
+   controller whose terminal is 2 or 3 has its tree line end " (stopped
+   after repeated failures)" and its details, after its identity:
+   "Status: Stopped after repeated failures. Its devices were removed."
+   Then the last record: "Recovery requests involved: the device at port
+   3 (USB Audio Device, 1234:5678); it did not answer." - the place in the
+   tool's own words ("port 3", "port 2 of the hub at port 1", from the
+   root port and the route string), the name found for the VID:PID among
+   the devices Windows has recorded (`DeviceDesc` under the
+   `USB\VID_vvvv&PID_pppp` instance keys, read only, both registry
+   layouts) or the ids alone, and the reason in words (a table of record
+   17 section 4.15.8's reasons). Where several of the window's records
+   name the same place: "3 of the last 4 recovery requests involved this
+   port." A record naming no device: "The driver did not record which
+   device was involved." Then task 50.31's state: "The driver may try
+   again automatically; next attempt in about 20 seconds." (with, where
+   the controller has root ports, "A device unplugged from or plugged
+   into one of this controller's own ports, not a hub's, can bring it
+   sooner."), or at `XhciFailedRetrySec` 0: "Automatic retries are off:
+   it stays stopped until it is restarted." Last: "To restart it,
+   right-click the controller and choose Restart Controller." A contained
+   controller (terminals 4 and 5) shows " (closed off)" and item 9's
+   text, never a retry line; the lost message (terminal 6) shows "
+   (stopped: interrupts lost)" with the snapshot's existing explanation
+   and no retry line. The tray's red icon and its tooltip (section 7.2.1)
+   are unchanged. Save Report and `/report` carry the details.
+3. **A held place's reason 4.** Section 24's notes gain hold 4 (record 17
+   section 4.15.4: the device stopped answering): at the port, " (on
+   hold)" as for hold 1, and the note "Note: This port is on hold because
+   the device on it stopped answering. Unplug the device, leave it
+   unplugged for a few seconds, and plug it in again; the hold also ends
+   when the controller restarts. Programs that were using the device may
+   need to open it again."; at a
+   controller's details for a hub's port: "A port of a hub on this
+   controller is on hold because the device on it stopped answering.
+   ..."; the balloon, where the hold notice is on (section 24 item 5):
+   "Port N of <controller> is on hold: the device on it stopped answering.
+   Unplug the device and plug it in again." Drafts for the owner. Hold 4
+   is powered, so it is announced and released as hold 1 is.
+4. **The snapshot text.** `tr_snap.c`'s terminal line (`tol_terminal_text`,
+   `print_tol`) keeps its texts and replaces "(it stays failed until a
+   stop and start)" with "(next attempt in about N s, try K)" under task 50.31, and keeps it at
+   `XhciFailedRetrySec` 0 and for the terminals never tried. After it, a
+   line per reset record: "reset requested: <reason> at root port P route
+   R slot S [vvvv:pppp], about T s ago", the latch's record marked, and the
+   reason counters. `snaptest.cmd` gains a fixture of each.
+5. **Where the action appears.** "Restart Controller..." on a controller's
+   right-click menu and on the Action menu while a controller is
+   selected, for every xhci98 controller the tool lists; for a stopped
+   one (terminal 2 or 3) also as the last line of its details (item 2)
+   and on the tray's red-icon menu after its existing item ("Restart
+   <controller>..."). Not offered for another driver's controller, for a
+   Thunderbolt NHI (`xhcicm.sys` has its own life) or where item 9
+   refuses it.
+6. **The confirmation.** Before anything is done the tool asks, listing
+   what will disconnect, from its own model of the controller's subtree
+   (every device under it, by the names the tree shows; a drive with its
+   letters; hubs counted, not listed): "Restart <controller>? These
+   devices will disconnect and connect again: <list>. A drive's open files
+   may be lost: close them first. A keyboard or mouse on this controller
+   stops for a few seconds." Buttons "Restart" and "Cancel" (Cancel the
+   default). For a stopped controller, whose devices are already gone, the
+   list is replaced by "Its devices were removed when it stopped." Drafts
+   for the owner.
+7. **The calls, 2000 and later** (both executables; `XHCITR64.EXE` on x64
+   and, through the WOW64 hand-over of section 9, for `XHCITR.EXE` there):
+   the controller's device information element from its instance id
+   (`SetupDiCreateDeviceInfoList` and `SetupDiOpenDeviceInfoA`);
+   `SetupDiSetClassInstallParamsA` with `SP_PROPCHANGE_PARAMS`
+   (`DIF_PROPERTYCHANGE`, `StateChange` `DICS_PROPCHANGE`, `Scope`
+   `DICS_FLAG_GLOBAL`, `HwProfile` 0), then
+   `SetupDiCallClassInstaller(DIF_PROPERTYCHANGE, ...)`, then
+   `SetupDiGetDeviceInstallParamsA`. This is the restart Microsoft
+   documents for `DICS_PROPCHANGE` and the form the Thunderbolt mark
+   service already sends (`xhcimark.c`, record 21 section 7.4). The new
+   routines are looked up at run time through `load_routines`, so the
+   import allowlists gain no row (section 9). A disable then an enable was
+   rejected: ended between the two, the tool would leave the controller
+   disabled, with every USB device on it, and a config-specific disable is
+   stored; `DICS_PROPCHANGE` stores nothing.
+8. **The calls, 98 SE and ME** (owner, 2026-11-17). A remove and rescan:
+   `CM_Query_Remove_SubTree` on the controller's devnode with
+   `CM_QUERY_REMOVE_UI_NOT_OK`, as the eject's 9x path sends it (section
+   6.2 step 6), so a refusal is known before anything stops; then
+   `CM_Remove_SubTree`; then `CM_Reenumerate_DevNode` on the controller's
+   parent (the PCI bridge), which finds the controller again and loads its
+   driver, the remove and rescan the 98 SE and ME legs have read from
+   Device Manager since `2.3.0.0`. Whether that sequence works from a Win32
+   program through `cfgmgr32.dll` on both 98 SE and ME is **unread**: the
+   first step of the implementation is that reading in both guests. If it
+   works on both, the action is offered there; if not, it is not offered
+   on 98 SE and ME at all (the menu item absent, the details' last line
+   saying "Restart it in Device Manager, or restart Windows."). A removal
+   that succeeds and a rescan that fails leave the controller absent until
+   the next hardware scan or restart; the tool says so: "The controller
+   was removed but Windows did not find it again. Use Refresh in Device
+   Manager, or restart Windows." No disable is used on 9x, so none can be
+   left behind.
+9. **Refused for a contained controller.** A controller whose terminal is
+   4 or 5 is not restarted: record 17 section 4.6's known limitation (a
+   stop on the pinned branch can wait for ever in `HcdDmaMapDrain`) means
+   a restart could stop Windows answering. The menu item is shown
+   disabled and the details say, draft: "This controller was closed off
+   because it stopped answering. Restarting it could stop Windows
+   responding: save your work and restart Windows." (Step 1 built this
+   text as a status line: approved as drafted, owner, 2026-11-17.) The
+   same refusal
+   where the driver does not answer the recovery-status request and the
+   controller reads failed: the tool cannot tell latched from contained
+   there. The terminal is read again immediately before the call, by the
+   process that makes it - the elevated one on Vista and later reads it
+   itself - since the menu's state can be stale; contained by then, the
+   call is not made.
+10. **Rights and elevation.** As the eject (section 6.4, 6.6): on 2000
+    and XP a user who is not an administrator gets "Restarting a
+    controller needs an administrator." and nothing is done (the call
+    fails with `ERROR_ACCESS_DENIED`, read after the call, nothing having
+    changed); on Vista and later the tool restarts itself elevated
+    (`elev_launch_req`, `ShellExecuteEx` "runas") with `/restart
+    "id=<instance id>" /result <section> /confirmed <digest>`, the
+    confirmation having been given in the unelevated window and its
+    digest checked by the elevated one as the eject's is, and waits for
+    the answer in the named section up to `TR_ELEV_WAIT_MS`. The manifest
+    stays `asInvoker`. 98 SE and ME need no rights.
+11. **What Windows answers, and what the driver says.** "Windows
+    completed the restart request" and "the driver recovered the
+    controller" are two different facts, and the tool reports each only
+    from its own evidence: a latched controller can already look started
+    to Windows, which is this task's original problem. On 2000 and later:
+    a failed call (any `SetupDiCallClassInstaller` or parameter call
+    returning `FALSE`) is reported with its error and is never shown as a
+    restart (`ERROR_ACCESS_DENIED` as item 10). After a successful call
+    the flags returned are kept, and before anything is claimed the tool
+    reads both the controller's devnode (`CM_Get_DevNode_Status`: started,
+    its problem code) and the driver's recovery-status request again
+    (item 1), waiting up to a few seconds (`TR_RESTART_SETTLE_MS`, a
+    bounded poll) for the driver's start to answer. The answers, drafts
+    for the owner:
+    - started, no problem, no flag, status read and not failed: "Windows
+      restarted <controller>. It is running."
+    - started, no problem, no flag, but status read and still failed
+      (terminal 1 to 3): "Windows completed the restart request, but
+      <controller> is still stopped after repeated failures." followed by
+      item 2's details as now read; never "restarted".
+    - status read as contained (4 or 5) or interrupts lost (6): item 2's
+      text for that terminal, after "Windows completed the restart
+      request, but".
+    - status unavailable (a driver before the request, or the request
+      failing): "Windows completed the restart request. The tool could
+      not read from the driver whether <controller> is working." followed
+      by the devnode's state as read ("Windows shows it running." or "It
+      is stopped (problem N).").
+    - `DI_NEEDREBOOT` or `DI_NEEDRESTART`: "Windows reports that a system
+      restart is required to finish restarting <controller>." followed by
+      the state as read by the same two readings; these flags are not
+      taken for a refusal, nor for the controller having been left
+      running.
+    - the devnode not started, or with a problem code: "Windows completed
+      the restart request, but <controller> did not start (problem N)."
+    On 98 SE and ME (where item 8's reading lets the action be offered)
+    the same two readings follow a rescan that found the controller, with
+    the same texts; a refused query-remove gives the eject's 9x answer
+    text (`tr_usb_answer9x`, "in use ... DOS box") and nothing else is
+    done. No second attempt, no forced fallback after a refusal, no prompt
+    to restart Windows. A time-out of the elevated process is shown as "No
+    answer from the elevated tool; the controller's state is:" with the
+    two readings.
+12. **After a restart.** The restart is a stop and a start of the
+    controller: the driver's start clears the latch, the window, the
+    holds of every place (record 17 section 4.5, "a controller start") and
+    task 50.31's backing off, and enumerates what is plugged in. A device
+    still failing is then failed alone and its place held again where
+    `XhciDeviceIsolation` applies and its abort and teardown end cleanly
+    (record 17 section 4.15.4); otherwise, or where its abort fails, the
+    controller can latch again. The tool refreshes when Windows
+    reports the device change, as now; the stopped line is gone.
+13. **The user documentation.** `xhcitr/README.TXT` gains the action and
+    the stopped controller's line; `docs/using/` (the USB Tree's page)
+    the same, no testing status. The release notes' known limitations
+    gain a line, draft for the owner: "If every device on one USB
+    controller disappears, open the xHCI98 USB Tree: it shows the
+    controller as stopped after repeated failures and, where the driver
+    recorded it, the port and device involved. Unplug that device and leave
+    it unplugged for a few seconds. The driver may try the controller again
+    by itself (the Tree shows the next attempt); it does not when automatic
+    retries are off (`XhciFailedRetrySec` 0), and unplugging a device
+    behind a hub does not bring an attempt sooner. Otherwise restart the
+    controller from the USB Tree (right-click it, Restart Controller) or
+    in Device Manager (disable and enable it), or restart Windows. A
+    controller shown as closed off is never tried again and should not be
+    restarted: save your work and restart Windows. Programs that were using
+    a device may need to open it again. On Windows ME, a device that does
+    not come back may need to be unplugged and plugged in again." The
+    restart sentence is conditional on item 8's reading: if the action is
+    not offered on 98 SE and ME, it reads instead "Otherwise, on Windows
+    2000 and later, restart the controller from the USB Tree (right-click
+    it, Restart Controller) or in Device Manager (disable and enable it);
+    on Windows 98 SE and ME, restart Windows." The line is settled at the
+    cut from T.24's result.
+14. **Decisions superseded.** Section 22 item 6's "the Tree never
+    disables a controller itself (the owner's choice D-1)" and T6's and
+    section 6.5's "never ... the controller" stand for the eject and the
+    settings window; the restart of this section is the owner's decision
+    of 2026-11-17 (T30), a Windows restart of the device asked for in
+    words and confirmed, with no disable on either family.
+15. **Host vectors** (`test\test_xhq.c`, `test\test_tr.c`): the
+    recovery-status block against the driver's layout (`test_xhq` holds them equal), every
+    reason's words, the place's words from root port and route string,
+    the texts word for word, the terminals each item shows or refuses,
+    the elevated command line's parse and its digest, and the version 1
+    to 3 query unchanged, the request refused by an older driver, and the
+    devnode state's words after each answer of item 11.
+16. **Legs.** T.21: on 98 SE, 2000, XP and 7 x86 (qemu flavour), a
+    controller latched by record 17 section 4.15.13's leg (a) (code `05`
+    four times inside the window) and by section 4.15.9's leg 13 (the
+    field report emulated end to end): the line, the
+    details with the place involved and the next attempt, the snapshot's
+    lines, the
+    tray's item; then Restart Controller: on 2000, XP and 7 as an
+    administrator and as a standard user (7 through the elevation), on 98
+    SE: the controller restarts and its devices come back. T.22: a
+    healthy controller with a stick holding an open file (2000, 7) and on
+    98 SE a DOS box on the stick: item 11's answer and state, and nothing
+    else. T.23:
+    a controller contained by injection `07`: the action disabled with its
+    text. T.24: 98 SE and ME, the reading of item 8 first, then the
+    restart. T.25: a hold of reason 4 (record 17 section 4.15.9's leg 1):
+    the port's tag and note, the balloon with the notice on. T.26: this
+    tool with a `3.5.0.0` driver (no recovery-status request) and a
+    `3.5.0.0` tool with this driver (the query unchanged), on 98 SE and 7.
+
+## 27. Restarting a controller: the calls, the answers and the legs (roadmap-usb4 task 50.32, owner 2026-11-17)
+
+Design before code, revision 50 (2026-11-19): revisions 41 to 46 of
+2026-11-18, revised for the owner's answers of that day, revision 47,
+reviewed and revised, revision 48, the owner's decision of
+2026-11-19 on the drive letters no devnode claims (item 7), reviewed and
+revised, revision 49, the owner's two later decisions of that day -
+the floppy letters no devnode claims (item 7) and C10 kept dropped -
+reviewed and revised, and revision 50, the owner's decision of that day
+on the answer after a restart Windows refuses in the session (items 2,
+8 and 12, H1), reviewed and revised.
+Task 50.32's line in `roadmap-usb4.md` leaves to its design the calls on
+98 SE and ME and on 2000 and later, both executables, the user
+documentation, and the release notes' line for a controller whose devices
+are all gone. Section 26 drew the restart before code (items 5 to 11, 13
+and 16); this section settles what it left open and replaces it where it
+says so. The texts the owner approved on 2026-11-17 (section 26 item 2) do
+not change. Every new user-visible string here is a draft for the owner,
+with the id of its entry in item 12, except H1, whose wording the owner
+accepted on 2026-11-19 (revision 50). Where an owner's answer of 2026-11-18
+decides a point, the place is marked "(owner, 2026-11-18)"; the owner's
+decisions of 2026-11-19, given through the coordinator, are marked
+"(owner, 2026-11-19)".
+
+Tags: **[hdr]** read in a kit header this repository builds against or
+holds (the Windows 2000 DDK's `tools\ntddk\inc`, MSVC 6.0's
+`tools\MSVC600\VC98\Include`, WDK 7.1's `tools\WinDDK71\inc\api`), names,
+values and declarations, and the structure sizes held by a compile-time
+check in each (nothing run); **[emu]** read in this project's guests on
+the pinned emulator (`runs/run-50.md`, "50.32"); **[rec]** recorded
+earlier in this repository, cited where it is; **[src]** read in this
+repository's sources at this revision.
+
+**Two stages.** The section is built in two stages, and stage 1 is
+complete in itself:
+- **Stage 1, 2000 and later:** items 1, 2 and 4 (with the driver's
+  lifetime words), item 5 but its check 6, items 6 (the confirmation
+  list), 8 (the four-part answer, its NT rows), 9 (elevation and Run As),
+  10 to 14 for 2000 and later, and legs T.28 to T.34's NT rows.
+- **Stage 2, 98 SE and ME:** items 3 and 7, item 5's check 6, item 8's 9x
+  rows, the 9x vectors of item 14, and legs T.27 and T.32 to T.34's 98 SE
+  rows.
+
+Stage 1 may ship with the 98 SE and ME action not offered: until stage 2 is
+cleared and its legs pass, `XHCITR.EXE` on 98 SE and ME offers no M1, M2 or
+M3, every controller there keeps the approved "Restart it from Device
+Manager, or restart Windows." where step 1 built it, `/restart` there
+answers R3, and the user documentation carries item 13's stage-1 text.
+Nothing of stage 2 is compiled into a build that ships stage 1 alone.
+
+1. **What is being built.** An action on each xhci98 controller, offered
+   also on the line of one stopped after repeated failures with the place
+   and device involved shown; asked first, with every device that will
+   disconnect listed; where Windows asks for a restart of the computer,
+   the tool says so and does no more; administrator rights on 2000 and
+   later, asked for on Vista and later as the eject asks, and on 2000 and
+   XP offered through Run As (item 9) (roadmap-usb4 task 50.32; decision
+   T30, section 12). On 2000 and later the action is Windows' single
+   stop-and-restart request for the device, `DIF_PROPERTYCHANGE` with
+   `DICS_PROPCHANGE`, accepted in place of a literal disable followed by an
+   enable (owner, 2026-11-18; it supersedes the description of
+   the restart "as Device Manager's disable and enable" in section 26's
+   opening paragraph and item 7). It is not the same operation as Device
+   Manager's Disable and Enable, which are two requests (`DICS_DISABLE`,
+   `DICS_ENABLE`) and store a disabled state between them, and the user
+   documentation does not say that it is. On 98 SE and ME it is a
+   query-remove, a removal and a rescan of the parent, under item 5's
+   checks.
+
+2. **The calls, 2000 and later.** One sequence, in both executables. Every
+   routine is resolved before anything is called; one missing makes the
+   action unavailable (R3), never a partial sequence.
+   1. The baseline (item 4) and item 5's checks, by the process that makes
+      the call (on Vista and later the elevated one, on 2000 and XP the
+      Run As one), immediately before it.
+   2. `SetupDiCreateDeviceInfoList(NULL, NULL)`; then
+      `SetupDiOpenDeviceInfoA(set, id, NULL, 0, &data)` with
+      `data.cbSize = sizeof(SP_DEVINFO_DATA)`. Either failing: no call is
+      made (A18; `ERROR_NO_SUCH_DEVINST` from the open is R10).
+   3. `SetupDiGetDeviceInstallParamsA(set, &data, &ip)` with
+      `ip.cbSize = sizeof(SP_DEVINSTALL_PARAMS_A)`. Its `DI_NEEDREBOOT` and
+      `DI_NEEDRESTART` are kept as the earlier requirement `P`; a failed
+      read makes `P` unknown and the sequence goes on. Where either is set,
+      both are cleared through `SetupDiSetDeviceInstallParamsA` with the
+      same structure, so that the read after the call is this call's; no
+      other flag is changed. `P` is kept whatever follows and is reported
+      (item 8, line 4). A failed clear is recorded: the later flags are then
+      reported as read and as possibly earlier.
+   4. `SetupDiSetClassInstallParamsA(set, &data, &p.ClassInstallHeader,
+      sizeof(SP_PROPCHANGE_PARAMS))` with `p.ClassInstallHeader.cbSize =
+      sizeof(SP_CLASSINSTALL_HEADER)`, `InstallFunction =
+      DIF_PROPERTYCHANGE` (`0x12`), `StateChange = DICS_PROPCHANGE`
+      (`0x3`), `Scope = DICS_FLAG_GLOBAL` (`0x1`), `HwProfile = 0`.
+      Failing: no call is made (A18).
+   5. `SetupDiCallClassInstaller(DIF_PROPERTYCHANGE, set, &data)`;
+      `FALSE` is read with `GetLastError` at once.
+   6. `SetupDiGetDeviceInstallParamsA` again with a fresh `cbSize`: its
+      `Flags & (DI_NEEDREBOOT | DI_NEEDRESTART)` (`0x100`, `0x80`) are the
+      call's requirement `F`; **a failed read makes `F` unknown, never
+      absent**. It is read after a `FALSE` call too.
+   7. `SetupDiDestroyDeviceInfoList` on every path that created the list;
+      then the settle and the answer (items 4 and 8).
+
+   **The seven SetupAPI routines** - `SetupDiCreateDeviceInfoList`,
+   `SetupDiOpenDeviceInfoA`, `SetupDiGetDeviceInstallParamsA`,
+   `SetupDiSetDeviceInstallParamsA`, `SetupDiSetClassInstallParamsA`,
+   `SetupDiCallClassInstaller` and `SetupDiDestroyDeviceInfoList` - and
+   `SP_DEVINFO_DATA`, `SP_DEVINSTALL_PARAMS_A`, `SP_CLASSINSTALL_HEADER`,
+   `SP_PROPCHANGE_PARAMS`, `DIF_PROPERTYCHANGE`, `DICS_PROPCHANGE`,
+   `DICS_FLAG_GLOBAL`, `DI_NEEDREBOOT` and `DI_NEEDRESTART` are declared,
+   with the same values, in all three `SETUPAPI.H` [hdr]: the Windows 2000
+   DDK's, MSVC 6.0's (what `XHCITR.EXE` is built with) and WDK 7.1's
+   `inc\api` (what `XHCITR64.EXE` is built with). The x86 headers pack to
+   one byte (`pshpack1.h`), WDK 7.1's to eight under `_WIN64`; the sizes,
+   held by a compile-time check in each kit, are x86 and x64:
+   `SP_DEVINFO_DATA` 28 and 32, `SP_DEVINSTALL_PARAMS_A` 296 and 320,
+   `SP_CLASSINSTALL_HEADER` 8 and 8, `SP_PROPCHANGE_PARAMS` 20 and 20. The
+   tool uses the headers' structures and `sizeof` in both builds, as
+   `xhcimark.c` does, never a copy or a literal size. `cfgmgr32.h` is in
+   the 2000 DDK and WDK 7.1 and not in MSVC 6.0, so the configuration
+   manager's values stay the tool's own defines, checked against both:
+   `CR_SUCCESS` 0, `CR_INVALID_DEVNODE` `0x5`, `CR_NO_SUCH_DEVNODE` `0xD`,
+   `CR_REMOVE_VETOED` `0x17`, `CR_ACCESS_DENIED` `0x33`,
+   `CM_QUERY_REMOVE_UI_NOT_OK` and `CM_REMOVE_UI_NOT_OK` `0x1`,
+   `CM_REENUMERATE_NORMAL` 0, `DN_STARTED` `0x8`, `DN_NEED_RESTART`
+   `0x100`, `CM_DRP_CLASS` `0x8`. `ERROR_IN_WOW64` (`0xE0000235`) is in WDK
+   7.1's `SETUPAPI.H` alone and is a define of the tool's own as well.
+   Each routine is looked up by `GetProcAddress` in `load_routines`, so the
+   static imports and both architectures' rows of `xhcitr-imports.allow`
+   are unchanged (section 9). The routines exist on 2000 and every later
+   target: `XHCIINST` resolves `SetupDiSetClassInstallParamsA`,
+   `SetupDiCallClassInstaller`, `SetupDiGetDeviceInstallParamsA` and
+   `SetupDiSetDeviceInstallParamsA` and the mark service the rest on 2000
+   to 10 [rec]. 2000 has no x64 edition among the targets; XP x64 is the
+   first x64 case. `SetupDiRestartDevices` is not used: WDK 7.1 declares it
+   only for `_SETUPAPI_VER >= _WIN32_WINNT_WS03` and the other two kits do
+   not declare it [hdr]. The 9x routines of item 3 (`CM_Remove_SubTree`
+   above all, which WDK 7.1's `cfgmgr32.h` marks obsolete in favour of
+   `CM_Query_And_Remove_SubTree` [hdr]) are never called on NT.
+
+   On 2000 and later the stop is a query-remove, and the refusals of a
+   volume with open files or of a paging, dump or hibernation path are the
+   participating drivers' (record 21 section 7.4 [rec]); the controller's
+   own handler passes the query on and proves none of them [src]. The tool
+   relies on Windows for them and claims nothing about why Windows refused
+   or asked for a restart, with one exception (owner, 2026-11-19, given
+   through the coordinator; revision 50): where Windows accepted the
+   request, no new start was seen and Windows asks for a restart of the
+   computer or has marked the controller to be finished at the next
+   restart - A1 with S3, and W1 or W5 - the answer ends with H1 (item 8),
+   which offers a program using one of the controller's drives as a
+   possibility, never as the cause, and gives the two next steps. The
+   reading behind it [emu]: with an Explorer window open on the
+   controller's stick, Vista refused the stop in the session - a
+   query-remove, then a cancel-remove, no new start - while the call
+   returned `TRUE` and the class installer's flags and the devnode's mark
+   were set; with the window closed the same request restarted the
+   controller (`runs/run-50.md`, "50.32 stage 1 on Vista x64, and a
+   restart Windows refuses in the session").
+
+   **Under WOW64.** `XHCITR.EXE` on 64-bit Windows hands its window and its
+   one-shot modes to `XHCITR64.EXE` (section 9): `/restart` joins both the
+   hand-over's dispatch and its list of waited one-shot modes, so its exit
+   code comes back. Where `XHCITR64.EXE` is absent and the 32-bit tool runs
+   itself, the action is shown disabled with R4: SetupAPI refuses a 32-bit
+   process's device installation request on 64-bit Windows
+   (`ERROR_IN_WOW64` [hdr]), and the tool does not try. The elevated run
+   starts the running executable by its own path (`GetModuleFileNameA`),
+   so on 64-bit Windows it is `XHCITR64.EXE`; a file gone by then fails the
+   start (A16).
+
+3. **The calls, 98 SE and ME, and the reading** (stage 2). `XHCITR.EXE` calls the
+   32-bit configuration manager, `cfgmgr32.dll`, which 98 SE and ME
+   provide over their configuration manager; it carries no 16-bit code and
+   does not use the 16-bit `setupx` device installer (record 27's helper's
+   route, whose disable writes the configuration flags). The sequence,
+   after item 5's checks:
+   1. The baseline (item 4); `CM_Get_Parent` read and kept, since the
+      controller's devnode handle is not valid once it is removed
+      (`CR_INVALID_DEVNODE` read on both [emu]). `CM_Get_Parent` failing
+      ends the sequence before the query: nothing is removed, and no call
+      is made through a handle that was not returned (A21).
+   2. `CM_Query_Remove_SubTree(dn, CM_QUERY_REMOVE_UI_NOT_OK)`. Any answer
+      but `CR_SUCCESS` ends the sequence: nothing is removed, and **no
+      removal ever follows a refused query**.
+   3. Accepted: `CM_Remove_SubTree(dn, CM_REMOVE_UI_NOT_OK)`, as the
+      eject's 9x path does (record 24 section 7.1). A removal that does
+      not answer `CR_SUCCESS` (A12) is followed by step 4's rescan of the
+      parent alone, once, which finds again anything the failed removal
+      took away; no root rescan follows it.
+   4. `CM_Reenumerate_DevNode(parent, CM_REENUMERATE_NORMAL)`; its answer
+      is kept. It returns at once and the controller appears later [emu],
+      so the settle follows (item 4). Where the controller is not found by
+      the settle's end, or the parent's rescan did not answer
+      `CR_SUCCESS`, one `CM_Reenumerate_DevNode` of the root devnode
+      (`CM_Locate_DevNodeA(NULL)`, its answer kept too), the settle again,
+      then the answer. A root locate that fails makes no second rescan (no
+      call through a handle that was not returned): A22, then the answer
+      from what the first settle found. Both are rescans; nothing is forced
+      or removed again.
+
+   The removal deletes nothing from the registry, so Windows finds the
+   controller again under its instance key with its driver; Device
+   Manager's Remove deletes that key, and its Refresh then runs the Add New
+   Hardware wizard (`runs/run-50.md`, "50.30 to 50.32 steps 1 and 2", L1).
+
+   **The reading** (`runs/run-50.md`, "50.32"; emulation, single
+   readings; a healthy controller). On 98 SE and on ME, each with the
+   `3.5.0.0` driver, a tablet and a Bulk-Only stick, a throwaway test
+   program found every routine above in `cfgmgr32.dll`, as record 24 A.1's
+   names say. Five removals on 98 SE and three on ME were each followed by
+   the controller's return with all seven devnodes of its subtree started,
+   1.5 to 3.4 seconds after the rescan, with no dialog or wizard on the
+   screen and the stick and the tablet working after. A program's file
+   held open for writing on the stick was refused on both
+   (`CR_REMOVE_VETOED`). On 98 SE a DOS box whose current drive was the
+   stick, and a file that DOS box held open, did not refuse it (one
+   reading; that the file was whole after says nothing of a write in
+   flight); ME's DOS box leg did not run. So the remove and rescan works
+   on both, as the roadmap's condition asks, and Windows' refusal of a
+   drive in use cannot be relied on there: the action is therefore
+   refused on 98 SE and ME while any USB storage device is on the
+   controller (item 7; owner, 2026-11-18). **A controller
+   stopped after repeated failures** (terminal 2 or 3) is not offered the
+   action on 98 SE and ME (owner, 2026-11-18): the driver has removed its
+   devices and it answers no port reading, so the tool cannot see what is
+   plugged into it, and a model the tool took before the stop can be
+   stale - a drive plugged in and mounted after it and before the stop is
+   not in it. Such a controller there shows the approved "Restart it from
+   Device Manager, or restart Windows."; M1, M2 and M3 are not offered
+   for it. What the user has instead: task 50.31's automatic try of the
+   controller (the details' next-try line), unplugging the device involved,
+   Device Manager, or a restart of the computer. Nothing of this case is
+   built on 98 SE and ME.
+
+4. **What the tool can say about a start.** Neither family's answer to the
+   call says that the controller started again; a latched controller
+   already reads started to Windows. The tool keeps four facts apart:
+   **the request accepted** (item 2's call `TRUE`; on 9x the query and the
+   removal `CR_SUCCESS`), **a start attempted**, **a start completed**, and
+   **the state now**. Its evidence of a start is positive only: it can see
+   that a new start completed, and nothing it reads proves that none did.
+
+   The driver's tolerance clock (`XHR_O_CLOCK`) is not used. It is zeroed
+   at the start of `hcdStartBody`, before its fallible work, so it shows an
+   attempt, not a completion; a baseline can be zero or small; an answer
+   with `XHR_F_STARTED` clear carries a zero that is not a running clock;
+   the clock counts timer callbacks, which can run late, so it cannot be
+   compared with elapsed time; and it attributes nothing [src]. No other
+   value the driver serves today numbers its starts: `CountersStart`, the
+   image-wide number `HcdCountersStart` draws (`hcd_log.c`), is written
+   only to the qemu flavour's trace [src].
+
+   **The driver addition** (owner, 2026-11-18). The
+   recovery-status request (record 13 section 8.12, `src\xhci_qry.h`
+   `XHR_*`) gains a lifetime part after its counts, flagged
+   `XHR_F_LIFETIME` (`0x10`; `0x08` is record 38's `XHR_F_RETRY_NEVER`,
+   section 15.1), its version staying 1. The answer's layout
+   with the two other additions of Phase 50, which take words of the
+   header the request already reserves:
+
+   | Part | Bytes | Flag | Words |
+   |---|---|---|---|
+   | header | 0 to 63 | | as now |
+   | isolation (task 50.30) | 32, 36, 40 | `XHR_F_ISOLATION` `0x02` | value, listed, applies |
+   | retry (task 50.31, record 38 section 15.1) | 44, 48, 52 | `XHR_F_RETRY` `0x04` | value, try, next seconds |
+   | records | 64 to 207 | | as now |
+   | counts | 208 to 311 | | as now |
+   | lifetime (this task) | 312, 316, 320 | `XHR_F_LIFETIME` `0x10` | image time low, image time high, start number |
+
+   The words: the system time `KeQuerySystemTime` returned at the image's
+   `DriverEntry`, its two words as returned (no arithmetic; the import is
+   already a row of `xhci98-imports.allow`, and inline on amd64), kept in a
+   variable of the image; and `CountersStart`, kept in the controller's FDO
+   extension outside `Hc`, the number of the start this FDO last began - 0
+   when none has begun on this FDO. The start counted is the one that
+   reaches `HcdCountersStart` in `hcdStartBody`: a `START_DEVICE` whose
+   forwarding to the lower drivers succeeded (`hcd_pnp.c`) and that entered
+   the start body; nothing between the body's entry and the draw can fail
+   [src]. A `START_DEVICE` the lower drivers fail draws no number.
+
+   The buffer tiers, every one defined:
+
+   | Output buffer | Answer |
+   |---|---|
+   | below 64 bytes | `STATUS_BUFFER_TOO_SMALL`, nothing |
+   | 64 to 311 | the header alone, `XHR_O_BYTES` 324, `XHR_F_LIFETIME` clear |
+   | 312 to 323 | the earlier whole answer, `XHR_O_BYTES` 312, `XHR_F_LIFETIME` clear |
+   | 324 and above | the whole answer, `XHR_O_BYTES` 324, `XHR_F_LIFETIME` set |
+
+   `XHR_F_LIFETIME` is set only in an answer that carries the tail. The
+   installed readers ask with 312 bytes and accept a larger `XHR_O_BYTES`
+   (`tr_log.c` `tr_xhr_parse`), so they keep their whole answer. The new
+   parser **keeps the 312-byte minimum** for the answer and for
+   `XHR_O_BYTES`, so an older driver still parses, and reads the lifetime
+   words only when the flag is set, at least 324 bytes came back and
+   `XHR_O_BYTES` is at least 324; a flag without them makes that answer an
+   invalid lifetime sample. It asks with 324 bytes or more.
+
+   **Synchronization.** The lifetime words are copied with the flags inside
+   the door gate (`HcdDoorGateEnter`), which `HcdStartController` holds
+   around the whole start and the door holds around every stop, so an
+   answer never sees a start half made or a stop half done [src]: it sees
+   the number and `XHR_F_STARTED` of one moment between them. The image
+   time is the image's and the number lives outside `Hc`, so neither needs
+   the extension to be initialized; the part is served whether or not the
+   controller is started. `XHR_F_STARTED` keeps its meaning (the
+   controller's start completed and it has not stopped since). The
+   records, counts and terminal stay as they are, filled only for a
+   started controller.
+
+   **The identity and what it shows.** A start's identity is the triple
+   (image time low, image time high, start number); a *valid sample* is an
+   answer with the tail and a start number other than 0. Two valid samples
+   with **different** identities belong to different starts: within one
+   image a number is drawn once (the counter would have to pass all of its
+   32 bits to repeat), and a different image time is a different load of
+   the image. Two samples with **equal** identities do not show the same
+   start: a reload can give the same time (the system time moves in ticks
+   and can be set) and draw the same number, and a full pass of the
+   counter is not excluded, only beyond any interval the tool waits. A
+   number of 0 says that no start has begun on this FDO; a changed image
+   time with a number of 0 is not an attempt.
+
+   **The sampling rule.** The baseline `I0` is the last valid sample before
+   the call. After it, every 500 ms of the settle, one sample. The tool
+   keeps a history, never only the last reading: whether any valid sample
+   differed from `I0`, whether any such sample had `XHR_F_STARTED` set,
+   how many valid samples there were, and the first failure of each kind.
+   **A start is seen completed** (S1) when a valid sample differing from
+   `I0` has `XHR_F_STARTED` set; once seen, it stays seen whatever later
+   samples read - a failed read, a stop, another start - and the state now
+   (line 3) says what the controller is at the end. **A start is seen to
+   have begun** (S2) when a valid sample differed from `I0` and none of
+   those had `XHR_F_STARTED` set: the tool saw a new start and did not see
+   it running, which may be a start that failed or one that ran and
+   stopped between samples. **No new start was seen** (S3) when `I0` is
+   valid and every valid sample equals it, with at least one valid sample:
+   an observation of the samples, not a proof that none happened. **The
+   tool cannot tell** (S4) when `I0` is not valid, or no sample after the
+   call is, or the driver serves no lifetime part.
+
+   On 98 SE and ME the removal is evidence of its own: the query and the
+   removal answered `CR_SUCCESS`, the id was then not found, and a devnode
+   of the same id found again later, started with no problem, is a new
+   start that completed (S1), lifetime part or not; found again and never
+   seen started is S2; not found again is A11. Where the id is still found
+   when the removal has returned, and after A12, the removal is no
+   evidence and line 2 comes from the lifetime samples alone, as on NT.
+   On 98 SE and ME the driver's door is `HCD<n>`, found by its driver key
+   as on NT. Nothing says *who* made a
+   start: another restart of the same controller inside the settle reads
+   the same, so the answer says that the controller started again, never
+   that this request started it. Task 50.31's try of a failed controller
+   resets it in place without `hcdStartBody` and leaves the identity as it
+   is (record 38 section 7.4: a try is committed inside `hcdRecover`).
+
+   **The settle.** After the call the tool polls every 500 ms, pumping the
+   window's messages as the elevated wait does, for at most
+   `TR_RESTART_SETTLE_MS` (30 s); it ends early once S1 is seen and the
+   devnode reads started with no problem. It is not ended early by `F`
+   or the mark read set (revision 50, a restart Windows refused in the
+   session): neither shows that no start follows, and a start that comes
+   late in the settle must still be seen (S1). The periodic refresh does
+   not run during the call or the settle, and no handle of this process on the
+   controller (`\\.\HCD<n>`, `\\.\XHCI98HC<k>`) stays open across the call.
+   The operation and the rescan need no further input from the user from
+   the confirmation on, so a keyboard or mouse that goes with the
+   controller does not hold them up.
+
+5. **Before the call: the checks.** Each refusal is a message box (from the
+   tray, its balloon; on 98 SE its pop-up), and nothing is called. In this
+   order:
+   1. a routine missing: R3; WOW64 without `XHCITR64.EXE`: R4;
+   2. a contained controller (terminal 4 or 5), or one read failed by a
+      driver without the recovery-status request: R2, R8 (section 26
+      item 9); on 98 SE and ME a terminal 2 or 3 controller, for which the
+      action is not offered at all (item 3) - found so by a later check,
+      the approved "Restart it from Device Manager, or restart Windows." is
+      the answer;
+   3. 2000 and XP without administrator rights (`ej_is_admin`): R1 with the
+      Run As offer (item 9);
+   4. Setup running (`set_setup_running`): R6;
+   5. the fresh walk of the controller's subtree incomplete (item 6): R11;
+   6. 98 SE and ME only (owner, 2026-11-18 and 2026-11-19): item 7's
+      rules in their order - the drive rule (R13, then R5, then R18), the
+      storage rule (R12, R16), the network rule (R15);
+   7. the shared eject mutex (section 6.3), taken by the process that
+      calls, not had within its 10 s: R7.
+
+   **Immediately before the call**, after the mutex, the process that
+   calls repeats checks 2, 5 and 6 in full - the walks, the descriptors,
+   the letters and their claimants, the classification - rather than
+   trusting the confirmation's: any refusal they now give is the answer,
+   and any change of the subtree's digest is R9. On 98 SE and ME a drive
+   letter on the controller and USB storage on it are both refusals, so
+   the confirmation's list there never holds either, and what it shows is
+   what the digest covers.
+
+6. **The confirmation and its list** (section 26 item 6, settled). Built
+   from a **fresh, complete walk** of the controller's subtree, never from
+   the rows the tree shows nor from the eject's eligibility:
+   `walk_from` below the controller's devnode, with every devnode's id,
+   class (`CM_DRP_CLASS`), status and problem read. The walk is complete
+   only when no devnode below the controller is marked `Incomplete` or
+   `ReadOk` clear, the walk's `Bad` count did not rise inside it, and no
+   bound (`TR_MAX_DEVS`, depth 32) was met; otherwise the action is
+   refused with R11. The walk made immediately before the call is held to
+   the same rule: two incomplete walks that match do not pass.
+
+   **The groups.** Every devnode below the controller belongs to one line.
+   The root hub has none of its own. A *device* is a devnode whose parent
+   is the root hub or a hub's FDO devnode of this driver; its line holds
+   it and every devnode below it that is not itself a device: a composite
+   device's function devnodes, their HID collections and class devnodes,
+   a disk and its volume devnodes. A hub is a device with its own line
+   ("USB hub"), and each device behind it has its own line with its place
+   ("port 2 of the hub at port 4", `tr_place_words`), so nothing nested is
+   left out or folded into the hub. A line is the device's name as the
+   tree shows it (`dn_name`), its place, its drive letters where its group
+   has a disk (`Letters`), and its kinds where its group has them
+   ("keyboard", "mouse", "storage"). The list is **complete and
+   scrollable**: a read-only multi-line box in the confirmation dialog,
+   every line in it, no cut (C2). The digest is `tr_res_digest` over the
+   controller's instance id and the instance id of **every** devnode of the
+   subtree, root hub included, sorted (upper-cased, as the digest does) so
+   that walk order does not matter. A different digest at the walk before
+   the call is R9: the window asks again with the new list; a one-shot run
+   refuses.
+
+   **A stopped controller.** C3 ("Its devices were removed when it
+   stopped.") replaces the list only when the fresh walk is complete and
+   finds nothing below the controller but the root hub; a terminal value
+   alone is not an inventory. Otherwise its devnodes are listed as any
+   others.
+
+   **Keyboards and mice.** Where a group holds a devnode of class
+   `Keyboard` or `Mouse`, C7 says that it stops and may not come back if
+   the restart fails, and that the restart needs nothing more from the
+   user once confirmed. C8 ("It is the only keyboard (or mouse) Windows
+   has.") is shown only when a complete walk of the whole devnode tree
+   (the completeness rule above, over every devnode) found no other
+   started devnode of that class outside this controller; where that walk
+   is not complete, C8a says that the tool could not tell. C4, on the files
+   of a drive, follows on 2000 and later where a group has a disk. Buttons
+   Restart and Cancel, Cancel the default; on Vista and later without an
+   elevated token Restart carries the shield (`BCM_SETSHIELD`, as
+   `elev_proc` does) and starts the elevated run; on 2000 and XP without
+   administrator rights the confirmation follows R1's Run As offer and its
+   Restart starts the Run As run (item 9).
+
+7. **98 SE and ME: the drives Windows needs, storage, and the network**
+   (stage 2; owner, 2026-11-18 and 2026-11-19). Each rule decides
+   affirmatively or refuses; a reading that fails or cannot be completed
+   is a refusal, never a pass. The rules are taken in this order, the
+   first refusal being the answer: the drive rule, whose R13 concerns the
+   whole computer and which nothing on the controller changes, then its
+   R5 and R18; the storage rule; the network rule.
+
+   **The drives Windows needs.** Rather than locate the active swap file,
+   which 98 SE and ME do not report to a Win32 program and which can lie
+   anywhere `SYSTEM.INI` once named before an edit, the rule covers every
+   drive:
+   1. `GetWindowsDirectoryA` and `GetSystemDirectoryA`: a return of 0 or of
+      the buffer's size or more, or a path not of the form `X:\...` with a
+      letter, is R13 in its form naming no letter (a path beginning `\\`,
+      a network installation, is no failure: it counts as a network path
+      for step 4).
+   2. `GetLogicalDrives` (an answer of 0, which no running system gives,
+      is R13), then `GetDriveTypeA` of each letter's root with
+      `SetErrorMode(SEM_FAILCRITICALERRORS)`: fixed, removable, CD-ROM and
+      RAM-disk letters are *local*, remote letters *network*; a letter the
+      first reports that the second answers unknown or without a root is
+      R13.
+   3. Every local letter is read against the whole devnode tree, walked
+      completely (item 6's rule over every devnode), with the
+      `CurrentDriveLetterAssignment` of every devnode read from its `Enum`
+      key - absent is a reading; a key that does not open, a failed read,
+      or an incomplete walk is R13. The walk descends from the root, so a
+      claimant's chain of parents is the walk's own. Then each letter is
+      one of three:
+      - **placed** - exactly one devnode claims it (owner, 2026-11-18).
+        **A placed letter whose chain passes through this controller
+        refuses, whatever the storage rule finds**: R5 where it is the
+        Windows or the system directory's drive, R18 otherwise. A placed
+        letter elsewhere passes.
+      - **claimed twice or more**: R13.
+      - **unclaimed** - no devnode claims it: R13, whatever is on the
+        controller, an unclaimed floppy letter excepted (below) (owner,
+        2026-11-19, given through the coordinator; it
+        replaces the allowance of 2026-11-18 for such a letter, which the
+        owner knowingly narrows). The guests' reading found the drives in
+        MS-DOS compatibility mode unclaimed; what else an unclaimed letter
+        is (a compressed volume, `SUBST`, a RAM drive, a network
+        redirector's or a boot firmware's disk) the tool does not try to
+        tell, and it does not try to show that such a drive does not
+        depend on this controller: a drive the firmware serves from a USB
+        device on this controller reads the same. No port of the
+        controller is sampled and no table of passing devices is kept.
+      - **a floppy letter unclaimed** - the one exception to the
+        unclaimed letter's R13 (owner, 2026-11-19, a later decision
+        given through the coordinator; revision 49): a letter **A: or
+        B:** whose root step 2's `GetDriveTypeA` answers removable
+        (`DRIVE_REMOVABLE`, 2) and that no devnode claims neither
+        refuses nor passes anything: the rule goes on to the next
+        letter. "Unclaimed" is told as for every letter above - no
+        devnode's `CurrentDriveLetterAssignment` holds it, in a walk
+        complete by item 6's rule - and the letters, their types and
+        their claimants are read by the same calls and keys on 98 SE and
+        on ME. Nothing else is excepted: an A: or B: of any other type
+        (fixed, CD-ROM, RAM disk, or one step 2 cannot type) that no
+        devnode claims is R13; a floppy letter claimed twice or more is
+        R13; a floppy letter claimed once is placed and takes the placed
+        letter's rule (R18 where its chain passes through this
+        controller); and every fault that is no one letter's (below)
+        still refuses whatever the floppy letters read. Why: with no
+        floppy controller 98 SE still lists A:, a removable drive in
+        MS-DOS compatibility mode that no devnode claims
+        (`runs/run-50.md`, "50.32 stage 2"), so under revision 48 alone
+        such a machine was refused whatever was plugged in.
+        **The risk the owner accepted.** Such a letter may be a drive
+        Windows reaches through the firmware, and the tool cannot tell
+        which device the firmware would serve it from. Where that is a USB
+        floppy drive, or another USB device, on the controller being
+        restarted, the drive rule no longer stops the restart, and a
+        program using that drive at the time can lose what it was
+        writing or fail. The storage rule (below) still refuses every
+        device on the controller that shows itself as USB storage, so a
+        floppy drive of the mass-storage class there is refused with
+        R12 whatever its letter; what now passes is a firmware-served
+        A: or B: whose device the storage rule does not recognise as
+        storage. The owner was told this risk and accepted it.
+      Every letter is read before any refusal is chosen. R13 comes first:
+      in its form naming no letter where the fault is no one letter's - a
+      step 1 failure, `GetLogicalDrives` answering 0, an incomplete walk,
+      or a devnode's `Enum` key or `CurrentDriveLetterAssignment` that
+      could not be read, any of which leaves every letter's reading unsure
+      - and otherwise naming the first letter, in alphabetical order, that
+      step 2 could not type or that is unclaimed (an unclaimed floppy
+      letter excepted) or claimed twice. Then R5,
+      naming the Windows or the system directory's letter; then R18, the
+      first other placed letter on the controller.
+   4. **The network.** A devnode of class `Net` in the controller's
+      subtree while any network letter exists or step 1 found a network
+      path: R15. (A controller stopped after repeated failures, whose
+      earlier network adapters this rule could not see, is not offered the
+      action on 98 SE and ME at all, item 3.) It is checked after the
+      storage rule.
+
+   **Storage on the controller** (owner, 2026-11-18: no restart while
+   USB storage is on the controller). For every device of item 6's
+   groups, and for every connected port of the controller and of its hubs
+   in a reading of its ports made with the walk (the root hub's and each
+   hub's `USB_NODE_CONNECTION_INFORMATION`, which lists a device whose
+   devnode has gone), the tool fetches the active configuration's
+   descriptor through the existing on-demand fetch (the device descriptor
+   is the connection answer's), before deciding and whatever the tree's
+   view already holds. A device is **storage** when any of these holds:
+   its device class or any interface class of its active configuration is
+   08h; any devnode of its group has a hardware or compatible id with
+   `Class_08` (the ids this driver gives a mass-storage device or
+   function, so an unbound or failed function and an empty card reader
+   count); any devnode of its group is of class `DiskDrive`, `CDROM`,
+   `hdc` or `SCSIAdapter`, has an id beginning `USBSTOR\` or `SCSI\`, or
+   the service `USBSTOR`, `xhciuas` or `USBNTMAP`. A composite device is
+   storage when any of its functions is.
+   - storage, whether its devnodes are present (bound, unbound, failed or
+     empty) or all gone while its port still shows it connected (stopped
+     with Safely Remove, say): R12, naming each, and asking for it to be
+     unplugged. Revisions 44 to 47 allowed a device whose devnodes this
+     process's own Safely Remove had taken away, on a record of that
+     removal (C10); revision 48 dropped it, and it stays dropped by the
+     owner's decision (owner, 2026-11-19, given through the
+     coordinator): a stick this tool has already stopped with Safely
+     Remove is unplugged like any other storage before the restart, so
+     no such record is kept and no stopped storage device is listed;
+   - a connected port whose configuration descriptor cannot be fetched, a
+     root hub or hub whose ports cannot be read, or a port the tree's
+     model of the controller does not hold (its reading bound met): R16.
+
+   What is established, then: an unclaimed letter never passes, an
+   unclaimed removable A: or B: excepted (with the risk above); a placed
+   drive passes only off this controller; no USB storage device is on the
+   controller, stopped or not; and a network letter passes only where no
+   network adapter is on it. Every other case refuses.
+
+   `SYSTEM.INI` is not read, so no profile routine is needed; every routine
+   above is a row of `xhcitr-imports.allow` already.
+
+   **What the guests show of the rule** (`runs/run-50.md`, "50.32 The drive
+   letters and the devnodes that claim them"; emulation, a single reading
+   each). On 98 SE and on ME every letter a protected-mode driver serves -
+   the floppy, ME's IDE disk on the secondary channel, the USB stick - is
+   claimed by exactly one devnode with a readable chain, and the whole-tree
+   walk was complete on both. Every letter served in MS-DOS compatibility
+   mode is claimed by none: the system disk C: on both (98 SE's on the
+   AHCI controller through the firmware, ME's on the IDE primary channel),
+   and 98 SE's AHCI transfer disk D:; Windows reports its paging in
+   compatibility mode on both. The CD-ROM had no letter on either. Under
+   step 3, on both images as they are launched the system disk's letter
+   is unclaimed, so the action is refused there whatever is plugged in
+   (R13). The legs of the restart itself (item 15) therefore run the
+   images with the system disk on the PIIX IDE controller and none of the
+   launcher's geometry hints, the arrangement under which 98 SE's own IDE
+   driver served C: in Phase 49 (`runs/run-49.md`, the readiness of the
+   UHCI round's vehicle and the vehicle of the standby choice), and record
+   whether each system then places every letter. Stage 2's legs found
+   every letter placed there with a floppy controller, and A: unclaimed
+   without one on 98 SE; under revision 49 that A: no longer refuses.
+
+8. **The answer.** Up to four lines, each from its own readings, so that
+   every combination has an answer and no line says more than its readings
+   show; on 2000 and later a fifth, the hint H1, follows them in one
+   combination (below). Item 5's refusals end before any reading below
+   and give only their own text, with W5 or W6 after it where the
+   devnode's `DN_NEED_RESTART` reads set.
+
+   **Line 1, the request.**
+
+   | Read | Line |
+   |---|---|
+   | NT: the list's creation, the element's open or the class parameters failed (no call made) | A18 (R10 for `ERROR_NO_SUCH_DEVINST` from the open) |
+   | NT: the call `FALSE`, `ERROR_ACCESS_DENIED` | R1 |
+   | NT: the call `FALSE`, any other error | A9 |
+   | NT: the call `TRUE` | A1 |
+   | 9x: `CM_Get_Parent` failed (no query made) | A21 |
+   | 9x: the query `CR_REMOVE_VETOED` | A10 |
+   | 9x: the query any other answer | A19 |
+   | 9x: the query accepted, the removal not `CR_SUCCESS` | A12, and after it A20 where the parent's rescan (item 3 step 3) returned other than `CR_SUCCESS` |
+   | 9x: both accepted | A13, and after it A20 for each rescan that returned other than `CR_SUCCESS` and A22 where the root could not be located for the second |
+
+   **Line 2, the start** (item 4): S1, S2, S3 or S4; on 98 SE and ME after
+   A13, S1 or S2 by the removal's evidence, or A11 (and then no line 3),
+   and where the removal is no evidence (item 4), S1 to S4 from the
+   lifetime samples.
+   Not made after R10, A10, A19, A21 or R1 from the call (nothing was done
+   to the device); after A18, A9 and A12 it is made, since a failed request
+   can still have changed the device.
+
+   **Line 3, the state now** (fresh readings at the end: the devnode, then
+   the recovery-status request).
+
+   | Read | Line |
+   |---|---|
+   | `CM_Locate_DevNodeA` answers `CR_NO_SUCH_DEVNODE` (NT) | N1 |
+   | the locate or the status read fails otherwise | N6 |
+   | present, not started or with a problem | N2 |
+   | started; the request fails, or its answer does not parse | N5 |
+   | started; the answer has `XHR_F_STARTED` clear | N7 |
+   | started; terminal 0 | N3 |
+   | started; terminal 1 (a recovery owed) | N9 |
+   | started; terminal 2 or 3 | N4, then section 26 item 2's details as now read |
+   | started; terminal 4 or 5 | the approved closed-off status text |
+   | started; terminal 6 | the approved interrupts-lost status text |
+   | started; any other terminal | N8 |
+
+   **Line 4, a restart of the computer** (each that applies, in this
+   order; the owner's case: said, and nothing more is done).
+
+   | Read | Line |
+   |---|---|
+   | NT: `F` set | W1 |
+   | NT: `F` unknown (the read after the call failed) | W2 |
+   | NT: `P` set (Windows asked before this request), whether or not its clear worked | W3 |
+   | NT: `P` unknown (the read before the call failed) | W4 |
+   | both: the devnode's `DN_NEED_RESTART` set at the end | W5 |
+   | both: set at the baseline, whatever the end reads (an earlier mark is reported as earlier) | W6 |
+   | both: the end's status not read and the baseline's not read either | W7 |
+   | none of these | no line |
+
+   **Line 5, the hint** (2000 and later only; owner, 2026-11-19, given
+   through the coordinator; revision 50). H1 is the answer's last line,
+   after every line of line 4, and is shown exactly where all three hold:
+   line 1 is A1 (the call `TRUE`; 98 SE and ME never answer A1), line 2
+   is S3, and line 4 holds W1 or W5 (`F` set after the call, or the
+   devnode's `DN_NEED_RESTART` set at the end; with either, whatever else
+   line 4 holds). It is not shown where a new start was seen (S1), where
+   a start was seen to begin (S2), where the tool cannot tell (S4), where
+   line 4 holds neither W1 nor W5 (W2, W3, W4, W6 or W7 alone), after any
+   refusal of item 5 or R1, R10, A9 or A18 from the call, nor on 98 SE
+   and ME, whose refused query already answers A10. It changes neither
+   the exit code (3, from W1 or W5) nor the title (B2). Where line 3 is
+   N4, the stopped controller's details the caller adds follow the answer,
+   after H1. From the tray the answer with H1 is longer than the balloon
+   takes (`TR_RST_BALLOON_CHARS`), so it is shown in the message box, as
+   every answer of that length is.
+
+   The lines of line 4 claim no cause and no state: the flags and the
+   devnode's mark say only that Windows asks for a restart of the computer;
+   lines 2 and 3 say what happened to the controller. H1 offers a cause as
+   a possibility only. "Nothing more" is the owner's rule: no second
+   call, nothing forced, no prompt to restart Windows (no
+   `SetupPromptReboot`), and nothing Windows keeps is cleared -
+   item 2's clear is of the tool's own information element, destroyed at
+   its step 7, and the devnode's `DN_NEED_RESTART` is left as Windows set
+   it. A failure after the confirmation can leave a keyboard or mouse of
+   the controller gone; the answer box then waits like any other and
+   nothing depends on its button.
+
+   **Exit codes** of the one-shot run, in this order of precedence (record
+   23 section 10's values):
+   1. 1 for item 5's refusals, R1, R10, A10, A14, A19 and A23 - nothing was
+      done;
+   2. 2 for A18, A9, A12, A11, A15, A16, A17, A20, A21 and A22 - the request
+      failed, or could not be prepared, or its end is not known;
+   3. then, the request accepted (A1 or A13): 3 where line 4 holds W1, W3,
+      W5 or W6; 0 where line 2 is S1, line 3 is N3 and line 4 is empty; 2
+      otherwise (S2 to S4, any other line 3, W2, W4 or W7).
+
+   **Success requires an accepted request**: A9 beside an S1 (a restart
+   another process made in the interval) is exit 2, its lines saying both.
+   The answer box's title, from the tray its balloon's, is B1 for exit 0
+   and B2 otherwise.
+
+9. **Rights: elevation and Run As** (section 26 item 10, settled). 98 SE
+   and ME need no rights. An administrator (2000 and XP: a member of
+   Administrators by `CheckTokenMembership`; Vista and later: an elevated
+   token; both looked up at run time, `ej_is_admin`) restarts in place.
+   Otherwise:
+   - **Vista and later:** the confirmation's shield button starts the
+     running executable through `elev_launch_req` with the verb `runas`,
+     which raises User Account Control's prompt.
+   - **2000 and XP** (owner, 2026-11-18): R1 is shown with a
+     second button, "Restart as administrator...", which shows the
+     confirmation and then starts the same run through the same routine and
+     verb. On 2000 and XP `runas` raises Windows' Run As dialog, where the
+     user names an administrator's account and its password (section 6.6
+     item 3, read on both [rec]). `ShellExecuteExA` and
+     `SHELLEXECUTEINFOA` are declared in MSVC 6.0's and WDK 7.1's
+     `shellapi.h` [hdr], and `ShellExecuteExA` is already a row of
+     `xhcitr-imports.allow` for both architectures, so nothing new is
+     imported. The answer section (`Local\Xhci98TrAnswer-<process
+     id>-<tick>`) grants write to SYSTEM and the Administrators, who include
+     the account named in the dialog (section 6.6 item 4).
+   Either way the run is `/restart "id=<instance id>" /result <section>
+   /confirmed <digest>`, a one-shot. **Its first step is to open the
+   section for writing** (`OpenFileMappingA` with `FILE_MAP_WRITE`, as
+   `elev_child_answer` does). A run that cannot - a Run As account that is
+   not an administrator, or XP's "Protect my computer and data from
+   unauthorized program activity" box ticked, whose restricted token holds
+   the Administrators group for deny only, neither of which the section's
+   access list lets write - does nothing else: no check, no walk, no call,
+   and exits 1 at once. The window, which holds the run's process handle
+   (`SEE_MASK_NOCLOSEPROCESS`), then reads exit 1 with no answer in the
+   section and shows A23, which says that nothing was restarted, as is
+   exact, and offers the two likely causes without asserting either. The
+   section's access list is not widened: a section any account could write
+   would let any program put an answer in the window. A run that can write
+   makes item 5's checks itself and walks again; where its digest differs
+   from `/confirmed` it refuses with R9, as item 6's one-shot run does (a
+   digest can spare a question, never add a device), and a `/restart`
+   given no `/confirmed` asks its own confirmation; it then takes the
+   mutex, repeats item 5's checks after it, makes the call and the
+   settle, writes its answer
+   (`tr_res_answer`) and exits with item 8's code. The window waits up to
+   `TR_ELEV_WAIT_MS` as the eject's does and shows the answer it reads
+   from the section. The outcomes of the start: the prompt or dialog
+   cancelled (`ShellExecuteExA` fails with `ERROR_CANCELLED`) is A14; any
+   other failure to start - the Run As service (Secondary Logon) stopped or
+   disabled, a logon the dialog refused, the executable gone - is A16 with
+   the error; the run ended with exit 1 and no answer, A23; the run started
+   and no answer within the wait, an end with no answer and any other exit
+   code, or an exit code that cannot be read, is A15 with line 3 as the
+   window reads it. The tool
+   makes no second attempt by itself. `/restart "id=..."` without
+   `/result` is the command line's form (A17 for an unknown id). The
+   manifest stays `asInvoker`.
+
+10. **The stopped controller's line and the device involved.** As built by
+    task 50.30's step 1 and approved (section 26 item 2): the tree line's
+    suffix, the status lines, and "Involved:", which names the newest reset
+    record's place (`tr_place_words`, from its root port and route string),
+    its VID:PID, and, where `rec_name` finds one, a description. That
+    description is the `DeviceDesc` of the first instance Windows recorded
+    under `Enum\USB\VID_vvvv&PID_pppp` (`SYSTEM\CurrentControlSet\Enum` on
+    NT, `Enum` on 98 SE and ME, read only), the text after an INF
+    reference's last `;`: a best-effort description of *a* device of that
+    VID:PID, which may be a stale entry or another device of the same
+    model, and none for a composite device whose parent instance carries
+    no description. The place and the VID:PID are the record's own and are
+    always shown with it. The word is "involved", not "caused": a reset
+    request associated with a device does not show that it caused the
+    controller's failure (owner, 2026-11-18; it supersedes
+    decision T30's "the device and place the driver names as its cause").
+    No new driver value is needed for the line. This task adds M1 on the
+    right-click and Action menus, M2 on the tray's red-icon menu and M3 as
+    the details' last line where M1 is offered; where it is not (R3, R4, or
+    a stopped controller on 98 SE and ME, item 3), the approved "Restart it from Device
+    Manager, or restart Windows." stays, and R8's controller keeps the
+    lines step 1 built.
+
+11. **Both executables.** The NT path builds in both with the headers each
+    is built with (item 2); the 9x path is compiled in both and runs only
+    in `XHCITR.EXE` on 98 SE and ME (`envNt` clear). `XHCITR64.EXE` serves
+    64-bit XP to 10 and, through the hand-over, `XHCITR.EXE` started there.
+    No import, manifest or subsystem changes (section 9): every routine the
+    restart adds is looked up at run time, and every other it uses is
+    already an imported row.
+
+12. **The strings.** Every one a draft for the owner but H1, whose
+    wording he accepted on 2026-11-19 (revision 50); the full list, with
+    the user documentation's drafts, is kept with the task's notes.
+    Menus: M1 "Restart Controller...", M2 "Restart <controller>...", M3 "To
+    restart it, right-click the controller and choose Restart Controller."
+    The confirmation: C1 "Restart <controller>?"; C2 "These devices will
+    disconnect, and should connect again when it has restarted:" and the
+    scrolling list, a line a device; C3 "Its devices were removed when it
+    stopped."; C4 "A drive's open files may be lost: close them first.";
+    C7 "A keyboard or mouse on this controller stops while it restarts,
+    and may not come back if the restart fails. Once you choose Restart,
+    nothing more is asked of you until the answer."; C8 "It is the only
+    keyboard (or mouse) Windows has."; C8a "The tool could not tell whether
+    Windows has another keyboard (or mouse)." The Run As
+    button: "Restart as administrator...". Refusals: R1 "Restarting a
+    controller needs an administrator."; R2 the approved closed-off text;
+    R3 "This Windows does not offer the call that restarts a device."; R4
+    "Restarting a controller on 64-bit Windows needs XHCITR64.EXE in the
+    same folder as XHCITR.EXE."; R5 "Windows uses drive C: on this
+    controller (the Windows folder / the system folder), so the controller
+    cannot be restarted while Windows runs. Restart Windows instead."; R6
+    and R7 the tool's existing "Setup is running: try again when it has
+    finished." and "Another program is removing a device; try again when
+    it has finished."; R8 "The tool cannot tell how this controller
+    stopped, so it does not restart it. Restart it from Device Manager, or
+    restart Windows."; R9 "The devices on <controller> changed. Nothing was
+    restarted. Look at the list again."; R10 "<controller> is no longer
+    present; nothing was restarted."; R11 "The tool could not read every
+    device on <controller>, so it does not restart it. Try again, or
+    restart it from Device Manager."; R12 "USB storage is connected to
+    <controller>: <list>. Unplug it, and then restart the controller.";
+    R13 "The tool could not tell which controller drive C: is on, so it
+    does not restart this controller. Restart Windows instead.", and where
+    no one letter is at fault (item 7 step 3) "The tool could not tell which
+    controller the Windows drive is on, so it does not restart this
+    controller. Restart Windows instead."; R15 "A network adapter on <controller> may be
+    carrying a network drive Windows uses, so the controller is not
+    restarted. Disconnect the network drives first, or restart Windows.";
+    R16 "The tool could not read what is plugged into <controller>, so it
+    does not restart it. Try again, or restart Windows."; R18 "Drive E: is
+    on <controller>, so the controller is not restarted. Unplug the drive's
+    device, and then restart the controller." (R12a and R19 to R22, the
+    refusals of revisions 45 to 47 for a letter unclaimed, and C10 are
+    gone with revision 48.)
+    Answers, line 1: A1 "Windows accepted the restart request
+    for <controller>."; A9 "Windows did not accept the restart request
+    (error 0xNNNNNNNN)."; A10 "Windows refused to remove <controller>. A
+    program may be using one of its devices: close the programs using its
+    drives and try again."; A11 "The controller was
+    removed but Windows did not find it again. Use Refresh in Device
+    Manager, or restart Windows."; A12 "Windows accepted the request but
+    could not remove <controller> (code 0xNNNNNNNN)."; A13 "Windows removed
+    <controller> and looked for it again."; A18 "The tool could not prepare
+    the restart request (error 0xNNNNNNNN); nothing was asked of Windows.";
+    A19 "Windows could not prepare the removal of <controller> (code
+    0xNNNNNNNN). Nothing was removed."; A20 "Windows' search for the
+    controller answered code 0xNNNNNNNN."; A21 "The tool could not find
+    the device <controller> is attached to (code 0xNNNNNNNN). Nothing was
+    removed."; A22 "The tool could not start a second search of the whole
+    computer (code 0xNNNNNNNN)." Line 2: S1 "It has started
+    again."; S2 "A new start of it began, but the tool did not see it
+    running."; S3 "The tool saw no new start of it."; S4 "The tool cannot
+    tell whether it was restarted." Line 3: N1 "Windows does not list it
+    now."; N2 "Windows shows it stopped (problem N)."; N3 "It is running.";
+    N4 "It is stopped after repeated failures."; N5 "Windows shows it
+    running; the tool could not read the driver's state."; N6 "The tool
+    could not read Windows' state of it (code 0xNNNNNNNN)."; N7 "Windows
+    shows it started, but the driver reports it is not running."; N8 "The
+    driver reports a state this tool does not know (N)."; N9 "It is
+    running, with a recovery of the controller pending." Line 4: W1
+    "Windows asks for the computer to be restarted."; W2 "The tool could not
+    read whether Windows asks for the computer to be restarted."; W3
+    "Windows had already asked for the computer to be restarted before this
+    request."; W4 "The tool could not read whether Windows had asked for
+    the computer to be restarted before this request."; W5 "Windows has
+    marked <controller> to be finished at the next restart of the
+    computer."; W6 "Windows had marked <controller> to be finished at the
+    next restart of the computer before this request."; W7 "The tool could
+    not read whether Windows has marked <controller> to be finished at the
+    next restart of the computer." Line 5: H1 "A program may be using one
+    of its drives: close it and try again, or restart the computer." (the
+    owner's wording, 2026-11-19, accepted as drafted). Rights: A14
+    "Nothing was restarted: administrator rights were not given."; A15 "No answer from the
+    administrator's run."; A16 "The tool could not start as an
+    administrator (error N). Nothing was restarted."; A17 "No xhci98
+    controller has the instance ID <id>."; A23 "Nothing was restarted: the
+    run as another account could not report back to this window. The
+    account may not be an administrator, or "Protect my computer" may have
+    been ticked; try again with an administrator's account."
+    Titles: B1 "Controller restarted", B2 "Controller restart".
+
+13. **The user documentation** (drafts; nothing is changed in `docs/using/`
+    or `xhcitr\README.TXT` before the owner's answer, and none carries
+    testing status). `xhcitr\README.TXT` gains a paragraph after Safely
+    Remove: the action, Windows' stop-and-restart of the device (not
+    Device Manager's Disable and Enable), the complete list and question,
+    the stopped controller's line and the tray's item, the rights (Run As
+    on 2000 and XP, the prompt on Vista and later), the restart of the
+    computer Windows may ask for, on 98 SE and ME the storage that must be
+    unplugged first and the drives the tool must be able to place (none
+    in MS-DOS compatibility mode but a floppy drive A: or B:), the
+    closed-off
+    controller, and `XHCITR /restart
+    "id=<instance id>"`; section 7.3's synopsis gains `/restart`. The
+    release notes' "The xHCI98 USB Tree" gains a bullet with the same facts
+    and "What `3.6.0.0` changes" an item. The known limitations take
+    section 26 item 13's line in its first form, the action being offered
+    on 98 SE and ME, and a line for 98 SE and ME: "The USB Tree does not
+    restart a USB controller while a USB storage device is connected to it
+    (unplug it first), nor while Windows has a drive, other than a floppy
+    drive (A: or B:), that the tool cannot place - one in MS-DOS
+    compatibility mode (System Properties, Performance), for one: restart
+    Windows instead. It does not restart a
+    controller that has stopped after repeated failures; unplug the device
+    involved, wait for the driver's next attempt, or restart Windows."
+    Where stage 1 ships alone (the two stages, above), the bullet, the
+    readme and the known limitations say instead that on 98 SE and ME the
+    restart is not offered: "On Windows 98 SE and ME the USB Tree does not
+    restart a controller; restart it in Device Manager, or restart
+    Windows." The readme goes in with the code and the release notes'
+    lines at 50.final with the rest of the release text.
+
+14. **Host vectors** (section 26 item 15, with): the lifetime part's
+    layout beside the isolation and retry words, its flag, each buffer
+    tier, an old reader of the new answer, the new reader of an old answer
+    (the 312-byte minimum), a flag without its tail (`test_xhq`); the
+    identity rules - different numbers, different times with the same
+    number, equal identities read as S3 and never as a proof, number 0
+    with a changed time, a completed-then-stopped pair of samples (S1
+    kept), a failed read after S1 (kept), samples that differ with
+    `XHR_F_STARTED` clear (S2), no valid baseline (S4), no valid sample
+    (S4); item 8's four tables row by row and their combinations (A9 with
+    S1 is exit 2; W1 with S1, S3 and N4; W2 and W4 with every line 2; W5
+    after a refusal; W6 with a clear end; W7; A21 and A22 with no call
+    through an unreturned handle; N6 apart from N1 and N2; N8 for terminals
+    7 and up; on 98 SE and ME A12 with its parent's rescan, A20 where that
+    fails, and line 2 from the lifetime samples after A12 and where the id
+    is still found after the removal; H1 (revision 50) present, last, with
+    A1, S3 and W1, W5 or both, and absent beside S1, S2 and S4 with W1 and
+    W5, with S3 and neither W1 nor W5 (W3 or W6 alone), after A9 and A18,
+    after a refusal before the call, and on 98 SE and ME (A13 with S3 and
+    W5), the exit code unchanged; the answer with H1 longer than the
+    tray's balloon takes),
+    the exit codes' precedence; the walk's completeness rule (a bound met, a
+    failed read, a `Bad` rise), the grouping (a composite device with HID
+    and disk children, a hub behind a hub with devices on both, the root
+    hub), the sorted digest over every devnode and its change by one
+    devnode anywhere; item 7's storage rule clause by clause (each id,
+    class and service form, an interface 08h on an unbound function, an
+    empty reader, a composite device with one storage function, a port
+    with no devnode and readable descriptors - R12 whether or not this
+    process stopped it - one with unreadable descriptors, an unread hub
+    and a port bound met (R16)), a stopped controller on 98 SE and ME
+    never offered, and the drive rule (each failure of steps 1 and 2, the
+    form of R13 naming no letter for each of its causes (a step 1
+    failure, `GetLogicalDrives` answering 0, an incomplete walk, a key or
+    an assignment not read) and before any letter's R13, a letter other
+    than an unclaimed removable A: or B: (C:, say) with no claimant - R13
+    with
+    nothing on the controller, with only a keyboard and mouse, and beside a
+    stick, a placed letter on the controller and a network adapter, R13
+    each time - an unclaimed removable A: and B: passed over (revision
+    49) with nothing else at fault, beside a keyboard (passes), beside a
+    stick (R12) and beside an unclaimed C: (R13 naming C:), an unclaimed
+    A: of another type (R13 naming A:), a removable A: claimed twice (R13)
+    and claimed once on the controller (R18), a no-letter fault beside an
+    unclaimed floppy letter (R13 naming no letter) - two claimants, a key
+    that does not open, a failed
+    `CurrentDriveLetterAssignment` read, an incomplete walk, the first
+    letter named, a placed letter elsewhere, a placed letter on the
+    controller on a device the storage rule did not match (R18), the
+    Windows drive on it (R5) before R18, R5 and R18 before R12, the
+    network case R15 after R12, a network installation's path); the Run As run
+    that cannot open the section (exit 1 at once, nothing called; A23 in
+    the window, A15 for any other exit with no answer); the `/restart`
+    command line with `/result` and `/confirmed`.
+
+15. **Acceptance legs.** On the `qemu` flavour in the emulator unless a row
+    says otherwise, with item 4's driver addition built; then the published
+    `release` package on one guest a family at 50.final's install legs.
+    Each row records what was observed; where an answer is named, it is the
+    one the readings select, and a row passes when the answer matches what
+    the guest did, not when a given answer appears. "Latched" is record 17
+    section 4.15.13's leg (a) (code `05` four times inside the window);
+    "contained" is injection `07`; "in use" a program holding a file open
+    for writing on a drive of the controller. A "stand-in" is a test build
+    of the tool, never shipped, that forces one reading's answer.
+
+    | Leg | Windows | What is read |
+    |---|---|---|
+    | T.27 (stage 2) | 98 SE, ME | on the q35 images as launched, whose system disk runs in MS-DOS compatibility mode (an unclaimed letter, item 7 step 3): the action refused with R13 naming C: with nothing on the controller, with a keyboard and mouse on it, and with a stick on it, nothing called; then on each image with its system disk on the PIIX IDE controller without the geometry hints, where the reading shows every letter placed (on a system that does not place them, its row says so and its restart rows are owed): Device Manager's Performance tab and the letters read as in 50.32's reading; a composite audio device on a root port, and a keyboard and a mouse on the controller (C7, C8a or C8 as read, the PS/2 mouse or keyboard outside): the action offered, the complete list, every device back after A13, S1, N3; a stick with its letter (R18) and after this tool's Safely Remove of it (R12), nothing called either time; a hub with a device behind it (offered); the emulator's network device with a mapped network drive where one can be made, else by a stand-in (R15); a stopped controller: no item offered, the approved line; a letter claimed twice, a failed `CurrentDriveLetterAssignment` read and a step 1 failure (R13, by stand-ins); a removal failure (A12, then the parent's rescan), `CM_Get_Parent` failing (A21), a root locate failing (A22) and rescans returning errors (A20), by stand-ins, and a rescan that finds nothing (A11); a settle that times out; under revision 49, on each image with no floppy controller and every other letter placed: the unclaimed removable A: read, a restart with a keyboard or tablet on the controller (offered, A13), the same with a stick (R18 or R12), a hard-disk letter unclaimed (R13), and a USB floppy drive on the controller where the emulator can present one (else said so) |
+    | T.28 | 2000 SP4 and the SMP image | administrator and a user: healthy and latched restarts; in use: whatever 2000 answers, recorded with lines 2 to 4 (the `DICS_DISABLE` reading of 49.5 is not taken for it); a user: R1 with Run As - an administrator's account given (the restart), the dialog cancelled (A14), a limited account given (exit 1, A23, nothing restarted), the Secondary Logon service stopped (A16); contained: R2, the item disabled; a keyboard and mouse on the controller; `DN_NEED_RESTART` set before the request (W6) |
+    | T.29 | XP SP3, XP x64 | as T.28, with XP's "Protect my computer" box ticked (exit 1, A23); on XP x64 `XHCITR.EXE` handing over (the exit code back), R4 with `XHCITR64.EXE` moved away, and A16 with it moved away after the window started |
+    | T.30 | Vista SP2 and 7 SP1, x86 and x64 | as T.28, elevated and as a standard user: the shield, the prompt allowed and cancelled (A14), R9 by a device plugged during the prompt, a device behind the 13th line still in the digest; on x64 R4 and A16 as T.29; a restart Windows refuses in the session (an Explorer window open on the stick): A1, S3, N3, W1, W5 and H1, exit 3, and with the window closed the restart without H1 (revision 50) |
+    | T.31 | 8, 8.1, 10, x86 and x64 | healthy, latched, in use, the elevated run, the hand-over on x64, R4 and A16 as T.29 |
+    | T.32 | 98 SE, 7 x86 | the tool with the `3.5.0.0` driver and with a driver without the lifetime part: S4 on 7, S1 by the devnode on 98 SE; R8 for a failed controller |
+    | T.33 | 7 x86 and 98 SE (stand-ins) | the lifetime readings: an equal identity throughout (S3), a new identity with `XHR_F_STARTED` clear (S2), one completed and then stopped before the next sample (S1 kept, N2 or N7), a reload with an equal image time and number (S3, by a stand-in), a reload with a new time and the same number (S1), a counter at its last value before the wrap, a failed baseline read (S4), failed samples between valid ones, a rejected request (A9) beside a start another process made (exit 2); the devnode's status read failing (N6); a terminal 9 (N8); the final parameter read failing (W2), `P` set before the call (W3), the first read failing (W4), `DN_NEED_RESTART` set (W5, also after R1); a task 50.31 try during the settle where that task's code is in |
+    | T.34 | 98 SE, 7 x86 | an incomplete walk (a stand-in bound): R11 on the first and on the second walk; on 98 SE a query answering an error other than a veto (A19, by a stand-in), and, between the confirmation and the call, a letter other than a removable A: or B: (C:, say) left unclaimed (R13) or a stick plugged in (R18 where it has taken a letter, R12 where it has none yet), by the checks repeated before the call |
+
+    None of these is a reading of real hardware; the release's bench gives
+    that where the owner takes it.
+
+16. **For the owner.** Decided, and marked "(owner, 2026-11-18)"
+    above: the stop-and-restart request in place of Disable then Enable
+    (item 1), a controller stopped after repeated failures not offered the
+    action on 98 SE and ME (item 3), the 9x storage, drive and network
+    refusals (items 5 and 7), the driver addition (item 4), Run As on 2000
+    and XP (item 9) and "involved" (item 10). Decided on 2026-11-19 and
+    marked "(owner, 2026-11-19)", given through the coordinator: on 98 SE
+    and ME the restart is refused whenever a local drive letter is
+    unclaimed (item 7 step 3, R13); no port sampling and no table of
+    passing devices is built, and the owner's allowance of 2026-11-18 for
+    such letters is narrowed by it, as he knows. The questions that hung on
+    that allowance - the table of passing devices, keyboards, mice and
+    tablets while a letter is unclaimed and their refusal's wording, the
+    driver's serving of HID report descriptors - no longer arise. What the
+    refusal costs, stated plainly: on a 98 SE or ME machine with any drive
+    other than a floppy drive in MS-DOS compatibility mode - both q35
+    images as launched - the tool restarts no controller at all; Device Manager and a restart of Windows
+    remain. Decided later on 2026-11-19, also given through the
+    coordinator (revision 49): a floppy letter, a removable A: or B:, that
+    no devnode claims no longer refuses the restart, while every other
+    unclaimed local letter still does (item 7 step 3), the owner having
+    been told and having accepted the risk that item states - a
+    firmware-served A: or B: on the controller being restarted that the
+    storage rule does not recognise as storage then passes; so a 98 SE
+    or ME machine with no floppy controller, whose A: is such a letter,
+    is no longer refused for it alone. And a USB storage device stopped
+    with Safely Remove but still plugged in is refused like any other
+    (item 7, C10 stays dropped), taken in revision 48 as the smaller
+    design and since decided by the owner. Decided later on 2026-11-19,
+    given through the coordinator (revision 50): after a restart request
+    Windows accepted with no new start seen and Windows asking for a
+    restart of the computer or the controller marked (A1, S3, W1 or W5),
+    the answer ends with H1 on 2000 and later, in the wording drafted for
+    him (items 2, 8 and 12). Open: the wording of the answer's other lines
+    and of every other string here, drafts for the owner.
+
+## 28. Line widths in the window and Save Report (roadmap-usb4 task 50.39, owner 2026-11-19)
+
+Design before code, revision 52 (2026-11-20); items 4 to 8 revised in
+revision 53 (2026-11-20) after the owner's answers. The owner decided on
+2026-11-19 that the widths of this tool's window and of Save Report are
+swept in this release, after tasks 50.30 to 50.32. The rule is the one
+sections 3.6, 6.5 and 20 already state: every line within 79 columns.
+Task 50.30 brought the snapshot engine's report within it
+(`snapshot-reader.md`; table rows, verbatim data and self-test output
+excepted) and left this tool's own texts. Section 7.3's addendum, that
+Save Report's tree lines can pass 79 columns at depth, stays for the
+tree's labels.
+
+1. **What the sweep found** (from the source at `319f8b6aa`: every text
+   call of `xhcitr\`, each number at the most digits it can hold, each
+   string at its longest; then measured in guests). The details pane,
+   which Save Report repeats node by node: 21 line formats pass 79
+   columns with their words and numbers alone - among them the recovery
+   requests' `reset requested:` line (section 26), the descriptors'
+   companion and SuperSpeedPlus lines, the Thunderbolt router's tunnels
+   line, the PCI and bridge diagnostics' counts, the network link's
+   logins - and about 105 more with long values (names, the transport's
+   reasons, the Settings rows, the counts at their bounds). Save
+   Report's own lines: its header, the driver keys' notes (task 50.29)
+   and the Settings block. The dialogs, measured in their own font on 98
+   SE and XP (the restart dialog of section 27 with the longest name and
+   every note, Settings, Logging level, the stop with administrator
+   rights, About): every text fits its control, but Settings' heading
+   when six or more settings wait for a restart (two lines high). The
+   tray's menu items with a long device name pass the screen's width.
+   Balloons are bounded already (an answer longer than 250 characters
+   goes to a message box), and message boxes wrap their own text.
+2. **The fitting** (`tr_fit_text`, the pure half). A line within the
+   width is written as it is. A wider one is broken between words: after
+   a clause's end (the space after a `,`, `;`, `.` or `:`) that falls in
+   the line's second half by column, else at the last space that fits;
+   never inside a quoted string, inside the label or before its first
+   word. Its further lines are put under its first value - the column
+   after a short label ("Label:" and its spaces, the label at most 24
+   characters with no `,`, `;`, `.` or `"`, the value no further in than
+   half the width) - else under the line's own indent, again no further
+   in than half the width. A word or a quoted string wider than a line is
+   written whole and the line broken after it. A line that begins with
+   the mark `TR_FIT_WHOLE` is a value read as it is - a name, an id, a
+   path, a version, a serial number or a string the device or Windows
+   gave - and is written whole, the mark dropped. A field's paragraph - a
+   "Label:" line and the lines under its value that follow it, which its
+   maker already wrapped - is joined from its first line wider than the
+   width to its end (at most 2048 bytes: past that, the rest is fitted on
+   its own) and fitted again as one, so that a narrower width does not
+   leave it in short pieces; a paragraph that fits is not touched, and
+   a line without a label (a note and the count after it, a list) is never
+   joined to the next. Only spaces and line ends change: no word, no order,
+   no punctuation. It is the rule task 50.30
+   gave the snapshot engine, applied to this tool's text once it is made,
+   so a line added later is fitted too.
+3. **Where.** The details pane and Edit > Copy (the pane as shown), at 79
+   columns; Save Report's and `/report`'s header, Logging levels and
+   Settings blocks at 79; each node's details, and the heads and notes of
+   the driver keys' blocks (task 50.29), at 79 less the node's lead
+   (`tr_report_width`: the lead is two spaces a level of depth, four more
+   and `| `), so that with the lead every line stays within 79 columns
+   down to a node 26 levels deep (item 6 says what passes it deeper)
+   (`tr_reg`'s notes take their width from the key, `TR_REG_KEY`'s
+   `Width`; the `.DEV` keeps 79); the Logging level dialog's list,
+   `/set /show` and the `XHCISET.TXT` beside a snapshot, at 79, a block
+   that no longer fits its caller ending with the cut mark (both 16 KiB
+   callers now have 64 KiB). Marked whole (`TR_FIT_WHOLE`): the Device
+   Manager entry's description, instance ID, hardware ID, driver, driver
+   key, version, INF file, matching ID and provider; a USB device's
+   driver key, manufacturer, product, serial number, string descriptors
+   and hub name; a router's name; a controller's "Opened as", root hub and
+   location; the other computer's name, vendor and device on a network
+   link (the window's form only: the snapshot's carries no mark); the
+   PCI and bridge diagnostics' `XhciPfwVersion` value and their names and
+   ids; the driver-key path in the Thunderbolt log's advice; and every
+   line that is a node's name or path - a unit's, a device's, a log's or a
+   PCI node's heading, a USB port's, a tunnel port's and a root hub's first
+   line, the host interfaces and the devices that stop with a unit or a
+   USB device, one a line - and the driver keys' block heads in Save
+   Report. The Logging levels block's names are controllers' and host
+   interfaces' own names (at most 63 characters) and fit as they are. Not
+   fitted: a
+   registry value's line (its data as read, as task 50.30 left verbatim
+   data); the logs' records, which hold no space and so are never broken;
+   the tree's labels (section 7.3); the snapshot engine's text (task
+   50.30's own fitting); the console's one-shot answers (already wrapped
+   at 79); message boxes and balloons.
+4. **The dialogs.** Settings' heading (`IDC_S_HEAD`) is three lines high
+   instead of two, the settings list one line shorter and the boxes of
+   the tool's own tab eight units lower; the dialog keeps its height,
+   which fills a 640 by 480 screen's work area. Since the owner's answer
+   of 2026-11-20 the heading is a read-only text box with no border, in
+   the label's place and size, that scrolls, so that every setting
+   waiting for a restart can be read however many there are: its
+   vertical scroll bar is shown, and the box is a stop of the Tab key,
+   only while its text needs more lines than the box shows (the lines
+   counted with the bar shown, against the height of the box's
+   formatting rectangle in lines of its font), so that a heading that
+   fits looks as the label did; its text
+   margins are none, so that its words start where the label's did; and
+   its text holds every row's name (it was cut at 600 bytes). Its words
+   are as they were. Every other dialog text fits as it is.
+5. **The tray menu** (the owner, 2026-11-20). Its item for a device,
+   "Safely remove" and the device's label (its disks and their letters,
+   else its name), with the reason it cannot be stopped where there is
+   one, cuts the label in the tray menu alone, with the "..." the label
+   already ends with when it is cut, so that the item keeps within the
+   screen. The label's length is at most `tr_tray_label_chars`: 60
+   characters on a screen 640 pixels wide and in proportion to the width
+   (three thirty-seconds of it: 75 at 800, 96 at 1024, 120 at 1280, and
+   from 1696 the 159 the label has always been held to), and no more than
+   leaves the whole item within the width at 6 pixels a character once
+   48 pixels are left for the menu's own margins (the longest label
+   measured, an item of 158 characters, was 817 pixels in 98 SE's menu
+   font and 797 in XP's, about 5.2 and 5.0 a character): with a reason of
+   43 characters, the longest a USB device gives, 38 at 640. It is never
+   under 24 characters, so that a label keeps a few words, and a width
+   that cannot be read leaves the 159 of before; either can leave an item
+   wider than the screen (at 640 the floor with the longest reason, a
+   Thunderbolt unit's 61 characters, comes to about 660 pixels by the
+   same count), and so can a label of wide letters (capitals). The width
+   is that of the work area of the monitor the menu opens on, at the
+   cursor (`MonitorFromRect` and `GetMonitorInfo`, looked up at run time
+   as for the window's place; the primary's work area where they are
+   missing). The cut is the tray's own (`tr_tray_label`): `tr_unit_label`
+   at the tray's length, the letters kept whole, except that a name with
+   no disks, or disks whose letters leave no room, is cut with "..." too,
+   where `tr_unit_label` cuts without one. On a double-byte code page
+   the cut falls between characters, never between a character's lead
+   and trail bytes, and can be a byte shorter: the pure half takes a test
+   of a lead byte from its caller, which passes `IsDBCSLeadByte` (already
+   imported) for the system's code page (revision 54). Every other place
+   a label is shown - the tree, the details, the window's Action menu, the
+   confirmations and the notices - keeps `tr_unit_label` and its own
+   bound as before.
+6. **What it leaves.** Lines whose words alone pass the width: a value
+   marked whole, a word, a quoted string or an indent wider than the
+   line. A report node more than 26 levels deep: 79 less its lead would
+   leave fewer than 20 columns, and `tr_report_width` keeps 20, so its
+   lines can pass 79 with their lead. The tree's labels at depth (section
+   7.3). The details pane at its
+   default size shows about 68 of its 79 columns (820 by 560, the
+   splitter at 300, a 7-pixel font; at 640 by 480 about 45): kept so by
+   the owner (2026-11-20). Fitting each report node to its own width,
+   rather than keeping the pane's 79 under the lead, was taken as the
+   recommended choice under the 79-column rule (revision 52, reviewed)
+   and kept by the owner the same day.
+7. **Host vectors.** `test_tr`: lines within the width kept to the byte,
+   CR LF, LF and a lone CR, the break under a label's value, the clause
+   rule by column, a field's paragraph joined and fitted again (from its
+   first line or a later one, with no line end at its last, CR LF and a
+   lone CR, ended by a line marked whole or a blank line, and past its
+   buffer) while a line with no label is not, a time is
+   not a label, a word, a quoted string and an
+   indent wider than a line, a value marked whole, empty input, spaces
+   alone, a label alone, 80 columns, the bound and the cut mark, the
+   report's widths and a node at depth 4 within 79 with its lead, and a
+   decoded descriptor's companion line, each with every word kept in
+   order; `tr_tray_label_chars` at 640, 800, 1024, 1280 and 1696 pixels
+   with no reason, a short one and the longest, at a narrow width (24)
+   and at one not read (159), and `tr_tray_label` cutting a name with no
+   disks, and disks whose letters leave no room, with "...", and keeping
+   the letters whole within the tray's length, `tr_unit_label` without
+   a lead test unchanged (item 9);
+   double-byte names (Shift-JIS lead bytes) cut between characters on
+   each path - a name alone, disks' names before their letters, disks
+   whose letters leave no room, under five bytes - a trail byte that
+   looks like a lead byte, a one-byte character before them, and no lead
+   test (every byte a character);
+   `test_xhq`: the recovery status at its widest (every reason
+   counted at its largest, four records with the longest words and places,
+   a long name, isolation and a pending try) within 79 columns with every
+   word kept; `test_trreg`: the key's notes on their fitted lines, at 79
+   and at a node's width.
+8. **Legs** (emulated guests, the qemu flavour): 98 SE and 2000, a
+   controller stopped after repeated failures by the injection codes, its
+   details and Save Report read and every line counted; the dialogs'
+   measurements as item 1. After items 4 and 5: 98 SE at 640 by 480 and
+   XP, a screenshot of each surface changed - the details pane, Save
+   Report, Settings' heading with a long list waiting for a restart, and
+   the tray menu with a device whose label is long - and Settings'
+   heading at work: one that fits (no scroll bar, no Tab stop), a long
+   list (the bar, scrolled by the keyboard, a Tab stop) and back to one
+   that fits (another tab, the tool's own tab), with Tab and Shift+Tab,
+   Enter and Escape and the Restart button beside it; the long list's
+   last name reached by scrolling as soon as it is set, and the bar as
+   set after a repaint and after the focus moves.
+9. **The tree's own label** (the owner, 2026-11-20, revision 55). Every
+   cut `tr_unit_label` makes - the label of the tree, the details, the
+   window's Action menu, the confirmations, the notices and Save Report,
+   every place but the tray menu - falls between characters on a
+   double-byte code page too, as the tray's does (item 5): the caller
+   passes the same test of a lead byte (`IsDBCSLeadByte`, the system's
+   code page), and the same rounding down to a character's end serves
+   each of its cuts - a name with no disks, the disks' names before
+   their letters, disks whose letters leave no room. Before, these cuts
+   were by bytes, and disks' names joined past the label's 159 bytes
+   could end on a character's first byte. No word changes, the bounds
+   are as before, a cut label can be a byte shorter, and on a
+   single-byte code page nothing changes. The later cuts of a name in
+   the "can run faster" notice's set and in the red icon's tooltip
+   (`tr_fast_name`, `tr_red_tip`), left by bytes here, follow in item
+   10.
+   Host vectors (`test_tr`, Shift-JIS lead bytes): disks' names a byte
+   under, at, one and two bytes over their room before the letters, and
+   a name alone the same way, with the test and without it; disks whose
+   letters leave no room; single-byte names (and a single-byte code
+   page's test) cut as without a test.
+10. **The notice's and the red icon's names** (the owner, 2026-11-20,
+    revision 56). The same test of a lead byte, and the same rounding
+    down to a character's end (`tr_char_floor`, the one routine items 5
+    and 9 use, with `tr_copy_lead`, a copy that ends between
+    characters), serve the other cuts of a device's name: `tr_fast_name`
+    - the "can run faster" notice's names, the lines that name a slow
+    device and its hub, and the red icon's set, held in 72 bytes - for
+    the label, the product string and the class-name label alike;
+    `tr_red_tip`, the red icon's tooltip (64 or 128 bytes) and the tray
+    menu's item, where a name is cut to the room its fixed words leave
+    and ends "..."; and the copy of a controller's name into the red
+    icon's list. XHCITR passes `IsDBCSLeadByte` to each. No word
+    changes; a cut name can be a byte shorter on a double-byte code
+    page; with no test (NULL) every cut is byte for byte as before, and
+    on a single-byte code page nothing changes. The "can run faster"
+    list's own layout of a name after `tr_fast_name`, left by bytes
+    here, follows in item 11.
+    Host vectors: in `test_tr`, `tr_copy_lead` at 8 bytes, and
+    `tr_fast_name` at 72 bytes on each of its three paths, each with
+    double-byte strings a byte under, at, one and two bytes over the
+    room, with the test and some without it (a product's spaces taken
+    off first); in `test_trred`, the tooltip's name the same
+    way at a 64-byte tip; single-byte names, and a single-byte code
+    page's test, cut as with none.
+11. **The rest, and the search** (the owner, 2026-11-20, revision 57).
+    The same routines, with the same test passed in, serve the last
+    cuts of a device's name: the "can run faster" list's entry
+    (`tr_fast_entry`), whose name line and "Behind <hub> (<speed>)" are
+    cut to their 160 bytes between characters, and whose wrapping keeps
+    of a word longer than its 96-byte line's room only whole characters
+    (a word starts after a space, and a space is never the second byte
+    of a double-byte character); the USB drive notice (`tr_stor_text`),
+    whose names cut to their room before "..." end between characters;
+    the console's wrap of a one-shot answer (`tr_wrap`, a word longer
+    than the line, and the end of its 16 KiB), the recovery details'
+    fields (`tr_xhr_details`) and the PCI and bridge diagnostics' NHI
+    heading (`tr_diag_wrap`), where a word longer than the line is broken
+    between characters; the 98 SE and ME storage refusal of a restart
+    (`tr_rst_rules9x`), cut to its room between characters; and, in the
+    window's half, a controller's name copied into the port-hold
+    notice's list, a recovery record's device name (its `DeviceDesc`)
+    copied into 96 bytes, and the last notice kept for the tooltip of a
+    shell before 5.0 and that tooltip. No word changes; with no test
+    every cut is byte for byte as before for the texts the tool makes
+    (names tidied of line ends). xhcitr was searched once more, every
+    copy, format and wrap of a text that can hold a device's name
+    against its destination's room. The sources that can hold a
+    double-byte name are a devnode's description and friendly name (read
+    whole or not at all), the labels of items 5 and 9, the names of item
+    10 and a registry `DeviceDesc`; IDs, product strings, Thunderbolt
+    router names and the network link's peer texts are ASCII alone. Left
+    by bytes, each never shown as a split character: the joined disk
+    names behind a label (512 bytes, of which a label keeps at most 156);
+    the snapshot engine's raw property and registry texts (written only
+    as printable ASCII); the driver keys' screening windows (`tr_reg`,
+    1,800 bytes, matched and never shown); and the storage refusal's
+    list (1,600 bytes, cut only past the refusal's 600). A text that
+    overflows its whole buffer (the details pane's 64 KiB, Save Report's
+    blocks) is a bound of the text, not of a name: where it is marked
+    cut, the mark follows the last line end within 256 bytes, or, with
+    none there, the last byte that fits. Host
+    vectors: in `test_tr`, the entry's name line, a continuation line
+    and the hub line, the drive notice with one name and with two, and
+    the console's wrap and its end; in `test_xhq`, the recovery details'
+    name; in `test_trrst`, the storage refusal; in `test_trdiag`, the
+    NHI heading; double-byte names under, at and over each limit with
+    the test, and some of the cases over it also without the test
+    (today's bytes, a lead byte last); single-byte names, and a
+    single-byte code page's test, cut as with none.

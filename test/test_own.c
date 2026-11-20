@@ -635,6 +635,32 @@ static void test_table(void)
              "Resource Error refused");
     CHECK_EQ(XhciOwnCommandEvent(8), XHCI_OWN_EV_CMD_REFUSED,
              "Bandwidth Error refused");
+
+    /* Task 50.30 step 3 (design record 17 section 4.15.5a): aborted (25)
+     * or left is never the refusal a rollback reads; both sides are kept
+     * until the slot goes, at the command and at the rollback. */
+    CHECK_EQ(XhciOwnCommandEvent(XHCI_OWN_CC_ABORTED),
+             XHCI_OWN_EV_CMD_REMOVED, "25 removed, not refused");
+    CHECK_EQ(XhciOwnCommandEvent(XHCI_OWN_CMD_LEFT),
+             XHCI_OWN_EV_CMD_REMOVED, "left removed, not refused");
+    CHECK_EQ(XhciOwnCommandEvent(24), XHCI_OWN_EV_CMD_REFUSED,
+             "24 still refused");
+    {
+        XHCI_OWN_SELECT sel;
+        ULONG answer;
+        ULONG actions;
+
+        XhciOwnSelectBegin(&sel, 1, 0, 0);
+        actions = XhciOwnSelectStep(&sel, XHCI_OWN_EV_CMD_REMOVED, &answer);
+        CHECK_EQ(actions, XHCI_OWN_A_PIN_NEW | XHCI_OWN_A_PIN_OLD,
+                 "removed at the command: both pinned, nothing freed");
+        CHECK_EQ(answer, XHCI_OWN_ANS_COMMAND, "the command's answer");
+        CHECK_EQ(actions & (XHCI_OWN_A_FREE_NEW | XHCI_OWN_A_FREE_OLD |
+                            XHCI_OWN_A_REATTACH_OLD), 0,
+                 "no rollback, no free, no reattach");
+    }
+    CHECK_EQ(XhciOwnDropStep(XHCI_OWN_EV_CMD_REMOVED), XHCI_OWN_A_PIN_OLD,
+             "a drop removed: pinned");
 }
 
 /* The drop-only command over the model: every outcome, both unknown

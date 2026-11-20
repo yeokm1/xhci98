@@ -1229,6 +1229,7 @@ static ULONG xhciProgramCommandRing(PXHCI_EXTENSION ext)
      * xhciCommandInvalidateLocked, which every path here has already run;
      * cleared again because a rebuilt ring must never inherit the marker). */
     ext->CommandNoOpRewrittenPA = 0;
+    ext->CommandAbortedPA = 0;
     status = XhciRingInit(&ext->CommandRing,
                           (volatile XHCI_TRB *)
                               XhciCommonAt(ext, layout->CommandRingOffset),
@@ -1238,6 +1239,10 @@ static ULONG xhciProgramCommandRing(PXHCI_EXTENSION ext)
     if (status != XHCI_RING_OK) {
         return status;
     }
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* Task 50.30 step 2: the injection's addresses go with the ring. */
+    HcdInjCmdRingReset(ext);
+#endif
 
     /*
      * RCS must be the ring's own producer cycle rather than a literal 1: the
@@ -3582,6 +3587,7 @@ static ULONG xhciRestoreState(PXHCI_EXTENSION ext)
      * specification's own: reinitialise, write, and only then run.
      */
     ext->CommandNoOpRewrittenPA = 0;    /* the TRBs go with the ring */
+    ext->CommandAbortedPA = 0;
     if (XhciRingInit(&ext->CommandRing,
                      (volatile XHCI_TRB *)
                          XhciCommonAt(ext, layout->CommandRingOffset),
@@ -3592,6 +3598,10 @@ static ULONG xhciRestoreState(PXHCI_EXTENSION ext)
         XHCI_DBG_TEXT("restore: the command ring could not be reinitialized");
         return 0;
     }
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* Task 50.30 step 2: the injection's addresses go with the ring. */
+    HcdInjCmdRingReset(ext);
+#endif
     if (!XhciWriteCrcr(ext,
                        ext->CommandRing.BasePA,
                        ext->CommandRing.Cycle ? XHCI_CRCR_RCS : 0,
@@ -4750,6 +4760,11 @@ static ULONG xhciInitDecode(PXHCI_EXTENSION ext, PULONG failStatus)
     /* Step 0c: MMIO sanity, before any register that has a side effect. */
     ext->InitStep = XHCI_INIT_STEP_CAP_SANITY;
     value = XhciRead32(ext, XHCI_CAP_CAPLENGTH);
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* Task 50.31's fault 34 (design record 38 section 17): a window that
+     * stopped decoding for one attempt, as a recovery meets it. */
+    value = HcdInjDecodeAnswer(ext, value);
+#endif
     XHCI_DBG_VALUE("CAPLENGTH/HCIVERSION dword", value);
     /*
      * Task 38.11 (design record 17 section 4.14.7): the version recorded

@@ -31,9 +31,10 @@ A leg runs on TCG unless release-legs.psd1 gives it Accel 'whpx' (the two
 Windows 10 legs; roadmap-usb4 49.4). A WHPX leg starts cold, since QEMU
 restores no saved state under WHPX, and is refused, before anything is
 started, where WHPX cannot run its guest: it never falls back to TCG by
-itself. -ForceTcg runs such a leg under TCG instead, the periodic
-cross-check, with the leg's TcgMinutes and TcgStallSeconds as its
-deadlines. result.json names the accelerator (accel, accelOwn,
+itself. -ForceTcg runs such a leg under TCG instead, with the leg's
+TcgMinutes and TcgStallSeconds as its deadlines: where WHPX cannot run the
+guest, or to tell the accelerator's part after a WHPX reading not
+explained; no cut asks for it (roadmap-usb4 50.2). result.json names the accelerator (accel, accelOwn,
 accelForced) and each start's own.
 
 A leg with Devices (Windows 10) also disables, enables, removes and
@@ -95,7 +96,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $Package 'INSTALL.BAT'))) { throw "$
 if ($def.ContainsKey('Needs') -and $def.Needs -and -not (Test-Path -LiteralPath (Join-Path $Package $def.Needs))) {
     throw "leg ${Leg}: $Package has no $($def.Needs) (the download this leg needs)"
 }
-# The accelerator: the leg's own, or TCG when forced (the cross-check).
+# The accelerator: the leg's own, or TCG when forced (-ForceTcg).
 $acc = Resolve-LegAccel $def ([bool]$ForceTcg)
 $accelArg = Get-LegAccelArg $guest $acc.Use
 # Devices and TrustCert are LEGNT.CMD's, and Windows 10's.

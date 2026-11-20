@@ -10,12 +10,16 @@ make-release.ps1 run here. -X64Tree names tree B, a second worktree of the
 same repository at this tree's commit, which builds amd64 and nothing else;
 by default <this tree>-x64, made or moved here (-X64Tree below).
 
-The script starts scripts\build-driver.cmd all here and
-scripts\build-driver.cmd all -amd64 in tree B as two processes at once,
+The script starts scripts\build-driver.cmd cut here and
+scripts\build-driver.cmd cut -amd64 in tree B as two processes at once
+("cut": the release flavour alone, run as "all" runs it, roadmap-usb4
+task 50.1; with -WithQemu "all" and "all -amd64", release and qemu),
 each with TEMP and TMP set to its own tree's out\tmp-<arch>\ and its output
 in its tree's out\cut-build-<arch>.log, waits for both, prints each one's
 exit code and time, and when both passed imports tree B's amd64 build:
-its output directories and its gated records copied into this tree, each
+its output directories and its gated records copied into this tree - the
+release flavour's, and with -WithQemu the qemu flavour's too, whatever
+other record tree B holds - each
 record held to its binaries before the copy and to the copies after it
 (package-common.ps1, Import-GatedBuild). Afterwards make-release.ps1
 -CheckOnly, the cut and make-package.ps1 -SignOnly read the amd64 build
@@ -41,6 +45,13 @@ the baseline the saving is measured against. The import is the same.
 Build nothing: import the amd64 build tree B already holds, for builds
 run by hand.
 
+.PARAMETER WithQemu
+Build "all" in both trees, release and qemu, as every cut did until task
+50.1, and import both flavours' records; with -ImportOnly, import both.
+Without it the builds are "cut" and only the release flavour is imported,
+so a qemu record an earlier build left in tree B is never taken. Nothing
+the cut or make-package.ps1 -SignOnly reads needs the qemu build.
+
 .PARAMETER NoTargetEvidence
 With -ImportOnly alone: lets the import admit records whose import gates
 ran without target evidence, for a host with no target binaries staged.
@@ -60,6 +71,7 @@ param(
     [string]$X64Tree = "",
     [switch]$Serial,
     [switch]$ImportOnly,
+    [switch]$WithQemu,
     [switch]$NoTargetEvidence
 )
 
@@ -76,7 +88,7 @@ try {
         $neverBuild = { param($Arch) throw "the builds were not started: XHCI98_PACKAGER_SELFTEST is 1 (a self-test run, which never builds)." }
     }
     [void](Invoke-CutBuilds -Repo (Get-RepoRoot) -X64Tree $X64Tree -Serial:$Serial -ImportOnly:$ImportOnly `
-                            -NoTargetEvidence:$NoTargetEvidence -BeforeStart $neverBuild)
+                            -WithQemu:$WithQemu -NoTargetEvidence:$NoTargetEvidence -BeforeStart $neverBuild)
     Write-Host "  Next: make-release.ps1 -CheckOnly, then the cut (releases\README.md, ""Cutting a release"")."
 } catch {
     Write-Err $_.Exception.Message

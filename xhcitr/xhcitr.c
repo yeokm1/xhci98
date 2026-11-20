@@ -64,6 +64,9 @@
 #include "tr_res.h"
 #include "../src/xhci_qry.h"
 #include "tr_set.h"
+#include "tr_reg.h"
+#include "tr_rst.h"
+#include "tr_pswt.h"
 #include "../xhciinst/inst_silent.h"
 
 static int report_snapshots(HANDLE f);
@@ -194,6 +197,18 @@ typedef BOOL (WINAPI *PFN_IFACEDETAIL)(HDEVINFO, PSP_DEVICE_INTERFACE_DATA,
                                        PSP_DEVICE_INTERFACE_DETAIL_DATA_A,
                                        DWORD, PDWORD, PSP_DEVINFO_DATA);
 typedef BOOL (WINAPI *PFN_DESTROY)(HDEVINFO);
+/* The restart of a controller (record 25 section 27 item 2). */
+typedef HDEVINFO (WINAPI *PFN_RST_CREATELIST)(const GUID *, HWND);
+typedef BOOL (WINAPI *PFN_RST_OPENINFO)(HDEVINFO, PCSTR, HWND, DWORD,
+                                        PSP_DEVINFO_DATA);
+typedef BOOL (WINAPI *PFN_RST_DIPARAMS)(HDEVINFO, PSP_DEVINFO_DATA,
+                                        PSP_DEVINSTALL_PARAMS_A);
+typedef BOOL (WINAPI *PFN_RST_CIPARAMS)(HDEVINFO, PSP_DEVINFO_DATA,
+                                        PSP_CLASSINSTALL_HEADER, DWORD);
+typedef BOOL (WINAPI *PFN_RST_CALLCI)(DI_FUNCTION, HDEVINFO,
+                                      PSP_DEVINFO_DATA);
+/* The 98 SE and ME rescan (record 25 section 27 item 3). */
+typedef DWORD (WINAPI *PFN_CM_REENUM)(DWORD, ULONG);
 
 static struct {
     HMODULE SetupApi;
@@ -221,6 +236,13 @@ static struct {
     PFN_ENUMIFACE EnumIface;
     PFN_IFACEDETAIL IfaceDetail;
     PFN_DESTROY Destroy;
+    PFN_RST_CREATELIST CreateList;  /* the restart (section 27)       */
+    PFN_RST_OPENINFO OpenInfo;
+    PFN_RST_DIPARAMS GetDiParams;
+    PFN_RST_DIPARAMS SetDiParams;
+    PFN_RST_CIPARAMS SetCiParams;
+    PFN_RST_CALLCI CallCi;
+    PFN_CM_REENUM Reenumerate;      /* 98 SE and ME: the restart's rescan */
 } api;
 
 /* ---- the model ----------------------------------------------------------- */
@@ -326,6 +348,15 @@ typedef struct _UCTRL {
     TR_TOLMAP HoldMap;
     unsigned char Hold[2 * TR_TOL_MAX_LOCS];
     DWORD HoldSkip;
+    /* Task 50.30 step 1 (record 25 section 26 item 1): the recovery-status
+     * request, read with the holds at each refresh: RecState 1 read, 0
+     * not asked or not served (a driver before it), -1 failed; RecFailed
+     * the query's XHQ_F_FAILED where it is not served; RecName the name
+     * Windows recorded for the newest record's VID:PID, or empty. */
+    int RecState;
+    int RecFailed;
+    TR_XHR Rec;
+    char RecName[96];
 } UCTRL;
 
 typedef struct _UPORT {
@@ -426,6 +457,8 @@ static int hcdNameRefused;      /* controllers that did not name their key */
 static int tbDevices;
 static DWORD viewFlags = TR_V_DEFAULT;
 static char detail[TR_DETAIL_BYTES];
+/* Task 50.39: the details as shown and as saved, fitted (tr_fit_text). */
+static char detailFit[TR_DETAIL_BYTES];
 
 static HWND hTray;
 static HWND hMain;
@@ -502,6 +535,24 @@ static int reportMode;     /* a report decodes every descriptor */
 static volatile LONG chgCount;
 static LONG modelGen;
 static int watchOk;
+/* XHCITR.EXE on 64-bit Windows with no XHCITR64.EXE beside it
+ * (wow64_handoff): the restart is not offered there (R4). */
+static int trWow64Limited;
+static int rst_offered(int c);
+static int rst_blocked(int c);
+static void rst_ui(HWND owner, int c, int fromTray);
+/* A restart or a stop of a device is in progress on this thread (its
+ * waits answer the window): another of either is refused (task 50.32). */
+static int trActionBusy;
+/* A restart's call or settle is running (in this process, or the elevated
+ * run's while the window waits for it): no reading of the controller, the
+ * hold job's included (record 25 section 27 item 4). */
+static volatile int rstBusy;
+/* Held by the hold job around each controller's read, and taken and given
+ * back by a restart once rstBusy is set, so that no read is under way at
+ * the call and none begins until rstBusy clears; made on the tray's
+ * thread before the first job. */
+static HANDLE holdGate;
 
 /* ======================================================================== */
 /* Small helpers                                                             */
@@ -520,6 +571,7 @@ static void net_node_add(int parentT, int k, const char *id);
 static void net_read_nhi(NHI *h);
 static void details_net(TR_TEXT *t, int k, int link);
 static void say(const char *text, int warn);
+static void say_titled(const char *text, int warn, const char *title);
 static void fast_scan(void);
 static void stor_scan(void);
 static int stor_setting(void);
@@ -588,6 +640,7 @@ static void load_routines(void)
     api.DeviceId = (PFN_CM_ID)proc(api.CfgMgr, "CM_Get_Device_IDA");
     api.Property = (PFN_CM_PROP)proc(api.CfgMgr, "CM_Get_DevNode_Registry_PropertyA");
     api.QueryRemove = (PFN_CM_QREMOVE)proc(api.CfgMgr, "CM_Query_Remove_SubTree");
+    api.Reenumerate = (PFN_CM_REENUM)proc(api.CfgMgr, "CM_Reenumerate_DevNode");
     api.Remove = (PFN_CM_QREMOVE)proc(api.CfgMgr, "CM_Remove_SubTree");
     api.FirstLogConf = (PFN_CM_FIRSTLC)proc(api.CfgMgr, "CM_Get_First_Log_Conf");
     api.NextResDes = (PFN_CM_NEXTRD)proc(api.CfgMgr, "CM_Get_Next_Res_Des");
@@ -623,6 +676,20 @@ static void load_routines(void)
         api.IfaceDetail = (PFN_IFACEDETAIL)proc(api.SetupApi,
                                                 "SetupDiGetDeviceInterfaceDetailA");
         api.Destroy = (PFN_DESTROY)proc(api.SetupApi, "SetupDiDestroyDeviceInfoList");
+        /* The restart of a controller (record 25 section 27 item 2):
+         * SetupAPI's property change, looked up like the rest. */
+        api.CreateList = (PFN_RST_CREATELIST)proc(api.SetupApi,
+                                                  "SetupDiCreateDeviceInfoList");
+        api.OpenInfo = (PFN_RST_OPENINFO)proc(api.SetupApi,
+                                              "SetupDiOpenDeviceInfoA");
+        api.GetDiParams = (PFN_RST_DIPARAMS)proc(api.SetupApi,
+                                                 "SetupDiGetDeviceInstallParamsA");
+        api.SetDiParams = (PFN_RST_DIPARAMS)proc(api.SetupApi,
+                                                 "SetupDiSetDeviceInstallParamsA");
+        api.SetCiParams = (PFN_RST_CIPARAMS)proc(api.SetupApi,
+                                                 "SetupDiSetClassInstallParamsA");
+        api.CallCi = (PFN_RST_CALLCI)proc(api.SetupApi,
+                                          "SetupDiCallClassInstaller");
     }
 }
 
@@ -778,8 +845,9 @@ static void lv_collect(void)
     }
 }
 
-/* The levels block: the report's, and the dialog's list. */
-static void lv_block(TR_TEXT *t)
+/* The levels block: the report's, and the dialog's list; lv_block
+ * writes it fitted (task 50.39). */
+static void lv_block_raw(TR_TEXT *t)
 {
     int d;
     int i;
@@ -794,6 +862,18 @@ static void lv_block(TR_TEXT *t)
                             &lvDev[d][i].L);
         }
     }
+}
+
+static void lv_block(TR_TEXT *t)
+{
+    static char raw[TR_DETAIL_BYTES];
+    TR_TEXT r;
+
+    tr_text_init(&r, raw, sizeof(raw));
+    lv_block_raw(&r);
+    tr_text_mark_cut(&r);
+    tr_fit_text(t, raw, TR_TEXT_COLS);
+    tr_text_mark_cut(t);
 }
 
 /* One line of a device's details: its level. */
@@ -1709,11 +1789,41 @@ static int dev_number(const char *path, TR_DEVNUM *n)
     return ok;
 }
 
+/* 1 when devnode i of w lies below devnode top. */
+static int walk_below(const WALK *w, int i, int top)
+{
+    int p;
+    int guard = 0;
+
+    for (p = w->N[i].Parent; p >= 0 && guard < 64; p = w->N[p].Parent) {
+        if (p == top) {
+            return 1;
+        }
+        guard++;
+    }
+    return 0;
+}
+
+/* 1 when disk_letters_nt reads devnode i's letters: a disk inside a unit
+ * or a USB device's set, or, where top is a devnode, any disk below it
+ * (the restart's fresh walk, task 50.32). */
+static int disk_letters_want(const WALK *w, int i, int top)
+{
+    if (!w->N[i].IsDisk) {
+        return 0;
+    }
+    if (top >= 0) {
+        return walk_below(w, i, top);
+    }
+    return w->N[i].UnitOf >= 0 || w->N[i].UsbOf >= 0;
+}
+
 /* NT: each disk inside a unit gets the letters of the volumes on it, by
  * the storage device number of the disk's interface and of each \\.\X:.
  * Read only, every device opened with no access rights; whatever cannot be
- * read just leaves a letter out. */
-static void disk_letters_nt(WALK *w)
+ * read just leaves a letter out. top -1: the model's units; else the
+ * disks below devnode top. */
+static void disk_letters_nt(WALK *w, int top)
 {
     TR_DEVNUM vol[26];
     int have[26];
@@ -1722,7 +1832,7 @@ static void disk_letters_nt(WALK *w)
     int any = 0;
 
     for (i = 0; i < w->Count; i++) {
-        if (w->N[i].IsDisk && (w->N[i].UnitOf >= 0 || w->N[i].UsbOf >= 0)) {
+        if (disk_letters_want(w, i, top)) {
             any = 1;
         }
     }
@@ -1758,7 +1868,7 @@ static void disk_letters_nt(WALK *w)
         DWORD need = 0;
         TR_DEVNUM dn;
         int l;
-        if (!w->N[i].IsDisk || (w->N[i].UnitOf < 0 && w->N[i].UsbOf < 0)) {
+        if (!disk_letters_want(w, i, top)) {
             continue;
         }
         set = api.GetClassDevs(&trGuidDisk, w->N[i].Id, NULL,
@@ -1787,9 +1897,17 @@ static void disk_letters_nt(WALK *w)
     }
 }
 
+/* A label's cut never splits a character of a double-byte code page
+ * (record 25 section 28 items 5 and 9). */
+static int label_lead(unsigned char c)
+{
+    return IsDBCSLeadByte((BYTE)c) != 0;
+}
+
 /* What the user sees for unit u: its disks and their letters, else its
- * own name (tr_unit_label). */
-static void unit_label(int u, char *out, size_t cap)
+ * own name (tr_unit_label); with tray above 0, the tray menu's cut to that
+ * many characters (tr_tray_label, task 50.39). */
+static void unit_label_n(int u, int tray, char *out, size_t cap)
 {
     char names[512];
     char letters[TR_LETTERS_BYTES];
@@ -1805,7 +1923,18 @@ static void unit_label(int u, char *out, size_t cap)
             tr_letters_add(letters, gw.N[i].Letters);
         }
     }
-    tr_unit_label(dn_name(&gw.N[u]), names, letters, out, cap);
+    if (tray > 0) {
+        tr_tray_label(dn_name(&gw.N[u]), names, letters, tray, label_lead,
+                      out, cap);
+    } else {
+        tr_unit_label(dn_name(&gw.N[u]), names, letters, label_lead, out,
+                      cap);
+    }
+}
+
+static void unit_label(int u, char *out, size_t cap)
+{
+    unit_label_n(u, 0, out, cap);
 }
 
 /* ======================================================================== */
@@ -2444,10 +2573,13 @@ static void build_usb(int root)
                            c->Ours && ids &&
                                inst_xhci_name(ven, dev, canon, sizeof(canon)) == 1);
         }
-        tr_sprintf(label, sizeof(label), "%s  (%s)%s%s%s%s",
+        tr_sprintf(label, sizeof(label), "%s  (%s)%s%s%s%s%s",
                    c->Dn >= 0 ? dn_name(&gw.N[c->Dn]) : "USB host controller",
                    c->Ours ? "xhci98" : "Windows", suffix, c->Behind[0] ? " (" : "",
-                   c->Behind, c->Behind[0] ? ")" : "");
+                   c->Behind, c->Behind[0] ? ")" : "",
+                   !c->Ours ? ""
+                   : c->RecState == 1 ? tr_xhr_tag(c->Rec.Terminal)
+                   : c->RecFailed ? " (stopped after a failure)" : "");
         tr_key(key, sizeof(key), "C", c->DrvKey, c->Path);
         t = add_tnode(u, K_CTRL, i, 0, 0, c->Dn, label, key);
         if (t < 0) {
@@ -3080,6 +3212,12 @@ static void refresh_model(int withUsb)
         setMissed = 1;
         return;
     }
+    if (rstBusy) {
+        /* A restart's settle: no reading of its controller until it ends
+         * (record 25 section 27 item 4); the restart reads the model again
+         * when it has answered. */
+        return;
+    }
     model_free_usb();
     tnCount = 0;
     usbDevices = 0;
@@ -3120,7 +3258,7 @@ static void refresh_model(int withUsb)
         }
     }
     if (envNt) {
-        disk_letters_nt(&gw);
+        disk_letters_nt(&gw, -1);
     }
     for (root = 0; root < nhiCount; root++) {
         if (nhi[root].R != NULL) {
@@ -3160,9 +3298,11 @@ static void refresh_model(int withUsb)
 /* One logical configuration of devnode dn (kind TR_LC_*), each descriptor
  * a line; 1 when it had one. 0 otherwise, with the configuration manager's
  * answer in *answer (TR_CR_NO_MORE_LOG_CONF: it has none). Read only, no
- * rights needed. */
+ * rights needed. claimed: the IRQ XhciInterruptMode 4 claimed (task
+ * 50.18), said beside the first IRQ, or at the end where there is none; 0
+ * none. */
 static int res_conf(TR_TEXT *t, DWORD dn, ULONG kind, const char *title,
-                    ULONG *answer)
+                    ULONG *answer, TR_U32 claimed)
 {
     TR_CMH lc = 0;
     TR_CMH rd;
@@ -3205,11 +3345,20 @@ static int res_conf(TR_TEXT *t, DWORD dn, ULONG kind, const char *title,
                          "read)\n", (unsigned long)rid, (unsigned long)size);
             continue;
         }
+        {
+            TR_U32 m4 = rid == TR_RES_IRQ ? claimed : 0;
 #ifdef _WIN64
-        tr_res_text(t, rid, buf, size, kind == TR_LC_ALLOC || kind == TR_LC_BOOT, 1);
+            tr_res_text_m4(t, rid, buf, size,
+                           kind == TR_LC_ALLOC || kind == TR_LC_BOOT, 1, m4);
 #else
-        tr_res_text(t, rid, buf, size, kind == TR_LC_ALLOC || kind == TR_LC_BOOT, 0);
+            tr_res_text_m4(t, rid, buf, size,
+                           kind == TR_LC_ALLOC || kind == TR_LC_BOOT, 0, m4);
 #endif
+            if (m4 != 0) {
+                tr_res_claimed_text(t, m4);
+                claimed = 0;
+            }
+        }
     }
     if (rd != lc && api.FreeResDes != NULL) {
         api.FreeResDes(rd);
@@ -3217,10 +3366,36 @@ static int res_conf(TR_TEXT *t, DWORD dn, ULONG kind, const char *title,
     if (api.FreeLogConf != NULL) {
         api.FreeLogConf(lc);
     }
-    if (!any) {
+    if (!any && claimed == 0) {
         tr_put(t, "    none\n");
     }
+    if (claimed != 0) {
+        tr_res_claimed_text(t, claimed);
+    }
     return 1;
+}
+
+/* Task 50.18: the IRQ xhci98 claimed for devnode d's message under
+ * XhciInterruptMode 4 (tr_log.h tr_msg4_claimed_irq), from its
+ * controller's query, read once a refresh; 0 for any other devnode, mode
+ * or answer. */
+static TR_U32 res_msg4_irq(const DNODE *d)
+{
+    int c;
+    DWORD err;
+
+    for (c = 0; c < ucCount; c++) {
+        if (!uc[c].Ours || uc[c].Dn < 0 || &gw.N[uc[c].Dn] != d) {
+            continue;
+        }
+        if (uc[c].XqState == 0) {
+            uc[c].XqState = hcd_query(c, &uc[c].Xq, &uc[c].X, &err) == 1
+                                ? 1 : -1;
+        }
+        return uc[c].XqState == 1
+                   ? tr_msg4_claimed_irq(uc[c].X.Ctr, uc[c].X.CtrBytes) : 0;
+    }
+    return 0;
 }
 
 /* The resources of devnode dn (record 25 revision 10, addendum): what is
@@ -3228,37 +3403,41 @@ static int res_conf(TR_TEXT *t, DWORD dn, ULONG kind, const char *title,
 static void details_resources(TR_TEXT *t, const DNODE *d)
 {
     ULONG answer;
+    TR_U32 claimed;
 
     if (api.FirstLogConf == NULL || api.NextResDes == NULL) {
         return;     /* this Windows does not offer the calls */
     }
-    if (!res_conf(t, d->Dn, TR_LC_ALLOC, "Resources", &answer)) {
+    claimed = res_msg4_irq(d);
+    if (!res_conf(t, d->Dn, TR_LC_ALLOC, "Resources", &answer, claimed)) {
         if (answer == TR_CR_NO_MORE_LOG_CONF) {
             tr_put(t, "  Resources:     none allocated\n");
         } else {
             tr_printf(t, "  Resources:     not read (answer %lu)\n",
                       (unsigned long)answer);
         }
+        if (claimed != 0) {
+            tr_res_claimed_text(t, claimed);
+        }
     }
     if (d->Problem != 0) {
         res_conf(t, d->Dn, TR_LC_BOOT, "Asked for (boot configuration)",
-                 &answer);
+                 &answer, 0);
         if (!res_conf(t, d->Dn, TR_LC_FILTERED, "Asked for (filtered list)",
-                      &answer)) {
+                      &answer, 0)) {
             res_conf(t, d->Dn, TR_LC_BASIC, "Asked for (first of the lists)",
-                     &answer);
+                     &answer, 0);
         }
     }
 }
 
-/* A note in the details pane's style: "  Note:          " and the text,
- * broken at spaces to 62 columns, each further line under the first. */
-static void details_note(TR_TEXT *t, const char *s)
+/* The details pane's wrapped text: lead (17 columns) and the text, broken
+ * at spaces to 62 columns, each further line under the first. */
+static void details_lead(TR_TEXT *t, const char *lead, const char *s)
 {
     char line[80];
     size_t n;
     size_t cut;
-    const char *lead = "  Note:          ";
 
     while (*s != '\0') {
         n = strlen(s);
@@ -3283,6 +3462,12 @@ static void details_note(TR_TEXT *t, const char *s)
     }
 }
 
+/* A note in the details pane's style: "  Note:          " and the text. */
+static void details_note(TR_TEXT *t, const char *s)
+{
+    details_lead(t, "  Note:          ", s);
+}
+
 /* Device Manager's entry for devnode dn; haveRunning and running the
  * version its driver said (tr_ver_state's form), for the mixed-install
  * note (owner, 2026-11-13): haveRunning 0 where no running version is
@@ -3300,17 +3485,19 @@ static void details_devnode(TR_TEXT *t, int dn, int haveRunning,
         return;
     }
     d = &gw.N[dn];
+    /* Task 50.39: a value read as it is is written whole (TR_FIT_WHOLE). */
     tr_printf(t, "\nDevice Manager entry\n");
-    tr_printf(t, "  Description:   %s\n", d->Desc[0] ? d->Desc : "(none)");
-    tr_printf(t, "  Instance ID:   %s\n", d->Id);
-    tr_printf(t, "  Hardware ID:   %s\n", d->Hw[0] ? d->Hw : "(none)");
-    tr_printf(t, "  Driver:        %s\n", d->Service[0] ? d->Service : "(none)");
+    tr_printf(t, "\001  Description:   %s\n", d->Desc[0] ? d->Desc : "(none)");
+    tr_printf(t, "\001  Instance ID:   %s\n", d->Id);
+    tr_printf(t, "\001  Hardware ID:   %s\n", d->Hw[0] ? d->Hw : "(none)");
+    tr_printf(t, "\001  Driver:        %s\n",
+              d->Service[0] ? d->Service : "(none)");
     if (d->Driver[0] != '\0') {
-        tr_printf(t, "  Driver key:    %s\n", d->Driver);
+        tr_printf(t, "\001  Driver key:    %s\n", d->Driver);
         driver_key_path(d, path, sizeof(path));
         if (reg_text(HKEY_LOCAL_MACHINE, path, "DriverVersion", ver,
                      sizeof(ver)) > 0) {
-            tr_printf(t, "  Version:       %s\n", ver);
+            tr_printf(t, "\001  Version:       %s\n", ver);
             if (tr_ver_parse(ver, &installed) &&
                 tr_ver_mixed(installed, haveRunning, running, note,
                              sizeof(note))) {
@@ -3321,15 +3508,15 @@ static void details_devnode(TR_TEXT *t, int dn, int haveRunning,
          * where Windows recorded the value. */
         if (reg_text(HKEY_LOCAL_MACHINE, path, "InfPath", ver,
                      sizeof(ver)) > 0 && ver[0] != '\0') {
-            tr_printf(t, "  INF file:      %s\n", ver);
+            tr_printf(t, "\001  INF file:      %s\n", ver);
         }
         if (reg_text(HKEY_LOCAL_MACHINE, path, "MatchingDeviceId", note,
                      sizeof(note)) > 0 && note[0] != '\0') {
-            tr_printf(t, "  Matching ID:   %s\n", note);
+            tr_printf(t, "\001  Matching ID:   %s\n", note);
         }
         if (reg_text(HKEY_LOCAL_MACHINE, path, "ProviderName", note,
                      sizeof(note)) > 0 && note[0] != '\0') {
-            tr_printf(t, "  Provider:      %s\n", note);
+            tr_printf(t, "\001  Provider:      %s\n", note);
         }
     }
     tr_printf(t, "  Status:        0x%08lX (%s)\n", (unsigned long)d->Status,
@@ -3404,7 +3591,7 @@ static void details_unit(TR_TEXT *t, int dn)
     {
         char name[160];
         unit_label(u, name, sizeof(name));
-        tr_printf(t, "\nUnit behind a Thunderbolt port: %s\n", name);
+        tr_printf(t, "\n\001Unit behind a Thunderbolt port: %s\n", name);
         if (strcmp(name, dn_name(&gw.N[u])) != 0) {
             tr_printf(t, "  What stops: %s and everything on it.\n",
                       dn_name(&gw.N[u]));
@@ -3452,7 +3639,7 @@ static void details_unit(TR_TEXT *t, int dn)
     tr_put(t, "  Devices that stop with it:\n");
     for (i = u; i < gw.Count; i++) {
         if (gw.N[i].UnitOf == u) {
-            tr_printf(t, "    %s\n", dn_name(&gw.N[i]));
+            tr_printf(t, "\001    %s\n", dn_name(&gw.N[i]));
         }
     }
 }
@@ -3675,7 +3862,7 @@ static void details_router(TR_TEXT *t, int k, int r)
                      kind, inst_get32(e, CM_ST_E_LANES), haveX ? &x : NULL,
                      link, sizeof(link));
     tr_printf(t, "Thunderbolt / USB4 device\n");
-    tr_printf(t, "  Name:          %s\n", name);
+    tr_printf(t, "\001  Name:          %s\n", name);
     tr_printf(t, "  Kind:          %s\n",
               kind == CM_ST_KIND_ICM ? "announced by the controller's firmware"
               : kind == CM_ST_KIND_USB4_PORT ? "router on a host USB4 port"
@@ -3738,7 +3925,7 @@ static void details_uport(TR_TEXT *t, int i, int fetch)
     int self;
     char ssp[96];
 
-    tr_printf(t, "USB port %s on %s\n", p->Path,
+    tr_printf(t, "\001USB port %s on %s\n", p->Path,
               c->Dn >= 0 ? dn_name(&gw.N[c->Dn]) : "a USB host controller");
     if (!p->HaveConn) {
         tr_put(t, "  The hub did not report this port.\n");
@@ -3746,14 +3933,14 @@ static void details_uport(TR_TEXT *t, int i, int fetch)
     }
     tr_printf(t, "  Connection:    %s\n", tr_conn_status_text(p->Conn.Status));
     {
-        /* Task 49.43: a held root port's note; with no hold known (the
-         * door closed, or a hub's port, whose hub the driver numbers in a
-         * way the tool cannot match), the general advice at a port that
-         * failed enumeration. */
+        /* Task 49.43: a held root port's note; with no hold shown (none
+         * known, or none there: task 50.7), the general advice at a port
+         * that failed enumeration. */
         int hold = p->ParentUp < 0 ? hold_root(p->Ctrl, p->Conn.Port) : -1;
         if (hold > 0 && tr_hold_note(hold) != NULL) {
             details_note(t, tr_hold_note(hold));
-        } else if (hold < 0 && c->Ours && p->Conn.Status == TR_CS_FAILED) {
+        } else if ((hold < 0 || hold == TR_HOLD_NONE) && c->Ours &&
+                   p->Conn.Status == TR_CS_FAILED) {
             details_note(t, tr_hold_fallback);
         }
     }
@@ -3794,7 +3981,7 @@ static void details_uport(TR_TEXT *t, int i, int fetch)
             }
             tr_text_init(&e, eb, sizeof(eb));
             tr_fast_entry(&e, name, fast_vid(p), fast_pid(p), port,
-                          p->ParentUp >= 0 ? hub : NULL, &f);
+                          p->ParentUp >= 0 ? hub : NULL, &f, label_lead);
             tr_put(t, "  Can run faster:\n");
             tr_put(t, "  ");
             {
@@ -3844,6 +4031,9 @@ static void details_uport(TR_TEXT *t, int i, int fetch)
         } else if (got > 0) {
             tr_xport_text(&xr, xt, sizeof(xt));
             tr_printf(t, "  Transport:     %s\n", xt);
+            if (xr.Why == TR_XPORT_WHY_NO_STREAMS) {
+                details_note(t, tr_xport_none_note);
+            }
             svc = uport_xport_service(p, &xr);
             if (tr_xport_stale(&xr, svc)) {
                 tr_printf(t, "  Note:          Windows bound this drive to %s, not to "
@@ -3894,13 +4084,13 @@ static void details_uport(TR_TEXT *t, int i, int fetch)
         }
     }
     if (p->HaveStr[0]) {
-        tr_printf(t, "  Manufacturer:  %s\n", p->Str[0]);
+        tr_printf(t, "\001  Manufacturer:  %s\n", p->Str[0]);
     }
     if (p->HaveStr[1]) {
-        tr_printf(t, "  Product:       %s\n", p->Str[1]);
+        tr_printf(t, "\001  Product:       %s\n", p->Str[1]);
     }
     if (p->HaveStr[2]) {
-        tr_printf(t, "  Serial number: %s\n", p->Str[2]);
+        tr_printf(t, "\001  Serial number: %s\n", p->Str[2]);
     }
     if (!p->Fetched) {
         tr_put(t, "  (strings, configuration and BOS: View > Descriptors "
@@ -3912,9 +4102,11 @@ static void details_uport(TR_TEXT *t, int i, int fetch)
                   self ? "self-powered" : "bus-powered");
     }
     tr_printf(t, "  Open pipes:    %lu\n", (unsigned long)p->Conn.OpenPipes);
-    tr_printf(t, "  Driver key:    %s\n", p->DrvKey[0] ? p->DrvKey : "(not reported)");
+    tr_printf(t, "\001  Driver key:    %s\n",
+              p->DrvKey[0] ? p->DrvKey : "(not reported)");
     if (p->Conn.IsHub) {
-        tr_printf(t, "  Hub:           %s\n", p->HubName[0] ? p->HubName : "(no name)");
+        tr_printf(t, "\001  Hub:           %s\n",
+                  p->HubName[0] ? p->HubName : "(no name)");
         if (p->HaveHubNode) {
             details_hubnode(t, p->HubNode);
         }
@@ -3937,7 +4129,8 @@ static void details_uport(TR_TEXT *t, int i, int fetch)
                           (unsigned int)p->Conn.Dev[14 + k],
                           k == 0 ? "manufacturer" : k == 1 ? "product"
                                                          : "serial number");
-                tr_printf(t, "  \"%s\"\n", p->HaveStr[k] ? p->Str[k] : "(malformed)");
+                tr_printf(t, "\001  \"%s\"\n",
+                          p->HaveStr[k] ? p->Str[k] : "(malformed)");
                 tr_hex(t, p->StrRaw[k], p->StrN[k], 2);
             }
         }
@@ -4024,6 +4217,19 @@ static void hold_read_path(const char *path, unsigned char *b, HOLDRES *u)
     if (h == INVALID_HANDLE_VALUE) {
         goto done;
     }
+    /* Task 50.7: the holds request first, answered at every logging level
+     * from 3.6.0.0's driver; an older driver refuses it, and the windows
+     * below are read as before. */
+    {
+        DWORD hgot = 0;
+        if (DeviceIoControl(h, XHH_IOCTL, NULL, 0, b, XHH_MAX_BYTES, &hgot,
+                            NULL) &&
+            tr_xhh_parse(b, hgot, &m, u->Hold, sizeof(u->Hold)) == 1) {
+            u->Map = m;
+            u->State = 1;
+            goto done;
+        }
+    }
     if (log_window(h, b, TR_SNAP_REGION_HCD, 0, &w, &err) != TR_SW_OK ||
         w.Region != TR_SNAP_REGION_HCD || w.Offset != 0 ||
         (w.Status & (TR_SNAP_S_BAD_REQUEST | TR_SNAP_S_BAD_EXTENSION |
@@ -4075,6 +4281,100 @@ done:
 
 static HOLDRES holdTmp;
 
+/* The name Windows recorded for a device of VID:PID vp (DeviceDesc under
+ * Enum\USB\VID_vvvv&PID_pppp\<instance>, read only, both registry
+ * layouts), the text after an INF reference's last ';'; "" for none. */
+static void rec_name(TR_U32 vp, char *out, size_t cap)
+{
+    char key[160];
+    char sub[128];
+    char val[256];
+    HKEY h;
+    HKEY hi;
+    DWORD i;
+    DWORD type;
+    DWORD n;
+    const char *s;
+    const char *semi;
+
+    out[0] = '\0';
+    if (vp == 0) {
+        return;
+    }
+    tr_sprintf(key, sizeof(key), "%sEnum\\USB\\VID_%04lX&PID_%04lX",
+               envNt ? "SYSTEM\\CurrentControlSet\\" : "",
+               (unsigned long)(vp >> 16), (unsigned long)(vp & 0xFFFFUL));
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, key, 0, KEY_READ, &h) !=
+        ERROR_SUCCESS) {
+        return;
+    }
+    for (i = 0; out[0] == '\0'; i++) {
+        n = sizeof(sub);
+        if (RegEnumKeyExA(h, i, sub, &n, NULL, NULL, NULL, NULL) !=
+            ERROR_SUCCESS) {
+            break;
+        }
+        if (RegOpenKeyExA(h, sub, 0, KEY_READ, &hi) != ERROR_SUCCESS) {
+            continue;
+        }
+        n = sizeof(val) - 1;
+        if (RegQueryValueExA(hi, "DeviceDesc", NULL, &type, (LPBYTE)val,
+                             &n) == ERROR_SUCCESS &&
+            type == REG_SZ && n > 0) {
+            val[n < sizeof(val) ? n : sizeof(val) - 1] = '\0';
+            s = val;
+            semi = strrchr(val, ';');
+            if (val[0] == '@' && semi != NULL) {
+                s = semi + 1;
+            }
+            tr_copy_lead(out, s, cap, label_lead);
+        }
+        RegCloseKey(hi);
+    }
+    RegCloseKey(h);
+}
+
+/* Task 50.30 step 1: controller c's recovery status, on the calling
+ * thread (the window's refresh). A driver before the request refuses it:
+ * the query's header then says only whether the controller is failed. */
+static void rec_read(int c)
+{
+    UCTRL *u = &uc[c];
+    unsigned char b[XHR_LIFE_BYTES];
+    DWORD got = 0;
+    HANDLE h;
+
+    u->RecState = 0;
+    u->RecFailed = 0;
+    u->RecName[0] = '\0';
+    if (!u->Ours) {
+        return;
+    }
+    h = open_device(u->Path);
+    if (h == INVALID_HANDLE_VALUE) {
+        u->RecState = -1;
+        return;
+    }
+    memset(b, 0, sizeof(b));
+    if (DeviceIoControl(h, XHR_IOCTL, NULL, 0, b, sizeof(b), &got, NULL) &&
+        tr_xhr_parse(b, got, &u->Rec) == 1) {
+        u->RecState = 1;
+        if (u->Rec.Records > 0) {
+            rec_name(u->Rec.Rec[0][5], u->RecName, sizeof(u->RecName));
+        }
+    } else {
+        memset(b, 0, sizeof(b));
+        got = 0;
+        if (DeviceIoControl(h, XHQ_IOCTL, NULL, 0, b, XHQ_HDR_BYTES, &got,
+                            NULL) &&
+            got >= XHQ_HDR_BYTES_V1 &&
+            inst_get32(b, XHQ_O_MAGIC) == XHQ_MAGIC) {
+            u->RecFailed = (inst_get32(b, XHQ_O_FLAGS) & XHQ_F_FAILED) != 0;
+        }
+    }
+    CloseHandle(h);
+}
+
 /* Controller c's holds into its record, on the calling thread (the
  * window's refresh, as its other requests are). */
 static void hold_read(int c)
@@ -4092,6 +4392,7 @@ static void hold_read(int c)
     u->HoldState = holdTmp.State;
     u->HoldMap = holdTmp.Map;
     memcpy(u->Hold, holdTmp.Hold, sizeof(u->Hold));
+    rec_read(c);
 }
 
 static void hold_read_all(void)
@@ -4347,10 +4648,10 @@ static void log_cm(TR_TEXT *t, int k)
 static void details_log(TR_TEXT *t, int index, int which)
 {
     if (which == LOG_CM) {
-        tr_printf(t, "%s\n\n", dn_name(&gw.N[nhi[index].Node]));
+        tr_printf(t, "\001%s\n\n", dn_name(&gw.N[nhi[index].Node]));
         log_cm(t, index);
     } else {
-        tr_printf(t, "%s (%s)\n\n",
+        tr_printf(t, "\001%s (%s)\n\n",
                   uc[index].Dn >= 0 ? dn_name(&gw.N[uc[index].Dn])
                                     : "USB host controller",
                   uc[index].Hcd[0] ? uc[index].Hcd : uc[index].Path);
@@ -4401,7 +4702,7 @@ static void details_net(TR_TEXT *t, int k, int link)
     TR_QNET q;
     int r;
 
-    tr_printf(t, "%s\n\n", dn_name(&gw.N[n->Node]));
+    tr_printf(t, "\001%s\n\n", dn_name(&gw.N[n->Node]));
     if (!n->HaveQ) {
         tr_printf(t, "Thunderbolt networking\n  It cannot be read: %s.\n",
                   n->Why[0] ? n->Why : "the driver did not answer");
@@ -4532,10 +4833,10 @@ static void pci_cm(TR_TEXT *t, int k)
 static void details_pci(TR_TEXT *t, int index, int which)
 {
     if (which == LOG_CM) {
-        tr_printf(t, "%s\n\n", dn_name(&gw.N[nhi[index].Node]));
+        tr_printf(t, "\001%s\n\n", dn_name(&gw.N[nhi[index].Node]));
         pci_cm(t, index);
     } else {
-        tr_printf(t, "%s (%s)\n\n",
+        tr_printf(t, "\001%s (%s)\n\n",
                   uc[index].Dn >= 0 ? dn_name(&gw.N[uc[index].Dn])
                                     : "USB host controller",
                   uc[index].Hcd[0] ? uc[index].Hcd : uc[index].Path);
@@ -4646,7 +4947,7 @@ static void details_diag(TR_TEXT *t)
         tr_put(t, "  No host interface driven by xhcicm was found.\n");
     }
     for (i = 0; i < nhiCount; i++) {
-        tr_diag_nhi(t, dn_name(&gw.N[nhi[i].Node]), nhi[i].Id);
+        tr_diag_nhi(t, dn_name(&gw.N[nhi[i].Node]), nhi[i].Id, label_lead);
         nhi_hw_key(nhi[i].Id, path, sizeof(path));
         ks = diag_key(path, &key, &err);
         if (ks != TR_DK_OPEN) {
@@ -4673,8 +4974,103 @@ static void details_diag(TR_TEXT *t)
         tr_put(t, "  No host interface driven by xhcicm was found.\n");
     }
     for (i = 0; i < nhiCount; i++) {
-        tr_diag_wrap(t, 2, dn_name(&gw.N[nhi[i].Node]));
+        tr_diag_wrap(t, 2, dn_name(&gw.N[nhi[i].Node]), label_lead);
         diag_irq(t, i);
+    }
+}
+
+/* Task 50.34 (design record 16 section 21.7): the Intel port switchover's
+ * words in the snapshot's HCD header (src\xhci.h's
+ * XHCI_SNAPSHOT_HCD_PSW_*): the count at word 956, the status of the
+ * start's record write at 957, the record's words from 958; a header
+ * shorter than 1016 words is a driver's from before them. */
+#define TR_PSW_HCD_WORDS        956UL
+#define TR_PSW_HCD_WRITE        957UL
+#define TR_PSW_HCD_AT           958UL
+#define TR_PSW_HCD_HEAD_WORDS   1016UL
+
+/* tr_snap.c: the record XhciIntelPortSwitchResult under a driver key
+ * (HKLM-relative), "as recorded at" its time and tr_psw_lines' lines, as
+ * the .DEV and /dump give it; 1 when there is one this build reads. */
+int tr_snap_pswrec_lines(const char *keyPath, char *out, size_t cap);
+
+/* src\xhci_psw.c's vendor test, the one every path of the switchover
+ * uses: inst_pci_vendev gives PCI offset 0's layout, the vendor in the
+ * low word. */
+unsigned long XhciPswIntel(unsigned long vendorDevice);
+
+/* 1 for a devnode whose first hardware id is an Intel PCI device's. */
+static int dn_is_intel(const DNODE *d)
+{
+    INST_U32 vd;
+
+    return inst_pci_vendev(first_hw(d), &vd) &&
+           XhciPswIntel((unsigned long)vd) != 0;
+}
+
+/* The switchover's line in an xhci98 controller's details (record 16
+ * section 21.7; record 25 section 18): the running controller's latched
+ * decision from its snapshot, the words /snapshot prints (tr_snap.c
+ * print_psw), so the window, Save Report, /snapshot, the .DEV and /dump
+ * say one thing. Where the driver serves no snapshot (its log is off, it
+ * is not started, or it is from before these words), the registry record
+ * of an Intel controller, said as recorded at its time, never as the
+ * current state. A controller that is not Intel's shows nothing, and its
+ * key is not read. */
+static void psw_details(TR_TEXT *t, const UCTRL *c)
+{
+    char text[3072];
+    char path[300];
+    const char *lead;
+    char *line;
+    char *nl;
+    unsigned char *b;
+    TR_SNAPW w;
+    TR_U32 words;
+    DWORD err;
+    HANDLE h;
+    int served = 0;
+    int have = 0;
+
+    b = (unsigned char *)malloc(TR_SNAP_BUFFER_BYTES);
+    h = b != NULL ? open_device(c->Path) : INVALID_HANDLE_VALUE;
+    if (h != INVALID_HANDLE_VALUE) {
+        if (log_window(h, b, TR_SNAP_REGION_HCD, 0, &w, &err) == TR_SW_OK &&
+            w.Region == TR_SNAP_REGION_HCD && w.Offset == 0 &&
+            (w.Status & (TR_SNAP_S_BAD_REQUEST | TR_SNAP_S_BAD_EXTENSION |
+                         TR_SNAP_S_BAD_REGION)) == 0 &&
+            w.PayloadBytes >= TR_PSW_HCD_HEAD_WORDS * 4 &&
+            inst_get32(w.Payload, 4) >= TR_PSW_HCD_HEAD_WORDS * 4) {
+            served = 1;
+            words = inst_get32(w.Payload, TR_PSW_HCD_WORDS * 4);
+            if (words <= TR_PSW_HCD_HEAD_WORDS - TR_PSW_HCD_AT &&
+                tr_psw_lines(w.Payload + TR_PSW_HCD_AT * 4,
+                             (unsigned long)words * 4,
+                             inst_get32(w.Payload, TR_PSW_HCD_WRITE * 4), 1,
+                             text, sizeof(text))) {
+                have = 1;
+            }
+        }
+        CloseHandle(h);
+    }
+    free(b);
+    if (!served && c->Dn >= 0 && dn_is_intel(&gw.N[c->Dn])) {
+        driver_key_path(&gw.N[c->Dn], path, sizeof(path));
+        have = tr_snap_pswrec_lines(path, text, sizeof(text));
+    }
+    if (!have) {
+        return;
+    }
+    lead = "  Port switch:   ";
+    line = text;
+    while (line != NULL && *line != '\0') {
+        nl = strchr(line, '\n');
+        if (nl != NULL) {
+            *nl = '\0';
+        }
+        details_lead(t, lead, line);
+        lead = "                 ";
+        line = (nl != NULL) ? nl + 1 : NULL;
     }
 }
 
@@ -4696,14 +5092,14 @@ static void details_of(TR_TEXT *t, int i, int fetch)
         tr_printf(t, "%d Thunderbolt or USB4 host interface%s driven by xhcicm.\n",
                   nhiCount, tr_plural(nhiCount));
         for (k = 0; k < nhiCount; k++) {
-            tr_printf(t, "  %s\n", dn_name(&gw.N[nhi[k].Node]));
+            tr_printf(t, "\001  %s\n", dn_name(&gw.N[nhi[k].Node]));
         }
         break;
     case K_NHI:
         details_nhi(t, n->A);
         break;
     case K_PORT:
-        tr_printf(t, "Thunderbolt tunnel port %d of %s\n", n->B + 1,
+        tr_printf(t, "\001Thunderbolt tunnel port %d of %s\n", n->B + 1,
                   dn_name(&gw.N[nhi[n->A].Node]));
         if (nhi[n->A].R != NULL && n->B >= 0 && n->B < 4 &&
             ((inst_get32(nhi[n->A].R, CM_ST_O_FLAGS) >>
@@ -4730,7 +5126,7 @@ static void details_of(TR_TEXT *t, int i, int fetch)
         details_router(t, n->A, n->B);
         break;
     case K_DEV:
-        tr_printf(t, "%s\n", dn_name(&gw.N[n->Dn]));
+        tr_printf(t, "\001%s\n", dn_name(&gw.N[n->Dn]));
         details_unit(t, n->Dn);
         details_devnode(t, n->Dn, 0, 0);
         break;
@@ -4751,19 +5147,39 @@ static void details_of(TR_TEXT *t, int i, int fetch)
         unsigned int ports = 0;
         int bus;
         tr_printf(t, "USB host controller (%s)\n", c->Ours ? "xhci98" : "Windows");
-        tr_printf(t, "  Opened as:     %s\n", c->Hcd[0] ? c->Hcd : c->Path);
+        tr_printf(t, "\001  Opened as:     %s\n", c->Hcd[0] ? c->Hcd : c->Path);
         if (c->HaveNode && tr_node_parse(c->Node, sizeof(c->Node), &ports, &bus)) {
             tr_printf(t, "  Root ports:    %u\n", ports);
         }
-        tr_printf(t, "  Root hub:      %s\n", c->RootHub[0] ? c->RootHub : "(not reported)");
+        tr_printf(t, "\001  Root hub:      %s\n",
+                  c->RootHub[0] ? c->RootHub : "(not reported)");
         if (c->Behind[0]) {
-            tr_printf(t, "  Location:      %s\n", c->Behind);
+            tr_printf(t, "\001  Location:      %s\n", c->Behind);
         }
         if (c->Ours) {
             int kinds;
             lv_details(t, c->Dn, TR_LV_XHCI98);
             ver_details(t, c->VerHave, c->VerRunning,
                         verFileHcdOk ? verFileHcd : NULL);
+            psw_details(t, c);
+            /* Task 50.30 step 1 (record 25 section 26 item 2); the restart
+             * advice only where a restart is offered (items 5 and 9). */
+            if (tr_xhr_details(t, c->RecState == 1 ? &c->Rec : NULL,
+                               c->RecFailed, c->RecName, label_lead) > 0 &&
+                tr_xhr_restart_ok(c->RecState == 1 ? &c->Rec : NULL)) {
+                /* Task 50.32: M3 where the restart is offered and can
+                 * be made (record 25 section 27 item 10). */
+                if (rst_offered(n->A) && !rst_blocked(n->A)) {
+                    details_note(t, TR_RST_M3);
+                } else {
+                    details_note(t, "Restart it from Device Manager, or "
+                                    "restart Windows.");
+                }
+            }
+            if (c->RecState == 1 && c->Rec.Records > 0) {
+                tr_printf(t, "  Recovery requests (newest first):\n");
+                tr_xhr_report(t, &c->Rec);
+            }
             /* Task 49.43: a hub's port on hold, said here, and only while a
              * hub is connected to this controller: a hub's location keeps
              * its hold after the hub is unplugged. */
@@ -4792,7 +5208,7 @@ static void details_of(TR_TEXT *t, int i, int fetch)
         break;
     }
     case K_ROOTHUB:
-        tr_printf(t, "Root hub of %s\n", uc[n->A].Path);
+        tr_printf(t, "\001Root hub of %s\n", uc[n->A].Path);
         if (uc[n->A].HaveNode) {
             details_hubnode(t, uc[n->A].Node);
         }
@@ -4833,6 +5249,169 @@ static int depth_of(int i)
     return d;
 }
 
+/* Lines under a node already written at depth, with its lead. */
+static int report_lines_out(HANDLE f, int depth, const char *text)
+{
+    TR_TEXT o;
+    char *out;
+    size_t need;
+    DWORD w;
+    int ok;
+
+    need = tr_report_lines_bytes(depth, text) + 2;
+    out = (char *)malloc(need);
+    if (out == NULL) {
+        return 0;
+    }
+    tr_text_init(&o, out, need);
+    tr_report_lines(&o, depth, text);
+    ok = !o.Overflow && WriteFile(f, out, (DWORD)o.Len, &w, NULL) &&
+         w == o.Len;
+    free(out);
+    return ok;
+}
+
+/* Task 50.29 (record 25 section 25): one driver key's block under a node
+ * already written at depth: head, the key, every value read only. */
+static int report_key_block(HANDLE f, int depth, const char *head,
+                            const DNODE *d)
+{
+    static char text[TR_REG_KEY_TEXT + TR_REG_VALUE_MAX + 4096];
+    char path[400];
+    TR_TEXT t;
+
+    tr_text_init(&t, text, sizeof(text));
+    tr_fit_text(&t, head, tr_report_width(depth));
+    if (d->Driver[0] == '\0') {
+        tr_put(&t, "  No driver key: no driver is installed for it.\n");
+    } else {
+        driver_key_path(d, path, sizeof(path));
+        tr_printf(&t, "  Key: HKLM\\%s\n", path);
+        tr_regw_key_text(&t, "  ", envNt, d->Driver, NULL, 0, NULL, NULL,
+                         tr_report_width(depth));
+    }
+    tr_text_mark_cut(&t);
+    return report_lines_out(f, depth, text);
+}
+
+/* tr_reg_tree_walk over the last walk (gw): a devnode's children are the
+ * entries whose Parent it is; a devnode whose children were not all read
+ * says so after the last that was. */
+typedef struct _RKEYS {
+    HANDLE F;
+    int Depth;
+} RKEYS;
+
+static TR_U32 rk_child(void *context, TR_U32 node, TR_U32 *child)
+{
+    int j;
+
+    (void)context;
+    for (j = (int)node + 1; j < gw.Count; j++) {
+        if (gw.N[j].Parent == (int)node) {
+            *child = (TR_U32)j;
+            return TR_REG_REL_OK;
+        }
+    }
+    return gw.N[node].Incomplete ? TR_REG_REL_PARTIAL : TR_REG_REL_NONE;
+}
+
+static TR_U32 rk_sibling(void *context, TR_U32 node, TR_U32 *next)
+{
+    int parent = gw.N[node].Parent;
+    int j;
+
+    (void)context;
+    for (j = (int)node + 1; j < gw.Count; j++) {
+        if (gw.N[j].Parent == parent) {
+            *next = (TR_U32)j;
+            return TR_REG_REL_OK;
+        }
+    }
+    return parent >= 0 && gw.N[parent].Incomplete ? TR_REG_REL_PARTIAL
+                                                   : TR_REG_REL_NONE;
+}
+
+static int rk_hub(void *context, TR_U32 node)
+{
+    (void)context;
+    return gw.N[node].IsHubId || tr_reg_hub_id(gw.N[node].Id);
+}
+
+static int rk_emit(void *context, TR_U32 node, int level)
+{
+    const RKEYS *r = (const RKEYS *)context;
+    const DNODE *d = &gw.N[node];
+    char head[TR_ID_CHARS + 400];
+    const char *mi;
+
+    if (level == 0) {
+        return report_key_block(r->F, r->Depth,
+                                "\nDriver key values (read only)\n", d);
+    }
+    mi = strstr(d->Id, "&MI_");
+    if (mi != NULL) {
+        tr_sprintf(head, sizeof(head), "\n\001Interface MI_%c%c",
+                   mi[4] != '\0' ? mi[4] : '?',
+                   mi[4] != '\0' && mi[5] != '\0' ? mi[5] : '?');
+    } else {
+        tr_sprintf(head, sizeof(head), "\n\001Devnode below it");
+    }
+    if (level > 1) {
+        tr_sprintf(head + strlen(head), sizeof(head) - strlen(head),
+                   ", level %d below the device", level);
+    }
+    tr_sprintf(head + strlen(head), sizeof(head) - strlen(head),
+               ": %s\n\001  Instance ID: %s\n", dn_name(d), d->Id);
+    return report_key_block(r->F, r->Depth, head, d);
+}
+
+static int rk_note(void *context, int level, const char *line)
+{
+    const RKEYS *r = (const RKEYS *)context;
+    char text[400];
+    char fit[600];
+    TR_TEXT t;
+
+    (void)level;
+    tr_sprintf(text, sizeof(text), "\n%s\n", line);
+    tr_text_init(&t, fit, sizeof(fit));
+    tr_fit_text(&t, text, tr_report_width(r->Depth));
+    return report_lines_out(r->F, r->Depth, fit);
+}
+
+/* Under a USB device's node of the report: its driver key's values, then
+ * those of the devnodes below it - its functions and interfaces, and the
+ * devnodes their drivers made - whatever their enumerator or driver, by
+ * tr_reg_tree_walk, the walk the device report's section takes
+ * (tr_snap.c). A hub's devnodes are the devices on its ports, each under
+ * its own port's node. The window's details pane never shows them. */
+static int report_keys(HANDLE f, int i, int depth)
+{
+    const TNODE *n = &tn[i];
+    const UPORT *p;
+    TR_REG_TREE w;
+    RKEYS r;
+    int dn = n->Dn;
+
+    if (n->Kind != K_UPORT || dn < 0 || dn >= gw.Count) {
+        return 1;
+    }
+    p = &up[n->A];
+    if (!p->HaveConn || p->Conn.Status != TR_CS_CONNECTED) {
+        return 1;
+    }
+    r.F = f;
+    r.Depth = depth;
+    w.Child = rk_child;
+    w.Sibling = rk_sibling;
+    w.IsHub = rk_hub;
+    w.Emit = rk_emit;
+    w.Note = rk_note;
+    w.Context = &r;
+    return tr_reg_tree_walk(&w, (TR_U32)dn) >= 0;
+}
+
 static int write_report(const char *path)
 {
     static char text[TR_DETAIL_BYTES];
@@ -4861,7 +5440,9 @@ static int write_report(const char *path)
               (unsigned int)st.wMonth, (unsigned int)st.wDay,
               (unsigned int)st.wHour, (unsigned int)st.wMinute, usbDevices,
               tr_plural(usbDevices), tbDevices, tr_plural(tbDevices));
-    ok = WriteFile(f, text, (DWORD)t.Len, &w, NULL) && w == t.Len;
+    tr_text_init(&d, detailFit, sizeof(detailFit));
+    tr_fit_text(&d, text, TR_TEXT_COLS);
+    ok = WriteFile(f, detailFit, (DWORD)d.Len, &w, NULL) && w == d.Len;
     /* The drivers' logging levels (section 7.5), before the tree. */
     tr_text_init(&t, text, sizeof(text));
     tr_put(&t, "Logging levels\n");
@@ -4880,9 +5461,14 @@ static int write_report(const char *path)
         tr_text_init(&d, detail, sizeof(detail));
         details_of(&d, i, 1);
         tr_text_mark_cut(&d);
+        /* Task 50.39: fitted to the node's width, so that with its lead
+         * every line stays within TR_TEXT_COLS. */
+        tr_text_init(&d, detailFit, sizeof(detailFit));
+        tr_fit_text(&d, detail, tr_report_width(depth));
+        tr_text_mark_cut(&d);
         /* Sized from the node's own lines and depth, so the indented copy
          * holds every line the details pane has. */
-        need = tr_report_node_bytes(depth, tn[i].Label, detail) + 2;
+        need = tr_report_node_bytes(depth, tn[i].Label, detailFit) + 2;
         if (need > nodeCap) {
             free(node);
             node = (char *)malloc(need);
@@ -4893,10 +5479,12 @@ static int write_report(const char *path)
             }
         }
         tr_text_init(&t, node, nodeCap);
-        tr_report_node(&t, depth, tn[i].Label, detail);
-        tr_put(&t, "\n");
+        tr_report_node(&t, depth, tn[i].Label, detailFit);
         ok = !t.Overflow && WriteFile(f, node, (DWORD)t.Len, &w, NULL) &&
              w == t.Len;
+        /* Task 50.29: a USB device's driver keys, inside its node. */
+        ok = ok && report_keys(f, i, depth) &&
+             WriteFile(f, "\r\n", 2, &w, NULL) && w == 2;
     }
     free(node);
     /* What XHCISNAP's field report carried (section 15). */
@@ -6172,7 +6760,7 @@ static int lvFocus = -1;    /* the driver the dialog was opened for, or -1 */
 /* The dialog's contents from the registry as it is now. */
 static void lv_fill(HWND dlg)
 {
-    static char text[16384];
+    static char text[TR_DETAIL_BYTES];
     TR_TEXT t;
     int d;
     int lv;
@@ -6421,6 +7009,8 @@ static int run_setlevel(void)
  * as Setup builds the first (xhciinst\build.cmd): their own headers carry
  * the driver's compatibility types. */
 unsigned long XhciPswGate(unsigned long vendorDevice);
+unsigned long XhciPswIntel(unsigned long vendorDevice);
+unsigned long XhciPswBoardRefused(unsigned long subsystem);
 unsigned long XhciPirqReviewed(unsigned long xhciId);
 unsigned long XhciPirqNoRouteListed(unsigned long xhciId,
                                     unsigned long subsystem);
@@ -6527,7 +7117,68 @@ static const char *set_fixed_key(const TRS_ROW *r)
  * task 49.38 one UAS drive's own key. */
 static int set_drvlike(const TRS_ROW *r)
 {
-    return trs_loc(r) == TRS_LOC_DRIVER || trs_loc(r) == TRS_LOC_DEVICE;
+    return trs_loc(r) == TRS_LOC_DRIVER || trs_loc(r) == TRS_LOC_DEVICE ||
+           trs_loc(r) == TRS_LOC_CTRL;
+}
+
+/* Task 50.34: whether the port switchover can apply to devnode d's
+ * controller by its identity (trs_ready_applies): an Intel controller, the
+ * board's subsystem in its hardware id and not the excluded one, and
+ * listed, or with XhciIntelPortSwitch 2 in force for it - read as the
+ * driver reads it, the machine-wide value first in any type, else its own
+ * key's. Nothing is read for a controller that is not Intel's. */
+static int dn_psw_applies(const DNODE *d)
+{
+    INST_U32 vd;
+    TR_U32 ss = 0;
+    TRS_RAW v;
+    char path[300];
+    int haveSs;
+    int listed;
+    int override2 = 0;
+
+    if (!inst_pci_vendev(first_hw(d), &vd) ||
+        !XhciPswIntel((unsigned long)vd)) {
+        return 0;
+    }
+    haveSs = trs_subsys(first_hw(d), &ss);
+    listed = XhciPswGate((unsigned long)vd) != 0;
+    if (!listed) {
+        set_raw(TR_LV_MACHINE_KEY, "XhciIntelPortSwitch", &v);
+        if (v.State != TRS_RAW_DWORD && v.State != TRS_RAW_OTHER) {
+            driver_key_path(d, path, sizeof(path));
+            set_raw(path, "XhciIntelPortSwitch", &v);
+        }
+        override2 = v.State == TRS_RAW_DWORD && v.Value == 2UL;
+    }
+    return trs_ready_applies(1, listed, haveSs,
+                             haveSs && XhciPswBoardRefused((unsigned long)ss)
+                                           != 0,
+                             override2);
+}
+
+/* Task 50.34: whether device k of driver d takes row r - every one, but
+ * for a controller's own row (XhciIntelPortSwitchReady) only a controller
+ * the switchover can apply to (dn_psw_applies), and no other controller's
+ * key is read or written for it. */
+static int set_dev_takes(const TRS_ROW *r, int d, int k)
+{
+    if (trs_loc(r) != TRS_LOC_CTRL) {
+        return 1;
+    }
+    return dn_psw_applies(&gw.N[lvDev[d][k].Dn]);
+}
+
+/* The machine-wide reading of a driver-key row; a controller's own row
+ * has none and the machine-wide key is not read for it (task 50.34). */
+static void set_raw_machine(const TRS_ROW *r, TRS_RAW *m)
+{
+    if (trs_loc(r) == TRS_LOC_CTRL) {
+        memset(m, 0, sizeof(*m));
+        m->State = TRS_RAW_ABSENT;
+        return;
+    }
+    set_raw(TR_LV_MACHINE_KEY, r->Name, m);
 }
 
 static int set_is_text(const TRS_ROW *r)
@@ -6837,6 +7488,9 @@ static void set_env(TRS_ENV *e)
     e->Inst.CmNhi = lvCount[TR_LV_XHCICM] > 0;
     for (k = 0; k < lvCount[TR_LV_XHCI98]; k++) {
         INST_U32 vd;
+        if (dn_psw_applies(&gw.N[lvDev[TR_LV_XHCI98][k].Dn])) {
+            e->PswXhci++;       /* task 50.34: XhciIntelPortSwitchReady */
+        }
         if (inst_pci_vendev(first_hw(&gw.N[lvDev[TR_LV_XHCI98][k].Dn]), &vd)) {
             if (XhciPswGate((unsigned long)vd)) {
                 e->Inst.PswController = 1;
@@ -7024,10 +7678,10 @@ static int set_read_driver(const TRS_ROW *r, int scope, TRS_RAW *m,
         memset(m, 0, sizeof(*m));
         m->State = TRS_RAW_ABSENT;
     } else {
-        set_raw(TR_LV_MACHINE_KEY, r->Name, m);
+        set_raw_machine(r, m);
     }
     for (k = 0; k < lvCount[d] && n < cap; k++) {
-        if (scope >= 0 && k != scope) {
+        if ((scope >= 0 && k != scope) || !set_dev_takes(r, d, k)) {
             continue;
         }
         if (d == SET_UAS) {
@@ -7112,6 +7766,11 @@ static void set_now(const TRS_ROW *r, int scope, char *out, size_t cap)
         return;
     }
     n = set_read_driver(r, scope, &m, own, TR_MAX_CTRL);
+    if (n == 0 && trs_loc(r) == TRS_LOC_CTRL) {
+        tr_copy(out, "(the port switchover does not apply to this "
+                     "controller)", cap);
+        return;
+    }
     set_held(r, scope, n, held);
     trs_now_text_each(r, &m, own, n, held, out, cap);
 }
@@ -7156,7 +7815,7 @@ static const char *set_tab_name(int tab)
 /* Every row the window lists, with its value now, its default and, where
  * the devices differ, each device's own; then this run's changes waiting
  * for a restart. */
-static void set_block(TR_TEXT *t)
+static void set_block_raw(TR_TEXT *t)
 {
     static TRS_RAW own[TR_MAX_CTRL];
     static INST_U32 held[TR_MAX_CTRL];
@@ -7215,6 +7874,20 @@ static void set_block(TR_TEXT *t)
         }
         tr_put(t, "\n");
     }
+}
+
+/* The Settings block, fitted (task 50.39): the report's, XHCISET.TXT and
+ * /set /show. */
+static void set_block(TR_TEXT *t)
+{
+    static char raw[TR_DETAIL_BYTES];
+    TR_TEXT r;
+
+    tr_text_init(&r, raw, sizeof(raw));
+    set_block_raw(&r);
+    tr_text_mark_cut(&r);
+    tr_fit_text(t, raw, TR_TEXT_COLS);
+    tr_text_mark_cut(t);
 }
 
 /* ---- writing (one writer for the window, its elevated run and /set) ------- */
@@ -7607,7 +8280,7 @@ static int set_write_driver(TR_TEXT *t, const TRS_ROW *r, int scope,
     }
     for (k = 0; k < lvCount[d]; k++) {
         const DNODE *dn = &gw.N[lvDev[d][k].Dn];
-        if (scope >= 0 && k != scope) {
+        if ((scope >= 0 && k != scope) || !set_dev_takes(r, d, k)) {
             continue;
         }
         if (j < n && set_raw_is(r, &own[j], canon)) {
@@ -7705,6 +8378,12 @@ static int set_check(const TRS_CHANGE *c, int n, TR_TEXT *t,
                          r->Name);
                 return INST_EXIT_REFUSED;
             }
+            if (!set_dev_takes(r, set_driver_of(r), scopes[i])) {
+                tr_printf(t, "The port switchover does not apply to %s, so "
+                             "its driver never reads %s. Nothing was "
+                             "changed.", c[i].On, r->Name);
+                return INST_EXIT_REFUSED;
+            }
             if (c[i].Drv[0] != '\0' &&
                 !tr_eq(gw.N[lvDev[set_driver_of(r)][scopes[i]].Dn].Driver,
                        c[i].Drv)) {
@@ -7716,7 +8395,7 @@ static int set_check(const TRS_CHANGE *c, int n, TR_TEXT *t,
                              "changed.", c[i].On);
                 return INST_EXIT_REFUSED;
             }
-            set_raw(TR_LV_MACHINE_KEY, r->Name, &m);
+            set_raw_machine(r, &m);
             if (m.State == TRS_RAW_DWORD || m.State == TRS_RAW_OTHER) {
                 tr_printf(t, "%s is set machine-wide (Services\\USB), which "
                              "every controller uses: to give one controller "
@@ -7726,7 +8405,8 @@ static int set_check(const TRS_CHANGE *c, int n, TR_TEXT *t,
             }
         } else if (set_drvlike(r) && trs_s98(r) < 0) {
             TRS_RAW m;
-            if (lvCount[set_driver_of(r)] == 0) {
+            if (lvCount[set_driver_of(r)] == 0 ||
+                (trs_loc(r) == TRS_LOC_CTRL && setEnv.PswXhci == 0)) {
                 tr_printf(t, "No %s here takes %s. Nothing was changed.",
                          set_driver_of(r) == SET_UAS ? "UAS drive"
                                                      : "controller",
@@ -7734,7 +8414,7 @@ static int set_check(const TRS_CHANGE *c, int n, TR_TEXT *t,
                 return INST_EXIT_REFUSED;
             }
             /* Every controller's own key: only from a whole reading. */
-            set_raw(TR_LV_MACHINE_KEY, r->Name, &m);
+            set_raw_machine(r, &m);
             if (gw.Bad != 0 && m.State != TRS_RAW_DWORD &&
                 m.State != TRS_RAW_OTHER) {
                 tr_printf(t, "The device list could not be read whole, so "
@@ -7994,8 +8674,7 @@ static int set_row_scope(const TRS_ROW *r)
     if (trs_loc(r) == TRS_LOC_DEVICE) {
         return setScopeUas;
     }
-    return (trs_loc(r) == TRS_LOC_DRIVER && r->Tab != TRS_TAB_S98) ? setScope
-                                                                   : -1;
+    return trs_scoped(r) ? setScope : -1;
 }
 
 static void set_pend_add(const TRS_ROW *r)
@@ -8015,9 +8694,61 @@ static void set_pend_add(const TRS_ROW *r)
     }
 }
 
+typedef BOOL (WINAPI *PFN_SHOWSCROLLBAR)(HWND, int, BOOL);
+
+/* Settings' heading, a read-only box that scrolls (record 25 section 28
+ * item 4): its bar, and its stop of the Tab key, only while the text needs
+ * more lines than the box shows. The lines are counted with the bar shown,
+ * so that a text that fits at that width fits without the bar too.
+ * ShowScrollBar is looked up at run time, as the monitor routines are, so
+ * the import table keeps to xhcitr-imports.allow; without it the bar
+ * stays. */
+static void set_head_text(HWND dlg, const char *text)
+{
+    HWND h = GetDlgItem(dlg, IDC_S_HEAD);
+    PFN_SHOWSCROLLBAR show =
+        (PFN_SHOWSCROLLBAR)proc(GetModuleHandleA("user32.dll"), "ShowScrollBar");
+    TEXTMETRICA tm;
+    HGDIOBJ font;
+    HGDIOBJ old;
+    HDC dc;
+    RECT r;
+    LONG style;
+    int lines;
+    int fits = 0;
+
+    if (show != NULL) {
+        show(h, SB_VERT, TRUE);
+    }
+    SetWindowTextA(h, text);
+    if (show != NULL) {
+        lines = (int)SendMessageA(h, EM_GETLINECOUNT, 0, 0);
+        SendMessageA(h, EM_GETRECT, 0, (LPARAM)&r);
+        dc = GetDC(h);
+        if (dc != NULL) {
+            font = (HGDIOBJ)SendMessageA(h, WM_GETFONT, 0, 0);
+            old = font != NULL ? SelectObject(dc, font) : NULL;
+            if (GetTextMetricsA(dc, &tm) && tm.tmHeight > 0) {
+                fits = lines <= (r.bottom - r.top) / tm.tmHeight;
+            }
+            if (old != NULL) {
+                SelectObject(dc, old);
+            }
+            ReleaseDC(h, dc);
+        }
+        if (fits) {
+            show(h, SB_VERT, FALSE);
+        }
+    }
+    style = GetWindowLongA(h, GWL_STYLE);
+    SetWindowLongA(h, GWL_STYLE, fits ? (style & ~WS_TABSTOP)
+                                      : (style | WS_TABSTOP));
+}
+
 static void set_head(HWND dlg)
 {
-    char text[600];
+    /* Every row waiting for a restart, each name with its comma. */
+    char text[SET_PEND_MAX * (TRS_NAME_MAX + 2) + 64];
     TR_TEXT t;
     int i;
 
@@ -8046,7 +8777,7 @@ static void set_head(HWND dlg)
     } else {
         tr_put(&t, "Choose a setting, then its value; Apply saves the changes.");
     }
-    SetDlgItemTextA(dlg, IDC_S_HEAD, text);
+    set_head_text(dlg, text);
     ShowWindow(GetDlgItem(dlg, IDC_S_RESTART), setPendN > 0 ? SW_SHOW : SW_HIDE);
 }
 
@@ -8288,7 +9019,7 @@ static void set_fill_choice(HWND dlg)
                !(r->Tab == TRS_TAB_S98 && setS98 != SET_S98_OK);
     if (set_drvlike(r) && r->Tab != TRS_TAB_S98 && set_row_scope(r) >= 0) {
         TRS_RAW m;
-        set_raw(TR_LV_MACHINE_KEY, r->Name, &m);
+        set_raw_machine(r, &m);
         if (m.State == TRS_RAW_DWORD || m.State == TRS_RAW_OTHER) {
             editable = 0;
         }
@@ -8923,8 +9654,9 @@ static void set_show_tab(HWND dlg)
                                IDC_S_ADV, IDC_S_LEVEL, IDC_S_NOTE, IDC_S_DEF,
                                IDC_S_FIND_L, IDC_S_FIND };
     static const int tool[] = { IDC_S_LOGIN, IDC_S_WARN, IDC_S_FAST,
-                                IDC_S_FASTWIN, IDC_S_STOR, IDC_S_HK,
-                                IDC_S_HKKEY, IDC_S_HKNOTE, IDC_S_SND };
+                                IDC_S_FASTWIN, IDC_S_STOR, IDC_S_HOLD,
+                                IDC_S_HK, IDC_S_HKKEY, IDC_S_HKNOTE,
+                                IDC_S_SND };
     int own = setTab == TRS_TABS;
     int i;
 
@@ -8941,8 +9673,8 @@ static void set_show_tab(HWND dlg)
         ShowWindow(GetDlgItem(dlg, IDC_S_NUM), SW_HIDE);
         ShowWindow(GetDlgItem(dlg, IDC_S_RANGE), SW_HIDE);
         set_tool_fill(dlg);
-        SetDlgItemTextA(dlg, IDC_S_HEAD, "The xHCI98 USB Tree's own settings, "
-                        "for you alone. Each takes effect at once.");
+        set_head_text(dlg, "The xHCI98 USB Tree's own settings, "
+                      "for you alone. Each takes effect at once.");
         ShowWindow(GetDlgItem(dlg, IDC_S_RESTART),
                    setPendN > 0 ? SW_SHOW : SW_HIDE);
         return;
@@ -8964,6 +9696,10 @@ static BOOL CALLBACK settings_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         int i;
         int n;
         (void)lp;
+        /* The heading's words start where the label's did (record 25
+         * section 28 item 4). */
+        SendDlgItemMessageA(dlg, IDC_S_HEAD, EM_SETMARGINS,
+                            EC_LEFTMARGIN | EC_RIGHTMARGIN, 0);
         SendMessageA(lv, LVM_SETEXTENDEDLISTVIEWSTYLE, LVS_EX_FULLROWSELECT,
                      LVS_EX_FULLROWSELECT);
         GetClientRect(lv, &rc);
@@ -9160,6 +9896,7 @@ static BOOL CALLBACK settings_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         case IDC_S_FAST:
         case IDC_S_FASTWIN:
         case IDC_S_STOR:
+        case IDC_S_HOLD:
             set_tool_option(dlg, LOWORD(wp));
             return TRUE;
         case IDC_S_HKKEY:
@@ -9371,7 +10108,7 @@ static int run_set(void)
  * XHCISET.TXT (an 8.3 name for 98 SE and ME), and a line for the box. */
 static void set_snapshot_file(const char *dir, char *box, size_t cap)
 {
-    static char text[16384];
+    static char text[TR_DETAIL_BYTES];
     char path[MAX_PATH + 16];
     TR_TEXT t;
     HANDLE f;
@@ -9847,12 +10584,25 @@ static void tray_balloon(const char *title, const char *text, int warn);
 #define TRAY_BK_OTHER   0
 #define TRAY_BK_FAST    1
 #define TRAY_BK_DRIVE   2
+#define TRAY_BK_HOLD    3       /* a held port's notice (task 50.7)         */
 static void tray_balloon_as(const char *title, const char *text, int warn,
                             int kind);
 static int tray_balloon_send(const char *title, const char *text, int warn,
                              int kind);
 /* The drive notice's view of the other balloons (section 7.8 item 8). */
 static TR_BSEND storSend;       /* the drive balloon's re-send watch        */
+/* Task 50.7: the hold notice's re-send watch (record 25 section 24 item
+ * 5), whether the balloon shown is the hold notice's, a re-send owed and
+ * since when, and what was announced (controller key, location, kind and
+ * the text as sent). */
+static TR_BSEND holdSend;
+static TR_BKIND holdKind;
+static int holdOwed;
+static DWORD holdOwedAt;
+static TR_U32 holdSentKey;
+static TR_U32 holdSentLoc;
+static int holdSentHold;
+static char holdSentText[256];
 static TR_BKIND storKind;       /* whether the balloon shown is the drive's */
 static int storHaveOther;       /* another balloon of the tool's was sent ... */
 static DWORD storOtherAt;       /* ... at this tick                         */
@@ -10096,8 +10846,8 @@ static int usb_listed(int d)
 }
 
 /* What the user sees for USB device d: its disks and their letters, else
- * its own name. */
-static void usb_label(int d, char *out, size_t cap)
+ * its own name; with tray above 0, the tray menu's cut (unit_label_n). */
+static void usb_label_n(int d, int tray, char *out, size_t cap)
 {
     char names[512];
     char letters[TR_LETTERS_BYTES];
@@ -10113,7 +10863,18 @@ static void usb_label(int d, char *out, size_t cap)
             tr_letters_add(letters, gw.N[i].Letters);
         }
     }
-    tr_unit_label(dn_name(&gw.N[d]), names, letters, out, cap);
+    if (tray > 0) {
+        tr_tray_label(dn_name(&gw.N[d]), names, letters, tray, label_lead,
+                      out, cap);
+    } else {
+        tr_unit_label(dn_name(&gw.N[d]), names, letters, label_lead, out,
+                      cap);
+    }
+}
+
+static void usb_label(int d, char *out, size_t cap)
+{
+    usb_label_n(d, 0, out, cap);
 }
 
 /* The letters of USB device d's disks as text ("F:, G:"), or its name. */
@@ -10185,7 +10946,7 @@ static void details_usb_eject(TR_TEXT *t, int d)
         tr_put(t, "  Devices that stop with it:\n");
         for (i = 0; i < gw.Count; i++) {
             if (gw.N[i].UsbOf == d) {
-                tr_printf(t, "    %s\n", dn_name(&gw.N[i]));
+                tr_printf(t, "\001    %s\n", dn_name(&gw.N[i]));
             }
         }
     }
@@ -10562,7 +11323,28 @@ static void watch_start(void)
 
 /* The whole eject of one unit, or of a USB device (section 6.5), from the
  * window or the tray. */
+static void ej_unit_run(HWND owner, int u, int fromTray);
+
+/* A stop of unit u, one at a time and never beside a restart. */
 static void ej_unit(HWND owner, int u, int fromTray)
+{
+    if (trActionBusy) {
+        /* Shown as the stop's own answers are: from the tray its balloon
+         * or pop-up, so that the running action is not held by a box. */
+        if (fromTray && (shellV5 || tr_pop_ready(hTray))) {
+            tray_balloon("Device not stopped", TR_RST_R7, 1);
+        } else {
+            MessageBoxA(owner, TR_RST_R7, "xHCI98 USB Tree",
+                        MB_OK | MB_ICONINFORMATION);
+        }
+        return;
+    }
+    trActionBusy = 1;
+    ej_unit_run(owner, u, fromTray);
+    trActionBusy = 0;
+}
+
+static void ej_unit_run(HWND owner, int u, int fromTray)
 {
     EJREQ *q;
     char msg[2048];
@@ -10805,6 +11587,8 @@ static int warn_on(void)
     }
     return tr_warn_removed(have, (TR_U32)v);
 }
+
+static void hold_notice_off(void);
 
 static void warn_set(int on)
 {
@@ -11159,7 +11943,7 @@ static void fast_name(int k, char *out, size_t cap)
     }
     tr_fast_name(out, cap, label,
                  p->Prod[0] ? p->Prod : (p->HaveStr[1] ? p->Str[1] : NULL),
-                 fast_vid(p), fast_pid(p));
+                 fast_vid(p), fast_pid(p), label_lead);
 }
 
 /* 1 when port k's device is behind a TT: below High Speed, with a hub
@@ -11481,6 +12265,32 @@ static void stor_set(int on)
     storPoll.N = 0;
 }
 
+/* Task 50.7, the owner's decision of 2026-11-15: the tray's hold watch, the
+ * user's switch, off unless ticked (tr_hold_watch_on). */
+static int hold_watch_setting(void)
+{
+    DWORD v;
+    int have = fast_dword(HKEY_CURRENT_USER, TR_SETTINGS_KEY, TR_HOLD_VALUE,
+                          &v);
+
+    return tr_hold_watch_on(have, v);
+}
+
+static void hold_watch_set(int on)
+{
+    HKEY k;
+    DWORD disp;
+    DWORD v = on ? 1UL : 0UL;
+
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, TR_SETTINGS_KEY, 0, NULL, 0,
+                        KEY_WRITE, NULL, &k, &disp) != ERROR_SUCCESS) {
+        return;
+    }
+    RegSetValueExA(k, TR_HOLD_VALUE, 0, REG_DWORD, (const BYTE *)&v,
+                   sizeof(v));
+    RegCloseKey(k);
+}
+
 /* Turned off, or a suspend: nothing kept owed. */
 static void stor_drop_all(void)
 {
@@ -11778,8 +12588,10 @@ static void stor_poll(void)
     static TR_STOR_POLL now;
     int c;
 
-    if (setOpen) {
-        return;     /* the baseline kept: the first tick after it compares */
+    if (setOpen || rstBusy) {
+        /* The baseline kept: the first tick after it compares; and no
+         * handle on a controller during a restart's settle (task 50.32). */
+        return;
     }
     if (hTray == NULL || !stor_setting()) {
         storPoll.N = 0;
@@ -11913,7 +12725,7 @@ static void stor_try_send(void)
         grp = &storQ.Rm;
     }
     tr_stor_text(storTitle, sizeof(storTitle), storText, sizeof(storText),
-                 grp, due == TR_SQ_RM);
+                 grp, due == TR_SQ_RM, label_lead);
     storSent = *grp;
     storSentArr = due == TR_SQ_ARR;
     grp->N = 0;
@@ -11939,6 +12751,17 @@ static int stor_sent_present(void)
 static int stor_answers(void)
 {
     return tr_stor_answers(balloonAnswers, envNt, envMajor, envMinor);
+}
+
+/* Task 50.7: the hold notice's watch at one event; a re-send it says is due
+ * is owed, and made at the next watch's results on a fresh reading
+ * (hold_done), never on the reading of the first send. */
+static void hold_balloon_event(int ev)
+{
+    if (tr_bsend_step(&holdSend, ev, GetTickCount(), stor_answers())) {
+        holdOwed = 1;
+        holdOwedAt = GetTickCount();
+    }
 }
 
 /* While the Settings window holds the model a tick waits (item 10): an
@@ -11994,7 +12817,7 @@ static int fast_list(TR_TEXT *t)
             tr_put(t, "\n");
         }
         tr_fast_entry(t, name, fast_vid(&up[k]), fast_pid(&up[k]), port,
-                      up[k].ParentUp >= 0 ? hub : NULL, &f);
+                      up[k].ParentUp >= 0 ? hub : NULL, &f, label_lead);
         if (t->Overflow) {
             t->Len = mark;
             t->Buf[mark] = '\0';
@@ -12160,7 +12983,7 @@ static void fast_box(HWND owner)
 static void fast_item(HMENU m, int append)
 {
     UINT flags = MF_STRING | (fast_setting() ? MF_CHECKED : MF_UNCHECKED);
-    const char *text = "Tell me when a device can run &faster";
+    const char *text = "Warn when a device can run &faster";
 
     if (append) {
         AppendMenuA(m, flags, IDM_FAST, text);
@@ -12213,6 +13036,8 @@ static void set_tool_fill(HWND dlg)
     EnableWindow(GetDlgItem(dlg, IDC_S_FASTWIN), fast_setting());
     CheckDlgButton(dlg, IDC_S_STOR, stor_setting() ? BST_CHECKED
                                                    : BST_UNCHECKED);
+    CheckDlgButton(dlg, IDC_S_HOLD, hold_watch_setting() ? BST_CHECKED
+                                                         : BST_UNCHECKED);
 }
 
 static void set_tool_option(HWND dlg, int id)
@@ -12241,6 +13066,11 @@ static void set_tool_option(HWND dlg, int id)
         stor_set(on);
         stor_clear();
         setToolRefresh = 1;
+    } else if (id == IDC_S_HOLD && on != hold_watch_setting()) {
+        /* Off: nothing read, kept or owed from now on; on: the next watch
+         * reads, and a hold already there is announced once. */
+        hold_watch_set(on);
+        hold_notice_off();
     }
     set_tool_fill(dlg);
 }
@@ -12344,7 +13174,10 @@ static void show_details(void)
         details_of(&t, i, (viewFlags & TR_V_DESC) ? 1 : 0);
         tr_text_mark_cut(&t);
     }
-    SetWindowTextA(hEdit, detail);
+    tr_text_init(&t, detailFit, sizeof(detailFit));
+    tr_fit_text(&t, detail, TR_TEXT_COLS);
+    tr_text_mark_cut(&t);
+    SetWindowTextA(hEdit, detailFit);
 }
 
 static void update_status(void)
@@ -12464,8 +13297,15 @@ static void fill_tree(void)
 
 static void refresh_window(void)
 {
-    HCURSOR old = SetCursor(LoadCursor(NULL, IDC_WAIT));
+    HCURSOR old;
 
+    if (rstBusy) {
+        /* A restart's settle: no new reading of its controller until it
+         * ends (record 25 section 27 item 4); the restart refreshes the
+         * window itself when it has answered. */
+        return;
+    }
+    old = SetCursor(LoadCursor(NULL, IDC_WAIT));
     if (hMain != NULL) {
         keep_state();
     }
@@ -12545,12 +13385,12 @@ static void copy_details(void)
         SendMessageA(hEdit, WM_COPY, 0, 0);
         return;
     }
-    n = strlen(detail) + 1;
+    n = strlen(detailFit) + 1;
     g = GlobalAlloc(GMEM_MOVEABLE | GMEM_DDESHARE, n);
     if (g == NULL) {
         return;
     }
-    memcpy(GlobalLock(g), detail, n);
+    memcpy(GlobalLock(g), detailFit, n);
     GlobalUnlock(g);
     if (OpenClipboard(hMain)) {
         EmptyClipboard();
@@ -12632,6 +13472,1398 @@ static void about(HWND owner)
     DialogBoxA(hInst, MAKEINTRESOURCEA(IDD_ABOUT), owner, (DLGPROC)about_proc);
 }
 
+/* ======================================================================== */
+/* Restarting a controller (record 25 section 27)                            */
+/* ======================================================================== */
+
+/*
+ * Roadmap-usb4 task 50.32. On 2000 and later the controller's restart is
+ * Windows' single stop-and-restart request, DIF_PROPERTYCHANGE with
+ * DICS_PROPCHANGE, through the seven SetupAPI routines load_routines finds
+ * at run time; the start is told from the recovery-status answer's lifetime
+ * part (tr_rst.c). On 98 SE and ME (stage 2) it is a query-remove, a
+ * removal and a rescan of the parent, under item 7's rules: no restart
+ * while a local drive letter is unclaimed (owner, 2026-11-19), while a
+ * placed letter or USB storage is on the controller, or while a network
+ * letter exists beside a network adapter on it; a controller stopped after
+ * repeated failures is not offered it there. Every user-visible string is
+ * a DRAFT (tr_rst.h).
+ */
+
+#define TR_RST_SETTLE_MS    30000UL
+#define TR_RST_POLL_MS      500UL
+#define TR_RST_DN_NEED_RESTART 0x00000100UL
+#define TR_RST_CR_NO_SUCH_DEVNODE 0x0000000DUL
+#define TR_RST_ERROR_NO_SUCH_DEVINST 0xE000020BUL
+#define TR_RST_MAX_IDS      512
+#define TR_RST_LINE_BYTES   320     /* room for one line of the list       */
+#define TR_RST_TRAY_MAX     64      /* the tray's M2 items (tr_res.h)      */
+#define TR_RST_MAX_PORTS    256     /* 98 SE and ME: the ports item 7 reads */
+#define TR_RST_CR_REMOVE_VETOED 0x00000017UL
+#define TR_RST_STOPPED9X    9       /* 98 SE and ME: terminal 2 or 3        */
+
+/* The controllers the tray's M2 items stand for, by instance id: the
+ * model may be read again while the menu is open. */
+static char trayRstIds[TR_RST_TRAY_MAX][INST_ID_CHARS];
+
+/* The confirmed request: the controller, its subtree's ids and the list. */
+typedef struct _RSTREQ {
+    char Id[INST_ID_CHARS];
+    char DrvKey[128];
+    char Name[160];
+    char Digest[TR_DIGEST_CHARS];
+    int Count;
+    char (*Ids)[TR_ID_CHARS];
+    char *List;                 /* the whole list, never cut (C2)           */
+    size_t ListCap;
+    int StoppedEmpty;           /* nothing below it but the root hub (C3)   */
+    int HasDisk;                /* C4                                       */
+    int Kbd;                    /* a keyboard on it (C7)                    */
+    int Mouse;
+    int KbdElsewhere;           /* -1 not known, 0 none, 1 one              */
+    int MouseElsewhere;
+} RSTREQ;
+
+static void rst_free(RSTREQ *q)
+{
+    if (q != NULL) {
+        free(q->Ids);
+        q->Ids = NULL;
+        free(q->List);
+        q->List = NULL;
+        q->ListCap = 0;
+    }
+}
+
+/* 1 when every routine of the restart was found: SetupAPI's on 2000 and
+ * later, the configuration manager's on 98 SE and ME. */
+static int rst_routines(void)
+{
+    if (!envNt) {
+        return api.QueryRemove != NULL && api.Remove != NULL &&
+               api.Parent != NULL && api.Reenumerate != NULL &&
+               api.Locate != NULL && api.Status != NULL;
+    }
+    return api.CreateList != NULL && api.OpenInfo != NULL &&
+           api.GetDiParams != NULL && api.SetDiParams != NULL &&
+           api.SetCiParams != NULL && api.CallCi != NULL &&
+           api.Destroy != NULL && api.Locate != NULL && api.Status != NULL;
+}
+
+/* 1 when controller c is offered the action (M1): this driver's, with its
+ * devnode; on 98 SE and ME not one stopped after repeated failures
+ * (section 27 item 3). */
+static int rst_offered(int c)
+{
+    return c >= 0 && c < ucCount && uc[c].Ours && uc[c].Dn >= 0 &&
+           tr_rst_offered(envNt, uc[c].RecState, uc[c].Rec.Terminal);
+}
+
+/* 1 when the action is offered but cannot be made (R2, R3, R4, R8): the
+ * menu item shown disabled. */
+static int rst_blocked(int c)
+{
+    const UCTRL *u = &uc[c];
+
+    if (!rst_routines() || trWow64Limited) {
+        return 1;
+    }
+    if (u->RecState == 1 && (u->Rec.Terminal == 4 || u->Rec.Terminal == 5)) {
+        return 1;
+    }
+    return u->RecState != 1 && u->RecFailed;
+}
+
+/* The door of the controller whose driver key is key, found by its name
+ * (XHCI98HC<k>: a new start can bring a new k), read as rec_read reads
+ * it: 1 the recovery-status answer parsed into x; 0 not served (a driver
+ * before it), *failed then the query header's XHQ_F_FAILED; -1 the door
+ * not found or the request failed otherwise. No handle stays open. */
+static int rst_door_read(const char *key, TR_XHR *x, int *failed)
+{
+    unsigned char b[XHR_LIFE_BYTES + 16];
+    char name[16];
+    char k[128];
+    HANDLE h;
+    DWORD got;
+    int n;
+
+    *failed = 0;
+    for (n = 0; n < 64; n++) {
+        int state = -1;
+        /* XHCI98HC<k> on NT, HCD<n> on 98 SE and ME. */
+        tr_sprintf(name, sizeof(name), "%s%d", tr_door_stem(), n);
+        h = open_device(name);
+        if (h == INVALID_HANDLE_VALUE) {
+            continue;
+        }
+        if (!usb_name(h, TR_IOCTL_GET_HCD_DRIVERKEY_NAME, 0, k, sizeof(k)) ||
+            !tr_eq(k, key)) {
+            CloseHandle(h);
+            continue;
+        }
+        memset(b, 0, sizeof(b));
+        got = 0;
+        if (DeviceIoControl(h, XHR_IOCTL, NULL, 0, b, sizeof(b), &got,
+                            NULL) &&
+            tr_xhr_parse(b, got, x) == 1) {
+            state = 1;
+        } else {
+            memset(b, 0, sizeof(b));
+            got = 0;
+            if (DeviceIoControl(h, XHQ_IOCTL, NULL, 0, b, XHQ_HDR_BYTES, &got,
+                                NULL) &&
+                got >= XHQ_HDR_BYTES_V1 &&
+                inst_get32(b, XHQ_O_MAGIC) == XHQ_MAGIC) {
+                state = 0;
+                *failed = (inst_get32(b, XHQ_O_FLAGS) & XHQ_F_FAILED) != 0;
+            }
+        }
+        CloseHandle(h);
+        return state;
+    }
+    return -1;
+}
+
+/* The recovery-status answer alone: 1 read and parsed, 0 not. */
+static int rst_xhr_read(const char *key, TR_XHR *x)
+{
+    int failed;
+
+    return rst_door_read(key, x, &failed) == 1;
+}
+
+/* The devnode of id now: TR_RST_DN_*, its problem, DN_NEED_RESTART
+ * (TR_RST_YES, _NO, _UNKNOWN) and the failing CONFIGRET. */
+static int rst_dn_state(const char *id, TR_U32 *problem, int *mark,
+                        TR_U32 *code)
+{
+    char buf[INST_ID_CHARS];
+    DWORD dn = 0;
+    ULONG st = 0;
+    ULONG pr = 0;
+    DWORD cr;
+
+    *problem = 0;
+    *mark = TR_RST_UNKNOWN;
+    *code = 0;
+    tr_copy(buf, id, sizeof(buf));
+    cr = api.Locate(&dn, buf, 0);
+    if (cr == TR_RST_CR_NO_SUCH_DEVNODE) {
+        *mark = TR_RST_NO;
+        return TR_RST_DN_GONE;
+    }
+    if (cr != TR_CR_SUCCESS) {
+        *code = cr;
+        return TR_RST_DN_UNREAD;
+    }
+    cr = api.Status(&st, &pr, dn, 0);
+    if (cr != TR_CR_SUCCESS) {
+        *code = cr;
+        return TR_RST_DN_UNREAD;
+    }
+    *mark = (st & TR_RST_DN_NEED_RESTART) != 0 ? TR_RST_YES : TR_RST_NO;
+    if ((st & INST_DN_STARTED) == 0 || (st & INST_DN_HAS_PROBLEM) != 0) {
+        *problem = (st & INST_DN_HAS_PROBLEM) != 0 ? pr : 0;
+        return TR_RST_DN_STOPPED;
+    }
+    return TR_RST_DN_STARTED;
+}
+
+/* The devnode's DN_NEED_RESTART now (TR_RST_YES, _NO, _UNKNOWN). */
+static int rst_mark(const char *id)
+{
+    TR_U32 problem;
+    TR_U32 code;
+    int mark;
+
+    if (api.Locate == NULL || api.Status == NULL) {
+        return TR_RST_UNKNOWN;
+    }
+    (void)rst_dn_state(id, &problem, &mark, &code);
+    return mark;
+}
+
+/* An item 5 refusal of q's controller into msg, with W5 where Windows
+ * has marked the controller (item 8); its exit code. */
+static int rst_refuse(const char *id, const char *name, const char *why,
+                      char *msg, size_t cap)
+{
+    TR_TEXT t;
+
+    tr_text_init(&t, msg, cap);
+    return tr_rst_refused(why, rst_mark(id), name, &t);
+}
+
+/* 1 when devnode i is where USB devices hang: the root hub or a hub's
+ * FDO devnode of this driver. */
+static int rst_is_hubnode(const WALK *w, int i)
+{
+    return tr_rst_is_hubnode(w->N[i].Id, w->N[i].Service, w->N[i].IsHubId);
+}
+
+/* The place the window's model knows for the device of id: "port 3",
+ * "port 2 of the hub at port 4"; "" where it does not. */
+static void rst_place(const char *id, char *out, size_t cap)
+{
+    TR_U32 root;
+    TR_U32 route;
+    int g = walk_find_id(&gw, id);
+
+    out[0] = '\0';
+    if (g < 0 || gw.N[g].UPort < 0 ||
+        !tr_path_route(up[gw.N[g].UPort].Path, &root, &route)) {
+        return;
+    }
+    tr_place_words(root, route, out, cap);
+}
+
+/* ---- 98 SE and ME: item 7's readings (stage 2) ----------------------- */
+
+/* The CurrentDriveLetterAssignment of a devnode from its Enum key, as
+ * TR_RST_LET_*: absent is a reading; a key that does not open or a read
+ * that fails is not. Only the letters A to Z are kept. */
+static int rst_let9x(const char *id, char *out, size_t cap)
+{
+    char path[INST_ID_CHARS + 16];
+    char raw[64];
+    HKEY k;
+    DWORD type;
+    DWORD n = sizeof(raw) - 1;
+    LONG r;
+    size_t o = 0;
+    DWORD i;
+
+    out[0] = '\0';
+    tr_sprintf(path, sizeof(path), "Enum\\%s", id);
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, &k) !=
+        ERROR_SUCCESS) {
+        return TR_RST_LET_FAILED;
+    }
+    memset(raw, 0, sizeof(raw));
+    r = RegQueryValueExA(k, "CurrentDriveLetterAssignment", NULL, &type,
+                         (LPBYTE)raw, &n);
+    RegCloseKey(k);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        return TR_RST_LET_ABSENT;
+    }
+    if (r != ERROR_SUCCESS) {
+        return TR_RST_LET_FAILED;
+    }
+    for (i = 0; i < n && i < sizeof(raw) && o + 1 < cap; i++) {
+        char c = raw[i];
+        if (c >= 'a' && c <= 'z') {
+            c = (char)(c - 'a' + 'A');
+        }
+        if (c >= 'A' && c <= 'Z') {
+            out[o++] = c;
+        }
+    }
+    out[o] = '\0';
+    return TR_RST_LET_READ;
+}
+
+/* Item 7 steps 1 and 2: the Windows and system directories, the letters
+ * and their types. win and sys hold MAX_PATH bytes each. */
+static void rst_drives9x(TR_RST_DRIVES *d, char *win, char *sys)
+{
+    UINT r;
+    UINT old;
+    int L;
+
+    memset(d, 0, sizeof(*d));
+    r = GetWindowsDirectoryA(win, MAX_PATH);
+    d->WinDir = r == 0 || r >= MAX_PATH ? NULL : win;
+    r = GetSystemDirectoryA(sys, MAX_PATH);
+    d->SysDir = r == 0 || r >= MAX_PATH ? NULL : sys;
+    old = SetErrorMode(SEM_FAILCRITICALERRORS);
+    d->Mask = (TR_U32)GetLogicalDrives();
+    for (L = 0; L < 26; L++) {
+        char root[4];
+        if ((d->Mask & (1UL << L)) == 0) {
+            continue;
+        }
+        root[0] = (char)('A' + L);
+        root[1] = ':';
+        root[2] = '\\';
+        root[3] = '\0';
+        d->Type[L] = GetDriveTypeA(root);
+    }
+    SetErrorMode(old);
+}
+
+/* The ports of the controller and of its hubs, read with the walk (item
+ * 7's storage rule): every port's connection answer, and for each device
+ * its descriptor and its active configuration's. */
+typedef struct _RSTPORTS {
+    TR_RST_PORT P[TR_RST_MAX_PORTS];
+    unsigned char Dev[TR_RST_MAX_PORTS][18];
+    unsigned char *Cfg[TR_RST_MAX_PORTS];
+    char Name[TR_RST_MAX_PORTS][96];
+    int N;
+    int Bound;              /* more ports than it holds                   */
+    int RootRead;           /* the root hub's ports read                  */
+} RSTPORTS;
+
+static void rst_ports_free(RSTPORTS *s)
+{
+    int i;
+
+    for (i = 0; i < s->N; i++) {
+        free(s->Cfg[i]);
+        s->Cfg[i] = NULL;
+    }
+}
+
+/* Reads the ports of hub (its path in the tree's form) into s; 1 when the
+ * hub answered its node information. */
+static int rst_scan9x(RSTPORTS *s, const WALK *w, const char *hub,
+                      const char *path, int depth)
+{
+    HANDLE h;
+    unsigned char ni[TR_NI_BYTES];
+    DWORD got = 0;
+    unsigned int ports = 0;
+    int bus;
+    unsigned int i;
+
+    h = open_device(hub);
+    if (h == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    memset(ni, 0, sizeof(ni));
+    if (!usb_ioctl(h, TR_IOCTL_USB_GET_NODE_INFORMATION, ni, sizeof(ni), ni,
+                   sizeof(ni), &got) ||
+        !tr_node_parse(ni, got, &ports, &bus)) {
+        CloseHandle(h);
+        return 0;
+    }
+    for (i = 1; i <= ports && i <= 255; i++) {
+        unsigned char buf[TR_CI_BYTES + TR_MAX_PIPES * TR_CI_PIPE_BYTES];
+        TR_CONN conn;
+        TR_RST_PORT *p;
+        char key[128];
+        char child[TR_NAME_LEN];
+        char here[64];
+        int me;
+        int read = 0;
+
+        if (s->N >= TR_RST_MAX_PORTS) {
+            s->Bound = 1;
+            break;
+        }
+        me = s->N++;
+        p = &s->P[me];
+        memset(p, 0, sizeof(*p));
+        p->Node = -1;
+        s->Name[me][0] = '\0';
+        p->Name = s->Name[me];
+        tr_port_path(here, sizeof(here), path, i);
+        memset(&conn, 0, sizeof(conn));
+        memset(buf, 0, sizeof(buf));
+        buf[0] = (unsigned char)i;
+        if (usb_ioctl(h, TR_IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX, buf,
+                      sizeof(buf), buf, sizeof(buf), &got) &&
+            tr_conn_parse(buf, got, 1, &conn)) {
+            read = 1;
+        } else {
+            memset(buf, 0, sizeof(buf));
+            buf[0] = (unsigned char)i;
+            if (usb_ioctl(h, TR_IOCTL_USB_GET_NODE_CONNECTION_INFORMATION, buf,
+                          sizeof(buf), buf, sizeof(buf), &got)) {
+                read = tr_conn_parse(buf, got, 0, &conn);
+            }
+        }
+        p->Read = read;
+        if (!read || conn.Status != TR_CS_CONNECTED) {
+            continue;
+        }
+        p->Connected = 1;
+        p->IsHub = conn.IsHub;
+        memcpy(s->Dev[me], conn.Dev, sizeof(s->Dev[me]));
+        p->Dev = s->Dev[me];
+        if (usb_name(h, TR_IOCTL_USB_GET_NODE_CONNECTION_DRIVERKEY_NAME, i,
+                     key, sizeof(key))) {
+            p->Node = walk_find_driver(w, key);
+        }
+        {
+            TR_U32 root;
+            TR_U32 route;
+            char place[64];
+            place[0] = '\0';
+            if (tr_path_route(here, &root, &route)) {
+                tr_place_words(root, route, place, sizeof(place));
+            }
+            tr_sprintf(s->Name[me], sizeof(s->Name[me]),
+                       "USB device %02X%02X:%02X%02X%s%s",
+                       conn.Dev[9], conn.Dev[8], conn.Dev[11], conn.Dev[10],
+                       place[0] ? ", " : "", place);
+        }
+        {
+            /* The active configuration: the one whose bConfigurationValue
+             * is the connection answer's; none active, or none found,
+             * leaves Cfg NULL (R16). */
+            unsigned int idx;
+            unsigned int count = conn.Dev[17];
+            for (idx = 0; conn.Config != 0 && idx < count && idx < 8; idx++) {
+                unsigned char *c9 = NULL;
+                DWORD n = usb_desc(hub, i, 2, idx, 0, 9, &c9);
+                if (n >= 9 && c9[5] == conn.Config) {
+                    unsigned int total = (unsigned int)c9[2] |
+                                         ((unsigned int)c9[3] << 8);
+                    if (total >= 9 && total <= 4096) {
+                        unsigned char *all = NULL;
+                        DWORD m = usb_desc(hub, i, 2, idx, 0, total, &all);
+                        if (m == total) {
+                            s->Cfg[me] = all;
+                            p->Cfg = all;
+                            p->CfgN = m;
+                        } else {
+                            free(all);
+                        }
+                    }
+                    free(c9);
+                    break;
+                }
+                free(c9);
+            }
+        }
+        if (p->IsHub && depth < 6 &&
+            usb_name(h, TR_IOCTL_USB_GET_NODE_CONNECTION_NAME, i, child,
+                     sizeof(child))) {
+            p->HubRead = rst_scan9x(s, w, child, here, depth + 1);
+        }
+    }
+    CloseHandle(h);
+    return 1;
+}
+
+/* The root hub's name of the controller whose driver key is key; 1 found. */
+static int rst_root_hub(const char *key, char *out, size_t cap)
+{
+    char name[16];
+    char k[128];
+    HANDLE h;
+    int n;
+
+    for (n = 0; n < 64; n++) {
+        tr_sprintf(name, sizeof(name), "%s%d", tr_door_stem(), n);
+        h = open_device(name);
+        if (h == INVALID_HANDLE_VALUE) {
+            continue;
+        }
+        if (usb_name(h, TR_IOCTL_GET_HCD_DRIVERKEY_NAME, 0, k, sizeof(k)) &&
+            tr_eq(k, key)) {
+            int ok = usb_name(h, TR_IOCTL_USB_GET_ROOT_HUB_NAME, 0, out, cap);
+            CloseHandle(h);
+            return ok && out[0] != '\0';
+        }
+        CloseHandle(h);
+    }
+    return 0;
+}
+
+/* Item 7's rules for the controller w->N[top] (its name), from the walk w
+ * and the nodes n built from it; 0 or the refusal's id, its text in why. */
+static int rst_rules9x(const WALK *w, TR_RST_NODE *n, int top,
+                       const char *name, char *why, size_t cap)
+{
+    TR_RST_DRIVES d;
+    char (*lets)[32];
+    char win[MAX_PATH];
+    char sys[MAX_PATH];
+    char hub[TR_NAME_LEN];
+    RSTPORTS *s;
+    int i;
+    int r;
+
+    lets = (char (*)[32])calloc((size_t)w->Count + 1, 32);
+    s = (RSTPORTS *)calloc(1, sizeof(RSTPORTS));
+    if (lets == NULL || s == NULL) {
+        free(lets);
+        free(s);
+        tr_sprintf(why, cap, "The tool could not read what is plugged into "
+                   "%s, so it does not restart it. Try again, or restart "
+                   "Windows.", name);
+        return 16;
+    }
+    for (i = 0; i < w->Count; i++) {
+        n[i].Hw = w->N[i].Hw;
+        n[i].HwBytes = w->N[i].HwBytes;
+        n[i].Compat = w->N[i].Compat;
+        n[i].CompatBytes = w->N[i].CompatBytes;
+        n[i].Service = w->N[i].Service;
+        n[i].LetState = rst_let9x(w->N[i].Id, lets[i], sizeof(lets[i]));
+        n[i].DrvLetters = lets[i];
+    }
+    rst_drives9x(&d, win, sys);
+    if (rst_root_hub(w->N[top].Driver, hub, sizeof(hub))) {
+        s->RootRead = rst_scan9x(s, w, hub, "", 0);
+    }
+    r = tr_rst_rules9x(&d, n, w->Count, top, w->Bad, w->Count >= TR_MAX_DEVS,
+                       s->P, s->N, s->Bound || !s->RootRead, name, why, cap,
+                       label_lead);
+    rst_ports_free(s);
+    free(s);
+    free(lets);
+    return r;
+}
+
+/* A fresh, complete walk of controller id's subtree into q (section 27
+ * item 6): every devnode's id for the digest, the list a line a device
+ * (tr_rst_list), its disks' letters read again; on 98 SE and ME then item
+ * 7's rules on the same walk. Returns 0 done, else a refusal's text in why
+ * (R10, R11; on 98 SE and ME R13, R5, R18, R12, R16, R15). */
+static int rst_collect(const char *id, RSTREQ *q, char *why, size_t cap)
+{
+    WALK w;
+    TR_RST_NODE *n = NULL;
+    char (*places)[64] = NULL;
+    TR_RST_LIST l;
+    TR_TEXT t;
+    int top;
+    int i;
+    int r = TR_RST_LIST_INCOMPLETE;
+
+    memset(&w, 0, sizeof(w));
+    why[0] = '\0';
+    rst_free(q);
+    if (!walk(&w)) {
+        tr_rst_r11(why, cap, q->Name);
+        free(w.N);
+        return 1;
+    }
+    top = walk_find_id(&w, id);
+    if (top < 0) {
+        tr_rst_r10(why, cap, q->Name);
+        free(w.N);
+        return 1;
+    }
+    tr_copy(q->DrvKey, w.N[top].Driver, sizeof(q->DrvKey));
+    if (envNt) {
+        disk_letters_nt(&w, top);
+    }
+    q->Ids = (char (*)[TR_ID_CHARS])calloc(TR_RST_MAX_IDS, TR_ID_CHARS);
+    q->ListCap = (size_t)(TR_RST_MAX_IDS + 1) * TR_RST_LINE_BYTES;
+    q->List = (char *)malloc(q->ListCap);
+    n = (TR_RST_NODE *)calloc((size_t)w.Count + 1, sizeof(TR_RST_NODE));
+    places = (char (*)[64])calloc((size_t)w.Count + 1, 64);
+    if (q->Ids != NULL && q->List != NULL && n != NULL && places != NULL) {
+        for (i = 0; i < w.Count; i++) {
+            const DNODE *d = &w.N[i];
+            n[i].Parent = d->Parent;
+            n[i].Id = d->Id;
+            n[i].Cls = d->Cls;
+            n[i].Name = dn_name(d);
+            n[i].Letters = d->Letters;
+            n[i].IsDisk = d->IsDisk;
+            n[i].IsHubNode = rst_is_hubnode(&w, i);
+            n[i].IsRootHub = strncmp(d->Id, "USB\\XHCI98_ROOT_HUB", 19) == 0;
+            n[i].ReadOk = d->ReadOk;
+            n[i].Incomplete = d->Incomplete;
+            n[i].Started = (d->Status & INST_DN_STARTED) != 0 &&
+                           d->Problem == 0;
+            if (i != top && walk_below(&w, i, top)) {
+                rst_place(d->Id, places[i], sizeof(places[i]));
+            }
+            n[i].Place = places[i];
+        }
+        memset(&l, 0, sizeof(l));
+        l.Ids = q->Ids;
+        l.Cap = TR_RST_MAX_IDS;
+        tr_text_init(&t, q->List, q->ListCap);
+        r = tr_rst_list(n, w.Count, top, w.Bad, w.Count >= TR_MAX_DEVS, id,
+                        &l, &t);
+        q->Count = l.Count;
+        q->StoppedEmpty = l.StoppedEmpty;
+        q->HasDisk = l.HasDisk;
+        q->Kbd = l.Kbd;
+        q->Mouse = l.Mouse;
+        q->KbdElsewhere = l.KbdElsewhere;
+        q->MouseElsewhere = l.MouseElsewhere;
+        tr_copy(q->Digest, l.Digest, sizeof(q->Digest));
+        if (r == TR_RST_LIST_OK && !envNt &&
+            rst_rules9x(&w, n, top, q->Name, why, cap) != 0) {
+            r = -1;
+        }
+    }
+    free(n);
+    free(places);
+    free(w.N);
+    if (r == -1) {
+        return 1;
+    }
+    if (r != TR_RST_LIST_OK) {
+        tr_rst_r11(why, cap, q->Name);
+        return 1;
+    }
+    return 0;
+}
+
+/* ---- the confirmation (section 27 item 6) ---------------------------- */
+
+#define TR_RST_MODE_PLAIN   0
+#define TR_RST_MODE_SHIELD  1       /* Vista and later, not elevated      */
+#define TR_RST_MODE_RUNAS   2       /* 2000 and XP, not an administrator  */
+
+typedef struct _RSTDLG {
+    const RSTREQ *Q;
+    int Mode;
+} RSTDLG;
+
+static BOOL CALLBACK rst_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_INITDIALOG: {
+        const RSTDLG *d = (const RSTDLG *)lp;
+        const char *list = d->Q->StoppedEmpty || d->Q->List == NULL
+                               ? "" : d->Q->List;
+        char head[600];
+        char note[1200];
+        TR_TEXT t;
+        tr_text_init(&t, head, sizeof(head));
+        if (d->Mode == TR_RST_MODE_RUNAS) {
+            tr_put(&t, TR_RST_R1);
+            tr_put(&t, "\n");
+        }
+        {
+            char c1[220];
+            tr_rst_c1(c1, sizeof(c1), d->Q->Name);
+            tr_put(&t, c1);
+        }
+        tr_put(&t, "\n");
+        tr_put(&t, d->Q->StoppedEmpty ? TR_RST_C3 : TR_RST_C2);
+        SetDlgItemTextA(dlg, IDC_RST_HEAD, head);
+        /* The whole list, whatever its length (C2): the box's limit raised
+         * to it first. */
+        SendDlgItemMessageA(dlg, IDC_RST_LIST, EM_LIMITTEXT,
+                            (WPARAM)(strlen(list) + 16), 0);
+        SetDlgItemTextA(dlg, IDC_RST_LIST, list);
+        tr_text_init(&t, note, sizeof(note));
+        if (d->Q->HasDisk) {
+            tr_put(&t, TR_RST_C4);
+            tr_put(&t, " ");
+        }
+        if (d->Q->Kbd || d->Q->Mouse) {
+            tr_put(&t, TR_RST_C7);
+            tr_put(&t, " ");
+            if (d->Q->Kbd) {
+                tr_put(&t, d->Q->KbdElsewhere < 0 ? TR_RST_C8AK
+                           : d->Q->KbdElsewhere == 0 ? TR_RST_C8K : "");
+                tr_put(&t, " ");
+            }
+            if (d->Q->Mouse) {
+                tr_put(&t, d->Q->MouseElsewhere < 0 ? TR_RST_C8AM
+                           : d->Q->MouseElsewhere == 0 ? TR_RST_C8M : "");
+            }
+        }
+        SetDlgItemTextA(dlg, IDC_RST_NOTE, note);
+        if (d->Mode == TR_RST_MODE_SHIELD) {
+            /* BCM_SETSHIELD: the button starts an elevation. */
+            SendDlgItemMessageA(dlg, IDOK, 0x160C, 0, 1);
+        } else if (d->Mode == TR_RST_MODE_RUNAS) {
+            SetDlgItemTextA(dlg, IDOK, TR_RST_RUNAS);
+        }
+        SetForegroundWindow(dlg);
+        /* The focus on Cancel, the default button, not on the list (whose
+         * text the first tab stop would show selected). */
+        SetFocus(GetDlgItem(dlg, IDCANCEL));
+        return FALSE;
+    }
+    case WM_COMMAND:
+        if (LOWORD(wp) == IDOK || LOWORD(wp) == IDCANCEL) {
+            EndDialog(dlg, LOWORD(wp));
+            return TRUE;
+        }
+        break;
+    }
+    return FALSE;
+}
+
+static int rst_confirm(HWND owner, const RSTREQ *q, int mode)
+{
+    RSTDLG d;
+
+    d.Q = q;
+    d.Mode = mode;
+    return DialogBoxParamA(hInst, MAKEINTRESOURCEA(IDD_RESTART), owner,
+                           (DLGPROC)rst_proc, (LPARAM)&d) == IDOK;
+}
+
+/* ---- the call and the settle (section 27 items 2, 4, 5 and 8) -------- */
+
+/* Waits ms, the window answering when pump is set. */
+static void rst_wait(DWORD ms, int pump)
+{
+    DWORD start = GetTickCount();
+
+    if (!pump) {
+        Sleep(ms);
+        return;
+    }
+    for (;;) {
+        MSG m;
+        DWORD spent = GetTickCount() - start;
+        if (spent >= ms) {
+            return;
+        }
+        (void)MsgWaitForMultipleObjects(0, NULL, FALSE, ms - spent,
+                                        QS_ALLINPUT);
+        while (PeekMessageA(&m, NULL, 0, 0, PM_REMOVE)) {
+            if (m.message == WM_QUIT) {
+                PostQuitMessage((int)m.wParam);
+                return;
+            }
+            TranslateMessage(&m);
+            DispatchMessageA(&m);
+        }
+    }
+}
+
+/* Called with rstBusy set: waits for a hold job's controller read under
+ * way to end (none begins after it). 1 done, 0 not within 10 s. */
+static int rst_hold_quiet(void)
+{
+    DWORD r;
+
+    if (holdGate == NULL) {
+        return 1;
+    }
+    r = WaitForSingleObject(holdGate, 10000);
+    if (r != WAIT_OBJECT_0 && r != WAIT_ABANDONED) {
+        return 0;
+    }
+    ReleaseMutex(holdGate);
+    return 1;
+}
+
+/* Item 5's refusal for its id r into why ("" for none). */
+static void rst_why(int r, char *why, size_t cap)
+{
+    why[0] = '\0';
+    switch (r) {
+    case TR_RST_NO_ROUTINE:
+        tr_copy(why, TR_RST_R3, cap);
+        break;
+    case TR_RST_WOW64:
+        tr_copy(why, TR_RST_R4, cap);
+        break;
+    case TR_RST_CONTAINED:
+        tr_copy(why, "Closed off. This controller was closed off because it "
+                     "stopped answering. Restarting it could stop Windows "
+                     "responding: save your work and restart Windows.", cap);
+        break;
+    case TR_RST_UNKNOWN_FAILED:
+        tr_copy(why, TR_RST_R8, cap);
+        break;
+    case TR_RST_NEED_ADMIN:
+        tr_copy(why, TR_RST_R1, cap);
+        break;
+    case TR_RST_SETUP:
+        tr_copy(why, TR_RST_R6, cap);
+        break;
+    case TR_RST_STOPPED9X:
+        /* 98 SE and ME: a controller stopped after repeated failures is
+         * not offered the restart (section 27 item 3). */
+        tr_copy(why, TR_RST_DM, cap);
+        break;
+    }
+}
+
+/* ---- 98 SE and ME: the call and the settle (section 27 items 3, 4) --- */
+
+/* The context of the 9x sequence's calls (tr_rst_seq9x). */
+typedef struct _RST9XCTX {
+    const RSTREQ *Q;
+    int Pump;
+} RST9XCTX;
+
+static TR_U32 rst9x_locate(void *ctx, TR_U32 *dn, const char *id)
+{
+    char buf[INST_ID_CHARS];
+    DWORD d = 0;
+    DWORD cr;
+
+    (void)ctx;
+    if (id == NULL) {
+        cr = api.Locate(&d, NULL, 0);
+    } else {
+        tr_copy(buf, id, sizeof(buf));
+        cr = api.Locate(&d, buf, 0);
+    }
+    *dn = cr == TR_CR_SUCCESS ? (TR_U32)d : 0;
+    return (TR_U32)cr;
+}
+
+static TR_U32 rst9x_parent(void *ctx, TR_U32 *parent, TR_U32 dn)
+{
+    DWORD p = 0;
+    DWORD cr;
+
+    (void)ctx;
+    cr = api.Parent(&p, (DWORD)dn, 0);
+    *parent = cr == TR_CR_SUCCESS ? (TR_U32)p : 0;
+    return (TR_U32)cr;
+}
+
+static TR_U32 rst9x_query(void *ctx, TR_U32 dn)
+{
+    (void)ctx;
+    return (TR_U32)api.QueryRemove((DWORD)dn, 0x1UL); /* CM_QUERY_REMOVE_UI_NOT_OK */
+}
+
+static TR_U32 rst9x_remove(void *ctx, TR_U32 dn)
+{
+    (void)ctx;
+    return (TR_U32)api.Remove((DWORD)dn, 0x1UL);      /* CM_REMOVE_UI_NOT_OK */
+}
+
+static TR_U32 rst9x_rescan(void *ctx, TR_U32 dn)
+{
+    (void)ctx;
+    return (TR_U32)api.Reenumerate((DWORD)dn, 0);     /* CM_REENUMERATE_NORMAL */
+}
+
+/* The settle after a 9x removal or rescan: a sample every 500 ms for at
+ * most 30 s. A located devnode of the id is found; started with no
+ * problem, seen; a locate that answers another error than no such devnode
+ * makes the reading unsure. It ends early once the devnode reads started,
+ * the driver answers started and, where the removal is no evidence (gone
+ * clear), a new start was seen. */
+static void rst9x_settle(void *ctx, TR_RST_HIST *h, int gone, TR_RST_SEEN *s)
+{
+    const RST9XCTX *c = (const RST9XCTX *)ctx;
+    DWORD start = GetTickCount();
+
+    for (;;) {
+        char buf[INST_ID_CHARS];
+        TR_XHR x;
+        DWORD dn = 0;
+        DWORD cr;
+        ULONG st = 0;
+        ULONG pr = 0;
+        int started = 0;
+        int ok;
+        rst_wait(TR_RST_POLL_MS, c->Pump);
+        ok = rst_xhr_read(c->Q->DrvKey, &x);
+        tr_rst_hist_add(h, ok ? &x : NULL);
+        tr_copy(buf, c->Q->Id, sizeof(buf));
+        cr = api.Locate(&dn, buf, 0);
+        if (cr == TR_CR_SUCCESS) {
+            s->Found = 1;
+            if (api.Status(&st, &pr, dn, 0) == TR_CR_SUCCESS &&
+                (st & INST_DN_STARTED) != 0 && (st & INST_DN_HAS_PROBLEM) == 0) {
+                s->Seen = 1;
+                started = 1;
+            }
+        } else if (cr != TR_RST_CR_NO_SUCH_DEVNODE) {
+            s->Unsure = 1;
+        }
+        if (started && ok && (x.Flags & XHR_F_STARTED) != 0 &&
+            (gone || tr_rst_start(h) == TR_RST_S1)) {
+            return;
+        }
+        if (GetTickCount() - start >= TR_RST_SETTLE_MS) {
+            return;
+        }
+    }
+}
+
+/* Section 27 item 3's sequence on 98 SE and ME (tr_rst_seq9x) through the
+ * configuration manager's routines. */
+static void rst_seq9x(const RSTREQ *q, TR_RST_IN *in, TR_RST_HIST *h,
+                      int pump)
+{
+    TR_RST_OPS9X ops;
+    RST9XCTX c;
+
+    c.Q = q;
+    c.Pump = pump;
+    ops.Ctx = &c;
+    ops.Locate = rst9x_locate;
+    ops.Parent = rst9x_parent;
+    ops.QueryRemove = rst9x_query;
+    ops.Remove = rst9x_remove;
+    ops.Reenumerate = rst9x_rescan;
+    ops.Settle = rst9x_settle;
+    tr_rst_seq9x(&ops, q->Id, in, h);
+}
+
+/* The restart of q's controller, its answer into msg: the shared mutex;
+ * then, immediately before the call, checks 2 and 5 again and the digest
+ * against the confirmed one (item 5: a change is R9, *changed set); the
+ * baseline, the seven calls, the settle, the four-part answer. The
+ * one-shot run's exit code. */
+static int rst_call(RSTREQ *q, char *msg, size_t cap, int pump, int *changed)
+{
+    TR_RST_IN in;
+    TR_RST_HIST h;
+    TR_RST_CHECK k;
+    TR_XHR base;
+    TR_XHR x;
+    TR_TEXT t;
+    HDEVINFO set;
+    SP_DEVINFO_DATA data;
+    SP_DEVINSTALL_PARAMS_A ip;
+    SP_PROPCHANGE_PARAMS p;
+    RSTREQ *fresh;
+    HANDLE m;
+    char buf[INST_ID_CHARS];
+    char why[600];
+    TR_U32 dummyProblem;
+    TR_U32 dummyCode;
+    int state;
+    int failed;
+    int r;
+    int code;
+    DWORD start;
+
+    *changed = 0;
+    tr_text_init(&t, msg, cap);
+    memset(&in, 0, sizeof(in));
+    in.Name = q->Name;
+    in.F = TR_RST_NOTREAD;
+    in.P = TR_RST_NOTREAD;
+    m = ej_lock();
+    if (m == NULL) {
+        return rst_refuse(q->Id, q->Name, TR_RST_R7, msg, cap);
+    }
+    rstBusy = 1;
+    if (!rst_hold_quiet()) {
+        rstBusy = 0;
+        ej_unlock(m);
+        return rst_refuse(q->Id, q->Name, TR_RST_R7, msg, cap);
+    }
+    /* Immediately before the call, by the process that calls: check 2 on
+     * a fresh read of the driver (R2, R8), then check 5, a fresh complete
+     * walk (R10, R11), and its digest against the confirmed one (R9). */
+    memset(&base, 0, sizeof(base));
+    state = rst_door_read(q->DrvKey, &base, &failed);
+    memset(&k, 0, sizeof(k));
+    k.Routines = rst_routines();
+    k.Wow64Limited = trWow64Limited;
+    k.RecState = state;
+    k.Terminal = state == 1 ? base.Terminal : 0;
+    k.QueryFailed = failed;
+    k.Admin = 1;            /* the call itself answers R1 (item 8) */
+    k.WalkComplete = 1;
+    r = tr_rst_check(&k);
+    if (r == TR_RST_OK && !tr_rst_offered(envNt, state, base.Terminal)) {
+        r = TR_RST_STOPPED9X;
+    }
+    if (r != TR_RST_OK) {
+        ej_unlock(m);
+        rstBusy = 0;
+        rst_why(r, why, sizeof(why));
+        return rst_refuse(q->Id, q->Name, why, msg, cap);
+    }
+    fresh = (RSTREQ *)calloc(1, sizeof(RSTREQ));
+    if (fresh == NULL) {
+        ej_unlock(m);
+        rstBusy = 0;
+        tr_rst_r11(why, sizeof(why), q->Name);
+        return rst_refuse(q->Id, q->Name, why, msg, cap);
+    }
+    tr_copy(fresh->Id, q->Id, sizeof(fresh->Id));
+    tr_copy(fresh->Name, q->Name, sizeof(fresh->Name));
+    if (rst_collect(fresh->Id, fresh, why, sizeof(why)) != 0) {
+        ej_unlock(m);
+        rstBusy = 0;
+        rst_free(fresh);
+        free(fresh);
+        return rst_refuse(q->Id, q->Name, why, msg, cap);
+    }
+    if (strcmp(fresh->Digest, q->Digest) != 0) {
+        ej_unlock(m);
+        rstBusy = 0;
+        rst_free(fresh);
+        free(fresh);
+        *changed = 1;
+        tr_rst_r9(why, sizeof(why), q->Name);
+        return rst_refuse(q->Id, q->Name, why, msg, cap);
+    }
+    tr_copy(q->DrvKey, fresh->DrvKey, sizeof(q->DrvKey));
+    rst_free(fresh);
+    free(fresh);
+    /* The baseline: the lifetime identity I0 just read, and the mark. */
+    (void)rst_dn_state(q->Id, &dummyProblem, &in.MarkBase, &dummyCode);
+    tr_rst_hist_init(&h, state == 1 ? &base : NULL);
+    rstBusy = 1;
+    if (!envNt) {
+        /* 98 SE and ME (section 27 item 3): F and P are NT's alone. */
+        rst_seq9x(q, &in, &h, pump);
+        goto settled;
+    }
+    set = api.CreateList(NULL, NULL);
+    if (set == INVALID_HANDLE_VALUE) {
+        in.Request = TR_RST_REQ_PREP;
+        in.Error = GetLastError();
+    } else {
+        memset(&data, 0, sizeof(data));
+        data.cbSize = sizeof(SP_DEVINFO_DATA);
+        tr_copy(buf, q->Id, sizeof(buf));
+        if (!api.OpenInfo(set, buf, NULL, 0, &data)) {
+            in.Error = GetLastError();
+            in.Request = in.Error == TR_RST_ERROR_NO_SUCH_DEVINST
+                             ? TR_RST_REQ_NODEV : TR_RST_REQ_PREP;
+        } else {
+            memset(&ip, 0, sizeof(ip));
+            ip.cbSize = sizeof(SP_DEVINSTALL_PARAMS_A);
+            if (api.GetDiParams(set, &data, &ip)) {
+                in.P = (ip.Flags & (DI_NEEDREBOOT | DI_NEEDRESTART)) != 0
+                           ? TR_RST_YES : TR_RST_NO;
+                if (in.P == TR_RST_YES) {
+                    /* Cleared on this element alone, so the read after the
+                     * call is the call's own; P is kept for line 4. */
+                    ip.Flags &= ~(DWORD)(DI_NEEDREBOOT | DI_NEEDRESTART);
+                    (void)api.SetDiParams(set, &data, &ip);
+                }
+            } else {
+                in.P = TR_RST_UNKNOWN;
+            }
+            memset(&p, 0, sizeof(p));
+            p.ClassInstallHeader.cbSize = sizeof(SP_CLASSINSTALL_HEADER);
+            p.ClassInstallHeader.InstallFunction = DIF_PROPERTYCHANGE;
+            p.StateChange = DICS_PROPCHANGE;
+            p.Scope = DICS_FLAG_GLOBAL;
+            p.HwProfile = 0;
+            if (!api.SetCiParams(set, &data, &p.ClassInstallHeader,
+                                 sizeof(SP_PROPCHANGE_PARAMS))) {
+                in.Request = TR_RST_REQ_PREP;
+                in.Error = GetLastError();
+            } else {
+                if (api.CallCi(DIF_PROPERTYCHANGE, set, &data)) {
+                    in.Request = TR_RST_REQ_OK;
+                } else {
+                    in.Error = GetLastError();
+                    in.Request = in.Error == ERROR_ACCESS_DENIED
+                                     ? TR_RST_REQ_DENIED : TR_RST_REQ_FAILED;
+                }
+                memset(&ip, 0, sizeof(ip));
+                ip.cbSize = sizeof(SP_DEVINSTALL_PARAMS_A);
+                if (api.GetDiParams(set, &data, &ip)) {
+                    in.F = (ip.Flags & (DI_NEEDREBOOT | DI_NEEDRESTART)) != 0
+                               ? TR_RST_YES : TR_RST_NO;
+                } else {
+                    in.F = TR_RST_UNKNOWN;
+                }
+            }
+        }
+        api.Destroy(set);
+    }
+    /* The settle: a sample every 500 ms for at most 30 s, ending once a
+     * completed start is seen and the devnode reads started. */
+    start = GetTickCount();
+    if (in.Request == TR_RST_REQ_OK || in.Request == TR_RST_REQ_FAILED) {
+        for (;;) {
+            int ok;
+            int dnNow;
+            rst_wait(TR_RST_POLL_MS, pump);
+            ok = rst_xhr_read(q->DrvKey, &x);
+            tr_rst_hist_add(&h, ok ? &x : NULL);
+            dnNow = rst_dn_state(q->Id, &in.Problem, &in.MarkEnd, &in.DnCode);
+            if (tr_rst_start(&h) == TR_RST_S1 && dnNow == TR_RST_DN_STARTED) {
+                break;
+            }
+            if (GetTickCount() - start >= TR_RST_SETTLE_MS) {
+                break;
+            }
+        }
+    }
+    in.Start = tr_rst_start(&h);
+settled:
+    ej_unlock(m);
+    rstBusy = 0;
+    in.Dn = rst_dn_state(q->Id, &in.Problem, &in.MarkEnd, &in.DnCode);
+    in.XhrOk = rst_xhr_read(q->DrvKey, &in.Xhr);
+    code = tr_rst_answer(&in, &t);
+    if (in.Dn == TR_RST_DN_STARTED && in.XhrOk &&
+        (in.Xhr.Flags & XHR_F_STARTED) != 0 &&
+        (in.Xhr.Terminal == 2 || in.Xhr.Terminal == 3)) {
+        char name[96];
+        name[0] = '\0';
+        if (in.Xhr.Records > 0) {
+            rec_name(in.Xhr.Rec[0][5], name, sizeof(name));
+        }
+        (void)tr_xhr_details(&t, &in.Xhr, 1, name[0] ? name : NULL,
+                             label_lead);
+    }
+    return code;
+}
+
+/* ---- the action, from the window or the tray ------------------------- */
+
+/* The checks before the question (section 27 item 5) for controller c of
+ * the model, into why; TR_RST_* (0 none). */
+static int rst_checks(int c, char *why, size_t cap)
+{
+    TR_RST_CHECK k;
+    int r;
+
+    memset(&k, 0, sizeof(k));
+    k.Routines = rst_routines();
+    k.Wow64Limited = trWow64Limited;
+    k.RecState = uc[c].RecState;
+    k.Terminal = uc[c].Rec.Terminal;
+    k.QueryFailed = uc[c].RecFailed;
+    k.Admin = ej_is_admin();
+    k.Elevates = envMajor >= 6;
+    k.RunAsOffered = envMajor == 5;
+    k.SetupRunning = set_setup_running();
+    k.WalkComplete = 1;     /* the walk is the next step's (R11) */
+    r = tr_rst_check(&k);
+    if (r == TR_RST_OK &&
+        !tr_rst_offered(envNt, uc[c].RecState, uc[c].Rec.Terminal)) {
+        r = TR_RST_STOPPED9X;
+    }
+    rst_why(r, why, cap);
+    return r;
+}
+
+/* The elevated (Vista and later) or Run As (2000, XP) run of q; the
+ * answer into msg, the exit code returned (section 27 item 9). */
+static int rst_elev_run(HWND owner, const RSTREQ *q, char *msg, size_t cap)
+{
+    static ELEVRUN r;
+    char pre[INST_ID_CHARS + 32];
+    char post[TR_DIGEST_CHARS + 16];
+    TR_TEXT t;
+    int outcome;
+
+    tr_sprintf(pre, sizeof(pre), "/restart \"id=%s\"", q->Id);
+    tr_sprintf(post, sizeof(post), " /confirmed %s", q->Digest);
+    elev_launch(owner, pre, post, &r);
+    tr_text_init(&t, msg, cap);
+    if (ejElevQuit) {
+        msg[0] = '\0';
+        return INST_EXIT_REFUSED;
+    }
+    outcome = tr_rst_child(r.Launched, r.Err, r.Finished, r.Finished,
+                           r.ExitCode, r.HaveAnswer);
+    switch (outcome) {
+    case TR_RST_CH_ANSWER:
+        /* The run's answer as written: its line ends are already CR LF, and
+         * tr_put would double each CR (a blank line between the parts). */
+        tr_copy(msg, r.Msg, cap);
+        return r.AnswerCode;
+    case TR_RST_CH_A14:
+        tr_put(&t, TR_RST_A14);
+        break;
+    case TR_RST_CH_A16:
+        tr_rst_a16(msg, cap, r.Err);
+        break;
+    case TR_RST_CH_A23:
+        /* The run could not open the answer section (a Run As account
+         * that is not an administrator, or a restricted token): it did
+         * nothing and exited 1 at once. */
+        tr_put(&t, TR_RST_A23);
+        break;
+    default: {
+        TR_RST_IN in;
+        tr_put(&t, TR_RST_A15);
+        tr_put(&t, "\n");
+        memset(&in, 0, sizeof(in));
+        in.Name = q->Name;
+        in.Dn = rst_dn_state(q->Id, &in.Problem, &in.MarkEnd, &in.DnCode);
+        in.XhrOk = rst_xhr_read(q->DrvKey, &in.Xhr);
+        tr_rst_state(&in, &t);
+        break;
+    }
+    }
+    return tr_rst_child_exit(outcome);
+}
+
+/* Shows the answer: a box from the window, a balloon from the tray. */
+static void rst_show(HWND owner, int fromTray, int code, const char *msg)
+{
+    const char *title = code == INST_EXIT_DONE ? TR_RST_B1 : TR_RST_B2;
+
+    if (fromTray && shellV5 && tr_rst_in_balloon(msg)) {
+        tray_balloon(title, msg, code != INST_EXIT_DONE);
+    } else {
+        MessageBoxA(owner, msg, title,
+                    MB_OK | (code == INST_EXIT_DONE ? MB_ICONINFORMATION
+                                                    : MB_ICONWARNING));
+    }
+}
+
+/* The whole action for controller c of the model. */
+static void rst_ui(HWND owner, int c, int fromTray)
+{
+    RSTREQ *q;
+    char why[600];
+    char msg[4096];
+    int r;
+    int mode = TR_RST_MODE_PLAIN;
+    int code;
+    HCURSOR old;
+
+    if (!rst_offered(c)) {
+        return;
+    }
+    if (trActionBusy) {
+        rst_show(owner, fromTray, INST_EXIT_REFUSED, TR_RST_R7);
+        return;
+    }
+    q = (RSTREQ *)calloc(1, sizeof(RSTREQ));
+    if (q == NULL) {
+        return;
+    }
+    trActionBusy = 1;
+    tr_copy(q->Id, gw.N[uc[c].Dn].Id, sizeof(q->Id));
+    tr_copy(q->Name, dn_name(&gw.N[uc[c].Dn]), sizeof(q->Name));
+    r = rst_checks(c, why, sizeof(why));
+    if (r == TR_RST_NEED_ADMIN && envMajor == 5) {
+        mode = TR_RST_MODE_RUNAS;
+    } else if (r != TR_RST_OK) {
+        code = rst_refuse(q->Id, q->Name, why, msg, sizeof(msg));
+        rst_show(owner, fromTray, code, msg);
+        free(q);
+        trActionBusy = 0;
+        return;
+    } else if (!ej_is_admin()) {
+        mode = TR_RST_MODE_SHIELD;
+    }
+    for (;;) {
+        int changed = 0;
+        if (rst_collect(q->Id, q, why, sizeof(why)) != 0) {
+            code = rst_refuse(q->Id, q->Name, why, msg, sizeof(msg));
+            rst_show(owner, fromTray, code, msg);
+            break;
+        }
+        if (!rst_confirm(owner, q, mode)) {
+            break;
+        }
+        old = SetCursor(LoadCursor(NULL, IDC_WAIT));
+        if (mode == TR_RST_MODE_PLAIN) {
+            code = rst_call(q, msg, sizeof(msg), 1, &changed);
+        } else {
+            /* The run makes the call and the settle: the window reads
+             * nothing of the controller until it has answered. */
+            rstBusy = 1;
+            if (!rst_hold_quiet()) {
+                code = rst_refuse(q->Id, q->Name, TR_RST_R7, msg,
+                                  sizeof(msg));
+            } else {
+                code = rst_elev_run(owner, q, msg, sizeof(msg));
+            }
+            rstBusy = 0;
+            /* The run's own R9 (a device changed during the prompt): the
+             * window asks again, as for its own call. */
+            changed = code == INST_EXIT_REFUSED && tr_rst_is_r9(msg, q->Name);
+        }
+        SetCursor(old);
+        if (msg[0] != '\0') {
+            rst_show(owner, fromTray, code, msg);
+        }
+        if (!changed) {
+            break;
+        }
+        /* R9: the devices changed since the question; the window asks
+         * again with the new list (item 6). */
+    }
+    rst_free(q);
+    free(q);
+    trActionBusy = 0;
+    if (hMain != NULL) {
+        refresh_window();
+    } else {
+        refresh_model(0);
+    }
+}
+
+/* /restart "id=<instance id>": the whole action once, then exit. Run as
+ * the elevated or Run As child (/result), its first step is to open the
+ * answer section for writing: a run that cannot does nothing and exits 1
+ * (section 27 item 9). A run given /confirmed whose fresh walk has
+ * another digest refuses with R9 (item 6: a digest can spare a question,
+ * never add a device). */
+static int run_restart(void)
+{
+    RSTREQ *q = NULL;
+    char why[600];
+    char msg[4096];
+    int code = INST_EXIT_REFUSED;
+    int changed = 0;
+    int c;
+    int d;
+    int r;
+
+    if (opts.Result) {
+        HANDLE sec = OpenFileMappingA(FILE_MAP_WRITE, FALSE, opts.ResultName);
+        if (sec == NULL) {
+            return INST_EXIT_REFUSED;
+        }
+        CloseHandle(sec);
+    }
+    msg[0] = '\0';
+    q = (RSTREQ *)calloc(1, sizeof(RSTREQ));
+    if (q == NULL) {
+        return INST_EXIT_FAILED;
+    }
+    refresh_model(0);
+    d = walk_find_id(&gw, opts.RestartId);
+    for (c = 0; c < ucCount; c++) {
+        if (uc[c].Dn == d && d >= 0 && uc[c].Ours) {
+            break;
+        }
+    }
+    if (d < 0 || c >= ucCount) {
+        code = tr_rst_a17(msg, sizeof(msg), opts.RestartId);
+        goto answer;
+    }
+    rec_read(c);
+    tr_copy(q->Id, gw.N[d].Id, sizeof(q->Id));
+    tr_copy(q->Name, dn_name(&gw.N[d]), sizeof(q->Name));
+    r = rst_checks(c, why, sizeof(why));
+    if ((r == TR_RST_NEED_ADMIN && opts.Result) ||
+        (r != TR_RST_OK && r != TR_RST_NEED_ADMIN)) {
+        code = rst_refuse(q->Id, q->Name, why, msg, sizeof(msg));
+        goto answer;
+    }
+    if (rst_collect(q->Id, q, why, sizeof(why)) != 0) {
+        code = rst_refuse(q->Id, q->Name, why, msg, sizeof(msg));
+        goto answer;
+    }
+    if (opts.Confirmed && strcmp(q->Digest, opts.ConfirmedDigest) != 0) {
+        tr_rst_r9(why, sizeof(why), q->Name);
+        code = rst_refuse(q->Id, q->Name, why, msg, sizeof(msg));
+        goto answer;
+    }
+    if (!opts.Confirmed) {
+        int mode = r == TR_RST_NEED_ADMIN && envMajor == 5 ? TR_RST_MODE_RUNAS
+                   : !ej_is_admin() ? TR_RST_MODE_SHIELD : TR_RST_MODE_PLAIN;
+        if (!rst_confirm(NULL, q, mode)) {
+            tr_copy(msg, "Cancelled; nothing was restarted.", sizeof(msg));
+            code = INST_EXIT_REFUSED;
+            goto answer;
+        }
+        if (mode != TR_RST_MODE_PLAIN) {
+            code = rst_elev_run(NULL, q, msg, sizeof(msg));
+            goto answer;
+        }
+    }
+    if (!ej_is_admin()) {
+        code = rst_refuse(q->Id, q->Name, TR_RST_R1, msg, sizeof(msg));
+    } else {
+        code = rst_call(q, msg, sizeof(msg), 0, &changed);
+    }
+answer:
+    if (q != NULL) {
+        rst_free(q);
+        free(q);
+    }
+    if (opts.Result) {
+        (void)elev_child_answer(code, msg);
+        return code;
+    }
+    if (!quit_asked() && msg[0] != '\0') {
+        say_titled(msg, code != INST_EXIT_DONE,
+                   code == INST_EXIT_DONE ? TR_RST_B1 : TR_RST_B2);
+    }
+    return code;
+}
+
 static const struct {
     UINT Id;
     DWORD Flag;
@@ -12671,6 +14903,12 @@ static void init_menu(HMENU m)
     }
     if (GetMenuState(m, IDM_FAST_WIN, MF_BYCOMMAND) != (UINT)-1) {
         fast_win_item(m, 0);
+    }
+    if (GetMenuState(m, IDM_RESTART, MF_BYCOMMAND) != (UINT)-1) {
+        int c = sel >= 0 && tn[sel].Kind == K_CTRL ? tn[sel].A : -1;
+        EnableMenuItem(m, IDM_RESTART, MF_BYCOMMAND |
+                       (rst_offered(c) && !rst_blocked(c) ? MF_ENABLED
+                                                         : MF_GRAYED));
     }
     EnableMenuItem(m, IDM_PROPS, MF_BYCOMMAND |
                                      (envNt && sel >= 0 && tn[sel].Dn >= 0
@@ -12757,6 +14995,13 @@ static int command(HWND w, UINT id)
     case IDM_PROPS:
         properties(tree_selected());
         return 1;
+    case IDM_RESTART: {
+        int sel = tree_selected();
+        if (sel >= 0 && tn[sel].Kind == K_CTRL) {
+            rst_ui(w, tn[sel].A, 0);
+        }
+        return 1;
+    }
     case IDM_ABOUT:
         about(w);
         return 1;
@@ -13075,7 +15320,7 @@ static void open_window(void)
 
 static void tray_tip(TR_NID *n)
 {
-    char tip[128];
+    char tip[400];
 
     if (trayRedOn) {
         tr_copy(n->szTip, trayRedTip, shellV5 ? sizeof(n->szTip) : 64);
@@ -13088,7 +15333,7 @@ static void tray_tip(TR_NID *n)
         tr_sprintf(tip, sizeof(tip), "xHCI98 USB Tree: %d Thunderbolt/USB4 device%s",
                    tbDevices, tr_plural(tbDevices));
     }
-    tr_copy(n->szTip, tip, shellV5 ? sizeof(n->szTip) : 64);
+    tr_copy_lead(n->szTip, tip, shellV5 ? sizeof(n->szTip) : 64, label_lead);
 }
 
 static void tray_add(void)
@@ -13207,7 +15452,7 @@ static int tray_balloon_send(const char *title, const char *text, int warn,
     TR_NID n;
     int fast = kind == TRAY_BK_FAST;
 
-    tr_copy(lastEvent, text, sizeof(lastEvent));
+    tr_copy_lead(lastEvent, text, sizeof(lastEvent), label_lead);
     balloonSentOk = 0;
     if (!iconAdded) {
         return 0;
@@ -13219,6 +15464,11 @@ static int tray_balloon_send(const char *title, const char *text, int warn,
     storOtherAt = GetTickCount();
     if (kind != TRAY_BK_DRIVE) {
         (void)tr_bsend_step(&storSend, TR_BE_OTHER, storOtherAt, 0);
+    }
+    /* Task 50.7: and the hold notice's, a re-send it owed included. */
+    if (kind != TRAY_BK_HOLD) {
+        (void)tr_bsend_step(&holdSend, TR_BE_OTHER, storOtherAt, 0);
+        holdOwed = 0;
     }
     if (!shellV5) {
         tray_update();
@@ -13252,6 +15502,7 @@ static int tray_balloon_send(const char *title, const char *text, int warn,
     tr_bkind_step(&qsKind, qsSending && kind != TRAY_BK_DRIVE ? TR_BE_SENT
                                                              : TR_BE_OTHER);
     tr_bkind_step(&storKind, kind == TRAY_BK_DRIVE ? TR_BE_SENT : TR_BE_OTHER);
+    tr_bkind_step(&holdKind, kind == TRAY_BK_HOLD ? TR_BE_SENT : TR_BE_OTHER);
     return 1;
 }
 
@@ -13273,6 +15524,7 @@ static void tray_balloon_clear(void)
     tr_bkind_step(&fastKind, TR_BE_DROP);
     tr_bkind_step(&qsKind, TR_BE_DROP);
     tr_bkind_step(&storKind, TR_BE_DROP);
+    tr_bkind_step(&holdKind, TR_BE_DROP);
 }
 
 /* A balloon with new text: the notice's is watched until the shell shows
@@ -13288,6 +15540,8 @@ static void tray_balloon_as(const char *title, const char *text, int warn,
             fastSentAt = GetTickCount();
         } else if (kind == TRAY_BK_DRIVE) {
             (void)tr_bsend_step(&storSend, TR_BE_SENT, GetTickCount(), 0);
+        } else if (kind == TRAY_BK_HOLD) {
+            (void)tr_bsend_step(&holdSend, TR_BE_SENT, GetTickCount(), 0);
         }
     }
 }
@@ -13354,9 +15608,9 @@ static void red_hc_read(void)
         }
         r = &redHc[redHcCount];
         memset(r, 0, sizeof(*r));
-        tr_copy(r->Name, uc[c].Dn >= 0 && uc[c].Dn < gw.Count
-                             ? dn_name(&gw.N[uc[c].Dn]) : "",
-                sizeof(r->Name));
+        tr_copy_lead(r->Name, uc[c].Dn >= 0 && uc[c].Dn < gw.Count
+                                  ? dn_name(&gw.N[uc[c].Dn]) : "",
+                     sizeof(r->Name), label_lead);
         tr_key(redHcKey[redHcCount], sizeof(redHcKey[0]), "C", uc[c].DrvKey,
                uc[c].Path);
         h = open_device(uc[c].Path);
@@ -13368,6 +15622,14 @@ static void red_hc_read(void)
                 r->Failed = (inst_get32(b, XHQ_O_FLAGS) & XHQ_F_FAILED) != 0;
             }
             CloseHandle(h);
+        }
+        if (hMain == NULL) {
+            /* The tray alone: the recovery status, which the window's
+             * refresh reads otherwise (hold_read_all), so that the menu's
+             * M2 for a controller stopped after repeated failures is
+             * offered without the window (record 25 section 27 item 10).
+             * The poll that calls this does not run during a restart. */
+            rec_read(c);
         }
         redHcCount++;
     }
@@ -13440,8 +15702,9 @@ static void tray_red(void)
     item[0] = '\0';
     key[0] = '\0';
     if (on) {
-        tr_red_tip(&in, &r, shellV5, tip, shellV5 ? sizeof(tip) : 64);
-        tr_red_tip(&in, &r, 0, item, sizeof(item));
+        tr_red_tip(&in, &r, shellV5, label_lead, tip,
+                   shellV5 ? sizeof(tip) : 64);
+        tr_red_tip(&in, &r, 0, label_lead, item, sizeof(item));
         if (r.Kind == TR_RED_HC && r.Nhi) {
             for (k = 0; k < nhiCount; k++) {
                 if (inst_fnv1a(INST_FNV_START, (const unsigned char *)nhi[k].Id,
@@ -13519,6 +15782,7 @@ typedef struct _HOLDJOB {
     HOLDRES Res[TR_MAX_CTRL];
     unsigned char *Buf;         /* TR_SNAP_BUFFER_BYTES, the door's      */
     TR_U32 Start;               /* holdStart: where its reading began    */
+    TR_U32 Gen;                 /* holdGen when the job began            */
 } HOLDJOB;
 
 static TR_HOLDQ holdQ;
@@ -13534,6 +15798,11 @@ static HOLDJOB *volatile holdLost; /* the lost job, while holdBusy is 2 */
  * the job thread loads it (a plain aligned load) as each controller's read
  * begins, and a reading across one is not used (tr_hold_reading_usable). */
 static TR_U32 volatile holdEpoch;
+/* Task 50.7: moved on the tray's thread whenever the hold watch is found
+ * off (hold_notice_off); a job carries the value it began under, and
+ * stops reading controllers, and its results are not used, once it
+ * differs (a plain aligned load on the job's thread, as holdEpoch's). */
+static TR_U32 volatile holdGen;
 /* Where the next job starts its reading (tr_hold_rot_index), on the tray's
  * thread: one on from the last job's start, below the controllers' count. */
 static TR_U32 holdStart;
@@ -13554,7 +15823,23 @@ static DWORD WINAPI hold_thread(LPVOID arg)
 
     for (i = 0; i < job->Count; i++) {
         job->Res[i].Epoch = holdEpoch;
-        hold_read_path(job->Path[i], job->Buf, &job->Res[i]);
+        if (job->Gen != holdGen) {
+            /* The watch was turned off meanwhile: no further controller
+             * is opened (task 50.7). */
+            job->Res[i].State = 0;
+            job->Res[i].At = GetTickCount();
+            continue;
+        }
+        (void)WaitForSingleObject(holdGate, INFINITE);
+        if (rstBusy) {
+            /* A restart is running: its controller, and every other, is
+             * left unread this time (task 50.32). */
+            job->Res[i].State = 0;
+            job->Res[i].At = GetTickCount();
+        } else {
+            hold_read_path(job->Path[i], job->Buf, &job->Res[i]);
+        }
+        ReleaseMutex(holdGate);
     }
     if (hTray == NULL || !PostMessageA(hTray, WM_TRHOLD, 0, (LPARAM)job)) {
         holdLost = job;
@@ -13589,8 +15874,14 @@ static void hold_poll(void)
         hold_free(job);
         holdBusy = 0;
     }
-    if (holdBusy) {
+    if (holdBusy || rstBusy) {
         return;
+    }
+    if (holdGate == NULL) {
+        holdGate = CreateMutexA(NULL, FALSE, NULL);
+        if (holdGate == NULL) {
+            return;
+        }
     }
     job = (HOLDJOB *)calloc(1, sizeof(HOLDJOB));
     if (job == NULL) {
@@ -13602,6 +15893,7 @@ static void hold_poll(void)
         return;
     }
     job->Start = holdStart;
+    job->Gen = holdGen;
     for (c = 0; c < ucCount && nOurs < TR_MAX_CTRL; c++) {
         if (uc[c].Ours) {
             ours[nOurs++] = c;
@@ -13616,10 +15908,10 @@ static void hold_poll(void)
         c = ours[tr_hold_rot_index(job->Start, nOurs, i)];
         tr_copy(job->Path[job->Count], uc[c].Path, sizeof(job->Path[0]));
         job->Key[job->Count] = hold_key(c);
-        tr_copy(job->Name[job->Count],
-                uc[c].Dn >= 0 && uc[c].Dn < gw.Count
-                    ? dn_name(&gw.N[uc[c].Dn]) : "",
-                sizeof(job->Name[0]));
+        tr_copy_lead(job->Name[job->Count],
+                     uc[c].Dn >= 0 && uc[c].Dn < gw.Count
+                         ? dn_name(&gw.N[uc[c].Dn]) : "",
+                     sizeof(job->Name[0]), label_lead);
         job->Count++;
     }
     if (job->Count == 0) {
@@ -13636,12 +15928,30 @@ static void hold_poll(void)
     CloseHandle(th);
 }
 
-/* Whether the announcement is shown (owner, 2026-11-14): on 2000 and
- * later as the removal warning's option (warn_on), on 98 SE and ME, which
- * do not offer it, always (tr_hold_notice_on). */
+/* Task 50.7: the hold notice turned off: its queue emptied unshown, its
+ * re-send watch dropped and a re-send it owed cleared. The tray's thread. */
+static void hold_notice_off(void)
+{
+    TR_HQENT e;
+
+    if (holdQInit) {
+        while (tr_holdq_next(&holdQ, &e)) {
+        }
+        /* And what was seen: switched on again, a hold there then is new
+         * to the queue and announced once. */
+        tr_holdq_init(&holdQ);
+    }
+    (void)tr_bsend_step(&holdSend, TR_BE_DROP, GetTickCount(), 0);
+    holdOwed = 0;
+    holdGen++;
+}
+
+/* Whether the tray watches held ports and announces them: the user's
+ * switch alone, on every Windows (owner, 2026-11-15; until then on 2000 and
+ * later the removal warning's option, on 98 SE and ME always). */
 static int hold_notice_on(void)
 {
-    return tr_hold_notice_on(envNt, envNt ? warn_on() : 0);
+    return hold_watch_setting();
 }
 
 /* The job's results, on the tray's thread. */
@@ -13672,6 +15982,10 @@ static void hold_done(HOLDJOB *job)
         }
     }
     tr_holdq_keep_keys(&holdQ, now, nNow);
+    if (job->Gen != holdGen) {
+        /* Begun before the watch was turned off (task 50.7): not used. */
+        goto done;
+    }
     tick = GetTickCount();
     for (k = 0; k < job->Count; k++) {
         r = &job->Res[k];
@@ -13696,9 +16010,53 @@ static void hold_done(HOLDJOB *job)
         }
     }
     if (!hold_notice_on()) {
-        while (tr_holdq_next(&holdQ, &e)) {
-        }
+        /* Also for a change another process made. */
+        hold_notice_off();
         goto done;
+    }
+    /* Task 50.7: a re-send owed is made only on this job's usable reading
+     * of its controller still showing the same hold; otherwise dropped, or
+     * left for a later watch within TR_BS_NOSHOW_MS. */
+    if (holdOwed) {
+        int listed = 0;
+        int usable = 0;
+        int holdNow = -1;
+        int verdict;
+        for (c = 0; c < nNow; c++) {
+            if (now[c] == holdSentKey) {
+                listed = 1;
+            }
+        }
+        for (c = 0; c < nOk; c++) {
+            if (readOk[c] == holdSentKey) {
+                usable = 1;
+            }
+        }
+        for (k = 0; usable && k < job->Count; k++) {
+            if (job->Key[k] == holdSentKey) {
+                r = &job->Res[k];
+                if (holdSentLoc < r->Map.RootLocs &&
+                    holdSentLoc < sizeof(r->Hold)) {
+                    holdNow = r->Hold[holdSentLoc];
+                }
+            }
+        }
+        verdict = tr_hold_resend_decide(holdSend.State == TR_BS_SENT, listed,
+                                        usable, holdNow, holdSentHold,
+                                        (TR_U32)holdOwedAt,
+                                        (TR_U32)GetTickCount(),
+                                        TR_BS_NOSHOW_MS);
+        if (verdict == TR_HR_SEND && iconAdded && shellV5) {
+            holdOwed = 0;
+            tray_balloon_clear();
+            (void)tray_balloon_send(TR_HOLD_TITLE, holdSentText, 1,
+                                    TRAY_BK_HOLD);
+            goto done;
+        }
+        if (verdict != TR_HR_WAIT) {
+            holdOwed = 0;
+            (void)tr_bsend_step(&holdSend, TR_BE_DROP, GetTickCount(), 0);
+        }
     }
     if (storHaveOther && GetTickCount() - storOtherAt < HOLD_GAP_MS) {
         goto done;      /* another balloon keeps the screen */
@@ -13725,7 +16083,15 @@ static void hold_done(HOLDJOB *job)
     }
     r = &job->Res[k];
     tr_hold_balloon(e.Hold, 0, e.Loc + 1, job->Name[k], text, sizeof(text));
-    tray_balloon(TR_HOLD_TITLE, text, 1);
+    tray_balloon_as(TR_HOLD_TITLE, text, 1, TRAY_BK_HOLD);
+    if (balloonSentOk) {
+        /* What a re-send repeats (task 50.7). */
+        holdOwed = 0;
+        holdSentKey = e.Key;
+        holdSentLoc = e.Loc;
+        holdSentHold = e.Hold;
+        tr_copy(holdSentText, text, sizeof(holdSentText));
+    }
     (void)tr_holdq_sent(&holdQ, &e, balloonSentOk);
 done:
     hold_free(job);
@@ -13743,7 +16109,10 @@ static void poll(void)
     int changed = 0;
     int routers = 0;
 
-    if (now == NULL) {
+    if (now == NULL || rstBusy) {
+        /* A restart is running: no handle on its controller (record 25
+         * section 27 item 4). */
+        free(now);
         return;
     }
     tr_snap_init(now);
@@ -13832,7 +16201,13 @@ static void poll(void)
         red_hc_read();
     }
     if (pollCount % HOLD_POLL_EVERY == 0) {
-        hold_poll();
+        /* Off (the default), no job and no door opened; found off, for a
+         * change made elsewhere too, nothing kept (task 50.7). */
+        if (hold_notice_on()) {
+            hold_poll();
+        } else {
+            hold_notice_off();
+        }
     }
     tray_red();
 }
@@ -13841,6 +16216,9 @@ static void tray_unit_menu(void)
 {
     HMENU m = CreatePopupMenu();
     POINT p;
+    RECT at;
+    RECT wa;
+    int width;
     int i;
     int g;
     UINT cmd;
@@ -13867,6 +16245,15 @@ static void tray_unit_menu(void)
         AppendMenuA(m, MF_STRING, IDM_FAST_SHOW, text);
         AppendMenuA(m, MF_SEPARATOR, 0, NULL);
     }
+    /* The menu opens at this point: the labels are cut to the work area of
+     * the monitor there (record 25 section 28 item 5). */
+    GetCursorPos(&p);
+    at.left = p.x;
+    at.top = p.y;
+    at.right = p.x + 1;
+    at.bottom = p.y + 1;
+    width = work_area(&at, TR_MONITOR_DEFAULTTONEAREST, &wa) ? wa.right - wa.left
+                                                              : 0;
     /* Two groups, each under a grey heading and only when it has an entry
      * (record 25 section 6.5): USB devices, then the Thunderbolt units. */
     for (g = 0; g < 2; g++) {
@@ -13880,7 +16267,9 @@ static void tray_unit_menu(void)
                     continue;
                 }
                 why = usb_why(i);
-                usb_label(i, name, sizeof(name));
+                usb_label_n(i, tr_tray_label_chars(width, why != NULL ?
+                                                   (int)strlen(why) : 0),
+                            name, sizeof(name));
             } else {
                 if (gw.N[i].UnitOf != i || gw.N[i].Parent < 0 ||
                     gw.N[gw.N[i].Parent].PortNhi < 0) {
@@ -13889,7 +16278,9 @@ static void tray_unit_menu(void)
                 /* Offered when the BIOS-held check refuses it, so that
                  * choosing it shows why (record 24 section 7.6). */
                 why = ej_offered(i) ? NULL : ej_why_not(i);
-                unit_label(i, name, sizeof(name));
+                unit_label_n(i, tr_tray_label_chars(width, why != NULL ?
+                                                    (int)strlen(why) : 0),
+                             name, sizeof(name));
             }
             if (!heading) {
                 if (trayUnitCount > 0) {
@@ -13914,9 +16305,23 @@ static void tray_unit_menu(void)
     if (trayUnitCount == 0) {
         AppendMenuA(m, MF_STRING | MF_GRAYED, 0, "No device to stop");
     }
+    /* Task 50.32 (record 25 section 27 item 10): M2 for each controller
+     * stopped after repeated failures. */
+    g = 0;
+    for (i = 0; i < ucCount && g < TR_RST_TRAY_MAX; i++) {
+        if (rst_offered(i) && !rst_blocked(i) && uc[i].RecState == 1 &&
+            (uc[i].Rec.Terminal == 2 || uc[i].Rec.Terminal == 3)) {
+            char text[200];
+            tr_sprintf(text, sizeof(text), "Restart %s...",
+                       dn_name(&gw.N[uc[i].Dn]));
+            tr_copy(trayRstIds[g], gw.N[uc[i].Dn].Id, sizeof(trayRstIds[g]));
+            AppendMenuA(m, MF_SEPARATOR, 0, NULL);
+            AppendMenuA(m, MF_STRING, IDM_RESTART0 + g, text);
+            g++;
+        }
+    }
     AppendMenuA(m, MF_SEPARATOR, 0, NULL);
     AppendMenuA(m, MF_STRING, IDM_OPEN, "Open xHCI98 USB Tree");
-    GetCursorPos(&p);
     SetForegroundWindow(hTray);
     trayInMenu = 1;
     cmd = (UINT)TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, p.x, p.y, 0,
@@ -13930,6 +16335,15 @@ static void tray_unit_menu(void)
         open_window_at(redKey);
     } else if (cmd == IDM_FAST_SHOW) {
         fast_box(NULL);
+    } else if (cmd >= IDM_RESTART0 && cmd < IDM_RESTART0 + TR_RST_TRAY_MAX) {
+        /* The controller found again by its instance ID. */
+        const char *id = trayRstIds[cmd - IDM_RESTART0];
+        for (i = 0; i < ucCount; i++) {
+            if (uc[i].Dn >= 0 && tr_eq(gw.N[uc[i].Dn].Id, id)) {
+                rst_ui(hTray, i, 1);
+                break;
+            }
+        }
     } else if (cmd >= IDM_UNIT0 && cmd < (UINT)(IDM_UNIT0 + trayUnitCount)) {
         /* The tree may have been read again while the menu was open: the
          * unit is found again by its instance ID. */
@@ -14709,6 +17123,9 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
                 tr_bkind_step(&storKind, TR_BE_SHOW);
                 stor_balloon_event(tr_bkind_fast(&storKind, 1) ? TR_BE_SHOW
                                                                : TR_BE_OTHER);
+                tr_bkind_step(&holdKind, TR_BE_SHOW);
+                hold_balloon_event(tr_bkind_fast(&holdKind, 1) ? TR_BE_SHOW
+                                                               : TR_BE_OTHER);
             }
             break;
         case WM_USER + 3:       /* NIN_BALLOONHIDE */
@@ -14719,6 +17136,8 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
                 fast_balloon_event(TR_BE_HIDE);
                 tr_bkind_step(&storKind, TR_BE_HIDE);
                 stor_balloon_event(TR_BE_HIDE);
+                tr_bkind_step(&holdKind, TR_BE_HIDE);
+                hold_balloon_event(TR_BE_HIDE);
             }
             break;
         case WM_USER + 4:       /* NIN_BALLOONTIMEOUT */
@@ -14729,6 +17148,8 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
                 fast_balloon_event(TR_BE_TIMEOUT);
                 tr_bkind_step(&storKind, TR_BE_TIMEOUT);
                 stor_balloon_event(TR_BE_TIMEOUT);
+                tr_bkind_step(&holdKind, TR_BE_TIMEOUT);
+                hold_balloon_event(TR_BE_TIMEOUT);
             }
             break;
         case WM_USER + 5: {     /* NIN_BALLOONUSERCLICK */
@@ -14750,6 +17171,8 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
                 fast_balloon_event(TR_BE_CLICK);
                 tr_bkind_step(&storKind, TR_BE_CLICK);
                 stor_balloon_event(TR_BE_CLICK);
+                tr_bkind_step(&holdKind, TR_BE_CLICK);
+                hold_balloon_event(TR_BE_CLICK);
             }
             if (onFast) {
                 fast_box(NULL);
@@ -14782,13 +17205,22 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
             fast_hold_tick();
             fast_balloon_event(TR_BE_TICK);
             stor_balloon_event(TR_BE_TICK);
+            hold_balloon_event(TR_BE_TICK);
             stor_poll();
-            stor_try_send();
+            if (!rstBusy) {
+                stor_try_send();
+            }
             tray_hover_poll();
         } else if (wp == TIMER_CHANGE) {
             KillTimer(w, TIMER_CHANGE);
-            refresh_window();
-            tray_update();
+            if (rstBusy) {
+                /* A restart's settle: no reading of its controller until
+                 * it ends (record 25 section 27 item 4); asked again. */
+                SetTimer(w, TIMER_CHANGE, 500, NULL);
+            } else {
+                refresh_window();
+                tray_update();
+            }
         }
         return 0;
     case WM_DEVICECHANGE:
@@ -14830,6 +17262,12 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
  * there is one, else a message box. */
 static void say(const char *text, int warn)
 {
+    say_titled(text, warn, "xHCI98 USB Tree");
+}
+
+/* As say, the box with its own title (the restart's B1 and B2). */
+static void say_titled(const char *text, int warn, const char *title)
+{
     HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD w;
 
@@ -14837,12 +17275,12 @@ static void say(const char *text, int warn)
         GetFileType(out) != FILE_TYPE_UNKNOWN) {
         /* Console text: at most 79 columns (record 25 section 6.5). */
         static char wrapped[16384];
-        tr_wrap(text, wrapped, sizeof(wrapped), 79);
+        tr_wrap(text, wrapped, sizeof(wrapped), 79, label_lead);
         WriteFile(out, wrapped, (DWORD)strlen(wrapped), &w, NULL);
         WriteFile(out, "\r\n", 2, &w, NULL);
         return;
     }
-    MessageBoxA(NULL, text, "xHCI98 USB Tree",
+    MessageBoxA(NULL, text, title,
                 MB_OK | (warn ? MB_ICONWARNING : MB_ICONINFORMATION));
 }
 
@@ -14995,6 +17433,7 @@ static int snap_args(int argc, char **argv, char **av, int cap)
                 : lstrcmpiA(a, "/o") == 0          ? "-o"
                 : lstrcmpiA(a, "/nosysinfo") == 0  ? "-nosysinfo"
                 : lstrcmpiA(a, "/nonet") == 0      ? "-nonet"
+                : lstrcmpiA(a, "/nokeys") == 0     ? "-nokeys"
                 : lstrcmpiA(a, "/nocm") == 0       ? "-nocm"
                 : lstrcmpiA(a, "/cmonly") == 0     ? "-cmonly"
                                                    : argv[i];
@@ -15562,7 +18001,7 @@ static int snap_all(const char *dir, const char *given, int sysinfo,
          * others). */
         tr_sprintf(args, sizeof(args), "/snapshot %s /c %d%s%s /nocm", base,
                    hcds[i], sysinfo ? "" : " /nosysinfo",
-                   i == 0 ? "" : " /nonet");
+                   i == 0 ? "" : " /nonet /nokeys");
         one[i].Rc = snap_child(args, sd, out, 120000);
         if (one[i].Rc == -2) {
             /* It may still be writing: its directory and output stay. */
@@ -15650,7 +18089,8 @@ static int report_snapshots(HANDLE f)
             ok = snap_say(f, line);
             continue;
         }
-        tr_sprintf(args, sizeof(args), "/snapshot XHCITR /c %d", hcd);
+        /* Task 50.29: the driver keys are under each device above. */
+        tr_sprintf(args, sizeof(args), "/snapshot XHCITR /c %d /nokeys", hcd);
         rc = snap_child(args, dir, out, 120000);
         if (out[0] != '\0') {
             DeleteFileA(out);
@@ -16637,6 +19077,26 @@ static int run_selftest(void)
                        "failures.", 62) == 0 &&
            strstr(tb, "\n                 ") != NULL &&
            strstr(tb, "controller restarts.") != NULL);
+        /* Task 50.5: the note under a transport of "none", wrapped. */
+        tr_text_init(&tt, tb, sizeof(tb));
+        details_note(&tt, tr_xport_none_note);
+        ST(strncmp(tb, "  Note:          This drive runs only as UAS, ", 46) ==
+               0 &&
+           strstr(tb, "\n                 ") != NULL &&
+           strstr(tb, "it may work there.") != NULL);
+        {
+            const char *ln = tb;
+            const char *nl;
+            int wide = 0;
+            while (*ln != '\0') {
+                nl = strchr(ln, '\n');
+                if ((nl != NULL ? (size_t)(nl - ln) : strlen(ln)) > 79) {
+                    wide = 1;
+                }
+                ln = nl != NULL ? nl + 1 : ln + strlen(ln);
+            }
+            ST(!wide);
+        }
         /* No buffer: nothing opened, nothing known. */
         {
             static HOLDRES hr;
@@ -16785,11 +19245,12 @@ static int wow64_handoff(int *code)
             "(Software\\xhci98) may be wrong, it does not show the devices' "
             "resources, and Eject may fail. For the full tool, put "
             "XHCITR64.EXE from the package's tools\\xhcitr folder beside it.";
+        trWow64Limited = 1;
         if (opts.Result) {
             return 0;
         }
         if (opts.Report || opts.Acpi || opts.Eject || opts.SetLevel ||
-            opts.Set) {
+            opts.Set || opts.Restart) {
             say(limits, 1);
         } else {
             MessageBoxA(NULL, limits, "xHCI98 USB Tree",
@@ -16838,7 +19299,8 @@ static int wow64_handoff(int *code)
     free(cmd);
     CloseHandle(pi.hThread);
     rc = INST_EXIT_DONE;
-    if (opts.Report || opts.Acpi || opts.Eject || opts.SetLevel || opts.Set) {
+    if (opts.Report || opts.Acpi || opts.Eject || opts.SetLevel || opts.Set ||
+        opts.Restart) {
         WaitForSingleObject(pi.hProcess, INFINITE);
         if (!GetExitCodeProcess(pi.hProcess, &rc)) {
             rc = INST_EXIT_FAILED;
@@ -16937,6 +19399,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
     }
     if (opts.Set) {
         return run_set();
+    }
+    if (opts.Restart) {
+        return run_restart();
     }
 
     /* One tray per session; a second plain start asks the first to show

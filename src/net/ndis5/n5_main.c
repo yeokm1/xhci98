@@ -202,6 +202,117 @@ static VOID netSendsQuiet(PNET_ADAPTER a, NDIS_STATUS status)
     }
 }
 
+#if defined(_M_IX86)
+#if defined(XHCI_FLAVOUR_QEMU)
+/* XhciQemuThreadExitSleep's bound: the image went 100 to 118 s after the
+ * adapter's removal (record 35 section 19), so a sleep that is to outlast
+ * it needs more than 10 s. */
+#define NET_END_SLEEP_MAX 300000UL
+
+/* A relative due time of `ms` milliseconds (at most NET_END_SLEEP_MAX),
+ * from 32-bit arithmetic. Any IRQL. */
+static VOID netEndInterval(PLARGE_INTEGER due, ULONG ms)
+{
+    ULONG ticks;
+
+    ticks = ms * 10000UL;
+    due->LowPart = 0UL - ticks;
+    due->HighPart = (ticks == 0) ? 0 : -1;
+}
+#endif
+
+/*
+ * The worker's end on 98 SE and ME (design record 35 section 19; the event
+ * form of src\hcd_ctl.c's HcdThreadEnd9x, record 15 section 4.5.22). The
+ * halt there waits for WorkExited alone and NDIS lets the image go after
+ * the adapter's removal, so the signal must be the thread's last contact
+ * with the image: the thread builds on its own stack the frames of
+ * KeSetEvent(&a->WorkExited, IO_NO_INCREMENT, FALSE) and
+ * PsTerminateSystemThread(STATUS_SUCCESS), the latter's entry as the
+ * former's return address and 0 in its own return slot (it does not
+ * return; were it to, the thread would fault at 0 rather than run on), and
+ * jumps to KeSetEvent. Both entries are read from the import table before
+ * the jump, which is the image's last instruction and comes before the
+ * signal. ESP is set back to its value at the routine's first statement
+ * before the frames are built. In the qemu flavour the record goes through
+ * the connection manager's log first, the sleep is chained between the two
+ * calls (KeDelayExecutionThread, its interval in this frame, above the
+ * chained frames: upward from the logged stack address the delay's return
+ * into PsTerminateSystemThread, KernelMode, FALSE, the interval's address,
+ * 0, STATUS_SUCCESS), and the control ends as before, the sleep an
+ * ordinary call between the signal and the end. Never returns. IRQL:
+ * PASSIVE_LEVEL, the ending worker.
+ */
+static VOID netWorkerEnd9x(PNET_ADAPTER a)
+{
+    PKEVENT kEvent;
+    ULONG aSignal;
+    ULONG aEnd;
+    ULONG aBase;
+#if defined(XHCI_FLAVOUR_QEMU)
+    ULONG aDelay;
+    ULONG sleepMs;
+    ULONG old;
+    LARGE_INTEGER interval;
+#endif
+
+    kEvent = &a->WorkExited;
+    aSignal = (ULONG)KeSetEvent;
+    aEnd = (ULONG)PsTerminateSystemThread;
+    __asm mov aBase, esp
+#if defined(XHCI_FLAVOUR_QEMU)
+    sleepMs = a->QemuEndSleepMs;
+    old = a->QemuEndOld;
+    aDelay = (ULONG)KeDelayExecutionThread;
+    netEndInterval(&interval, sleepMs);
+    NetCmLog(a, "net.end9x", ((old != 0 ? 3UL : 1UL) << 28) | sleepMs);
+    NetCmLog(a, "net.end9x.self", (ULONG)netWorkerEnd9x);
+    NetCmLog(a, "net.end9x.signal", aSignal);
+    NetCmLog(a, "net.end9x.delay", (sleepMs != 0) ? aDelay : 0UL);
+    NetCmLog(a, "net.end9x.end", aEnd);
+    NetCmLog(a, "net.end9x.stack",
+             (sleepMs != 0 && old == 0) ? aBase - 24UL : 0UL);
+    if (old != 0) {
+        /* The control: nothing of the adapter is read after the signal. */
+        (VOID)KeSetEvent(kEvent, IO_NO_INCREMENT, FALSE);
+        if (sleepMs != 0) {
+            (VOID)KeDelayExecutionThread(KernelMode, FALSE, &interval);
+        }
+        (VOID)PsTerminateSystemThread(STATUS_SUCCESS);
+    }
+    if (sleepMs != 0) {
+        __asm {
+            mov esp, aBase
+            lea eax, interval
+            push 0              /* the end: STATUS_SUCCESS */
+            push 0              /* the end: its return slot */
+            push eax            /* the sleep: Interval */
+            push 0              /* the sleep: Alertable, FALSE */
+            push 0              /* the sleep: WaitMode, KernelMode */
+            push aEnd           /* the sleep returns into the end */
+            push 0              /* KeSetEvent: Wait, FALSE */
+            push 0              /* KeSetEvent: Increment */
+            push kEvent         /* KeSetEvent: Event */
+            push aDelay         /* KeSetEvent returns into the sleep */
+            mov eax, aSignal
+            jmp eax
+        }
+    }
+#endif
+    __asm {
+        mov esp, aBase
+        push 0                  /* the end: STATUS_SUCCESS */
+        push 0                  /* the end: its return slot */
+        push 0                  /* KeSetEvent: Wait, FALSE */
+        push 0                  /* KeSetEvent: Increment */
+        push kEvent             /* KeSetEvent: Event */
+        push aEnd               /* KeSetEvent returns into the end */
+        mov eax, aSignal
+        jmp eax
+    }
+}
+#endif
+
 /* The power OIDs' work (section 7.7): Close at D3, Open at D0, then the
  * pended set completed. IRQL: PASSIVE_LEVEL. */
 static VOID netWorker(PVOID ctx)
@@ -259,17 +370,117 @@ static VOID netWorker(PVOID ctx)
             NdisMSetInformationComplete(a->Handle, status);
         }
     }
+#if defined(_M_IX86)
+    /* 98 SE and ME, where the halt joins WorkExited alone: nothing of the
+     * image runs after its signal (record 35 section 19). */
+    if (!IoIsWdmVersionAvailable(1, 0x10)) {
+        netWorkerEnd9x(a);
+    }
+#endif
     (VOID)KeSetEvent(&a->WorkExited, IO_NO_INCREMENT, FALSE);
     (VOID)PsTerminateSystemThread(STATUS_SUCCESS);
 }
 
 static VOID netStopWorker(PNET_ADAPTER a);
 
+#if defined(XHCI_FLAVOUR_QEMU)
+/* A qemu-only value of the adapter's key, 0 when absent: task 50.27's
+ * XhciQemuThreadRefNet, the reference attempts of the worker's start to
+ * count as failed; and on x86 the worker's end on 98 SE and ME (record 35
+ * section 19), XhciQemuThreadExitSleep and XhciQemuThreadExitOld. Never
+ * written by an INF. IRQL: PASSIVE_LEVEL. */
+static ULONG netReadQemuDword(NDIS_HANDLE wcc, PNDIS_STRING name)
+{
+    PNDIS_CONFIGURATION_PARAMETER p;
+    NDIS_HANDLE cfg;
+    NDIS_STATUS status;
+    ULONG v = 0;
+
+    NdisOpenConfiguration(&status, &cfg, wcc);
+    if (status != NDIS_STATUS_SUCCESS) {
+        return 0;
+    }
+    NdisReadConfiguration(&status, &p, cfg, name, NdisParameterInteger);
+    if (status == NDIS_STATUS_SUCCESS &&
+        p->ParameterType == NdisParameterInteger) {
+        v = (ULONG)p->ParameterData.IntegerData;
+    }
+    NdisCloseConfiguration(cfg);
+    return v;
+}
+
 /* IRQL: PASSIVE_LEVEL. */
-static NDIS_STATUS netStartWorker(PNET_ADAPTER a)
+static ULONG netReadQemuThreadRef(NDIS_HANDLE wcc)
+{
+    NDIS_STRING name = NDIS_STRING_CONST("XhciQemuThreadRefNet");
+    ULONG v;
+
+    v = netReadQemuDword(wcc, &name);
+    return (v > 1000) ? 1000UL : v;
+}
+
+#if defined(_M_IX86)
+/* IRQL: PASSIVE_LEVEL, the initialisation. */
+static VOID netReadQemuEnd(PNET_ADAPTER a, NDIS_HANDLE wcc)
+{
+    NDIS_STRING sleep = NDIS_STRING_CONST("XhciQemuThreadExitSleep");
+    NDIS_STRING old = NDIS_STRING_CONST("XhciQemuThreadExitOld");
+    ULONG v;
+
+    v = netReadQemuDword(wcc, &sleep);
+    a->QemuEndSleepMs = (v > NET_END_SLEEP_MAX) ? NET_END_SLEEP_MAX : v;
+    a->QemuEndOld = (netReadQemuDword(wcc, &old) == 1UL) ? 1UL : 0UL;
+}
+#endif
+#endif
+
+/*
+ * Task 50.27 (design record 15 section 4.5.21, "The thread starts' join",
+ * the rule of the three drivers' threads; src\hcd_ctl.c's
+ * HcdThreadReference): on NT the worker's object from its handle, the
+ * reference retried every 10 ms until had and the handle closed only then,
+ * so the halt always joins on the object. A NULL object type: PsThreadType
+ * is a data import. Fail-closed: a reference that never succeeds keeps the
+ * initialisation here for good, logged at the first failed attempt.
+ * Returns the failed attempts; `inject` of them are forced (the qemu
+ * flavour), each object given back. IRQL: PASSIVE_LEVEL.
+ */
+static ULONG netRefThread(PNET_ADAPTER a, HANDLE h, PVOID *object,
+                          ULONG inject)
+{
+    NTSTATUS status;
+    ULONG failed;
+
+    failed = 0;
+    for (;;) {
+        *object = NULL;
+        status = ObReferenceObjectByHandle(h, THREAD_ALL_ACCESS, NULL,
+                                           KernelMode, object, NULL);
+        if (NT_SUCCESS(status) && inject != 0) {
+            inject--;
+            ObDereferenceObject(*object);
+            *object = NULL;
+            status = STATUS_UNSUCCESSFUL;
+        }
+        if (NT_SUCCESS(status)) {
+            break;
+        }
+        failed++;
+        if (failed == 1) {
+            NetCmLog(a, "net.thread.ref.fail", (ULONG)status);
+        }
+        NdisMSleep(10000);
+    }
+    (VOID)ZwClose(h);
+    return failed;
+}
+
+/* IRQL: PASSIVE_LEVEL. */
+static NDIS_STATUS netStartWorker(PNET_ADAPTER a, ULONG inject)
 {
     HANDLE h;
     NTSTATUS status;
+    ULONG failed;
 
     KeInitializeEvent(&a->WorkEvent, NotificationEvent, FALSE);
     KeInitializeEvent(&a->WorkExited, NotificationEvent, FALSE);
@@ -281,27 +492,18 @@ static NDIS_STATUS netStartWorker(PNET_ADAPTER a)
     }
     /* The join differs by target, as src\cm\cm_thr.c's: the thread
      * object on NT (WDM 1.10 and later), whose signal alone says the
-     * thread has left the image; the exit event on Windows 98 and ME,
-     * where a wait on a thread object faults (win98-wdm.md). */
-    status = STATUS_SUCCESS;
+     * thread has left the image, always had (netRefThread; until task
+     * 50.27 a failed reference failed the start and left only the exit
+     * event, set before PsTerminateSystemThread, to wait on); the exit
+     * event on Windows 98 and ME, where a wait on a thread object faults
+     * (win98-wdm.md). */
     if (IoIsWdmVersionAvailable(1, 0x10)) {
-        status = ObReferenceObjectByHandle(h, THREAD_ALL_ACCESS, NULL,
-                                           KernelMode, &a->WorkThread,
-                                           NULL);
-        if (!NT_SUCCESS(status)) {
-            a->WorkThread = NULL;
+        failed = netRefThread(a, h, &a->WorkThread, inject);
+        if (failed != 0) {
+            NetCmLog(a, "net.thread.ref.retry", failed);
         }
-    }
-    (VOID)ZwClose(h);
-    if (!NT_SUCCESS(status)) {
-        /* NT without the object: the residual src\cm\cm_thr.c keeps from
-         * hcd_ctl.c (CmThrStart): the initialisation fails, the thread is
-         * told to leave and its exit event waited for. The event precedes
-         * PsTerminateSystemThread by a few instructions, the one window
-         * this path leaves; an unload follows the failed start only after
-         * NDIS has torn the adapter down. */
-        netStopWorker(a);
-        return NDIS_STATUS_RESOURCES;
+    } else {
+        (VOID)ZwClose(h);
     }
     return NDIS_STATUS_SUCCESS;
 }
@@ -429,7 +631,14 @@ static NDIS_STATUS netInitialize(PNDIS_STATUS openError, PUINT medium,
         netFreeAdapter(a);
         return status;
     }
-    status = netStartWorker(a);
+#if defined(XHCI_FLAVOUR_QEMU)
+#if defined(_M_IX86)
+    netReadQemuEnd(a, wcc);
+#endif
+    status = netStartWorker(a, netReadQemuThreadRef(wcc));
+#else
+    status = netStartWorker(a, 0);
+#endif
     if (status != NDIS_STATUS_SUCCESS) {
         netFreeAdapter(a);
         return status;

@@ -3433,6 +3433,124 @@ static void test_event_lost_is_fatal(void)
              "as a controller error");
 }
 
+/*
+ * Task 50.30 step 1 (design record 17 section 4.15.8): `Fatal` is the code's,
+ * set before the pointer is resolved; `Matched` is the pointer's, set only
+ * once the event resolves onto a TD queued on this queue. The caller names a
+ * device for a fatal code only with both, so an Event Lost or an Undefined
+ * Error inside no TD - its pointer zero, off the ring, or past every queued
+ * TD, or on a pipe with nothing queued - escalates without naming the device
+ * whose pipe the event's Slot ID and DCI reach. EP0 (DCI 1) and an ordinary
+ * pipe (an interrupt IN on DCI 3) take the same engine and are both read.
+ */
+#define FATAL_PIPE_DCI 3
+
+static ULONG deliver_at(XFER_FIXTURE *fix, ULONG dci, ULONG pa, ULONG code,
+                        PXHCI_XFER_EVENT_RESULT result)
+{
+    return XhciXferEvent(&fix->queue, &fix->ring, FIX_SLOT, dci, pa,
+                         event_dw2(code, 0), event_dw3(FIX_SLOT, dci), result);
+}
+
+static void fatal_matched_case(ULONG dci, ULONG code, const char *what)
+{
+    XFER_FIXTURE fix;
+    XHCI_XFER_EVENT_RESULT result;
+    ULONG last;
+
+    /* Matched: the event names the TD's last TRB. */
+    fixture_init(&fix, 32);
+    if (dci == 1) {
+        CHECK_EQ(fixture_submit_in(&fix, 0, 18), XHCI_XFER_OK, what);
+        last = 2;
+    } else {
+        CHECK_EQ(fixture_submit_interrupt(&fix, 0, 8), XHCI_XFER_OK, what);
+        last = 0;
+    }
+    CHECK_EQ(deliver_at(&fix, dci, XhciRingTrbPA(&fix.ring, last), code,
+                        &result),
+             XHCI_XFER_OK, what);
+    CHECK_EQ(result.Fatal, 1, what);
+    CHECK_EQ(result.Matched, 1, what);
+    CHECK_EQ(result.Unattributed, 0, what);
+    CHECK_EQ(result.Code, code, what);
+
+    /* Inside no TD: an index on this ring past the one queued TD. */
+    fixture_init(&fix, 32);
+    if (dci == 1) {
+        CHECK_EQ(fixture_submit_in(&fix, 0, 18), XHCI_XFER_OK, what);
+    } else {
+        CHECK_EQ(fixture_submit_interrupt(&fix, 0, 8), XHCI_XFER_OK, what);
+    }
+    CHECK_EQ(deliver_at(&fix, dci, XhciRingTrbPA(&fix.ring, 10), code,
+                        &result),
+             XHCI_XFER_OK, what);
+    CHECK_EQ(result.Fatal, 1, what);
+    CHECK_EQ(result.Matched, 0, what);
+    CHECK_EQ(result.Unattributed, 1, what);
+    CHECK_EQ(fix.queue.Count, 1, what);
+
+    /* A zero pointer: an error the xHC could not attribute to a TRB. */
+    CHECK_EQ(deliver_at(&fix, dci, 0, code, &result), XHCI_XFER_OK, what);
+    CHECK_EQ(result.Fatal, 1, what);
+    CHECK_EQ(result.Matched, 0, what);
+    CHECK_EQ(result.Unattributed, 1, what);
+
+    /* An address on no ring of this queue. */
+    CHECK_EQ(deliver_at(&fix, dci, 0x0E000000UL, code, &result), XHCI_XFER_OK,
+             what);
+    CHECK_EQ(result.Fatal, 1, what);
+    CHECK_EQ(result.Matched, 0, what);
+    CHECK_EQ(fix.queue.Count, 1, what);
+
+    /* An open pipe with nothing queued: the event's pointer names the TRB a
+     * TD once held, and no TD holds it now. */
+    fixture_init(&fix, 32);
+    CHECK_EQ(deliver_at(&fix, dci, XhciRingTrbPA(&fix.ring, 0), code,
+                        &result),
+             XHCI_XFER_OK, what);
+    CHECK_EQ(result.Fatal, 1, what);
+    CHECK_EQ(result.Matched, 0, what);
+    CHECK_EQ(result.Unattributed, 1, what);
+}
+
+static void test_fatal_matched_fact(void)
+{
+    XFER_FIXTURE fix;
+    XHCI_XFER_EVENT_RESULT result;
+
+    fatal_matched_case(1, XHCI_CC_EVENT_LOST, "EP0, Event Lost");
+    fatal_matched_case(1, XHCI_CC_UNDEFINED_ERROR, "EP0, Undefined Error");
+    fatal_matched_case(FATAL_PIPE_DCI, XHCI_CC_EVENT_LOST,
+                       "ordinary pipe, Event Lost");
+    fatal_matched_case(FATAL_PIPE_DCI, XHCI_CC_UNDEFINED_ERROR,
+                       "ordinary pipe, Undefined Error");
+
+    /* Matched is the pointer's fact, not the code's: a matched success has
+     * it without Fatal, and a refused code - nothing resolved - has neither. */
+    fixture_init(&fix, 32);
+    CHECK_EQ(fixture_submit_interrupt(&fix, 0, 8), XHCI_XFER_OK, "queued");
+    CHECK_EQ(deliver_at(&fix, FATAL_PIPE_DCI, XhciRingTrbPA(&fix.ring, 0), 100,
+                        &result),
+             XHCI_XFER_OK, "an unassigned code");
+    CHECK_EQ(result.Refused, 1, "refused");
+    CHECK_EQ(result.Matched, 0, "and matched to nothing");
+    CHECK_EQ(result.Fatal, 0, "nor fatal");
+    CHECK_EQ(deliver_at(&fix, FATAL_PIPE_DCI, XhciRingTrbPA(&fix.ring, 0),
+                        XHCI_CC_SUCCESS, &result),
+             XHCI_XFER_OK, "a success");
+    CHECK_EQ(result.Matched, 1, "matched");
+    CHECK_EQ(result.Fatal, 0, "and not fatal");
+    /* An event for another endpoint is foreign before any of it is read. */
+    CHECK_EQ(XhciXferEvent(&fix.queue, &fix.ring, FIX_SLOT, FATAL_PIPE_DCI,
+                           XhciRingTrbPA(&fix.ring, 0),
+                           event_dw2(XHCI_CC_EVENT_LOST, 0),
+                           event_dw3(FIX_SLOT, FATAL_PIPE_DCI + 1), &result),
+             XHCI_XFER_OK, "another DCI's event");
+    CHECK_EQ(result.Matched, 0, "matched to nothing");
+    CHECK_EQ(result.Fatal, 0, "and left to the router to escalate");
+}
+
 /* The teardown path: everything queued comes back with one status and the ring
  * is not touched, because by then the controller may not be running. */
 static void test_queue_drain(void)
@@ -5673,6 +5791,7 @@ int main(void)
     test_event_two_transfers_in_order();
     test_event_rejections();
     test_event_lost_is_fatal();
+    test_fatal_matched_fact();
     test_queue_drain();
     test_queue_owns_index();
     test_queue_stopped_latches_length();

@@ -100,7 +100,7 @@ static const char *trRedText(const TR_RED_IN *in, const TR_RED *r,
 }
 
 void tr_red_tip(const TR_RED_IN *in, const TR_RED *r, int prefix,
-                char *out, size_t cap)
+                TR_LEAD_FN lead, char *out, size_t cap)
 {
     const char *fmt;
     const char *name;
@@ -131,7 +131,7 @@ void tr_red_tip(const TR_RED_IN *in, const TR_RED *r, int prefix,
     room = cap - 1 > fixed ? cap - 1 - fixed : 0;
     n = strlen(name);
     if (n >= sizeof(cut)) {
-        n = sizeof(cut) - 1;
+        n = tr_char_floor(name, sizeof(cut) - 1, lead);
     }
     if (n == 0) {
         tr_copy(cut, generic, sizeof(cut));
@@ -139,8 +139,9 @@ void tr_red_tip(const TR_RED_IN *in, const TR_RED *r, int prefix,
         memcpy(cut, name, n);
         cut[n] = '\0';
     } else if (room >= 4) {
-        memcpy(cut, name, room - 3);
-        memcpy(cut + room - 3, "...", 4);
+        n = tr_char_floor(name, room - 3, lead);
+        memcpy(cut, name, n);
+        memcpy(cut + n, "...", 4);
     } else {
         tr_copy(cut, generic, sizeof(cut));
     }
