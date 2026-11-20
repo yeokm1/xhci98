@@ -70,6 +70,20 @@ static void check_directory(const DIR_UNDER_TEST *d)
     CHECK(shape == 0, what);
     sprintf(what, "%s: no two fields overlap", d->Name);
     CHECK(overlap == 0, what);
+    /* Every UUID listed is hashed, never its words (record 21 section 8.4's
+       identity rule): a member whose name ends in "Uuid" - a router's own,
+       a link's child, a port's as recorded at a suspend - carries
+       CM_QS_FD_HASH and width 0. */
+    for (i = 0; i < d->Count; i++) {
+        size_t len = strlen(d->Fields[i].Name);
+        if (len >= 4 && strcmp(d->Fields[i].Name + len - 4, "Uuid") == 0 &&
+            (d->Fields[i].Width != 0 ||
+             (d->Fields[i].Flags & CM_QS_FD_HASH) == 0)) {
+            sprintf(what, "%s: a UUID listed unhashed: %s", d->Name,
+                    d->Fields[i].Name);
+            CHECK(0, what);
+        }
+    }
     /* No held packet's words (a TBT_FRAME's Dw: UUIDs and property
        blocks travel in them). */
     for (i = 0; i < d->Count; i++) {

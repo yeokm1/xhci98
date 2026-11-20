@@ -414,3 +414,82 @@ VOID XhciMsg4PackReasons(const UCHAR *reasons16, PULONG words4)
         }
     }
 }
+
+/* ------------------------------------------------------------------ */
+/* A refused start's record (section 4.5.20)                           */
+/* ------------------------------------------------------------------ */
+
+ULONG XhciMsg4IsStartRefusal(ULONG failed, ULONG delivery, ULONG reason)
+{
+    if (!failed || delivery != XHCI_POLL_DELIVERY_NONE) {
+        return 0;
+    }
+    switch (reason) {
+    case XHCI_POLL_R_MSG4_NO_SYSTEM:
+    case XHCI_POLL_R_MSG4_NO_LINE:
+    case XHCI_POLL_R_MSG4_AVOIDED:
+    case XHCI_POLL_R_MSG4_SHARED:
+    case XHCI_POLL_R_MSG4_REFUSED:
+    case XHCI_POLL_R_MSG4_QUARANTINED:
+    case XHCI_POLL_R_MSG4_VALUE_INVALID:
+    case XHCI_POLL_R_MSG4_NO_INTERRUPT:
+    case XHCI_POLL_R_MSG4_NO_IRQ:
+    case XHCI_POLL_R_MSG4_CLAIM_REFUSED:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+VOID XhciMsg4RecordBuild(const XHCI_M4REC_IN *in, PULONG words)
+{
+    ULONG i;
+
+    for (i = 0; i < XHCI_M4REC_WORDS; i++) {
+        words[i] = 0;
+    }
+    words[0] = XHCI_M4REC_MAGIC;
+    words[1] = XHCI_M4REC_VERSION | (XHCI_M4REC_WORDS << 16);
+    words[XHCI_M4REC_AT_STATE] =
+        (in->State == XHCI_M4REC_REFUSED) ? XHCI_M4REC_REFUSED
+                                          : XHCI_M4REC_CLEARED;
+    words[3] = in->TimeLo;
+    words[4] = in->TimeHi;
+    words[6] = (in->System & 0xFFUL) | ((in->Flavour & 0xFFUL) << 8);
+    words[7] = in->DriverVersion;
+    if (in->State != XHCI_M4REC_REFUSED) {
+        return;
+    }
+    words[5] = in->Status;
+    words[8] = in->Location;
+    for (i = 0; i < XHCI_M4REC_POLL_WORDS; i++) {
+        words[XHCI_M4REC_AT_POLL + i] = (in->Poll != NULL) ? in->Poll[i] : 0;
+    }
+    words[XHCI_M4REC_AT_CONNECT] = in->ConnectStatus;
+    for (i = 0; i < XHCI_M4REC_MSG4_WORDS; i++) {
+        words[XHCI_M4REC_AT_MSG4 + i] = (in->Msg4 != NULL) ? in->Msg4[i] : 0;
+    }
+}
+
+ULONG XhciMsg4RecordState(ULONG present, ULONG binary, const UCHAR *data,
+                          ULONG length)
+{
+    ULONG state;
+
+    if (!present) {
+        return XHCI_M4REC_ABSENT;
+    }
+    if (!binary || data == NULL || length < XHCI_M4REC_BYTES ||
+        xhciMsg4Le32(data) != XHCI_M4REC_MAGIC ||
+        (xhciMsg4Le32(data + 4) & 0xFFFFUL) != XHCI_M4REC_VERSION) {
+        return XHCI_M4REC_FOREIGN;
+    }
+    state = xhciMsg4Le32(data + XHCI_M4REC_AT_STATE * 4);
+    if (state == XHCI_M4REC_CLEARED) {
+        return XHCI_M4REC_IS_CLEARED;
+    }
+    if (state == XHCI_M4REC_REFUSED) {
+        return XHCI_M4REC_IS_REFUSED;
+    }
+    return XHCI_M4REC_FOREIGN;
+}

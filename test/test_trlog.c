@@ -8,13 +8,15 @@
  * a full ring's cut, level 4 shown as at 2 and 3 (3.5.0.0); the address
  * values of xhcicm's log withheld below level 4 and served at 4; the HCD
  * region's counters, and
- * their names held to src\xhci_counters.h field by field.
+ * their names held to src\xhci_counters.h field by field; and the IRQ
+ * XhciInterruptMode 4 claimed, read from the counters (task 50.18).
  */
 
 #include <stdio.h>
 #include <string.h>
 #include <stddef.h>
 #include "../src/xhci_counters.h"
+#include "../src/xhci_poll.h"
 #include "../src/cm/cm_qryb.h"
 #include "../xhcitr/tr_log.h"
 #include "test_harness.h"
@@ -375,6 +377,83 @@ static void test_counters(void)
     CHECK_EQ(tr_hcd_counters_text(&t, NULL, 0), 0, "none");
 }
 
+/* ---- the IRQ XhciInterruptMode 4 claimed (task 50.18) ------------------ */
+
+static void m4_block(XHCIHC_COUNTERS *c)
+{
+    memset(c, 0, sizeof(*c));
+    c->IntrMode = 4;
+    c->IntrDelivery = XHCI_POLL_DELIVERY_MSI;
+    c->IntrReason = XHCI_POLL_R_FORCED_MSG4;
+    c->Msg4Irq = 7;
+    c->Msg4Members = 1;
+    c->Msg4ClaimStatus = 0;
+}
+
+static void test_msg4_irq(void)
+{
+    static XHCIHC_COUNTERS c;
+    const unsigned char *b = (const unsigned char *)&c;
+
+    CHECK_EQ(TR_HCW_INTR_MODE * 4, offsetof(XHCIHC_COUNTERS, IntrMode),
+             "m4: IntrMode's word");
+    CHECK_EQ(TR_HCW_INTR_DELIVERY * 4,
+             offsetof(XHCIHC_COUNTERS, IntrDelivery), "m4: IntrDelivery's");
+    CHECK_EQ(TR_HCW_INTR_REASON * 4, offsetof(XHCIHC_COUNTERS, IntrReason),
+             "m4: IntrReason's");
+    CHECK_EQ(TR_HCW_MSG4_IRQ * 4, offsetof(XHCIHC_COUNTERS, Msg4Irq),
+             "m4: Msg4Irq's");
+    CHECK_EQ(TR_HCW_MSG4_CLAIM * 4,
+             offsetof(XHCIHC_COUNTERS, Msg4ClaimStatus), "m4: the claim's");
+    CHECK_EQ(TR_HCW_MSG4_LOST * 4, offsetof(XHCIHC_COUNTERS, Msg4Lost),
+             "m4: Msg4Lost's");
+
+    m4_block(&c);
+    CHECK_EQ(tr_msg4_claimed_irq(b, sizeof(c)), 7, "m4: IRQ 7 claimed");
+    c.IntrDelivery = XHCI_POLL_DELIVERY_MSIX;
+    c.Msg4Irq = 40;
+    CHECK_EQ(tr_msg4_claimed_irq(b, sizeof(c)), 40,
+             "m4: an input above 23, MSI-X");
+    CHECK_EQ(tr_msg4_claimed_irq(b, (TR_HCW_MSG4_LOST + 1) * 4), 40,
+             "m4: a block just long enough");
+    CHECK_EQ(tr_msg4_claimed_irq(b, TR_HCW_MSG4_LOST * 4), 0,
+             "m4: a driver before mode 4");
+    CHECK_EQ(tr_msg4_claimed_irq(NULL, sizeof(c)), 0, "m4: no block");
+    CHECK_EQ(tr_msg4_claimed_irq(b, 0), 0, "m4: level 0, no counters");
+
+    m4_block(&c);
+    c.IntrMode = 0;
+    c.IntrReason = XHCI_POLL_R_AUTO;
+    c.IntrDelivery = XHCI_POLL_DELIVERY_LINE;
+    CHECK_EQ(tr_msg4_claimed_irq(b, sizeof(c)), 0, "m4: the line");
+    m4_block(&c);
+    c.IntrMode = 2;
+    c.IntrReason = XHCI_POLL_R_FORCED_POLL;
+    c.IntrDelivery = XHCI_POLL_DELIVERY_POLL;
+    CHECK_EQ(tr_msg4_claimed_irq(b, sizeof(c)), 0, "m4: polling");
+    m4_block(&c);
+    c.IntrMode = 3;
+    c.IntrReason = XHCI_POLL_R_FORCED_MESSAGE;
+    CHECK_EQ(tr_msg4_claimed_irq(b, sizeof(c)), 0, "m4: mode 3's MSI");
+    m4_block(&c);
+    c.IntrReason = XHCI_POLL_R_MSG4_NO_IRQ;
+    c.IntrDelivery = XHCI_POLL_DELIVERY_NONE;
+    CHECK_EQ(tr_msg4_claimed_irq(b, sizeof(c)), 0, "m4: a refused start");
+    m4_block(&c);
+    c.IntrDelivery = XHCI_POLL_DELIVERY_MESSAGE;
+    CHECK_EQ(tr_msg4_claimed_irq(b, sizeof(c)), 0, "m4: not yet connected");
+    m4_block(&c);
+    c.Msg4ClaimStatus = 4;
+    CHECK_EQ(tr_msg4_claimed_irq(b, sizeof(c)), 0, "m4: the claim refused");
+    m4_block(&c);
+    c.Msg4Irq = 0;
+    CHECK_EQ(tr_msg4_claimed_irq(b, sizeof(c)), 0,
+             "m4: strategy 1, the line borrowed");
+    m4_block(&c);
+    c.Msg4Lost = 1;
+    CHECK_EQ(tr_msg4_claimed_irq(b, sizeof(c)), 0, "m4: the message lost");
+}
+
 int main(void)
 {
     test_names();
@@ -382,6 +461,7 @@ int main(void)
     test_request();
     test_window();
     test_counters();
+    test_msg4_irq();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

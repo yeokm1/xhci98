@@ -178,7 +178,7 @@ rem The OS supplies usbd.sys and usbui.dll through the INF's LayoutFile. The
 rem HCD replaces usbport.sys and usbhub.sys, and the INF gate refuses an INF
 rem that fetches either (OS-HCDREPLACED).
 rem
-rem Usage:  scripts\build-driver.cmd [release|qemu|all|stor98]
+rem Usage:  scripts\build-driver.cmd [release|qemu|all|cut|stor98]
 rem                                  [-amd64] [-NoTargetEvidence]
 rem                                                       (default: release)
 rem
@@ -197,8 +197,11 @@ rem   binary is built, gated or touched.
 rem
 rem   "release" is the default deliberately: widening it would build a binary
 rem   that must never be published on every ordinary run.  "all" is the two,
-rem   and is what a release cut uses so that every flavor is gated even though
-rem   only release is staged.
+rem   with every self-test in full and every tool built (below).  "cut" is
+rem   what a release cut uses since roadmap-usb4 task 50.1 (owner,
+rem   2026-11-14: "just release build will do"): the release flavour alone,
+rem   run as "all" runs it, so the qemu flavour a cut never publishes is not
+rem   built; nothing the cut or make-package.ps1 -SignOnly reads needs it.
 rem
 rem   The DDK and MSVC 6.0 both live inside this repository - tools\ntddk and
 rem   tools\MSVC600 - and are found relative to this script, so a
@@ -290,20 +293,24 @@ rem release: refused by name, before a single self-test, rather than read as
 rem release, which would hide a caller that still expects two binaries.
 if /i "%FLAVORS%"=="both" goto retiredflavor
 if /i "%FLAVORS%"=="debug" goto retiredflavor
-rem "all" is what a cut builds (cut-builds.ps1, or by hand for -ImportOnly or
-rem a one-tree cut), so it runs every self-test in full: the INF gate's
+rem "cut" is what a cut builds (cut-builds.ps1 and pre-cut.ps1, or by hand
+rem for -ImportOnly or a one-tree cut; task 50.1), and "all" was until then:
+rem both run every self-test in full: the INF gate's
 rem self-tests skip themselves when nothing they read has changed since
 rem their last passing run, except under this (roadmap-usb4 task 45.30).
 rem A pre-merge build of a branch sets XHCI98_SELFTEST_SKIP_OK=1 to let that
-rem skip stand in an "all" build too; a cut never sets it, and
+rem skip stand in an "all" or "cut" build too; a cut never sets it, and
 rem XHCI98_FULL_SELFTESTS=1 set by the caller still wins (owner, 2026-10-30).
-if /i "%FLAVORS%"=="all" if not "%XHCI98_SELFTEST_SKIP_OK%"=="1" set "XHCI98_FULL_SELFTESTS=1"
-rem An "all" run also builds every tool whose self-test it runs and fails a
-rem tool self-test whose EXE is still missing (build-steps.ps1 -All), whatever
-rem XHCI98_SELFTEST_SKIP_OK says; a release or qemu run passes such a step
-rem over and lists it at the end (task 49.26).
 set "ALLRUN="
+if /i "%FLAVORS%"=="cut" set "ALLRUN=-All"
 if /i "%FLAVORS%"=="all" set "ALLRUN=-All"
+if defined ALLRUN if not "%XHCI98_SELFTEST_SKIP_OK%"=="1" set "XHCI98_FULL_SELFTESTS=1"
+rem An "all" or "cut" run also builds every tool whose self-test it runs and
+rem fails a tool self-test whose EXE is still missing (build-steps.ps1 -All),
+rem whatever XHCI98_SELFTEST_SKIP_OK says; a release or qemu run passes such
+rem a step over and lists it at the end (task 49.26). "cut" then builds the
+rem release flavour alone, "all" release and qemu.
+if /i "%FLAVORS%"=="cut" set "FLAVORS=release"
 if /i "%FLAVORS%"=="all" set "FLAVORS=release qemu"
 rem The Stor98-only run (task 48.9): both flavours' records, which each name
 rem the Stor98 images, are amended or deleted (:stor98only).
@@ -497,8 +504,8 @@ rem self-tests, the INF, UAS, CM, Stor98 and txtsetup.oem gates with their
 rem self-tests, the packager's, the QEMU launchers' and the VM matrix's
 rem self-tests, the Stor98 interface header, on the x86 run XHCITR and
 rem XHCIPERF rebuilt (XHCITR compiles the installer's pure half, so a cut
-rem never needs it built by hand) and their self-tests; in an "all" run
-rem also XHCIMARK, XHCIINST and XHCIDI rebuilt, and on amd64 XHCITR
+rem never needs it built by hand) and their self-tests; in an "all" or
+rem "cut" run also XHCIMARK, XHCIINST and XHCIDI rebuilt, and on amd64 XHCITR
 rem and XHCIPERF, so none of the tool self-tests below can be passed over
 rem (one whose EXE is still missing fails); the XHCIINST,
 rem XHCIMARK and XHCIDI self-tests when their EXEs are there, the host suite
@@ -1477,12 +1484,13 @@ endlocal
 exit /b 1
 
 :badflavor
-echo ERROR: unknown build flavor "%FLAVOR%" - use release, qemu or all.
+echo ERROR: unknown build flavor "%FLAVOR%" - use release, qemu, all or cut.
 echo (The flavor formerly called "standard" is now "release".
 echo It is a hard cut: the old word is not accepted.)
 echo (There are TWO flavors since task 45.45: release ships and is the
 echo default; "all" adds qemu, which carries the port-0xE9 mirror and must
-echo NEVER be published. debug and both were retired with it.)
+echo NEVER be published; "cut" is release as a cut builds it. debug and
+echo both were retired with it.)
 echo (The DDK's own words are free and checked; this project uses them only
 echo where setenv.bat forces it - see :flavordirs.)
 endlocal

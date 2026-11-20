@@ -69,6 +69,10 @@ static NTSTATUS hcdStart(PHCD_CONTROLLER hc, PIRP irp)
                     (hc->ControllerStarted ? 1UL : 0UL) |
                         (hc->MapQuarantined ? 2UL : 0UL));
         if (hc->ControllerStarted) {
+            /* Task 50.31 (design record 38 section 7.5): the live
+             * lifetime ends here, so the leave flag first. */
+            HcdRetryLeave(hc, XHCI_RETRY_PNP_START_LIVE,
+                          XHCI_RETRY_PHASE_ENTRY, XHCI_RETRY_OUT_OK);
             HcdDoorControllerStop(hc);
             HcdStopController(hc);
             hc->Common.PnpState = HCD_PNP_STOPPED;
@@ -120,6 +124,12 @@ static NTSTATUS hcdRemove(PHCD_CONTROLLER hc, PIRP irp)
 {
     NTSTATUS status;
 
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* Record 17 section 4.15.16 E: fault 2D's exercise ended, by its
+     * hand-off with no reconnection, before anything of the removal; a
+     * terminal request, never lowered (the extension goes after it). */
+    HcdInjRealEnter(hc, IRP_MN_REMOVE_DEVICE, 1);
+#endif
     /*
      * Admission closes first, then what holds the outstanding-I/O count is
      * waited out, and only then is the controller stopped and its resources
@@ -131,6 +141,11 @@ static NTSTATUS hcdRemove(PHCD_CONTROLLER hc, PIRP irp)
      * forwarded. The bias AddDevice set is dropped here.
      */
     hc->Common.PnpState = HCD_PNP_REMOVED;
+    /* Task 50.30 step 3 (design record 17 section 4.15.3): a removal with
+     * no surprise removal first (98 SE and ME report a departed controller
+     * with this IRP alone) ends the thread's command wait before the
+     * outstanding I/O is waited out below. Never cleared. */
+    HcdEnumLeaveRaise(hc, HCD_LEAVE_REMOVE);
     /* Task 49.24 (record 15 sections 4.5.4 and 4.5.17): mode 4's flag
      * closed before the outstanding I/O is waited out, the causes masked
      * first where the controller is proven still there: 98 SE and ME
@@ -179,6 +194,9 @@ NTSTATUS HcdControllerPnp(PHCD_CONTROLLER hc, PIRP irp)
 {
     PIO_STACK_LOCATION stack;
     NTSTATUS status;
+#if defined(XHCI_FLAVOUR_QEMU)
+    ULONG bracketed;
+#endif
 
     stack = IoGetCurrentIrpStackLocation(irp);
     XHCI_DBG_VALUE("hcd: controller PnP minor", stack->MinorFunction);
@@ -192,12 +210,48 @@ NTSTATUS HcdControllerPnp(PHCD_CONTROLLER hc, PIRP irp)
     }
 
     if (stack->MinorFunction == IRP_MN_REMOVE_DEVICE) {
+        /* Task 50.31 (design record 38 section 7.5): every path that ends
+         * or may end the lifetime publishes the leave flag first, under the
+         * controller lock, before its own work and its PnP state; 98 SE and
+         * ME's removal with no surprise removal before it included. */
+        HcdRetryLeave(hc, XHCI_RETRY_PNP_REMOVE, XHCI_RETRY_PHASE_ENTRY,
+                      XHCI_RETRY_OUT_OK);
         return hcdRemove(hc, irp);
     }
 
     if (!HcdIoEnter(hc)) {
         return HcdCompleteIrp(irp, STATUS_DELETE_PENDING, 0);
     }
+
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* Record 17 section 4.15.16 E: every minor that could overlap fault
+     * 2D's driver call or end what it uses meets an exercise left
+     * consistent - a stop, a surprise removal and a START of a started
+     * controller (which stops it) terminal - and leaves the bracket where
+     * its handling ends, below. */
+    bracketed = 0;
+    switch (stack->MinorFunction) {
+    case IRP_MN_START_DEVICE:
+    case IRP_MN_QUERY_STOP_DEVICE:
+    case IRP_MN_CANCEL_STOP_DEVICE:
+    case IRP_MN_QUERY_REMOVE_DEVICE:
+    case IRP_MN_CANCEL_REMOVE_DEVICE:
+    case IRP_MN_STOP_DEVICE:
+    case IRP_MN_SURPRISE_REMOVAL:
+        bracketed = 1;
+        HcdInjRealEnter(
+            hc, stack->MinorFunction,
+            (stack->MinorFunction == IRP_MN_STOP_DEVICE ||
+             stack->MinorFunction == IRP_MN_SURPRISE_REMOVAL ||
+             (stack->MinorFunction == IRP_MN_START_DEVICE &&
+              hc->ControllerStarted))
+                ? 1UL
+                : 0UL);
+        break;
+    default:
+        break;
+    }
+#endif
 
     switch (stack->MinorFunction) {
     case IRP_MN_START_DEVICE:
@@ -209,10 +263,21 @@ NTSTATUS HcdControllerPnp(PHCD_CONTROLLER hc, PIRP irp)
         /* Task 49.24 (design record 15 section 4.5.4): under mode 4 on NT
          * 5 the message is released at the query-stop, which a release
          * that cannot prove it off refuses; a released query is sent down
-         * and waited for, so a lower driver's refusal reconnects at once. */
+         * and waited for, so a lower driver's refusal reconnects at once.
+         * Task 50.31: the leave flag before HcdMsg4QueryStop, which waits
+         * for the power gate; cleared where the query is refused, locally
+         * after the connection is restored or latched, or below. */
+        HcdRetryLeave(hc,
+                      (stack->MinorFunction == IRP_MN_QUERY_STOP_DEVICE)
+                          ? XHCI_RETRY_PNP_QUERY_STOP
+                          : XHCI_RETRY_PNP_QUERY_REMOVE,
+                      XHCI_RETRY_PHASE_ENTRY, XHCI_RETRY_OUT_OK);
         if (stack->MinorFunction == IRP_MN_QUERY_STOP_DEVICE) {
             status = HcdMsg4QueryStop(hc);
             if (!NT_SUCCESS(status)) {
+                HcdRetryLeave(hc, XHCI_RETRY_PNP_QUERY_STOP,
+                              XHCI_RETRY_PHASE_OUTCOME,
+                              XHCI_RETRY_OUT_REFUSED_LOCAL);
                 status = HcdCompleteIrp(irp, status, 0);
                 break;
             }
@@ -224,6 +289,9 @@ NTSTATUS HcdControllerPnp(PHCD_CONTROLLER hc, PIRP irp)
                 if (!NT_SUCCESS(status)) {
                     HcdMsg4CancelStop(hc);
                     hc->Common.PnpState = hc->Common.PnpStateBeforeQuery;
+                    HcdRetryLeave(hc, XHCI_RETRY_PNP_QUERY_STOP,
+                                  XHCI_RETRY_PHASE_OUTCOME,
+                                  XHCI_RETRY_OUT_REFUSED_BELOW);
                 }
                 status = HcdCompleteIrp(irp, status, irp->IoStatus.Information);
                 break;
@@ -246,11 +314,18 @@ NTSTATUS HcdControllerPnp(PHCD_CONTROLLER hc, PIRP irp)
             hc->Common.PnpState == HCD_PNP_REMOVE_PENDING) {
             hc->Common.PnpState = hc->Common.PnpStateBeforeQuery;
         }
+        HcdRetryLeave(hc,
+                      (stack->MinorFunction == IRP_MN_CANCEL_STOP_DEVICE)
+                          ? XHCI_RETRY_PNP_CANCEL_STOP
+                          : XHCI_RETRY_PNP_CANCEL_REMOVE,
+                      XHCI_RETRY_PHASE_OUTCOME, XHCI_RETRY_OUT_OK);
         irp->IoStatus.Status = STATUS_SUCCESS;
         status = HcdPassDown(hc, irp);
         break;
 
     case IRP_MN_STOP_DEVICE:
+        HcdRetryLeave(hc, XHCI_RETRY_PNP_STOP, XHCI_RETRY_PHASE_ENTRY,
+                      XHCI_RETRY_OUT_OK);
         HcdDoorControllerStop(hc);
         /* An orderly stop keeps the children PnP stopped first (hcd_pdo.c,
          * HcdDevicePdoDormantAll); a removal, a surprise removal, a reset's
@@ -264,6 +339,8 @@ NTSTATUS HcdControllerPnp(PHCD_CONTROLLER hc, PIRP irp)
         break;
 
     case IRP_MN_SURPRISE_REMOVAL:
+        HcdRetryLeave(hc, XHCI_RETRY_PNP_SURPRISE, XHCI_RETRY_PHASE_ENTRY,
+                      XHCI_RETRY_OUT_OK);
         HcdDoorControllerStop(hc);
         /* Task 49.24 (record 15 section 4.5.4, "Surprise removal"): mode
          * 4's readiness flag cleared first, under the interrupt object's
@@ -330,6 +407,11 @@ NTSTATUS HcdControllerPnp(PHCD_CONTROLLER hc, PIRP irp)
         break;
     }
 
+#if defined(XHCI_FLAVOUR_QEMU)
+    if (bracketed) {
+        HcdInjRealLeave(hc);
+    }
+#endif
     HcdIoLeave(hc);
     return status;
 }

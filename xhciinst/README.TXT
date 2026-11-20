@@ -608,8 +608,13 @@ XhciCmSafeEject (with the Thunderbolt support), and
 XhciCmAsm4242Structural (98 SE and ME, with an ASMedia ASM4242 whose
 firmware Setup does not know as a known build). docs/using/tuning.md
 says what each does. A change takes effect at the
-driver's next start. Advanced... on each tab has the settings to change
-only if the release notes advise it. On the USB tab: XhciInterruptMode,
+driver's next start; with XhciIntelPortSwitch on, on Windows 2000 and
+later, the shared connectors can move at a later start of Windows, once
+Windows Setup has finished and Windows has been restarted since the
+switchover was first turned on (docs/using/tuning.md says when). Advanced...
+on each tab has the settings to change only if the release notes advise
+it. On the USB tab: XhciIntelPortSwitchSetup (with an Intel 7-, 8- or
+9-series controller), XhciInterruptMode,
 XhciLinkKeep, XhciSsFlapFallback, XhciResumeKeep, XhciUsb2Bos,
 XhciImodInterval250ns, the driver's log (XhciLogVerbosity,
 XhciLogDebugView), the polling periods (XhciPollIdleMs, XhciPollActiveMs)

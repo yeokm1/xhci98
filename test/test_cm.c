@@ -556,6 +556,23 @@ static void test_values(void)
           v.WakePowerUpRaw == 2, "2 is refused: the default stands, the value recorded");
     CmValuesTakeWakePowerUp(&v, 0, 0);
     CHECK_EQ(v.WakePowerUpFound | v.WakePowerUpRefused, 0, "a later absent read clears both");
+    /* XhciCmWakeOrder (task 50.10): the same rule, default 0 (owner,
+     * 2026-11-15: off by default). */
+    CHECK_EQ(CM_WAKE_ORDER_DEFAULT, 0, "XhciCmWakeOrder defaults to 0");
+    CmValuesDefault(&v);
+    CHECK_EQ(v.WakeOrder, 0, "0 after CmValuesDefault");
+    CmValuesTakeWakeOrder(&v, 0, 0);
+    CHECK(v.WakeOrder == 0 && v.WakeOrderFound == 0 &&
+          v.WakeOrderRefused == 0, "absent: the default, nothing found");
+    CmValuesTakeWakeOrder(&v, 1, 1);
+    CHECK(v.WakeOrder == 1 && v.WakeOrderFound == 1, "1 is taken");
+    CmValuesTakeWakeOrder(&v, 1, 0);
+    CHECK(v.WakeOrder == 0 && v.WakeOrderRefused == 0, "0 is taken");
+    CmValuesTakeWakeOrder(&v, 1, 2);
+    CHECK(v.WakeOrder == 0 && v.WakeOrderRefused == 1 &&
+          v.WakeOrderRaw == 2, "2 is refused: the default stands, the value recorded");
+    CmValuesTakeWakeOrder(&v, 0, 0);
+    CHECK_EQ(v.WakeOrderFound | v.WakeOrderRefused, 0, "a later absent read clears both");
     CHECK_EQ(v.Found | v.Refused, 0, "the rule table's bits untouched by it");
 }
 

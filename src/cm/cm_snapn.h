@@ -91,6 +91,10 @@ const CM_QS_FIELD CmQsF_CM_NHI[] = {
     CM_QS_F(CM_NHI, Values.WakePowerUpFound, 4, 0),
     CM_QS_F(CM_NHI, Values.WakePowerUpRaw, 4, 0),
     CM_QS_F(CM_NHI, Values.WakePowerUpRefused, 4, 0),
+    CM_QS_F(CM_NHI, Values.WakeOrder, 4, 0),
+    CM_QS_F(CM_NHI, Values.WakeOrderFound, 4, 0),
+    CM_QS_F(CM_NHI, Values.WakeOrderRaw, 4, 0),
+    CM_QS_F(CM_NHI, Values.WakeOrderRefused, 4, 0),
     CM_QS_F(CM_NHI, Values.BridgeReq, 4, 0),
     CM_QS_F(CM_NHI, Values.BridgeReqFound, 4, 0),
     CM_QS_F(CM_NHI, Values.BridgeReqRaw, 4, 0),
@@ -310,6 +314,8 @@ const CM_QS_FIELD CmQsF_CM_NHI[] = {
     CM_QS_F(CM_NHI, RegClosed, 4, 0),
     CM_QS_F(CM_NHI, RegBusy, 4, 0),
     CM_QS_F(CM_NHI, RegCloseTimeouts, 4, 0),
+    CM_QS_F(CM_NHI, PowerRel, 4, 0),
+    CM_QS_F(CM_NHI, PrCounted, 4, 0),
     CM_QS_F(CM_NHI, BrDiagSeq, 4, 0),
     CM_QS_F(CM_NHI, BrDiagWritten, 4, 0),
     CM_QS_F(CM_NHI, NiDiagSeq, 4, 0),
@@ -703,6 +709,11 @@ const CM_QS_FIELD CmQsF_CM_REENUM[] = {
     CM_QS_F(CM_REENUM, WpuRelRefused, 4, 0),
     CM_QS_F(CM_REENUM, WpuOnCounted, 4, 0),
     CM_QS_F(CM_REENUM, WpuPendCounted, 4, 0),
+    CM_QS_F(CM_REENUM, PrS0Epoch, 4, 0),
+    CM_QS_F(CM_REENUM, PrResumeOkEpoch, 4, 0),
+    CM_QS_F(CM_REENUM, PrS0NoDev, 4, 0),
+    CM_QS_F(CM_REENUM, PrPassed, 4, 0),
+    CM_QS_F(CM_REENUM, PrLastPass, 4, 0),
 };
 const ULONG CmQsN_CM_REENUM = sizeof(CmQsF_CM_REENUM) / sizeof(CmQsF_CM_REENUM[0]);
 
@@ -734,6 +745,8 @@ const CM_QS_FIELD CmQsF_CM_REENUM_PORT[] = {
     CM_QS_F(CM_REENUM_PORT, AcpiSerial, 4, 0),
     CM_QS_F(CM_REENUM_PORT, WpuRelEpoch, 4, 0),
     CM_QS_F(CM_REENUM_PORT, WpuRelAt, 4, 0),
+    CM_QS_F(CM_REENUM_PORT, PrSec, 4, 0),
+    CM_QS_F(CM_REENUM_PORT, PrSub, 4, 0),
 };
 const ULONG CmQsN_CM_REENUM_PORT = sizeof(CmQsF_CM_REENUM_PORT) / sizeof(CmQsF_CM_REENUM_PORT[0]);
 

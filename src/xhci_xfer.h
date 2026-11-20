@@ -531,6 +531,19 @@ typedef struct _XHCI_XFER_EVENT_RESULT {
     ULONG Code;
     ULONG Refused;
     ULONG Unattributed;
+    /*
+     * Task 50.30 step 1 (design record 17 section 4.15.8): the event's
+     * pointer resolved onto a TD queued on this queue, which proves the
+     * device whose pipe the queue is. Set by XhciXferEvent and
+     * XhciXferIsoEvent once they find the owner, and 0 on every return
+     * before that; the retry replay goes through XhciXferEvent with the
+     * kept event, so it sets it as that event resolves onto its queued TD,
+     * and the settles take no event and leave it 0. `Fatal` is set before
+     * the pointer is resolved, so a fatal code
+     * on an event inside no TD has `Fatal` without `Matched`: the caller
+     * escalates it and names no device.
+     */
+    ULONG Matched;
 } XHCI_XFER_EVENT_RESULT, *PXHCI_XFER_EVENT_RESULT;
 
 /*

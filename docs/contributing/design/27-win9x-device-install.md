@@ -1,6 +1,19 @@
 # Design Record 27 - The Windows 98 SE and ME Device Install
 
-Status: draft 18, 2026-11-04 (roadmap-usb4 task 46.24: an update with a
+Status: draft 21, 2026-11-20 (removestale makes every registry read and
+writes every trace line first, and reads presence again as its last act
+before DIF_REMOVE, with nothing between them; what that does and does not
+guarantee; section 9.1);
+draft 20, 2026-11-20 (read on 98 SE the same day: `SURegOpenKey`
+answers 1011, not 2, for a driver key that is not there, so `removestale`
+kept every stale entry; the helper now proves the key gone by enumerating
+its class key's subkeys to their end, `SURegEnumKey` a new import; section
+9.1);
+draft 19, 2026-11-20 (roadmap-usb4 Phase 50, design record 23 revisions 65
+and 67: a `removestale` job for the installer's stale bus entries, whose
+conditions the helper reads again immediately before the removal and which
+it keeps, with its reason, when they no longer hold; section 9.1);
+draft 18, 2026-11-04 (roadmap-usb4 task 46.24: an update with a
 UAS disk plugged in asked for "xhci98 xHCI Host Controller Disk" at the
 Windows source for `xhciuas.sys`, the UAS job being the run's second
 copying job after the controller's; the installer's placement of
@@ -354,10 +367,10 @@ case:
 
 ```
 XHCIDI-JOB 1
-JOB <install | remove | probe>
+JOB <install | remove | removestale | probe>
 RESULT <result file>
 HWND <hwnd>
-DEVICE <device id>          install and remove only
+DEVICE <device id>          install, remove and removestale only
 INF <inf path>              install only
 SECTION <install section>   install only, and optional (draft 13)
 FLAGS <flag> [<flag> [<flag>]]  install only, and optional
@@ -1036,6 +1049,56 @@ next start's hardware detection finds the controller and nothing to
 install it with, which is the machine as it was before the install
 (owner, 2026-10-18). `CM_Uninstall_DevNode` of `cfgmgr32.dll`, a stub on
 both systems (record 13 section 10.13.8), is not touched.
+
+### 9.1 A stale bus entry, for the install (draft 19)
+
+The install removes the package's own bus entries left with a gone driver
+key and no devnode (design record 23 sections 5.3 and 6.3, revision 65).
+It reads those conditions before the job, but Windows may enumerate the
+device again, or its driver key may come back, between that reading and
+the removal, while the job and result files are written and the helper
+started. So such an entry goes through its own job, `JOB removestale` with
+the `DEVICE` line of a `remove` job, which the helper accepts only for one
+of the package's own bus ids (`USB\XHCI98_ROOT_HUB`, `_HUB`, `_HUB30` or
+`_COMPOSITE`, then `\` or `&`; any other id is refused as a malformed job,
+`device-id`). The helper finds the entry and builds its `DEVICE_INFO` as
+for `remove`, and then reads the conditions again itself, in this order
+(draft 21). First everything that reads the registry or writes a line of
+the result file: the id one of those bus ids; the `dnDevnode` of the entry
+found 0 ("If set, this contains the address of the DevNode associated with
+the device", setupx.h); its `Enum` entry's `Driver` value read as a string
+(`REG_SZ`, the bytes read one string, with or without its NUL and nothing
+after it; any other type, an empty or over-long value or bytes after a NUL
+is kept as `driver`) and of 98's form (`<class>\NNNN`); and that value's
+key under `System\CurrentControlSet\Services\Class` not there: it does not
+open with `SURegOpenKey`, and the class key's subkeys, enumerated with
+`SURegEnumKey` to their end (`ERROR_NO_MORE_ITEMS`, 259), do not hold its
+name. A failed open alone proves nothing: on 98 SE `SURegOpenKey` answered
+1011 for a key that was not there, where the 32-bit registry answers 2
+(read on the legs of 2026-11-20); a key that opens or is listed, an
+enumeration that ends on any other code, or a class key that does not
+open, is no proof that it is gone. Then the `REMOVEDEVICE_PARAMS` block is
+attached, and last, with no registry call and no line written between it
+and the dispatch, the entry is looked for in a `DiGetClassDevsEx` list
+with `DIGCF_PRESENT`: in it (a devnode now), or the list not made, it is
+kept (`devnode`, `list`); otherwise `DIF_REMOVE` is called at once, and
+the listing's `CALL` line is written after it. This narrows the window
+between the last reading and the removal to that one listing and a list
+walk; it does not close it: neither `DiGetClassDevsEx` nor `DIF_REMOVE`
+holds the configuration manager, the setup engine documents no such
+guarantee, and a devnode created between the listing and the removal is
+not seen. When all hold it removes the entry as `remove` does; otherwise
+it removes nothing and ends `RESULT kept <reason>`, the reason `device`,
+`list` (the present devices could not be listed), `devnode`, `driver`,
+`key` or `key-unreadable`, after a `CALL SURegOpenKey <driver> <code>`
+line for the key it tried and, where that failed, a `CALL SURegEnumKey
+<name> <code>` line with the code the enumeration ended on (0 when it met
+the name, 65535 when it stopped after 10000 names with no end), or a
+second `CALL SURegOpenKey <class key> <code>` line when the class key did
+not open. The checks are the pure `di_stale_check` and, for the last one,
+`di_stale_final` (host-tested, each refusal, presence consulted only after
+the others passed) over what `di_sys.c` read. The installer takes `kept`
+as a step, never a failure (record 23 section 6.4).
 
 ## 10. The console tool
 

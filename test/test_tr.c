@@ -2364,7 +2364,7 @@ static void test_usb_eject(void)
     /* console text */
     tr_wrap("Windows has stopped USB Flash Disk (F:). You can now unplug the "
             "device. Until you unplug it, Device Manager's Refresh can start "
-            "it again.", wide, sizeof(wide), 40);
+            "it again.", wide, sizeof(wide), 40, NULL);
     CHECK(strcmp(wide, "Windows has stopped USB Flash Disk (F:).\r\n"
                        "You can now unplug the device. Until you\r\n"
                        "unplug it, Device Manager's Refresh can\r\n"
@@ -2387,13 +2387,13 @@ static void test_usb_eject(void)
         }
         CHECK(longest <= 40, "wrap: no line longer than the width");
     }
-    tr_wrap("one\n\ntwo\r\n", wide, sizeof(wide), 79);
+    tr_wrap("one\n\ntwo\r\n", wide, sizeof(wide), 79, NULL);
     CHECK(strcmp(wide, "one\r\n\r\ntwo\r\n") == 0, "wrap: breaks and paragraphs kept");
-    tr_wrap("abcdefghijklmnop qr", wide, sizeof(wide), 8);
+    tr_wrap("abcdefghijklmnop qr", wide, sizeof(wide), 8, NULL);
     CHECK(strcmp(wide, "abcdefgh\r\nijklmnop\r\nqr") == 0, "wrap: a long word cut");
-    tr_wrap("aaaa bbbb cccc", wide, 7, 79);
+    tr_wrap("aaaa bbbb cccc", wide, 7, 79, NULL);
     CHECK(strcmp(wide, "aaaa b") == 0, "wrap: cut short and terminated");
-    tr_wrap("", wide, sizeof(wide), 79);
+    tr_wrap("", wide, sizeof(wide), 79, NULL);
     CHECK(wide[0] == '\0', "wrap: nothing");
 }
 
@@ -3059,7 +3059,7 @@ static void test_fast_path(void)
     tr_text_init(&t, box, sizeof(box));
     tr_fast_entry(&t, "USB 10/100/1G/2.5G/5G LAN", 0x0BDA, 0x8157,
                   "Port 1.3 of xHCI98 USB 3 Controller (VIA VL805/VL806)",
-                  "xHCI98 USB Hub", &f);
+                  "xHCI98 USB Hub", &f, NULL);
     CHECK(strstr(box, "  Can run at: SuperSpeed (5 Gbit/s)\r\n") != NULL ||
               strstr(box, "  Can run at: SuperSpeed (5 Gbit/s)\n") != NULL,
           "5G: the entry says SuperSpeed (5 Gbit/s)");
@@ -3840,7 +3840,7 @@ static void test_stor(void)
     gone[0] = gone[1] = 1;
     CHECK_EQ(tr_stor_step(&set, gone, NULL, 0, NULL, 0, 0, &q, t0 + 1), 2,
              "stor: a hub's two drives");
-    tr_stor_text(title, sizeof(title), text, sizeof(text), &q.Rm, 1);
+    tr_stor_text(title, sizeof(title), text, sizeof(text), &q.Rm, 1, NULL);
     CHECK(strcmp(title, "USB drives removed") == 0, "stor: plural title");
     CHECK(strcmp(text, "Alpha (E:) and Beta (F:) were removed.") == 0,
           "stor: two names");
@@ -3856,11 +3856,11 @@ static void test_stor(void)
     CHECK_EQ(tr_stor_step(&set, NULL, o, TR_STOR_MAX + 1, NULL, 0, 0, &q, t0),
              TR_STOR_MAX, "stor: 64 kept, the 65th not");
     CHECK_EQ(set.N, TR_STOR_MAX, "stor: the set full");
-    tr_stor_text(title, sizeof(title), text, sizeof(text), &q.Arr, 0);
+    tr_stor_text(title, sizeof(title), text, sizeof(text), &q.Arr, 0, NULL);
     CHECK(strcmp(text, "D, D and 62 more are connected.") == 0,
           "stor: and n more");
     q.Arr.N = 70;
-    tr_stor_text(title, sizeof(title), text, sizeof(text), &q.Arr, 0);
+    tr_stor_text(title, sizeof(title), text, sizeof(text), &q.Arr, 0, NULL);
     CHECK(strcmp(text, "D, D and 68 more are connected.") == 0,
           "stor: the count exact past the kept");
 
@@ -3869,12 +3869,12 @@ static void test_stor(void)
     memset(&set, 0, sizeof(set));
     stor_obs(&o[0], "C1", "1", 1, "Stick (E:)", TR_SN_LETTER);
     (void)tr_stor_step(&set, NULL, o, 1, NULL, 0, 0, &q, t0);
-    tr_stor_text(title, sizeof(title), text, sizeof(text), &q.Arr, 0);
+    tr_stor_text(title, sizeof(title), text, sizeof(text), &q.Arr, 0, NULL);
     CHECK(strcmp(title, "USB drive connected") == 0, "stor: title");
     CHECK(strcmp(text, "Stick (E:) is connected.") == 0, "stor: text");
     memset(q.Arr.Name[0], 'x', TR_STOR_NAME - 1);
     q.Arr.Name[0][TR_STOR_NAME - 1] = '\0';
-    tr_stor_text(title, sizeof(title), text, 40, &q.Arr, 0);
+    tr_stor_text(title, sizeof(title), text, 40, &q.Arr, 0, NULL);
     CHECK(strlen(text) <= 39 && has(text, "... is connected."),
           "stor: a long name cut to fit");
 
@@ -4356,17 +4356,17 @@ static void test_fast(void)
     /* The name (task 43.78): a specific label, the product string, a
      * class-name label, the VID:PID last. */
     tr_fast_name(out, sizeof(out), "QEMU QEMU HARDDISK USB Device (G:)",
-                 "QEMU USB HARDDRIVE", 0x46F4, 0x0001);
+                 "QEMU USB HARDDRIVE", 0x46F4, 0x0001, NULL);
     CHECK(strcmp(out, "QEMU QEMU HARDDISK USB Device (G:)") == 0,
           "name: a specific label first");
     tr_fast_name(out, sizeof(out), "USB Input Device", "QEMU USB Keyboard",
-                 0x0627, 0x0001);
+                 0x0627, 0x0001, NULL);
     CHECK(strcmp(out, "QEMU USB Keyboard") == 0,
           "name: the product over a class name");
-    tr_fast_name(out, sizeof(out), "HID-compliant mouse", "  ", 0x0627, 0x0001);
+    tr_fast_name(out, sizeof(out), "HID-compliant mouse", "  ", 0x0627, 0x0001, NULL);
     CHECK(strcmp(out, "HID-compliant mouse") == 0,
           "name: a class name over the VID:PID");
-    tr_fast_name(out, sizeof(out), "usb mass storage device", NULL, 1, 2);
+    tr_fast_name(out, sizeof(out), "usb mass storage device", NULL, 1, 2, NULL);
     CHECK(strcmp(out, "usb mass storage device") == 0,
           "name: a class name, no product");
     CHECK_EQ(tr_name_generic("USB Input Device"), 1, "generic: 7's HID");
@@ -4391,17 +4391,17 @@ static void test_fast(void)
     CHECK_EQ(tr_name_generic("USB Input Devices"), 0, "specific: not whole");
     CHECK_EQ(tr_name_generic(""), 0, "generic: empty is not");
     CHECK_EQ(tr_name_generic(NULL), 0, "generic: NULL is not");
-    tr_fast_name(out, sizeof(out), "", "QEMU USB Keyboard", 0x0627, 0x0001);
+    tr_fast_name(out, sizeof(out), "", "QEMU USB Keyboard", 0x0627, 0x0001, NULL);
     CHECK(strcmp(out, "QEMU USB Keyboard") == 0, "name: no label, the product");
-    tr_fast_name(out, sizeof(out), NULL, "  Mouse  ", 0x0627, 0x0001);
+    tr_fast_name(out, sizeof(out), NULL, "  Mouse  ", 0x0627, 0x0001, NULL);
     CHECK(strcmp(out, "Mouse") == 0, "name: the product's spaces off");
-    tr_fast_name(out, sizeof(out), NULL, "   ", 0x0627, 0x0001);
+    tr_fast_name(out, sizeof(out), NULL, "   ", 0x0627, 0x0001, NULL);
     CHECK(strcmp(out, "USB device 0627:0001") == 0, "name: blank product");
-    tr_fast_name(out, sizeof(out), NULL, NULL, 0x10627, 0xABCD);
+    tr_fast_name(out, sizeof(out), NULL, NULL, 0x10627, 0xABCD, NULL);
     CHECK(strcmp(out, "USB device 0627:ABCD") == 0, "name: nothing, VID:PID");
-    tr_fast_name(out, 6, NULL, " Keyboard", 0, 0);
+    tr_fast_name(out, 6, NULL, " Keyboard", 0, 0, NULL);
     CHECK(strcmp(out, "Keybo") == 0, "name: product cut to fit");
-    tr_fast_name(out, 1, "x", "y", 0, 0);
+    tr_fast_name(out, 1, "x", "y", 0, 0, NULL);
     CHECK(out[0] == '\0', "name: room for the terminator only");
 
     /* The balloon. */
@@ -4440,7 +4440,7 @@ static void test_fast(void)
     tr_text_init(&t, box, sizeof(box));
     tr_fast_entry(&t, "USB Mass Storage Device (F:)", 0x0781, 0x5581,
                   "Port 3.2 of Intel(R) USB 3.0 eXtensible Host Controller",
-                  "Generic USB Hub", &f);
+                  "Generic USB Hub", &f, NULL);
     CHECK(strstr(box, "USB Mass Storage Device (F:) (0781:5581)\r\n") == box,
           "entry: the name first");
     CHECK(strstr(box, "  Port 3.2 of Intel(R) USB 3.0 eXtensible Host Controller\r\n")
@@ -4461,7 +4461,8 @@ static void test_fast(void)
     tr_text_init(&t, box, sizeof(box));
     tr_fast_entry(&t, "A device with a rather long name that goes on", 1, 2,
                   "Port 15 of AMD USB 3.10 eXtensible Host Controller - 1.10 "
-                  "(Microsoft) - AMD 1022:15B6 (behind PCI bridge 00:08.1)", NULL, &f);
+                  "(Microsoft) - AMD 1022:15B6 (behind PCI bridge 00:08.1)", NULL, &f,
+                  NULL);
     CHECK(strstr(box, "Behind") == NULL, "entry: no hub line on a root port");
     CHECK(fast_lines_fit(box), "entry: a long port line in 79 columns");
     CHECK(strstr(box, "fell back to USB 2.0") != NULL, "entry: the root port's try");
@@ -4570,6 +4571,27 @@ static void test_resources(void)
     tr_text_init(&t, buf, sizeof(buf));
     CHECK(tr_res_text(&t, TR_RES_IRQ, d, 20, 1, 0) &&
           strcmp(buf, "    IRQ           10 (level, shared)\r\n") == 0, "res: IRQ");
+    /* Task 50.18: under XhciInterruptMode 4 the line is not in use, and
+     * the claimed IRQ has a line of its own; 0 reads as before. */
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK(tr_res_text_m4(&t, TR_RES_IRQ, d, 20, 1, 0, 0) &&
+          strcmp(buf, "    IRQ           10 (level, shared)\r\n") == 0,
+          "res: IRQ, no claim");
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK(tr_res_text_m4(&t, TR_RES_IRQ, d, 20, 1, 0, 7) &&
+          strcmp(buf, "    IRQ           10 (level, shared), not in use in "
+                      "XhciInterruptMode 4\r\n") == 0, "res: IRQ, mode 4");
+    tr_text_init(&t, buf, sizeof(buf));
+    tr_res_claimed_text(&t, 7);
+    CHECK(strcmp(buf, "    IRQ           7, claimed by xhci98 for its "
+                      "message interrupt\r\n") == 0, "res: the claimed IRQ");
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK(tr_res_text_m4(&t, TR_RES_IRQ, d, 24, 1, 1, 7) &&
+          strcmp(buf, "    IRQ           10 (level, shared), not in use in "
+                      "XhciInterruptMode 4\r\n") == 0, "res: IRQ, mode 4, x64");
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK(tr_res_text_m4(&t, TR_RES_IRQ, d, 20, 0, 0, 7) &&
+          !has(buf, "not in use"), "res: a requirement is not the line");
     tr_text_init(&t, buf, sizeof(buf));
     CHECK(!tr_res_text(&t, TR_RES_IRQ, d, 20, 1, 1) && has(buf, "could not be read"),
           "res: an x64 IRQ descriptor is 24 bytes");
@@ -5077,7 +5099,20 @@ static void test_ver_route(void)
                       "3.3.0.0. Restart Windows to run the installed driver.")
               == 0, "does not say");
     tr_ver_line(TR_VER_SAME, 0x03030000UL, f330, out, sizeof(out));
-    CHECK(strcmp(out, "3.3.0.0 running, the installed file's") == 0, "same");
+    CHECK(strcmp(out, "3.3.0.0 running; the installed file is the same.") == 0,
+          "same");
+    {
+        /* The widest same line, with the details' label, within 79
+         * columns (record 25 section 28); a running 0 is never the same. */
+        static const TR_U32 f255[4] = { 255, 255, 255, 255 };
+        CHECK_EQ(tr_ver_state(1, 0xFFFFFFFFUL, f255), TR_VER_SAME,
+                 "the same at 255.255.255.255");
+        tr_ver_line(TR_VER_SAME, 0xFFFFFFFFUL, f255, out, sizeof(out));
+        CHECK(strcmp(out, "255.255.255.255 running; the installed file is "
+                          "the same.") == 0 &&
+              strlen("  Driver version: ") + strlen(out) <= 79,
+              "same: the widest within 79 columns with its label");
+    }
     tr_ver_text(0x0A0B0C0DUL, out, sizeof(out));
     CHECK(strcmp(out, "10.11.12.13") == 0, "packed to text");
 
@@ -5473,9 +5508,811 @@ static void test_snap_all(void)
     CHECK(strlen(out) < 40, "the message is bounded");
 }
 
+/* Shift-JIS's lead bytes, for the labels' double-byte vectors (task 50.39). */
+static int sjis_lead(unsigned char c)
+{
+    return (c >= 0x81 && c <= 0x9F) || (c >= 0xE0 && c <= 0xFC);
+}
+
+/* A single-byte code page's test: no byte is a lead byte. */
+static int sb_lead(unsigned char c)
+{
+    (void)c;
+    return 0;
+}
+
+/* A name for the label vectors: one 'a' first with one1, then chars
+ * double-byte characters (Shift-JIS 0x82 0xA0); one1 + 2 * chars bytes. */
+static void dbcs_name(char *s, int one1, int chars)
+{
+    int i = 0;
+    int k;
+
+    if (one1) {
+        s[i++] = 'a';
+    }
+    for (k = 0; k < chars; k++) {
+        s[i++] = (char)0x82;
+        s[i++] = (char)0xA0;
+    }
+    s[i] = '\0';
+}
+
+/* Task 50.39 (record 25 section 28 item 10): the shared cut between
+ * characters (tr_copy_lead) and the names cut with it (tr_fast_name, into
+ * TR_NAME_CHARS as the red icon's set holds them). */
+static void test_lead_cuts(void)
+{
+    char nm[200];
+    char out[TR_NAME_CHARS];
+    char o0[TR_NAME_CHARS];
+    char g[10];
+    size_t n;
+    size_t k;
+    int same;
+
+    dbcs_name(nm, 0, 3);
+    tr_copy_lead(g, nm, 8, sjis_lead);
+    CHECK(strcmp(g, nm) == 0 && strlen(g) == 6, "copy: under its room whole");
+    dbcs_name(nm, 1, 3);
+    tr_copy_lead(g, nm, 8, sjis_lead);
+    CHECK(strcmp(g, nm) == 0 && strlen(g) == 7, "copy: at its room whole");
+    dbcs_name(nm, 0, 4);
+    tr_copy_lead(g, nm, 8, sjis_lead);
+    CHECK(strlen(g) == 6 && memcmp(g, nm, 6) == 0,
+          "copy: a byte over, a byte sooner, not inside a character");
+    tr_copy_lead(g, nm, 8, NULL);
+    tr_copy(o0, nm, 8);
+    CHECK(strcmp(g, o0) == 0 && strlen(g) == 7 && (unsigned char)g[6] == 0x82,
+          "copy: without a lead test tr_copy's bytes");
+    dbcs_name(nm, 1, 4);
+    tr_copy_lead(g, nm, 8, sjis_lead);
+    CHECK(strlen(g) == 7 && memcmp(g, nm, 7) == 0,
+          "copy: two bytes over, cut at a character's end");
+    memset(g, 'x', sizeof(g));
+    tr_copy_lead(g, "abc", 0, sjis_lead);
+    CHECK(g[0] == 'x', "copy: no room, nothing written");
+    tr_copy_lead(g, "abc", 1, sjis_lead);
+    CHECK(g[0] == '\0' && g[1] == 'x', "copy: room for the terminator only");
+
+    /* A specific label, at TR_NAME_CHARS: 71 bytes of name. */
+    dbcs_name(nm, 0, 35);
+    tr_fast_name(out, sizeof(out), nm, "QEMU USB Keyboard", 1, 2, sjis_lead);
+    CHECK(strcmp(out, nm) == 0 && strlen(out) == 70,
+          "name: a double-byte label under its room whole");
+    dbcs_name(nm, 1, 35);
+    tr_fast_name(out, sizeof(out), nm, "QEMU USB Keyboard", 1, 2, sjis_lead);
+    CHECK(strcmp(out, nm) == 0 && strlen(out) == 71,
+          "name: a double-byte label at its room whole");
+    dbcs_name(nm, 0, 36);
+    tr_fast_name(out, sizeof(out), nm, "QEMU USB Keyboard", 1, 2, sjis_lead);
+    tr_fast_name(o0, sizeof(o0), nm, "QEMU USB Keyboard", 1, 2, NULL);
+    CHECK(strlen(out) == 70 && memcmp(out, nm, 70) == 0 &&
+          strlen(o0) == 71 && (unsigned char)o0[70] == 0x82,
+          "name: a label a byte over, a byte sooner; without the test as before");
+    dbcs_name(nm, 1, 36);
+    tr_fast_name(out, sizeof(out), nm, "QEMU USB Keyboard", 1, 2, sjis_lead);
+    CHECK(strlen(out) == 71 && memcmp(out, nm, 71) == 0,
+          "name: a label two bytes over, cut at a character's end");
+
+    /* The product string, under a class-name label. */
+    dbcs_name(nm, 0, 35);
+    tr_fast_name(out, sizeof(out), "USB Input Device", nm, 1, 2, sjis_lead);
+    CHECK(strcmp(out, nm) == 0, "name: a double-byte product under its room whole");
+    dbcs_name(nm, 1, 35);
+    tr_fast_name(out, sizeof(out), "USB Input Device", nm, 1, 2, sjis_lead);
+    CHECK(strcmp(out, nm) == 0, "name: a double-byte product at its room whole");
+    dbcs_name(nm, 0, 36);
+    tr_fast_name(out, sizeof(out), "USB Input Device", nm, 1, 2, sjis_lead);
+    tr_fast_name(o0, sizeof(o0), "USB Input Device", nm, 1, 2, NULL);
+    CHECK(strlen(out) == 70 && memcmp(out, nm, 70) == 0 &&
+          strlen(o0) == 71 && (unsigned char)o0[70] == 0x82,
+          "name: a product a byte over, a byte sooner; without the test as before");
+    dbcs_name(nm, 1, 36);
+    tr_fast_name(out, sizeof(out), "USB Input Device", nm, 1, 2, sjis_lead);
+    CHECK(strlen(out) == 71 && memcmp(out, nm, 71) == 0,
+          "name: a product two bytes over, cut at a character's end");
+    nm[0] = ' ';
+    dbcs_name(nm + 1, 0, 36);
+    strcat(nm, "  ");
+    tr_fast_name(out, sizeof(out), NULL, nm, 1, 2, sjis_lead);
+    CHECK(strlen(out) == 70 && memcmp(out, nm + 1, 70) == 0,
+          "name: a product's spaces off, then cut between characters");
+
+    /* The class-name label, with no product: "USB\" and double-byte
+     * characters. */
+    strcpy(nm, "USB\\");
+    dbcs_name(nm + 4, 0, 33);
+    tr_fast_name(out, sizeof(out), nm, NULL, 1, 2, sjis_lead);
+    CHECK(strlen(nm) == 70 && strcmp(out, nm) == 0,
+          "name: a class-name label under its room whole");
+    dbcs_name(nm + 4, 1, 33);
+    tr_fast_name(out, sizeof(out), nm, NULL, 1, 2, sjis_lead);
+    CHECK(strlen(nm) == 71 && strcmp(out, nm) == 0,
+          "name: a class-name label at its room whole");
+    dbcs_name(nm + 4, 0, 34);
+    tr_fast_name(out, sizeof(out), nm, NULL, 1, 2, sjis_lead);
+    tr_fast_name(o0, sizeof(o0), nm, NULL, 1, 2, NULL);
+    CHECK(strlen(nm) == 72 && strlen(out) == 70 && memcmp(out, nm, 70) == 0 &&
+          strlen(o0) == 71 && (unsigned char)o0[70] == 0x82,
+          "name: a class-name label a byte over, cut between characters");
+    dbcs_name(nm + 4, 1, 34);
+    tr_fast_name(out, sizeof(out), nm, NULL, 1, 2, sjis_lead);
+    CHECK(strlen(nm) == 73 && strlen(out) == 71 && memcmp(out, nm, 71) == 0,
+          "name: a class-name label two bytes over, cut at a character's end");
+
+    /* Single-byte names on each path, and a single-byte code page's test
+     * over high bytes: as with no test. */
+    same = 1;
+    for (n = 65; n <= 80; n++) {
+        for (k = 0; k < n; k++) {
+            nm[k] = (char)('a' + (k % 26));
+        }
+        nm[n] = '\0';
+        tr_fast_name(out, sizeof(out), nm, NULL, 1, 2, sjis_lead);
+        tr_fast_name(o0, sizeof(o0), nm, NULL, 1, 2, NULL);
+        same = same && strcmp(out, o0) == 0;
+        tr_fast_name(out, sizeof(out), "USB Input Device", nm, 1, 2, sjis_lead);
+        tr_fast_name(o0, sizeof(o0), "USB Input Device", nm, 1, 2, NULL);
+        same = same && strcmp(out, o0) == 0;
+        memcpy(nm, "USB\\", 4);
+        tr_fast_name(out, sizeof(out), nm, NULL, 1, 2, sjis_lead);
+        tr_fast_name(o0, sizeof(o0), nm, NULL, 1, 2, NULL);
+        same = same && strcmp(out, o0) == 0;
+        for (k = 0; k < n; k++) {
+            nm[k] = (char)(0x80 + (k % 0x7F));
+        }
+        tr_fast_name(out, sizeof(out), nm, NULL, 1, 2, sb_lead);
+        tr_fast_name(o0, sizeof(o0), nm, NULL, 1, 2, NULL);
+        same = same && strcmp(out, o0) == 0;
+        tr_fast_name(out, sizeof(out), "USB Input Device", nm, 1, 2, sb_lead);
+        tr_fast_name(o0, sizeof(o0), "USB Input Device", nm, 1, 2, NULL);
+        same = same && strcmp(out, o0) == 0;
+        tr_copy_lead(out, nm, sizeof(out), sb_lead);
+        tr_copy(o0, nm, sizeof(o0));
+        same = same && strcmp(out, o0) == 0;
+    }
+    CHECK(same, "name: single-byte names cut as with no test");
+}
+
+/* Task 50.39 (record 25 section 28 item 11): the "can run faster" list's
+ * lines and the USB drive notice's names cut between characters. */
+static void entry_hub(char *hub, int one1, int chars)
+{
+    int w;
+
+    hub[0] = '\0';
+    for (w = 0; w < 7; w++) {
+        dbcs_name(hub + strlen(hub), 0, 10);
+        strcat(hub, " ");
+    }
+    dbcs_name(hub + strlen(hub), one1, chars);
+}
+
+static void test_lead_entry(void)
+{
+    static TR_STOR_GRP g;
+    TR_FAST_IN in;
+    TR_FAST f;
+    TR_TEXT t;
+    char box[2048];
+    char b0[2048];
+    char nm[200];
+    char want[200];
+    char title[64];
+    char text[64];
+    char t0[64];
+    size_t n;
+    size_t k;
+    int same;
+
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    in.Root = 0;
+    in.HubKnown = 1;
+    in.HubHaveV2 = 1;
+    in.HubExSpeed = TR_SPEED_HIGH;
+    tr_fast_check(&in, &f);
+
+    /* The name's line: one word, wider than the line's 95 bytes. */
+    dbcs_name(nm, 0, 47);
+    tr_text_init(&t, box, sizeof(box));
+    tr_fast_entry(&t, nm, 1, 2, "Port 1", NULL, &f, sjis_lead);
+    memcpy(want, nm, 94);
+    strcpy(want + 94, "\r\n  (0001:0002)\r\n");
+    CHECK(strncmp(box, want, strlen(want)) == 0,
+          "entry: a double-byte word under the line's room whole");
+    dbcs_name(nm, 1, 47);
+    tr_text_init(&t, box, sizeof(box));
+    tr_fast_entry(&t, nm, 1, 2, "Port 1", NULL, &f, sjis_lead);
+    memcpy(want, nm, 95);
+    strcpy(want + 95, "\r\n  (0001:0002)\r\n");
+    CHECK(strncmp(box, want, strlen(want)) == 0,
+          "entry: a double-byte word at the line's room whole");
+    dbcs_name(nm, 0, 48);
+    tr_text_init(&t, box, sizeof(box));
+    tr_fast_entry(&t, nm, 1, 2, "Port 1", NULL, &f, sjis_lead);
+    memcpy(want, nm, 94);
+    strcpy(want + 94, "\r\n  (0001:0002)\r\n");
+    CHECK(strncmp(box, want, strlen(want)) == 0,
+          "entry: a word a byte over the line, a byte sooner");
+    tr_text_init(&t, b0, sizeof(b0));
+    tr_fast_entry(&t, nm, 1, 2, "Port 1", NULL, &f, NULL);
+    memcpy(want, nm, 95);
+    strcpy(want + 95, "\r\n  (0001:0002)\r\n");
+    CHECK(strncmp(b0, want, strlen(want)) == 0 && (unsigned char)b0[94] == 0x82,
+          "entry: without a lead test the word as before, a lead byte last");
+    dbcs_name(nm, 1, 48);
+    tr_text_init(&t, box, sizeof(box));
+    tr_fast_entry(&t, nm, 1, 2, "Port 1", NULL, &f, sjis_lead);
+    memcpy(want, nm, 95);
+    strcpy(want + 95, "\r\n  (0001:0002)\r\n");
+    CHECK(strncmp(box, want, strlen(want)) == 0,
+          "entry: a word two bytes over the line, cut at a character's end");
+
+    /* A continuation line: 4 spaces, so 91 bytes of room for a word. */
+    strcpy(nm, "Port 1 of ");
+    dbcs_name(nm + 10, 0, 45);
+    tr_text_init(&t, box, sizeof(box));
+    tr_fast_entry(&t, "Dev", 1, 2, nm, NULL, &f, sjis_lead);
+    strcpy(want, "\r\n    ");
+    memcpy(want + 6, nm + 10, 90);
+    strcpy(want + 96, "\r\n");
+    CHECK(strstr(box, want) != NULL,
+          "entry: a double-byte word under a continuation line's room whole");
+    dbcs_name(nm + 10, 1, 45);
+    tr_text_init(&t, box, sizeof(box));
+    tr_fast_entry(&t, "Dev", 1, 2, nm, NULL, &f, sjis_lead);
+    memcpy(want + 6, nm + 10, 91);
+    strcpy(want + 97, "\r\n");
+    CHECK(strstr(box, want) != NULL,
+          "entry: a double-byte word at a continuation line's room whole");
+    dbcs_name(nm + 10, 0, 46);
+    tr_text_init(&t, box, sizeof(box));
+    tr_fast_entry(&t, "Dev", 1, 2, nm, NULL, &f, sjis_lead);
+    memcpy(want + 6, nm + 10, 90);
+    strcpy(want + 96, "\r\n");
+    CHECK(strstr(box, want) != NULL,
+          "entry: a continuation line's word a byte over, a byte sooner");
+    tr_text_init(&t, b0, sizeof(b0));
+    tr_fast_entry(&t, "Dev", 1, 2, nm, NULL, &f, NULL);
+    memcpy(want + 6, nm + 10, 91);
+    strcpy(want + 97, "\r\n");
+    CHECK(strstr(b0, want) != NULL && (unsigned char)want[96] == 0x82,
+          "entry: a continuation line without a lead test as before");
+    dbcs_name(nm + 10, 1, 46);
+    tr_text_init(&t, box, sizeof(box));
+    tr_fast_entry(&t, "Dev", 1, 2, nm, NULL, &f, sjis_lead);
+    memcpy(want + 6, nm + 10, 91);
+    strcpy(want + 97, "\r\n");
+    CHECK(strstr(box, want) != NULL,
+          "entry: a continuation line's word two bytes over, at a character's end");
+
+    /* The hub's line: "Behind " and the name in 159 bytes. */
+    entry_hub(nm, 0, 2);
+    tr_text_init(&t, box, sizeof(box));
+    tr_fast_entry(&t, "Dev", 1, 2, "Port 1", nm, &f, sjis_lead);
+    want[0] = ' ';
+    memcpy(want + 1, nm + 147, 4);
+    strcpy(want + 5, "\r\n  Runs at:");
+    CHECK(strlen(nm) == 151 && strstr(box, want) != NULL && fast_lines_fit(box),
+          "entry: a double-byte hub name under its room whole");
+    entry_hub(nm, 1, 2);
+    tr_text_init(&t, box, sizeof(box));
+    tr_fast_entry(&t, "Dev", 1, 2, "Port 1", nm, &f, sjis_lead);
+    memcpy(want + 1, nm + 147, 5);
+    strcpy(want + 6, "\r\n  Runs at:");
+    CHECK(strlen(nm) == 152 && strstr(box, want) != NULL && fast_lines_fit(box),
+          "entry: a double-byte hub name at its room whole");
+    entry_hub(nm, 0, 3);
+    tr_text_init(&t, box, sizeof(box));
+    tr_fast_entry(&t, "Dev", 1, 2, "Port 1", nm, &f, sjis_lead);
+    memcpy(want + 1, nm + 147, 4);
+    strcpy(want + 5, "\r\n  Runs at:");
+    CHECK(strlen(nm) == 153 && strstr(box, want) != NULL && fast_lines_fit(box),
+          "entry: a hub name a byte over, a byte sooner");
+    tr_text_init(&t, b0, sizeof(b0));
+    tr_fast_entry(&t, "Dev", 1, 2, "Port 1", nm, &f, NULL);
+    memcpy(want + 1, nm + 147, 5);
+    strcpy(want + 6, "\r\n  Runs at:");
+    CHECK(strstr(b0, want) != NULL && (unsigned char)want[5] == 0x82,
+          "entry: without a lead test the hub name as before, a lead byte last");
+    entry_hub(nm, 1, 3);
+    tr_text_init(&t, box, sizeof(box));
+    tr_fast_entry(&t, "Dev", 1, 2, "Port 1", nm, &f, sjis_lead);
+    memcpy(want + 1, nm + 147, 5);
+    strcpy(want + 6, "\r\n  Runs at:");
+    CHECK(strlen(nm) == 154 && strstr(box, want) != NULL && fast_lines_fit(box),
+          "entry: a hub name two bytes over, cut at a character's end");
+
+    /* The drive notice: one name in a 64-byte text, room 49. */
+    memset(&g, 0, sizeof(g));
+    g.N = 1;
+    g.Kept = 1;
+    dbcs_name(g.Name[0], 0, 24);
+    tr_stor_text(title, sizeof(title), text, sizeof(text), &g, 0, sjis_lead);
+    CHECK(strlen(text) == 62 && memcmp(text, g.Name[0], 48) == 0 &&
+          strcmp(text + 48, " is connected.") == 0,
+          "drive: a double-byte name under its room whole");
+    dbcs_name(g.Name[0], 1, 24);
+    tr_stor_text(title, sizeof(title), text, sizeof(text), &g, 0, sjis_lead);
+    CHECK(strlen(text) == 63 && memcmp(text, g.Name[0], 49) == 0 &&
+          strcmp(text + 49, " is connected.") == 0,
+          "drive: a double-byte name at its room whole");
+    dbcs_name(g.Name[0], 0, 25);
+    tr_stor_text(title, sizeof(title), text, sizeof(text), &g, 0, sjis_lead);
+    CHECK(strlen(text) == 63 && memcmp(text, g.Name[0], 46) == 0 &&
+          strcmp(text + 46, "... is connected.") == 0,
+          "drive: a byte over, cut at a character's end");
+    dbcs_name(g.Name[0], 1, 25);
+    tr_stor_text(title, sizeof(title), text, sizeof(text), &g, 0, sjis_lead);
+    tr_stor_text(title, sizeof(title), t0, sizeof(t0), &g, 0, NULL);
+    CHECK(strlen(text) == 62 && memcmp(text, g.Name[0], 45) == 0 &&
+          strcmp(text + 45, "... is connected.") == 0,
+          "drive: two bytes over, a byte sooner, not inside a character");
+    CHECK(strlen(t0) == 63 && memcmp(t0, g.Name[0], 46) == 0 &&
+          (unsigned char)t0[45] == 0x82,
+          "drive: without a lead test as before, a lead byte last");
+    /* Two names: room 21 each. */
+    g.N = 2;
+    g.Kept = 2;
+    strcpy(g.Name[0], "Alpha");
+    dbcs_name(g.Name[1], 0, 10);
+    tr_stor_text(title, sizeof(title), text, sizeof(text), &g, 0, sjis_lead);
+    CHECK(strncmp(text, "Alpha and ", 10) == 0 &&
+          memcmp(text + 10, g.Name[1], 20) == 0 &&
+          strcmp(text + 30, " are connected.") == 0,
+          "drive: the second name under its room whole");
+    dbcs_name(g.Name[1], 1, 10);
+    tr_stor_text(title, sizeof(title), text, sizeof(text), &g, 0, sjis_lead);
+    CHECK(memcmp(text + 10, g.Name[1], 21) == 0 &&
+          strcmp(text + 31, " are connected.") == 0,
+          "drive: the second name at its room whole");
+    dbcs_name(g.Name[1], 0, 11);
+    tr_stor_text(title, sizeof(title), text, sizeof(text), &g, 0, sjis_lead);
+    CHECK(strncmp(text, "Alpha and ", 10) == 0 &&
+          memcmp(text + 10, g.Name[1], 18) == 0 &&
+          strcmp(text + 28, "... are connected.") == 0,
+          "drive: the second name cut at a character's end");
+    dbcs_name(g.Name[1], 1, 11);
+    tr_stor_text(title, sizeof(title), text, sizeof(text), &g, 0, sjis_lead);
+    tr_stor_text(title, sizeof(title), t0, sizeof(t0), &g, 0, NULL);
+    CHECK(memcmp(text + 10, g.Name[1], 17) == 0 &&
+          strcmp(text + 27, "... are connected.") == 0 &&
+          (unsigned char)t0[10 + 17] == 0x82,
+          "drive: the second name a byte sooner; without the test as before");
+
+    /* Single-byte names, and a single-byte code page's test over high
+     * bytes, as with no test. */
+    same = 1;
+    for (n = 90; n <= 100; n++) {
+        for (k = 0; k < n; k++) {
+            nm[k] = (char)('a' + (k % 26));
+        }
+        nm[n] = '\0';
+        tr_text_init(&t, box, sizeof(box));
+        tr_fast_entry(&t, nm, 1, 2, "Port 1", NULL, &f, sjis_lead);
+        tr_text_init(&t, b0, sizeof(b0));
+        tr_fast_entry(&t, nm, 1, 2, "Port 1", NULL, &f, NULL);
+        same = same && strcmp(box, b0) == 0;
+        for (k = 0; k < n; k++) {
+            nm[k] = (char)(0x80 + (k % 0x7F));
+        }
+        tr_text_init(&t, box, sizeof(box));
+        tr_fast_entry(&t, nm, 1, 2, "Port 1", NULL, &f, sb_lead);
+        tr_text_init(&t, b0, sizeof(b0));
+        tr_fast_entry(&t, nm, 1, 2, "Port 1", NULL, &f, NULL);
+        same = same && strcmp(box, b0) == 0;
+    }
+    for (n = 148; n <= 158; n++) {
+        for (k = 0; k < n; k++) {
+            nm[k] = (k % 21 == 20) ? ' ' : (char)('a' + (k % 26));
+        }
+        nm[n] = '\0';
+        tr_text_init(&t, box, sizeof(box));
+        tr_fast_entry(&t, "Dev", 1, 2, "Port 1", nm, &f, sjis_lead);
+        tr_text_init(&t, b0, sizeof(b0));
+        tr_fast_entry(&t, "Dev", 1, 2, "Port 1", nm, &f, NULL);
+        same = same && strcmp(box, b0) == 0;
+        for (k = 0; k < n; k++) {
+            if (nm[k] != ' ') {
+                nm[k] = (char)(0x80 + (k % 0x7F));
+            }
+        }
+        tr_text_init(&t, box, sizeof(box));
+        tr_fast_entry(&t, "Dev", 1, 2, "Port 1", nm, &f, sb_lead);
+        tr_text_init(&t, b0, sizeof(b0));
+        tr_fast_entry(&t, "Dev", 1, 2, "Port 1", nm, &f, NULL);
+        same = same && strcmp(box, b0) == 0;
+    }
+    g.N = 1;
+    g.Kept = 1;
+    for (n = 45; n <= 55; n++) {
+        for (k = 0; k < n; k++) {
+            g.Name[0][k] = (char)('a' + (k % 26));
+        }
+        g.Name[0][n] = '\0';
+        tr_stor_text(title, sizeof(title), text, sizeof(text), &g, 0, sjis_lead);
+        tr_stor_text(title, sizeof(title), t0, sizeof(t0), &g, 0, NULL);
+        same = same && strcmp(text, t0) == 0;
+        for (k = 0; k < n; k++) {
+            g.Name[0][k] = (char)(0x80 + (k % 0x7F));
+        }
+        tr_stor_text(title, sizeof(title), text, sizeof(text), &g, 0, sb_lead);
+        tr_stor_text(title, sizeof(title), t0, sizeof(t0), &g, 0, NULL);
+        same = same && strcmp(text, t0) == 0;
+    }
+    CHECK(same, "entry and drive: single-byte names cut as with no test");
+
+    /* The console's wrap: a word longer than 79 columns broken between
+     * characters. */
+    {
+        char w[300];
+        char w0[300];
+        dbcs_name(nm, 0, 39);
+        tr_wrap(nm, w, sizeof(w), 79, sjis_lead);
+        CHECK(strcmp(w, nm) == 0, "wrap: a double-byte word under the width whole");
+        dbcs_name(nm, 1, 39);
+        tr_wrap(nm, w, sizeof(w), 79, sjis_lead);
+        CHECK(strcmp(w, nm) == 0, "wrap: a double-byte word at the width whole");
+        dbcs_name(nm, 0, 40);
+        tr_wrap(nm, w, sizeof(w), 79, sjis_lead);
+        tr_wrap(nm, w0, sizeof(w0), 79, NULL);
+        CHECK(memcmp(w, nm, 78) == 0 && strcmp(w + 78, "\r\n\x82\xA0") == 0,
+              "wrap: a byte over the width, broken a byte sooner");
+        CHECK(memcmp(w0, nm, 79) == 0 && strcmp(w0 + 79, "\r\n\xA0") == 0,
+              "wrap: without a lead test as before, a lead byte last");
+        dbcs_name(nm, 1, 40);
+        tr_wrap(nm, w, sizeof(w), 79, sjis_lead);
+        CHECK(memcmp(w, nm, 79) == 0 && strcmp(w + 79, "\r\n\x82\xA0") == 0,
+              "wrap: two bytes over, broken at a character's end");
+        same = 1;
+        for (n = 75; n <= 85; n++) {
+            for (k = 0; k < n; k++) {
+                nm[k] = (char)('a' + (k % 26));
+            }
+            nm[n] = '\0';
+            tr_wrap(nm, w, sizeof(w), 79, sjis_lead);
+            tr_wrap(nm, w0, sizeof(w0), 79, NULL);
+            same = same && strcmp(w, w0) == 0;
+            for (k = 0; k < n; k++) {
+                nm[k] = (char)(0x80 + (k % 0x7F));
+            }
+            tr_wrap(nm, w, sizeof(w), 79, sb_lead);
+            tr_wrap(nm, w0, sizeof(w0), 79, NULL);
+            same = same && strcmp(w, w0) == 0;
+        }
+        CHECK(same, "wrap: single-byte words as with no test");
+        /* The output's end: a word cut to the room left, between
+         * characters. */
+        dbcs_name(nm, 0, 9);
+        tr_wrap(nm, w, 20, 79, sjis_lead);
+        CHECK(strcmp(w, nm) == 0, "wrap: a double-byte word under the output's room whole");
+        dbcs_name(nm, 1, 9);
+        tr_wrap(nm, w, 20, 79, sjis_lead);
+        CHECK(strcmp(w, nm) == 0, "wrap: a double-byte word at the output's room whole");
+        dbcs_name(nm, 0, 15);
+        tr_wrap(nm, w, 20, 79, sjis_lead);
+        tr_wrap(nm, w0, 20, 79, NULL);
+        CHECK(strlen(w) == 18 && memcmp(w, nm, 18) == 0 &&
+              strlen(w0) == 19 && (unsigned char)w0[18] == 0x82,
+              "wrap: past the output's room, cut between characters");
+        dbcs_name(nm, 1, 15);
+        tr_wrap(nm, w, 20, 79, sjis_lead);
+        CHECK(strlen(w) == 19 && memcmp(w, nm, 19) == 0,
+              "wrap: past the output's room, at a character's end");
+    }
+}
+
+/* ---- the details pane's and the report's width (task 50.39) --------------- */
+
+static char fitOut[8192];
+static char fitA[8192];
+static char fitB[8192];
+
+/* The text with each run of spaces, CRs and LFs made one space: what the
+ * fitting may change and what it may not. */
+static void fit_squeeze(const char *in, char *out, size_t cap)
+{
+    size_t n = 0;
+    int gap = 0;
+
+    for (; *in != '\0' && n + 2 < cap; in++) {
+        if (*in == ' ' || *in == '\r' || *in == '\n') {
+            gap = n > 0;
+            continue;
+        }
+        if (gap) {
+            out[n++] = ' ';
+            gap = 0;
+        }
+        out[n++] = *in;
+    }
+    out[n] = '\0';
+}
+
+/* The widest line of s, CR LF or LF ended. */
+static int fit_widest(const char *s)
+{
+    int w = 0;
+    int c = 0;
+
+    for (; *s != '\0'; s++) {
+        if (*s == '\r') {
+            continue;
+        }
+        if (*s == '\n') {
+            c = 0;
+            continue;
+        }
+        if (++c > w) {
+            w = c;
+        }
+    }
+    return w;
+}
+
+/* in fitted at 79; the words kept in order. */
+static const char *fit79(const char *in)
+{
+    TR_TEXT t;
+
+    tr_text_init(&t, fitOut, sizeof(fitOut));
+    tr_fit_text(&t, in, TR_TEXT_COLS);
+    fit_squeeze(in, fitA, sizeof(fitA));
+    fit_squeeze(fitOut, fitB, sizeof(fitB));
+    CHECK(!t.Overflow && strcmp(fitA, fitB) == 0, "fit: every word kept");
+    return fitOut;
+}
+
+static void test_fit(void)
+{
+    static char line[512];
+    TR_TEXT t;
+    char small[40];
+    const char *s;
+    int k;
+
+    CHECK(TR_TEXT_COLS == 79, "the width is 79");
+    /* A line within the width, as it is: its spaces, CR LF or LF in, CR LF
+     * out, no end added. */
+    CHECK(strcmp(fit79("  Name:  value  \na\r\nb"),
+                 "  Name:  value  \r\na\r\nb") == 0, "fit: short lines kept");
+    memset(line, 'x', 79);
+    line[79] = '\0';
+    CHECK(strcmp(fit79(line), line) == 0, "fit: 79 columns kept");
+    /* Under the label's value. */
+    s = fit79("  Transport:     UAS (the only transport the device offers; "
+              "XhciForceBulkOnly does not apply to it)\n");
+    CHECK(strcmp(s, "  Transport:     UAS (the only transport the device "
+                    "offers;\r\n                 XhciForceBulkOnly does not "
+                    "apply to it)\r\n") == 0, "fit: under the value");
+    /* A clause's end in the line's second half; else a space. */
+    s = fit79("    reset requested: CMD_KEPT (a command for it was stopped "
+              "and only a controller reset settles it), extra 4294967295, at "
+              "port 4294967295 of a hub behind port 4294967295 slot "
+              "4294967295 [FFFF:FFFF], about 4294967295 s ago (the latch's)");
+    CHECK(strcmp(s, "    reset requested: CMD_KEPT (a command for it was "
+                    "stopped and only a\r\n                     controller "
+                    "reset settles it), extra 4294967295,\r\n"
+                    "                     at port 4294967295 of a hub "
+                    "behind port 4294967295 slot\r\n"
+                    "                     4294967295 [FFFF:FFFF],\r\n"
+                    "                     about 4294967295 s ago (the "
+                    "latch's)") == 0, "fit: clauses, then spaces");
+    CHECK(fit_widest(s) <= 79, "fit: within 79");
+    s = fit79("  one, two, three, four, five, six, seven, eight, nine, ten, "
+              "eleven, twelve, thirteen");
+    CHECK(strcmp(s, "  one, two, three, four, five, six, seven, eight, nine, "
+                    "ten, eleven, twelve,\r\n  thirteen") == 0,
+          "fit: no label, under the indent");
+    /* A colon with no space after it, or too far in, is not a label. */
+    s = fit79("  It is 02:02 now and the clock reads something long enough to "
+              "pass the edge of the line here");
+    CHECK(strcmp(s, "  It is 02:02 now and the clock reads something long "
+                    "enough to pass the edge of\r\n  the line here") == 0,
+          "fit: a time is not a label");
+    /* A word wider than the line: whole, after a label, and between words. */
+    memset(line, 0, sizeof(line));
+    strcpy(line, "  Instance ID:   USB\\VID_1234&PID_5678\\");
+    memset(line + strlen(line), '9', 70);
+    CHECK(strcmp(fit79(line), line) == 0, "fit: an id wider than the line");
+    memset(line, 0, sizeof(line));
+    strcpy(line, "aaa ");
+    memset(line + 4, 'X', 100);
+    strcat(line, " bbb ccc");
+    s = fit79(line);
+    CHECK(strncmp(s, "aaa\r\nXXXX", 9) == 0 &&
+          strcmp(s + 5 + 100, "\r\nbbb ccc") == 0, "fit: a long word alone");
+    /* The second half is the line's own columns, the hang included. */
+    tr_text_init(&t, fitOut, sizeof(fitOut));
+    tr_fit_text(&t, "  Key:  aaaaaaaaaaa bbbb, ccccccc dddddddd", 20);
+    CHECK(strcmp(fitOut, "  Key:  aaaaaaaaaaa\r\n        bbbb,\r\n"
+                         "        ccccccc\r\n        dddddddd") == 0,
+          "fit: a clause's end by column");
+    /* Nothing, spaces, a label with no value, a lone CR, 80 columns. */
+    CHECK(strcmp(fit79(""), "") == 0, "fit: empty");
+    memset(line, 0, sizeof(line));
+    memset(line, ' ', 85);
+    CHECK(strcmp(fit79(line), "") == 0, "fit: spaces wider than a line");
+    memset(line, 0, sizeof(line));
+    strcpy(line, "word");
+    memset(line + 4, ' ', 90);
+    CHECK(strcmp(fit79(line), "word") == 0, "fit: trailing spaces");
+    memset(line, 0, sizeof(line));
+    strcpy(line, "  Label:");
+    memset(line + 8, ' ', 85);
+    CHECK(strcmp(fit79(line), "  Label:") == 0, "fit: a label alone");
+    CHECK(strcmp(fit79("a\rb\r"), "a\r\nb\r\n") == 0, "fit: a lone CR");
+    memset(line, 0, sizeof(line));
+    memset(line, 'x', 40);
+    line[40] = ' ';
+    memset(line + 41, 'y', 39);
+    s = fit79(line);
+    CHECK(strlen(s) == 81 && s[40] == '\r' && s[41] == '\n',
+          "fit: 80 columns broken");
+    /* An indent past the width: no hang further in than half the line. */
+    memset(line, 0, sizeof(line));
+    memset(line, ' ', 100);
+    strcpy(line + 100, "word other");
+    s = fit79(line);
+    CHECK(strncmp(s + 104, "\r\n", 2) == 0 && strspn(s + 106, " ") == 39 &&
+          strcmp(s + 145, "other") == 0, "fit: a deep indent");
+    /* A value read as it is: whole, its mark dropped. */
+    memset(line, 0, sizeof(line));
+    line[0] = TR_FIT_WHOLE;
+    strcpy(line + 1, "  Serial number: ");
+    for (k = 0; k < 12; k++) {
+        strcat(line, "AAAA BBBB ");
+    }
+    strcat(line, "\nnext");
+    tr_text_init(&t, fitOut, sizeof(fitOut));
+    tr_fit_text(&t, line, TR_TEXT_COLS);
+    CHECK(strncmp(fitOut, line + 1, 137) == 0 &&
+          strcmp(fitOut + 137, "\r\nnext") == 0, "fit: a value kept whole");
+    /* A quoted string is not broken. */
+    s = fit79("  Its vendor:           \"Some Vendor Name With Many Words In It, "
+              "Incorporated, Limited\" and more");
+    CHECK(strcmp(s, "  Its vendor:           \"Some Vendor Name With Many Words "
+                    "In It, Incorporated, Limited\"\r\n"
+                    "                        and more") == 0,
+          "fit: a quoted string whole");
+    /* Bounded, and said: the cut mark on the fitted text. */
+    tr_text_init(&t, small, sizeof(small));
+    tr_fit_text(&t, "  one, two, three, four, five, six, seven, eight, nine, "
+                    "ten, eleven, twelve, thirteen", TR_TEXT_COLS);
+    CHECK(t.Overflow && strlen(small) < sizeof(small), "fit: bounded");
+    {
+        static char mid[300];
+        tr_text_init(&t, mid, sizeof(mid));
+        for (k = 0; k < 6; k++) {
+            tr_fit_text(&t, "  one, two, three, four, five, six, seven, eight, "
+                            "nine, ten, eleven, twelve, thirteen\n",
+                        TR_TEXT_COLS);
+        }
+        tr_text_mark_cut(&t);
+        CHECK(t.Overflow && strlen(mid) < sizeof(mid) &&
+              strcmp(mid + strlen(mid) - strlen(TR_CUT_MARK), TR_CUT_MARK) == 0,
+              "fit: an overflow marked cut");
+    }
+    /* A field's paragraph, already wrapped by its maker, joined and fitted
+     * again when a line of it is too wide; a paragraph that fits, a line
+     * with no label and a new field are left apart. */
+    tr_text_init(&t, fitOut, sizeof(fitOut));
+    tr_fit_text(&t, "  Note:          To restart it, right-click the controller "
+                    "and choose Restart\n                 Controller.\n"
+                    "  Next:          x\n", 69);
+    CHECK(strcmp(fitOut, "  Note:          To restart it, right-click the "
+                         "controller and choose\r\n                 Restart "
+                         "Controller.\r\n  Next:          x\r\n") == 0,
+          "fit: a field's paragraph joined");
+    tr_text_init(&t, fitOut, sizeof(fitOut));
+    tr_fit_text(&t, "  Involved:      The driver did not record which device "
+                    "was involved.\n                 XhciFailedRetrySec is 0, "
+                    "so the driver will not try it again\n                 by "
+                    "itself. It stays stopped until it is restarted.\n"
+                    "  Recovery requests (newest first):\n", 69);
+    CHECK(strcmp(fitOut, "  Involved:      The driver did not record which "
+                         "device was involved.\r\n                 "
+                         "XhciFailedRetrySec is 0,\r\n                 so the "
+                         "driver will not try it again by itself.\r\n"
+                         "                 It stays stopped until it is "
+                         "restarted.\r\n  Recovery requests (newest first):"
+                         "\r\n") == 0,
+          "fit: a paragraph's later line joined with the rest");
+    tr_text_init(&t, fitOut, sizeof(fitOut));
+    tr_fit_text(&t, "  (99999 more values not listed: the report lists 256 "
+                    "values / 64 KB of a key)\n  256 values\n", 50);
+    CHECK(strcmp(fitOut, "  (99999 more values not listed:\r\n  the report "
+                         "lists 256 values / 64 KB of a key)\r\n  256 values"
+                         "\r\n") == 0, "fit: a line with no label not joined");
+    /* The joining's edges: a last line with no end, CR LF and a lone CR, a
+     * line marked whole and a blank line ending the paragraph, and the
+     * paragraph's buffer exhausted. */
+    s = "  Note:          one two three four five six seven eight nine ten\n"
+        "                 eleven twelve";
+    tr_text_init(&t, fitOut, sizeof(fitOut));
+    tr_fit_text(&t, s, 40);
+    fit_squeeze(s, fitA, sizeof(fitA));
+    fit_squeeze(fitOut, fitB, sizeof(fitB));
+    CHECK(!t.Overflow && strcmp(fitA, fitB) == 0 && fit_widest(fitOut) <= 40 &&
+          fitOut[strlen(fitOut) - 1] == 'e', "fit: joined, no end kept");
+    tr_text_init(&t, fitOut, sizeof(fitOut));
+    tr_fit_text(&t, "  Note:          one two three four five six seven eight "
+                    "nine ten\r\n                 eleven twelve\r", 40);
+    CHECK(strlen(fitOut) >= 8 &&
+          strcmp(fitOut + strlen(fitOut) - 8, "twelve\r\n") == 0 &&
+          strstr(fitOut, "\r\r") == NULL, "fit: joined, CR LF and a lone CR");
+    memset(line, 0, sizeof(line));
+    strcpy(line, "  Note:          one two three four five six seven eight "
+                 "nine ten\n");
+    k = (int)strlen(line);
+    line[k] = TR_FIT_WHOLE;
+    strcpy(line + k + 1, "                 kept whole\n\n                 tail\n");
+    tr_text_init(&t, fitOut, sizeof(fitOut));
+    tr_fit_text(&t, line, 40);
+    CHECK(strstr(fitOut, "ten\r\n                 kept whole\r\n\r\n"
+                         "                 tail\r\n") != NULL &&
+          strchr(fitOut, TR_FIT_WHOLE) == NULL,
+          "fit: a whole line ends the paragraph");
+    tr_text_init(&t, fitOut, sizeof(fitOut));
+    tr_fit_text(&t, "  Note:          one two three four five six seven eight "
+                    "nine ten\n\n                 tail\n", 40);
+    CHECK(strstr(fitOut, "ten\r\n\r\n                 tail\r\n") != NULL,
+          "fit: a blank line ends the paragraph");
+    {
+        static char many[6000];
+        many[0] = '\0';
+        strcpy(many, "  Note:          ");
+        for (k = 0; k < 60; k++) {
+            strcat(many, "words in a long paragraph that goes on and on\n"
+                         "                 ");
+        }
+        strcat(many, "end\n");
+        tr_text_init(&t, fitOut, sizeof(fitOut));
+        tr_fit_text(&t, many, 40);
+        fit_squeeze(many, fitA, sizeof(fitA));
+        fit_squeeze(fitOut, fitB, sizeof(fitB));
+        CHECK(!t.Overflow && strcmp(fitA, fitB) == 0 &&
+              fit_widest(fitOut) <= 40, "fit: past the paragraph's buffer");
+    }
+    /* Save Report's lead: each node fitted to its own width. */
+    CHECK(tr_report_width(0) == 73 && tr_report_width(4) == 65 &&
+          tr_report_width(40) == 20, "fit: the report's widths");
+    {
+        static char node[2048];
+        tr_text_init(&t, fitOut, sizeof(fitOut));
+        tr_fit_text(&t, "  Transport:     UAS (the only transport the device "
+                        "offers; XhciForceBulkOnly does not apply to it)\n"
+                        "  Blocked: a device on this port was stopped and not "
+                        "removed. Shut down\n", tr_report_width(4));
+        tr_text_init(&t, node, sizeof(node));
+        tr_report_node(&t, 4, "[Port 1] USB Flash Disk  SuperSpeed", fitOut);
+        CHECK(!t.Overflow && fit_widest(node) <= 79, "fit: a node at depth 4");
+    }
+    /* The pane's descriptors: the companion's Mult line fitted. */
+    {
+        static const unsigned char iso[] = {
+            9, 2, 31, 0, 1, 1, 0, 0x80, 50,
+            9, 4, 0, 0, 1, 0x01, 0x02, 0x00, 0,
+            7, 5, 0x81, 0x05, 0x00, 0x04, 1,
+            6, 0x30, 2, 0x02, 0x00, 0x0C
+        };
+        static char raw[4096];
+        tr_text_init(&t, raw, sizeof(raw));
+        tr_dec_config(&t, iso, sizeof(iso));
+        CHECK(fit_widest(raw) > 79, "fit: the decode passes 79 as written");
+        s = fit79(raw);
+        CHECK(fit_widest(s) <= 79 && has(s, "(Mult 2: up to 3 bursts"),
+              "fit: the decode within 79");
+    }
+}
+
 int main(void)
 {
     test_main_title();
+    test_fit();
+    test_lead_cuts();
+    test_lead_entry();
     test_at_records();
     test_printf();
     test_hex_names();
@@ -5703,16 +6540,17 @@ int main(void)
         CHECK(strcmp(out, "E:, F:, Z:") == 0, "letters: text");
         tr_letters_text("", out, sizeof(out));
         CHECK(out[0] == '\0', "letters: none");
-        tr_unit_label("NVM Express Controller", "Samsung SSD 970 EVO", "E", out,
-                      sizeof(out));
+        tr_unit_label("NVM Express Controller", "Samsung SSD 970 EVO", "E",
+                      NULL, out, sizeof(out));
         CHECK(strcmp(out, "Samsung SSD 970 EVO (E:)") == 0, "label: a disk and its letter");
-        tr_unit_label("NVM Express Controller", "QEMU NVMe Ctrl", "EF", out,
-                      sizeof(out));
+        tr_unit_label("NVM Express Controller", "QEMU NVMe Ctrl", "EF", NULL,
+                      out, sizeof(out));
         CHECK(strcmp(out, "QEMU NVMe Ctrl (E:, F:)") == 0, "label: two letters");
-        tr_unit_label("NVM Express Controller", "QEMU NVMe Ctrl", "", out,
-                      sizeof(out));
+        tr_unit_label("NVM Express Controller", "QEMU NVMe Ctrl", "", NULL,
+                      out, sizeof(out));
         CHECK(strcmp(out, "QEMU NVMe Ctrl") == 0, "label: a disk with no letter");
-        tr_unit_label("USB xHCI Compliant Host Controller", "", "", out, sizeof(out));
+        tr_unit_label("USB xHCI Compliant Host Controller", "", "", NULL, out,
+                      sizeof(out));
         CHECK(strcmp(out, "USB xHCI Compliant Host Controller") == 0,
               "label: no disk keeps the device name");
         tr_disk_line("QEMU NVMe Ctrl", "E", out, sizeof(out));
@@ -5746,12 +6584,230 @@ int main(void)
                 names[k] = (char)('a' + (k % 26));
             }
             names[sizeof(names) - 1] = '\0';
-            tr_unit_label("Unit", names, "EF", lab, sizeof(lab));
+            tr_unit_label("Unit", names, "EF", NULL, lab, sizeof(lab));
             CHECK(strlen(lab) == sizeof(lab) - 1 &&
                   strcmp(lab + strlen(lab) - 12, "... (E:, F:)") == 0,
                   "label: long names end in ..., the letters kept whole");
-            tr_unit_label("Unit", "Disk", all, lab, sizeof(lab));
+            tr_unit_label("Unit", "Disk", all, NULL, lab, sizeof(lab));
             CHECK(strcmp(lab, "Disk") == 0, "label: no room for the letters keeps the name");
+
+            /* Task 50.39 (record 25 section 28 item 5): the tray's cut. */
+            CHECK(tr_tray_label_chars(640, 0) == 60 &&
+                  tr_tray_label_chars(800, 0) == 75 &&
+                  tr_tray_label_chars(1024, 0) == 96 &&
+                  tr_tray_label_chars(1280, 0) == 120 &&
+                  tr_tray_label_chars(1696, 0) == TR_TRAY_LABEL_MAX &&
+                  tr_tray_label_chars(2560, 0) == TR_TRAY_LABEL_MAX,
+                  "tray: 60 characters at 640, in proportion, at most 159");
+            CHECK(tr_tray_label_chars(640, 20) == 60 &&
+                  tr_tray_label_chars(640, 43) == 38 &&
+                  tr_tray_label_chars(800, 43) == 65 &&
+                  tr_tray_label_chars(1024, 61) == 84 &&
+                  tr_tray_label_chars(1280, 61) == 120,
+                  "tray: the item within the width with its reason");
+            CHECK(tr_tray_label_chars(640, 61) == TR_TRAY_LABEL_MIN &&
+                  tr_tray_label_chars(200, 0) == TR_TRAY_LABEL_MIN,
+                  "tray: never under 24 characters");
+            CHECK(tr_tray_label_chars(0, 0) == TR_TRAY_LABEL_MAX &&
+                  tr_tray_label_chars(-1, 43) == TR_TRAY_LABEL_MAX,
+                  "tray: a width not read keeps 159");
+            tr_tray_label("Unit", names, "EF", 60, NULL, lab, sizeof(lab));
+            CHECK(strlen(lab) == 60 && strncmp(lab, names, 48) == 0 &&
+                  strcmp(lab + 48, "... (E:, F:)") == 0,
+                  "tray: disks cut at 60 with ..., the letters kept whole");
+            tr_tray_label(names, "", "", 30, NULL, lab, sizeof(lab));
+            CHECK(strlen(lab) == 30 && strncmp(lab, names, 27) == 0 &&
+                  strcmp(lab + 27, "...") == 0,
+                  "tray: a name with no disks cut with ...");
+            tr_unit_label(names, "", "", NULL, lab, 31);
+            CHECK(strlen(lab) == 30 && strncmp(lab, names, 30) == 0,
+                  "label: elsewhere a name with no disks is cut as before");
+            tr_tray_label("Unit", names, all, 40, NULL, lab, sizeof(lab));
+            CHECK(strlen(lab) == 40 && strncmp(lab, names, 37) == 0 &&
+                  strcmp(lab + 37, "...") == 0,
+                  "tray: letters that leave no room, the names cut with ...");
+            tr_tray_label("Unit", "Disk", all, 40, NULL, lab, sizeof(lab));
+            CHECK(strcmp(lab, "Disk") == 0,
+                  "tray: letters that leave no room, a short name kept");
+            tr_tray_label("Unit", "Samsung SSD 970 EVO", "E", 60, NULL,
+                          lab, sizeof(lab));
+            CHECK(strcmp(lab, "Samsung SSD 970 EVO (E:)") == 0,
+                  "tray: a label within its length as it is");
+            tr_tray_label("A name", "", "", 60, NULL, lab, sizeof(lab));
+            CHECK(strcmp(lab, "A name") == 0, "tray: a short name as it is");
+            tr_tray_label(names, "", "", TR_TRAY_LABEL_MAX, NULL, lab, sizeof(lab));
+            CHECK(strlen(lab) == sizeof(lab) - 1 &&
+                  strcmp(lab + sizeof(lab) - 4, "...") == 0,
+                  "tray: bounded by out as well");
+            {
+                char g[8];
+                memset(g, 'x', sizeof(g));
+                tr_tray_label("abcdef", "", "", 0, NULL, g, 0);
+                CHECK(g[0] == 'x', "tray: no room, nothing written");
+                tr_tray_label("abcdef", "", "", 0, NULL, g, 4);
+                CHECK(strcmp(g, "abc") == 0 && g[4] == 'x',
+                      "tray: under five bytes cut plainly");
+                memset(g, 'x', sizeof(g));
+                tr_tray_label("abcdef", "", "", 0, NULL, g, 5);
+                CHECK(strcmp(g, "a...") == 0 && g[5] == 'x',
+                      "tray: five bytes, one letter and ...");
+                memset(g, 'x', sizeof(g));
+                tr_tray_label("abcdef", "", "", 0, NULL, g, 7);
+                CHECK(strcmp(g, "abcdef") == 0 && g[7] == 'x',
+                      "tray: a name of cap - 1 kept whole");
+                memset(g, 'x', sizeof(g));
+                tr_tray_label("abcdef", "", "", 5, NULL, g, sizeof(g));
+                CHECK(strcmp(g, "ab...") == 0 && g[6] == 'x' && g[7] == 'x',
+                      "tray: cut at its length, nothing written past it");
+            }
+            {
+                /* Task 50.39: a double-byte name (Shift-JIS lead bytes) is
+                 * cut between characters, never between a lead and a
+                 * trail byte. */
+                char dn[80];
+                char d1[80];
+                char cut[64];
+                char g[8];
+                int k;
+                for (k = 0; k < 31; k++) {
+                    dn[2 * k] = (char)0x82;
+                    dn[2 * k + 1] = (char)0xA0;
+                    d1[2 * k] = (char)0x88;
+                    d1[2 * k + 1] = (char)0x9F;
+                }
+                dn[62] = '\0';
+                d1[62] = '\0';
+                tr_tray_label(dn, "", "", 60, sjis_lead, cut, sizeof(cut));
+                CHECK(strlen(cut) == 59 && memcmp(cut, dn, 56) == 0 &&
+                      strcmp(cut + 56, "...") == 0,
+                      "tray: 31 double-byte characters at 60: 28 whole, ...");
+                tr_tray_label(d1, "", "", 60, sjis_lead, cut, sizeof(cut));
+                CHECK(strlen(cut) == 59 && memcmp(cut, d1, 56) == 0 &&
+                      strcmp(cut + 56, "...") == 0,
+                      "tray: a trail byte that looks like a lead byte");
+                cut[0] = 'a';
+                memcpy(cut + 1, dn, 60);
+                cut[61] = '\0';
+                tr_tray_label(cut, "", "", 60, sjis_lead, d1, sizeof(d1));
+                CHECK(strlen(d1) == 60 && d1[0] == 'a' &&
+                      memcmp(d1 + 1, dn, 56) == 0 &&
+                      strcmp(d1 + 57, "...") == 0,
+                      "tray: one byte, then double-byte characters");
+                tr_tray_label(dn, "", "", 60, NULL, cut, sizeof(cut));
+                CHECK(strlen(cut) == 60 && strcmp(cut + 57, "...") == 0,
+                      "tray: without a lead test every byte is a character");
+                tr_tray_label("Unit", dn, "EF", 31, sjis_lead, cut,
+                              sizeof(cut));
+                CHECK(strlen(cut) == 30 && memcmp(cut, dn, 18) == 0 &&
+                      strcmp(cut + 18, "... (E:, F:)") == 0,
+                      "tray: disks' names cut between characters, letters whole");
+                tr_tray_label("Unit", dn, all, 40, sjis_lead, cut,
+                              sizeof(cut));
+                CHECK(strlen(cut) == 39 && memcmp(cut, dn, 36) == 0 &&
+                      strcmp(cut + 36, "...") == 0,
+                      "tray: no room for the letters, cut between characters");
+                memset(g, 'x', sizeof(g));
+                tr_tray_label(dn, "", "", 0, sjis_lead, g, 4);
+                CHECK(strlen(g) == 2 && memcmp(g, dn, 2) == 0 && g[4] == 'x',
+                      "tray: under five bytes, one whole character");
+                tr_unit_label("Unit", dn, "EF", NULL, cut, 32);
+                CHECK(strlen(cut) == 31 && memcmp(cut, dn, 19) == 0,
+                      "label: tr_unit_label without a lead test as before");
+                tr_unit_label("Unit", dn, "EF", sjis_lead, cut, 32);
+                CHECK(strlen(cut) == 30 && memcmp(cut, dn, 18) == 0 &&
+                      strcmp(cut + 18, "... (E:, F:)") == 0,
+                      "label: tr_unit_label's cut between characters");
+            }
+            {
+                /* Task 50.39 (record 25 section 28 item 9): the tree's own
+                 * label is cut between characters too. 159 bytes of label
+                 * with the letters " (E:, F:)" leave 150 for the disks'
+                 * names; a cut keeps at most 147 of them before "...". */
+                char nm[200];
+                char lb[160];
+                char l0[160];
+                size_t n;
+                int same;
+                dbcs_name(nm, 1, 74);
+                tr_unit_label("Unit", nm, "EF", sjis_lead, lb, sizeof(lb));
+                CHECK(strlen(nm) == 149 && strlen(lb) == 158 &&
+                      memcmp(lb, nm, 149) == 0 &&
+                      strcmp(lb + 149, " (E:, F:)") == 0,
+                      "label: double-byte names a byte under their room kept whole");
+                dbcs_name(nm, 0, 75);
+                tr_unit_label("Unit", nm, "EF", sjis_lead, lb, sizeof(lb));
+                CHECK(strlen(nm) == 150 && strlen(lb) == 159 &&
+                      memcmp(lb, nm, 150) == 0 &&
+                      strcmp(lb + 150, " (E:, F:)") == 0,
+                      "label: double-byte names at their room kept whole");
+                dbcs_name(nm, 1, 75);
+                tr_unit_label("Unit", nm, "EF", sjis_lead, lb, sizeof(lb));
+                CHECK(strlen(nm) == 151 && strlen(lb) == 159 &&
+                      memcmp(lb, nm, 147) == 0 &&
+                      strcmp(lb + 147, "... (E:, F:)") == 0,
+                      "label: a byte over, the cut at a character's end");
+                dbcs_name(nm, 0, 76);
+                tr_unit_label("Unit", nm, "EF", sjis_lead, lb, sizeof(lb));
+                CHECK(strlen(nm) == 152 && strlen(lb) == 158 &&
+                      memcmp(lb, nm, 146) == 0 &&
+                      strcmp(lb + 146, "... (E:, F:)") == 0,
+                      "label: two bytes over, a byte sooner, not inside a character");
+                tr_unit_label("Unit", nm, "EF", NULL, l0, sizeof(l0));
+                CHECK(strlen(l0) == 159 && memcmp(l0, nm, 147) == 0 &&
+                      (unsigned char)l0[146] == 0x82 &&
+                      strcmp(l0 + 147, "... (E:, F:)") == 0,
+                      "label: without a lead test the cut as before, a lead byte last");
+                dbcs_name(nm, 0, 79);
+                tr_unit_label(nm, "", "", sjis_lead, lb, sizeof(lb));
+                CHECK(strlen(nm) == 158 && strcmp(lb, nm) == 0,
+                      "label: a double-byte name alone under its room kept whole");
+                dbcs_name(nm, 1, 79);
+                tr_unit_label(nm, "", "", sjis_lead, lb, sizeof(lb));
+                CHECK(strlen(nm) == 159 && strcmp(lb, nm) == 0,
+                      "label: a double-byte name alone at its room kept whole");
+                dbcs_name(nm, 0, 80);
+                tr_unit_label(nm, "", "", sjis_lead, lb, sizeof(lb));
+                tr_unit_label(nm, "", "", NULL, l0, sizeof(l0));
+                CHECK(strlen(lb) == 158 && memcmp(lb, nm, 158) == 0 &&
+                      strlen(l0) == 159 && (unsigned char)l0[158] == 0x82,
+                      "label: a double-byte name alone a byte over, cut a byte sooner");
+                dbcs_name(nm, 1, 80);
+                tr_unit_label(nm, "", "", sjis_lead, lb, sizeof(lb));
+                CHECK(strlen(lb) == 159 && memcmp(lb, nm, 159) == 0,
+                      "label: a name alone two bytes over, cut at a character's end");
+                dbcs_name(nm, 0, 40);
+                tr_unit_label("Unit", nm, all, sjis_lead, lab, sizeof(lab));
+                tr_unit_label("Unit", nm, all, NULL, l0, sizeof(lab));
+                CHECK(strlen(lab) == 62 && memcmp(lab, nm, 62) == 0 &&
+                      strlen(l0) == 63 && (unsigned char)l0[62] == 0x82,
+                      "label: no room for the letters, cut between characters");
+                same = 1;
+                for (n = 140; n <= 170; n++) {
+                    for (k = 0; k < n; k++) {
+                        nm[k] = (char)('a' + (k % 26));
+                    }
+                    nm[n] = '\0';
+                    tr_unit_label("Unit", nm, "EF", sjis_lead, lb, sizeof(lb));
+                    tr_unit_label("Unit", nm, "EF", NULL, l0, sizeof(l0));
+                    same = same && strcmp(lb, l0) == 0;
+                    tr_unit_label(nm, "", "", sjis_lead, lb, sizeof(lb));
+                    tr_unit_label(nm, "", "", NULL, l0, sizeof(l0));
+                    same = same && strcmp(lb, l0) == 0;
+                    tr_unit_label("Unit", nm, all, sjis_lead, lb, 64);
+                    tr_unit_label("Unit", nm, all, NULL, l0, 64);
+                    same = same && strcmp(lb, l0) == 0;
+                    for (k = 0; k < n; k++) {
+                        nm[k] = (char)(0x80 + (k % 0x7F));
+                    }
+                    tr_unit_label("Unit", nm, "EF", sb_lead, lb, sizeof(lb));
+                    tr_unit_label("Unit", nm, "EF", NULL, l0, sizeof(l0));
+                    same = same && strcmp(lb, l0) == 0;
+                    tr_unit_label(nm, "", "", sb_lead, lb, sizeof(lb));
+                    tr_unit_label(nm, "", "", NULL, l0, sizeof(l0));
+                    same = same && strcmp(lb, l0) == 0;
+                }
+                CHECK(same, "label: single-byte names cut as before with a lead test");
+            }
         }
     }
     {

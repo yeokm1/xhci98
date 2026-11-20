@@ -199,6 +199,72 @@ ULONG XhciTolHaltConfirmed(ULONG epState)
             epState == XHCI_EP_STATE_ERROR) ? 1UL : 0UL;
 }
 
+ULONG XhciTolCmdVerdict(ULONG code)
+{
+    return (code == XHCI_CC_COMMAND_ABORTED || code == XHCI_TOL_CMD_LEFT)
+               ? 1UL
+               : 0UL;
+}
+
+ULONG XhciTolFrozenAdmits(ULONG type, ULONG teardown)
+{
+    return (teardown && (type == XHCI_TRB_TYPE_STOP_EP ||
+                         type == XHCI_TRB_TYPE_DISABLE_SLOT))
+               ? 1UL
+               : 0UL;
+}
+
+ULONG XhciTolFaultStep(ULONG marked, ULONG hub, ULONG published,
+                       ULONG cycled)
+{
+    if (!marked) {
+        return XHCI_TOL_FAULT_NONE;
+    }
+    if (hub) {
+        return XHCI_TOL_FAULT_RESET;
+    }
+    if (!published) {
+        return XHCI_TOL_FAULT_STEP;
+    }
+    return cycled ? XHCI_TOL_FAULT_OWED : XHCI_TOL_FAULT_CYCLE;
+}
+
+ULONG XhciTolLateAlone(ULONG isolate, ULONG left, ULONG present,
+                       ULONG verdict)
+{
+    return (isolate && !left && present &&
+            (verdict == XHCI_TOL_LATE_CYCLE ||
+             verdict == XHCI_TOL_LATE_LEFT)) ? 1UL : 0UL;
+}
+
+ULONG XhciTolMarkedFails(ULONG debtClear, ULONG gone, ULONG failedAlone,
+                         ULONG cmdLeft, ULONG abortVerdict,
+                         ULONG admitRefused)
+{
+    return (debtClear && !gone && !failedAlone &&
+            (cmdLeft != 0 || abortVerdict != 0 || admitRefused != 0))
+               ? 1UL
+               : 0UL;
+}
+
+ULONG XhciTolAdmitOwesReset(ULONG trbType, ULONG hasRecord,
+                            ULONG teardown)
+{
+    return (hasRecord && !teardown && trbType == XHCI_TRB_TYPE_STOP_EP)
+               ? 1UL
+               : 0UL;
+}
+
+ULONG XhciTolAdmitMarks(ULONG trbType, ULONG hasRecord)
+{
+    if (!hasRecord || trbType == XHCI_TRB_TYPE_ENABLE_SLOT ||
+        trbType == XHCI_TRB_TYPE_DISABLE_SLOT ||
+        trbType == XHCI_TRB_TYPE_NOOP_COMMAND) {
+        return 0;
+    }
+    return 1;
+}
+
 ULONG XhciTolStopRest(const XHCI_TOL_STOP_IO *io, PULONG state,
                       PULONG restops)
 {
@@ -209,6 +275,10 @@ ULONG XhciTolStopRest(const XHCI_TOL_STOP_IO *io, PULONG state,
     *restops = 0;
     code = io->Stop(io->Context);
     for (;;) {
+        if (XhciTolCmdVerdict(code)) {
+            *state = XHCI_EP_STATE_RUNNING;
+            return XHCI_TOL_STOP_ABORTED;
+        }
         s = io->State(io->Context);
         *state = s;
         if (code != XHCI_CC_SUCCESS && code != XHCI_CC_CONTEXT_STATE_ERROR) {
@@ -356,6 +426,12 @@ ULONG XhciTolWaitResolved(ULONG reason, ULONG done, ULONG expired)
 
 ULONG XhciTolLateStopped(ULONG stopCode, ULONG epState, ULONG done)
 {
+    /* Task 50.30 step 3 (section 4.15.5a, the hcdEp0Late row): an aborted
+     * or left Stop says nothing of whether it ran, and a completion of the
+     * transfer says nothing of it either: classified first. */
+    if (XhciTolCmdVerdict(stopCode)) {
+        return XHCI_TOL_LATE_RESET;
+    }
     if (done) {
         return XHCI_TOL_LATE_DONE;
     }
@@ -370,10 +446,16 @@ ULONG XhciTolLateStopped(ULONG stopCode, ULONG epState, ULONG done)
 }
 
 ULONG XhciTolLateVerdict(ULONG left, ULONG present, ULONG hub,
-                         ULONG published)
+                         ULONG published, ULONG isolate)
 {
     if (left) {
         return XHCI_TOL_LATE_LEFT;
+    }
+    if (isolate) {
+        if (hub) {
+            return XHCI_TOL_LATE_RESET;
+        }
+        return published ? XHCI_TOL_LATE_CYCLE : XHCI_TOL_LATE_LEFT;
     }
     if (present || hub) {
         return XHCI_TOL_LATE_RESET;
@@ -528,8 +610,11 @@ ULONG XhciTolLocObserveChange(PXHCI_TOL_LOC loc, ULONG connected,
     }
     loc->DiscSeen = 0;
     xhciTolLocRearm(loc);
-    /* A port held unpowered is released only by a controller start. */
-    if (loc->Hold == XHCI_TOL_HOLD_REENUMS) {
+    /* A port held unpowered is released only by a controller start; one
+     * held because its device stopped answering, as REENUMS (task 50.30
+     * step 3, design record 17 section 4.15.4). */
+    if (loc->Hold == XHCI_TOL_HOLD_REENUMS ||
+        loc->Hold == XHCI_TOL_HOLD_UNANSWERED) {
         loc->Hold = (UCHAR)XHCI_TOL_HOLD_NONE;
     }
     return 1;
@@ -885,6 +970,11 @@ ULONG XhciTolResumeRefused(ULONG terminal)
                : 0UL;
 }
 
+ULONG XhciTolResumeFailures(ULONG failures, ULONG reinitialized)
+{
+    return reinitialized ? 0UL : failures;
+}
+
 ULONG XhciTolShutLatch(ULONG systemPower)
 {
     return (systemPower == XHCI_TOL_SYSTEM_SHUTDOWN) ? 1UL : 0UL;
@@ -997,4 +1087,758 @@ VOID XhciTolCountCode(PXHCI_TOL_STATS stats, ULONG code)
     if (stats != NULL && code < 256) {
         stats->Codes[code]++;
     }
+}
+
+/* ------------------------------------------------------------------ */
+/* Task 50.30 step 1: the reset reasons (record 17 section 4.15.8)      */
+/* ------------------------------------------------------------------ */
+
+static VOID xhciTolRecClear(PXHCI_RESET_REC r)
+{
+    r->Reason = 0;
+    r->Extra = 0;
+    r->Slot = 0;
+    r->RootPort = 0;
+    r->Route = 0;
+    r->VidPid = 0;
+    r->Clock = 0;
+    r->Recoveries = 0;
+}
+
+VOID XhciTolWhyInit(PXHCI_TOL_WHY w)
+{
+    ULONG i;
+
+    if (w == NULL) {
+        return;
+    }
+    for (i = 0; i < XHCI_WHY_COUNTERS; i++) {
+        w->Counts[i] = 0;
+    }
+    w->Next = 0;
+    w->Kept = 0;
+    w->Latched = 0;
+    w->Staged = 0;
+    w->StagedExtra = 0;
+    w->StagedLost = 0;
+    for (i = 0; i < XHCI_WHY_RING; i++) {
+        xhciTolRecClear(&w->Rec[i]);
+    }
+    w->StagedSlot = 0;
+    w->StagedPort = 0;
+    w->StagedRoute = 0;
+    w->StagedVidPid = 0;
+    w->SpreadCount = 0;
+    w->SpreadNext = 0;
+    w->IsolationValue = XHCI_TOL_ISO_NONE;
+    w->IsolationState = 0;
+    for (i = 0; i < XHCI_TOL_SPREAD_RING; i++) {
+        w->Spread[i].Place = 0;
+        w->Spread[i].Hub = 0;
+        w->Spread[i].VidPid = 0;
+        w->Spread[i].Clock = 0;
+    }
+}
+
+ULONG XhciTolSpreadAdd(PXHCI_TOL_WHY w, ULONG place, ULONG hub, ULONG vidPid,
+                       ULONG clock)
+{
+    PXHCI_TOL_SPREAD_REC r;
+
+    if (w == NULL) {
+        return 0;
+    }
+    if (w->SpreadNext >= XHCI_TOL_SPREAD_RING) {
+        w->SpreadNext = 0;
+    }
+    r = &w->Spread[w->SpreadNext];
+    r->Place = place;
+    r->Hub = hub;
+    r->VidPid = vidPid;
+    r->Clock = clock;
+    w->SpreadNext = (w->SpreadNext + 1) % XHCI_TOL_SPREAD_RING;
+    if (w->SpreadCount != 0xFFFFFFFFUL) {
+        w->SpreadCount++;
+    }
+    return w->SpreadCount;
+}
+
+ULONG XhciTolWhyNote(const XHCI_RESET_REC *rec)
+{
+    if (rec == NULL) {
+        return 0;
+    }
+    return ((rec->Reason & 0xFFUL) << 24) | ((rec->RootPort & 0xFFUL) << 16) |
+           ((rec->Slot & 0xFFUL) << 8) | (rec->Extra & 0xFFUL);
+}
+
+ULONG XhciTolWhyRecord(PXHCI_TOL_WHY w, const XHCI_RESET_REC *rec,
+                       ULONG begins)
+{
+    ULONG reason;
+    ULONG at;
+
+    if (w == NULL || rec == NULL) {
+        return 0;
+    }
+    reason = rec->Reason < XHCI_WHY_COUNT ? rec->Reason : XHCI_WHY_NONE;
+    w->Counts[reason]++;
+    if (begins) {
+        at = w->Next < XHCI_WHY_RING ? w->Next : 0;
+        w->Rec[at] = *rec;
+        w->Rec[at].Reason = reason;
+        w->Next = (at + 1) % XHCI_WHY_RING;
+        if (w->Kept < XHCI_WHY_RING) {
+            w->Kept++;
+        }
+        /* A newer recovery: a latch named earlier is no longer the last. */
+        w->Latched = 0;
+    }
+    return XhciTolWhyNote(rec);
+}
+
+VOID XhciTolWhyStage(PXHCI_TOL_WHY w, ULONG reason, ULONG extra,
+                     const XHCI_RESET_REC *place)
+{
+    if (w == NULL) {
+        return;
+    }
+    if (w->Staged != 0) {
+        w->StagedLost++;
+        return;
+    }
+    w->Staged = reason;
+    w->StagedExtra = extra;
+    if (place != NULL) {
+        w->StagedSlot = place->Slot;
+        w->StagedPort = place->RootPort;
+        w->StagedRoute = place->Route;
+        w->StagedVidPid = place->VidPid;
+    } else {
+        w->StagedSlot = 0;
+        w->StagedPort = 0;
+        w->StagedRoute = 0;
+        w->StagedVidPid = 0;
+    }
+}
+
+ULONG XhciTolWhyStageXfer(PXHCI_TOL_WHY w, ULONG fatal, ULONG matched,
+                          ULONG code, const XHCI_RESET_REC *place)
+{
+    if (fatal) {
+        XhciTolWhyStage(w, XHCI_WHY_XFER_FATAL, code,
+                        matched ? place : NULL);
+    }
+    return fatal;
+}
+
+ULONG XhciTolWhyTake(PXHCI_TOL_WHY w, PULONG extra, PXHCI_RESET_REC place)
+{
+    ULONG reason;
+
+    if (extra != NULL) {
+        *extra = 0;
+    }
+    if (place != NULL) {
+        xhciTolRecClear(place);
+    }
+    if (w == NULL) {
+        return XHCI_WHY_EVENT_RING;
+    }
+    reason = w->Staged;
+    if (reason == 0) {
+        reason = XHCI_WHY_EVENT_RING;
+    } else {
+        if (extra != NULL) {
+            *extra = w->StagedExtra;
+        }
+        if (place != NULL) {
+            place->Slot = w->StagedSlot;
+            place->RootPort = w->StagedPort;
+            place->Route = w->StagedRoute;
+            place->VidPid = w->StagedVidPid;
+        }
+    }
+    w->Staged = 0;
+    w->StagedExtra = 0;
+    w->StagedSlot = 0;
+    w->StagedPort = 0;
+    w->StagedRoute = 0;
+    w->StagedVidPid = 0;
+    return reason;
+}
+
+ULONG XhciTolLeftAdmit(ULONG state, ULONG settle, ULONG onList)
+{
+    if (state == XHCI_LEFT_CLEAR) {
+        return settle ? 0UL : 1UL;
+    }
+    if (state == XHCI_LEFT_SETTLING) {
+        return (settle && onList) ? 1UL : 0UL;
+    }
+    return 0;
+}
+
+ULONG XhciTolLeftInputOk(ULONG state)
+{
+    return state == XHCI_LEFT_CLEAR ? 1UL : 0UL;
+}
+
+ULONG XhciTolLeftSlotCheck(ULONG matched, ULONG code, ULONG slot,
+                           ULONG maxSlotsEn, ULONG owned, ULONG dcbaaLo,
+                           ULONG dcbaaHi, ULONG listed)
+{
+    if (!matched) {
+        return XHCI_LEFT_SLOT_UNMATCHED;
+    }
+    if (code != XHCI_CC_SUCCESS) {
+        return XHCI_LEFT_SLOT_CODE;
+    }
+    if (slot == 0 || slot > maxSlotsEn || slot > 255) {
+        return XHCI_LEFT_SLOT_RANGE;
+    }
+    if (owned) {
+        return XHCI_LEFT_SLOT_OWNED;
+    }
+    if (dcbaaLo != 0 || dcbaaHi != 0) {
+        return XHCI_LEFT_SLOT_DCBAA;
+    }
+    if (listed) {
+        return XHCI_LEFT_SLOT_LISTED;
+    }
+    return XHCI_LEFT_SLOT_OK;
+}
+
+ULONG XhciTolLeftSlotlessEnd(ULONG trbType, ULONG ended, ULONG code,
+                             ULONG slotCheck)
+{
+    if (trbType == XHCI_TRB_TYPE_NOOP_COMMAND) {
+        return XHCI_LEFT_END_CLEAR;
+    }
+    if (trbType != XHCI_TRB_TYPE_ENABLE_SLOT || !ended) {
+        return XHCI_LEFT_END_RESET;
+    }
+    if (code != XHCI_CC_SUCCESS) {
+        /* An Enable Slot answered with an error code allocated nothing. */
+        return XHCI_LEFT_END_CLEAR;
+    }
+    return slotCheck == XHCI_LEFT_SLOT_OK ? XHCI_LEFT_END_DISABLE
+                                          : XHCI_LEFT_END_RESET;
+}
+
+ULONG XhciTolLeftAfterRestore(ULONG state, ULONG namesDevice)
+{
+    if (state == XHCI_LEFT_CLEAR || namesDevice) {
+        return XHCI_LEFT_CLEAR;
+    }
+    return XHCI_LEFT_SETTLING;
+}
+
+XHCI_C_ASSERT(leftListMax, XHCI_LEFT_LIST_MAX == XHCI_MAX_SLOTS + 1UL);
+
+VOID XhciLeftDebtClear(PXHCI_LEFT_DEBT d)
+{
+    ULONG held;
+    ULONG deferred;
+    ULONG extra;
+    ULONG count;
+    XHCI_RESET_REC at;
+    ULONG i;
+    PUCHAR b;
+
+    held = d->EnableHeld;
+    deferred = d->Deferred;
+    extra = d->DeferredExtra;
+    count = d->DeferredCount;
+    at = d->DeferredAt;
+    b = (PUCHAR)d;
+    for (i = 0; i < sizeof(*d); i++) {
+        b[i] = 0;
+    }
+    d->Owed = XHCI_LEFT_CLEAR;
+    d->End = XHCI_LEFT_HOW_NONE;
+    d->EnableHeld = held;
+    d->Deferred = deferred;
+    d->DeferredExtra = extra;
+    d->DeferredCount = count;
+    d->DeferredAt = at;
+}
+
+VOID XhciLeftDebtHcrst(PXHCI_LEFT_DEBT d)
+{
+    ULONG i;
+    PUCHAR b;
+
+    b = (PUCHAR)d;
+    for (i = 0; i < sizeof(*d); i++) {
+        b[i] = 0;
+    }
+    d->Owed = XHCI_LEFT_CLEAR;
+    d->End = XHCI_LEFT_HOW_NONE;
+}
+
+ULONG XhciLeftDebtDefer(PXHCI_LEFT_DEBT d, ULONG reason, ULONG extra,
+                        const XHCI_RESET_REC *place)
+{
+    if (d->Owed == XHCI_LEFT_CLEAR || !XhciTolWhyThread(reason)) {
+        return 0;
+    }
+    d->DeferredCount++;
+    if (d->Deferred == 0) {
+        d->Deferred = reason;
+        d->DeferredExtra = extra;
+        d->DeferredAt.Reason = reason;
+        d->DeferredAt.Extra = extra;
+        d->DeferredAt.Slot = place != NULL ? place->Slot : 0UL;
+        d->DeferredAt.RootPort = place != NULL ? place->RootPort : 0UL;
+        d->DeferredAt.Route = place != NULL ? place->Route : 0UL;
+        d->DeferredAt.VidPid = place != NULL ? place->VidPid : 0UL;
+        d->DeferredAt.Clock = 0;
+        d->DeferredAt.Recoveries = 0;
+    }
+    return 1;
+}
+
+ULONG XhciLeftDebtTakeDeferred(PXHCI_LEFT_DEBT d, PULONG extra,
+                               PXHCI_RESET_REC place)
+{
+    ULONG reason;
+    ULONG i;
+    PUCHAR b;
+
+    reason = d->Deferred;
+    *extra = d->DeferredExtra;
+    *place = d->DeferredAt;
+    d->Deferred = 0;
+    d->DeferredExtra = 0;
+    b = (PUCHAR)&d->DeferredAt;
+    for (i = 0; i < sizeof(d->DeferredAt); i++) {
+        b[i] = 0;
+    }
+    return reason;
+}
+
+ULONG XhciTolTeardownStops(ULONG queued, ULONG retained, ULONG running)
+{
+    return ((queued || retained) && running) ? 1UL : 0UL;
+}
+
+ULONG XhciTolInputHeldAfter(ULONG held, ULONG disabled)
+{
+    return (held != 0 && held == disabled) ? 0UL : held;
+}
+
+ULONG XhciTolLeftNamedReset(ULONG trbType)
+{
+    return trbType == XHCI_TRB_TYPE_STOP_EP ? 1UL : 0UL;
+}
+
+ULONG XhciLeftDebtLeave(PXHCI_LEFT_DEBT d, ULONG settle, ULONG type,
+                        ULONG slot, ULONG pa, ULONG gen, ULONG device,
+                        ULONG lost, const XHCI_RESET_REC *place)
+{
+    if (settle || d->Owed != XHCI_LEFT_CLEAR) {
+        if (!d->Interrupted) {
+            d->InterruptedType = type;
+            d->InterruptedSlot = slot;
+        }
+        d->Interrupted = 1;
+        return XHCI_LEFT_TOOK_INTERRUPTED;
+    }
+    XhciLeftDebtClear(d);
+    d->Owed = XHCI_LEFT_OWED;
+    d->Type = type;
+    d->Slot = slot;
+    d->PA = pa;
+    d->Gen = gen;
+    d->Device = device ? 1UL : 0UL;
+    d->End = lost ? XHCI_LEFT_HOW_LOST : XHCI_LEFT_HOW_NONE;
+    if (d->Device && XhciTolLeftNamedReset(type)) {
+        (VOID)XhciLeftDebtDefer(d, XHCI_WHY_CMD_KEPT, type, place);
+    }
+    return XHCI_LEFT_TOOK_OWED;
+}
+
+ULONG XhciLeftDebtAdd(PXHCI_LEFT_DEBT d, ULONG kind, ULONG slot)
+{
+    if (d->Count >= XHCI_LEFT_LIST_MAX) {
+        d->Overflow = 1;
+        if (d->Reset == 0) {
+            d->Reset = XHCI_WHY_CMD_KEPT;
+            d->ResetSlot = slot;
+            d->ResetExtra = d->Type;
+        }
+        return 0;
+    }
+    d->List[d->Count].Kind = kind;
+    d->List[d->Count].Slot = slot;
+    d->Count++;
+    return 1;
+}
+
+ULONG XhciLeftDebtAddRecords(PXHCI_LEFT_DEBT d, const ULONG *tier)
+{
+    ULONG deepest;
+    ULONG lost;
+    ULONG t;
+    ULONG i;
+
+    deepest = 0;
+    for (i = 1; i <= XHCI_MAX_SLOTS; i++) {
+        if (tier[i] != XHCI_LEFT_TIER_NONE && tier[i] > deepest) {
+            deepest = tier[i];
+        }
+    }
+    lost = 0;
+    t = deepest;
+    for (;;) {
+        for (i = 1; i <= XHCI_MAX_SLOTS; i++) {
+            if (tier[i] == t && !XhciLeftDebtAdd(d, XHCI_LEFT_ENTRY_RECORD,
+                                                 i)) {
+                lost++;
+            }
+        }
+        if (t == 0) {
+            break;
+        }
+        t--;
+    }
+    return lost;
+}
+
+ULONG XhciLeftDebtListed(const XHCI_LEFT_DEBT *d, ULONG slot)
+{
+    ULONG i;
+
+    for (i = d->Head; i < d->Count && i < XHCI_LEFT_LIST_MAX; i++) {
+        if (d->List[i].Slot == slot) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+ULONG XhciLeftDebtPass(const XHCI_LEFT_DEBT *d, ULONG routes, ULONG genMoved)
+{
+    if (d->Owed == XHCI_LEFT_CLEAR || routes) {
+        return XHCI_LEFT_PASS_NONE;
+    }
+    if (d->Overflow) {
+        return XHCI_LEFT_PASS_FAIL;
+    }
+    if (d->Owed == XHCI_LEFT_OWED) {
+        return (d->End != XHCI_LEFT_HOW_NONE || genMoved)
+                   ? XHCI_LEFT_PASS_TAKE
+                   : XHCI_LEFT_PASS_NONE;
+    }
+    if (d->Interrupted) {
+        /* Revision 24: every route's bit is clear and neither a stop's
+         * teardown nor an HCRST has settled it - a failed settlement. */
+        return XHCI_LEFT_PASS_FAIL;
+    }
+    if (!d->Listed) {
+        return XHCI_LEFT_PASS_TAKE;
+    }
+    return d->Head >= d->Count ? XHCI_LEFT_PASS_CLEAR : XHCI_LEFT_PASS_NEXT;
+}
+
+ULONG XhciLeftDebtStep(const XHCI_LEFT_DEBT *d, ULONG routes, ULONG genMoved,
+                       ULONG failed, ULONG tainted)
+{
+    ULONG action;
+
+    if (failed) {
+        return XHCI_LEFT_PASS_NONE;
+    }
+    if (d->Owed == XHCI_LEFT_CLEAR) {
+        return (d->Deferred != 0 && !routes) ? XHCI_LEFT_PASS_CLEAR
+                                             : XHCI_LEFT_PASS_NONE;
+    }
+    action = XhciLeftDebtPass(d, routes, genMoved);
+    if (tainted && action == XHCI_LEFT_PASS_NEXT) {
+        return XHCI_LEFT_PASS_TAINTED;
+    }
+    return action;
+}
+
+VOID XhciLeftDebtTake(PXHCI_LEFT_DEBT d)
+{
+    if (d->Owed == XHCI_LEFT_OWED) {
+        if (d->End == XHCI_LEFT_HOW_NONE) {
+            d->End = XHCI_LEFT_HOW_LOST;
+        }
+        d->Owed = XHCI_LEFT_SETTLING;
+        d->Listed = 0;
+    }
+}
+
+VOID XhciLeftDebtFail(PXHCI_LEFT_DEBT d, ULONG why, ULONG slot, ULONG extra)
+{
+    if (d->Reset == 0) {
+        if (why != 0) {
+            d->Reset = why;
+            d->ResetSlot = slot;
+            d->ResetExtra = extra;
+        } else if (d->Interrupted) {
+            d->Reset = XHCI_WHY_CMD_KEPT;
+            d->ResetSlot = d->InterruptedSlot;
+            d->ResetExtra = d->InterruptedType;
+        } else {
+            d->Reset = XHCI_WHY_CMD_KEPT;
+            d->ResetSlot = slot;
+            d->ResetExtra = extra;
+        }
+    }
+    d->Interrupted = 0;
+    d->InterruptedType = 0;
+    d->InterruptedSlot = 0;
+    d->Overflow = 0;
+    d->Listed = 1;
+    d->Head = d->Count;
+}
+
+ULONG XhciLeftDebtSettleClear(PXHCI_LEFT_DEBT d, PULONG why, PULONG slot,
+                              PULONG extra)
+{
+    *why = 0;
+    *slot = 0;
+    *extra = 0;
+    if (d->Owed == XHCI_LEFT_CLEAR) {
+        return 0;
+    }
+    *why = d->Reset;
+    *slot = d->ResetSlot;
+    *extra = d->ResetExtra;
+    XhciLeftDebtClear(d);
+    if (*why != 0) {
+        d->EnableHeld = 1;
+    }
+    return 1;
+}
+
+ULONG XhciLeftDebtFailClear(PXHCI_LEFT_DEBT d, ULONG failWhy,
+                            ULONG failSlot, ULONG failExtra, PULONG why,
+                            PULONG slot, PULONG extra)
+{
+    XhciLeftDebtFail(d, failWhy, failSlot, failExtra);
+    return XhciLeftDebtSettleClear(d, why, slot, extra);
+}
+
+ULONG XhciLeftDebtRestored(PXHCI_LEFT_DEBT d, ULONG owedRecords)
+{
+    ULONG before;
+    ULONG i;
+
+    before = d->Owed;
+    if (before == XHCI_LEFT_CLEAR) {
+        return before;
+    }
+    if (!d->Interrupted && owedRecords == 0 && d->Reset == 0 &&
+        !d->Overflow &&
+        XhciTolLeftAfterRestore(before, d->Device) == XHCI_LEFT_CLEAR) {
+        XhciLeftDebtClear(d);
+        return before;
+    }
+    d->Owed = XHCI_LEFT_SETTLING;
+    if (d->End == XHCI_LEFT_HOW_NONE) {
+        d->End = XHCI_LEFT_HOW_LOST;
+    }
+    for (i = d->Head; i < d->Count && i < XHCI_LEFT_LIST_MAX; i++) {
+        if (d->List[i].Kind == XHCI_LEFT_ENTRY_SLOT) {
+            d->SlotlessDone = 0;
+        }
+    }
+    d->Listed = 0;
+    d->Head = 0;
+    d->Count = 0;
+    return before;
+}
+
+VOID XhciCmdAbortClear(PXHCI_CMD_ABORT_MARK m)
+{
+    m->Set = 0;
+    m->PA = 0;
+    m->Gen = 0;
+    m->How = 0;
+}
+
+VOID XhciCmdAbortSet(PXHCI_CMD_ABORT_MARK m, ULONG pa, ULONG gen, ULONG how)
+{
+    m->Set = 1;
+    m->PA = pa;
+    m->Gen = gen;
+    m->How = how;
+}
+
+ULONG XhciCmdAbortMatches(const XHCI_CMD_ABORT_MARK *m, ULONG pa, ULONG gen)
+{
+    return (m->Set && m->PA == pa && m->Gen == gen) ? 1UL : 0UL;
+}
+
+ULONG XhciTolWhyThread(ULONG reason)
+{
+    switch (reason) {
+    case XHCI_WHY_CMD_KEPT:
+    case XHCI_WHY_CMD_NO_VERDICT:
+    case XHCI_WHY_DISABLE_SLOT:
+    case XHCI_WHY_EP0_RECOVERY:
+    case XHCI_WHY_EP0_LATE:
+    case XHCI_WHY_CREATE_LATE:
+    case XHCI_WHY_SLOT_ID:
+    case XHCI_WHY_PORTSC_DEAD:
+    case XHCI_WHY_WARM_RESET:
+    case XHCI_WHY_TEARDOWN_STOP:
+    case XHCI_WHY_CFG_FAULT:
+    case XHCI_WHY_STREAMS:
+    case XHCI_WHY_BOT_XFER:
+    case XHCI_WHY_HUB_UNANSWERED:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+ULONG XhciTolAbortKeepsReset(ULONG trbType)
+{
+    switch (trbType) {
+    case XHCI_TRB_TYPE_ADDRESS_DEVICE:
+    case XHCI_TRB_TYPE_CONFIGURE_EP:
+    case XHCI_TRB_TYPE_EVALUATE_CONTEXT:
+    case XHCI_TRB_TYPE_RESET_EP:
+    case XHCI_TRB_TYPE_SET_TR_DEQUEUE:
+    case XHCI_TRB_TYPE_RESET_DEVICE:
+        return 0;
+    default:
+        return 1;
+    }
+}
+
+ULONG XhciTolWaitVerdict(ULONG own, ULONG aborted, ULONG failed, ULONG moved,
+                         ULONG leaving, ULONG expired)
+{
+    if (own) {
+        return XHCI_WAIT_OWN;
+    }
+    if (aborted && !failed && !moved) {
+        return XHCI_WAIT_ABORTED;
+    }
+    if (failed) {
+        return XHCI_WAIT_FAILED;
+    }
+    if (moved) {
+        return XHCI_WAIT_LOST;
+    }
+    if (leaving) {
+        return XHCI_WAIT_LEFT;
+    }
+    if (expired) {
+        return XHCI_WAIT_NO_VERDICT;
+    }
+    return XHCI_WAIT_WAIT;
+}
+
+ULONG XhciTolIsolationMode(ULONG found, ULONG value)
+{
+    if (found && (value == XHCI_ISOLATION_OFF || value == XHCI_ISOLATION_ALL)) {
+        return value;
+    }
+    return XHCI_ISOLATION_LISTED;
+}
+
+/* The controllers on which the default 1 applies the handling (design
+ * record 17 sections 4.15.10 and 4.15.11). The rule lists a controller
+ * once its abort has been read on real hardware, the entry citing that
+ * run section; the one entry below was listed by the owner's decision of
+ * 2026-11-20 without such a reading. Ends at 0. */
+static const ULONG xhciIsolationTable[] = {
+    0x1E318086UL,   /* Intel 7 Series, 8086:1E31 (the field report of
+                     * section 4.15.1): its abort read only in the
+                     * emulator's model (section 4.15.9) */
+    0
+};
+
+ULONG XhciIsolationListed(ULONG vendorDevice)
+{
+    ULONG i;
+
+    for (i = 0; xhciIsolationTable[i] != 0; i++) {
+        if (xhciIsolationTable[i] == vendorDevice) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+ULONG XhciTolIsolationApplies(ULONG mode, ULONG listed)
+{
+    if (mode == XHCI_ISOLATION_ALL) {
+        return 1;
+    }
+    return (mode == XHCI_ISOLATION_LISTED && listed) ? 1UL : 0UL;
+}
+
+ULONG XhciTolIsolationState(ULONG mode, ULONG listed, ULONG applies)
+{
+    return ((mode & 0xFFUL) << XHCI_TOL_ISO_MODE_SHIFT) |
+           (listed ? 2UL : 0UL) | (applies ? 1UL : 0UL);
+}
+
+ULONG XhciTolIsolationNote(ULONG value, ULONG listed, ULONG applies)
+{
+    return ((value > 0xFEUL ? 0xFFUL : value) << 8) | (listed ? 2UL : 0UL) |
+           (applies ? 1UL : 0UL);
+}
+
+ULONG XhciQemuIsolationListed(ULONG vendorDevice)
+{
+    return (vendorDevice == XHCI_TOL_QEMU_XHCI_ID) ? 1UL : 0UL;
+}
+
+ULONG XhciTolWhyAt(const XHCI_TOL_WHY *w, ULONG i)
+{
+    ULONG next;
+
+    next = (w->Next < XHCI_WHY_RING) ? w->Next : 0;
+    return (next + 2UL * XHCI_WHY_RING - 1UL - (i % XHCI_WHY_RING)) %
+           XHCI_WHY_RING;
+}
+
+ULONG XhciTolWhyLatch(PXHCI_TOL_WHY w, PXHCI_RESET_REC rec)
+{
+    ULONG at;
+
+    if (w == NULL || w->Kept == 0) {
+        return 0;
+    }
+    at = XhciTolWhyAt(w, 0);
+    w->Latched = at + 1;
+    if (rec != NULL) {
+        *rec = w->Rec[at];
+    }
+    return 1;
+}
+
+ULONG XhciTolWhyInvolved(const XHCI_TOL_WHY *w)
+{
+    const XHCI_RESET_REC *newest;
+    ULONG count;
+    ULONG i;
+    ULONG at;
+
+    if (w == NULL || w->Kept == 0) {
+        return 0;
+    }
+    newest = &w->Rec[XhciTolWhyAt(w, 0)];
+    if (newest->RootPort == 0) {
+        return 0;
+    }
+    count = 0;
+    for (i = 0; i < w->Kept && i < XHCI_WHY_RING; i++) {
+        at = XhciTolWhyAt(w, i);
+        if (w->Rec[at].RootPort == newest->RootPort &&
+            w->Rec[at].Route == newest->Route) {
+            count++;
+        }
+    }
+    return count;
 }

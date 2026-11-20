@@ -335,6 +335,80 @@ ULONG XhciHoldCompanionDisconnect(PXHCI_LINK_HOLD hold);
  */
 ULONG XhciHoldCompanionPortsc(PXHCI_LINK_HOLD hold, ULONG portsc);
 
+/*
+ * Task 50.5 (design record 13 section 10.7.4): a send-back that never
+ * reaches USB 2.0. 1 when the hold is to time out now: `eligible` (the
+ * caller's: an active hold of the UAS reason, not seen elsewhere, nothing
+ * owed below SuperSpeed), its kind PAIRED or UNIDENTIFIED, no connect seen
+ * on the companion since its last departure, the companion `idle` now, and
+ * `now - quietAt` (tolerance ticks, wrap-safe) at least `bound`. Pure.
+ */
+ULONG XhciHoldQuietDue(const XHCI_LINK_HOLD *hold, ULONG eligible,
+                       ULONG idle, ULONG quietAt, ULONG now, ULONG bound);
+
+/* The refusal's record a time-out leaves on its root port (10.7.4 item 5). */
+#define XHCI_HOLD_TO_NONE           0UL
+#define XHCI_HOLD_TO_ARMED          1UL /* released at At, its connect owed */
+#define XHCI_HOLD_TO_LATCHED        2UL /* the connection that followed    */
+
+/* A connect fed to the port's machine: ARMED latches, however late its
+ * inspection came; any other state stays. */
+ULONG XhciHoldToConnect(ULONG state);
+
+/* The service's look at the port: ARMED lapses only past `window` ticks of
+ * `at` with the port read empty (`present` 0: CCS and CSC clear), so an
+ * arrival waiting for its inspection is never expired by time. */
+ULONG XhciHoldToExpire(ULONG state, ULONG at, ULONG now, ULONG window,
+                       ULONG present);
+
+/* A PDO creation on the port of a device whose vendor and product id
+ * `match` the record's: the new state, and *refuse 1 when it is refused in
+ * place (LATCHED and a match); a mismatch drops a LATCHED record, and an
+ * ARMED one stays as it is, refusing nothing. */
+ULONG XhciHoldToCreate(ULONG state, ULONG match, PULONG refuse);
+
+/* The port read physically empty or reporting a connection change: a
+ * LATCHED record is cleared; ARMED waits for its arrival. */
+ULONG XhciHoldToDepart(ULONG state);
+
+/* The serial a refusal record keeps of the held drive, and the one the
+ * returning device read (10.7.4 item 5), as the bus read them before the
+ * first PDO (HcdDeviceReadSerial): */
+#define XHCI_HOLD_TO_SER_UNKNOWN    0UL /* not read                         */
+#define XHCI_HOLD_TO_SER_NONE       1UL /* no iSerialNumber: no serial      */
+#define XHCI_HOLD_TO_SER_ID         2UL /* a serial taken as an instance id,
+                                         * compared by its key              */
+#define XHCI_HOLD_TO_SER_OTHER      3UL /* an iSerialNumber whose text is not
+                                         * known: every read failed, or what
+                                         * came was no instance id (which a
+                                         * malformed reply is too)         */
+
+/* The key of a serial instance id: FNV-1a over its bytes up to the NUL or
+ * `room`, whichever comes first. Two different ids with one key, which is
+ * rare but not impossible, are taken as one serial. Pure. */
+ULONG XhciHoldToSerialKey(const char *id, ULONG room);
+
+/* Whether the device whose PDO is being made may be the held drive as far
+ * as the serials tell (its vendor and product id already the record's): 0
+ * only when they prove another unit - one form NONE and the other ID or
+ * OTHER (the device descriptors' iSerialNumber differ, which one drive's
+ * never does), or both ID with different keys; 1 otherwise: an UNKNOWN on
+ * either side, an OTHER against an ID or an OTHER (its text unknown), both
+ * NONE, or both ID with one key. Pure. */
+ULONG XhciHoldToSameUnit(ULONG heldForm, ULONG heldKey, ULONG newForm,
+                         ULONG newKey);
+
+/* A PDO creation's device against its root port's record: the record's
+ * vendor (15:0) and product (31:16) id, serial form and key, then the
+ * device's. MATCH only for the same ids with serials that do not prove
+ * another unit (XhciHoldToSameUnit); the match XhciHoldToCreate takes is
+ * the MATCH answer alone. Pure. */
+#define XHCI_HOLD_TO_IDS_DIFFER     0UL /* another model                    */
+#define XHCI_HOLD_TO_MATCH          1UL /* the held drive, as far as known  */
+#define XHCI_HOLD_TO_OTHER_UNIT     2UL /* the held model, another serial   */
+ULONG XhciHoldToMatch(ULONG heldVidPid, ULONG heldForm, ULONG heldKey,
+                      ULONG vidPid, ULONG form, ULONG key);
+
 /* Whether two identities are one device: both valid, the same vendor and
  * product id, and the same nonempty serial. */
 ULONG XhciLinkSameDevice(const XHCI_LINK_IDENTITY *a,

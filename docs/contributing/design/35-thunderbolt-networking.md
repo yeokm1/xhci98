@@ -4590,6 +4590,118 @@ not connected".
   hardware: the counts are the drivers' own.
 - It names no peer kind it has not read a block of.
 
+## 18. The worker's start (task 50.27)
+
+On 2000 and later the adapter's worker is joined on its thread object,
+always had: the creator retries the reference until it has it (the rule
+of design record 15 section 4.5.21, "The thread starts' join", for
+`xhci98.sys`, `xhcicm.sys` and this driver), and before that change a
+failed reference failed the initialisation and left only the exit event
+to wait on. 98 SE and ME are unchanged.
+
+## 19. The worker's end on 98 SE and ME (task 50.40)
+
+**What was read** (`runs/run-50.md`, "50.37 (continued): xhcicm.sys and
+xhcinet.sys on 98 SE and ME - can their images unload?"). On 98 SE and ME
+this driver's image is unloaded after its adapter's removal: between 115 and
+118 s after the removal was asked on 98 SE, between 100 and 103 s on ME (one
+reading each). The adapter's worker (section 7.7) ends with
+`KeSetEvent(&a->WorkExited)` and then `PsTerminateSystemThread`, and on 98
+SE and ME the halt waits on that event alone (a wait on the thread object
+faults there, `runs/run-26.md`, 26-A.2; record 15 section 4.5.22), then
+frees the adapter; NDIS later lets the image go. After its signal the thread
+still executes in the image: the return into `netWorker`, the push of the
+status and the call through the import table. That is the window record 15
+section 4.5.22 closed in `xhci98.sys`; nothing here has hit it (the deferral
+is long), and nothing bounds it.
+
+**Why not the residency of record 21 section 7.9.** NDIS owns this driver
+object: `NdisMInitializeWrapper` and `NdisMRegisterMiniport` take its
+dispatch table and its unload, and NDIS decides when the image goes. A
+device object of this driver's own made beside NDIS's would be an unrecorded
+use of a driver object NDIS manages, with no Windows 98 reading of what NDIS
+does with it; NDIS 5's own route to one (`NdisMRegisterDevice`) is not an
+import of this image and has no Windows 98 evidence. The worker is the one
+thread of this image, so its end is the window.
+
+**The change (x86, 98 SE and ME only).** `netWorker` ends through a routine
+of this image, `netWorkerEnd9x` (`n5_main.c`, compiled for `_M_IX86` only),
+in record 15 section 4.5.22's event form: the thread sets back its stack
+pointer, builds on its own stack the frames of `KeSetEvent(&a->WorkExited,
+IO_NO_INCREMENT, FALSE)` and `PsTerminateSystemThread(STATUS_SUCCESS)`, with
+`PsTerminateSystemThread`'s entry as `KeSetEvent`'s return address and 0 in
+the end's return slot, and jumps to `KeSetEvent`: both entries are read from
+the import table before the jump, which is the image's last instruction and
+comes before the signal. It is this image's own routine, not a call into
+`xhci98.sys` (another image, which need not be loaded) - the same
+instructions, the flag form left out (nothing here joins by a flag). Which
+ending runs is decided in the thread by `IoIsWdmVersionAvailable(1, 0x10)`,
+the test that already chooses the halt's join: FALSE takes the chain; TRUE
+(2000 and later) keeps the two calls, which the thread-object join covers.
+No import is added: `KeSetEvent`, `PsTerminateSystemThread` and, for the
+qemu flavour's sleep, `KeDelayExecutionThread` are rows of
+`xhcinet-imports.allow` already. The amd64 image compiles none of it. The
+event lives in the adapter, which the halt frees once the join returns: what
+`KeSetEvent` touches of it after waking the waiter is as record 15 section
+4.5.22 says.
+
+**The qemu flavour: the window seen closed.** Two values in the adapter's
+key, read at the initialisation with `XhciQemuThreadRefNet` (section 18)
+into the adapter, never written by an INF, absent from the `release`
+flavour:
+
+- `XhciQemuThreadExitSleep` (REG_DWORD, milliseconds, at most 300000; absent
+  or 0 as today): the chained end sleeps that long between its signal and
+  its end (`KeDelayExecutionThread` chained between them, its interval in
+  the routine's frame, above the chained frames). The bound is longer than
+  record 15's 10000 because the image went 100 to 118 s after the removal
+  here: a sleep that ends before the unload shows nothing.
+- `XhciQemuThreadExitOld` (1): the control - the old two calls with the
+  sleep made by an ordinary call in the image between them, so that the
+  thread returns into the image after its signal.
+
+Before the jump (or the control's signal) the routine writes its record
+through the connection manager's log (`NetCmLog`, the route of every line of
+this driver: a note in the NHI's log ring, which `xhcicm.sys`'s thread emits
+on its next pass, in the qemu flavour on port `0xE9`). The record is the
+best this route gives, not a guarantee: a note made while the connection
+manager's gate gives no NHI - the network PDO orphaned by its NHI's removal
+- is dropped, so an adapter halted by its NHI's removal may end with no
+record. The ending itself does not depend on the record. The record is:
+`net.end9x` (the form: 1 the chain, 3 the control; and the sleep in
+milliseconds), then the addresses of the routine itself (inside the image),
+of `KeSetEvent`, of `KeDelayExecutionThread` when the sleep is chained, of
+`PsTerminateSystemThread`, and the stack address the chained frame begins
+at. The legs read:
+
+- **every removal of the adapter on its own** (`DEVCYCLE remove` of
+  `XHCICM\TBNET`, its NHI running, so the note has an NHI and is emitted;
+  its emission checked before the reading rests on it): the end record
+  before the image's pages go; every resolved target outside the image's
+  span (the span from guest memory, as the section above found it); an
+  adapter halted by its NHI's removal is read for no fault only;
+- **with the sleep** (200000 ms): the image's span unmapped while the thread
+  is still in its delay. The thread's signal comes after the removal was
+  asked (the halt is the removal's), so at a host time T after the request
+  the thread has been asleep at most T minus the request's host stamp; while
+  that is well short of the sleep (the unload came at 100 to 118 s, against
+  200 s), the thread is alive with nothing of the image ahead of it, by
+  record 15 section 4.5.22's argument (no `-icount`: the guest's time cannot
+  run ahead of the host's). Then no fault after the sleep has run out (a
+  further removal of the same start was planned and not made);
+- **the control** on 98 SE (the same sleep): a fault in the old range, at
+  the return address of the control's delay call (read from the build's own
+  map).
+
+**Other code of this image after its adapter's halt on 98 SE and ME**: the
+upcall timers' routines (section 7.8) run at DISPATCH_LEVEL, and the halt
+cancels both and waits for a routine still returning; on one processor the
+halt's PASSIVE_LEVEL thread cannot overtake a DPC-level routine's return.
+The connection manager's callbacks into this image are counted by
+`xhcicm.sys`, which drops the count after the callback has returned into it,
+so no instruction of this image runs after the release a `Close` waits for.
+This image has no work item and no other thread.
+
 ## Appendix A. The binary readings behind `legal-provenance.md` section 4
 
 Each item is a reading of a third-party binary, in the words of the

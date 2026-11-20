@@ -49,7 +49,7 @@ static NTSTATUS uasStreamsIoctl(PDEVICE_OBJECT lower, ULONG code,
 }
 
 static PXHCI98_STREAMS_REQUEST uasStreamsRequest(USBD_PIPE_HANDLE pipe,
-                                                 ULONG count)
+                                                 ULONG count, BOOLEAN declare)
 {
     PXHCI98_STREAMS_REQUEST req;
 
@@ -61,6 +61,10 @@ static PXHCI98_STREAMS_REQUEST uasStreamsRequest(USBD_PIPE_HANDLE pipe,
         req->PipeHandle = pipe;
         req->StreamsRequested = count;
         req->Status = XHCI98_STREAMS_FAILED;
+        /* Task 50.20 (record 17 section 4.12.10): exactly the declaration,
+         * the bus's half 0, before every request - a bus that knows the
+         * field writes its half, and one that does not leaves it 0. */
+        req->Flags = declare ? XHCI98_STREAMS_F_CLIENT_RECOVERS : 0UL;
     }
     return req;
 }
@@ -71,11 +75,12 @@ static PXHCI98_STREAMS_REQUEST uasStreamsRequest(USBD_PIPE_HANDLE pipe,
  * everything is closed and opened again at that count (once; a second
  * shortfall fails).
  */
-NTSTATUS UasStreamsOpen(PUAS_STREAMS s, PDEVICE_OBJECT lower,
+NTSTATUS UasStreamsOpen(PUAS_STREAMS s, PDEVICE_OBJECT lower, BOOLEAN declare,
                         USBD_PIPE_HANDLE status, USBD_PIPE_HANDLE dataIn,
                         USBD_PIPE_HANDLE dataOut, ULONG wanted)
 {
     PXHCI98_STREAMS_REQUEST req;
+    ULONG acked;
     ULONG count;
     ULONG pass;
     ULONG i;
@@ -97,10 +102,12 @@ NTSTATUS UasStreamsOpen(PUAS_STREAMS s, PDEVICE_OBJECT lower,
     count = wanted;
     st = STATUS_NOT_SUPPORTED;
     shrunk = FALSE;
+    acked = 0;
     for (pass = 0; pass < 2; pass++) {
         shrunk = FALSE;
+        acked = 0;
         for (i = 0; i < 3; i++) {
-            req = uasStreamsRequest(s->Base[i], count);
+            req = uasStreamsRequest(s->Base[i], count, declare);
             if (req == NULL) {
                 st = STATUS_INSUFFICIENT_RESOURCES;
                 break;
@@ -112,6 +119,7 @@ NTSTATUS UasStreamsOpen(PUAS_STREAMS s, PDEVICE_OBJECT lower,
             }
             if (NT_SUCCESS(st)) {
                 s->Open[i] = TRUE;
+                acked += UasStreamsAcked(1, req->Flags);
                 for (n = 0; n <= UAS_STREAMS_MAX; n++) {
                     s->Pipe[i][n] = (n >= 1 && n <= req->StreamsGranted)
                                         ? req->StreamPipeHandle[n] : NULL;
@@ -134,6 +142,18 @@ NTSTATUS UasStreamsOpen(PUAS_STREAMS s, PDEVICE_OBJECT lower,
     if (!NT_SUCCESS(st) || shrunk) {
         UasStreamsClose(s);
         return NT_SUCCESS(st) ? STATUS_UNSUCCESSFUL : st;
+    }
+    /* Task 50.20: all three acknowledged, or none; opens that disagree are
+     * a bus fault, and the start fails as a failed open fails it. */
+    switch (UasStreamsContract(acked, 3)) {
+    case UAS_SC_CONTRACT:
+        s->Contract = TRUE;
+        break;
+    case UAS_SC_LEGACY:
+        break;
+    default:
+        UasStreamsClose(s);
+        return STATUS_UNSUCCESSFUL;
     }
     s->Granted = count;
     return STATUS_SUCCESS;
@@ -158,7 +178,7 @@ VOID UasStreamsClose(PUAS_STREAMS s)
 
     for (i = 0; i < 3; i++) {
         if (s->Open[i] && s->Lower != NULL) {
-            req = uasStreamsRequest(s->Base[i], 0);
+            req = uasStreamsRequest(s->Base[i], 0, FALSE);
             if (req != NULL) {
                 (VOID)uasStreamsIoctl(s->Lower, IOCTL_XHCI98_CLOSE_STREAMS,
                                       req);
@@ -168,4 +188,5 @@ VOID UasStreamsClose(PUAS_STREAMS s)
         s->Open[i] = FALSE;
     }
     s->Granted = 0;
+    s->Contract = FALSE;
 }

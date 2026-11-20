@@ -1313,6 +1313,371 @@ static void test_status(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* The status a cancelled URB carries (task 50.26)                      */
+/* ------------------------------------------------------------------ */
+
+#define CX_L        0x00010000UL
+#define CX_E        0xC0010000UL
+#define CX_GUARD    32UL
+#define CX_BODY     0x200UL
+#define CX_FILL     0xA5U
+
+static void test_cancel_values(void)
+{
+    static const ULONG others[] = {
+        0x00000000UL, 0x40000000UL, 0x00020000UL, 0xC0000004UL,
+        0xC0000005UL, 0xC0007000UL, 0x80000900UL, 0xC0000B00UL,
+        0xC0000012UL, 0x80000300UL
+    };
+    ULONG i;
+
+    /* WDK 7.1 inc\api\usb.h:472, restated. */
+    CHECK_EQ(XHCI_PIPE_USBD_CANCELED_E, 0xC0010000UL,
+             "USBD_STATUS_CANCELED is error-class in WDK 7.1");
+    CHECK_EQ(XhciPipeUsbdIsCancel(CX_L), 1, "L is a cancellation");
+    CHECK_EQ(XhciPipeUsbdIsCancel(CX_E), 1, "E is a cancellation");
+    CHECK_EQ(XhciPipeNtStatus(CX_L), 0xC0000120UL, "L: STATUS_CANCELLED");
+    CHECK_EQ(XhciPipeNtStatus(CX_E), 0xC0000120UL,
+             "E: STATUS_CANCELLED, not the error-class default");
+    for (i = 0; i < sizeof(others) / sizeof(others[0]); i++) {
+        CHECK_EQ(XhciPipeUsbdIsCancel(others[i]), 0, "not a cancellation");
+        /* An abort's own status (DEV_NOT_RESPONDING, DEVICE_GONE) and
+         * every other one leave as they are, at either value. */
+        CHECK_EQ(XhciPipeUsbdOut(others[i], CX_E), others[i],
+                 "unchanged at E");
+        CHECK_EQ(XhciPipeUsbdOut(others[i], CX_L), others[i],
+                 "unchanged at L");
+    }
+    CHECK_EQ(XhciPipeUsbdOut(CX_L, CX_L), CX_L, "L at L");
+    CHECK_EQ(XhciPipeUsbdOut(CX_L, CX_E), CX_E, "L at E");
+    CHECK_EQ(XhciPipeUsbdOut(CX_E, CX_E), CX_E, "idempotent at E");
+    CHECK_EQ(XhciPipeUsbdOut(XhciPipeUsbdOut(CX_L, CX_E), CX_E), CX_E,
+             "twice is once");
+    CHECK_EQ(XhciPipeUsbdOut(CX_E, CX_L), CX_E,
+             "only L is rewritten: an E stays (never produced inside)");
+
+    /* The owner's choices of 2026-11-16 (record 13 section 6.15.2): 1, the
+     * default, the value each system's own stack gives - L on 98 SE and
+     * ME, E on 2000 and later; 0 L and 2 E everywhere. */
+    for (i = 0; i < 2; i++) {
+        ULONG own;
+
+        own = i ? CX_E : CX_L;
+        CHECK_EQ(XhciPipeCancelPick(1, 0, i), CX_L, "0: L everywhere");
+        CHECK_EQ(XhciPipeCancelPick(1, 2, i), CX_E, "2: E everywhere");
+        CHECK_EQ(XhciPipeCancelPick(1, 1, i), own, "1: the system's own");
+        CHECK_EQ(XhciPipeCancelPick(0, 0, i), own, "absent: the default");
+        CHECK_EQ(XhciPipeCancelPick(0, 2, i), own,
+                 "absent, whatever the unread value: the default");
+        CHECK_EQ(XhciPipeCancelPick(1, 3, i), own, "3: the default");
+        CHECK_EQ(XhciPipeCancelPick(1, 0xFFFFFFFFUL, i), own,
+                 "FFFFFFFF: the default");
+    }
+    CHECK_EQ(XhciPipeCancelPick(1, 1, 0), CX_L, "98 SE and ME: L");
+    CHECK_EQ(XhciPipeCancelPick(1, 1, 1), CX_E, "2000 and later: E");
+    CHECK_EQ(XhciPipeCancelPick(1, 1, 0xFFFFFFFFUL), CX_E,
+             "any nonzero nt is NT");
+}
+
+static void cx_put16(UCHAR *p, ULONG v)
+{
+    p[0] = (UCHAR)(v & 0xFF);
+    p[1] = (UCHAR)((v >> 8) & 0xFF);
+}
+
+static void cx_put32(UCHAR *p, ULONG v)
+{
+    p[0] = (UCHAR)(v & 0xFF);
+    p[1] = (UCHAR)((v >> 8) & 0xFF);
+    p[2] = (UCHAR)((v >> 16) & 0xFF);
+    p[3] = (UCHAR)((v >> 24) & 0xFF);
+}
+
+static ULONG cx_get32(const UCHAR *p)
+{
+    return (ULONG)p[0] | ((ULONG)p[1] << 8) | ((ULONG)p[2] << 16) |
+           ((ULONG)p[3] << 24);
+}
+
+/* A URB image inside guard bytes: every byte CX_FILL, then the header and,
+ * for an isochronous one, its counts and `slots` packets (offset i * 100,
+ * length i + 1, status st[i]) written whether or not Length holds them. */
+static UCHAR *cx_urb(UCHAR *buf, ULONG function, ULONG length, ULONG status,
+                     ULONG wide, ULONG npkt, ULONG errors, const ULONG *st,
+                     ULONG slots)
+{
+    UCHAR *u;
+    UCHAR *p;
+    ULONG first;
+    ULONG i;
+
+    for (i = 0; i < CX_GUARD + CX_BODY + CX_GUARD; i++) {
+        buf[i] = CX_FILL;
+    }
+    u = buf + CX_GUARD;
+    cx_put16(u + 0, length);
+    cx_put16(u + 2, function);
+    cx_put32(u + 4, status);
+    if (function == 0x000A) {
+        first = wide ? 0x8CUL : 0x54UL;
+        cx_put32(u + (wide ? 0x84UL : 0x4CUL), npkt);
+        cx_put32(u + (wide ? 0x88UL : 0x50UL), errors);
+        for (i = 0; i < slots; i++) {
+            p = u + first + i * 12UL;
+            cx_put32(p + 0, i * 100UL);
+            cx_put32(p + 4, i + 1UL);
+            cx_put32(p + 8, st[i]);
+        }
+    }
+    return u;
+}
+
+static ULONG cx_diff(const UCHAR *a, const UCHAR *b)
+{
+    ULONG i;
+    ULONG n;
+
+    n = 0;
+    for (i = 0; i < CX_GUARD + CX_BODY + CX_GUARD; i++) {
+        if (a[i] != b[i]) {
+            n++;
+        }
+    }
+    return n;
+}
+
+static ULONG cx_guards_kept(const UCHAR *buf)
+{
+    ULONG i;
+
+    for (i = 0; i < CX_GUARD; i++) {
+        if (buf[i] != CX_FILL || buf[CX_GUARD + CX_BODY + i] != CX_FILL) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void cx_copy(UCHAR *to, const UCHAR *from)
+{
+    ULONG i;
+
+    for (i = 0; i < CX_GUARD + CX_BODY + CX_GUARD; i++) {
+        to[i] = from[i];
+    }
+}
+
+/* The packet table as the driver leaves it: answered successes, an
+ * underrun already stored as success by hcdIsoComplete, an answered error,
+ * a held request's DEVICE_GONE, and unanswered L packets. */
+static const ULONG cxMixed[10] = {
+    0x00000000UL, CX_L, 0x00000000UL, 0xC0000005UL, CX_L,
+    0xC0007000UL, CX_L, 0xC0000004UL, CX_L, CX_L
+};
+
+/* A client's own packet table left from an earlier cancelled transfer. */
+static const ULONG cxStale[4] = { CX_L, CX_L, CX_L, CX_L };
+
+static void cx_width(ULONG wide)
+{
+    static UCHAR buf[CX_GUARD + CX_BODY + CX_GUARD];
+    static UCHAR was[CX_GUARD + CX_BODY + CX_GUARD];
+    UCHAR *u;
+    ULONG fixed;
+    ULONG errors;
+    ULONG carrying;
+    ULONG i;
+
+    fixed = wide ? 0x8CUL : 0x54UL;
+    CHECK_EQ(wide ? XHCI_PIPE_ISOURB_PACKET0_64 : XHCI_PIPE_ISOURB_PACKET0_32,
+             fixed, "IsoPacket[0]'s offset, restated");
+
+    /* The gates: nothing written for any of them. */
+    u = cx_urb(buf, 0x000A, fixed + 10 * 12, CX_L, wide, 10, 6, cxMixed, 10);
+    cx_copy(was, buf);
+    CHECK_EQ(XhciPipeUrbCancelOut(0, 1, 1, u, CX_E, wide), 0, "not a URB IRP");
+    CHECK_EQ(XhciPipeUrbCancelOut(1, 0, 1, u, CX_E, wide), 0,
+             "not at a device PDO");
+    CHECK_EQ(XhciPipeUrbCancelOut(1, 1, 1, NULL, CX_E, wide), 0, "NULL URB");
+    CHECK_EQ(XhciPipeUrbCancelOut(1, 1, 1, u, CX_L, wide), 0, "value 0: L");
+    CHECK_EQ(XhciPipeUrbCancelOut(1, 1, 1, u, 0, wide), 0,
+             "a PDO's zeroed copy: L");
+    CHECK_EQ(cx_diff(buf, was), 0, "gated: no byte changed");
+
+    /* The whole table, mixed: only the five L packets and the header. */
+    CHECK_EQ(XhciPipeUrbCancelOut(1, 1, 1, u, CX_E, wide), 6, "mixed table");
+    CHECK_EQ(cx_get32(u + 4), CX_E, "header E");
+    for (i = 0; i < 10; i++) {
+        CHECK_EQ(cx_get32(u + fixed + i * 12 + 8),
+                 cxMixed[i] == CX_L ? CX_E : cxMixed[i],
+                 "packet status: L to E, every other kept");
+        CHECK_EQ(cx_get32(u + fixed + i * 12 + 4), i + 1, "Length kept");
+        CHECK_EQ(cx_get32(u + fixed + i * 12), i * 100, "Offset kept");
+    }
+    CHECK_EQ(cx_get32(u + (wide ? 0x88UL : 0x50UL)), 6, "ErrorCount kept");
+    CHECK_EQ(cx_get32(u + (wide ? 0x84UL : 0x4CUL)), 10,
+             "NumberOfPackets kept");
+    CHECK_EQ(cx_diff(buf, was), 6, "one byte (the top) of each E rewritten");
+    CHECK(cx_guards_kept(buf), "guards kept");
+    CHECK_EQ(XhciPipeUrbIsoCount(u, wide, CX_E, &errors, &carrying), 1,
+             "counted as isochronous");
+    CHECK_EQ(errors, 6, "the log's ErrorCount");
+    CHECK_EQ(carrying, 5, "the log's E packets");
+
+    /* Again: nothing more. */
+    cx_copy(was, buf);
+    CHECK_EQ(XhciPipeUrbCancelOut(1, 1, 1, u, CX_E, wide), 0, "repeated");
+    CHECK_EQ(cx_diff(buf, was), 0, "repeated: no byte changed");
+
+    /* NumberOfPackets above what Length holds: Length's room bounds it. */
+    u = cx_urb(buf, 0x000A, fixed + 3 * 12, CX_L, wide, 10, 10, cxMixed, 10);
+    CHECK_EQ(XhciPipeUrbCancelOut(1, 1, 1, u, CX_E, wide), 2,
+             "header and packet 1 of the three Length holds");
+    for (i = 3; i < 10; i++) {
+        CHECK_EQ(cx_get32(u + fixed + i * 12 + 8), cxMixed[i],
+                 "past Length: untouched");
+    }
+    CHECK(cx_guards_kept(buf), "guards kept, excessive count");
+
+    /* NumberOfPackets 0xFFFFFFFF, Length holding two. */
+    u = cx_urb(buf, 0x000A, fixed + 2 * 12, 0, wide, 0xFFFFFFFFUL, 0,
+               cxMixed, 10);
+    CHECK_EQ(XhciPipeUrbCancelOut(1, 1, 1, u, CX_E, wide), 1,
+             "the second packet only; the header was success");
+    CHECK_EQ(cx_get32(u + 4), 0, "a success header kept");
+    CHECK_EQ(cx_get32(u + fixed + 4 * 12 + 8), CX_L, "packet 4 untouched");
+
+    /* A truncated capacity: Length 5 bytes short of a third packet. */
+    u = cx_urb(buf, 0x000A, fixed + 3 * 12 - 5, CX_L, wide, 10, 0,
+               cxMixed, 10);
+    CHECK_EQ(XhciPipeUrbCancelOut(1, 1, 1, u, CX_E, wide), 2,
+             "header and packet 1; the partial third is not a packet");
+    CHECK_EQ(cx_get32(u + fixed + 2 * 12 + 8), cxMixed[2], "third kept");
+
+    /* NumberOfPackets below what Length holds. */
+    u = cx_urb(buf, 0x000A, fixed + 10 * 12, CX_E, wide, 2, 0, cxMixed, 10);
+    CHECK_EQ(XhciPipeUrbCancelOut(1, 1, 1, u, CX_E, wide), 1,
+             "packet 1 of two; an E header left");
+    CHECK_EQ(cx_get32(u + fixed + 4 * 12 + 8), CX_L,
+             "past NumberOfPackets: untouched");
+
+    /* Length below the fixed fields: the header only; the counts are
+     * never read. */
+    u = cx_urb(buf, 0x000A, fixed - 1, CX_L, wide, 10, 0, cxMixed, 10);
+    cx_copy(was, buf);
+    CHECK_EQ(XhciPipeUrbCancelOut(1, 1, 1, u, CX_E, wide), 1,
+             "short isochronous URB: header only");
+    CHECK_EQ(cx_diff(buf, was), 1, "only the header's top byte");
+    CHECK_EQ(XhciPipeUrbIsoCount(u, wide, CX_L, &errors, &carrying), 0,
+             "too short to count");
+    CHECK_EQ(errors + carrying, 0, "nothing counted");
+
+    /* Not isochronous (BULK_OR_INTERRUPT_TRANSFER, 9): the header only,
+     * whatever lies where packets would be. */
+    u = cx_urb(buf, 0x000A, fixed + 10 * 12, CX_L, wide, 10, 0, cxMixed, 10);
+    cx_put16(u + 2, 0x0009);
+    cx_copy(was, buf);
+    CHECK_EQ(XhciPipeUrbCancelOut(1, 1, 1, u, CX_E, wide), 1,
+             "bulk URB: header only");
+    CHECK_EQ(cx_diff(buf, was), 1, "only the header's top byte, bulk");
+    CHECK_EQ(XhciPipeUrbIsoCount(u, wide, CX_L, &errors, &carrying), 0,
+             "bulk is not counted");
+    CHECK(cx_guards_kept(buf), "guards kept, bulk");
+
+    /* An abort's own status in the header survives. */
+    u = cx_urb(buf, 0x0009, 0x48, 0xC0000005UL, wide, 0, 0, cxMixed, 0);
+    CHECK_EQ(XhciPipeUrbCancelOut(1, 1, 1, u, CX_E, wide), 0,
+             "DEV_NOT_RESPONDING header kept");
+    CHECK_EQ(cx_get32(u + 4), 0xC0000005UL, "DEV_NOT_RESPONDING");
+    u = cx_urb(buf, 0x0009, 0x48, 0xC0007000UL, wide, 0, 0, cxMixed, 0);
+    CHECK_EQ(XhciPipeUrbCancelOut(1, 1, 1, u, CX_E, wide), 0,
+             "DEVICE_GONE header kept");
+
+    /* A request refused at the dispatch (HcdCompleteIrp, `ours` 0) whose
+     * client reused a URB of an earlier cancelled transfer: L left in the
+     * header and in every packet. An isochronous request the composite
+     * parent does not support (header not written), one refused as
+     * malformed (header written INVALID_PARAMETER, packets not), and a bulk
+     * one: not a byte changed, at E. */
+    u = cx_urb(buf, 0x000A, fixed + 4 * 12, CX_L, wide, 4, 0, cxStale, 4);
+    cx_copy(was, buf);
+    CHECK_EQ(XhciPipeUrbCancelOut(1, 1, 0, u, CX_E, wide), 0,
+             "unsupported isochronous: stale header and packets kept");
+    CHECK_EQ(cx_diff(buf, was), 0, "unsupported isochronous: no byte");
+    u = cx_urb(buf, 0x000A, fixed + 4 * 12, 0x80000300UL, wide, 4, 0,
+               cxStale, 4);
+    cx_copy(was, buf);
+    CHECK_EQ(XhciPipeUrbCancelOut(1, 1, 0, u, CX_E, wide), 0,
+             "refused isochronous: stale packets kept");
+    CHECK_EQ(cx_diff(buf, was), 0, "refused isochronous: no byte");
+    u = cx_urb(buf, 0x0009, 0x48, CX_L, wide, 0, 0, cxStale, 0);
+    cx_copy(was, buf);
+    CHECK_EQ(XhciPipeUrbCancelOut(1, 1, 0, u, CX_E, wide), 0,
+             "unsupported bulk: stale header kept");
+    CHECK_EQ(cx_diff(buf, was), 0, "unsupported bulk: no byte");
+    CHECK(cx_guards_kept(buf), "guards kept, refusals");
+
+    /* The same isochronous image completed by a path that wrote it
+     * (`ours` 1): the header and the four packets. */
+    u = cx_urb(buf, 0x000A, fixed + 4 * 12, CX_L, wide, 4, 4, cxStale, 4);
+    CHECK_EQ(XhciPipeUrbCancelOut(1, 1, 1, u, CX_E, wide), 5,
+             "written by the completion: header and packets");
+
+    /* Task 50.28 (record 13 section 10.5.3, point 10): a held request the
+     * report's sweep completes (HcdIoGoneFinish, through HCD_URB_OUT, so
+     * `ours` 1: HcdIoPark wrote its header, the drain its packets). A
+     * DEVICE_GONE claim keeps its header; its unanswered L packets are
+     * encoded as at every completion that wrote them. */
+    u = cx_urb(buf, 0x000A, fixed + 10 * 12, 0xC0007000UL, wide, 10, 10,
+               cxMixed, 10);
+    cx_copy(was, buf);
+    CHECK_EQ(XhciPipeUrbCancelOut(1, 1, 1, u, CX_L, wide), 0,
+             "sweep, gone, at L: nothing");
+    CHECK_EQ(cx_diff(buf, was), 0, "sweep, gone, at L: no byte");
+    CHECK_EQ(XhciPipeUrbCancelOut(1, 1, 1, u, CX_E, wide), 5,
+             "sweep, gone, isochronous: the five L packets");
+    CHECK_EQ(cx_get32(u + 4), 0xC0007000UL, "sweep, gone: header kept");
+    for (i = 0; i < 10; i++) {
+        CHECK_EQ(cx_get32(u + fixed + i * 12 + 8),
+                 cxMixed[i] == CX_L ? CX_E : cxMixed[i],
+                 "sweep, gone: L packets to E, DEVICE_GONE and the rest kept");
+    }
+    CHECK(cx_guards_kept(buf), "guards kept, sweep gone");
+    /* Not the dispatch's `ours` 0: the same image, written by the sweep's
+     * path, would keep its L packets were it completed through
+     * HcdCompleteIrp. */
+    u = cx_urb(buf, 0x000A, fixed + 10 * 12, 0xC0007000UL, wide, 10, 10,
+               cxMixed, 10);
+    CHECK_EQ(XhciPipeUrbCancelOut(1, 1, 0, u, CX_E, wide), 0,
+             "the sweep's image through `ours` 0 would keep its L packets");
+    /* A CANCELED claim (an abort recorded before the claim): its header L,
+     * written by hcdParkedComplete, and the same packets. */
+    u = cx_urb(buf, 0x000A, fixed + 10 * 12, CX_L, wide, 10, 10, cxMixed,
+               10);
+    CHECK_EQ(XhciPipeUrbCancelOut(1, 1, 1, u, CX_E, wide), 6,
+             "sweep, cancelled, isochronous: header and the five L packets");
+    CHECK_EQ(cx_get32(u + 4), CX_E, "sweep, cancelled: header E");
+    /* Bulk: a DEVICE_GONE claim untouched, a CANCELED claim's header E. */
+    u = cx_urb(buf, 0x0009, 0x48, 0xC0007000UL, wide, 0, 0, cxMixed, 0);
+    cx_copy(was, buf);
+    CHECK_EQ(XhciPipeUrbCancelOut(1, 1, 1, u, CX_E, wide), 0,
+             "sweep, gone, bulk: nothing");
+    CHECK_EQ(cx_diff(buf, was), 0, "sweep, gone, bulk: no byte");
+    u = cx_urb(buf, 0x0009, 0x48, CX_L, wide, 0, 0, cxMixed, 0);
+    CHECK_EQ(XhciPipeUrbCancelOut(1, 1, 1, u, CX_E, wide), 1,
+             "sweep, cancelled, bulk: the header");
+    CHECK_EQ(cx_get32(u + 4), CX_E, "sweep, cancelled, bulk: header E");
+    CHECK_EQ(XhciPipeUrbCancelOut(1, 1, 1, u, CX_L, wide), 0,
+             "sweep, cancelled, bulk, at L: nothing more");
+}
+
+static void test_cancel_encode(void)
+{
+    cx_width(0);
+    cx_width(1);
+}
+
+/* ------------------------------------------------------------------ */
 /* Isochronous URBs                                                     */
 /* ------------------------------------------------------------------ */
 
@@ -3567,6 +3932,144 @@ static void test_select_walk(void)
     CHECK_EQ(count, 2, "two entries, amd64");
 }
 
+/*
+ * Task 50.28 (design record 13 section 10.5.3): the policy of
+ * XhciUnplugComplete, the hold decision and the report's claim. List
+ * ownership and the counts are not these vectors' to prove (point 11).
+ */
+static void test_unplug(void)
+{
+    ULONG kind;
+    ULONG in;
+    ULONG v;
+    ULONG want;
+    ULONG mark;
+
+    /* The policy (owner, 2026-11-16): 98 SE and ME always held; on NT 0
+     * held, 1, absent, another type and any other number at once. */
+    CHECK_EQ(XhciPipeUnplugPick(1, 1, 0), XHCI_PIPE_UNPLUG_HELD,
+             "98 SE and ME at 1: held");
+    CHECK_EQ(XhciPipeUnplugPick(1, 0, 0), XHCI_PIPE_UNPLUG_HELD,
+             "98 SE and ME at 0: held");
+    CHECK_EQ(XhciPipeUnplugPick(0, 0, 0), XHCI_PIPE_UNPLUG_HELD,
+             "98 SE and ME absent: held");
+    CHECK_EQ(XhciPipeUnplugPick(1, 2, 0), XHCI_PIPE_UNPLUG_HELD,
+             "98 SE and ME at 2: held - no value is at once there");
+    CHECK_EQ(XhciPipeUnplugPick(1, 1, 1), XHCI_PIPE_UNPLUG_AT_ONCE,
+             "NT at 1: at once");
+    CHECK_EQ(XhciPipeUnplugPick(1, 0, 1), XHCI_PIPE_UNPLUG_HELD,
+             "NT at 0: held");
+    CHECK_EQ(XhciPipeUnplugPick(0, 0, 1), XHCI_PIPE_UNPLUG_AT_ONCE,
+             "NT absent: the default, whatever the unread value");
+    CHECK_EQ(XhciPipeUnplugPick(1, 2, 1), XHCI_PIPE_UNPLUG_AT_ONCE,
+             "NT at 2: the default");
+    CHECK_EQ(XhciPipeUnplugPick(1, 0xFFFFFFFFUL, 1), XHCI_PIPE_UNPLUG_AT_ONCE,
+             "NT at FFFFFFFF: the default");
+    CHECK_EQ(XhciPipeUnplugPick(1, 0, 0xFFFFFFFFUL), XHCI_PIPE_UNPLUG_HELD,
+             "any nonzero nt is NT: 0 held");
+
+    /* The hold decision over every combination of its nine inputs and
+     * three kinds, against the order the record gives. */
+    for (kind = 0; kind <= XHCI_PARK_KIND_DRAIN; kind++) {
+        for (in = 0; in < 0x200UL; in++) {
+            if ((in & (XHCI_PARK_IN_CLOSING | XHCI_PARK_IN_CANCELLED |
+                       XHCI_PARK_IN_PARK_CLOSED)) != 0) {
+                want = XHCI_PARK_DECLINE;
+            } else if ((in & XHCI_PARK_IN_ABORTED) != 0) {
+                want = XHCI_PARK_CANCEL;
+            } else if (kind != XHCI_PARK_KIND_HOLD &&
+                       (in & XHCI_PARK_IN_ISO_RELEASED) != 0 &&
+                       (in & XHCI_PARK_IN_ISO) != 0) {
+                want = XHCI_PARK_CANCEL;
+            } else if (kind == XHCI_PARK_KIND_DRAIN &&
+                       (in & XHCI_PARK_IN_GONE_NOW) != 0 &&
+                       (in & XHCI_PARK_IN_CONTAINED) == 0 &&
+                       !((in & XHCI_PARK_IN_ISO) != 0 &&
+                         (in & XHCI_PARK_IN_ISO_KEEP) != 0)) {
+                want = XHCI_PARK_NOT_HELD;
+            } else {
+                want = XHCI_PARK_HOLD;
+            }
+            v = XhciPipeParkVerdict(kind, in);
+            if (v != want) {
+                printf("  kind %lu in %03lX: %lu, want %lu\n", kind, in, v,
+                       want);
+            }
+            CHECK(v == want, "the hold decision's table");
+            if ((in & XHCI_PARK_IN_CONTAINED) != 0) {
+                CHECK(v != XHCI_PARK_NOT_HELD,
+                      "a contained controller's request is never not held");
+            }
+            if (kind != XHCI_PARK_KIND_DRAIN) {
+                CHECK(v != XHCI_PARK_NOT_HELD,
+                      "only the drain's kind is ended by the mark");
+            }
+        }
+    }
+    CHECK_EQ(XhciPipeParkVerdict(XHCI_PARK_KIND_DRAIN, 0), XHCI_PARK_HOLD,
+             "98 SE's departure, or before the report: held, as before");
+    CHECK_EQ(XhciPipeParkVerdict(XHCI_PARK_KIND_DRAIN, XHCI_PARK_IN_GONE_NOW),
+             XHCI_PARK_NOT_HELD, "reported on 2000 and later: not held");
+    CHECK_EQ(XhciPipeParkVerdict(XHCI_PARK_KIND_DRAIN,
+                                 XHCI_PARK_IN_GONE_NOW |
+                                     XHCI_PARK_IN_CONTAINED),
+             XHCI_PARK_HOLD,
+             "marked before a containment, drained by it: held (P1)");
+    CHECK_EQ(XhciPipeParkVerdict(XHCI_PARK_KIND_DRAIN,
+                                 XHCI_PARK_IN_GONE_NOW |
+                                     XHCI_PARK_IN_ABORTED),
+             XHCI_PARK_CANCEL, "an abort keeps its precedence");
+    CHECK_EQ(XhciPipeParkVerdict(XHCI_PARK_KIND_DRAIN,
+                                 XHCI_PARK_IN_GONE_NOW | XHCI_PARK_IN_ISO |
+                                     XHCI_PARK_IN_ISO_KEEP),
+             XHCI_PARK_HOLD, "the fallback keeps an isochronous one");
+    CHECK_EQ(XhciPipeParkVerdict(XHCI_PARK_KIND_DRAIN,
+                                 XHCI_PARK_IN_GONE_NOW | XHCI_PARK_IN_ISO),
+             XHCI_PARK_NOT_HELD, "without it, isochronous too");
+    CHECK_EQ(XhciPipeParkVerdict(XHCI_PARK_KIND_DEPART,
+                                 XHCI_PARK_IN_GONE_NOW |
+                                     XHCI_PARK_IN_CONTAINED),
+             XHCI_PARK_HOLD, "a contained controller's command: held");
+    CHECK_EQ(XhciPipeParkVerdict(XHCI_PARK_KIND_HOLD,
+                                 XHCI_PARK_IN_ISO_RELEASED |
+                                     XHCI_PARK_IN_ISO),
+             XHCI_PARK_HOLD,
+             "the isochronous latch leaves a containment's new request");
+
+    /* The claim: the drain's mark only; a closing's or a containment's
+     * left; an abort recorded before it wins; the fallback leaves an
+     * isochronous one. */
+    for (mark = 0; mark < 2; mark++) {
+        for (in = 0; in < 0x200UL; in++) {
+            if (!mark ||
+                (in & (XHCI_PARK_IN_CLOSING | XHCI_PARK_IN_CONTAINED)) != 0 ||
+                ((in & XHCI_PARK_IN_ISO) != 0 &&
+                 (in & XHCI_PARK_IN_ISO_KEEP) != 0)) {
+                want = XHCI_PARK_CLAIM_LEAVE;
+            } else if ((in & XHCI_PARK_IN_ABORTED) != 0) {
+                want = XHCI_PARK_CLAIM_CANCEL;
+            } else {
+                want = XHCI_PARK_CLAIM_GONE;
+            }
+            v = XhciPipeClaimVerdict(mark, in);
+            if (v != want) {
+                printf("  mark %lu in %03lX: %lu, want %lu\n", mark, in, v,
+                       want);
+            }
+            CHECK(v == want, "the claim's table");
+        }
+    }
+    CHECK_EQ(XhciPipeClaimVerdict(1, 0), XHCI_PARK_CLAIM_GONE,
+             "a drain's hold at the report: DEVICE_GONE");
+    CHECK_EQ(XhciPipeClaimVerdict(1, XHCI_PARK_IN_ABORTED),
+             XHCI_PARK_CLAIM_CANCEL,
+             "an abort marked before the claim, released after it: CANCELED");
+    CHECK_EQ(XhciPipeClaimVerdict(1, XHCI_PARK_IN_CLOSING),
+             XHCI_PARK_CLAIM_LEAVE, "a closing PDO's: its release's");
+    CHECK_EQ(XhciPipeClaimVerdict(0, 0), XHCI_PARK_CLAIM_LEAVE,
+             "a containment's or a ghost's hold: not the claim's");
+}
+
 int main(void)
 {
     test_seq();
@@ -3585,6 +4088,8 @@ int main(void)
     test_raw_setup();
     test_split();
     test_status();
+    test_cancel_values();
+    test_cancel_encode();
     test_iso_check();
     test_iso_fragments();
     test_iso_frames();
@@ -3606,6 +4111,7 @@ int main(void)
     test_urb_length();
     test_select_list_bytes();
     test_select_iface_name();
+    test_unplug();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

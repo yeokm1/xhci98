@@ -80,6 +80,15 @@
  * file's tail. */
 static VOID cmWpuService(PCM_NHI nhi);
 static VOID cmWpuPortReleased(PCM_NHI nhi, ULONG i);
+/* The wake order (design record 21 section 6.3.2, task 50.10), at this
+ * file's tail: NHIs started with the switch on (CmWpuCount), the pass and
+ * the drop at an NHI's end. */
+static LONG cmPrOnCount;
+/* A relation was ever installed (a pass then also runs with the order off,
+ * to clear it). */
+static LONG cmPrGiven;
+static VOID cmPrService(PCM_NHI nhi);
+static VOID cmPrDrop(PCM_NHI nhi);
 
 /* The USB4 profile's actions reach the seam with this bit in Why (cm_nhi.c,
  * cmU4ToIcm); its stor98 statement is made at the core's upcall, not here. */
@@ -5363,6 +5372,9 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
         }
         if (action->Depth >= 2 && r->Route == CM_ROUTE_CONFIGMG &&
             r->Wk != NULL) {
+            /* Record 21 section 6.1.6 item 5 b: a device chained below a
+             * member changes what is below it. */
+            CmCfgwkConnLost(r->Wk, cmChainMembers(nhi, action));
             /* A chained tunnel on 98 SE and ME: its chain port numbered
              * and re-enumerated by the worker (task 48.31), and no member
              * re-enumerated before it - PCI.VXD would take a chained
@@ -5409,6 +5421,16 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
             action->Why != TBT_ICM_WHY_UNAVAILABLE) {
             CmEjectDown(nhi, nhi->U4On ? CmNhiActionMember(nhi, action)
                                        : XHCI_TBT_NO_MEMBER);
+        }
+        if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL) {
+            /* Record 21 section 6.1.6 item 5 b: a unit's copy below the
+             * member is no longer bound to what is there. */
+            CmCfgwkConnLost(r->Wk,
+                            (nhi->U4On &&
+                             CmNhiActionMember(nhi, action) <
+                                 XHCI_TBT_MAX_TUNNELS)
+                                ? 1UL << CmNhiActionMember(nhi, action)
+                                : cmOwnedMask(nhi));
         }
         /* The acknowledgement before the removal is per member: a member
          * with a statement pending is held, the rest go on (cmHeld). */
@@ -5558,6 +5580,8 @@ VOID CmReenumService(PCM_NHI nhi)
     if (r->Route == CM_ROUTE_FILTER) {
         /* Record 21 section 6.3.1 (task 49.46). */
         cmWpuService(nhi);
+        /* Record 21 section 6.3.2 (task 50.10). */
+        cmPrService(nhi);
     }
     /* Owed chain actions, tried again each pass (task 45.13). */
     cmChainService(nhi);
@@ -6089,17 +6113,33 @@ static VOID cmReleaseHeld(PCM_NHI nhi, BOOLEAN fail, ULONG mask)
 
 /* Record 21 section 6.1.3: every end of the NHI's resume ends the CONFIGMG
  * worker's sleep, so the operations it parked are taken again and wait
- * for Windows' restore of their bridges. <= DISPATCH_LEVEL. */
-static VOID cmResumeWk(PCM_NHI nhi)
+ * for Windows' restore of their bridges. Section 6.1.6 item 6: a
+ * successful resume (`ok`) under the USB4 software connection manager
+ * tells it which members' routers are the same as at the suspend.
+ * <= DISPATCH_LEVEL. */
+static VOID cmResumeWk(PCM_NHI nhi, BOOLEAN ok)
 {
+    ULONG same;
+    ULONG m;
+    ULONG port;
+
     if (nhi->Reenum.Route == CM_ROUTE_CONFIGMG && nhi->Reenum.Wk != NULL) {
-        CmCfgwkResumed(nhi->Reenum.Wk);
+        same = 0;
+        for (m = 0; ok && nhi->U4On && m < nhi->Reenum.Members &&
+                    m < XHCI_TBT_MAX_TUNNELS;
+             m++) {
+            port = CmNhiMemberPort(nhi, m);
+            if (port != 0 && TbtU4PortResumeSame(&nhi->U4, port)) {
+                same |= 1UL << m;
+            }
+        }
+        CmCfgwkResumed(nhi->Reenum.Wk, same);
     }
 }
 
 VOID CmReenumResumeFailed(PCM_NHI nhi)
 {
-    cmResumeWk(nhi);
+    cmResumeWk(nhi, FALSE);
     nhi->Reenum.ResumeFailures++;
     CmLogNote(nhi, "cm.reenum.resume-failed", nhi->Reenum.Members);
     cmReleaseHeld(nhi, TRUE, 0xFFFFFFFFUL);
@@ -6112,8 +6152,10 @@ VOID CmReenumResumed(PCM_NHI nhi, BOOLEAN ok)
     ULONG i;
 
     r = &nhi->Reenum;
-    cmResumeWk(nhi);
+    cmResumeWk(nhi, ok);
     if (ok) {
+        /* Record 21 section 6.3.2: released by success in this epoch. */
+        r->PrResumeOkEpoch = CmWpuEpochNow();
         r->Resumes++;
     } else {
         r->ResumeFailures++;
@@ -6198,6 +6240,9 @@ VOID CmReenumStop(PCM_NHI nhi)
     CmMarksReset(&r->Marks);
     cmRegRecompute();
     KeReleaseSpinLock(&cmRegLock, irql);
+    /* Record 21 section 6.3.2: the relations this NHI's PDO was given in
+     * cleared, now that no child's target can name it. */
+    cmPrDrop(nhi);
     if (r->Wk != NULL) {
         CM_CFGWK_COUNTERS wc;
 
@@ -6687,6 +6732,15 @@ VOID CmWpuCount(PCM_NHI nhi, BOOLEAN on)
     } else if (!on && r->WpuOnCounted) {
         r->WpuOnCounted = 0;
         (VOID)InterlockedDecrement(&cmWpuOnCount);
+    }
+    /* Record 21 section 6.3.2: the wake order's switch counted the same
+     * way. */
+    if (on && nhi->PowerRel != 0 && !nhi->PrCounted) {
+        nhi->PrCounted = 1;
+        (VOID)InterlockedIncrement(&cmPrOnCount);
+    } else if (!on && nhi->PrCounted) {
+        nhi->PrCounted = 0;
+        (VOID)InterlockedDecrement(&cmPrOnCount);
     }
     if (r->WpuPendCounted) {
         /* Read at this start, or gone without one. */
@@ -8573,5 +8627,825 @@ static VOID cmWpuService(PCM_NHI nhi)
     }
     for (i = 0; i < n; i++) {
         CmFilterUnhold(held[i]);
+    }
+}
+
+/* ======================================================================
+ * The wake order (design record 21 section 6.3.2, task 50.10). On
+ * Windows 7 and later the child filter on a function directly behind an
+ * active tunnel port answers PowerRelations with the PDO of the NHI that
+ * owns the port, so the power manager turns the NHI on before the
+ * function at a system wake (documented: the queried device lists the
+ * devices to be turned on before it). The NHI completes its system S0 only
+ * after its resume's work on the normal path (cm_power.c), so the
+ * function, and by the tree's order every device behind it, powers up
+ * after the tunnel is back. The switch is XhciCmWakeOrder, 0 by default;
+ * with every NHI's switch at 0 nothing here answers, asks or refuses, and
+ * the driver behaves as 3.5.0.0 did. Locks: cmRegLock, then a filter's
+ * Lock.
+ * ====================================================================== */
+
+#define CM_PR_PASS_MS       500UL   /* the thread's pass at most this often  */
+#define CM_PR_RETRY_MS      5000UL  /* an ask not answered asked again       */
+#define CM_PR_BATCH         32UL    /* children asked per walk under the lock */
+#define CM_PR_LIST_MAX      1024UL  /* a lower answer longer is left alone   */
+#define CM_PR_TOK_TRUE      1UL     /* a special-file InPath TRUE in flight  */
+#define CM_PR_TOK_FALSE     2UL     /* a special-file InPath FALSE           */
+
+/* The drop walk's stamp, never 0, under cmRegLock. */
+static ULONG cmPrWalk;
+
+BOOLEAN CmPrOn(VOID)
+{
+    return (BOOLEAN)(*(volatile LONG *)&cmPrOnCount > 0);
+}
+
+/* Windows 7 or later (the kernel's shared data page, as cmChildTagOs reads
+ * it): the documented first system with PowerRelations. NT filters alone
+ * call it. */
+static BOOLEAN cmPrOs(VOID)
+{
+    return (BOOLEAN)(SharedUserData->NtMajorVersion > 6 ||
+                     (SharedUserData->NtMajorVersion == 6 &&
+                      SharedUserData->NtMinorVersion >= 1));
+}
+
+/* The tick count's low part, and a span in ticks (no 64-bit arithmetic:
+ * CM_PR_RETRY_MS * 10000 stays below 2^32). <= DISPATCH_LEVEL. */
+static ULONG cmPrTick(VOID)
+{
+    LARGE_INTEGER now;
+
+    KeQueryTickCount(&now);
+    return now.LowPart;
+}
+
+static ULONG cmPrTicks(ULONG ms)
+{
+    ULONG incr;
+
+    incr = KeQueryTimeIncrement();
+    if (incr == 0) {
+        incr = 1;
+    }
+    return (ms * 10000UL) / incr;
+}
+
+/*
+ * The domain and member whose port `c` sits directly behind, by location:
+ * `c`'s bus is the secondary bus of an active, exclusive member of a
+ * listed domain whose switch is on, as that domain's thread last read it;
+ * with `range`, any bus that member's bridge spans. NULL where none, or
+ * where two members match (ambiguous). Under cmRegLock.
+ */
+static PCM_NHI cmPrDomainOf(PCM_FILTER c, BOOLEAN range)
+{
+    PLIST_ENTRY e;
+    PCM_REENUM r;
+    PCM_NHI found;
+    ULONG bus;
+    ULONG i;
+    ULONG n;
+
+    if (c->Common.Kind != CM_KIND_CHILD) {
+        return NULL;
+    }
+    /* The bus read at the child's last start (a renumbering stops and
+     * starts the device), else the location the marks read once. */
+    if (c->PrBusValid) {
+        bus = c->PrBus;
+    } else if (c->Located) {
+        bus = c->LocBus;
+    } else {
+        return NULL;
+    }
+    found = NULL;
+    n = 0;
+    for (e = cmRegDomains.Flink; e != &cmRegDomains; e = e->Flink) {
+        r = CONTAINING_RECORD(e, CM_REENUM, Link);
+        for (i = 0; i < r->Members && i < XHCI_TBT_MAX_TUNNELS; i++) {
+            if ((r->Port[i].Flags & (CM_PORT_ACTIVE | CM_PORT_EXCLUSIVE)) !=
+                    (CM_PORT_ACTIVE | CM_PORT_EXCLUSIVE) ||
+                r->Port[i].PrSec == 0) {
+                continue;
+            }
+            if (bus == r->Port[i].PrSec ||
+                (range && bus > r->Port[i].PrSec &&
+                 bus <= r->Port[i].PrSub)) {
+                found = CONTAINING_RECORD(r, CM_NHI, Reenum);
+                n++;
+            }
+        }
+    }
+    return n == 1 ? found : NULL;
+}
+
+/*
+ * The target of `c`'s answer (section 6.3.2's rule): the PDO of the NHI
+ * owning the active tunnel port `c` sits directly behind (cmPrDomainOf,
+ * by location, whatever filter made `c`), with that NHI's switch on, on
+ * Windows 7 or later, with no special-file use pending or accepted; else
+ * NULL. Under cmRegLock; takes `c`'s Lock.
+ */
+static PDEVICE_OBJECT cmPrTargetLocked(PCM_FILTER c)
+{
+    PCM_NHI d;
+    PDEVICE_OBJECT t;
+    KIRQL irql;
+
+    if (c->Common.Kind != CM_KIND_CHILD || !cmPrOs()) {
+        return NULL;
+    }
+    d = cmPrDomainOf(c, FALSE);
+    if (d == NULL || d->PowerRel == 0) {
+        return NULL;
+    }
+    t = d->Common.Pdo;
+    KeAcquireSpinLock(&c->Lock, &irql);
+    if (c->PrUsagePend != 0 || c->PrInPath != 0 || c->Removing) {
+        t = NULL;
+    }
+    KeReleaseSpinLock(&c->Lock, irql);
+    return t;
+}
+
+/* A new paged list of `lower`'s entries (none when NULL) and `add` unless
+ * already there (NULL: none added); NULL when the pool refused. */
+static PDEVICE_RELATIONS cmPrList(const DEVICE_RELATIONS *lower,
+                                  PDEVICE_OBJECT add, PULONG added)
+{
+    PDEVICE_RELATIONS rel;
+    ULONG n;
+    ULONG i;
+    ULONG bytes;
+
+    n = lower != NULL ? lower->Count : 0;
+    *added = 0;
+    if (add != NULL) {
+        *added = 1;
+        for (i = 0; i < n; i++) {
+            if (lower->Objects[i] == add) {
+                *added = 0;
+            }
+        }
+    }
+    bytes = (ULONG)sizeof(DEVICE_RELATIONS) +
+            (n + *added) * (ULONG)sizeof(PDEVICE_OBJECT);
+    rel = (PDEVICE_RELATIONS)CmAllocPaged(bytes);
+    if (rel == NULL) {
+        return NULL;
+    }
+    CmZero(rel, bytes);
+    for (i = 0; i < n; i++) {
+        rel->Objects[i] = lower->Objects[i];
+    }
+    if (*added) {
+        rel->Objects[n] = add;
+    }
+    rel->Count = n + *added;
+    return rel;
+}
+
+/* The location of a child for the log. Under cmRegLock. */
+static ULONG cmPrBdf(PCM_FILTER c)
+{
+    return cmFiltBdf(c);
+}
+
+/* A child's note for this block, written to the listed domain whose port
+ * it sits behind (cmPrDomainOf), else to the first listed domain on the
+ * filter route, else nowhere: only live domains are ever written to.
+ * PASSIVE_LEVEL or below. */
+static VOID cmPrNote(PCM_FILTER c, const char *label, ULONG value)
+{
+    PLIST_ENTRY e;
+    PCM_REENUM r;
+    PCM_NHI dom;
+    KIRQL irql;
+
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    dom = cmPrDomainOf(c, TRUE);
+    for (e = cmRegDomains.Flink; dom == NULL && e != &cmRegDomains;
+         e = e->Flink) {
+        r = CONTAINING_RECORD(e, CM_REENUM, Link);
+        if (r->Route == CM_ROUTE_FILTER) {
+            dom = CONTAINING_RECORD(r, CM_NHI, Reenum);
+        }
+    }
+    if (dom != NULL) {
+        CmLogNote(dom, label, value);
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+}
+
+/* A query ended without installing an answer (`failed`: below or for
+ * pool, so the pass asks again after its time) or with nothing to give:
+ * the ask out closed. */
+static VOID cmPrEnded(PCM_FILTER c, BOOLEAN failed)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&c->Lock, &irql);
+    c->PrAskOut = 0;
+    if (failed) {
+        c->PrAnsFailed = 1;
+    }
+    KeReleaseSpinLock(&c->Lock, irql);
+}
+
+/*
+ * IRP_MN_QUERY_DEVICE_RELATIONS for PowerRelations on a child (section
+ * 6.3.2, the answer): forwarded and waited for, then read on its way back.
+ * A target: the lower answer's entries with the NHI's PDO added, the PDO
+ * referenced under cmRegLock (the domain is delisted under it before the
+ * NHI can go). No target where this child gave one before: the clearing
+ * answer (success, the lower list as it is or an empty one). Every other
+ * case goes up as it came. PASSIVE_LEVEL.
+ */
+NTSTATUS CmPrRelations(PCM_FILTER c, PIRP irp)
+{
+    NTSTATUS status;
+    const DEVICE_RELATIONS *lower;
+    PDEVICE_RELATIONS fresh;
+    PDEVICE_RELATIONS empty;
+    PDEVICE_RELATIONS spare;
+    PDEVICE_OBJECT target;
+    PDEVICE_OBJECT now;
+    PDEVICE_OBJECT drop;
+    PVOID before;
+    KIRQL irql;
+    KIRQL cirql;
+    ULONG added;
+    ULONG bdf;
+    ULONG count;
+    BOOLEAN clearing;
+
+    status = CmForwardSync(&c->Common, irp);
+    lower = (const DEVICE_RELATIONS *)irp->IoStatus.Information;
+    if (!(NT_SUCCESS(status) || (status == STATUS_NOT_SUPPORTED && lower == NULL)) ||
+        (lower != NULL && lower->Count > CM_PR_LIST_MAX)) {
+        /* Failed below, or not ours to read: as it came; the query has
+         * ended, and the pass asks again after its time. */
+        cmPrEnded(c, TRUE);
+        return CmCompleteIrp(irp, status, irp->IoStatus.Information);
+    }
+    if (!NT_SUCCESS(status)) {
+        lower = NULL;
+    }
+    /* A target given needs the empty list a later clearing answer uses
+     * (so that one never waits on pool), taken before any lock. */
+    spare = NULL;
+    if (c->PrEmpty == NULL) {
+        spare = (PDEVICE_RELATIONS)CmAllocPaged(sizeof(DEVICE_RELATIONS));
+    }
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    target = cmPrTargetLocked(c);
+    KeAcquireSpinLock(&c->Lock, &cirql);
+    if (c->PrEmpty == NULL && spare != NULL) {
+        c->PrEmpty = spare;
+        spare = NULL;
+    }
+    if (target != NULL && c->PrEmpty == NULL) {
+        target = NULL;
+    }
+    before = c->PrAnsTarget;
+    if (target != NULL) {
+        /* The answer in progress: a special-file notification is refused
+         * until it is recorded (CmPrUsage). */
+        c->PrAnswering = 1;
+    }
+    KeReleaseSpinLock(&c->Lock, cirql);
+    if (target != NULL) {
+        ObReferenceObject(target);
+    }
+    bdf = cmPrBdf(c);
+    KeReleaseSpinLock(&cmRegLock, irql);
+    if (spare != NULL) {
+        CmFree(spare);
+    }
+    clearing = (BOOLEAN)(target == NULL && before != NULL);
+    if (target == NULL && !clearing) {
+        cmPrEnded(c, FALSE);
+        return CmCompleteIrp(irp, status, irp->IoStatus.Information);
+    }
+    fresh = NULL;
+    added = 0;
+    if (target != NULL) {
+        fresh = cmPrList(lower, target, &added);
+        if (fresh == NULL) {
+            ObDereferenceObject(target);
+            KeAcquireSpinLock(&c->Lock, &cirql);
+            c->PrAnswering = 0;
+            KeReleaseSpinLock(&c->Lock, cirql);
+            cmPrEnded(c, TRUE);
+            cmPrNote(c, "cm.powerrel.nomem", bdf);
+            return CmCompleteIrp(irp, status, irp->IoStatus.Information);
+        }
+        if (!added) {
+            /* Already listed below: the reference this answer took is not
+             * carried by it. */
+            ObDereferenceObject(target);
+        }
+        if (lower != NULL) {
+            CmFree((PVOID)lower);
+        }
+        irp->IoStatus.Information = (ULONG_PTR)fresh;
+        lower = fresh;
+    }
+    /* Published under cmRegLock, where CmReenumStop delists a domain
+     * before its drop walk: a target no longer current (its domain gone
+     * meanwhile) is taken out of the list again, so no walk can miss an
+     * answer naming a stopped NHI. */
+    drop = NULL;
+    empty = NULL;
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    now = target != NULL ? cmPrTargetLocked(c) : NULL;
+    KeAcquireSpinLock(&c->Lock, &cirql);
+    if (target != NULL && now != target) {
+        /* Decided here; the paged list itself is changed after the locks
+         * (below), before the IRP completes. */
+        if (added) {
+            drop = target;
+        }
+        target = NULL;
+        clearing = (BOOLEAN)(before != NULL);
+    }
+    if (target == NULL && lower == NULL && irp->IoStatus.Information == 0) {
+        /* The clearing answer where nothing below answered: the empty
+         * list kept for it, its ownership passed to the PnP manager. */
+        empty = c->PrEmpty;
+        c->PrEmpty = NULL;
+    }
+    if (target == NULL && !clearing) {
+        /* Nothing was given and nothing is now: the list (if any) goes up
+         * as it is. */
+    } else if (target == NULL && lower == NULL &&
+               irp->IoStatus.Information == 0 && empty == NULL) {
+        /* No empty list (cannot happen while a target stands: one is
+         * taken before a target is given): as it came, asked again. */
+        clearing = FALSE;
+        c->PrAnsFailed = 1;
+    } else {
+        c->PrAnsTarget = (PVOID)target;
+        c->PrAnsOk = 1;
+        c->PrAnsFailed = 0;
+        if (target != NULL) {
+            /* An aligned LONG store, only ever 0 to 1 (as cmWpuAnyAdded). */
+            *(volatile LONG *)&cmPrGiven = 1;
+        }
+    }
+    c->PrAskOut = 0;
+    c->PrAnswering = 0;
+    KeReleaseSpinLock(&c->Lock, cirql);
+    KeReleaseSpinLock(&cmRegLock, irql);
+    if (drop != NULL) {
+        /* The entry this answer appended, taken out again (PASSIVE_LEVEL:
+         * the list is paged). */
+        fresh->Count--;
+        fresh->Objects[fresh->Count] = NULL;
+        ObDereferenceObject(drop);
+    }
+    if (empty != NULL) {
+        CmZero(empty, sizeof(DEVICE_RELATIONS));
+        irp->IoStatus.Information = (ULONG_PTR)empty;
+    }
+    if (target == NULL && !clearing) {
+        return CmCompleteIrp(irp, irp->IoStatus.Information != 0 ? STATUS_SUCCESS
+                                                                : status,
+                             irp->IoStatus.Information);
+    }
+    lower = (const DEVICE_RELATIONS *)irp->IoStatus.Information;
+    count = lower != NULL ? lower->Count : 0;
+    cmPrNote(c, "cm.powerrel.answer",
+                 (clearing ? 0x02000000UL : 0) |
+                     (target != NULL ? 0x01000000UL : 0) |
+                     ((count & 0xFFUL) << 16) | (bdf & 0xFFFFUL));
+    return CmCompleteIrp(irp, STATUS_SUCCESS, irp->IoStatus.Information);
+}
+
+/*
+ * A special-file usage notification on a child, at its dispatch (section
+ * 6.3.2, special files): InPath TRUE refused while a relation stands or
+ * an answer giving one is being made; else counted pending before it is
+ * forwarded (no target while pending). *token for the completion. FALSE:
+ * refuse it. PASSIVE_LEVEL.
+ */
+BOOLEAN CmPrUsage(PCM_FILTER c, PIO_STACK_LOCATION stack, PULONG token)
+{
+    DEVICE_USAGE_NOTIFICATION_TYPE type;
+    KIRQL irql;
+    BOOLEAN refuse;
+
+    *token = 0;
+    type = stack->Parameters.UsageNotification.Type;
+    if (c->Common.Kind != CM_KIND_CHILD ||
+        (type != DeviceUsageTypePaging && type != DeviceUsageTypeHibernation &&
+         type != DeviceUsageTypeDumpFile)) {
+        return TRUE;
+    }
+    if (!stack->Parameters.UsageNotification.InPath) {
+        *token = CM_PR_TOK_FALSE;
+        return TRUE;
+    }
+    refuse = FALSE;
+    KeAcquireSpinLock(&c->Lock, &irql);
+    /* A relation installed, or an answer giving one being made. An ask
+     * still out is not enough: its answer gives no target while this
+     * notification is pending or accepted (PrUsagePend, PrInPath). */
+    if (c->PrAnsTarget != NULL || c->PrAnswering) {
+        refuse = TRUE;
+    } else {
+        c->PrUsagePend++;
+        *token = CM_PR_TOK_TRUE;
+    }
+    KeReleaseSpinLock(&c->Lock, irql);
+    if (refuse) {
+        cmPrNote(c, "cm.powerrel.inpath.refused", (ULONG)type);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+/* Its completion: a TRUE no longer pending, accepted on success (a failed
+ * one leaves the count as it was); a FALSE lowers it, whatever its
+ * status. IRQL: <= DISPATCH_LEVEL. */
+VOID CmPrUsageDone(PCM_FILTER c, ULONG token, NTSTATUS status)
+{
+    KIRQL irql;
+
+    if (token == 0) {
+        return;
+    }
+    KeAcquireSpinLock(&c->Lock, &irql);
+    if (token == CM_PR_TOK_TRUE) {
+        if (c->PrUsagePend != 0) {
+            c->PrUsagePend--;
+        }
+        if (NT_SUCCESS(status)) {
+            c->PrInPath++;
+        }
+    } else if (c->PrInPath != 0) {
+        c->PrInPath--;
+    }
+    KeReleaseSpinLock(&c->Lock, irql);
+}
+
+/* A device D0 on a child on its way down: the first of an epoch latched
+ * with what its owner had reached then. IRQL: <= DISPATCH_LEVEL. */
+VOID CmPrD0Dispatch(PCM_FILTER c)
+{
+    PCM_NHI d;
+    KIRQL irql;
+    KIRQL cirql;
+    ULONG epoch;
+    ULONG order;
+    ULONG ok;
+
+    if (!CmPrOn()) {
+        return;
+    }
+    epoch = CmWpuEpochNow();
+    if (epoch == 0) {
+        return;
+    }
+    order = 0;
+    ok = 0;
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    /* The domain by location, from the live list (cmPrDomainOf). */
+    d = cmPrDomainOf(c, TRUE);
+    if (d != NULL) {
+        order = (ULONG)(d->Reenum.PrS0Epoch == epoch);
+        ok = (ULONG)(d->Reenum.PrResumeOkEpoch == epoch);
+    }
+    KeAcquireSpinLock(&c->Lock, &cirql);
+    if (c->PrD0Epoch != epoch || c->PrD0Gen != c->WpuStartGen) {
+        c->PrD0Epoch = epoch;
+        c->PrD0Gen = c->WpuStartGen;
+        c->PrD0Order = order | (c->Started ? 0x10UL : 0);
+        c->PrD0Ok = ok;
+        c->PrD0Done = 0;
+        c->PrD0Status = 0;
+        c->PrD0Count = 1;
+    } else if (c->PrD0Count < 15) {
+        c->PrD0Count++;
+    }
+    KeReleaseSpinLock(&c->Lock, cirql);
+    KeReleaseSpinLock(&cmRegLock, irql);
+}
+
+/* Its completion (`context` CmWpuD0Context's at the dispatch): the first
+ * one matching the latch records its status. IRQL: <= DISPATCH_LEVEL. */
+VOID CmPrD0Done(PCM_FILTER c, ULONG context, NTSTATUS status)
+{
+    KIRQL irql;
+
+    if (!CmPrOn()) {
+        return;
+    }
+    KeAcquireSpinLock(&c->Lock, &irql);
+    if (c->PrD0Epoch == (context >> 8) && c->PrD0Epoch != 0 &&
+        (c->PrD0Gen & 0xFFUL) == (context & 0xFFUL) && !c->PrD0Done) {
+        c->PrD0Done = 1;
+        c->PrD0Status = (ULONG)status;
+    }
+    KeReleaseSpinLock(&c->Lock, irql);
+}
+
+/* A successful start (`removed` FALSE: the answer is asked again, the last
+ * one kept for comparison) or a removal (TRUE: its devnode's relations
+ * gone with it). PASSIVE_LEVEL. */
+VOID CmPrReset(PCM_FILTER c, BOOLEAN removed)
+{
+    PDEVICE_RELATIONS empty;
+    KIRQL irql;
+    ULONG bus;
+    ULONG bytes;
+    BOOLEAN ok;
+
+    if (!removed && CmPrOn()) {
+        /* The bus as the devnode has it at this start (the property is
+         * the devnode's; this object passes its own requests unlocated
+         * meanwhile, as CmRegAttLocate does). */
+        bus = 0;
+        bytes = 0;
+        c->InLocate++;
+        ok = (BOOLEAN)NT_SUCCESS(IoGetDeviceProperty(c->Common.Pdo,
+                                                     DevicePropertyBusNumber,
+                                                     sizeof(bus), &bus,
+                                                     &bytes));
+        c->InLocate--;
+        KeAcquireSpinLock(&cmRegLock, &irql);
+        c->PrBus = bus;
+        c->PrBusValid = ok ? 1UL : 0UL;
+        KeReleaseSpinLock(&cmRegLock, irql);
+    } else if (!removed) {
+        /* Not read with the order off: an earlier start's reading is not
+         * kept (the marks' location stands in for it). */
+        KeAcquireSpinLock(&cmRegLock, &irql);
+        c->PrBusValid = 0;
+        KeReleaseSpinLock(&cmRegLock, irql);
+    }
+    empty = NULL;
+    KeAcquireSpinLock(&c->Lock, &irql);
+    if (removed) {
+        c->PrAnsTarget = NULL;
+        empty = c->PrEmpty;
+        c->PrEmpty = NULL;
+    }
+    c->PrAnsOk = 0;
+    c->PrAnsFailed = 0;
+    c->PrAskOut = 0;
+    KeReleaseSpinLock(&c->Lock, irql);
+    if (empty != NULL) {
+        CmFree(empty);
+    }
+}
+
+/* The NHI's system S0 completed (cm_power.c), `noDevice` when no device
+ * D0 came with it or it failed: the epoch recorded, logged with the
+ * resume's outcome. IRQL: <= DISPATCH_LEVEL. */
+VOID CmPrNhiS0(PCM_NHI nhi, BOOLEAN noDevice)
+{
+    PCM_REENUM r;
+    ULONG epoch;
+
+    r = &nhi->Reenum;
+    epoch = CmWpuEpochNow();
+    r->PrS0Epoch = epoch;
+    if (nhi->PowerRel != 0) {
+        CmLogNote(nhi, "cm.powerrel.s0",
+                  ((epoch & 0xFFFFUL) << 8) |
+                      (noDevice ? 0x02UL : 0) |
+                      (r->PrResumeOkEpoch == epoch ? 0x01UL : 0));
+    }
+}
+
+/* TRUE when `pdo` is a listed domain's NHI PDO. Under cmRegLock. */
+static BOOLEAN cmPrListed(PVOID pdo)
+{
+    PLIST_ENTRY e;
+    PCM_NHI d;
+
+    for (e = cmRegDomains.Flink; e != &cmRegDomains; e = e->Flink) {
+        d = CONTAINING_RECORD(CONTAINING_RECORD(e, CM_REENUM, Link), CM_NHI,
+                              Reenum);
+        if ((PVOID)d->Common.Pdo == pdo) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/* Asks `n` held children for the query, logs, drops each hold. PASSIVE_LEVEL. */
+static VOID cmPrAsk(PCM_NHI nhi, PCM_FILTER *held, PULONG note, ULONG n)
+{
+    ULONG i;
+
+    for (i = 0; i < n; i++) {
+        IoInvalidateDeviceRelations(held[i]->Common.Pdo, PowerRelations);
+        CmLogNote(nhi, "cm.powerrel.ask", note[i]);
+        CmFilterUnhold(held[i]);
+    }
+}
+
+/*
+ * The thread's pass, from CmReenumService on the filter route, at most
+ * every CM_PR_PASS_MS: each started child whose target is this NHI's PDO,
+ * or whose last answer gave it, asked again while what it would answer is
+ * not what it last answered (or nothing was answered since its start), an
+ * ask out being asked again after CM_PR_RETRY_MS; then the D0 latches of
+ * this domain's children logged once each. PASSIVE_LEVEL.
+ */
+static VOID cmPrService(PCM_NHI nhi)
+{
+    PCM_REENUM r;
+    PCM_FILTER held[CM_PR_BATCH];
+    ULONG note[CM_PR_BATCH];
+    ULONG logv[CM_PR_BATCH];
+    ULONG logs[CM_PR_BATCH];
+    PLIST_ENTRY e;
+    PCM_FILTER g;
+    PDEVICE_OBJECT t;
+    PDEVICE_OBJECT pdo;
+    KIRQL irql;
+    KIRQL cirql;
+    ULONG now;
+    ULONG tick;
+    ULONG span;
+    ULONG n;
+    ULONG nl;
+    ULONG i;
+    ULONG v;
+    ULONG retry;
+    ULONG members;
+    ULONG sec[XHCI_TBT_MAX_TUNNELS];
+    ULONG sub[XHCI_TBT_MAX_TUNNELS];
+    BOOLEAN need;
+
+    r = &nhi->Reenum;
+    /* Off, the pass runs only to clear a relation an earlier start with
+     * the order on installed (cmPrGiven): with none ever given it does
+     * nothing at all, as 3.5.0.0. */
+    if (nhi->Suspended ||
+        (nhi->PowerRel == 0 && *(volatile LONG *)&cmPrGiven == 0)) {
+        return;
+    }
+    now = cmNow(nhi);
+    if (r->PrPassed && now - r->PrLastPass < CM_PR_PASS_MS) {
+        return;
+    }
+    r->PrPassed = 1;
+    r->PrLastPass = now;
+    /* Each active, exclusive member's secondary and subordinate buses, read
+     * now (the location rule, cmPrDomainOf), published under the lock. */
+    members = r->Members < XHCI_TBT_MAX_TUNNELS ? r->Members
+                                                : XHCI_TBT_MAX_TUNNELS;
+    for (i = 0; i < members; i++) {
+        sec[i] = 0;
+        sub[i] = 0;
+        KeAcquireSpinLock(&cmRegLock, &irql);
+        v = r->Port[i].Flags;
+        KeReleaseSpinLock(&cmRegLock, irql);
+        if (nhi->PowerRel != 0 &&
+            (v & (CM_PORT_ACTIVE | CM_PORT_EXCLUSIVE)) ==
+                (CM_PORT_ACTIVE | CM_PORT_EXCLUSIVE) &&
+            cmCfgRead(NULL, r->Port[i].Bdf, 0x18UL, &v) != 0 &&
+            ((v >> 8) & 0xFFUL) != 0 && ((v >> 8) & 0xFFUL) != 0xFFUL &&
+            ((v >> 16) & 0xFFUL) >= ((v >> 8) & 0xFFUL)) {
+            sec[i] = (v >> 8) & 0xFFUL;
+            sub[i] = (v >> 16) & 0xFFUL;
+        }
+    }
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    for (i = 0; i < members; i++) {
+        r->Port[i].PrSec = sec[i];
+        r->Port[i].PrSub = sub[i];
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    pdo = nhi->Common.Pdo;
+    tick = cmPrTick();
+    span = cmPrTicks(CM_PR_RETRY_MS);
+    n = 0;
+    nl = 0;
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    for (e = cmRegAtts.Flink; e != &cmRegAtts && n < CM_PR_BATCH; e = e->Flink) {
+        g = CONTAINING_RECORD(e, CM_FILTER, AttLink);
+        if (g->Common.Kind != CM_KIND_CHILD || !g->AttListed) {
+            continue;
+        }
+        if (nhi->PowerRel != 0 && nl < CM_PR_BATCH &&
+            cmPrDomainOf(g, TRUE) == nhi) {
+            v = cmPrBdf(g) & 0xFFFFUL;
+            KeAcquireSpinLock(&g->Lock, &cirql);
+            if (g->PrD0Done && g->PrD0Logged != g->PrD0Epoch) {
+                g->PrD0Logged = g->PrD0Epoch;
+                logv[nl] = v | ((g->PrD0Order & 1UL) << 31) |
+                           (NT_SUCCESS((NTSTATUS)g->PrD0Status) ? 0
+                                                                : 0x40000000UL) |
+                           ((g->PrD0Ok & 1UL) << 29) |
+                           ((g->PrD0Order & 0x10UL) << 24) |
+                           ((g->PrD0Count & 0xFUL) << 24) |
+                           (((g->Depth < 15 ? g->Depth : 15) & 0xFUL) << 20);
+                logs[nl] = g->PrD0Status;
+                nl++;
+            }
+            KeReleaseSpinLock(&g->Lock, cirql);
+        }
+        if (!g->Started) {
+            continue;
+        }
+        t = cmPrTargetLocked(g);
+        KeAcquireSpinLock(&g->Lock, &cirql);
+        /* This NHI's, or a relation naming an NHI no longer listed (its
+         * own drop's clearing not installed): any running NHI's pass asks
+         * for that one. */
+        need = (BOOLEAN)((t == pdo || g->PrAnsTarget == (PVOID)pdo ||
+                          (g->PrAnsTarget != NULL &&
+                           !cmPrListed(g->PrAnsTarget))) &&
+                         ((PVOID)t != g->PrAnsTarget ||
+                          (t != NULL && !g->PrAnsOk)) &&
+                         ((!g->PrAskOut && !g->PrAnsFailed) ||
+                          tick - g->PrAskAt >= span));
+        retry = g->PrAskOut;
+        KeReleaseSpinLock(&g->Lock, cirql);
+        if (need && CmFilterTryHold(g)) {
+            KeAcquireSpinLock(&g->Lock, &cirql);
+            g->PrAskOut = 1;
+            g->PrAskAt = tick;
+            KeReleaseSpinLock(&g->Lock, cirql);
+            held[n] = g;
+            note[n] = (t != NULL ? 0x01000000UL : 0) |
+                      (retry ? 0x02000000UL : 0) | (cmPrBdf(g) & 0xFFFFUL);
+            n++;
+        }
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    for (i = 0; i < nl; i++) {
+        CmLogNote(nhi, "cm.powerrel.d0", logv[i]);
+        CmLogNote(nhi, "cm.powerrel.d0.status", logs[i]);
+    }
+    cmPrAsk(nhi, held, note, n);
+}
+
+/*
+ * The drop at the NHI's end (CmReenumStop, the domain already delisted):
+ * every attachment whose last answer gave this NHI's PDO asked once for a
+ * clearing query, whatever its own state but a removal begun, in batches
+ * under the lock, until a walk finds none (each taken one stamped). The
+ * thread, PASSIVE_LEVEL.
+ */
+static VOID cmPrDrop(PCM_NHI nhi)
+{
+    PCM_FILTER held[CM_PR_BATCH];
+    ULONG note[CM_PR_BATCH];
+    PLIST_ENTRY e;
+    PCM_FILTER g;
+    PVOID pdo;
+    KIRQL irql;
+    KIRQL cirql;
+    ULONG seq;
+    ULONG tick;
+    ULONG n;
+    BOOLEAN match;
+
+    pdo = (PVOID)nhi->Common.Pdo;
+    tick = cmPrTick();
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    cmPrWalk++;
+    if (cmPrWalk == 0) {
+        cmPrWalk = 1;
+    }
+    seq = cmPrWalk;
+    KeReleaseSpinLock(&cmRegLock, irql);
+    for (;;) {
+        n = 0;
+        KeAcquireSpinLock(&cmRegLock, &irql);
+        for (e = cmRegAtts.Flink; e != &cmRegAtts && n < CM_PR_BATCH;
+             e = e->Flink) {
+            g = CONTAINING_RECORD(e, CM_FILTER, AttLink);
+            if (g->Common.Kind != CM_KIND_CHILD) {
+                continue;
+            }
+            KeAcquireSpinLock(&g->Lock, &cirql);
+            match = (BOOLEAN)(g->PrWalkSeq != seq && g->PrAnsTarget == pdo);
+            if (match) {
+                g->PrWalkSeq = seq;
+            }
+            KeReleaseSpinLock(&g->Lock, cirql);
+            if (match && CmFilterTryHold(g)) {
+                KeAcquireSpinLock(&g->Lock, &cirql);
+                g->PrAskOut = 1;
+                g->PrAskAt = tick;
+                KeReleaseSpinLock(&g->Lock, cirql);
+                held[n] = g;
+                note[n] = cmPrBdf(g) & 0xFFFFUL;
+                n++;
+            }
+        }
+        KeReleaseSpinLock(&cmRegLock, irql);
+        if (n == 0) {
+            break;
+        }
+        cmPrAsk(nhi, held, note, n);
     }
 }

@@ -71,6 +71,36 @@ static void state(void)
     tr_red_state(&in, &r);
 }
 
+/* Shift-JIS's lead bytes and a single-byte code page's test, for the
+ * tooltip's cut between characters (record 25 section 28 item 10). */
+static int sjis_lead(unsigned char c)
+{
+    return (c >= 0x81 && c <= 0x9F) || (c >= 0xE0 && c <= 0xFC);
+}
+
+static int sb_lead(unsigned char c)
+{
+    (void)c;
+    return 0;
+}
+
+/* dev[0]'s name: one 'a' first with one1, then chars double-byte
+ * characters (0x82 0xA0). */
+static void dbcs_dev(int one1, int chars)
+{
+    int i = 0;
+    int k;
+
+    if (one1) {
+        dev[0].Name[i++] = 'a';
+    }
+    for (k = 0; k < chars; k++) {
+        dev[0].Name[i++] = (char)0x82;
+        dev[0].Name[i++] = (char)0xA0;
+    }
+    dev[0].Name[i] = '\0';
+}
+
 static void test_nothing(void)
 {
     reset();
@@ -267,7 +297,7 @@ static void tip_check(const TR_RED *rr, int prefix, size_t cap, const char *want
     char out[256];
 
     memset(out, 'Z', sizeof(out));
-    tr_red_tip(&in, rr, prefix, out, cap);
+    tr_red_tip(&in, rr, prefix, NULL, out, cap);
     CHECK(strlen(out) <= cap - 1, "within the room");
     if (want != NULL) {
         CHECK(strcmp(out, want) == 0, want);
@@ -351,7 +381,7 @@ static void test_tip(void)
             char suf[32];
             t = r;
             t.Count = n;
-            tr_red_tip(&in, &t, c, out, caps[c]);
+            tr_red_tip(&in, &t, c, NULL, out, caps[c]);
             CHECK(strlen(out) <= caps[c] - 1, "a long name within the room");
             if (n > 1) {
                 sprintf(suf, " and %d more", n - 1);
@@ -371,15 +401,71 @@ static void test_tip(void)
     t.Count = 2;
     {
         char out[40];
-        tr_red_tip(&in, &t, 0, out, 40);
+        tr_red_tip(&in, &t, 0, NULL, out, 40);
         CHECK(strcmp(out, "A device is slowed by a USB 1.1 hub and") == 0,
               "no room for a name: the generic word, cut at the room");
     }
     {
         char out[1];
         out[0] = 'X';
-        tr_red_tip(&in, &t, 0, out, 1);
+        tr_red_tip(&in, &t, 0, NULL, out, 1);
         CHECK_EQ(out[0], 0, "a room of one is empty");
+    }
+
+    /* Task 50.39 (record 25 section 28 item 10): a double-byte name cut
+     * between characters. " is slowed by a USB 1.1 hub" leaves 36 bytes of
+     * a 64-byte tip for the name; a cut keeps at most 33 before "...". */
+    {
+        static const char tail[] = " is slowed by a USB 1.1 hub";
+        char out[64];
+        char o0[64];
+        size_t k;
+        int same;
+        reset();
+        dev[0].Kind = TR_RED_SLOW2;
+        in.DevCount = 1;
+        state();
+        dbcs_dev(1, 17);
+        tr_red_tip(&in, &r, 0, sjis_lead, out, sizeof(out));
+        CHECK(strlen(out) == 62 && memcmp(out, dev[0].Name, 35) == 0 &&
+              strcmp(out + 35, tail) == 0,
+              "tip: a double-byte name a byte under its room whole");
+        dbcs_dev(0, 18);
+        tr_red_tip(&in, &r, 0, sjis_lead, out, sizeof(out));
+        CHECK(strlen(out) == 63 && memcmp(out, dev[0].Name, 36) == 0 &&
+              strcmp(out + 36, tail) == 0,
+              "tip: a double-byte name at its room whole");
+        dbcs_dev(1, 18);
+        tr_red_tip(&in, &r, 0, sjis_lead, out, sizeof(out));
+        CHECK(strlen(out) == 63 && memcmp(out, dev[0].Name, 33) == 0 &&
+              strncmp(out + 33, "...", 3) == 0 && strcmp(out + 36, tail) == 0,
+              "tip: a byte over, cut at a character's end");
+        dbcs_dev(0, 19);
+        tr_red_tip(&in, &r, 0, sjis_lead, out, sizeof(out));
+        tr_red_tip(&in, &r, 0, NULL, o0, sizeof(o0));
+        CHECK(strlen(out) == 62 && memcmp(out, dev[0].Name, 32) == 0 &&
+              strncmp(out + 32, "...", 3) == 0 && strcmp(out + 35, tail) == 0,
+              "tip: two bytes over, a byte sooner, not inside a character");
+        CHECK(strlen(o0) == 63 && memcmp(o0, dev[0].Name, 33) == 0 &&
+              (unsigned char)o0[32] == 0x82 && strcmp(o0 + 36, tail) == 0,
+              "tip: without a lead test as before, a lead byte last");
+        same = 1;
+        for (n = 30; n <= 45; n++) {
+            for (k = 0; k < (size_t)n; k++) {
+                dev[0].Name[k] = (char)('a' + (k % 26));
+            }
+            dev[0].Name[n] = '\0';
+            tr_red_tip(&in, &r, 0, sjis_lead, out, sizeof(out));
+            tr_red_tip(&in, &r, 0, NULL, o0, sizeof(o0));
+            same = same && strcmp(out, o0) == 0;
+            for (k = 0; k < (size_t)n; k++) {
+                dev[0].Name[k] = (char)(0x80 + (k % 0x7F));
+            }
+            tr_red_tip(&in, &r, 0, sb_lead, out, sizeof(out));
+            tr_red_tip(&in, &r, 0, NULL, o0, sizeof(o0));
+            same = same && strcmp(out, o0) == 0;
+        }
+        CHECK(same, "tip: single-byte names cut as with no test");
     }
 }
 

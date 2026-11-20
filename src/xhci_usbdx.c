@@ -389,6 +389,16 @@ ULONG XhciUsbdxIoctlAlias(ULONG code)
     return code;
 }
 
+/* Task 50.25: xhci_usbdx.h. */
+ULONG XhciUsbdxShortOk(ULONG flagSet, ULONG in, ULONG bulkOrInterrupt,
+                       ULONG contract)
+{
+    if (flagSet) {
+        return 1;
+    }
+    return (contract && in && bulkOrInterrupt) ? 1UL : 0UL;
+}
+
 /* Task 49.45: the notes' packing. */
 
 static ULONG xhciUsbdxSat(ULONG v, ULONG max)

@@ -1773,6 +1773,7 @@ ULONG XhciPipeNtStatus(ULONG usbd)
     case XHCI_PIPE_USBD_PENDING:
         return XHCI_PIPE_NT_PENDING;
     case XHCI_PIPE_USBD_CANCELED:
+    case XHCI_PIPE_USBD_CANCELED_E:
         return XHCI_PIPE_NT_CANCELLED;
     case XHCI_PIPE_USBD_INVALID_URB_FUNCTION:
     case XHCI_PIPE_USBD_INVALID_PARAMETER:
@@ -1808,6 +1809,209 @@ ULONG XhciPipeConfigureUsbdStatus(ULONG completionCode)
     default:
         return XHCI_PIPE_USBD_INTERNAL_HC_ERROR;
     }
+}
+
+ULONG XhciPipeUsbdIsCancel(ULONG usbd)
+{
+    return (usbd == XHCI_PIPE_USBD_CANCELED ||
+            usbd == XHCI_PIPE_USBD_CANCELED_E) ? 1UL : 0UL;
+}
+
+/*
+ * Mode 1's table, by `nt`: what each system's own USB stack gives a
+ * cancelled bulk or interrupt URB, read in guests with no xhci98.sys
+ * (record 13 section 6.15.6, 2026-11-16). The stock UHCD/OpenHCI and USBD
+ * stacks of 98 SE and ME give L; usbport and USBXHCI give E on XP, Vista,
+ * 7, 8.1 and 10, and on 2000's USB 2.0 path, while 2000's own UHCI path
+ * (uhcd.sys) gives L: the owner's choice for 2000 is E (2026-11-16), so
+ * one row serves every NT system. An added USB 2.0 stack on 98 SE (E) is
+ * not looked for (owner, 2026-11-16). Only these rows change when a
+ * reading or a decision does.
+ */
+static const ULONG xhciPipeCancelOwn[2] = {
+    XHCI_PIPE_USBD_CANCELED,    /* 98 SE and ME          */
+    XHCI_PIPE_USBD_CANCELED_E   /* 2000 and later        */
+};
+
+ULONG XhciPipeCancelPick(ULONG taken, ULONG value, ULONG nt)
+{
+    if (taken && value == XHCI_PIPE_CANCEL_L) {
+        return XHCI_PIPE_USBD_CANCELED;
+    }
+    if (taken && value == XHCI_PIPE_CANCEL_E) {
+        return XHCI_PIPE_USBD_CANCELED_E;
+    }
+    return xhciPipeCancelOwn[nt ? 1 : 0];
+}
+
+ULONG XhciPipeUnplugPick(ULONG taken, ULONG value, ULONG nt)
+{
+    if (!nt) {
+        return XHCI_PIPE_UNPLUG_HELD;
+    }
+    if (taken && value == XHCI_PIPE_UNPLUG_HOLD_ALL) {
+        return XHCI_PIPE_UNPLUG_HELD;
+    }
+    return XHCI_PIPE_UNPLUG_AT_ONCE;
+}
+
+ULONG XhciPipeParkVerdict(ULONG kind, ULONG in)
+{
+    if ((in & (XHCI_PARK_IN_CLOSING | XHCI_PARK_IN_CANCELLED |
+               XHCI_PARK_IN_PARK_CLOSED)) != 0) {
+        return XHCI_PARK_DECLINE;
+    }
+    if ((in & XHCI_PARK_IN_ABORTED) != 0) {
+        return XHCI_PARK_CANCEL;
+    }
+    if (kind != XHCI_PARK_KIND_HOLD &&
+        (in & (XHCI_PARK_IN_ISO_RELEASED | XHCI_PARK_IN_ISO)) ==
+            (XHCI_PARK_IN_ISO_RELEASED | XHCI_PARK_IN_ISO)) {
+        return XHCI_PARK_CANCEL;
+    }
+    if (kind == XHCI_PARK_KIND_DRAIN && (in & XHCI_PARK_IN_GONE_NOW) != 0 &&
+        (in & XHCI_PARK_IN_CONTAINED) == 0 &&
+        (in & (XHCI_PARK_IN_ISO | XHCI_PARK_IN_ISO_KEEP)) !=
+            (XHCI_PARK_IN_ISO | XHCI_PARK_IN_ISO_KEEP)) {
+        return XHCI_PARK_NOT_HELD;
+    }
+    return XHCI_PARK_HOLD;
+}
+
+ULONG XhciPipeClaimVerdict(ULONG drainMark, ULONG in)
+{
+    if (!drainMark ||
+        (in & (XHCI_PARK_IN_CLOSING | XHCI_PARK_IN_CONTAINED)) != 0) {
+        return XHCI_PARK_CLAIM_LEAVE;
+    }
+    if ((in & (XHCI_PARK_IN_ISO | XHCI_PARK_IN_ISO_KEEP)) ==
+        (XHCI_PARK_IN_ISO | XHCI_PARK_IN_ISO_KEEP)) {
+        return XHCI_PARK_CLAIM_LEAVE;
+    }
+    if ((in & XHCI_PARK_IN_ABORTED) != 0) {
+        return XHCI_PARK_CLAIM_CANCEL;
+    }
+    return XHCI_PARK_CLAIM_GONE;
+}
+
+ULONG XhciPipeUsbdOut(ULONG usbd, ULONG out)
+{
+    if (usbd == XHCI_PIPE_USBD_CANCELED &&
+        out == XHCI_PIPE_USBD_CANCELED_E) {
+        return XHCI_PIPE_USBD_CANCELED_E;
+    }
+    return usbd;
+}
+
+/* Little-endian field access by bytes: a client's URB has no alignment
+ * this module may assume. */
+static ULONG xhciPipeGet16(const UCHAR *p)
+{
+    return (ULONG)p[0] | ((ULONG)p[1] << 8);
+}
+
+static ULONG xhciPipeGet32(const UCHAR *p)
+{
+    return (ULONG)p[0] | ((ULONG)p[1] << 8) | ((ULONG)p[2] << 16) |
+           ((ULONG)p[3] << 24);
+}
+
+/* Below, beside XhciPipeBusInformation. */
+static VOID xhciPipePut32(UCHAR *p, ULONG value);
+
+/* An isochronous URB's packet count within its own Length, and its
+ * packet table's and ErrorCount's offsets; 0 for any other URB or one
+ * too short for its fixed fields (HcdIoIsoRefused's bound). */
+static ULONG xhciPipeIsoBound(const UCHAR *u, ULONG wide, PULONG first,
+                              PULONG errorsAt)
+{
+    ULONG length;
+    ULONG fixed;
+    ULONG room;
+    ULONG count;
+
+    if (xhciPipeGet16(u + XHCI_PIPE_URB_FUNCTION_OFF) !=
+        XHCI_PIPE_URB_ISO_FUNCTION) {
+        return 0;
+    }
+    fixed = wide ? XHCI_PIPE_ISOURB_PACKET0_64 : XHCI_PIPE_ISOURB_PACKET0_32;
+    length = xhciPipeGet16(u + XHCI_PIPE_URB_LENGTH_OFF);
+    if (length < fixed) {
+        return 0;
+    }
+    room = (length - fixed) / XHCI_PIPE_ISO_PACKET_BYTES;
+    count = xhciPipeGet32(u + (wide ? XHCI_PIPE_ISOURB_NPKT_64
+                                    : XHCI_PIPE_ISOURB_NPKT_32));
+    *first = fixed;
+    *errorsAt = wide ? XHCI_PIPE_ISOURB_ERRORS_64 : XHCI_PIPE_ISOURB_ERRORS_32;
+    return count < room ? count : room;
+}
+
+ULONG XhciPipeUrbCancelOut(ULONG urbIrp, ULONG devicePdo, ULONG ours,
+                           PVOID urb, ULONG out, ULONG wide)
+{
+    UCHAR *u;
+    UCHAR *s;
+    ULONG first;
+    ULONG errorsAt;
+    ULONG n;
+    ULONG i;
+    ULONG done;
+
+    if (!urbIrp || !devicePdo || !ours || urb == NULL ||
+        out != XHCI_PIPE_USBD_CANCELED_E) {
+        return 0;
+    }
+    u = (UCHAR *)urb;
+    done = 0;
+    first = 0;
+    errorsAt = 0;
+    if (xhciPipeGet32(u + XHCI_PIPE_URB_STATUS_OFF) ==
+        XHCI_PIPE_USBD_CANCELED) {
+        xhciPipePut32(u + XHCI_PIPE_URB_STATUS_OFF, out);
+        done++;
+    }
+    n = xhciPipeIsoBound(u, wide, &first, &errorsAt);
+    for (i = 0; i < n; i++) {
+        s = u + first + i * XHCI_PIPE_ISO_PACKET_BYTES +
+            XHCI_PIPE_ISO_PACKET_STATUS_OFF;
+        if (xhciPipeGet32(s) == XHCI_PIPE_USBD_CANCELED) {
+            xhciPipePut32(s, out);
+            done++;
+        }
+    }
+    return done;
+}
+
+ULONG XhciPipeUrbIsoCount(PVOID urb, ULONG wide, ULONG usbd,
+                          PULONG errors, PULONG carrying)
+{
+    const UCHAR *u;
+    ULONG first;
+    ULONG errorsAt;
+    ULONG n;
+    ULONG i;
+
+    *errors = 0;
+    *carrying = 0;
+    if (urb == NULL) {
+        return 0;
+    }
+    u = (const UCHAR *)urb;
+    first = 0;
+    errorsAt = 0;
+    n = xhciPipeIsoBound(u, wide, &first, &errorsAt);
+    if (first == 0) {
+        return 0;
+    }
+    *errors = xhciPipeGet32(u + errorsAt);
+    for (i = 0; i < n; i++) {
+        if (xhciPipeGet32(u + first + i * XHCI_PIPE_ISO_PACKET_BYTES +
+                          XHCI_PIPE_ISO_PACKET_STATUS_OFF) == usbd) {
+            (*carrying)++;
+        }
+    }
+    return 1;
 }
 
 ULONG XhciPipeResetParts(ULONG function)

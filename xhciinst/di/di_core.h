@@ -41,6 +41,7 @@
 #define DI_JOB_INSTALL      1
 #define DI_JOB_REMOVE       2
 #define DI_JOB_PROBE        3
+#define DI_JOB_REMOVESTALE  4   /* a stale bus entry (record 27 9.1)    */
 
 #define DI_FLAG_FORCE       0x0001
 #define DI_FLAG_QUIET       0x0002
@@ -127,6 +128,81 @@ const char *di_err_name(unsigned err);
 #define DI_V_FAILED             "failed"
 #define DI_V_REFUSED            "refused"
 #define DI_V_PROBED             "probed"
+
+/*
+ * Section 9.1 (design record 23 revision 67): removestale's own verdict,
+ * "kept <reason>", when the entry, read again immediately before its
+ * removal, is no longer a stale bus entry, and nothing was removed: its
+ * id not one of the package's own bus ids (device), the present devices
+ * not listed (list), a devnode for it (devnode), no Driver value of 98's
+ * form (driver), its driver key there (key), or that key not openable
+ * for another reason (key-unreadable).
+ */
+#define DI_V_KEPT               "kept"
+#define DI_KEPT_DEVICE          "device"
+#define DI_KEPT_LIST            "list"
+#define DI_KEPT_DEVNODE         "devnode"
+#define DI_KEPT_DRIVER          "driver"
+#define DI_KEPT_KEY             "key"
+#define DI_KEPT_KEY_UNREADABLE  "key-unreadable"
+
+/*
+ * The end of a key's subkeys as SURegEnumKey returns it, the kernel's
+ * ERROR_NO_MORE_ITEMS. A driver key is gone only when its class key's
+ * subkeys, enumerated to this end, do not hold its name: SURegOpenKey's
+ * own answer for a key that is not there was 1011 on 98 SE (read on the
+ * legs, 2026-11-20), not the 2 the 32-bit registry gives, so no code of a
+ * failed open proves the key absent.
+ */
+#define DI_REG_NO_MORE_ITEMS    259UL
+
+/* 1 when devid is one of the package's own bus entries: USB\XHCI98_ROOT_HUB,
+ * _HUB, _HUB30 or _COMPOSITE, then "\" or "&" (the installer's
+ * inst_bus_id, form 1). */
+int di_stale_id(const char *devid);
+/* 1 when a Driver value has 98's form: <class>\NNNN (letters, digits or
+ * _, a backslash, four decimal digits). */
+int di_driver_value_ok(const char *value);
+/* "Enum\<devid>" and "System\CurrentControlSet\Services\Class\<driver>"
+ * into out: 1, or 0 when it does not fit. */
+int di_enum_path(char *out, unsigned size, const char *devid);
+/* The registry's string type (REG_SZ), the one type a Driver value is
+ * read as. */
+#define DI_REG_SZ               1UL
+
+/* A Driver value as SURegQueryValueEx gave it: 1 when its type is DI_REG_SZ
+ * and its cb bytes (cb < size, the buffer's size) are one string, with or
+ * without its terminating NUL and nothing after it; buf is then terminated
+ * at the string's end. 0 for any other type, an empty or over-long value,
+ * or bytes after an embedded NUL (record 27 section 9.1). */
+int di_driver_text(unsigned long type, char *buf, unsigned long cb,
+                   unsigned size);
+int di_class_path(char *out, unsigned size, const char *driver);
+/* The class key above a driver key, "System\CurrentControlSet\Services\
+ * Class\<class>", into out (1, or 0), and the driver key's own name, the
+ * part after the backslash (NULL when the value has none). */
+int di_class_parent(char *out, unsigned size, const char *driver);
+const char *di_class_child(const char *driver);
+/* What the class key's subkeys, enumerated, say of the child: called with
+ * each subkey's name or, at the end, with name NULL and the code the
+ * enumeration ended on. 1 there, 0 gone (the end reached, ERROR_NO_MORE_
+ * ITEMS, without it), -1 not known (any other end). */
+int di_listed(const char *child, const char *name, unsigned long endRc);
+/* removestale's checks, in the order the helper makes them (record 27
+ * section 9.1). First everything that reads the registry or writes the
+ * result file: di_stale_check, NULL when the entry is still stale (its id
+ * the package's, dnDevnode 0 in the entry found, its Driver value read and
+ * of 98's form, and its driver key gone: keyState 0, its class key's
+ * subkeys enumerated to DI_REG_NO_MORE_ITEMS without its name), else the
+ * DI_KEPT_* reason; keyState (read only with driverRead) 1 the key is
+ * there (it opened, or its class key lists it), 0 gone, -1 not known.
+ * Then, last, with nothing between it and DIF_REMOVE, the presence read
+ * again: di_stale_final, NULL to remove (present 0), else DI_KEPT_DEVNODE
+ * (1, in a DIGCF_PRESENT list) or DI_KEPT_LIST (-1, the list not made).
+ * Presence is consulted only once di_stale_check has passed. */
+const char *di_stale_check(const char *devid, unsigned long devnode,
+                           int driverRead, const char *driver, int keyState);
+const char *di_stale_final(int present);
 
 const char *di_verdict(int job, unsigned err, unsigned long flags);
 

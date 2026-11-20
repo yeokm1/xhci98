@@ -8,6 +8,11 @@
  * takes a format string. Doing it this way also keeps the file free of any
  * CRT dependency, which kernel mode has none of anyway.
  *
+ * Each line reaches the debug console whole: it is built on the caller's
+ * stack and written under one flag with interrupts held off (xhciDbgPortLine
+ * below; docs/contributing/build-and-test.md, "Whole lines on the debug
+ * console").
+ *
  * C89 only. IRQL: any.
  */
 
@@ -31,41 +36,30 @@
  */
 #ifdef XHCI_DBG_TRACE
 
-/* One line, built on the stack. Long enough for a name plus three hex words
- * and the IRQL; XhciDbgWords wraps rather than growing it. */
+/*
+ * One physical line is built on the stack: the prefix, then at most
+ * XHCI_DBG_TEXT_MAX characters in all (the prefix counted), then the
+ * newline and a terminator. A longer line is not cut short: the builder
+ * emits all but its last character with XHCI_DBG_CONT and a newline, and
+ * carries on in a new line that begins with the prefix and XHCI_DBG_CONT,
+ * so no physical line is longer than 127 characters with its newline, as
+ * before, and nothing is dropped. A line that fits comes out byte for byte
+ * as it did before the builder existed.
+ */
 #define XHCI_DBG_LINE_MAX 128
+#define XHCI_DBG_TEXT_MAX (XHCI_DBG_LINE_MAX - 2)
+#define XHCI_DBG_CONT     '\\'
 
 static const char xhciDbgHexDigits[] = "0123456789ABCDEF";
+static const char xhciDbgPrefixText[] = "xhci98: ";
 
-/* Append `s`, stopping at the buffer end. Returns the new length. */
-static ULONG xhciDbgAppend(char *buf, ULONG len, const char *s)
-{
-    while (*s != '\0' && len < (XHCI_DBG_LINE_MAX - 1)) {
-        buf[len] = *s;
-        len++;
-        s++;
-    }
-    return len;
-}
-
-/* Append `digits` hex digits of `value`, most significant first. */
-static ULONG xhciDbgAppendHex(char *buf, ULONG len, ULONG value, ULONG digits)
-{
-    ULONG shift;
-
-    shift = digits * 4;
-    while (shift > 0 && len < (XHCI_DBG_LINE_MAX - 1)) {
-        shift -= 4;
-        buf[len] = xhciDbgHexDigits[(value >> shift) & 0xF];
-        len++;
-    }
-    return len;
-}
+typedef struct _XHCI_DBG_LINE {
+    ULONG Len;
+    char Text[XHCI_DBG_LINE_MAX];
+} XHCI_DBG_LINE;
 
 /*
- * Emit a completed, NUL-terminated line to both sinks.
- *
- * **The port-0xE9 write is opt-IN and only the `qemu` flavour asks for it**
+ * The port-0xE9 write is opt-IN and only the `qemu` flavour asks for it
  * (roadmap task 13-L.1, design record 08 section 5.1). It is a QEMU/Bochs
  * debug console, and this file used to say that "on real hardware nothing
  * decodes that port and the byte is discarded, so this is safe to leave in
@@ -125,96 +119,304 @@ static ULONG xhciDbgAppendHex(char *buf, ULONG len, ULONG value, ULONG digits)
 static volatile ULONG xhciDbgE9Gate = 0;
 #endif
 
-static VOID xhciDbgEmit(const char *line)
+#ifdef XHCI_DBG_E9
+/*
+ * Whole lines on the debug console (docs/contributing/build-and-test.md,
+ * "Whole lines on the debug console"). Each physical line goes out under
+ * one flag with every interrupt of this processor held off, so a line from
+ * another thread, a DPC, the ISR or another processor can only come before
+ * or after it, never inside it.
+ *
+ * Held off how: on x86 the processor's own interrupt flag (pushfd, cli,
+ * then popfd, which puts back whatever the caller had), because the one
+ * x86 binary also runs on 98 SE and ME, whose emulation of the levels above
+ * DISPATCH_LEVEL this project has not read, and IF clear is what holds an
+ * interrupt off on every x86 kernel alike; on amd64 KeRaiseIrql to
+ * HIGH_LEVEL, an intrinsic there (no import) and the documented level that
+ * masks every interrupt on NT. The flag is taken with xchg (on x86 by hand,
+ * as msi4nt.h's MsgIrqpXchg, so nothing is called while IF is clear; on
+ * amd64 the intrinsic). Nothing is called under the flag but the port
+ * writes, so while a processor holds the flag an emit can start on it only
+ * from an NMI or a fault; an ordinary interrupt can start one while it
+ * waits, which is safe, since a waiter holds nothing. Interrupts are held
+ * off for one look at the flag at a time and for the writing of the line,
+ * not across the wait: between two looks the caller's own state is put
+ * back, so a processor waiting for another's line still takes its
+ * interrupts if its caller allowed them. The flag is not fair, so under
+ * contention one wait can outlast several lines; against that, an NMI path
+ * and a holder that never lets go, the wait is bounded: after
+ * XHCI_DBG_LOCK_SPINS looks the line is written without the flag and a
+ * notice line says so, with the number of such lines since the load,
+ * counted by an interlocked increment. No call out, no allocation.
+ *
+ * DbgPrint stays outside, at the caller's IRQL, as before.
+ */
+#define XHCI_DBG_LOCK_SPINS 0x04000000UL
+
+static volatile LONG xhciDbgLineFlag;
+static volatile LONG xhciDbgLineForced;
+
+#if defined(_M_IX86)
+typedef ULONG XHCI_DBG_MASK;
+
+static ULONG xhciDbgMaskOn(VOID)
+{
+    ULONG f;
+
+    __asm {
+        pushfd
+        pop eax
+        mov f, eax
+        cli
+    }
+    return f;
+}
+
+static VOID xhciDbgMaskOff(ULONG f)
+{
+    __asm {
+        mov eax, f
+        push eax
+        popfd
+    }
+}
+
+static LONG xhciDbgXchg(volatile LONG *target, LONG value)
+{
+    LONG r;
+
+    __asm {
+        mov ecx, target
+        mov eax, value
+        xchg [ecx], eax
+        mov r, eax
+    }
+    return r;
+}
+
+/* The new value; lock xadd, by hand like the exchange. */
+static LONG xhciDbgIncrement(volatile LONG *target)
+{
+    LONG r;
+
+    __asm {
+        mov ecx, target
+        mov eax, 1
+        lock xadd [ecx], eax
+        inc eax
+        mov r, eax
+    }
+    return r;
+}
+#elif defined(_M_AMD64)
+typedef KIRQL XHCI_DBG_MASK;
+
+static KIRQL xhciDbgMaskOn(VOID)
+{
+    KIRQL old;
+
+    KeRaiseIrql(HIGH_LEVEL, &old);
+    return old;
+}
+
+static VOID xhciDbgMaskOff(KIRQL old)
+{
+    KeLowerIrql(old);
+}
+
+#define xhciDbgXchg(t, v) InterlockedExchange((t), (v))
+#define xhciDbgIncrement(t) InterlockedIncrement((t))
+#else
+#error the qemu flavour's line flag knows x86 and amd64 only
+#endif
+
+static VOID xhciDbgPortByte(UCHAR c)
+{
+#ifdef XHCI_DBG_E9_NOEXEC
+    if (xhciDbgE9Gate != 0)
+#endif
+    {
+        WRITE_PORT_UCHAR((PUCHAR)0xE9, c);
+    }
+}
+
+static VOID xhciDbgPortLine(const char *line, ULONG len)
+{
+    XHCI_DBG_MASK mask;
+    ULONG spins;
+    ULONG i;
+    ULONG forced;
+    BOOLEAN held;
+
+    held = FALSE;
+    mask = xhciDbgMaskOn();
+    for (spins = 0; spins < XHCI_DBG_LOCK_SPINS; spins++) {
+        if (xhciDbgLineFlag == 0 && xhciDbgXchg(&xhciDbgLineFlag, 1) == 0) {
+            held = TRUE;
+            break;
+        }
+        xhciDbgMaskOff(mask);
+        mask = xhciDbgMaskOn();
+    }
+    for (i = 0; i < len; i++) {
+        xhciDbgPortByte((UCHAR)line[i]);
+    }
+    if (held) {
+        (VOID)xhciDbgXchg(&xhciDbgLineFlag, 0);
+    } else {
+        const char *p;
+
+        forced = (ULONG)xhciDbgIncrement(&xhciDbgLineForced);
+        for (p = xhciDbgPrefixText; *p != '\0'; p++) {
+            xhciDbgPortByte((UCHAR)*p);
+        }
+        for (p = "dbg: line written without the line flag, lines="; *p != '\0'; p++) {
+            xhciDbgPortByte((UCHAR)*p);
+        }
+        for (i = 8; i > 0; i--) {
+            xhciDbgPortByte((UCHAR)xhciDbgHexDigits[(forced >> ((i - 1) * 4)) & 0xF]);
+        }
+        xhciDbgPortByte((UCHAR)'\n');
+    }
+    xhciDbgMaskOff(mask);
+}
+#endif /* XHCI_DBG_E9 */
+
+#ifdef XHCI_HOST_TEST
+/* The host suite's sink (test/test_dbg.c): each finished physical line. */
+VOID XhciDbgHostSink(const char *line, ULONG len);
+#endif
+
+/* Emit one finished physical line, NUL-terminated, `len` bytes with its
+ * newline. */
+static VOID xhciDbgEmit(const char *line, ULONG len)
 {
 #ifdef XHCI_DBG_E9
-    const char *p;
-
-    p = line;
-    while (*p != '\0') {
-#ifdef XHCI_DBG_E9_NOEXEC
-        if (xhciDbgE9Gate != 0)
+    xhciDbgPortLine(line, len);
 #endif
-        {
-            WRITE_PORT_UCHAR((PUCHAR)0xE9, (UCHAR)*p);
-        }
-        p++;
-    }
-#endif
+#ifdef XHCI_HOST_TEST
+    XhciDbgHostSink(line, len);
+#else
+    UNREFERENCED_PARAMETER(len);
     DbgPrint("%s", line);
+#endif
+}
+
+static VOID xhciDbgPut(XHCI_DBG_LINE *l, char c)
+{
+    ULONG i;
+    char carry;
+
+    if (l->Len == XHCI_DBG_TEXT_MAX) {
+        carry = l->Text[XHCI_DBG_TEXT_MAX - 1];
+        l->Text[XHCI_DBG_TEXT_MAX - 1] = XHCI_DBG_CONT;
+        l->Text[XHCI_DBG_TEXT_MAX] = '\n';
+        l->Text[XHCI_DBG_TEXT_MAX + 1] = '\0';
+        xhciDbgEmit(l->Text, XHCI_DBG_TEXT_MAX + 1);
+        l->Len = 0;
+        for (i = 0; xhciDbgPrefixText[i] != '\0'; i++) {
+            l->Text[l->Len++] = xhciDbgPrefixText[i];
+        }
+        l->Text[l->Len++] = XHCI_DBG_CONT;
+        l->Text[l->Len++] = carry;
+    }
+    l->Text[l->Len++] = c;
+}
+
+static VOID xhciDbgAppend(XHCI_DBG_LINE *l, const char *s)
+{
+    while (*s != '\0') {
+        xhciDbgPut(l, *s);
+        s++;
+    }
+}
+
+/* Append `digits` hex digits of `value`, most significant first. */
+static VOID xhciDbgAppendHex(XHCI_DBG_LINE *l, ULONG value, ULONG digits)
+{
+    ULONG shift;
+
+    shift = digits * 4;
+    while (shift > 0) {
+        shift -= 4;
+        xhciDbgPut(l, xhciDbgHexDigits[(value >> shift) & 0xF]);
+    }
+}
+
+static VOID xhciDbgStart(XHCI_DBG_LINE *l)
+{
+    l->Len = 0;
+    xhciDbgAppend(l, xhciDbgPrefixText);
+}
+
+/* After any put Len is at most XHCI_DBG_TEXT_MAX, so the newline and the
+ * terminator fit. */
+static VOID xhciDbgFinish(XHCI_DBG_LINE *l)
+{
+    l->Text[l->Len++] = '\n';
+    l->Text[l->Len] = '\0';
+    xhciDbgEmit(l->Text, l->Len);
 }
 
 static ULONG xhciDbgIrql(VOID)
 {
-#ifdef XHCI_DBG_NO_IRQL
+#if defined(XHCI_DBG_NO_IRQL) || defined(XHCI_HOST_TEST)
     return 0xFF;
 #else
     return (ULONG)KeGetCurrentIrql();
 #endif
 }
 
-static ULONG xhciDbgPrefix(char *buf)
-{
-    return xhciDbgAppend(buf, 0, "xhci98: ");
-}
-
 VOID XhciDbgText(const char *msg)
 {
-    char line[XHCI_DBG_LINE_MAX];
-    ULONG len;
+    XHCI_DBG_LINE line;
 
-    len = xhciDbgPrefix(line);
-    len = xhciDbgAppend(line, len, msg);
-    len = xhciDbgAppend(line, len, "\n");
-    line[len] = '\0';
-    xhciDbgEmit(line);
+    xhciDbgStart(&line);
+    xhciDbgAppend(&line, msg);
+    xhciDbgFinish(&line);
 }
 
 VOID XhciDbgValue(const char *msg, ULONG value)
 {
-    char line[XHCI_DBG_LINE_MAX];
-    ULONG len;
+    XHCI_DBG_LINE line;
 
-    len = xhciDbgPrefix(line);
-    len = xhciDbgAppend(line, len, msg);
-    len = xhciDbgAppend(line, len, "=");
-    len = xhciDbgAppendHex(line, len, value, 8);
-    len = xhciDbgAppend(line, len, "\n");
-    line[len] = '\0';
-    xhciDbgEmit(line);
+    xhciDbgStart(&line);
+    xhciDbgAppend(&line, msg);
+    xhciDbgAppend(&line, "=");
+    xhciDbgAppendHex(&line, value, 8);
+    xhciDbgFinish(&line);
 }
 
 VOID XhciDbgCallback(const char *name, ULONG a, ULONG b, ULONG c)
 {
-    char line[XHCI_DBG_LINE_MAX];
-    ULONG len;
+    XHCI_DBG_LINE line;
 
-    len = xhciDbgPrefix(line);
-    len = xhciDbgAppend(line, len, "cb ");
-    len = xhciDbgAppend(line, len, name);
-    len = xhciDbgAppend(line, len, " irql=");
-    len = xhciDbgAppendHex(line, len, xhciDbgIrql(), 2);
-    len = xhciDbgAppend(line, len, " a=");
-    len = xhciDbgAppendHex(line, len, a, 8);
-    len = xhciDbgAppend(line, len, " b=");
-    len = xhciDbgAppendHex(line, len, b, 8);
-    len = xhciDbgAppend(line, len, " c=");
-    len = xhciDbgAppendHex(line, len, c, 8);
-    len = xhciDbgAppend(line, len, "\n");
-    line[len] = '\0';
-    xhciDbgEmit(line);
+    xhciDbgStart(&line);
+    xhciDbgAppend(&line, "cb ");
+    xhciDbgAppend(&line, name);
+    xhciDbgAppend(&line, " irql=");
+    xhciDbgAppendHex(&line, xhciDbgIrql(), 2);
+    xhciDbgAppend(&line, " a=");
+    xhciDbgAppendHex(&line, a, 8);
+    xhciDbgAppend(&line, " b=");
+    xhciDbgAppendHex(&line, b, 8);
+    xhciDbgAppend(&line, " c=");
+    xhciDbgAppendHex(&line, c, 8);
+    xhciDbgFinish(&line);
 }
 
 /*
  * Dump `count` ULONGs, four per line, each line labelled with the word index
- * so a structure can be reassembled from the log without counting columns.
+ * so a structure can be reassembled from the log without counting columns -
+ * which is also why each line goes out on its own under the line flag rather
+ * than the whole dump under one hold: a line of another context may fall
+ * between two of them, and the label still places each.
  * The caller is responsible for the pointer being readable - this is used for
  * usbport-owned structures whose size the ABI record pins.
  */
 VOID XhciDbgWords(const char *msg, const ULONG *words, ULONG count)
 {
-    char line[XHCI_DBG_LINE_MAX];
-    ULONG len;
+    XHCI_DBG_LINE line;
     ULONG i;
 
     if (words == NULL) {
@@ -226,21 +428,19 @@ VOID XhciDbgWords(const char *msg, const ULONG *words, ULONG count)
     while (i < count) {
         ULONG n;
 
-        len = xhciDbgPrefix(line);
-        len = xhciDbgAppend(line, len, msg);
-        len = xhciDbgAppend(line, len, "+");
-        len = xhciDbgAppendHex(line, len, i * 4, 2);
-        len = xhciDbgAppend(line, len, ":");
+        xhciDbgStart(&line);
+        xhciDbgAppend(&line, msg);
+        xhciDbgAppend(&line, "+");
+        xhciDbgAppendHex(&line, i * 4, 2);
+        xhciDbgAppend(&line, ":");
 
         for (n = 0; n < 4 && i < count; n++) {
-            len = xhciDbgAppend(line, len, " ");
-            len = xhciDbgAppendHex(line, len, words[i], 8);
+            xhciDbgAppend(&line, " ");
+            xhciDbgAppendHex(&line, words[i], 8);
             i++;
         }
 
-        len = xhciDbgAppend(line, len, "\n");
-        line[len] = '\0';
-        xhciDbgEmit(line);
+        xhciDbgFinish(&line);
     }
 }
 

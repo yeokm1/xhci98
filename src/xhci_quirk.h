@@ -5,7 +5,10 @@
  * Fourteen registry values, one per quirk taken, each a REG_DWORD in the
  * controller's driver key read at every start (record 20 section 6.1): 0
  * off, 1 the controllers Linux names, 2 every controller where the fix is
- * generic xHCI behaviour. On the three vendor-register quirks a 2 is read as
+ * generic xHCI behaviour. A fifteenth, XhciStreamDequeueAvoid (task 50.20,
+ * design record 17 section 4.12.10), is this driver's own and no Linux
+ * quirk: the same three values over a list of its own (the Intel 7 Series
+ * xHCI), read and reported as the fourteen are. On the three vendor-register quirks a 2 is read as
  * 1; absent, another type or any other number is the default (1, or 0 for
  * XhciShutdownReset). Each quirk's list is matched against the PCI vendor
  * and device dword alone (section 6.2): no revision is matched (section
@@ -48,7 +51,12 @@
 #define XHCI_QK_LINK_NOOP           11UL    /* XhciControlLinkNoOp          */
 #define XHCI_QK_ISOCH_SUCCESS       12UL    /* XhciIsochSpuriousSuccess     */
 #define XHCI_QK_AMD_BIT             13UL    /* XhciAmdSuspendBitClear       */
-#define XHCI_QK_COUNT               14UL
+#define XHCI_QK_DEQ_AVOID           14UL    /* XhciStreamDequeueAvoid       */
+#define XHCI_QK_COUNT               15UL
+
+/* The quirks whose packed words lie together in the counter block (words
+ * 199 to 212); XHCI_QK_DEQ_AVOID's is word 325 (QuirkStreamDequeueAvoid). */
+#define XHCI_QK_COUNT_BLOCK         14UL
 
 /*
  * The registry value names, in XHCI_QK_* order, as one list: the pure table
@@ -70,7 +78,8 @@
     X("XhciStreamRingPad")                                             \
     X("XhciControlLinkNoOp")                                           \
     X("XhciIsochSpuriousSuccess")                                      \
-    X("XhciAmdSuspendBitClear")
+    X("XhciAmdSuspendBitClear")                                        \
+    X("XhciStreamDequeueAvoid")
 
 /* How a value was found, the read status apart from the value. */
 #define XHCI_QK_FOUND_NONE          0UL     /* absent, or no driver key     */
@@ -109,10 +118,13 @@
 #define XHCI_QK_WHY_READ_FF         11UL    /* the control byte read FFh    */
 #define XHCI_QK_WHY_ID_UNREAD       12UL    /* Q1: no identity ever read    */
 #define XHCI_QK_WHY_ID_KEPT         13UL    /* Q1: the identity kept        */
+#define XHCI_QK_WHY_PSW_HELD        14UL    /* Q4: the port switchover held
+                                             * this lifetime (task 50.34) */
 
 /*
- * One packed word per quirk, for the counter block (words 199 to 212) and
- * the start's log note (`quirk.<name>`):
+ * One packed word per quirk, for the counter block (words 199 to 212, and
+ * 325 for XhciStreamDequeueAvoid) and the start's log note
+ * (`quirk.<name>`):
  *
  *   bits 1:0    the mode in effect (XHCI_QK_MODE_*)
  *   bits 4:2    the normalization (XHCI_QK_NORM_*)
@@ -179,8 +191,9 @@ typedef struct _XHCI_QUIRK_STATE {
 XHCI_C_ASSERT(xhci_quirk_state_even,
               (sizeof(XHCI_QUIRK_STATE) % (2 * sizeof(ULONG))) == 0);
 
-/* The value's name, its Linux flag and its short log label, for the log
- * and any reader that prints them. NULL past XHCI_QK_COUNT. */
+/* The value's name, its Linux flag ("none" for XhciStreamDequeueAvoid,
+ * this driver's own) and its short log label, for the log and any reader
+ * that prints them. NULL past XHCI_QK_COUNT. */
 const char *XhciQuirkValueName(ULONG quirk);
 const char *XhciQuirkLinuxFlag(ULONG quirk);
 const char *XhciQuirkLabel(ULONG quirk);

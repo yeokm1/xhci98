@@ -48,6 +48,7 @@
 #define IDC_S_STOR              1122    /* the USB drive notice (48.17) */
 #define IDC_S_FIND_L            1123    /* the settings search (49.38)  */
 #define IDC_S_FIND              1124
+#define IDC_S_HOLD              1125    /* the hold watch (50.7)        */
 
 #define IDM_REFRESH             40001
 #define IDM_SAVE                40002
@@ -77,5 +78,12 @@
 #define IDM_RED                 40053   /* the tray menu red item */
 #define IDM_FAST_WIN            40054   /* Windows' own ports watched too */
 #define IDM_UNIT0               41000   /* 41000..41063: the tray's units */
+/* Task 50.32: the restart of a controller (record 25 section 27). */
+#define IDD_RESTART             107
+#define IDC_RST_HEAD            1201
+#define IDC_RST_LIST            1202
+#define IDC_RST_NOTE            1203
+#define IDM_RESTART             40060
+#define IDM_RESTART0            41200   /* 41200..41263: the tray's M2 */
 
 #endif /* TR_RES_H */

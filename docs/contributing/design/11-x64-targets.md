@@ -2335,8 +2335,9 @@ publishes:
       `usbui.dll`; its right-click route still copies both). Options set
       aside: a separate XP x64 and Server 2003 x64 INF in a folder of its
       own outside `nt-x64\`, which keeps the tabs but changes record 36's
-      three-family layout (planned, roadmap-usb4 "Planned - The XP x64
-      Property Pages"); `Include=`, `Needs=` and an `.NTamd64.5.2`
+      three-family layout (then planned as XP64UI.1, roadmap-usb4 "Planned -
+      The XP x64 Property Pages"; dropped by the owner on 2026-11-09,
+      roadmap-usb4's decisions table, "Phase 48"); `Include=`, `Needs=` and an `.NTamd64.5.2`
       decoration, refused by the store as above; and `usbui.dll` named in
       `[SourceDisksFiles]`, which ships a Microsoft file or sends the
       engine to this disk for one (`OS-MEDIA`).

@@ -100,6 +100,29 @@ The owner's answers
 to the nine points that revision first left open are in as well
 (section 4.5.13, second table).
 
+**Revision 15, 2026-11-15 (roadmap-usb4 task 50.4, designed before
+code).** Section 4.5.20: a start mode 4 refused writes
+`XhciMode4Refusal` in the controller's driver key, the next start that
+is not such a refusal clears it, and the USB Tree prints it in the
+device report and in `/dump` when no controller opens; nothing on 98 SE
+and ME, where a stored `4` runs as `0`.
+
+**Revision 16, 2026-11-16 (roadmap-usb4 task 50.27, designed before
+code).** Section 4.5.21: the library's new end call, `MsgIrqUninitialize`,
+made as a defensive last step of the unload; the image is still kept
+from the library's start (owner, 2026-11-16), so nothing of the driver's
+behaviour changes; and, folded in by the owner the same day, every NT
+thread start of `xhci98.sys` and `xhcicm.sys` holds its thread object, so
+every stop joins on it.
+
+**Revision 17, 2026-11-19 (roadmap-usb4 task 50.37, designed before
+code).** Section 4.5.22: on 98 SE and ME, where a removal of the
+controller unloads the image and the joins wait on an event or a flag,
+each thread of `xhci98.sys` sets its signal by a call chained into
+`PsTerminateSystemThread`, so that nothing of the image runs after the
+signal; the qemu flavour's trace, sleep and control show the window
+closed; what else of the image can still run after a removal is listed.
+
 ## 1. What is asked, and what is not
 
 A registry switch chooses how the bus learns that the controller has written
@@ -1247,7 +1270,8 @@ In order, the first refusal ending the start:
    refuses, reason 34). Once the call has run the image is kept for the
    boot (`DriverUnload` cleared under the boot ledger's lock, as a
    quarantine does): the library maps the local APIC for the image's
-   life and has no call to end it.
+   life and has no call to end it. The library has such a call since
+   2026-11-16, and the keep stays (section 4.5.21).
 2. **The library's mode.** `MSGIRQ_MODE_FAKE_IRQ` goes on; `NONE` is
    left to the claim's or the connect's status, which names why
    (`MSGIRQ_STATUS_HAL_UNSUPPORTED`: a PIC-mode HAL, or a local APIC in
@@ -1857,7 +1881,9 @@ byte), `msg4.bdf` (the location), `msg4.shared`, `msg4.shared.pci`, `msg4.line`,
 (a start the table refused), `msg4.stranded`, `msg4.brake` (the
 counters) and `msg4.lost` (the cause). A refused start records itself
 and flushes as section 8's "A start the delivery refuses" has it, so the
-reason is in DebugView beside the Code 10.
+reason is in DebugView beside the Code 10; and since revision 15 it is
+written in the controller's driver key as well, where the USB Tree reads
+it with no started controller (section 4.5.20).
 
 **`XHCITR`'s report**, under "event delivery": the mode and reason by
 name (the new texts are the owner's to word); the library's status by
@@ -1868,6 +1894,14 @@ claim each IRQ's reason in words ("never claimed", "the ACPI interrupt",
 "excluded", "full" and so on); the vector; the stranded count; the
 brake's counts; and, when the delivery was lost, the cause as a line of
 its own. A block from a driver before these words prints none of it.
+On 64-bit Windows the second pool's four values (section 4.5.16 item
+1), which the amd64 driver never reads and its INF never writes, read
+"not used on 64-bit Windows" in that section and in the refused start's
+record (section 4.5.20), not "not found" (the owner, 2026-11-15;
+roadmap-usb4 task 50.18). The USB Tree's details pane also gives the
+claimed IRQ beside the controller's resources, and marks the line
+Windows assigned as not in use (design record 25 section 7.4, the
+resources addendum).
 
 #### 4.5.10 Build, licence and signature
 
@@ -2517,6 +2551,571 @@ IRQ, more than sixteen controllers, standby (only hibernation was read,
 on XP), real hardware, the USB4 host beside mode-4 controllers in a
 guest, and a user's own per-controller value surviving an update (only
 the INF's `8` and the machine-wide value were read).
+
+#### 4.5.20 A refused start's record: `XhciMode4Refusal` (revision 15, 2026-11-15; roadmap-usb4 task 50.4)
+
+**What it is for.** A mode-4 start the driver refuses leaves the
+controller at Code 10, and nothing a tester can read says why: the USB
+Tree opens only a started controller, the counter block and the note
+ring go with the FDO at the removal that follows, and DebugView needs
+`XhciLogDebugView` set beforehand (section 8, "A start the delivery
+refuses"). The MSI stability improvements' published history shows the
+refusals the library makes, but not the driver's own before it is
+called: a value out of range (30), `XhciMsiAvoid` (24), the x86 helper
+not answering (26), a function refused after a quarantine (27), no line
+to borrow (23), Vista and later (22). The legs of run 49.24.2 read each
+of those as a Device Manager code and an inference from the value changed
+(`runs/run-49.md`, "A refused start: what a tester can read"). This
+section gives each such start a record the driver writes and the USB
+Tree prints.
+
+**The value.** `XhciMode4Refusal`, `REG_BINARY`, in the controller's
+driver (software) key - the key `XhciInterruptMode` and the `XhciMsi*`
+values are read from, which the USB Tree already finds by content with
+no started controller (`tr_snap.c`, `find_driver_keys`). It is a result
+the driver writes, never a setting: no INF writes it, the driver's
+behaviour never depends on it, and it has no INF-gate row and no row in
+`tuning.md`'s table of settings (since 2026-11-15 `tuning.md` describes
+it in a section of its own, "A value the driver writes", the owner's
+addition). The driver does read it, once per start and only to
+know whether a clear is owed (below); the owner's rule that every value
+the driver reads is written by the install at its default (2026-10-30)
+and that no value is hidden (2026-11-14) is about settings, the values
+that change what the driver does, and a record whose read decides only
+whether the record itself is rewritten is not one. The precedent is
+`XhciCmOscPending` (record 32 section 12.8.15.13): no INF writes it, the
+connection manager reads it at a start and acts on it, and it has no
+gate row; both are in `test/test_trset.c`'s list of names in the code
+that are not settings (`trsNotSetting`), which exempts a name from the
+suite's "every value the code reads has a row and a `tuning.md` row",
+and `XhciMode4Refusal` joins them. The record is described where a
+tester reads about mode 4 (`build-and-test.md`, "Mode 4 for testers"),
+in `snapshot-reader.md`, and for users in `tuning.md`, "A value the
+driver writes", outside its table. Uninstalling the device removes the key and
+the record with it.
+
+**When, and on which systems.** Once per start, at its end:
+`HcdStartController` (`hcd_ctl.c`), after the start body and its
+start-decision event, outside the door gate, calls
+`HcdMsg4RecordStart` (`hcd_msg4.c`) with the start's status, at
+`PASSIVE_LEVEL` on the PnP manager's start thread, the same context in
+which the start already opens this key to read its values. On 2000, XP,
+Server 2003, XP x64, and Vista and later (where a stored `4` refuses
+with reason 22). **On 98 SE and ME nothing is read or written**: there a
+stored `4` runs as `0` (section 4.5.7), and the refusal table is never
+filled because no message is ever connected, so no start there can be a
+mode-4 refusal; the 9x start gains no registry access. The system class
+is taken afresh (`HcdMsg4SystemClass`), not from the start's
+`Msg4System`, which a start that failed before the delivery was settled
+has not set.
+
+**What counts as a mode-4 refusal** (pure, `XhciMsg4IsStartRefusal`,
+`xhci_msg4.c`): the start failed, the delivery is
+`XHCI_POLL_DELIVERY_NONE`, and the reason is one of 22 to 27, 30, 31,
+33 or 34 (section 4.5.2). That covers the decision's refusals, the
+connect's, the readiness flag's (26 with status `HCD_MSG4_ST_READY`),
+the No Op's (31) and the quarantine's (27, which refuses under any
+mode). A start that failed for any other cause - the resources, the DMA
+adapter, the controller's own initialisation, mode 1 or 3 refused - is
+not one, nor is a start that succeeded.
+
+**Written and cleared.**
+
+- A start that is a mode-4 refusal writes the record with its state
+  word 1 (refused), the whole value replaced.
+- Any other start on those systems - one that succeeded, or one that
+  failed for another cause - clears it: the driver reads the value and,
+  when it is there and is not already a cleared record (state 1, or a
+  value it cannot parse), writes the cleared record: the header words
+  kept as for any record (the magic, the version and count, the time,
+  the system, the flavour and the driver's version), the state 0, and
+  every word from 8 on 0. When the value is absent or already cleared
+  nothing is written, so a machine that never had a refusal sees no
+  registry write at any start.
+
+So the record says one thing: whether this controller's latest start
+that reached `HcdStartController` was refused by mode 4. A start that
+never reached it - one the lower driver failed, or one `hcd_pnp.c`
+refuses before it (a start on a started FDO, or on one whose map pump
+is quarantined) - leaves the record as it was; its time and the driver
+version in it say when and by which build it was written. A failed write or open is
+ignored (best effort, as `uasNotePolicy` and `hcdWriteSymbolicName`):
+it never changes the start's outcome.
+
+**The record** (version 1, 55 little-endian `ULONG`s, 220 bytes; a
+reader takes a longer value's first 55 words and refuses a shorter one,
+a wrong magic or another version):
+
+| Word | Holds |
+|---|---|
+| 0 | the magic `0x46523458` ("X4RF") |
+| 1 | the version (1) in bits 15:0, the record's word count (55) in bits 31:16 |
+| 2 | the state: 0 cleared by a later start, 1 refused |
+| 3, 4 | the system time when written (`KeQuerySystemTime`, UTC, low and high words; no arithmetic in the driver) |
+| 5 | the start's `NTSTATUS` (0 in a cleared record) |
+| 6 | bits 7:0 the system class (`XHCI_MSG4_SYS_*`), bits 15:8 the build flavour (`XHCI_SNAPSHOT_FLAVOUR_*`) |
+| 7 | the writing driver's version, packed (`XHCI_VER_PACKED`) |
+| 8 | the controller's PCI location (`HcdCtlMsg4Location`): bit 31 set when known, bus, device and function in bits 15:0 as `XhciMsg4Bdf` packs them |
+| 9 | 0, reserved |
+| 10 to 15 | the counter block's first six delivery words as the start left them: `IntrModeRead`, `IntrMode`, `IntrDelivery`, `IntrReason`, `IntrPinStatus`, `IntrPin` |
+| 16 | `MsiConnectStatus` (the library's status, or this driver's own `HCD_MSG4_ST_*` word) |
+| 17 to 54 | the 38 mode-4 counter words, `Msg4Strategy` to `Msg4HighFirstRefused`, in the block's order (section 4.5.9) |
+
+Which words mean something depends on where the start was refused, and
+the reader says so rather than printing a zero as a value: under reason
+27 (the quarantine, decided before the values are read and before any
+connection) the values and the claim are "not read" and the connection
+status is "not tried"; under 22, 23, 24 and 30 (the decision) no
+connection was tried either, so the connection status is "not tried";
+the claim's lines and each IRQ's reason are printed only when a claim
+was made (the IRQ or the claim's status non-zero), as the existing
+section does. Every refused record's text also gives the writing
+driver's version and flavour and the controller's PCI location ("not
+known" when bit 31 is clear), so a record a later update left behind,
+or one read by `/dump` from a bare key path, says which build wrote it
+and for which controller.
+
+The builder is pure (`XhciMsg4RecordBuild`, `xhci_msg4.c`, host
+vectors in `test/test_msg4.c`), as is the reader's state test
+(`XhciMsg4RecordState`: absent, cleared, refused, or not this record).
+The words copied are those the USB Tree's "event delivery" and "message
+interrupt, XhciInterruptMode 4" sections decode, so the record reads with
+the same names and texts.
+
+**The USB Tree** (`tr_snap.c`, `m4rec_text`):
+
+- In the device report (`.DEV`, so `/snapshot` and Save Report), under
+  each PCI xHCI controller `xhci98.sys` drives whose driver key holds
+  the value, after its status and problem lines, labelled "mode 4": a
+  refused record with when it was written (UTC), the reason by its
+  existing name, the connection status, the values as read and, for a
+  claim, each IRQ's reason; a cleared record as one line saying the last
+  start was not refused by mode 4, and when.
+- In `/dump` (and `/snapshot`'s dump step), when no controller opens at
+  the index asked (not under `/probe`): after the existing "cannot
+  open" lines, every `xhci98.sys` driver key that holds the value, by
+  its key path, with the same text; or a line that none holds one.
+- `-selftest-m4rec` decodes canned records (refused at the decision,
+  at a claim with IRQ reasons and the upper pool's values, the
+  quarantine, Vista, cleared, a wrong magic, a short value, an unknown
+  state; from task 50.18 a record on 64-bit Windows, and the "message
+  interrupt, XhciInterruptMode 4" section on 32-bit and 64-bit Windows),
+  and `snaptest.cmd` holds its text.
+
+Every new line is a draft for the owner (task 46.18's rule).
+
+**Not covered.** A message lost while the controller runs (`Msg4Lost`,
+section 4.5.4) is not a start and writes nothing here; nor does a start
+that never reached `HcdStartController`. The qemu flavour's injections
+are not needed to read it: a value out of range, a forced IRQ in use,
+`XhciMsiAvoid` 2 or the x86 helper disabled each refuse a release
+build's start.
+
+#### 4.5.21 The library's end at the unload (revision 16, 2026-11-16; roadmap-usb4 task 50.27)
+
+**What changed in the library.** The header gained
+`ULONG MsgIrqUninitialize(VOID)` (the library's API notes, "Rules for
+clients", and its design record 01 section 10). It ends the copy: on the
+fake-IRQ path it unmaps the local APIC page `MsgIrqInitialize` mapped,
+and the copy is "not initialised" again. `PASSIVE_LEVEL` only
+(`MSGIRQ_STATUS_INVALID_PARAMETER` above it, nothing changed). A copy
+that is not initialised - never started, a start that failed, ended
+already - or that mapped nothing (a PIC-mode HAL, 98 SE and ME, Vista and
+later) gives `OK` and changes nothing, so it is called on every system
+without asking the mode, and a second call is harmless. A copy holding a
+live connection (either mode, including one a failed disconnect left
+live), an ISA claim held or kept or a function's membership of one, or
+any connection quarantined since the image was loaded gives
+`MSGIRQ_STATUS_IN_USE` and changes nothing. Serialisation is the
+caller's: no other call of the copy may be in progress or start while it
+runs, and after `OK` only `MsgIrqInitialize` may follow. It adds no
+import (`MmUnmapIoSpace` is in both images already). The header defines
+`MSGIRQ_CALL_UNINITIALIZE` with it, and both seams refuse to compile
+without it; the header's version macro stays 1. The copy this tree
+takes is the copy it had with the call added and comments on the
+library's reserved attach mode, nothing else changed
+(`legal-provenance.md` section 2a).
+
+**What `xhci98.sys` did until now, and does still.** Section 4.5.3 step
+1 keeps the image for the boot from the library's start
+(`hcdMsgNtLibrary` calls `HcdDmaKeepImage` right after
+`MsgIrqInitialize`), because the library mapped the local APIC "for the
+image's life and has no call to end it". So this driver never left one
+page behind per load: an image that started the library is never
+unloaded, and its one page stays with it until the restart - one page
+per boot, whatever the controllers do afterwards.
+
+**The decision** (owner, 2026-11-16: "Conservative"). The keep at the
+library's start stays, and nothing of the driver's behaviour changes.
+`MsgIrqUninitialize` is added as the last step of `hcdUnload`, after
+`HcdSuspDriverUnload`. **The call is defensive only**: no unload of a
+copy the library has started reaches it.
+
+- **Which images reach it.** Only those that never started the library:
+  every image on 98 SE and ME (mode 4 runs as 0 there, `hcd_msg4.c`
+  deciding by the system first) and on Vista and later (mode 4 is a
+  2000, XP and XP x64 mode); every image under any other
+  `XhciInterruptMode`; and a mode-4 image whose starts were all refused
+  before the library was called (the decision, the refusal table, the
+  quiet step, the x86 helper's routine or `IoInvalidateDeviceState`
+  missing). For each of them the call reads the IRQL
+  (`HAL.dll!KeGetCurrentIrql`, already imported) and the copy's flag and
+  returns `OK`, publishing nothing. An image that started the library
+  has `DriverUnload` NULL from that moment, under the boot ledger's
+  lock and while the start's device object exists, so it never reaches
+  the call: there the call is unreachable, and the page stays mapped
+  until the restart, as before.
+- **If a started copy ever reached it** - a later change that dropped the
+  keep - the library's own conditions would hold on the ordinary paths:
+  the I/O manager calls `hcdUnload` once every device object is deleted,
+  and only the controller's FDO calls the library; a controller's stop
+  joins its controller thread (`HcdMsg4Look`, `HcdMsg4LostThread`)
+  before `HcdMsg4Release`, clears `ControllerStarted` under the power
+  gate (so `HcdMsg4Suspend` and `HcdMsg4Resume` touch nothing), and ends
+  its connection and claim or keeps the image; the trampoline calls the
+  routine only while a connection exists, and the DPC it queues is
+  drained by `hcdRelease`. Until this revision the join had one
+  exception: a start whose `ObReferenceObjectByHandle` of the new
+  controller thread failed (`hcd_ctl.c`, the thread's start) waited only
+  for `ThreadExited`, which the thread sets before its call into
+  `PsTerminateSystemThread`, so there was nothing to join and an unload
+  inside that window would have run under the thread; the library's
+  quiescence would not have proved the image's there. "The thread starts'
+  join" below closes it.
+- **The result** is written on the qemu flavour's port-`0xE9` channel
+  (`msg4.uninit`, the channel that outlives every controller, as the boot
+  ledger's lines do); no controller's note ring exists at that point. A
+  started copy's end would also be in the library's published history
+  (section 4.5.16 item 10: UNINIT, kind 129, or call 12 with its
+  status), which a copy never started does not write. `IN_USE` is
+  recorded and left: no retry, no loop; a `DriverUnload` cannot refuse.
+
+**Start-up failures.** The library is never started in `DriverEntry`
+(section 4.5.3 step 1), so `DriverEntry` has no failure after a
+successful initialise and needs no call. A controller start refused after
+the library's start leaves the copy started and the image kept, as
+before. No start path calls `MsgIrqUninitialize`: another controller of
+the image may be in a library call then, which the caller's
+serialisation forbids.
+
+**Considered and not taken** (owner, 2026-11-16). Dropping the keep at
+the library's start, so that an image that ran mode 4 unloads when its
+last device object goes and the end call unmaps the page there; with it,
+a claim release that is not `OK` (`NOT_INITIALIZED`,
+`INVALID_PARAMETER` or `IN_USE`; `CLAIM_KEPT` keeps it today) would
+have kept the image, so that the unload never met a claim the library
+still held. Not taken: it changes when the driver unloads for a path not
+used by default, for one page per boot; and the keep at the library's
+start also covered, for every mode-4 load, the thread-start residual
+above, which an image free to unload would have exposed (closed since by
+"The thread starts' join" below; the decision stands as taken).
+
+**The thread starts' join** (owner, 2026-11-16, folded into task 50.27).
+The rule: on 2000 and later every system thread of `xhci98.sys`,
+`xhcicm.sys` and `xhcinet.sys` whose image can unload is joined on its
+thread object, and the object is always had - by the stop, or for an
+idle callback context the stop abandoned in a callback, by the unload
+(`HcdSuspDriverUnload`) before the image goes. **The form taken**: the creator keeps the new
+thread's handle until `ObReferenceObjectByHandle` has given it the
+object, retrying at 10 ms intervals for as long as that takes, and closes
+the handle only then; the stop waits on the object, as it does after
+every ordinary start. This is the form the completion workers and the
+finer-timer thread already use (`hcd_susp.c`, `hcdSuspDoneJoin`;
+`hcd_tmr.c`, `HcdTmrJoin`), which retry at their join instead; here the
+retry is made at the start, in the creator, so the handle is never kept
+across process contexts and every later join (the stop, the abandoned
+callback contexts at the unload) finds the object. The completion workers
+and the finer-timer thread keep a handle that is not a kernel handle
+until their join, which is correct only because their creator and their
+join both run in system-process threads (the PnP and power paths and the
+driver's own threads), which share that process's handle table; a change
+that moved either to another process context would need
+`OBJ_KERNEL_HANDLE` there. The other form, the
+thread referencing itself by pointer as its first act, was not taken: it
+needs `KeGetCurrentThread` or `PsGetCurrentThread`, an import of
+`ntoskrnl.exe` on x86 that neither image's allowlist has, and this
+change adds no import.
+
+| Thread | Before | After |
+|---|---|---|
+| `xhci98.sys`, the controller thread (`hcd_ctl.c`, `hcdThreadStart`) | a failed reference: the thread told to leave, `ThreadExited` waited for, the start failed - the window | the reference retried until had; the start goes on as after a first-time reference |
+| `xhci98.sys`, the idle callback thread (`hcd_susp.c`) | the same as the controller thread's, by the callback's exit flag | the same retry |
+| `xhci98.sys`, the completion workers and the finer-timer thread | the handle kept, the reference retried at the join | unchanged |
+| `xhcicm.sys`, the connection-manager thread (`cm_thr.c`, `CmThrStart`) | as the controller thread's (`ThreadExited`) | the same retry |
+| `xhcicm.sys`, the call workers and the CONFIGMG worker (`CmThrSpawn`) | the handle closed at once, no object | unchanged: they run on 98 SE and ME alone, where the image never unloads (`DriverUnload` is not installed there) |
+| `xhcinet.sys`, the adapter's worker (`src\net\ndis5\n5_main.c`, `netStartWorker`) | a failed reference: the thread told to leave, its exit event waited for, the initialisation failed - the window | the reference retried until had; the initialisation goes on |
+| `xhcinet6.sys` | no system thread | nothing to change |
+
+Since roadmap-usb4 task 50.38 (record 17 section 5, "The trigger
+reader") the qemu flavour of `xhci98.sys` has one more thread, the
+trigger reader (`hcd_inj.c`, `HcdInjReaderStart`), made after the
+controller thread and joined after it: its object is had by the same
+retry (`qemu.inj.reader.ref.fail`, `qemu.inj.reader.ref.retry`; forced by
+`XhciQemuThreadRefReader`).
+
+**Fail-closed.** The retry has no limit, deliberately: a reference that
+never succeeds keeps the start (the controller's or the NHI's
+`IRP_MN_START_DEVICE`, the adapter's initialisation) blocked for good. A
+limit followed by the old unwind on the event would bring the window
+back. The handle is one `PsCreateSystemThread` has just returned in the
+same thread with the same access, and the reference takes no allocation
+on this path, so a failure is not expected to clear by waiting; the loop
+is a guard against an unsafe unload, not a recovery. The first failed
+attempt is logged at once, so a hang is seen while it lasts
+(`thread.ref.fail` and `susp.cb.ref.fail` in the controller's note ring
+with the status, and the qemu flavour's port-`0xE9` line;
+`cm.thread.ref.fail`; `net.thread.ref.fail`), each attempt counts in the
+existing `ThreadReferenceFailures` of the controller or the NHI (the USB
+Tree's snapshot already carries the NHI's), and the count is logged once
+the object is had (`thread.ref.retry`, `susp.cb.ref.retry`,
+`cm.thread.ref.retry`, `net.thread.ref.retry`). A forced failure
+exercises the branch: the qemu flavour's `XhciQemuThreadRefCtl`,
+`XhciQemuThreadRefCb` and `XhciQemuThreadRefCm` (machine-wide,
+`Services\USB`) and `XhciQemuThreadRefNet` (the adapter's own key,
+which is all `xhcinet.sys` reads), qemu-only and never written by an
+INF, make that many reference attempts of the controller thread's, the
+idle callback thread's, the connection-manager thread's and the network
+worker's start count as failed, the object given back each time. The
+legs force each start separately and tear it down after: the controller
+thread; the idle callback thread with selective suspend on, then a later
+failure of the same start after the callback exists (the qemu
+flavour's `XhciQemuStartFailLate`, machine-wide, fails the start just
+after the callback thread is made), and an unload with a callback
+context abandoned where a client's callback can be held in progress; the connection-manager thread; the
+network adapter's worker.
+
+**98 SE and ME.** Unchanged: the same source builds for them, and their
+path takes no reference at all (`IoIsWdmVersionAvailable(1, 0x10)` is
+false there; a wait on a thread object faulted Windows 98 SE, the
+measurement of task 26-A.2), so their joins stay on the event or the exit
+flag the thread sets last. On 98 SE and ME `xhcicm.sys` never unloads,
+and an `xhci98.sys` stop unloads nothing; the window before
+`PsTerminateSystemThread` stays where it was there, recorded in
+`hcd_ctl.c`. (Superseded for `xhci98.sys` by section 4.5.22, 2026-11-19:
+a removal of the controller does unload the image on 98 SE, and the
+window was met there; its threads now end from outside the image.)
+
+**The network driver** (owner, 2026-11-16, folded into task 50.27).
+`xhcinet.sys`'s adapter worker (record 35) had the same window: on NT a
+failed reference failed `MiniportInitialize` after telling the worker to
+leave and waiting for its exit event, which precedes its call into
+`PsTerminateSystemThread`. It takes the same form (`netRefThread`), the
+wait between attempts `NdisMSleep`, the forced failure from the adapter's
+key through `NdisReadConfiguration` (no new import). The halt's join is
+unchanged: the object on NT, the exit event on 98 SE and ME.
+`xhcinet6.sys` makes no system thread.
+
+**Legs** (run sheet 50.27): the defaults unchanged on 2000 and XP (start,
+stop, disable and enable, the unload) and a start and stop on 98 SE and
+ME; the forced reference failures above on 2000 or XP; the network
+adapter's start, stop, disable and enable and unload on 2000 and XP; mode 4 on 2000 and XP on an APIC-mode HAL with behaviour and
+log as before the change; for `xhcicm.sys`, record 21 section 4.5.19.
+
+#### 4.5.22 The thread ends on 98 SE and ME (revision 17, 2026-11-19; roadmap-usb4 task 50.37)
+
+**What was seen** (runs/run-50.md, "50.32 (continued)", worker s98audrm, 2026-11-19; QEMU TCG, one
+processor, the `qemu` flavour of 6dcd3e51f). On 98 SE this driver's image is unloaded at every removal
+of the controller's devnode - the USB Tree's restart (`CM_Query_Remove_SubTree`, `CM_Remove_SubTree`,
+then a rescan) and Device Manager's Remove alike - and a new copy is loaded for the rescan: the qemu
+flavour's `msg4.uninit` line (`hcdUnload`) ends each removal, and the image's base, found by searching
+guest memory for one of this driver's own strings, moves at each (FF03EAC0 at the boot, FF16C160,
+FF1E3D80, FF25BD80, FF1E1D80 after four restarts in leg L36), the old range unmapped after it (QEMU's
+`info mem`). In L36's fourth restart the removal ran to its end ("controller thread has exited"), the
+image was unloaded, the new copy started the controller and answered QUERY_CAPABILITIES and
+QUERY_PNP_DEVICE_STATE (the trace's last lines), and the screen read "A fatal exception 0E has occurred
+at 0028:FF271C03": FF25BD80 + 0x15E83, inside the copy that had run until that removal, its pages
+unmapped at the fault. Offset 0x15E83 of that build (read with its PDB; the project's own binary) is the
+instruction after the call of `KeSetEvent(&hc->ThreadExited, ...)` in `hcdThread`, the line before
+`PsTerminateSystemThread`: the return address of that call. L16 faulted at the same offset above a base
+that was inferred, not read. One identified and one compatible in 22 removals that unloaded the qemu
+flavour; none in 5 of 3.5.0.0 (the same code). Both came with a USB audio device on the controller;
+whether it matters for the timing was not read.
+
+**The mechanism.** The controller thread ends with `KeSetEvent(&hc->ThreadExited)` and then
+`PsTerminateSystemThread`. On 98 SE and ME the stop waits for that event alone (`hcdThreadStop`, the
+`HcdWaitEvent` branch), because a wait on the thread's object faults there (runs/run-26.md, 26-A.2,
+runs 5 to 7: "A fatal exception 0E has occurred at 0028:C00312EE" inside the wait on the object
+`ObReferenceObjectByHandle` gave; win98-wdm.md, "KeWaitForSingleObject on a PKTHREAD"). The REMOVE
+then completes, and the image goes once the driver's last device object is deleted (win98-wdm.md,
+"DriverUnload re-enters from IoDeleteDevice"; runs/run-46.md, "46.20 follow-up": on 98 SE the image goes
+at a Remove of the controller even with no `DriverUnload` registered). The event says the thread has
+finished with the controller's storage, not that it has left the image. After the signal, inside
+`KeSetEvent`, the thread still has to execute, in the image: the return into `hcdThread`, the push of
+`STATUS_SUCCESS`, and the call through the image's import address table entry for
+`PsTerminateSystemThread` (a read of the image's data). In L36 the thread made that return only after
+the image had been unloaded: the stop's thread, released by the signal, carried the removal through
+to the unload before the exiting thread executed those instructions. 26-A.2 run 8 saw the same window
+on Windows 2000, where an event wait rebooted the guest at every disable (read as this window; no dump),
+and the thread-object wait closed it there. On 98 SE it is open at every removal of the controller, and
+since task 50.32 such a removal is an ordinary action of the USB Tree.
+
+**The candidates.**
+
+1. **Wait on the thread object, where 98 SE and ME offer one.** They do not, usefully: the object is
+   had (`ObReferenceObjectByHandle` succeeds there, 26-A.2 run 6), but the wait on it faults (runs 5
+   and 6); `IoIsWdmVersionAvailable(1, 0x10)` keeps 98 SE (WDM 1.00) and ME (1.05) off it today.
+   `ZwWaitForSingleObject` on the thread's handle has no import row and no Windows 98 evidence, and
+   would end on the same thread whose object wait faulted (how 98 implements it was not read);
+   `KeGetCurrentThread` and `PsGetCurrentThread` have no row either (section 4.5.21). Not taken.
+2. **The thread's last instructions outside the image.** An ordinary C ending cannot do it: a call of
+   `KeSetEvent` returns into the image, and a compiled tail jump to `PsTerminateSystemThread` still
+   executes in the image after `KeSetEvent` has returned. What can: the thread arranges, on its own
+   stack, the arguments of both routines and makes `PsTerminateSystemThread`'s entry the return address
+   of `KeSetEvent`, then jumps to `KeSetEvent`. Both routines are `__stdcall` (the DDK's build makes
+   stdcall the default, `i386mk.inc`, and every call the image already makes to them pushes the
+   arguments and leaves the popping to the callee), so `KeSetEvent`'s return pops its three arguments
+   and enters `PsTerminateSystemThread` with its return slot and argument in place. From the signal on,
+   the thread executes only the two system routines: the jump is the image's last instruction and comes
+   before the signal; both routines' addresses are read from the import table into the thread's own
+   frame before it; nothing after it reads the image. What this relies on is the routines' calling
+   contract and `PsTerminateSystemThread`'s documented contract that it does not return, nothing of how
+   either is implemented. The return slot holds 0: should `PsTerminateSystemThread` ever return, the
+   thread faults at address 0 at once rather than run on - no recovery, and no worse than today's code,
+   which would return into a frame of the image. A few lines of inline assembly, which the x86 image
+   already uses (`hcd_io.c`, `hcd_stage.c`); 98 SE and ME are x86 only, and the amd64 build never
+   compiles any of it. **Taken.**
+3. **A bounded settle after the event.** The stop would sleep some milliseconds after the event before
+   letting the REMOVE complete, hoping the exiting thread runs meanwhile. Not acceptable: it is no
+   synchronisation - nothing says the exiting thread is run within any bound (in L36 it returned into
+   the image only after the unload) - and any bound is paid at every removal and shutdown. The completion
+   workers' join already has this form (a 10 ms grace after their flag, `hcdSuspDoneJoin`); it is
+   replaced below.
+4. **Keep the image until the thread is gone.** On 98 SE a NULL `DriverUnload` does not keep the
+   image at a Remove of the controller (run-46, "46.20 follow-up": test images `w98se-tR1`, `-tR2`, and
+   the boot `xhciuas.sys`); with, in addition, one device object made at `DriverEntry` and never
+   deleted, it stayed, and the Refresh started the controller on the same image (`w98se-tS2`, `-tS3`).
+   That would close this and every sibling below at once, the work items and completion tails
+   included. Not taken: it changes the image's life on 98 SE and ME for the rest of the boot - an update
+   of `xhci98.sys` within a boot would take effect only at the restart (the installer's 9x placement for
+   this file would have to take the resident route `xhcicm.sys` and `xhciuas.sys` take), and the Tree's
+   restart would no longer give a fresh image, so every image-wide state's re-entry would need reading -
+   for a window item 2 closes exactly. Recorded as the owner's option should the residual tails below
+   ever need closing.
+
+**The change (98 SE and ME only).** One routine, `HcdThreadEnd9x` (`hcd_ctl.c`, compiled for `_M_IX86`
+only), in two forms, each never returning:
+
+- **the event form**: `KeSetEvent(event, IO_NO_INCREMENT, FALSE)` chained into
+  `PsTerminateSystemThread(STATUS_SUCCESS)`;
+- **the flag form**, for the threads a 9x join knows by a flag the thread sets last:
+  `InterlockedExchange(flag, 1)` chained the same way. `InterlockedExchange` is the image's own
+  `__fastcall` import (`ntddk.h` declares it `NTKERNELAPI LONG FASTCALL`; the target in ECX, the value in
+  EDX, no stack argument), so the frame holds only `PsTerminateSystemThread`'s entry as the return
+  address, then its return slot and argument.
+
+Neither adds an import: `KeSetEvent`, `InterlockedExchange`, `PsTerminateSystemThread` (and, for the
+qemu flavour's sleep below, `KeDelayExecutionThread`) are rows of `xhci98-imports.allow` already. Which
+ending runs is decided in the thread by `IoIsWdmVersionAvailable(1, 0x10)`, the test that already
+chooses the join: FALSE (98 SE, ME) takes the chain; TRUE (2000 and later) keeps today's two calls,
+which the thread-object join covers. Each thread end:
+
+| Thread | Its end on 98 SE and ME before | After |
+|---|---|---|
+| The controller thread (`hcd_ctl.c`, `hcdThread`) | `KeSetEvent(&hc->ThreadExited)`, then `PsTerminateSystemThread`; joined by `HcdWaitEvent` on the event | the event form on `ThreadExited`; the join unchanged |
+| The idle callback thread (`hcd_susp.c`, `hcdSuspCbThread`; only with `XhciSelectiveSuspend` 1) | `KeSetEvent(&cb->Exited)`, `InterlockedExchange(&cb->ExitFlag, 1)`, `PsTerminateSystemThread`; joined by polling `ExitFlag` (the stop, or `HcdSuspDriverUnload` for a context the stop abandoned in a callback) | `KeSetEvent(&cb->Exited)` as before (nothing on 9x waits on it), then the flag form on `ExitFlag`; both joins unchanged. A context abandoned in a callback never touches the controller again (section 4.4 of record 14), and its end reads nothing of the controller: only its own context and the image-wide values below |
+| The completion workers and the grower (`hcd_susp.c`, `hcdSuspDoneExit`; only with `XhciSelectiveSuspend` 1) | `InterlockedExchange(&w->Exited, 1)`, `PsTerminateSystemThread`; joined by polling `Exited`, then a 10 ms grace | the flag form on `Exited`; the grace dropped on 9x (it stood in for this) |
+| The qemu flavour's trigger reader (`hcd_inj.c`, `hcdInjReaderExit`; from task 50.38, record 17 section 5) | - (new) | the event form on `InjPollExited`, `who` 4 in the trace; joined by `HcdWaitEvent` on the event after the controller thread's join |
+
+On 2000 and later nothing changes: the same endings, the same joins on the thread object. In the
+amd64 build none of this is compiled: the routine, its call sites, the qemu flavour's values and their
+reads all sit under `_M_IX86`. Cost: none at a removal or a shutdown - no wait is added anywhere, and
+the completion workers' stop on 9x loses its 10 ms per thread.
+
+**What `KeSetEvent` itself may touch after its signal.** The event lives in the controller's device
+extension, which the stop frees later in the same REMOVE (`IoDeleteDevice` of the FDO). That
+`KeSetEvent` touches nothing of the event after waking the waiter is what every KEVENT handshake on
+these systems relies on (a completion routine's stack event above all) and is unchanged by this
+section; the flag form ends on a single locked exchange, after which nothing of the context is
+touched.
+
+**The qemu flavour: seeing the window closed, not only unhit.** Two image-wide values, read at each
+controller start into variables of the image (never through a controller at a thread's end, so an
+abandoned callback context reads nothing of a controller that may be gone):
+
+- `XhciQemuThreadExitSleep` (machine-wide, `Services\USB`, as `XhciQemuThreadRefCtl`; REG_DWORD,
+  milliseconds, at most 10000; absent or 0 as today): on 98 SE and ME every thread end sleeps that long
+  **between its signal and `PsTerminateSystemThread`**, by chaining `KeDelayExecutionThread` between
+  them, its interval in the routine's own frame, above every chained frame. The chained frame then
+  holds, from the stack word `PsTerminateSystemThread`'s entry occupies upward: that entry (the delay's
+  return address), `KernelMode`, `FALSE`, the interval's address, the return slot 0, `STATUS_SUCCESS` -
+  in both forms (the event form's three arguments are popped by `KeSetEvent`, the exchange takes none
+  from the stack). They are a layout check only: they are in place from the jump on, before the
+  signal routine has returned, and nothing obliges the delay or the end to overwrite them.
+- `XhciQemuThreadExitOld` (the same key; 1): the control. The controller thread ends as before this
+  section, with the sleep made by an ordinary call inside the image between `KeSetEvent` and
+  `PsTerminateSystemThread`.
+
+At each 9x thread end, just before the jump, the qemu flavour writes one port-`0xE9` line: which thread
+and which form (or the control), the addresses of the signal routine, of `KeDelayExecutionThread` when
+the sleep is chained, of `PsTerminateSystemThread`, of `HcdThreadEnd9x` itself (an address inside the
+image; `DriverStart` and `DriverSize` are zero on 98, win98-wdm.md), the sleep in milliseconds, and the
+stack address the chained frame begins at. The legs read:
+
+- **every removal**: the end line, then the unload's `msg4.uninit` line, in that order; every resolved
+  target outside the image's span (the span from guest memory, as above), on 98 SE and on ME;
+- **with the sleep** (10000 ms): the proof is the delay's length. The end line and the unload's
+  `msg4.uninit` are stamped on the host as they reach the port; the old range is read unmapped
+  (`info mem`) at a host time T after the unload line, and T minus the end line's stamp is compared with
+  the sleep. `KeDelayExecutionThread` returns no earlier than its interval of guest time, counted by
+  the guest's timer interrupts; and these legs run QEMU with TCG and without `-icount`, where every
+  emulated timer (the PIT, the HPET, the local APIC timer) fires at deadlines on QEMU's virtual clock,
+  which advances with the host's monotonic clock while the guest runs (QEMU's documentation of
+  `-icount`: without it, the virtual clock follows real time). So over any interval the guest's time
+  can fall behind the host's (50.36's slow starts did) but cannot run ahead of it beyond one tick: a
+  10000 ms delay that began at or after the end line's host stamp has not ended before 10 s of host time
+  have passed. While T minus the end line's stamp is well short of that (the legs read within about
+  2 s, a margin of some 8 s against a tick of at most 55 ms), the exited thread has not yet left its
+  chain - it is alive, with nothing of the image ahead of it - and the image it set its signal from is
+  already gone. Each start's clock is also measured against the host's (TICK, twice, host-stamped) as a
+  cross-check of that property, not as the bound. Then, after the sleep has run out: no fault, and
+  the end of the thread looked for in two further readings - the stack page at the traced address
+  read again (released, or not), and the next removals of the same start passing; the stack words at
+  the traced address are read at both moments as the layout check above, nothing more. Which of the
+  thread's routines it is in at T (the rest of the signal routine, or the delay) is not read and does
+  not matter: both are the system's;
+- **the control** (`XhciQemuThreadExitOld` with the sleep; its end line written before its signal): a
+  fault in the old range. At the return
+  address of the sleep's call is the expected one and shows the control works; at the return address of
+  `KeSetEvent` is the old window met before the sleep was reached (it also shows the window; the run
+  sheet says which). Both addresses are read from the build's own map;
+- **the generated code**: this project's own disassembly of `HcdThreadEnd9x` in both flavours, read
+  before the legs: the jump as the last instruction, and no read of the image after the pushes begin
+  except the frame's own locals.
+
+Both values are qemu-only, never written by an INF, and the `release` flavour has neither them nor the
+sleep or control paths.
+
+**Siblings: what else of this image can run after the removal has let it go on 98 SE and ME.**
+98 SE and ME run one processor; code at DISPATCH_LEVEL there runs to its return before any
+PASSIVE_LEVEL thread runs again.
+
+| Item | Standing |
+|---|---|
+| The finer-timer thread (`hcd_tmr.c`) | NT only (`HcdTmrCreate` returns on 9x) |
+| DPCs: the interrupt DPC (also what `hcd_inj.c` queues), the slot timers, the MFINDEX sampler, the tolerance clock's (`HcdCtlBackstopTick`, the lost-interrupt backstop), the poller's timer, a device PDO's refusal timer, the DMA DPCs, and the staging DPCs `StageDpc`, `StageTimerDpc` and the qemu flavour's `StageHoldDpc` (`hcd_stage.c`, drained by its release, called from the controller's release) | each drained by its count or flag before the release (runs/run-46.md, "46.20 xhci98's and xhcicm's 9x paths"; the staging DPCs here); the return after a DPC's last decrement runs at DISPATCH_LEVEL, which the removal's PASSIVE_LEVEL thread cannot overtake on one processor (the same run's reading for `xhciuas.sys`'s timer DPC). Unchanged |
+| KTIMERs with no DPC (the root links' recovery bound, the hub re-arm, the stack deadlines) | no code runs at their expiry; cancelled before their storage goes. Unchanged |
+| Task 50.31's retry of a stopped controller | runs in the controller thread's pass; no thread, timer, DPC or work item of its own (design record 38) |
+| Work items (`ExQueueWorkItem`; 98 has no `IoQueueWorkItem`): `hcdPowerWork` and `hcdPowerWorkD0` (`hcd_power.c`), `hcdHubPowerWork` (`hcd_hubfdo.c`), `hcdSuspWakeCancelWork` (`hcd_susp.c`) | **the same kind of window, not closed here**: a work routine returns to the system's worker through its own epilogue, after an act that can release the removal (`hcdPowerWork` ends in `HcdIoLeave`, whose `KeSetEvent` of `RemoveEvent` the controller's REMOVE waits for) |
+| Power completion tails that release the removal at PASSIVE_LEVEL without a worker: `hcdD0Done` calling `hcdD0Finish` inline (its `HcdIoLeave`), `hcdSystemDeviceDone`'s and `hcdSystemDone`'s `HcdIoLeave` (`hcd_power.c`); the hub FDO's `hcdHubSystemDeviceDone`, `hcdHubSystemDone` and `hcdHubD0Done` (`hcd_hubfdo.c`) | **the same kind of window where the completion runs in another thread at PASSIVE_LEVEL**: after the release, the routine's remaining instructions and its return run in the image. Inline in the waiter's own thread there is no window (the waiter is that thread); at DISPATCH_LEVEL there is none on one processor. Not closed here |
+| Completion routines of IRPs this driver sends and waits for, each a `KeSetEvent` then `return STATUS_MORE_PROCESSING_REQUIRED`: `hcdSignalOnComplete` (`HcdForwardAndWait`, `hcd_pnp.c`), `hcdConfigDone` (`hcd_svc.c`), `hcdHubSignal` (`hcd_hubfdo.c`), `hcdRhSignal` (`hcd_rh.c`), `hcdCompDone` (`hcd_urb.c`), `hcdIsoDone` (`hcd_ctl.c`); `hcdHlprDone` (`hcd_msi86.c`) is NT only | the event says the IRP is done, not that the routine has returned. Where the lower driver completes inline (the waiter never blocks) or at DISPATCH_LEVEL there is no window; where it completes at PASSIVE_LEVEL in another thread, the routine's return runs in the image after the waiter is released. The controller's own REMOVE is passed down without a wait (`hcdRemove`, `HcdPassDown`), so none of these is the REMOVE's; how 98 SE's lower drivers complete each was not read. Not closed here |
+| `xhcicm.sys` on 98 SE and ME: the connection-manager thread (`cm_thr.c`, the event then `PsTerminateSystemThread`, joined by the event), the CONFIGMG worker and the call workers | section 4.5.21 records the image as never unloading there (`DriverUnload` NULL on 9x); run-46's reading that a NULL `DriverUnload` does not keep an image at a Remove of its devnodes says that may not hold at a removal of the NHI. Not read here; the same two forms would fix its threads, in that image. Listed. Read since (task 50.40): the image does unload there at the last NHI's removal; closed by a device object never deleted, design record 21 section 7.9. |
+| `xhcinet.sys` on 98 SE and ME: the adapter's worker (`n5_main.c`, `KeSetEvent(&a->WorkExited)` then `PsTerminateSystemThread`, the halt waiting on the event) | the same pattern; whether NDIS unloads the miniport's image at the adapter's removal on 98 SE is not read. Listed. Read since (task 50.40): NDIS unloads it 100 to 118 s after the adapter's removal; closed by the event form of the chained ending, design record 35 section 19. |
+| `xhciuas.sys` on 98 SE and ME | no system thread; its work items' tail was the reason for task 46.20's residency, which run-46 found holds for a device's unplug and not for a Remove of the controller. Listed |
+| Every count a teardown waits for, released by a dispatch, a bus-interface call or a completion that then returns through the image: the controller's (`HcdIoLeave`, whose `KeSetEvent` of `RemoveEvent` its REMOVE waits for once its own count is dropped: `hcdDispatchOther`, `HcdControllerPnp`, the power dispatch and their refusal branches), the root hub FDO's (`hcdRhIoLeave`, `hcd_rh.c`: its power, cleanup, system-control and device-control dispatches and its refusal branch), each hub FDO's (`hcdHubIoLeave`, `hcd_hubfdo.c`: `HcdHubFdoDeviceControl` and the other hub dispatches), and a device PDO's `Busy`, which the teardown polls before it deletes the PDO (`hcd_pdo.c`: `HcdDevicePdoPower`; `hcd_urb.c`: `HcdDevicePdoInternalIoctl` and its other dispatch paths; `hcd_susp.c`'s idle and wake paths), and the bus interface slot's `Busy` (`hcd_urb.c`, a client's direct call) | **the same kind of window, for a dispatch or a call running in another PASSIVE_LEVEL thread while the teardown waits on that count**: after the release, the routine's remaining instructions and its return run in the image. Their callers are the system's (`IoCallDriver` from a client) or a client driver's; no lifetime rule of 98 SE's that would keep the image across that return was read. Not closed here |
+
+None of the residual tails was seen; each needs its own release to come in another PASSIVE_LEVEL thread
+at the removal of the controller and that thread to be overtaken there. Closing them in this image is
+candidate 4 (or the `Io*WorkItem` family, absent on 98).
+
+**Legs** (run sheet section of this task). 98 SE and ME, the Tree's restart and Device Manager's
+Remove, with and without QEMU's `usb-audio`, the `release` and `qemu` flavours: at least 60 removals
+on 98 SE and 30 on ME, none faulting, with the qemu flavour's readings above at every removal; sleep
+legs as above; the control; selective suspend on (the callback thread, the workers and the grower) with
+the sleep; a shutdown and a plain unplug as regression; one NT restart leg (2000 or XP) showing the NT
+ending unchanged (no end line, the thread-object join). Every 98 SE and ME start's guest clock checked.
+Not run, as in task 50.27: a callback context abandoned at a teardown - no client in these guests holds
+its idle callback in progress at a removal and no injection holds one; its end is the same code as the
+callback thread's ordinary end, read in the selective-suspend legs.
 
 ## 5. The poller's lifecycle
 
@@ -4496,6 +5095,27 @@ fullest one), the header's new copy, and the legs on XP behind them; the
 places of sections 4.5.1 to 4.5.13 that described the old rule marked
 as superseded. The 98 SE and ME code's removal of the same day is
 recorded in sections 3 and 4.5.7.
+
+### 13.12 Revision 15 (task 50.4)
+
+Section 4.5.20, 2026-11-15, reviewed and revised before the code: the
+record of a refused mode-4 start (`XhciMode4Refusal`), when it is
+written and cleared, its layout, and the USB Tree's reading of it.
+
+### 13.13 Revision 16 (task 50.27)
+
+Section 4.5.21, 2026-11-16, before the code: the library's end at the
+unload, a defensive step; section 4.5.3 step 1's keep of the image at
+the library's start kept (owner, 2026-11-16), the alternative recorded
+as not taken; the thread starts' join (the reference retried until had)
+added the same day.
+
+### 13.14 Revision 17 (task 50.37)
+
+Section 4.5.22, 2026-11-19, reviewed and revised before the code: the
+98 SE and ME thread ends chained out of the image, the alternatives
+weighed (the thread-object wait, a settle, the image kept), the qemu
+flavour's view of the window, and the residual windows of the image.
 
 ## 14. What changes in the documents
 

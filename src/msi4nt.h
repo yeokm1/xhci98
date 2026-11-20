@@ -63,6 +63,11 @@ extern "C" {
 #define MSGIRQ_CAP_64BIT                0x04
 #define MSGIRQ_CAP_PER_VECTOR_MASK      0x08
 
+/* Attach mode: reserved; unsupported in this release (owner, 2026-11-16;
+ * roadmap Phase 13). The value is kept, and a connect that passes it
+ * and meets a connect's ordinary conditions returns
+ * MSGIRQ_STATUS_UNSUPPORTED: no connection is made and nothing in the
+ * device's interrupt configuration changes. */
 #define MSGIRQ_CONNECT_FLAG_ATTACH      0x1
 #define MSGIRQ_CONNECT_FLAG_PIN_PRIVATE 0x2
 #if defined(MSI4NT_ISA_LINE)
@@ -348,6 +353,7 @@ typedef struct _MSGIRQ_HISTORY {
 #define MSGIRQ_EVENT_CLIENT      15     /* msi4vxd's; msi4nt writes none */
 #define MSGIRQ_EVENT_CLAIM_STOP  16     /* msi4nt: where a claim stopped, and why */
 #define MSGIRQ_EVENT_ABSENT_ONLY 128    /* msi4nt: a disconnect with MSGIRQ_DISCONNECT_ABSENT_ONLY */
+#define MSGIRQ_EVENT_UNINIT      129    /* msi4nt: MsgIrqUninitialize ended the copy */
 
 /* REFUSED: the call (Arg1) and the detail kind (Arg2). */
 #define MSGIRQ_CALL_CONNECT      1
@@ -361,6 +367,7 @@ typedef struct _MSGIRQ_HISTORY {
 #define MSGIRQ_CALL_INITIALIZE   9
 #define MSGIRQ_CALL_ARM          10
 #define MSGIRQ_CALL_DISARM       11
+#define MSGIRQ_CALL_UNINITIALIZE 12
 
 #define MSGIRQ_DETAIL_NONE       0
 #define MSGIRQ_DETAIL_NTSTATUS   1
@@ -413,9 +420,13 @@ MSI4NT_C_ASSERT(isa_result_v1, FIELD_OFFSET(MSGIRQ_ISA_RESULT, PoolsScanned) == 
 /* ------------------------------------------------------------------ */
 
 ULONG MsgIrqInitialize(const MSGIRQ_HOST *Host);
+ULONG MsgIrqUninitialize(VOID);
 ULONG MsgIrqGetMode(VOID);
 ULONG MsgIrqQuery(const MSGIRQ_CONNECT_PARAMS *Params, MSGIRQ_CAPABILITIES *Caps);
 ULONG MsgIrqConnect(const MSGIRQ_CONNECT_PARAMS *Params, PMSGIRQ_MESSAGE_INFO *Info);
+/* Attach mode's two calls: reserved; unsupported in this release. The
+ * names and signatures are kept, and each returns
+ * MSGIRQ_STATUS_UNSUPPORTED on any Info (docs/using/api.md). */
 ULONG MsgIrqArm(PMSGIRQ_MESSAGE_INFO Info);
 ULONG MsgIrqDisarm(PMSGIRQ_MESSAGE_INFO Info);
 ULONG MsgIrqTranslateLine(ULONG Bus, ULONG BusInterruptLevel,
@@ -1109,6 +1120,33 @@ static BOOLEAN MsgIrqpDisconnectFlagsValid(ULONG Flags)
     }
     return (Flags == 0 || Flags == MSGIRQ_DISCONNECT_QUARANTINE || Flags == MSGIRQ_DISCONNECT_ABSENT_OK ||
             Flags == MSGIRQ_DISCONNECT_ABSENT_ONLY) ? TRUE : FALSE;
+}
+
+/* MsgIrqUninitialize's decision (design record 01, section 10), from what
+ * the copy holds. *Go is TRUE only when the copy is to be ended; with any
+ * other answer the call changes nothing. */
+typedef struct _MSGIRQP_HELD {
+    BOOLEAN Passive;                    /* the caller is at PASSIVE_LEVEL */
+    BOOLEAN Initialized;
+    BOOLEAN Connections;                /* a live connection: either path, either mode, armed or not */
+    BOOLEAN Claims;                     /* an ISA claim, held or kept, or a function's membership */
+    ULONG Quarantined;                  /* connections quarantined since the image was loaded */
+} MSGIRQP_HELD;
+
+static ULONG MsgIrqpUninitDecide(const MSGIRQP_HELD *H, BOOLEAN *Go)
+{
+    *Go = FALSE;
+    if (!H->Passive) {
+        return MSGIRQ_STATUS_INVALID_PARAMETER;
+    }
+    if (!H->Initialized) {
+        return MSGIRQ_STATUS_OK;                        /* never started, or ended already */
+    }
+    if (H->Connections || H->Claims || H->Quarantined != 0) {
+        return MSGIRQ_STATUS_IN_USE;
+    }
+    *Go = TRUE;
+    return MSGIRQ_STATUS_OK;
 }
 
 /* An ABSENT_ONLY disconnect's outcome (record 08, kind 128). */
@@ -3235,7 +3273,10 @@ static struct {
     MSGIRQP_REVERT_AFFINITY RevertAffinity;
     PVOID ConnectEx;
     PVOID DisconnectEx;
-    PVOID ApicVa;
+    PVOID ApicVa;                       /* the local APIC page, mapped by MsgIrqInitialize on the
+                                           fake-IRQ path and unmapped by MsgIrqUninitialize */
+    ULONG Quarantined;                  /* connections quarantined since the image was loaded: never
+                                           reset, since nothing ends the copy once it is not 0 */
     KEVENT Lock;
 #if defined(MSGIRQP_CALLS)
     /* The published state (design record 07) and the history (record 08):
@@ -4477,6 +4518,79 @@ static ULONG MsgIrqpInitializeCall(const MSGIRQ_HOST *Host)
     return MSGIRQ_STATUS_OK;
 }
 
+/* The copy's end (design record 01, section 10): with nothing held, the
+ * local APIC page is unmapped and the copy is "not initialised" again, so
+ * that MsgIrqInitialize may run once more. Everything else the copy got at
+ * its start is a routine's address, a lock in its own block or a volatile
+ * registry key it holds no handle to, and needs no release. The caller
+ * guarantees that no other call of this copy is running or can start: the
+ * locks below make the check see the lists whole, they do not hold off a
+ * call that has passed its own "initialised" test. */
+ULONG MsgIrqUninitialize(VOID)
+{
+    MSGIRQP_HELD held;
+    BOOLEAN go;
+    ULONG status;
+    ULONG mode;
+    PVOID va;
+
+    held.Passive = (BOOLEAN)(KeGetCurrentIrql() == PASSIVE_LEVEL);
+    held.Initialized = MsgIrqpG.Initialized;
+    held.Connections = FALSE;
+    held.Claims = FALSE;
+    held.Quarantined = 0;
+    if (!held.Passive || !held.Initialized) {
+        status = MsgIrqpUninitDecide(&held, &go);
+        if (held.Initialized) {
+            MSGIRQP_EV_EARLY(MSGIRQ_CALL_UNINITIALIZE, status);     /* above PASSIVE_LEVEL */
+        }
+        return status;
+    }
+#if defined(MSGIRQP_CALLS)
+    MsgIrqpPubBegin();
+#endif
+    MsgIrqpLock();
+    held.Connections = (BOOLEAN)(MsgIrqpG.List != NULL);
+#if defined(MSI4NT_ISA_LINE)
+    held.Claims = (BOOLEAN)(MsgIrqpG.IsaList != NULL || MsgIrqpG.IsaMembers != NULL);
+#endif
+    held.Quarantined = MsgIrqpG.Quarantined;
+    status = MsgIrqpUninitDecide(&held, &go);
+    mode = MsgIrqpG.Mode;
+    va = NULL;
+    if (go) {
+        va = MsgIrqpG.ApicVa;
+        MsgIrqpG.ApicVa = NULL;
+        MsgIrqpG.Initialized = FALSE;
+        MsgIrqpG.Mode = MSGIRQ_MODE_NONE;
+        MsgIrqpG.NoneStatus = MSGIRQ_STATUS_UNSUPPORTED;
+    }
+    MsgIrqpUnlock();
+    if (va != NULL) {
+        MmUnmapIoSpace(va, 0x1000);
+    }
+#if defined(MSGIRQP_HISTORY)
+    if (go) {
+        MsgIrqpEv(MSGIRQ_EVENT_UNINIT, MSGIRQP_EV_COPY, mode, (va != NULL) ? 1UL : 0UL, 0, 0, FALSE);
+    } else {
+        MsgIrqpEvRefused(MSGIRQP_EV_COPY, MSGIRQ_CALL_UNINITIALIZE, status, 0, 0);
+    }
+#else
+    UNREFERENCED_PARAMETER(mode);
+#endif
+#if defined(MSGIRQP_CALLS)
+    MsgIrqpPubEnd();                                    /* the history's last copy into the registry */
+#endif
+    if (go) {
+#if defined(MSGIRQP_PUBLISH)
+        MsgIrqpG.PubOn = FALSE;                         /* nothing more is published by this start */
+#endif
+        MsgIrqpG.HaveHost = FALSE;                      /* the client's table is not called again */
+    }
+    MSI4NT_TRACE(("msi4nt: uninitialize %lu\n", status));
+    return status;
+}
+
 ULONG MsgIrqGetMode(VOID)
 {
     return MsgIrqpG.Initialized ? MsgIrqpG.Mode : MSGIRQ_MODE_NONE;
@@ -4531,7 +4645,7 @@ static ULONG MsgIrqpConnectNative(const MSGIRQ_CONNECT_PARAMS *P, PMSGIRQ_MESSAG
 
     if (P->MessageBased.PhysicalDeviceObject == NULL ||
         (P->MessageBased.Flags & MSGIRQ_CONNECT_FLAG_ATTACH)) {
-        return MSGIRQ_STATUS_UNSUPPORTED;
+        return MSGIRQ_STATUS_UNSUPPORTED;               /* no PDO; or attach mode, reserved */
     }
     if (P->MessageBased.Bus > 255 || P->MessageBased.Dev > 31 || P->MessageBased.Func > 7) {
         return MSGIRQ_STATUS_INVALID_PARAMETER;
@@ -4641,7 +4755,7 @@ static ULONG MsgIrqpConnectFake(const MSGIRQ_CONNECT_PARAMS *P, PMSGIRQ_MESSAGE_
     NTSTATUS ns;
 
     if (P->MessageBased.Flags & MSGIRQ_CONNECT_FLAG_ATTACH) {
-        return MSGIRQ_STATUS_UNSUPPORTED;               /* roadmap Q12 */
+        return MSGIRQ_STATUS_UNSUPPORTED;               /* reserved; unsupported in this release */
     }
 #if defined(MSI4NT_ISA_LINE)
     if (P->MessageBased.Flags & MSGIRQ_CONNECT_FLAG_ISA_LINE) {
@@ -5402,10 +5516,13 @@ static ULONG MsgIrqpConnectCall(const MSGIRQ_CONNECT_PARAMS *Params, PMSGIRQ_MES
     return status;
 }
 
+/* Attach mode's two calls are reserved and unsupported in this release
+ * (owner, 2026-11-16): UNSUPPORTED is their documented behaviour, on any
+ * Info and at any IRQL, and nothing is read or changed. */
 ULONG MsgIrqArm(PMSGIRQ_MESSAGE_INFO Info)
 {
     UNREFERENCED_PARAMETER(Info);
-    return MSGIRQ_STATUS_UNSUPPORTED;                   /* attach mode: roadmap Q12 */
+    return MSGIRQ_STATUS_UNSUPPORTED;
 }
 
 ULONG MsgIrqDisarm(PMSGIRQ_MESSAGE_INFO Info)
@@ -5502,6 +5619,7 @@ ULONG MsgIrqDisconnect(PMSGIRQ_MESSAGE_INFO Info, ULONG Flags)
         (VOID)KeSynchronizeExecution(c->Interrupt, MsgIrqpCountSync, &counts);
         haveCounts = TRUE;
         quarantine = TRUE;
+        MsgIrqpG.Quarantined++;                         /* MsgIrqUninitialize refuses from now on */
         MSI4NT_TRACE(("msi4nt: quarantined vector %02lx\n", c->Vector));
 #if defined(MSI4NT_ISA_LINE)
         if (c->Isa != NULL) {

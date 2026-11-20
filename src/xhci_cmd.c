@@ -366,9 +366,18 @@ ULONG XhciAsyncTimerAvailable(VOID)
  * Always called with the controller lock **released**, for the same reason the
  * timer arm is. IRQL: <= DISPATCH_LEVEL.
  */
-VOID XhciRequestControllerReset(PXHCI_EXTENSION ext)
+VOID XhciRequestControllerResetWhy(PXHCI_EXTENSION ext, ULONG reason,
+                                   ULONG slot, ULONG extra)
 {
-    HcdSvcRequestReset(ext);
+    HcdSvcRequestResetWhy(ext, reason, slot, 0, extra);
+}
+
+/* xhci_hw.h. Lock released. IRQL: <= DISPATCH_LEVEL. */
+VOID XhciRequestControllerResetPlaced(PXHCI_EXTENSION ext, ULONG reason,
+                                      ULONG extra,
+                                      const XHCI_RESET_REC *place)
+{
+    HcdSvcRequestResetPlaced(ext, reason, extra, place);
 }
 
 /* ------------------------------------------------------------------ */
@@ -447,6 +456,7 @@ VOID XhciCommandInit(PXHCI_EXTENSION ext)
     ext->CommandType = 0;
     ext->CommandControl = 0;
     ext->CommandGeneration = 0;
+    ext->CommandAbortedPA = 0;
     ext->ControllerFailed = 0;
 
     /*
@@ -492,11 +502,16 @@ static VOID xhciCommandInvalidateLocked(PXHCI_EXTENSION ext)
     }
     ext->CommandState = XHCI_CMD_STATE_IDLE;
     xhciCommandEndOutstanding(ext);
+    ext->CommandAbortedPA = 0;
     /* Unconditional, and it has to be: the owner is recorded *before* the
      * submit, so a device can own the engine while CommandState is still IDLE -
      * exactly the window a quiesce arriving mid-pump lands in. */
     XhciSlotCommandLost(ext);
     ext->CommandGeneration++;
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* Task 50.30 step 2: the injection's addresses go with the ring. */
+    HcdInjCmdRingReset(ext);
+#endif
     /*
      * A rewritten No Op still waiting for its completion is given up with the
      * ring: every path through here rebuilds the command ring before the
@@ -505,6 +520,7 @@ static VOID xhciCommandInvalidateLocked(PXHCI_EXTENSION ext)
      * as the No Op's (Phase 20).
      */
     ext->CommandNoOpRewrittenPA = 0;
+    ext->CommandAbortedPA = 0;
 }
 
 /* IRQL: <= DISPATCH_LEVEL. No wait is performed while the lock is held. */
@@ -1226,6 +1242,15 @@ static VOID xhciCommandAborted(PXHCI_EXTENSION ext, ULONG pointer)
 
     ext->LastCommandTrbPA = pointer;
     ext->CommandCompletionCode = XHCI_CC_COMMAND_ABORTED;
+    /* Task 50.30: kept for the Command Ring Stopped that ends this abort,
+     * which may name this same TRB, still unfetched and executable
+     * (xhciCommandRingStopped). Only the current abort's. */
+    if (ext->CommandState == XHCI_CMD_STATE_ABORTING) {
+        ext->CommandAbortedPA = pointer;
+        ext->CommandAbortedGen = ext->CommandGeneration;
+    } else {
+        ext->CommandAbortedPA = 0;
+    }
     xhciCommandEndOutstanding(ext);
     /* Whatever this command was going to do for a device, it is not going to:
      * an aborted command's effect is unknown, which is not a state a slot can
@@ -1303,6 +1328,8 @@ static VOID xhciCommandAborted(PXHCI_EXTENSION ext, ULONG pointer)
  * low 28 bits beside it. Controller lock held. */
 static VOID xhciNoteDiverged(PXHCI_EXTENSION ext, ULONG reason, ULONG pointer)
 {
+    /* Task 50.30 step 1: the reason the drain's one request records. */
+    XhciTolWhyStage(&ext->Why, XHCI_WHY_ENGINE_DIVERGED, reason, NULL);
     ext->Tol.Stats.CmdDiverged++;
     if (ext->Tol.Stats.CmdDiverged <= XHCI_NOTE_ESCALATIONS) {
         XhciLogNoteLocked(ext, "cmd.diverged",
@@ -1313,6 +1340,8 @@ static VOID xhciNoteDiverged(PXHCI_EXTENSION ext, ULONG reason, ULONG pointer)
 static ULONG xhciCommandRingStopped(PXHCI_EXTENSION ext, ULONG pointer)
 {
     ULONG abandoned;
+    ULONG aborted;
+    ULONG alone;
 
     ext->CommandRingStops++;
 
@@ -1330,7 +1359,16 @@ static ULONG xhciCommandRingStopped(PXHCI_EXTENSION ext, ULONG pointer)
         return XHCI_CMD_ACTION_RESET;
     }
 
+    /* Task 50.30 (record 17 section 4.15.9): the TRB the current abort's
+     * Command Aborted ended, taken once, and only in its own generation. */
+    aborted = (ext->CommandAbortedPA != 0 &&
+               ext->CommandAbortedGen == ext->CommandGeneration)
+                  ? ext->CommandAbortedPA
+                  : 0;
+    ext->CommandAbortedPA = 0;
+
     abandoned = ext->CommandTrbPA;
+    alone = abandoned;
     if (ext->CommandTrbPA != 0) {
         /* The abort found the ring between commands, so the Command Aborted
          * event never came: "a Command Completion Event with the Completion Code
@@ -1374,6 +1412,17 @@ static ULONG xhciCommandRingStopped(PXHCI_EXTENSION ext, ULONG pointer)
      * refuses falls through to the divergence reset below, since a position
      * that cannot be edited cannot safely be adopted either.
      */
+    /*
+     * Task 50.30 (record 17 section 4.15.9): the stop naming the TRB the
+     * Command Aborted event already ended. That event ended it as
+     * outstanding, so `abandoned` reads 0 here, yet the controller reports
+     * its dequeue ON that TRB: unfetched, valid, executable at the next
+     * doorbell, ahead of the command it is rung for. It is the abandoned
+     * command for every rule below - the rewrite, and the second
+     * abandonment's divergence - and only when the stop names it; an
+     * ordinary stop at the next TRB adopts the position as before.
+     */
+    abandoned = XhciRingStopAbandoned(abandoned, aborted, pointer);
     if (abandoned != 0 && ext->CommandNoOpRewrittenPA != 0) {
         /*
          * A second abandonment while the first rewrite is still unanswered.
@@ -1425,6 +1474,20 @@ static ULONG xhciCommandRingStopped(PXHCI_EXTENSION ext, ULONG pointer)
     }
 
     ext->CommandState = XHCI_CMD_STATE_IDLE;
+    /*
+     * Task 50.30 step 3 (design record 17 section 4.15.3, verdict 2): the
+     * abort ended cleanly. The TRB it abandoned - the one the Command
+     * Aborted event named, or the one still outstanding when this event
+     * came alone - and the generation go to the device layer, whose waiter
+     * reads them as "aborted". A command that completed before CA took
+     * effect is neither: its own completion has answered it.
+     */
+    if (aborted != 0 || alone != 0) {
+        ext->CommandAbortEndedPA = (aborted != 0) ? aborted : alone;
+        ext->CommandAbortEndedHow = (aborted != 0) ? 1UL : 2UL;
+        ext->CommandAbortEndedGen = ext->CommandGeneration;
+        XhciSlotCommandAbortEnded(ext);
+    }
     return XHCI_CMD_ACTION_NONE;
 }
 
@@ -1547,6 +1610,13 @@ ULONG XhciCommandEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
                  */
                 ext->CommandsFatal++;
                 ext->CommandResetRequests++;
+                /* Task 50.30 step 1: the device named only when matched,
+                 * by the rule the slot-fatal arm above keeps. */
+                HcdSvcWhyStageLocked(ext, XHCI_WHY_CMD_FATAL,
+                                     matched ? XHCI_TRB_GET_SLOT_ID(
+                                                   event->Control)
+                                             : 0UL,
+                                     code);
                 /* Task 49.35: recorded in a release build. */
                 ext->Tol.Stats.CmdFatal++;
                 if (ext->Tol.Stats.CmdFatal <= XHCI_NOTE_ESCALATIONS) {
@@ -1610,9 +1680,13 @@ static VOID NTAPI xhciCommandTimeout(PVOID miniPortExtension, PVOID context)
     KIRQL oldIrql;
     ULONG action;
     ULONG crcr;
+    ULONG stuckSlot;
+    ULONG stuckRung;
 
     ext = (PXHCI_EXTENSION)miniPortExtension;
     timeout = (PXHCI_COMMAND_TIMEOUT)context;
+    stuckSlot = 0;
+    stuckRung = 0;
 
     /*
      * Only the two pointers are checked before the lock, because they are the
@@ -1722,6 +1796,11 @@ static VOID NTAPI xhciCommandTimeout(PVOID miniPortExtension, PVOID context)
                           (ext->CommandType << 24) |
                           (XHCI_TRB_GET_SLOT_ID(ext->CommandControl) << 16) |
                           (XHCI_TRB_GET_EP_ID(ext->CommandControl) << 8));
+#if defined(XHCI_FLAVOUR_QEMU)
+        /* Task 50.30 step 2: QEMU ignores the abort written: a command the
+         * layer withheld has its outcome acted out instead. */
+        HcdInjCmdAbortWritten(ext);
+#endif
     } else if (timeout->Phase == XHCI_CMD_PHASE_ABORT &&
                ext->CommandState == XHCI_CMD_STATE_ABORTING) {
         /*
@@ -1747,6 +1826,8 @@ static VOID NTAPI xhciCommandTimeout(PVOID miniPortExtension, PVOID context)
             timeout->Attempt >= XHCI_COMMAND_ABORT_WAITS) {
             ext->CommandResetRequests++;
             action = XHCI_CMD_ACTION_RESET;
+            stuckSlot = XHCI_TRB_GET_SLOT_ID(ext->CommandControl);
+            stuckRung = timeout->Attempt + 2UL;
             /* Task 49.35: recorded in a release build. */
             XhciLogNoteLocked(ext, "cmd.abort.stuck", crcr);
             XHCI_DBG_VALUE_CHANGED("command: abort did not complete, CRCR",
@@ -1777,6 +1858,7 @@ static VOID NTAPI xhciCommandTimeout(PVOID miniPortExtension, PVOID context)
     } else if (action == XHCI_CMD_ACTION_RESET) {
         XHCI_DBG_VALUE_CHANGED("command: ring will not stop - requesting "
                                "controller reset, CRCR", crcr);
-        XhciRequestControllerReset(ext);
+        XhciRequestControllerResetWhy(ext, XHCI_WHY_ENGINE_ABORT_STUCK,
+                                      stuckSlot, stuckRung);
     }
 }

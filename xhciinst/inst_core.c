@@ -1127,6 +1127,118 @@ int inst_bus_id(const char *instanceId)
     return old ? 2 : 1;
 }
 
+static int inst_hex_run(const char *s, int n)
+{
+    int i;
+
+    for (i = 0; i < n; i++) {
+        char c = s[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') ||
+              (c >= 'a' && c <= 'f'))) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int inst_driver_value_form(int nt, const char *value)
+{
+    const char *bs;
+    size_t n;
+    size_t i;
+
+    if (value == NULL) {
+        return 0;
+    }
+    bs = strchr(value, '\\');
+    if (bs == NULL || bs == value || strchr(bs + 1, '\\') != NULL ||
+        strlen(bs + 1) != 4) {
+        return 0;
+    }
+    for (i = 1; i <= 4; i++) {
+        if (bs[i] < '0' || bs[i] > '9') {
+            return 0;
+        }
+    }
+    n = (size_t)(bs - value);
+    if (nt) {
+        /* {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx} */
+        return n == 38 && value[0] == '{' && value[37] == '}' &&
+               inst_hex_run(value + 1, 8) && value[9] == '-' &&
+               inst_hex_run(value + 10, 4) && value[14] == '-' &&
+               inst_hex_run(value + 15, 4) && value[19] == '-' &&
+               inst_hex_run(value + 20, 4) && value[24] == '-' &&
+               inst_hex_run(value + 25, 12);
+    }
+    for (i = 0; i < n; i++) {
+        char c = value[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') ||
+              (c >= 'a' && c <= 'z') || c == '_')) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int inst_once(char (*seen)[INST_ID_CHARS], int *count, int cap,
+              const char *id)
+{
+    int i;
+
+    for (i = 0; i < *count; i++) {
+        if (inst_eq(seen[i], id)) {
+            return 0;
+        }
+    }
+    if (*count < cap) {
+        inst_copy(seen[*count], id, INST_ID_CHARS);
+        (*count)++;
+    }
+    return 1;
+}
+
+static void inst_cat(char *out, size_t cap, const char *s);
+
+void inst_plan_row(char *out, size_t cap, const char *inf,
+                   const char *driver, const char *text,
+                   const char *action)
+{
+    size_t head;
+
+    if (cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    inst_cat(out, cap, "    INF ");
+    inst_cat(out, cap, inf);
+    inst_cat(out, cap, "; driver ");
+    inst_cat(out, cap, driver);
+    if (text[0] != '\0') {
+        inst_cat(out, cap, " ");
+        inst_cat(out, cap, text);
+    }
+    inst_cat(out, cap, ";");
+    head = strlen(out);
+    inst_cat(out, cap, " ");
+    inst_cat(out, cap, action);
+    if (inst_text_width(out) > INST_COLUMNS) {
+        out[head] = '\0';
+        inst_cat(out, cap, "\n    ");
+        inst_cat(out, cap, action);
+    }
+    inst_cat(out, cap, "\n");
+}
+
+int inst_keygone_ours9x(const char *instanceId, const char *mfg)
+{
+    if (inst_bus_id(instanceId) != 0 || inst_cm_child_id(instanceId) ||
+        inst_uas_unit_id(instanceId)) {
+        return 1;
+    }
+    /* Exactly, case included: the string the package's INFs write. */
+    return mfg != NULL && strcmp(mfg, INST_MFG_9X) == 0;
+}
+
 /* ======================================================================== */
 /* The action per device                                                     */
 /* ======================================================================== */
@@ -1268,6 +1380,7 @@ const char *inst_action_text(int action)
     case INST_ACT_FILTER:  return "Add tunnel-port filter";
     case INST_ACT_UNKNOWN: return "Skip (unknown version)";
     case INST_ACT_WINDOWS: return "Skip and use Windows UAS driver. (xhciuas will be staged)";
+    case INST_ACT_ORPHAN:  return "Skip (driver entry missing)";
     default:               return "?";
     }
 }
@@ -2553,6 +2666,24 @@ const INST_VALUE instValues[] = {
       },
       0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
       INST_G_CHK, INST_VK_DWORD, 0 },
+    /* Task 50.30 (design record 17 section 4.15.11): the owner's wording;
+     * the listed controller named since it was listed (owner, 2026-11-20,
+     * record 17 section 4.15.10). */
+    { "XhciDeviceIsolation", INST_INF_XHCI, INST_APPLY_ANY_XHCI,
+      0x0UL, 0x7UL,
+      "a device that stops answering while plugged in: removed alone and "
+      "its port put on hold, the other devices on the controller kept "
+      "working, on the listed controller",
+      "2 is at your own risk.", 0x4UL,
+      {
+        "off: reset the whole controller",
+        "on the Intel 7 Series, 8086:1E31",
+        "on every controller",
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_CHK, INST_VK_DWORD, 0 },
     { "XhciCommandCheck", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x3UL,
       "count and log the commands a controller that follows the xHCI "
       "specification to the letter would refuse; it changes nothing "
@@ -2567,6 +2698,67 @@ const INST_VALUE instValues[] = {
       },
       0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
       INST_G_CHK, INST_VK_DWORD, 0 },
+    /* Task 50.26 (design record 13 section 6.15.2): the name, the default
+     * 1 and the texts are the owner's (2026-11-16). */
+    { "XhciCancelStatus", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x7UL,
+      "the status a cancelled USB transfer reports to its device's driver: "
+      "the earlier value, 0x00010000, which Windows 98 SE and ME report, "
+      "or the later, 0xC0010000, which Windows 2000 and later report",
+      "read when the controller starts: restart it after a change. 0 and "
+      "2 are for a driver that misbehaves at 1.", 0x5UL,
+      {
+        "the earlier value everywhere",
+        "as each Windows' own USB stack reports it",
+        "the later value everywhere",
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_CHK, INST_VK_DWORD, 0 },
+    /* Task 50.28 (design record 13 section 10.5.3, point 13): the name and
+     * the default are the owner's (2026-11-16); the texts are the owner's
+     * (2026-11-20; revised 2026-11-17: not every transfer ends, and a
+     * removal can still wait; tuning.md's section lists which). */
+    { "XhciUnplugComplete", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x3UL,
+      "what happens to the transfers a USB device still has outstanding "
+      "when it is unplugged: on Windows 2000 and later they are ended once "
+      "Windows has been told the device is gone, so a drive's removal "
+      "need not wait for its driver's time-out, though some stay held, "
+      "such as those of a controller closed off after a fault; on Windows "
+      "98 SE and ME they are held until the device's driver cancels them "
+      "or Windows removes the device",
+      "read when the controller starts: restart it after a change. 0 is "
+      "for a driver that misbehaves at 1.", 0x1UL,
+      {
+        "held on every Windows, as earlier releases did",
+        "ended on unplug on Windows 2000 and later",
+        NULL,
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_CHK, INST_VK_DWORD, 0 },
+    /* Task 50.31 (design record 38 section 16): the name, the range and the
+     * default are the owner's (2026-11-17); the texts are the owner's
+     * (2026-11-19). A range, 0 to 600, of which 1 is refused (the driver
+     * reads 1 as 5). */
+    { "XhciFailedRetrySec", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x0UL,
+      "when a controller has stopped after repeated failures, the seconds, "
+      "2 to 600, before the driver tries it again by itself; later waits "
+      "double up to ten minutes, and a device unplugged from or plugged "
+      "into one of its own ports can bring a try sooner",
+      "read when the controller starts: restart it after a change. 0 "
+      "leaves a stopped controller stopped until it is restarted, as "
+      "earlier releases did.", 0x1UL,
+      {
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL
+      },
+      0UL, 600UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_CHK, INST_VK_DWORD, 0xFFFFFFFDUL },
     /* Task 49.39 (design record 17 section 4.12.8): the owner's texts,
      * 2026-11-12. */
     { "XhciStreamDequeueRepair", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL,
@@ -2834,6 +3026,80 @@ const INST_VALUE instValues[] = {
       },
       0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
       INST_G_LNX, INST_VK_DWORD, 0 },
+    /* Task 50.20 (design record 17 section 4.12.10): this driver's own
+     * value in the quirk values' form. The meaning and choice 0 are the
+     * owner's (2026-11-16: the technical text kept, its second sentence
+     * added; choice 0 without the release it was compared with); the
+     * caution and choices 1 and 2 are the owner's too (2026-11-16). */
+    { "XhciStreamDequeueAvoid", INST_INF_XHCI, INST_APPLY_ANY_XHCI,
+      0x0UL, 0x7UL,
+      "UAS drives: no stream dequeue command where the controller would "
+      "move another stream; the UAS driver recovers the drive instead. "
+      "It applies only to a drive run by xHCI98's own UAS driver",
+      "0 lets the listed controller remove the drive when a program's "
+      "request is refused; 2 is at your own risk.", 0x5UL,
+      {
+        "off: check and cycle the drive",
+        "on the Intel 7 Series, 8086:1E31",
+        "on every controller",
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_HW, INST_VK_DWORD, 0 },
+    /* Task 50.34 (design record 16 section 21.4): the setting over the
+     * port switchover's hold while Windows Setup runs; Advanced, never
+     * asked. The meaning, caution and choices are drafts for the owner
+     * (section 21.11, Q8). The first-session check's own value,
+     * XhciIntelPortSwitchReady, is per controller and the driver's: the
+     * row after this one, the xHCI98 USB Tree's alone. */
+    { "XhciIntelPortSwitchSetup", INST_INF_XHCI, INST_APPLY_PSW,
+      0x0UL, 0x7UL,
+      "Windows Setup check for the Intel port switchover: whether the "
+      "shared connectors wait while Windows says Setup is running",
+      "1 moves the shared connectors at every start, during Windows "
+      "Setup too; a device in use on them is disconnected then.", 0x2UL,
+      {
+        "automatic",
+        "bypass: move them whatever Windows says",
+        "never move them while the switchover is on, at shutdown "
+        "included",
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_HW, INST_VK_DWORD, 0 },
+    /* Task 50.34 (design record 16 sections 21.5 and 21.5.3): the
+     * first-session check's own note, one per controller in its driver
+     * key and never machine-wide (INST_LOC_CTRL): the xHCI98 USB Tree's
+     * alone, so that an image can be prepared with it at 0; Setup shows,
+     * writes and removes it nowhere. The meaning, caution and choices are
+     * drafts for the owner (section 21.11, Q8). */
+    { "XhciIntelPortSwitchReady", INST_INF_XHCI, INST_APPLY_PSW,
+      0x0UL, 0x3UL,
+      "the port switchover's first-session check for this controller: "
+      "whether the switchover has been on for it at an earlier start; "
+      "the driver sets it",
+      "0 prepares a fresh Windows session: in the next session the "
+      "controller's first start that finds the switchover on sets it to 1 "
+      "again, and the shared connectors are not moved in that session. "
+      "The session running now is not changed by it. To prepare an image "
+      "of this Windows, so that a computer installed from it does not "
+      "move them in its first session, set 0 on each controller as the "
+      "last step and capture the image before the controller starts again "
+      "(any further start of it sets it back to 1), or set it in the image "
+      "offline. 1: they can move from the next restart of Windows, once "
+      "nothing else holds them.", 0,
+      {
+        "not yet on for this controller",
+        "on at an earlier start (that start's Windows session may still "
+        "be running)",
+        NULL,
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_CTRL, 0UL,
+      INST_G_HW, INST_VK_DWORD, 0 },
     { "XhciCmNetPollMs", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x0UL,
       "Thunderbolt networking: how often, in ms, received traffic is "
       "looked for without the controller's interrupt",
@@ -2957,6 +3223,19 @@ const INST_VALUE instValues[] = {
       "Thunderbolt / USB4: power up a drive again after standby or "
       "hibernation when its first power-up failed",
       "leave it as installed.", 0x1UL,
+      {
+        "no: as earlier releases",
+        "yes",
+        NULL,
+        NULL,
+        NULL
+      },
+      0UL, 0UL, 0, 0UL, INST_LOC_MW, 0UL,
+      INST_G_U4, INST_VK_DWORD, 0 },
+    { "XhciCmWakeOrder", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x3UL,
+      "Thunderbolt / USB4, Windows 7 to 10: after standby or "
+      "hibernation, power up a drive only after its controller",
+      "a test switch: leave it at 0.", 0x2UL,
       {
         "no: as earlier releases",
         "yes",
@@ -3632,8 +3911,9 @@ int inst_value_set(const char *arg, int *index, INST_U32 *value)
     if (i < 0) {
         return 0;
     }
-    if (instValues[i].Loc == INST_LOC_DRIVE) {
-        return 0;   /* a drive's own value: the xHCI98 USB Tree's (49.38) */
+    if (INST_LOC_TREE_ONLY(instValues[i].Loc)) {
+        return 0;   /* a drive's or a controller's own value: the xHCI98
+                     * USB Tree's (49.38, 50.34) */
     }
     if (instValues[i].Kind == INST_VK_TEXT) {
         return -3;
@@ -3787,7 +4067,7 @@ int inst_settings_list(const char *find, const INST_ENV *env, INST_MW_READ rd,
         const INST_VALUE *v = &instValues[i];
         INST_U32 now = 0;
         int st;
-        if (v->Loc == INST_LOC_DRIVE || !inst_value_matches(v, find)) {
+        if (INST_LOC_TREE_ONLY(v->Loc) || !inst_value_matches(v, find)) {
             continue;
         }
         n++;
@@ -8164,7 +8444,8 @@ int inst_di_path(const char *p)
 static const char *inst_di_job_word(int job)
 {
     return job == INST_DI_INSTALL ? "install" :
-           job == INST_DI_REMOVE ? "remove" : "probe";
+           job == INST_DI_REMOVE ? "remove" :
+           job == INST_DI_REMOVESTALE ? "removestale" : "probe";
 }
 
 int inst_di_jobpath(char *out, size_t cap, const char *dir)
@@ -8263,7 +8544,8 @@ int inst_di_jobfile_ex(char *out, size_t cap, int job, const char *result,
         out[0] = '\0';
     }
     if ((job != INST_DI_PROBE && job != INST_DI_INSTALL &&
-         job != INST_DI_REMOVE) ||
+         job != INST_DI_REMOVE && job != INST_DI_REMOVESTALE) ||
+        (job == INST_DI_REMOVESTALE && inst_bus_id(devId) != 1) ||
         result == NULL || strlen(result) > 255 || !inst_di_path(result) ||
         hwnd > 65535UL) {
         return 0;
@@ -8458,7 +8740,7 @@ int inst_di_parse(const char *text, const char *version, int job,
                     inst_number(w, &r->Number);
                 }
                 inst_copy(r->Detail, inst_di_rest(line, 1), sizeof(r->Detail));
-            } else if (inst_eq(word, "refused")) {
+            } else if (inst_eq(word, "refused") || inst_eq(word, "kept")) {
                 inst_copy(r->Detail, inst_di_rest(line, 1), sizeof(r->Detail));
             }
         } else if (strcmp(w, "FLAGS") == 0) {
@@ -8500,6 +8782,8 @@ int inst_di_parse(const char *text, const char *version, int job,
                   inst_eq(word, "removed-restart") ? INST_DI_V_REMOVED_RESTART :
                   inst_eq(word, "cancelled") ? INST_DI_V_CANCELLED :
                   inst_eq(word, "not-found") ? INST_DI_V_NOT_FOUND :
+                  (job == INST_DI_REMOVESTALE && inst_eq(word, "kept")) ?
+                      INST_DI_V_KEPT :
                   inst_eq(word, "failed") ? INST_DI_V_FAILED : INST_DI_V_NONE;
     }
     r->Verdict = verdict;
@@ -8519,6 +8803,7 @@ int inst_di_outcome(int job, int verdict)
         return INST_DI_OUT_RESTART;
     case INST_DI_V_CANCELLED:
     case INST_DI_V_NO_MATCH:
+    case INST_DI_V_KEPT:
         return INST_DI_OUT_STEPS;
     case INST_DI_V_NOT_PRESENT:
     case INST_DI_V_NOT_FOUND:
@@ -8544,6 +8829,7 @@ int inst_di_unfinished(int verdict)
     case INST_DI_V_REMOVED_RESTART:
     case INST_DI_V_NOT_FOUND:
     case INST_DI_V_PROBED:
+    case INST_DI_V_KEPT:
         return 0;
     default:
         return 1;
@@ -8564,8 +8850,18 @@ const char *inst_di_verdict_text(int verdict)
     case INST_DI_V_REMOVED_RESTART:     return "removed, restart pending";
     case INST_DI_V_NOT_FOUND:           return "not found";
     case INST_DI_V_PROBED:              return "the helper runs here";
+    case INST_DI_V_KEPT:                return "it could not be checked";
     default:                            return "the helper did not finish";
     }
+}
+
+const char *inst_di_kept_text(const char *detail)
+{
+    if (detail != NULL &&
+        (inst_eq(detail, "devnode") || inst_eq(detail, "key"))) {
+        return "Windows set it up again";
+    }
+    return "it could not be checked";
 }
 
 /* ======================================================================== */
@@ -12790,7 +13086,7 @@ const int instOtherPkgCount =
 /* Proposals for the maintainer: the generic and the specific driver of one
  * device, or two drivers of one device, not staged together. */
 const INST_OTHER_REL instOtherRels[] = {
-    /* usb-wdm-free 0.1.9 and 0.1.10 have the two side by side on 98 SE, where uac1
+    /* usb-wdm-free 0.1.9 to 0.1.12 have the two side by side on 98 SE, where uac1
      * serves no MIDI and usbmidi's hardware ids outrank uac1's class line
      * (its STAGE.TXT COEXISTS there): COEXISTS on W98SE (0x1), EXCLUDES
      * on the rest (0x1FFE). No release staged uac1 before 0.1.9, so no

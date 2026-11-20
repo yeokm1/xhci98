@@ -195,6 +195,10 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
     XhciLogAppend(log, "ioctl.unknown", hc->IoctlUnknown, 1);
     XhciLogAppend(log, "enum.cmd.timedout", hc->EnumCommandsTimedOut, 1);
     XhciLogAppend(log, "enum.cmd.refused", hc->EnumCommandsRefused, 1);
+    XhciLogAppend(log, "cmd.left.refused", hc->CmdLeftRefused, 1);
+    XhciLogAppend(log, "cmd.left.settled", hc->CmdLeftSettled, 1);
+    XhciLogAppend(log, "cmd.settle.commands", hc->CmdSettleCommands, 1);
+    XhciLogAppend(log, "cmd.enable.held", hc->CmdEnableRefused, 1);
     XhciLogAppend(log, "enum.cmd.busy", hc->EnumCommandsBusy, 1);
     XhciLogAppend(log, "enum.cmd.busy.cleared", hc->EnumCommandsBusyCleared,
                   1);

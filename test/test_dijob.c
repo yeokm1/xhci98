@@ -80,6 +80,14 @@ static void test_jobs(void)
                "a root hub's 87-character id, read by the helper");
     round_trip(INST_DI_REMOVE, DI_JOB_REMOVE, rootHub, NULL, 0, 0, 0UL,
                "a removal, read by the helper");
+    round_trip(INST_DI_REMOVESTALE, DI_JOB_REMOVESTALE, rootHub, NULL, 0, 0,
+               0UL, "a stale entry's removal, read by the helper");
+    {
+        char text[INST_DI_JOB_BYTES + 1];
+        CHECK(!inst_di_jobfile(text, sizeof(text), INST_DI_REMOVESTALE,
+                               "C:\\XHCI98\\XHCIDI.RES", 0UL, pci, NULL, 0, 0),
+              "the installer writes no removestale for a controller");
+    }
     memset(longId, 'I', 200);
     memcpy(longId, "PCI\\", 4);
     longId[200] = '\0';
@@ -207,10 +215,58 @@ static void test_results(void)
 #undef PUT
 }
 
+/* removestale's "kept" (record 27 section 9.1): the helper's writer read
+ * by the installer to INST_DI_V_KEPT with its reason, a step. */
+static void test_kept(void)
+{
+    static char lines[8][DI_LINE_MAX];
+    const char *ptr[8];
+    char text[4096];
+    DI_OUT o;
+    DI_CMD c;
+    INST_DI_RESULT r;
+    int n = 0;
+    int i;
+
+    memset(&c, 0, sizeof(c));
+    c.job = DI_JOB_REMOVESTALE;
+    strcpy(c.version, V);
+    strcpy(c.result, "C:\\XHCI98\\XHCIDI.RES");
+    strcpy(c.devid, rootHub);
+    di_out_init(&o);
+    strcpy(lines[n++], di_out_header(&o, V));
+    strcpy(lines[n++], di_out_job(&o, &c));
+    strcpy(lines[n++], di_out_found(&o, 1));
+    strcpy(lines[n++], di_out_call(&o, "SURegOpenKey", "USB\\0009", 0));
+    strcpy(lines[n++], di_out_result_text(&o, DI_V_KEPT, DI_KEPT_KEY));
+    strcpy(lines[n++], di_out_end(&o));
+    for (i = 0; i < n; i++) {
+        ptr[i] = lines[i];
+    }
+    res_text(text, sizeof(text), ptr, n);
+    CHECK(inst_di_parse(text, V, INST_DI_REMOVESTALE, rootHub, NULL, &r) ==
+          INST_DI_V_KEPT, "kept read as kept");
+    CHECK(strcmp(r.Detail, "key") == 0, "kept: the reason");
+    CHECK(inst_di_outcome(INST_DI_REMOVESTALE, INST_DI_V_KEPT) ==
+          INST_DI_OUT_STEPS, "kept is a step, not a failure");
+    CHECK(!inst_di_unfinished(INST_DI_V_KEPT), "kept is a finished job");
+    CHECK(strcmp(inst_di_kept_text(r.Detail), "Windows set it up again") == 0,
+          "kept: key back");
+    CHECK(strcmp(inst_di_kept_text("devnode"), "Windows set it up again") == 0,
+          "kept: devnode");
+    CHECK(strcmp(inst_di_kept_text("key-unreadable"), "it could not be checked") == 0,
+          "kept: unreadable");
+    CHECK(strcmp(inst_di_kept_text("list"), "it could not be checked") == 0,
+          "kept: the present list not made is no setup by Windows");
+    CHECK(inst_di_parse(text, V, INST_DI_REMOVE, rootHub, NULL, &r) ==
+          INST_DI_V_NONE, "kept is no verdict of a plain removal");
+}
+
 int main(void)
 {
     test_jobs();
     test_results();
+    test_kept();
     printf("test_dijob: %d checks, %d failures\n", checks, failures);
     return failures;
 }

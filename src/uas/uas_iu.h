@@ -678,4 +678,89 @@ VOID UasFailPack(PULONG w, ULONG event, ULONG origin, ULONG tag,
                  const UCHAR *sense, ULONG senseLength, ULONG slotState,
                  ULONG xfers, ULONG timeout, ULONG length);
 
+/*
+ * Task 50.20 (design record 17 section 4.12.10, section 8): the stream
+ * recovery on a device whose bus answered the streams open with
+ * XHCI98_STREAMS_F_CONTRACT - a controller that must not be sent a stream's
+ * Set TR Dequeue, which holds an endpoint whose position it withheld until
+ * this driver's RESET_PIPE or RESET_PORT.
+ *
+ * UasStreamOnCancel: what marking a busy transfer for cancelling does, under
+ * the FDO lock: UAS_SO_OWE to set StreamOwed and add the transfer's endpoint
+ * to StreamGated (a stream transfer of a contract device), with UAS_SO_ASK
+ * to ask for the worker when no recovery is running (a cancel made while one
+ * runs belongs to it).
+ *
+ * UasStreamProof: the worker's choice once StreamOwed is set, taken again
+ * under the FDO lock at each poll of one bounded loop. UAS_SP_RESET at once
+ * for a command slot ACTIVE, a task management slot, a tag in quarantine
+ * (the bitmap or a still-owned slot's flag) or a task management answer
+ * that was not an applicable success; UAS_SP_WAIT while a transfer it
+ * cancelled is not back, or a FINAL slot still has a busy transfer it did
+ * not cancel, and the step's one budget lasts; UAS_SP_RESET when that budget
+ * has run out; UAS_SP_RECYCLE (RESET_PIPE on each gated endpoint) otherwise.
+ *
+ * UasRecoveryPhaseNext: the recovery-owned TEST UNIT READY after this
+ * driver's own port reset, one LUN's step: `answer` is UAS_RP_A_*, `tries`
+ * the device answers so far including this one, `resourceFails` the
+ * allocation or admission failures so far including this one. A UNIT
+ * ATTENTION is read past up to UAS_RP_TRIES answers (UAS_RP_AGAIN); any
+ * other device answer, or the fourth attention, ends the LUN's phase
+ * (UAS_RP_DONE). Of the outcomes that are no device answer, a first
+ * allocation or admission failure is tried once more after 100 ms
+ * (UAS_RP_RETRY); a second, a transport failure or the deadline is a device
+ * that did not come back from its reset (UAS_RP_FAILED).
+ */
+#define UAS_SO_OWE                  0x1UL
+#define UAS_SO_ASK                  0x2UL
+
+#define UAS_SP_WAIT                 0UL
+#define UAS_SP_RECYCLE              1UL
+#define UAS_SP_RESET                2UL
+
+#define UAS_RP_A_GOOD               0UL  /* device answers:              */
+#define UAS_RP_A_ATTENTION          1UL  /* CHECK CONDITION, sense key 6 */
+#define UAS_RP_A_OTHER              2UL  /* any other SENSE or RESPONSE  */
+#define UAS_RP_A_RESOURCE           3UL  /* no device answer: allocation
+                                          * or admission failed before
+                                          * submission                    */
+#define UAS_RP_A_TRANSPORT          4UL  /* a transfer of it failed       */
+#define UAS_RP_A_DEADLINE           5UL  /* the deadline passed, before or
+                                          * after submission              */
+
+#define UAS_RP_AGAIN                0UL
+#define UAS_RP_DONE                 1UL
+#define UAS_RP_FAILED               2UL
+#define UAS_RP_RETRY                3UL  /* the same TUR, after 100 ms    */
+#define UAS_RP_TRIES                4UL
+#define UAS_RP_RESOURCE_TRIES       2UL
+
+ULONG UasStreamOnCancel(ULONG contract, ULONG streamXfer, ULONG recovering);
+/* Whether the pump stops at the barrier: while a recovery runs (its own
+ * command phase excepted), or while the stream recovery is owed on a live
+ * device - a Dead or gone one's queue is failed past it, nothing sent. */
+ULONG UasPumpBarrier(ULONG recovering, ULONG streamOwed, ULONG phase,
+                     ULONG ended);
+ULONG UasStreamProof(ULONG active, ULONG tmf, ULONG quarantined,
+                     ULONG tmfFailed, ULONG cancelsBack, ULONG finalBusy,
+                     ULONG budgetGone);
+ULONG UasRecoveryPhaseNext(ULONG answer, ULONG tries, ULONG resourceFails);
+
+/*
+ * The handshake's answer, the client's side (record 17 section 4.12.10,
+ * D1). UasStreamsAcked: 1 for an open that succeeded (`ok`: its IRP
+ * succeeded and its Status said so) with the bus's acknowledgment in
+ * `flags`. UasStreamsContract over the `n` opens of a start (`acked` the
+ * count acknowledged): UAS_SC_CONTRACT when every one was, UAS_SC_LEGACY
+ * when none was (a bus before 3.6.0.0, or a controller not flagged),
+ * UAS_SC_FAULT when they disagree - the start then fails as a failed open
+ * fails it.
+ */
+#define UAS_SC_LEGACY               0UL
+#define UAS_SC_CONTRACT             1UL
+#define UAS_SC_FAULT                2UL
+
+ULONG UasStreamsAcked(ULONG ok, ULONG flags);
+ULONG UasStreamsContract(ULONG acked, ULONG n);
+
 #endif /* UAS_IU_H */

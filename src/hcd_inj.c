@@ -72,6 +72,10 @@
  *                 that never answers - and a refused code delivered for it
  *   EP0_PREPDO    the same for a device whose PDO does not exist yet
  *
+ * Task 50.7's ENUM_DESC (20h): the next `arg` 8-byte device-descriptor
+ * reads of an enumeration at a root port answered with bMaxPacketSize0 0
+ * (HcdInjEnumDesc), so the port fails its enumeration for good.
+ *
  * Task 36.22's bulk faults (BULK_TIMEOUT, _STOP, _ERROR, _SHORT): the
  * doorbells of one bulk endpoint (`arg` its address, 0 the first bulk IN)
  * of a published device withheld, so the next TD sits unstarted - QEMU
@@ -111,8 +115,16 @@
 #define HCD_VALUE_QEMU_START_HOLD L"XhciQemuStartHold"
 #define HCD_QEMU_START_HOLD_MAX   3000UL
 
-/* The trigger is read once per ten tolerance ticks, about a second. */
+/* The trigger's first admission, ten tolerance ticks (about a second)
+ * after the start's latch, the gate the controller thread's own periodic
+ * read had (task 50.38). */
 #define HCD_INJ_READ_TICKS 10UL
+
+/* Task 50.38: the trigger reader's period, from one read's start to the
+ * next, about a second as the controller thread's own read was, and its
+ * period while a rendezvous holds, the hold's own 100 ms turn. */
+#define HCD_INJ_POLL_MS      1000UL
+#define HCD_INJ_POLL_FAST_MS 100UL
 
 /* An endpoint fault's phase (InjPhase). */
 #define HCD_INJ_PHASE_IDLE      0UL  /* ready to inject while one is left  */
@@ -133,6 +145,11 @@
  * least 45 ms each: a few seconds) before the next injection. */
 #define HCD_INJ_DELIVER_MS      1000UL
 #define HCD_INJ_SETTLE_TICKS    50UL
+
+/* Task 50.30 step 3 (record 17 section 4.15.16 E): fault 2D's exercise,
+ * at the end of this file. */
+static VOID hcdInjQsStart(PHCD_CONTROLLER hc);
+static ULONG hcdInjQsArm(PHCD_CONTROLLER hc, ULONG value);
 
 /* ----------------------------------------------------------------------- */
 /* The hooks the kept files and hcd_ctl.c call                              */
@@ -282,6 +299,7 @@ ULONG HcdInjHealthUsbsts(PXHCI_EXTENSION ext, ULONG usbsts)
  * by the thread before its Stop goes out, so an unlocked look that misses
  * it is a look at an event that cannot be the watched one. */
 static ULONG hcdInjBulkLoseEvent(PHCD_CONTROLLER hc, const XHCI_TRB *ev);
+static VOID hcdInjQueueDrain(PHCD_CONTROLLER hc);
 
 ULONG HcdInjEventSwallow(PXHCI_EXTENSION ext, const XHCI_TRB *ev)
 {
@@ -290,6 +308,41 @@ ULONG HcdInjEventSwallow(PXHCI_EXTENSION ext, const XHCI_TRB *ev)
     ULONG swallowed;
 
     hc = HcdControllerFromExt(ext);
+    /* Task 50.30 step 2: the completion of the layer's own No Op is the
+     * layer's, never the engine's; after outcome 4's completion the
+     * Stopped event is owed at the next TRB. */
+    if ((hc->InjHang.NoOpPA != 0 || hc->InjHang.StopOwedPA != 0) &&
+        XHCI_TRB_GET_TYPE(ev->Control) == XHCI_TRB_TYPE_COMMAND_COMPLETION) {
+        ULONG ate;
+        ULONG owe;
+
+        ate = 0;
+        owe = 0;
+        KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+        if (hc->InjHang.NoOpPA != 0 &&
+            (ev->Param0 & ~0xFUL) == hc->InjHang.NoOpPA) {
+            hc->InjHang.NoOpPA = 0;
+            ate = 1;
+        } else if (hc->InjHang.StopOwedPA != 0 &&
+                   (ev->Param0 & ~0xFUL) == hc->InjHang.StopOwedPA &&
+                   hc->InjHangEvN == 0) {
+            XhciInjCommandEvent(&hc->InjHangEv[0],
+                                hc->InjHang.StopOwedPA + XHCI_TRB_BYTES,
+                                XHCI_CC_COMMAND_RING_STOPPED);
+            hc->InjHangEvN = 1;
+            hc->InjHangEvAt = 0;
+            hc->InjHang.StopOwedPA = 0;
+            owe = 1;
+        }
+        KeReleaseSpinLock(&hc->InjLock, oldIrql);
+        if (ate) {
+            XhciLogNoteLocked(ext, "qemu.inj.noop.retired", 1);
+            return 1;
+        }
+        if (owe) {
+            hcdInjQueueDrain(hc);
+        }
+    }
     /* 36.22's BULK_TIMEOUT: a completion the driver never sees. */
     if (hc->InjBulkLose && hcdInjBulkLoseEvent(hc, ev)) {
         return 1;
@@ -317,6 +370,22 @@ ULONG HcdInjEventTake(PXHCI_EXTENSION ext, XHCI_TRB *ev)
     ULONG taken;
 
     hc = HcdControllerFromExt(ext);
+    if (!hc->InjEp.EvPending && hc->InjHangEvAt < hc->InjHangEvN) {
+        /* Task 50.30 step 2: one of the outcome's events, a pass each. */
+        KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+        taken = 0;
+        if (hc->InjHangEvAt < hc->InjHangEvN && hc->InjHangEvAt < 2) {
+            *ev = hc->InjHangEv[hc->InjHangEvAt];
+            hc->InjHangEvAt++;
+            if (hc->InjHangEvAt >= hc->InjHangEvN) {
+                hc->InjHangEvN = 0;
+                hc->InjHangEvAt = 0;
+            }
+            taken = 1;
+        }
+        KeReleaseSpinLock(&hc->InjLock, oldIrql);
+        return taken;
+    }
     if (!hc->InjEp.EvPending) {
         return 0;
     }
@@ -337,8 +406,14 @@ ULONG HcdInjEventTake(PXHCI_EXTENSION ext, XHCI_TRB *ev)
  * IRQL: DISPATCH_LEVEL. */
 VOID HcdInjEventDone(PXHCI_EXTENSION ext)
 {
-    (VOID)KeSetEvent(&HcdControllerFromExt(ext)->InjEvDone, IO_NO_INCREMENT,
-                     FALSE);
+    PHCD_CONTROLLER hc;
+
+    hc = HcdControllerFromExt(ext);
+    (VOID)KeSetEvent(&hc->InjEvDone, IO_NO_INCREMENT, FALSE);
+    /* Task 50.30 step 2: the outcome's next event, at the next pass. */
+    if (hc->InjHangEvN != 0) {
+        hcdInjQueueDrain(hc);
+    }
 }
 
 /* A doorbell for the answered endpoint is dropped: a halted endpoint
@@ -432,6 +507,26 @@ VOID HcdInjEp0Doorbell(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     ULONG first;
 
     fire = 0;
+    if (hc->InjHang.Fault == XHCI_INJ_EP0_HANG ||
+        hc->InjHang.Fault == XHCI_INJ_DEVICE_HANG) {
+        /* Task 50.30 step 2: a device that never answers - no event, the
+         * thread's deadline meets the silence. */
+        KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+        fire = XhciInjHangEp0(&hc->InjHang, dev->Port, dev->Route);
+        if (fire) {
+            hc->InjHangEp0Slot = dev->SlotId;
+            /* Step 3 (record 17 section 4.15.16 C): bit 7's latch, and
+             * outcome 7's mark deadline. */
+            XhciInjHangLatch(&hc->InjHang, dev->SlotId, HcdTolNow(hc));
+        }
+        KeReleaseSpinLock(&hc->InjLock, oldIrql);
+        if (fire) {
+            XhciLogNoteLocked(&hc->Hc, "qemu.inj.hang",
+                              (hc->InjHang.Fault << 24) | (dev->Port << 16) |
+                                  (dev->SlotId << 8));
+            return;
+        }
+    }
     if (hc->InjEp.Ep0Want != 0) {
         first = dev->Ep0Xfer.FirstIndex;
         KeAcquireSpinLock(&hc->InjLock, &oldIrql);
@@ -496,6 +591,12 @@ static VOID hcdInjClear(PHCD_CONTROLLER hc)
     hc->InjClearHalt = 0;
     hc->InjSetInterface = 0;
     hc->InjSelectConfig = 0;
+    hc->InjRecycleCfg = 0;      /* task 50.20: faults 34 and 35 */
+    hc->InjRecycleDci = 0;
+    hc->InjRecycleSkip = 0;
+    hc->InjRvPoint = 0;
+    hc->InjRvSeq = 0;
+    hc->InjEnumDesc = 0;
     KeAcquireSpinLock(&hc->InjLock, &oldIrql);
     hc->InjStopRace = 0;
     hc->InjStopRaceReads = 0;
@@ -505,7 +606,220 @@ static VOID hcdInjClear(PHCD_CONTROLLER hc)
     hc->InjStaleSlot = 0;
     hc->InjRestartRace = 0;
     hc->InjRepairRace = 0;
+    XhciInjHangEnd(&hc->InjHang);       /* task 50.30: faults 24 to 2B */
+    hc->InjHangEvN = 0;
+    hc->InjHangEvAt = 0;
+    hc->InjHangEp0Slot = 0;
+    /* Task 50.31: faults 30 to 35. */
+    hc->InjRetryFail = 0;
+    hc->InjRetryOnes = 0;
+    hc->InjRetryPortsc = 0;
+    hc->InjRetryPortscPort = 0;
+    hc->InjRetryHoldTicks = 0;
+    hc->InjRetryHolding = 0;
+    hc->InjRecoverEarly = 0;
+    hc->InjSweepBreak = 0;
     KeReleaseSpinLock(&hc->InjLock, oldIrql);
+}
+
+/*
+ * Task 50.31 (design record 38 section 17): faults 30 to 35, the retry's
+ * hooks. Each is a count or an arm under InjLock, a leaf taken inside the
+ * controller lock where the caller holds it (the commit's two hooks); none
+ * takes another lock while it holds InjLock. The arming, from the
+ * injection poll: `arg` 0 is one, 255 until CLEAR where a count is
+ * unbounded. IRQL: PASSIVE_LEVEL, the controller thread's injection poll;
+ * no lock held on entry.
+ */
+static VOID hcdInjRetryArm(PHCD_CONTROLLER hc, ULONG fault, ULONG port,
+                           ULONG arg)
+{
+    KIRQL oldIrql;
+    ULONG count;
+
+    count = (arg == 0) ? 1UL
+            : (arg == XHCI_INJ_ARG_FOREVER) ? 0xFFFFFFFFUL
+                                            : arg;
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    switch (fault) {
+    case XHCI_INJ_RETRY_FAIL:
+        hc->InjRetryFail = count;
+        break;
+    case XHCI_INJ_RETRY_ONES:
+        hc->InjRetryOnes = count;
+        break;
+    case XHCI_INJ_RETRY_PORTSC_ONES:
+        hc->InjRetryPortsc = 1;
+        hc->InjRetryPortscPort = port;
+        break;
+    case XHCI_INJ_RETRY_HOLD:
+        hc->InjRetryHoldTicks = (arg == 0) ? XHCI_INJ_RETRY_HOLD_TICKS : arg;
+        hc->InjRetryHolding = 0;
+        break;
+    case XHCI_INJ_RECOVER_EARLY:
+        hc->InjRecoverEarly = count;
+        break;
+    default:
+        hc->InjSweepBreak = count;
+        break;
+    }
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    XhciLogNote(&hc->Hc, "qemu.inj.retry.armed", (fault << 16) | arg);
+}
+
+/* 30: 1 while runs are left, an attempt about to begin refused (hcdRecover,
+ * before XhciRecoverController). IRQL: <= DISPATCH_LEVEL. */
+ULONG HcdInjRetryFailNow(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+    ULONG refuse;
+
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    refuse = (hc->InjRetryFail != 0) ? 1UL : 0UL;
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    return refuse;
+}
+
+/* 30: a run of failures spent (terminal 2): one run used. IRQL: <=
+ * DISPATCH_LEVEL. */
+VOID HcdInjRetryRunEnd(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    if (hc->InjRetryFail != 0 && hc->InjRetryFail != 0xFFFFFFFFUL) {
+        hc->InjRetryFail--;
+    }
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+}
+
+/* 31: the commit's USBSTS read. Controller lock held; IRQL
+ * DISPATCH_LEVEL. */
+ULONG HcdInjRetryOnes(PHCD_CONTROLLER hc, ULONG usbsts)
+{
+    KIRQL oldIrql;
+    ULONG answer;
+
+    answer = usbsts;
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    if (hc->InjRetryOnes != 0) {
+        if (hc->InjRetryOnes != 0xFFFFFFFFUL) {
+            hc->InjRetryOnes--;
+        }
+        answer = 0xFFFFFFFFUL;
+    }
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    if (answer != usbsts) {
+        XhciLogNoteLocked(&hc->Hc, "qemu.inj.retry.ones", usbsts);
+    }
+    return answer;
+}
+
+/* 32: a sweep's PORTSC read. Controller lock held; IRQL DISPATCH_LEVEL. */
+ULONG HcdInjRetryPortsc(PHCD_CONTROLLER hc, ULONG port, ULONG portsc)
+{
+    KIRQL oldIrql;
+    ULONG answer;
+
+    answer = portsc;
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    if (hc->InjRetryPortsc &&
+        (hc->InjRetryPortscPort == 0 || hc->InjRetryPortscPort == port)) {
+        answer = 0xFFFFFFFFUL;
+    }
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    return answer;
+}
+
+/* 33: 1 while the next armed try's commit is held back, the hold begun at
+ * the first look and lasting its ticks on the tolerance clock. Controller
+ * lock held; IRQL DISPATCH_LEVEL. */
+ULONG HcdInjRetryHeld(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+    ULONG now;
+    ULONG held;
+    ULONG began;
+
+    now = HcdTolNow(hc);
+    held = 0;
+    began = 0;
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    if (hc->InjRetryHoldTicks != 0) {
+        if (!hc->InjRetryHolding) {
+            hc->InjRetryHolding = 1;
+            hc->InjRetryHoldStart = now;
+            began = 1;
+        }
+        if (XhciTolElapsed(now, hc->InjRetryHoldStart,
+                           hc->InjRetryHoldTicks)) {
+            hc->InjRetryHoldTicks = 0;
+            hc->InjRetryHolding = 0;
+        } else {
+            held = 1;
+        }
+    }
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    if (began) {
+        XhciLogNoteLocked(&hc->Hc, "qemu.inj.retry.hold", now);
+    }
+    return held;
+}
+
+/* 34: whether this attempt's capability decode answers all ones, taken by
+ * hcdRecover for each attempt's first call. IRQL: PASSIVE_LEVEL, the
+ * controller thread; no lock held. */
+ULONG HcdInjRecoverEarlyTake(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+    ULONG take;
+
+    take = 0;
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    if (hc->InjRecoverEarly != 0) {
+        if (hc->InjRecoverEarly != 0xFFFFFFFFUL) {
+            hc->InjRecoverEarly--;
+        }
+        take = 1;
+    }
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    if (take) {
+        XhciLogNote(&hc->Hc, "qemu.inj.retry.early", 1);
+    }
+    return take;
+}
+
+/* 34: the decode's first read (xhciInitDecode), all ones while the attempt
+ * hcdRecover marked runs. IRQL: any. */
+ULONG HcdInjDecodeAnswer(PXHCI_EXTENSION ext, ULONG value)
+{
+    return HcdControllerFromExt(ext)->InjDecodeOnes ? 0xFFFFFFFFUL : value;
+}
+
+/* 35: between a sweep's first and second port holds, the leave generation
+ * advanced in a hold of its own, nothing else written. IRQL:
+ * PASSIVE_LEVEL, the controller thread; neither lock held on entry. */
+VOID HcdInjSweepBreak(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+    ULONG take;
+
+    take = 0;
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    if (hc->InjSweepBreak != 0) {
+        if (hc->InjSweepBreak != 0xFFFFFFFFUL) {
+            hc->InjSweepBreak--;
+        }
+        take = 1;
+    }
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    if (!take) {
+        return;
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hc->Hc.Retry.LeaveGen++;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    XhciLogNote(&hc->Hc, "qemu.inj.retry.sweep", 1);
 }
 
 /*
@@ -515,6 +829,31 @@ static VOID hcdInjClear(PHCD_CONTROLLER hc)
  * time's low part, good for holds under seven minutes; a hold for ever
  * never ends. IRQL: any (KeQuerySystemTime and InjLock are).
  */
+/*
+ * Task 50.30 step 2 (record 17 section 4.15.9): the command ring given up
+ * or rebuilt - every invalidation (xhciCommandInvalidateLocked), the
+ * start's and a recovery's ring setup (xhciProgramCommandRing), the
+ * restore (xhciRestoreState) and the HCRST (HcdInjResetWritten). The
+ * layer's addresses on the ring and the outcome's events not yet delivered
+ * go with it (XhciInjHangRingGone), so its No Op marker never meets a
+ * later command at the same address and no queued Command Ring Stopped or
+ * Command Aborted reaches a new ring generation; a 0x26 armed by a
+ * device's behaviour stays armed. hcd_svc.h. IRQL: <= DISPATCH_LEVEL, the
+ * controller lock held or not.
+ */
+VOID HcdInjCmdRingReset(PXHCI_EXTENSION ext)
+{
+    PHCD_CONTROLLER hc;
+    KIRQL oldIrql;
+
+    hc = HcdControllerFromExt(ext);
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    XhciInjHangRingGone(&hc->InjHang);
+    hc->InjHangEvN = 0;
+    hc->InjHangEvAt = 0;
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+}
+
 VOID HcdInjResetWritten(PXHCI_EXTENSION ext)
 {
     PHCD_CONTROLLER hc;
@@ -523,6 +862,14 @@ VOID HcdInjResetWritten(PXHCI_EXTENSION ext)
     ULONG hold;
 
     hc = HcdControllerFromExt(ext);
+    if (hc->InjHang.Fault != 0 || hc->InjHang.NoOpPA != 0) {
+        /* Task 50.30 step 2: the ring is rebuilt; a 0x26 armed by a
+         * device's behaviour stays armed across the recovery. */
+        HcdInjCmdRingReset(ext);
+        KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+        hc->InjHangEp0Slot = 0;
+        KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    }
     if (!hc->InjResetArmed) {
         return;
     }
@@ -613,6 +960,29 @@ ULONG HcdInjSetInterface(PHCD_CONTROLLER hc, ULONG slot, PULONG stalled)
 }
 
 /*
+ * Task 50.7: fault 20. 1 when the 8-byte device-descriptor read an
+ * enumeration at root port `port` just made is to be answered with
+ * bMaxPacketSize0 0 (hcd_enum.c, hcdPerform's GET_DEVICE), one read of the
+ * armed count spent. QEMU's devices answer every descriptor read, so this
+ * is the one way a guest reaches a root port whose enumeration failed for
+ * good with no cycle, recovery or hold. IRQL: PASSIVE_LEVEL, the thread.
+ */
+ULONG HcdInjEnumDesc(PHCD_CONTROLLER hc, ULONG port)
+{
+    if (hc->InjEnumDesc == 0 ||
+        (hc->InjEnumDescPort != 0 && hc->InjEnumDescPort != port)) {
+        return 0;
+    }
+    if (hc->InjEnumDesc != 0xFFFFFFFFUL) {
+        hc->InjEnumDesc--;
+    }
+    XHCI_DBG_VALUE("qemu inject: device descriptor's bMaxPacketSize0 0, "
+                   "port", port);
+    XhciLogNote(&hc->Hc, "qemu.inj.enumdesc", port);
+    return 1;
+}
+
+/*
  * Task 38.10: fault 19. The next Configure Endpoint of an interface switch
  * - step 3's (`rollback` 0; a function's unconfigure or release shares
  * it) or the rollback's (1), as armed - is answered
@@ -623,6 +993,154 @@ ULONG HcdInjSetInterface(PHCD_CONTROLLER hc, ULONG slot, PULONG stalled)
  * releases what the switch held. Returns 1 with *code when it answered.
  * IRQL: PASSIVE_LEVEL, the thread.
  */
+/* Task 50.20 (record 17 section 4.12.10), fault 34: RESET_PIPE's recycle
+ * Configure answered and not issued, at the selected attempt and DCI.
+ * Thread only. */
+ULONG HcdInjRecycleConfigure(PHCD_CONTROLLER hc, ULONG slot, ULONG dci,
+                             PULONG code)
+{
+    ULONG arg;
+
+    if (hc->InjRecycleCfg == 0 ||
+        (hc->InjRecycleDci != 0 && hc->InjRecycleDci != dci)) {
+        return 0;
+    }
+    if (hc->InjRecycleSkip != 0) {
+        hc->InjRecycleSkip--;
+        return 0;
+    }
+    arg = hc->InjRecycleCfg - 1;
+    hc->InjRecycleCfg = 0;
+    if ((arg & XHCI_INJ_RC_NOCOMPLETE) != 0) {
+        *code = 0;
+        HcdSvcRequestResetWhy(&hc->Hc, XHCI_WHY_INJECTED, slot, 0,
+                              XHCI_INJ_RECYCLE_CFG);
+    } else {
+        *code = XHCI_CC_RESOURCE_ERROR;
+    }
+    XhciLogNote(&hc->Hc, "qemu.inj.recycle",
+                (slot << 24) | ((dci & 0xFFUL) << 16) | ((arg & 0xFUL) << 8) |
+                    (*code & 0xFFUL));
+    return 1;
+}
+
+/* Task 50.38: the oldest reading in the trigger reader's queue taken, if
+ * there is one, into *value. Returns whether one was taken. IRQL:
+ * PASSIVE_LEVEL, the controller thread. */
+static ULONG hcdInjQueueTake(PHCD_CONTROLLER hc, PULONG value)
+{
+    KIRQL oldIrql;
+    ULONG taken;
+
+    taken = 0;
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    if (hc->InjPollCount != 0) {
+        *value = hc->InjPollQ[hc->InjPollHead];
+        hc->InjPollHead = (hc->InjPollHead + 1) % HCD_INJ_POLL_DEPTH;
+        hc->InjPollCount--;
+        taken = 1;
+    }
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    return taken;
+}
+
+/* Task 50.38: the release of the rendezvous armed with sequence `seq` (23
+ * with arg 0 and another sequence) sought in the reader's queue, oldest
+ * first; found, it and every reading before it are removed - those passed
+ * over, as this loop's own reads passed over the values before the
+ * release - and it is returned in *value. Returns whether it was found.
+ * IRQL: PASSIVE_LEVEL, the controller thread. */
+static ULONG hcdInjQueueRelease(PHCD_CONTROLLER hc, ULONG seq, PULONG value)
+{
+    KIRQL oldIrql;
+    ULONG found;
+    ULONG v;
+    ULONG i;
+
+    found = 0;
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    for (i = 0; i < hc->InjPollCount; i++) {
+        v = hc->InjPollQ[(hc->InjPollHead + i) % HCD_INJ_POLL_DEPTH];
+        if (XHCI_INJ_GET_SEQ(v) != seq &&
+            XHCI_INJ_GET_FAULT(v) == XHCI_INJ_RENDEZVOUS &&
+            XHCI_INJ_GET_ARG(v) == 0) {
+            hc->InjPollHead = (hc->InjPollHead + i + 1) % HCD_INJ_POLL_DEPTH;
+            hc->InjPollCount -= i + 1;
+            *value = v;
+            found = 1;
+            break;
+        }
+    }
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    return found;
+}
+
+/* Task 50.20, fault 35: hold at `point` while it is armed, noting that it
+ * was reached, until the release (23 again, arg 0) or 600 turns of 100 ms.
+ * The thread looks for the release in the trigger reader's queue at each
+ * turn, since its own pass cannot run while it holds, and the reader reads
+ * every 100 ms meanwhile (task 50.38; until then this loop read the
+ * machine-wide key itself, and each turn also held that read's time).
+ * Readings that are not the release stay queued for the pass after a hold
+ * that ends without one. PASSIVE_LEVEL, the thread, no lock held. */
+VOID HcdInjRendezvous(PHCD_CONTROLLER hc, ULONG point)
+{
+    LARGE_INTEGER due;
+    KIRQL oldIrql;
+    ULONG value;
+    ULONG standing;
+    ULONG latched;
+    ULONG i;
+
+    if (hc->InjRvPoint == 0 || hc->InjRvPoint != point) {
+        return;
+    }
+    if (point == XHCI_INJ_RV_RECOVERY) {
+        /* Record 17 section 4.15.16 C (revision 34): only a route raised
+         * from here on is latched for this hold. */
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        hc->InjRvLeave = 0;
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+    }
+    hc->InjRvReached++;
+    XhciLogNote(&hc->Hc, "qemu.inj.rv.reached", (point << 16) | hc->InjRvReached);
+    /* At once on the debugcon line too: the ring is not flushed while the
+     * thread holds here, and a leg times its next step on this line. */
+    XHCI_DBG_VALUE("qemu inject: rendezvous reached, point/count",
+                   (point << 16) | hc->InjRvReached);
+    (VOID)InterlockedExchange((PLONG)&hc->InjPollFast, 1);
+    (VOID)KeSetEvent(&hc->InjPollKick, IO_NO_INCREMENT, FALSE);
+    for (i = 0; i < 600; i++) {
+        /* Task 50.30 step 3 (record 17 section 4.15.16 C): the recovery's
+         * entry lets the thread go at once when a route's bit is raised -
+         * a power transition, a removal or a stop - so the recovery meets
+         * it; since revision 34 also when one was raised and lowered since
+         * the last poll (HcdEnumLeaveRaise's latch). */
+        if (point == XHCI_INJ_RV_RECOVERY) {
+            XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+            standing = hc->CmdWaitLeave;
+            latched = hc->InjRvLeave;
+            XhciControllerLockRelease(&hc->Hc, oldIrql);
+            if (XhciInjRvRouteLets(point, standing, latched)) {
+                XhciLogNote(&hc->Hc, "qemu.inj.rv.route", standing | latched);
+                break;
+            }
+        }
+        /* A release written before this first read counts as well: the
+         * baseline is the arming command's sequence, not this read's. */
+        if (hcdInjQueueRelease(hc, hc->InjRvSeq, &value)) {
+            /* Consumed here, so the pass does not fire it again. */
+            (VOID)XhciInjTake(&hc->InjTrigger, 1, value);
+            break;
+        }
+        due.QuadPart = -1000000;               /* 100 ms */
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
+    (VOID)InterlockedExchange((PLONG)&hc->InjPollFast, 0);
+    hc->InjRvPoint = 0;
+    XhciLogNote(&hc->Hc, "qemu.inj.rv.released", (point << 16) | i);
+}
+
 ULONG HcdInjSelectConfigure(PHCD_CONTROLLER hc, ULONG rollback, PULONG code)
 {
     ULONG arg;
@@ -637,7 +1155,8 @@ ULONG HcdInjSelectConfigure(PHCD_CONTROLLER hc, ULONG rollback, PULONG code)
     hc->InjSelectConfig = 0;
     if (arg >= 2) {
         *code = 0;
-        HcdSvcRequestReset(&hc->Hc);
+        HcdSvcRequestResetWhy(&hc->Hc, XHCI_WHY_INJECTED, 0, 0,
+                              XHCI_INJ_SELECT_CONFIG);
     } else {
         *code = XHCI_CC_RESOURCE_ERROR;
     }
@@ -699,7 +1218,8 @@ static VOID hcdInjRaceRing(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     for (id = 1; ep->Streams != NULL && id <= ep->Streams->Count; id++) {
         p = ep->Streams->Pipe[id];
-        if (p != NULL && p != pipe && p->Queue->Count != 0 && !dev->Gone) {
+        if (p != NULL && p != pipe && p->Queue->Count != 0 && !dev->Gone &&
+            !HCD_DEV_FROZEN(dev)) {
             XhciWriteDoorbell(&hc->Hc, dev->SlotId,
                               XhciStreamDoorbell(p->Dci, p->StreamId));
             rung = p->StreamId;
@@ -711,7 +1231,8 @@ static VOID hcdInjRaceRing(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
      * takes the endpoint Running (xHCI 4.6.10), which is the window this
      * fault is for. */
     for (id = 1; anyStream && rung == 0 && ep->Streams != NULL &&
-                 id <= ep->Streams->Count && !dev->Gone; id++) {
+                 id <= ep->Streams->Count && !dev->Gone &&
+                 !HCD_DEV_FROZEN(dev); id++) {
         p = ep->Streams->Pipe[id];
         if (p != NULL && p != pipe) {
             XhciWriteDoorbell(&hc->Hc, dev->SlotId,
@@ -766,6 +1287,7 @@ VOID HcdInjStart(PHCD_CONTROLLER hc)
     KeAcquireSpinLock(&hc->InjLock, &oldIrql);
     XhciInjEpClear(&hc->InjEp);
     KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    hcdInjQsStart(hc);
     hc->InjFault = 0;
     hc->InjLeft = 0;
     hc->InjPort = 0;
@@ -783,6 +1305,22 @@ VOID HcdInjStart(PHCD_CONTROLLER hc)
                 : 0UL;
     XhciInjTriggerStart(&hc->InjTrigger, found, value);
     hc->InjReadAt = HcdTolNow(hc);
+    /* Task 50.38: the reader's state for this lifetime, before any thread
+     * of it exists (hcdThreadStart makes the reader after the controller
+     * thread), so no reading of an earlier lifetime is ever taken. */
+    hc->InjPollHead = 0;
+    hc->InjPollCount = 0;
+    hc->InjPollLost = 0;
+    hc->InjPollLostNoted = 0;
+    hc->InjPollLast = 0;
+    hc->InjPollLastValid = 0;
+    hc->InjPollOpen = 0;
+    hc->InjPollFast = 0;
+    hc->InjPollStop = 0;
+    hc->InjPollRunning = 0;
+    hc->InjPollObject = NULL;
+    KeInitializeEvent(&hc->InjPollKick, SynchronizationEvent, FALSE);
+    KeInitializeEvent(&hc->InjPollExited, NotificationEvent, FALSE);
     XhciLogNote(&hc->Hc, "qemu.inj.latched", found ? value : 0xFFFFFFFFUL);
     value = 0;
     if (!NT_SUCCESS(HcdCtlQemuReadDword(hc, HCD_VALUE_QEMU_START_HOLD,
@@ -984,6 +1522,7 @@ static VOID hcdInjRing(PHCD_CONTROLLER hc)
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     dev = hc->SlotDevice[hc->InjSlot];
     if (dev != NULL && dev == hc->InjDev && !dev->Gone &&
+        !HCD_DEV_FROZEN(dev) &&
         dev->Pipes[hc->InjDci] != NULL && !dev->Pipes[hc->InjDci]->Closed) {
         XhciWriteDoorbell(&hc->Hc, hc->InjSlot, hc->InjDci);
     }
@@ -1715,7 +2254,7 @@ static VOID hcdInjBulkKick(PHCD_CONTROLLER hc)
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     pipe = hcdInjBulkPipe(hc);
-    if (pipe != NULL && !pipe->Closed) {
+    if (pipe != NULL && !pipe->Closed && !HCD_DEV_FROZEN(pipe->Device)) {
         if (pipe->Streams == NULL) {
             if (pipe->Queue->Count != 0 && !pipe->Paused) {
                 XhciWriteDoorbell(&hc->Hc, hc->InjSlot, hc->InjDci);
@@ -2008,8 +2547,26 @@ static ULONG hcdInjBulkSetDequeue(PHCD_CONTROLLER hc, ULONG stream, ULONG pa,
                                   ULONG cycle)
 {
     XHCI_TRB trb;
+    PHCD_PIPE ep;
+    KIRQL oldIrql;
+    ULONG contract;
     ULONG built;
 
+    /* Task 50.20 (record 17 section 4.12.10): never on an endpoint held to
+     * the contract, whose streams get no Set TR Dequeue from anyone; the
+     * attempt fails, and its caller abandons the injection. */
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    ep = (hc->InjDev != NULL && hc->SlotDevice[hc->InjSlot] == hc->InjDev &&
+          !hc->InjDev->Gone)
+             ? hc->InjDev->Pipes[hc->InjDci]
+             : NULL;
+    contract = (ep != NULL && ep->StreamContract) ? 1UL : 0UL;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (contract) {
+        XhciLogNote(&hc->Hc, "qemu.inj.contract",
+                    (hc->InjSlot << 16) | (hc->InjDci << 8) | stream);
+        return XHCI_CC_INVALID;
+    }
     if (stream == 0) {
         built = XhciTrbSetTrDequeue(&trb, hc->InjSlot, hc->InjDci, pa,
                                     cycle) == XHCI_RING_OK;
@@ -2305,6 +2862,91 @@ static VOID hcdInjDisarmEndpoint(PHCD_CONTROLLER hc)
 }
 
 /* One command the trigger fired. IRQL: PASSIVE_LEVEL. */
+/* Task 50.20 (record 17 section 4.12.10): fault 33's argument applied -
+ * bit 0 this controller counted as listed, as 8086:1E31 is, so that
+ * XhciStreamDequeueAvoid decides the flag as it would there (0 off, 1 and 2
+ * on); bit 1 the QEMU resync off - and counted as the start latch counts
+ * it. */
+static VOID hcdInjStreamApply(PHCD_CONTROLLER hc, ULONG arg)
+{
+    PXHCI_QUIRK_STATE st;
+    KIRQL oldIrql;
+
+    if ((arg & XHCI_INJ_SU_FLAG) != 0) {
+        st = &hc->Hc.Quirk;
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        XhciQuirkSetEffective(st, XHCI_QK_DEQ_AVOID, 1,
+                              XhciQuirkEffective(st->Mode[XHCI_QK_DEQ_AVOID],
+                                                 1),
+                              0);
+        HcdQuirkPublishLocked(hc);
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        hc->StreamSetDeqUntrusted = XhciQuirkOn(st, XHCI_QK_DEQ_AVOID);
+    }
+    if ((arg & XHCI_INJ_SU_RESYNC_OFF) != 0) {
+        hc->QemuResyncOff = 1;
+    }
+    hc->Counters.StreamDeqUntrusted = hc->StreamSetDeqUntrusted;
+    XhciLogNote(&hc->Hc, "qemu.inj.streamflag",
+                (hc->StreamSetDeqUntrusted << 1) | hc->QemuResyncOff);
+}
+
+/* Fault 33 as the key holds it at the controller's start (the start's
+ * value of every other fault is latched and never fires): the controller's
+ * driver key, then on 2000 to 10 the machine-wide key. PASSIVE_LEVEL. */
+VOID HcdInjStreamStart(PHCD_CONTROLLER hc)
+{
+    ULONG value;
+    ULONG found;
+
+    value = 0;
+    found = NT_SUCCESS(HcdCtlQemuReadDword(hc, HCD_VALUE_QEMU_INJECT, &value))
+                ? 1UL
+                : 0UL;
+    if ((!found || XHCI_INJ_GET_FAULT(value) != XHCI_INJ_STREAM_UNTRUSTED) &&
+        IoIsWdmVersionAvailable(1, 0x10)) {
+        value = 0;
+        found = NT_SUCCESS(HcdCtlQemuReadMachineDword(HCD_VALUE_QEMU_INJECT,
+                                                      &value))
+                    ? 1UL
+                    : 0UL;
+    }
+    if (found && XHCI_INJ_GET_FAULT(value) == XHCI_INJ_STREAM_UNTRUSTED) {
+        hcdInjStreamApply(hc, XHCI_INJ_GET_ARG(value));
+    }
+}
+
+/*
+ * Task 50.34 (design record 16 section 21.10): fault 2C's argument, read as
+ * HcdInjStreamStart reads fault 21 - the controller's key, then the
+ * machine-wide key - and called only by a start that reaches the port
+ * switchover's step (hcd_ctl.c), so no other controller or start reads it.
+ * 0 when the value is absent or another fault. IRQL: PASSIVE_LEVEL.
+ */
+ULONG HcdInjPswStep(PHCD_CONTROLLER hc)
+{
+    ULONG value;
+    ULONG found;
+
+    value = 0;
+    found = NT_SUCCESS(HcdCtlQemuReadDword(hc, HCD_VALUE_QEMU_INJECT, &value))
+                ? 1UL
+                : 0UL;
+    if ((!found || XHCI_INJ_GET_FAULT(value) != XHCI_INJ_PSW_STEP) &&
+        IoIsWdmVersionAvailable(1, 0x10)) {
+        value = 0;
+        found = NT_SUCCESS(HcdCtlQemuReadMachineDword(HCD_VALUE_QEMU_INJECT,
+                                                      &value))
+                    ? 1UL
+                    : 0UL;
+    }
+    if (found && XHCI_INJ_GET_FAULT(value) == XHCI_INJ_PSW_STEP) {
+        XhciLogNote(&hc->Hc, "qemu.inj.psw", XHCI_INJ_GET_ARG(value));
+        return XHCI_INJ_GET_ARG(value);
+    }
+    return 0;
+}
+
 static VOID hcdInjFire(PHCD_CONTROLLER hc, ULONG value)
 {
     PXHCI_EXTENSION ext;
@@ -2394,6 +3036,41 @@ static VOID hcdInjFire(PHCD_CONTROLLER hc, ULONG value)
         hc->InjRepairRace = (arg == 0) ? 1UL : arg;
         KeReleaseSpinLock(&hc->InjLock, oldIrql);
         break;
+    case XHCI_INJ_STREAM_UNTRUSTED:
+        /* Task 50.20: read at the controller's start only (record 17
+         * section 4.12.10, HcdInjStreamStart); fired later it changes
+         * nothing and is noted. */
+        XhciLogNote(&hc->Hc, "qemu.inj.streamflag.ignored", arg);
+        break;
+    case XHCI_INJ_PSW_STEP:
+        /* Task 50.34: read by a start that reaches the port switchover's
+         * step only (HcdInjPswStep). */
+        XhciLogNote(&hc->Hc, "qemu.inj.psw.ignored", arg);
+        break;
+    case XHCI_INJ_RECYCLE_CFG:
+        /* Task 50.20: the recycle's Configure, at attempt arg 3:0. */
+        hc->InjRecycleCfg = arg + 1;
+        hc->InjRecycleDci = XHCI_INJ_GET_PORT(value);
+        hc->InjRecycleSkip = arg & 0xFUL;
+        if (hc->InjRecycleSkip != 0) {
+            hc->InjRecycleSkip--;
+        }
+        break;
+    case XHCI_INJ_RENDEZVOUS:
+        /* Task 50.20: arm a point; arg 0 disarms. The arming command's
+         * sequence is kept: any later 23/0 is the release. */
+        hc->InjRvPoint = arg;
+        hc->InjRvReached = 0;
+        hc->InjRvSeq = XHCI_INJ_GET_SEQ(value);
+        break;
+    case XHCI_INJ_ENUM_DESC:
+        /* Task 50.7: arg reads (0 one, 255 until CLEAR) at the root port in
+         * bits 15:8 (0 any). */
+        hc->InjEnumDesc = (arg == 0) ? 1UL
+                          : (arg == XHCI_INJ_ARG_FOREVER) ? 0xFFFFFFFFUL
+                                                          : arg;
+        hc->InjEnumDescPort = XHCI_INJ_GET_PORT(value);
+        break;
     case XHCI_INJ_SELECT_CONFIG:
         /* arg 0/1 refused at step 3 / the rollback, 2/3 no completion. */
         if (arg <= 3) {
@@ -2408,6 +3085,16 @@ static VOID hcdInjFire(PHCD_CONTROLLER hc, ULONG value)
         XhciInjArmDead(&hc->InjRegs, arg, fault == XHCI_INJ_DEAD_NOPROOF);
         KeReleaseSpinLock(&hc->InjLock, oldIrql);
         break;
+    case XHCI_INJ_RETRY_FAIL:
+    case XHCI_INJ_RETRY_ONES:
+    case XHCI_INJ_RETRY_PORTSC_ONES:
+    case XHCI_INJ_RETRY_HOLD:
+    case XHCI_INJ_RECOVER_EARLY:
+    case XHCI_INJ_RETRY_SWEEP_BREAK:
+        /* Task 50.31 (design record 38 section 17); taken on a failed
+         * controller too (XhciInjNeedsLive). */
+        hcdInjRetryArm(hc, fault, XHCI_INJ_GET_PORT(value), arg);
+        break;
     case XHCI_INJ_RESET_SLOW:
         /* Task 49.35: arg x 10 ms (255 for ever), port 0 HCRST, 1 CNR. */
         if (arg == 0 || XHCI_INJ_GET_PORT(value) > 1) {
@@ -2420,6 +3107,35 @@ static VOID hcdInjFire(PHCD_CONTROLLER hc, ULONG value)
         hc->InjResetHolding = 0;
         hc->InjResetArmed = 1;
         KeReleaseSpinLock(&hc->InjLock, oldIrql);
+        break;
+    case XHCI_INJ_ADDRESS_HANG:
+    case XHCI_INJ_EP0_HANG:
+    case XHCI_INJ_DEVICE_HANG:
+    case XHCI_INJ_CFGEP_HANG:
+    case XHCI_INJ_RESETEP_HANG:
+    case XHCI_INJ_SETDEQ_HANG:
+    case XHCI_INJ_EVAL_HANG:
+    case XHCI_INJ_RESETDEV_HANG:
+        /* Task 50.30 step 2 (record 17 section 4.15.9). */
+        KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+        XhciInjHangArm(&hc->InjHang, fault, XHCI_INJ_GET_PORT(value), arg);
+        hc->InjHangEvN = 0;
+        hc->InjHangEvAt = 0;
+        hc->InjHangEp0Slot = 0;
+        KeReleaseSpinLock(&hc->InjLock, oldIrql);
+        if (hc->InjHang.Fault == 0) {
+            /* 0x26 behind a hub: refused (xhci_inj.h). */
+            XhciLogNote(&hc->Hc, "qemu.inj.hang.refused", value);
+            break;
+        }
+        XhciLogNote(&hc->Hc, "qemu.inj.hang.armed",
+                    (fault << 24) | (XHCI_INJ_GET_PORT(value) << 16) |
+                        (hc->InjHang.ByBehaviour << 8) | arg);
+        break;
+    case XHCI_INJ_QUERY_STOP:
+        /* Task 50.30 step 3 (record 17 section 4.15.16 E): armed or
+         * refused there, with its own note. */
+        done = hcdInjQsArm(hc, value);
         break;
     case XHCI_INJ_HC_EVENT:
         /* Task 49.35: one Host Controller Event, code arg, through the
@@ -2454,10 +3170,32 @@ static VOID hcdInjFire(PHCD_CONTROLLER hc, ULONG value)
     }
 }
 
+/* One reading of the trigger taken: XhciInjTake's sequence rule, then the
+ * command carried out or the unknown code noted. IRQL: PASSIVE_LEVEL, the
+ * controller thread, no lock held. */
+static VOID hcdInjTakeValue(PHCD_CONTROLLER hc, ULONG value)
+{
+    switch (XhciInjTake(&hc->InjTrigger, 1, value)) {
+    case XHCI_INJ_TAKE_FIRE:
+        hcdInjFire(hc, value);
+        break;
+    case XHCI_INJ_TAKE_UNKNOWN:
+        XHCI_DBG_VALUE("qemu inject: no such fault", value);
+        XhciLogNote(&hc->Hc, "qemu.inj.unknown", value);
+        break;
+    default:
+        break;
+    }
+}
+
 /*
- * Each controller-thread pass, first in hcdPoll: the trigger read about once
- * a second, a fresh command carried out, and the interrupts the window has
- * dropped since the last pass noted. IRQL: PASSIVE_LEVEL, no lock held.
+ * Each controller-thread pass, first in hcdPoll: the trigger reader's
+ * readings taken (task 50.38; until then the thread read the key itself
+ * about once a second here), a fresh command carried out, and the
+ * interrupts the window has dropped since the last pass noted. Nothing is
+ * taken before the first admission, 10 tolerance ticks after the start's
+ * latch, the gate the thread's own first read had; readings made earlier
+ * wait in the queue. IRQL: PASSIVE_LEVEL, no lock held.
  */
 VOID HcdInjPoll(PHCD_CONTROLLER hc)
 {
@@ -2501,38 +3239,784 @@ VOID HcdInjPoll(PHCD_CONTROLLER hc)
         hcdInjIrqArm(hc, 0, 0);
     }
 
-    now = HcdTolNow(hc);
-    if (now - hc->InjReadAt < HCD_INJ_READ_TICKS && now >= hc->InjReadAt) {
+    if (!hc->InjPollOpen) {
+        now = HcdTolNow(hc);
+        if (now - hc->InjReadAt < HCD_INJ_READ_TICKS &&
+            now >= hc->InjReadAt) {
+            return;
+        }
+        hc->InjPollOpen = 1;
+    }
+    /* Oldest first, at most what was queued at this look plus what the
+     * reader adds meanwhile, up to the queue's depth. */
+    for (found = 0; found < HCD_INJ_POLL_DEPTH; found++) {
+        value = 0;
+        if (!hcdInjQueueTake(hc, &value)) {
+            break;
+        }
+        hcdInjTakeValue(hc, value);
+    }
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    dropped = (LONG)hc->InjPollLost;
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    if ((ULONG)dropped != hc->InjPollLostNoted) {
+        hc->InjPollLostNoted = (ULONG)dropped;
+        XHCI_DBG_VALUE("qemu inject: readings dropped so far",
+                       (ULONG)dropped);
+        XhciLogNote(ext, "qemu.inj.reader.lost", (ULONG)dropped);
+    }
+}
+
+/* ----------------------------------------------------------------------- */
+/* Task 50.38: the trigger reader (design record 17 section 5)               */
+/* ----------------------------------------------------------------------- */
+
+/* The low part of the system time, in 100 ns units; a difference of two
+ * is good for some seven minutes, far more than any period here. IRQL:
+ * any. */
+static ULONG hcdInjReaderNow(VOID)
+{
+    LARGE_INTEGER now;
+
+    KeQuerySystemTime(&now);
+    return now.LowPart;
+}
+
+/* The reader's end: the event set last and the thread gone; on 98 SE and
+ * ME, where the stop joins the event alone, set from outside the image
+ * (record 15 section 4.5.22). Never returns. IRQL: PASSIVE_LEVEL, the
+ * reader. */
+static VOID hcdInjReaderExit(PHCD_CONTROLLER hc)
+{
+#if defined(_M_IX86)
+    if (!IoIsWdmVersionAvailable(1, 0x10)) {
+        HcdThreadEnd9x(HCD_END9X_READER, &hc->InjPollExited, NULL);
+    }
+#endif
+    (VOID)KeSetEvent(&hc->InjPollExited, IO_NO_INCREMENT, FALSE);
+    (VOID)PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+/*
+ * The trigger reader: XhciQemuInject read about once a second (every
+ * 100 ms while a rendezvous holds) off the controller thread, which a read
+ * that did not return held on 98 SE with a cancel waiting on it (50.38's
+ * kind A, s5v07 and s5v20). Each period runs from one read's start to the
+ * next, whatever the controller thread is doing. A value read that differs
+ * from the one queued last is queued (the oldest dropped and counted when
+ * the queue is full) and the controller thread woken; the thread takes
+ * every queued reading in order at its next pass. The keys are the controller
+ * thread's own until then: on 2000 to 10 the machine-wide key alone (no
+ * IoOpenDeviceRegistryKey from a thread of the driver; task 49.24), on 98
+ * SE and ME both. IRQL: PASSIVE_LEVEL (a system thread), no lock held
+ * across the read.
+ */
+static VOID NTAPI hcdInjReader(PVOID context)
+{
+    PHCD_CONTROLLER hc;
+    LARGE_INTEGER due;
+    NTSTATUS status;
+    KIRQL oldIrql;
+    ULONG started;
+    ULONG elapsed;
+    ULONG period;
+    ULONG value;
+    ULONG found;
+
+    hc = (PHCD_CONTROLLER)context;
+    started = hcdInjReaderNow();
+    for (;;) {
+        period = (hc->InjPollFast != 0) ? HCD_INJ_POLL_FAST_MS
+                                        : HCD_INJ_POLL_MS;
+        elapsed = (hcdInjReaderNow() - started) / 10000UL;
+        HcdRelativeMs(&due, (elapsed < period) ? period - elapsed : 0UL);
+        /* The kick (a rendezvous's entry, the stop) ends the wait early;
+         * the time-out is the deadline. */
+        status = KeWaitForSingleObject(&hc->InjPollKick, Executive,
+                                       KernelMode, FALSE, &due);
+        if (hc->InjPollStop) {
+            break;
+        }
+        if (status != STATUS_SUCCESS && status != STATUS_TIMEOUT) {
+            /* Windows 98 can end the wait at once, unsatisfied
+             * (HcdWaitEvent): 1 ms yielded, the same deadline again. */
+            HcdRelativeMs(&due, 1);
+            (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+            continue;
+        }
+        started = hcdInjReaderNow();
+        value = 0;
+        if (IoIsWdmVersionAvailable(1, 0x10)) {
+            found = NT_SUCCESS(HcdCtlQemuReadMachineDword(
+                        HCD_VALUE_QEMU_INJECT, &value))
+                        ? 1UL
+                        : 0UL;
+        } else {
+            found = NT_SUCCESS(HcdCtlQemuReadDword(hc, HCD_VALUE_QEMU_INJECT,
+                                                   &value))
+                        ? 1UL
+                        : 0UL;
+        }
+        if (!found ||
+            (hc->InjPollLastValid && value == hc->InjPollLast)) {
+            continue;
+        }
+        hc->InjPollLast = value;
+        hc->InjPollLastValid = 1;
+        KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+        if (hc->InjPollCount == HCD_INJ_POLL_DEPTH) {
+            hc->InjPollHead = (hc->InjPollHead + 1) % HCD_INJ_POLL_DEPTH;
+            hc->InjPollCount--;
+            hc->InjPollLost++;
+        }
+        hc->InjPollQ[(hc->InjPollHead + hc->InjPollCount) %
+                     HCD_INJ_POLL_DEPTH] = value;
+        hc->InjPollCount++;
+        KeReleaseSpinLock(&hc->InjLock, oldIrql);
+        HcdThreadWake(hc);
+    }
+    hcdInjReaderExit(hc);
+}
+
+/* hcd.h. The reader made, from hcdThreadStart once the controller thread
+ * runs (HcdInjStart has set its state); on 2000 to 10 its object had, the
+ * reference retried until had (record 15 section 4.5.21). A creation that
+ * fails is noted and the lifetime goes on with no trigger read. IRQL:
+ * PASSIVE_LEVEL, the start. */
+VOID HcdInjReaderStart(PHCD_CONTROLLER hc)
+{
+    HANDLE handle;
+    NTSTATUS status;
+    ULONG failed;
+
+    status = PsCreateSystemThread(&handle, THREAD_ALL_ACCESS, NULL, NULL,
+                                  NULL, hcdInjReader, hc);
+    if (!NT_SUCCESS(status)) {
+        XHCI_DBG_VALUE("qemu inject: no trigger reader, status",
+                       (ULONG)status);
+        XhciLogNote(&hc->Hc, "qemu.inj.reader.none", (ULONG)status);
         return;
     }
-    hc->InjReadAt = now;
-    value = 0;
-    /* 2000 to 10: the machine-wide key alone from this periodic read (no
-     * IoOpenDeviceRegistryKey from the controller thread; task 49.24);
-     * the start's latch still reads both keys once. 98 SE and ME: both,
-     * as before. */
     if (IoIsWdmVersionAvailable(1, 0x10)) {
-        found = NT_SUCCESS(HcdCtlQemuReadMachineDword(HCD_VALUE_QEMU_INJECT,
-                                                      &value))
-                    ? 1UL
-                    : 0UL;
+        failed = HcdThreadReference(hc, handle, &hc->InjPollObject,
+                                    "qemu.inj.reader.ref.fail",
+                                    L"XhciQemuThreadRefReader");
+        if (failed != 0) {
+            XhciLogNote(&hc->Hc, "qemu.inj.reader.ref.retry", failed);
+        }
     } else {
-        found = NT_SUCCESS(HcdCtlQemuReadDword(hc, HCD_VALUE_QEMU_INJECT,
-                                               &value))
-                    ? 1UL
-                    : 0UL;
+        (VOID)ZwClose(handle);
     }
-    switch (XhciInjTake(&hc->InjTrigger, found, value)) {
-    case XHCI_INJ_TAKE_FIRE:
-        hcdInjFire(hc, value);
+    hc->InjPollRunning = 1;
+}
+
+/* hcd.h. The reader told to leave and joined, from hcdThreadStop after the
+ * controller thread's join: on 2000 to 10 by its object, on 98 SE and ME by
+ * the event it sets from outside the image. A read in progress is waited
+ * for. IRQL: PASSIVE_LEVEL, the stop. */
+VOID HcdInjReaderStop(PHCD_CONTROLLER hc)
+{
+    if (!hc->InjPollRunning) {
+        return;
+    }
+    (VOID)InterlockedExchange((PLONG)&hc->InjPollStop, 1);
+    (VOID)KeSetEvent(&hc->InjPollKick, IO_NO_INCREMENT, FALSE);
+    if (hc->InjPollObject != NULL) {
+        (VOID)KeWaitForSingleObject(hc->InjPollObject, Executive, KernelMode,
+                                    FALSE, NULL);
+        ObDereferenceObject(hc->InjPollObject);
+        hc->InjPollObject = NULL;
+    } else {
+        (VOID)HcdWaitEvent(&hc->InjPollExited, 0);
+    }
+    XHCI_DBG_TEXT("qemu inject: trigger reader has exited");
+    hc->InjPollRunning = 0;
+}
+
+/* ----------------------------------------------------------------------- */
+/* Task 50.30 step 2: a device or a command that stops answering            */
+/* (design record 17 section 4.15.9; xhci_inj.h XHCI_INJ_HANG)              */
+/* ----------------------------------------------------------------------- */
+
+/* The place of the device a command or a transfer names: its root port and
+ * route, 0 and 0 when no record holds the slot. Controller lock held. */
+static VOID hcdInjHangPlace(PHCD_CONTROLLER hc, ULONG slot, PULONG port,
+                            PULONG route)
+{
+    PHCD_USB_DEVICE dev;
+
+    *port = 0;
+    *route = 0;
+    if (slot == 0 || slot > XHCI_MAX_SLOTS) {
+        return;
+    }
+    dev = hc->SlotDevice[slot];
+    if (dev != NULL) {
+        *port = dev->Port;
+        *route = dev->Route;
+    }
+}
+
+/* hcd.h. A command that fits is marked for the submit about to be made
+ * (its type and slot); nothing is spent here. The doorbell of that very
+ * command, once the engine has placed it, spends the count and withholds
+ * (HcdInjCmdDoorbell); HcdInjHangSubmitted ends the mark whatever the
+ * submit answered, so a refused or busy submission leaves nothing for a
+ * later command's doorbell to take. IRQL: PASSIVE_LEVEL (the thread,
+ * before the submit). */
+VOID HcdInjHangCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb)
+{
+    KIRQL oldIrql;
+    KIRQL lockIrql;
+    ULONG port;
+    ULONG route;
+    ULONG type;
+    ULONG slot;
+
+    if (hc->InjHang.Fault == 0 || hc->InjOwnCmd) {
+        return;
+    }
+    type = XHCI_TRB_GET_TYPE(trb->Control);
+    slot = XHCI_TRB_GET_SLOT_ID(trb->Control);
+    XhciControllerLockAcquire(&hc->Hc, &lockIrql);
+    hcdInjHangPlace(hc, slot, &port, &route);
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    if (XhciInjHangCmdFits(&hc->InjHang, type, port, route)) {
+        hc->InjHang.HoldNext = 1;
+        hc->InjHang.HoldType = type;
+        hc->InjHang.HoldSlot = slot;
+        hc->InjHang.HoldRec = 0;
+    } else if (XhciInjHangRecoveryFits(&hc->InjHang, type, slot,
+                                       XHCI_TRB_GET_EP_ID(trb->Control))) {
+        /* Step 3 (record 17 section 4.15.16 C): the latched slot's
+         * recovery command, matched by its slot rather than its place,
+         * since the device's record may already be going. */
+        hc->InjHang.HoldNext = 1;
+        hc->InjHang.HoldType = type;
+        hc->InjHang.HoldSlot = slot;
+        hc->InjHang.HoldRec = 1;
+    }
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    XhciControllerLockRelease(&hc->Hc, lockIrql);
+}
+
+/* hcd.h. The submit has answered (placed, refused or busy): the mark ends.
+ * IRQL: PASSIVE_LEVEL (the thread, after the submit). */
+VOID HcdInjHangSubmitted(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+
+    if (!hc->InjHang.HoldNext) {
+        return;
+    }
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    hc->InjHang.HoldNext = 0;
+    hc->InjHang.HoldType = 0;
+    hc->InjHang.HoldSlot = 0;
+    hc->InjHang.HoldRec = 0;
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+}
+
+/* hcd_svc.h. The command doorbell: withheld only when the command the
+ * engine has just made outstanding is the marked one (its type and slot,
+ * from the submit that placed it), and only then is the count spent.
+ * IRQL: DISPATCH_LEVEL, controller lock held (the submit's). */
+ULONG HcdInjCmdDoorbell(PXHCI_EXTENSION ext)
+{
+    PHCD_CONTROLLER hc;
+    KIRQL oldIrql;
+    ULONG held;
+    ULONG rec;
+    ULONG type;
+    ULONG port;
+    ULONG route;
+    ULONG slot;
+    ULONG trig;
+    ULONG window;
+
+    hc = HcdControllerFromExt(ext);
+    if (!hc->InjHang.HoldNext) {
+        return 0;
+    }
+    held = 0;
+    rec = 0;
+    type = 0;
+    port = 0;
+    slot = 0;
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    if (hc->InjHang.HoldNext && ext->CommandTrbPA != 0 &&
+        ext->CommandType == hc->InjHang.HoldType &&
+        XHCI_TRB_GET_SLOT_ID(ext->CommandControl) == hc->InjHang.HoldSlot) {
+        slot = hc->InjHang.HoldSlot;
+        type = hc->InjHang.HoldType;
+        if (hc->InjHang.HoldRec) {
+            /* Step 3: the recovery command, consumed only here, at the
+             * doorbell of the command the engine has placed. */
+            if (XhciInjHangRecoveryTake(
+                    &hc->InjHang, type, slot,
+                    XHCI_TRB_GET_EP_ID(ext->CommandControl))) {
+                held = 1;
+                rec = 1;
+                hc->InjHang.HeldPA = ext->CommandTrbPA;
+            }
+        } else {
+            hcdInjHangPlace(hc, slot, &port, &route);
+            if (XhciInjHangCmd(&hc->InjHang, type, port, route)) {
+                held = 1;
+                hc->InjHang.HeldPA = ext->CommandTrbPA;
+                XhciInjHangLatch(&hc->InjHang, slot, HcdTolNow(hc));
+            }
+        }
+        hc->InjHang.HoldNext = 0;
+        hc->InjHang.HoldType = 0;
+        hc->InjHang.HoldSlot = 0;
+        hc->InjHang.HoldRec = 0;
+    }
+    /* Record 17 section 4.15.16 E: fault 2D's arming taken by this
+     * withholding, in this hold of both locks; with bit 7 the route's bit
+     * raised here, so the thread's next look leaves the wait. */
+    trig = 0;
+    window = 0;
+    if (held && XhciInjQsTrigger(&hc->InjQs, slot, ext->CommandTrbPA,
+                                 HcdTolNow(hc))) {
+        trig = 1;
+        if ((hc->InjQs.Arg & XHCI_INJ_QS_WINDOW) != 0 &&
+            hc->IsolationApplies) {
+            hc->CmdWaitLeave |= HCD_LEAVE_QTEST;
+            window = 1;
+        }
+    }
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    if (rec) {
+        XHCI_DBG_VALUE("qemu inject: recovery command withheld, slot/type",
+                       (slot << 8) | type);
+        XhciLogNoteLocked(ext, "qemu.inj.hang.recovery",
+                          (hc->InjHang.Fault << 24) | (slot << 16) |
+                              (type << 8) | hc->InjHang.Outcome);
+    } else if (held) {
+        XhciLogNoteLocked(ext, "qemu.inj.hang",
+                          (hc->InjHang.Fault << 24) | (port << 16) |
+                              (slot << 8) | hc->InjHang.Outcome);
+    }
+    if (trig) {
+        KeClearEvent(&hc->InjQsIdle);
+        if (window) {
+            (VOID)KeSetEvent(&hc->CmdDoneEvent, IO_NO_INCREMENT, FALSE);
+        }
+        XHCI_DBG_VALUE("qemu inject: query-stop exercise taken, slot/window",
+                       (slot << 8) | window);
+        XhciLogNoteLocked(ext, "qemu.inj.qstop.trigger",
+                          (slot << 16) | (type << 8) | hc->InjQs.Arg);
+    }
+    return held;
+}
+
+/* hcd_svc.h. IRQL: DISPATCH_LEVEL, controller lock held (the watchdog's
+ * rung 1, CA just written). */
+VOID HcdInjCmdAbortWritten(PXHCI_EXTENSION ext)
+{
+    PHCD_CONTROLLER hc;
+    XHCI_TRB ev[2];
+    KIRQL oldIrql;
+    ULONG count;
+    ULONG rewrite;
+    ULONG ring;
+    ULONG held;
+    ULONG index;
+    ULONG badPA;
+
+    hc = HcdControllerFromExt(ext);
+    if (hc->InjHang.HeldPA == 0) {
+        return;
+    }
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    held = hc->InjHang.HeldPA;
+    if (held != ext->CommandTrbPA) {
+        /* Not the command it withheld: nothing to act out. */
+        KeReleaseSpinLock(&hc->InjLock, oldIrql);
+        return;
+    }
+    badPA = XhciRingTrbPA(&ext->CommandRing, ext->CommandRing.Trbs - 1) +
+            2UL * XHCI_TRB_BYTES;
+    count = XhciInjHangEvents(XhciInjHangActOutcome(hc->InjHang.Outcome),
+                              held,
+                              held + XHCI_TRB_BYTES, badPA, ev, &rewrite,
+                              &ring);
+    hc->InjHang.HeldPA = 0;
+    if (rewrite &&
+        XhciRingIndexFromPA(&ext->CommandRing, held, &index) == XHCI_RING_OK &&
+        XhciRingNoOpAtType(&ext->CommandRing, index,
+                           XHCI_TRB_TYPE_NOOP_COMMAND) == XHCI_RING_OK) {
+        /* The layer's own No Op, never the engine's marker: its
+         * completion is swallowed here (HcdInjEventSwallow). */
+        hc->InjHang.NoOpPA = held;
+    }
+    if (ring) {
+        hc->InjHang.StopOwedPA = held;
+    }
+    hc->InjHangEvN = count;
+    hc->InjHangEvAt = 0;
+    if (count > 0) {
+        hc->InjHangEv[0] = ev[0];
+    }
+    if (count > 1) {
+        hc->InjHangEv[1] = ev[1];
+    }
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    XhciLogNoteLocked(ext, "qemu.inj.outcome",
+                      (hc->InjHang.Outcome << 8) | count);
+    if (ring) {
+        XhciWriteDoorbell(ext, XHCI_DB_COMMAND, 0);
+    }
+    if (count > 0) {
+        hcdInjQueueDrain(hc);
+    }
+}
+
+/* hcd.h. IRQL: PASSIVE_LEVEL (the thread's late path). */
+VOID HcdInjHangLate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    KIRQL oldIrql;
+    ULONG armed;
+    ULONG withheld;
+
+    if (hc->InjHang.Fault != XHCI_INJ_DEVICE_HANG) {
+        return;
+    }
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    withheld = (hc->InjHangEp0Slot == dev->SlotId) ? 1UL : 0UL;
+    armed = XhciInjHangLate(&hc->InjHang, dev->Port, dev->Route, withheld);
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    if (armed) {
+        XhciLogNote(&hc->Hc, "qemu.inj.armed",
+                    (dev->Port << 16) | (dev->SlotId << 8));
+    }
+}
+
+/*
+ * hcd.h. Step 3 (design record 17 section 4.15.16 C): outcome 7's mark
+ * deadline, looked at by the controller thread's own EP0 wait for `dev`
+ * at each look, before that look takes the controller lock. Armed for this
+ * device's slot and passed, it is disarmed under the injection lock (one
+ * shot); then, that lock let go, the cycle is marked through the one entry
+ * point every mark takes (HcdTolCycleMark, reason REFUSED_CODE, DCI 1)
+ * under the controller lock, only while the record is still the slot's.
+ * The same wait's look resolves the mark. No callback exists, so nothing
+ * outlives the wait to be drained. IRQL: PASSIVE_LEVEL, the controller
+ * thread, no lock held.
+ */
+VOID HcdInjWaitLook(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    KIRQL oldIrql;
+    ULONG slot;
+    ULONG due;
+    ULONG marked;
+
+    if (hc->InjHang.MarkSlot == 0) {
+        return;
+    }
+    slot = dev->SlotId;
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    due = XhciInjHangMarkDue(&hc->InjHang, slot, HcdTolNow(hc));
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    if (!due) {
+        return;
+    }
+    marked = 0;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (slot != 0 && slot <= XHCI_MAX_SLOTS && hc->SlotDevice[slot] == dev) {
+        HcdTolCycleMark(hc, dev, XHCI_TOL_CYCLE_REFUSED_CODE, 1);
+        marked = 1;
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    XHCI_DBG_VALUE("qemu inject: mark deadline in the wait, slot", slot);
+    XhciLogNote(&hc->Hc, "qemu.inj.hang.mark", (slot << 8) | marked);
+}
+
+/* hcd.h. IRQL: PASSIVE_LEVEL (the thread's port inspection). */
+VOID HcdInjHangPortGone(PHCD_CONTROLLER hc, ULONG port)
+{
+    KIRQL oldIrql;
+    ULONG ended;
+
+    if (hc->InjHang.Fault != XHCI_INJ_DEVICE_HANG) {
+        return;
+    }
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    ended = XhciInjHangGone(&hc->InjHang, port);
+    if (ended) {
+        hc->InjHangEp0Slot = 0;
+    }
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    if (ended) {
+        XhciLogNote(&hc->Hc, "qemu.inj.disarm", port);
+    }
+}
+
+/* ----------------------------------------------------------------------- */
+/* Task 50.30 step 3: fault 2D, the query-stop under a debt, a driver-path  */
+/* exercise (design record 17 section 4.15.16 E; xhci_inj.h XHCI_INJ_QSTOP) */
+/* ----------------------------------------------------------------------- */
+
+/* The routes whose bit standing keeps the query from being committed. */
+#define HCD_INJ_QS_ROUTES                                                    \
+    (HCD_LEAVE_STOP | HCD_LEAVE_REMOVE | HCD_LEAVE_POWER | HCD_LEAVE_DIRECT | \
+     HCD_LEAVE_SHUT)
+
+/* How an exercise ended (qemu.inj.qstop.end, bits 15:8). */
+#define HCD_INJ_QS_END_CANCEL   1UL  /* the thread's cancel, or none owed */
+#define HCD_INJ_QS_END_HANDOFF  2UL  /* a terminal request's hand-off     */
+#define HCD_INJ_QS_END_NODEBT   3UL  /* bit 7 and no debt formed          */
+#define HCD_INJ_QS_END_ABORTED  4UL  /* the thread, before any call       */
+#define HCD_INJ_QS_END_BRACKET  5UL  /* a bracket, before any call        */
+
+/* A start, before the thread runs: IDLE, not closed, the route's bit of
+ * any earlier lifetime gone; Busy as it is. IRQL: PASSIVE_LEVEL. */
+static VOID hcdInjQsStart(PHCD_CONTROLLER hc)
+{
+    KIRQL lockIrql;
+    KIRQL oldIrql;
+
+    XhciControllerLockAcquire(&hc->Hc, &lockIrql);
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    XhciInjQsStart(&hc->InjQs);
+    hc->CmdWaitLeave &= ~HCD_LEAVE_QTEST;
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    (VOID)KeSetEvent(&hc->InjQsIdle, IO_NO_INCREMENT, FALSE);
+    XhciControllerLockRelease(&hc->Hc, lockIrql);
+}
+
+/* Fault 2D fired: armed, or refused with its reason (noted). Returns 1 when
+ * armed. IRQL: PASSIVE_LEVEL (the thread's injection poll). */
+static ULONG hcdInjQsArm(PHCD_CONTROLLER hc, ULONG value)
+{
+    PXHCI_EXTENSION ext;
+    KIRQL lockIrql;
+    KIRQL oldIrql;
+    ULONG reason;
+
+    ext = &hc->Hc;
+    XhciControllerLockAcquire(ext, &lockIrql);
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    reason = XhciInjQsArmRefusal(
+        &hc->InjQs,
+        (hc->ControllerStarted && (ext->Flags & XHCI_EXT_FLAG_STARTED) != 0)
+            ? 1UL
+            : 0UL,
+        (hc->Msg4System == XHCI_MSG4_SYS_NT5 && hc->Msg4Info != NULL) ? 1UL
+                                                                       : 0UL,
+        hc->IsolationApplies ? 1UL : 0UL);
+    if (reason == XHCI_INJ_QS_R_OK) {
+        XhciInjQsArm(&hc->InjQs, XHCI_INJ_GET_ARG(value));
+    }
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    if (reason == XHCI_INJ_QS_R_OK) {
+        KeClearEvent(&hc->InjQsIdle);
+    }
+    XhciControllerLockRelease(ext, lockIrql);
+    if (reason != XHCI_INJ_QS_R_OK) {
+        XHCI_DBG_VALUE("qemu inject: query-stop exercise refused, reason",
+                       reason);
+        XhciLogNote(ext, "qemu.inj.qstop.refused", reason);
+        return 0;
+    }
+    XhciLogNote(ext, "qemu.inj.qstop.armed", XHCI_INJ_GET_ARG(value));
+    return 1;
+}
+
+/* An exercise ended: noted with how, and on the debugcon line at once, in
+ * the hold of the controller lock that makes it IDLE, so no bracket can
+ * read IDLE and write a note before this one. IRQL: DISPATCH_LEVEL, the
+ * controller lock held, InjLock not held. */
+static VOID hcdInjQsEndNoteLocked(PHCD_CONTROLLER hc, ULONG how,
+                                  ULONG released)
+{
+    XHCI_DBG_VALUE("qemu inject: query-stop exercise ended, how/released",
+                   (how << 8) | released);
+    XhciLogNoteLocked(&hc->Hc, "qemu.inj.qstop.end", (how << 8) | released);
+}
+
+/*
+ * hcd.h. The thread's step: at most one driver call a turn, each committed
+ * in one hold of the controller lock and the injection lock inside it
+ * (XhciInjQsStep), made with both let go, and recorded in one hold again.
+ * The query and the cancel are the driver's own (HcdMsg4QueryStop,
+ * HcdMsg4CancelStop), called with no IRP: no PnP state is touched, nothing
+ * is forwarded or completed. An end with no call - bit 7 and no debt, a
+ * terminal request's hand-off - is decided, its route's bit cleared, its
+ * notes written and InjQsIdle set in one hold of the controller lock, and
+ * the cancel's end likewise in the hold that records it: a bracket reads
+ * the state under that lock, so whether it waited or found IDLE, its notes
+ * follow the exercise's last. IRQL: PASSIVE_LEVEL, the controller thread,
+ * no lock and no gate held.
+ */
+VOID HcdInjExercise(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+    NTSTATUS status;
+    KIRQL lockIrql;
+    KIRQL oldIrql;
+    ULONG action;
+    ULONG ready;
+    ULONG debt;
+    ULONG released;
+    ULONG leftNote;
+
+    if (hc->InjQs.State != XHCI_INJ_QS_TRIGGERED &&
+        hc->InjQs.State != XHCI_INJ_QS_QUERIED) {
+        return;
+    }
+    ext = &hc->Hc;
+    XhciControllerLockAcquire(ext, &lockIrql);
+    ready = (hc->ControllerStarted &&
+             (ext->Flags & XHCI_EXT_FLAG_STARTED) != 0 &&
+             hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0 &&
+             (ext->Flags & XHCI_EXT_FLAG_SUSPENDED) == 0 &&
+             (hc->CmdWaitLeave & HCD_INJ_QS_ROUTES) == 0)
+                ? 1UL
+                : 0UL;
+    leftNote = ((hc->Left.Owed & 0xFFUL) << 24) |
+               ((hc->Left.Slot & 0xFFUL) << 16);
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    debt = XhciInjQsDebtFits(&hc->InjQs,
+                             hc->Left.Owed != XHCI_LEFT_CLEAR ? 1UL : 0UL,
+                             hc->Left.Slot, hc->Left.PA);
+    /* Before the step, which a hand-off clears it in. */
+    released = hc->InjQs.Released;
+    action = XhciInjQsStep(&hc->InjQs, HcdTolNow(hc), ready, debt);
+    leftNote |= (hc->InjQs.HeldSlot & 0xFFUL) << 8;
+    if (action == XHCI_INJ_QS_NODEBT || action == XHCI_INJ_QS_HANDOFF ||
+        action == XHCI_INJ_QS_ENDED) {
+        hc->CmdWaitLeave &= ~HCD_LEAVE_QTEST;
+    }
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    switch (action) {
+    case XHCI_INJ_QS_NODEBT:
+        /* The withheld command's watchdog won, or the debt names another
+         * command: an unsuccessful arrangement, never a query under a
+         * debt. */
+        XhciLogNoteLocked(ext, "qemu.inj.qstop.nodebt", leftNote);
+        hcdInjQsEndNoteLocked(hc, HCD_INJ_QS_END_NODEBT, 0);
+        (VOID)KeSetEvent(&hc->InjQsIdle, IO_NO_INCREMENT, FALSE);
         break;
-    case XHCI_INJ_TAKE_UNKNOWN:
-        XHCI_DBG_VALUE("qemu inject: no such fault", value);
-        XhciLogNote(ext, "qemu.inj.unknown", value);
+    case XHCI_INJ_QS_HANDOFF:
+        /* A stop or a removal takes the released query over as a real
+         * query that succeeded leaves it: no reconnection. */
+        hcdInjQsEndNoteLocked(hc, HCD_INJ_QS_END_HANDOFF, released);
+        (VOID)KeSetEvent(&hc->InjQsIdle, IO_NO_INCREMENT, FALSE);
+        break;
+    case XHCI_INJ_QS_ENDED:
+        hcdInjQsEndNoteLocked(hc, HCD_INJ_QS_END_ABORTED, 0);
+        (VOID)KeSetEvent(&hc->InjQsIdle, IO_NO_INCREMENT, FALSE);
         break;
     default:
         break;
     }
+    XhciControllerLockRelease(ext, lockIrql);
+
+    switch (action) {
+    case XHCI_INJ_QS_QUERY:
+        status = HcdMsg4QueryStop(hc);
+        released = (NT_SUCCESS(status) && hc->Msg4QueryReleased) ? 1UL : 0UL;
+        XHCI_DBG_VALUE("qemu inject: query-stop made, status",
+                       (ULONG)status);
+        XhciLogNote(ext, "qemu.inj.qstop", (ULONG)status);
+        XhciControllerLockAcquire(ext, &lockIrql);
+        KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+        XhciInjQsQueried(&hc->InjQs, released, HcdTolNow(hc));
+        KeReleaseSpinLock(&hc->InjLock, oldIrql);
+        XhciControllerLockRelease(ext, lockIrql);
+        return;
+    case XHCI_INJ_QS_CANCEL:
+        /* A refused query has reconnected and cleared its own bit
+         * already: no cancel is owed, and none is made. */
+        if (released) {
+            HcdMsg4CancelStop(hc);
+            XHCI_DBG_VALUE("qemu inject: query-stop cancelled, lost",
+                           hc->Msg4Lost);
+            XhciLogNote(ext, "qemu.inj.qcancel", hc->Msg4Lost);
+        }
+        XhciControllerLockAcquire(ext, &lockIrql);
+        KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+        XhciInjQsEnded(&hc->InjQs);
+        hc->CmdWaitLeave &= ~HCD_LEAVE_QTEST;
+        KeReleaseSpinLock(&hc->InjLock, oldIrql);
+        hcdInjQsEndNoteLocked(hc, HCD_INJ_QS_END_CANCEL, released);
+        (VOID)KeSetEvent(&hc->InjQsIdle, IO_NO_INCREMENT, FALSE);
+        XhciControllerLockRelease(ext, lockIrql);
+        return;
+    default:
+        return;
+    }
+}
+
+/*
+ * hcd.h. A real request's bracket, at its dispatch's entry: Busy raised,
+ * Abort set, and for a terminal request Closed and Terminal, in one hold
+ * of both locks. An exercise armed or triggered is ended here, with no
+ * call; one in a call or queried is waited for - the thread woken, which
+ * finishes the call it committed and at its next turn ends the exercise,
+ * by the cancel for a request that is not terminal and by the hand-off
+ * for one that is. Nothing the thread needs is held while waiting. Every
+ * bracket notes qemu.inj.qstop.real (the kind, the state it found, its
+ * answer) once its wait is over, and one that waited
+ * qemu.inj.qstop.waited (ms). IRQL: PASSIVE_LEVEL, no lock, no door gate
+ * and no power gate held.
+ */
+VOID HcdInjRealEnter(PHCD_CONTROLLER hc, ULONG kind, ULONG terminal)
+{
+    PXHCI_EXTENSION ext;
+    LARGE_INTEGER before;
+    LARGE_INTEGER after;
+    KIRQL lockIrql;
+    KIRQL oldIrql;
+    ULONG found;
+    ULONG answer;
+    ULONG waited;
+
+    ext = &hc->Hc;
+    XhciControllerLockAcquire(ext, &lockIrql);
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    found = hc->InjQs.State;
+    answer = XhciInjQsBracket(&hc->InjQs, terminal ? 1UL : 0UL);
+    if (answer == XHCI_INJ_QS_BR_ENDED) {
+        hc->CmdWaitLeave &= ~HCD_LEAVE_QTEST;
+    }
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    if (answer == XHCI_INJ_QS_BR_ENDED) {
+        hcdInjQsEndNoteLocked(hc, HCD_INJ_QS_END_BRACKET, 0);
+        (VOID)KeSetEvent(&hc->InjQsIdle, IO_NO_INCREMENT, FALSE);
+    }
+    XhciControllerLockRelease(ext, lockIrql);
+    if (answer == XHCI_INJ_QS_BR_WAIT) {
+        KeQuerySystemTime(&before);
+        HcdThreadWake(hc);
+        (VOID)HcdWaitEvent(&hc->InjQsIdle, 0);
+        KeQuerySystemTime(&after);
+        waited = (after.LowPart - before.LowPart) / 10000UL;
+        XhciLogNote(ext, "qemu.inj.qstop.waited", waited);
+    }
+    if (answer != XHCI_INJ_QS_BR_NOTHING) {
+        XHCI_DBG_VALUE("qemu inject: query-stop bracket, kind/found/answer",
+                       ((kind & 0xFFUL) << 16) | ((found & 0xFFUL) << 8) |
+                           answer);
+    }
+    XhciLogNote(ext, "qemu.inj.qstop.real",
+                ((kind & 0xFFUL) << 16) | ((found & 0xFFUL) << 8) | answer);
+}
+
+/* hcd.h. Where the driver's own handling of a bracketed request ends.
+ * IRQL: <= DISPATCH_LEVEL, no lock held. */
+VOID HcdInjRealLeave(PHCD_CONTROLLER hc)
+{
+    KIRQL lockIrql;
+    KIRQL oldIrql;
+
+    XhciControllerLockAcquire(&hc->Hc, &lockIrql);
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    XhciInjQsLeave(&hc->InjQs);
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    XhciControllerLockRelease(&hc->Hc, lockIrql);
 }
 
 #else /* release: injection is not in the image */

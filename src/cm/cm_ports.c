@@ -1102,6 +1102,227 @@ ULONG CmPortsLostStep(ULONG outcome, ULONG verdict, ULONG elapsedMs,
     return CM_PORTS_LOST_REMOVE;
 }
 
+BOOLEAN CmPortsSlowArm(ULONG outcome, BOOLEAN refused, ULONG code)
+{
+    return (BOOLEAN)(refused && code != 0xFDUL &&
+                     outcome != CM_PORTS_RW_LOST_REMOVED &&
+                     (outcome == CM_PORTS_RW_LOST_KEPT || code == 0xFEUL ||
+                      code == 0xFCUL));
+}
+
+BOOLEAN CmPortsSlowAlive(BOOLEAN active, ULONG before, ULONG now)
+{
+    return (BOOLEAN)(active && before == now);
+}
+
+ULONG CmPortsUnitPathRouted(const CM_PORTS_UNIT *u, ULONG k, ULONG unitSec,
+                            ULONG memberBdf, const ULONG *bdf,
+                            CM_PORTS_CFG_READ rd, PVOID context)
+{
+    ULONG path[CM_PORTS_UNIT_MAX + 1];
+    ULONG depth;
+    ULONG x;
+    ULONG lo;
+    ULONG hi;
+    ULONG buses;
+    ULONG sec;
+    ULONG sub;
+    ULONG want;
+    ULONG at;
+    ULONG n;
+
+    if (u == NULL || rd == NULL || bdf == NULL) {
+        return CM_PORTS_UNDO_UNPROVEN;
+    }
+    n = u->Count < CM_PORTS_UNIT_MAX ? u->Count : CM_PORTS_UNIT_MAX;
+    if (k >= n) {
+        return CM_PORTS_UNDO_UNPROVEN;
+    }
+    /* The node's ancestors in the table, nearest first; each comes before
+     * its child, so the walk ends at the member. */
+    depth = 0;
+    x = u->N[k].Parent;
+    while (x != CM_PORTS_UNIT_MEMBER) {
+        if (x >= n || depth >= CM_PORTS_UNIT_MAX ||
+            u->N[x].Kind != CM_PORTS_UNIT_BRIDGE ||
+            (depth == 0 ? x >= k : x >= path[depth - 1])) {
+            return CM_PORTS_UNDO_UNPROVEN;
+        }
+        path[depth++] = x;
+        x = u->N[x].Parent;
+    }
+    /* From the member down: each level's bus routed by every bridge above
+     * it, the range narrowed at each. */
+    buses = 0xFFFFFFFFUL;
+    if (!rd(context, memberBdf, 0x18UL, &buses)) {
+        return CM_PORTS_UNDO_UNREAD;
+    }
+    sec = (buses >> 8) & 0xFFUL;
+    sub = (buses >> 16) & 0xFFUL;
+    if (buses == 0xFFFFFFFFUL || sec == 0 || sec != (unitSec & 0xFFUL) ||
+        sub < sec) {
+        return CM_PORTS_UNDO_UNPROVEN;
+    }
+    lo = sec;
+    hi = sub;
+    want = sec;
+    while (depth != 0) {
+        x = path[--depth];
+        at = bdf[x];
+        if (at == 0xFFFFFFFFUL || ((at >> 8) & 0xFFUL) != want) {
+            return CM_PORTS_UNDO_UNPROVEN;
+        }
+        buses = 0xFFFFFFFFUL;
+        if (!rd(context, at, 0x18UL, &buses)) {
+            return CM_PORTS_UNDO_UNREAD;
+        }
+        sec = (buses >> 8) & 0xFFUL;
+        sub = (buses >> 16) & 0xFFUL;
+        want = (u->N[x].Copy[0x18 / 4] >> 8) & 0xFFUL;
+        if (buses == 0xFFFFFFFFUL || want == 0 || sec != want || sub < sec ||
+            sec < lo || sec > hi) {
+            return CM_PORTS_UNDO_UNPROVEN;
+        }
+        lo = sec;
+        if (sub < hi) {
+            hi = sub;
+        }
+    }
+    /* `want` is the bus the node sits on: inside every range above it. */
+    return (want >= lo && want <= hi) ? CM_PORTS_UNDO_RESET
+                                      : CM_PORTS_UNDO_UNPROVEN;
+}
+
+VOID CmPortsUnitUndoPlan(const CM_PORTS_UNIT *u, ULONG unitSec,
+                         ULONG memberBdf, BOOLEAN sameLife,
+                         CM_PORTS_CFG_READ rd, PVOID context, PULONG plan,
+                         PULONG bdf)
+{
+    ULONG n;
+    ULONG k;
+    ULONG par;
+    ULONG want;
+    ULONG route;
+    ULONG id;
+    ULONG cls;
+    ULONG type;
+    ULONG subsys;
+    BOOLEAN reads;
+    BOOLEAN same;
+    const CM_PORTS_UNIT_NODE *node;
+
+    if (u == NULL || rd == NULL || plan == NULL || bdf == NULL) {
+        return;
+    }
+    n = u->Count < CM_PORTS_UNIT_MAX ? u->Count : CM_PORTS_UNIT_MAX;
+    for (k = 0; k < n; k++) {
+        plan[k] = CM_PORTS_UNDO_UNPROVEN;
+        bdf[k] = 0xFFFFFFFFUL;
+    }
+    for (k = 0; k < n; k++) {
+        node = &u->N[k];
+        par = node->Parent;
+        if (!sameLife) {
+            continue;
+        }
+        if (par == CM_PORTS_UNIT_MEMBER) {
+            want = unitSec & 0xFFUL;
+        } else if (par < k && plan[par] == CM_PORTS_UNDO_RESET &&
+                   u->N[par].Kind == CM_PORTS_UNIT_BRIDGE) {
+            want = (u->N[par].Copy[0x18 / 4] >> 8) & 0xFFUL;
+        } else {
+            /* Its parent not proven this unit's: neither is it. */
+            continue;
+        }
+        if (want == 0) {
+            continue;
+        }
+        bdf[k] = (want << 8) | (node->DevFn & 0xFFUL);
+        route = CmPortsUnitPathRouted(u, k, unitSec, memberBdf, bdf, rd,
+                                      context);
+        if (route != CM_PORTS_UNDO_RESET) {
+            /* Not routed to it through the member and this unit's own
+             * bridges now (or not read). */
+            plan[k] = route;
+            continue;
+        }
+        id = 0xFFFFFFFFUL;
+        cls = 0xFFFFFFFFUL;
+        type = 0xFFFFFFFFUL;
+        subsys = 0xFFFFFFFFUL;
+        reads = (BOOLEAN)(rd(context, bdf[k], 0x00UL, &id) &&
+                          rd(context, bdf[k], 0x08UL, &cls) &&
+                          rd(context, bdf[k], 0x0CUL, &type));
+        if (reads && node->Kind == CM_PORTS_UNIT_FN) {
+            reads = rd(context, bdf[k], 0x2CUL, &subsys);
+        }
+        if (!reads) {
+            plan[k] = CM_PORTS_UNDO_UNREAD;
+            continue;
+        }
+        if (node->Kind == CM_PORTS_UNIT_BRIDGE) {
+            same = (BOOLEAN)(id == node->Copy[0] && cls == node->Copy[0x08 / 4] &&
+                             ((type >> 16) & 0x7FUL) == 1UL);
+        } else {
+            same = (BOOLEAN)(id == node->Copy[0] &&
+                             cls == node->Copy[CM_PORTS_UNIT_FN_CLASS] &&
+                             subsys == node->Copy[CM_PORTS_UNIT_FN_SUBSYS] &&
+                             ((type >> 16) & 0x7FUL) == 0UL);
+        }
+        plan[k] = (same && cmPortsIdAnswers(id)) ? CM_PORTS_UNDO_RESET
+                                                  : CM_PORTS_UNDO_OTHER;
+    }
+}
+
+ULONG CmPortsSlowPlace(BOOLEAN noCfg, BOOLEAN live, ULONG secNow,
+                       BOOLEAN doubt, ULONG secRecorded, PULONG sec)
+{
+    *sec = 0;
+    if (noCfg) {
+        return CM_PORTS_SLOW_P_NOTREAD;
+    }
+    secNow &= 0xFFUL;
+    secRecorded &= 0xFFUL;
+    if (live && secNow != 0) {
+        *sec = secNow;
+        return CM_PORTS_SLOW_P_READ;
+    }
+    if (doubt && secRecorded != 0) {
+        *sec = secRecorded;
+        return CM_PORTS_SLOW_P_RECORD;
+    }
+    return live ? CM_PORTS_SLOW_P_RESET : CM_PORTS_SLOW_P_NOTREAD;
+}
+
+ULONG CmPortsUnitNameBus(BOOLEAN doubt, ULONG secRecorded, ULONG secNow)
+{
+    if (doubt && (secRecorded & 0xFFUL) != 0) {
+        return secRecorded & 0xFFUL;
+    }
+    return secNow & 0xFFUL;
+}
+
+BOOLEAN CmPortsRefusalKeep(BOOLEAN active, ULONG lifeAt, ULONG lifeNow,
+                           ULONG epochAt, ULONG epochNow, BOOLEAN stopping,
+                           BOOLEAN asleep)
+{
+    return (BOOLEAN)(CmPortsSlowAlive(active, lifeAt, lifeNow) &&
+                     epochAt == epochNow && !stopping && !asleep);
+}
+
+ULONG CmPortsSlowWait(ULONG sinceMs)
+{
+    return sinceMs < CM_PORTS_SUB_SLOW_MS ? CM_PORTS_SUB_SLOW_MS - sinceMs
+                                          : 1UL;
+}
+
+BOOLEAN CmPortsSlowDue(BOOLEAN armed, BOOLEAN active, BOOLEAN asleep,
+                       BOOLEAN stopping, BOOLEAN epochSame, ULONG sinceMs)
+{
+    return (BOOLEAN)(armed && active && !asleep && !stopping && epochSame &&
+                     sinceMs >= CM_PORTS_SUB_SLOW_MS);
+}
+
 BOOLEAN CmPortsResumeWaitWanted(BOOLEAN read, ULONG buses)
 {
     return (BOOLEAN)(read && buses != 0xFFFFFFFFUL &&
@@ -1454,4 +1675,309 @@ ULONG CmPortsWpuStep(const CM_WPU_IN *in, PULONG why)
         return CM_WPU_V_WAIT;
     }
     return CM_WPU_V_ASK;
+}
+
+/* ---- record 21 section 6.1.6: a dock's or switched enclosure's own switch
+ * put back (TBSTBYWB9X.1) ------------------------------------------------- */
+
+/* (hi, lo) a <= (hi, lo) b. */
+static BOOLEAN cmPortsLe(ULONG ahi, ULONG alo, ULONG bhi, ULONG blo)
+{
+    return (BOOLEAN)(ahi < bhi || (ahi == bhi && alo <= blo));
+}
+
+/* A bridge header's windows: start and end (hi, lo) each; FALSE when the
+ * window is closed (start above end). */
+static BOOLEAN cmPortsWinIo(const ULONG *h, PULONG b, PULONG l)
+{
+    ULONG r;
+
+    r = h[0x1C / 4];
+    *b = (r & 0xF0UL) << 8;
+    *l = (r & 0xF000UL) | 0xFFFUL;
+    if ((r & 0xFUL) == 1UL) {
+        *b |= (h[0x30 / 4] & 0xFFFFUL) << 16;
+        *l |= h[0x30 / 4] & 0xFFFF0000UL;
+    }
+    return (BOOLEAN)(*b <= *l);
+}
+
+static BOOLEAN cmPortsWinMem(const ULONG *h, PULONG b, PULONG l)
+{
+    ULONG r;
+
+    r = h[0x20 / 4];
+    *b = (r & 0xFFF0UL) << 16;
+    *l = (r & 0xFFF00000UL) | 0xFFFFFUL;
+    return (BOOLEAN)(*b <= *l);
+}
+
+static BOOLEAN cmPortsWinPf(const ULONG *h, PULONG bhi, PULONG blo,
+                            PULONG lhi, PULONG llo)
+{
+    ULONG r;
+
+    r = h[0x24 / 4];
+    *blo = (r & 0xFFF0UL) << 16;
+    *llo = (r & 0xFFF00000UL) | 0xFFFFFUL;
+    *bhi = 0;
+    *lhi = 0;
+    if ((r & 0xFUL) == 1UL) {
+        *bhi = h[0x28 / 4];
+        *lhi = h[0x2C / 4];
+    }
+    return cmPortsLe(*bhi, *blo, *lhi, *llo);
+}
+
+BOOLEAN CmPortsUnitNested(const ULONG *parent, const ULONG *child)
+{
+    ULONG pb;
+    ULONG cb;
+    ULONG psec;
+    ULONG psub;
+    ULONG cb0;
+    ULONG cl0;
+    ULONG pb0;
+    ULONG pl0;
+    ULONG cbh;
+    ULONG clh;
+    ULONG pbh;
+    ULONG plh;
+
+    if (parent == NULL || child == NULL) {
+        return FALSE;
+    }
+    pb = parent[0x18 / 4];
+    cb = child[0x18 / 4];
+    psec = (pb >> 8) & 0xFFUL;
+    psub = (pb >> 16) & 0xFFUL;
+    if ((cb & 0xFFUL) != psec || ((cb >> 8) & 0xFFUL) <= psec ||
+        ((cb >> 16) & 0xFFUL) < ((cb >> 8) & 0xFFUL) ||
+        ((cb >> 16) & 0xFFUL) > psub) {
+        return FALSE;
+    }
+    if (cmPortsWinIo(child, &cb0, &cl0) &&
+        (!cmPortsWinIo(parent, &pb0, &pl0) || cb0 < pb0 || cl0 > pl0)) {
+        return FALSE;
+    }
+    if (cmPortsWinMem(child, &cb0, &cl0) &&
+        (!cmPortsWinMem(parent, &pb0, &pl0) || cb0 < pb0 || cl0 > pl0)) {
+        return FALSE;
+    }
+    if (cmPortsWinPf(child, &cbh, &cb0, &clh, &cl0)) {
+        if (cmPortsWinPf(parent, &pbh, &pb0, &plh, &pl0) &&
+            cmPortsLe(pbh, pb0, cbh, cb0) && cmPortsLe(clh, cl0, plh, pl0)) {
+            return TRUE;
+        }
+        if (cmPortsWinMem(parent, &pb0, &pl0) && cbh == 0 && clh == 0 &&
+            cb0 >= pb0 && cl0 <= pl0) {
+            return TRUE;
+        }
+        return FALSE;
+    }
+    return TRUE;
+}
+
+BOOLEAN CmPortsUnitDisjoint(ULONG busesA, ULONG busesB)
+{
+    ULONG sa;
+    ULONG ua;
+    ULONG sb;
+    ULONG ub;
+
+    sa = (busesA >> 8) & 0xFFUL;
+    ua = (busesA >> 16) & 0xFFUL;
+    sb = (busesB >> 8) & 0xFFUL;
+    ub = (busesB >> 16) & 0xFFUL;
+    return (BOOLEAN)(ua < sb || ub < sa);
+}
+
+BOOLEAN CmPortsUnitBarsIn(const ULONG *parent, const ULONG *fn)
+{
+    ULONG k;
+    ULONG bar;
+    ULONG lo;
+    ULONG hi;
+    ULONG b;
+    ULONG l;
+    ULONG bh;
+    ULONG lh;
+    BOOLEAN in;
+
+    if (parent == NULL || fn == NULL) {
+        return FALSE;
+    }
+    for (k = 0; k < 6; k++) {
+        bar = fn[3 + k];
+        if ((bar & 1UL) != 0) {
+            lo = bar & ~0x3UL;
+            if (lo != 0 &&
+                (!cmPortsWinIo(parent, &b, &l) || lo < b || lo > l)) {
+                return FALSE;
+            }
+            continue;
+        }
+        lo = bar & ~0xFUL;
+        hi = 0;
+        if ((bar & 0x6UL) == 0x4UL) {
+            if (k + 1 >= 6) {
+                return FALSE;
+            }
+            hi = fn[3 + k + 1];
+            k++;
+        }
+        if (lo == 0 && hi == 0) {
+            continue;
+        }
+        in = FALSE;
+        if (hi == 0 && cmPortsWinMem(parent, &b, &l) && lo >= b && lo <= l) {
+            in = TRUE;
+        }
+        if (!in && cmPortsWinPf(parent, &bh, &b, &lh, &l) &&
+            cmPortsLe(bh, b, hi, lo) && cmPortsLe(hi, lo, lh, l)) {
+            in = TRUE;
+        }
+        if (!in) {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+ULONG CmPortsUnitBridgeNow(const ULONG *copy, BOOLEAN reads, const ULONG *now)
+{
+    ULONG k;
+
+    if (copy == NULL || now == NULL || !reads ||
+        !cmPortsIdAnswers(now[CM_PORTS_UNIT_BR_ID])) {
+        return CM_PORTS_UNIT_NOTYET;
+    }
+    if (now[CM_PORTS_UNIT_BR_ID] != copy[0] ||
+        now[CM_PORTS_UNIT_BR_TYPE] == 0xFFFFFFFFUL ||
+        ((now[CM_PORTS_UNIT_BR_TYPE] >> 16) & 0x7FUL) != 1UL) {
+        return CM_PORTS_UNIT_OTHER;
+    }
+    if (CmPortsHdrEligible(now[CM_PORTS_UNIT_BR_CMD],
+                           now[CM_PORTS_UNIT_BR_18])) {
+        return CM_PORTS_UNIT_RESET;
+    }
+    if ((now[CM_PORTS_UNIT_BR_CMD] & 0x7UL) != (copy[1] & 0x7UL) ||
+        (now[CM_PORTS_UNIT_BR_18] & 0xFFFFFFUL) !=
+            (copy[0x18 / 4] & 0xFFFFFFUL) ||
+        (now[CM_PORTS_UNIT_BR_18 + 1] & 0xFFFFUL) !=
+            (copy[0x1C / 4] & 0xFFFFUL)) {
+        return CM_PORTS_UNIT_STATE;
+    }
+    for (k = 2; k < 7; k++) {
+        if (now[CM_PORTS_UNIT_BR_18 + k] != copy[0x18 / 4 + k]) {
+            return CM_PORTS_UNIT_STATE;
+        }
+    }
+    return CM_PORTS_UNIT_ASCOPY;
+}
+
+ULONG CmPortsUnitFnNow(const ULONG *copy, BOOLEAN reads, const ULONG *now)
+{
+    ULONG k;
+
+    if (copy == NULL || now == NULL || !reads ||
+        !cmPortsIdAnswers(now[0])) {
+        return CM_PORTS_UNIT_NOTYET;
+    }
+    if (now[0] != copy[0] || now[2] == 0xFFFFFFFFUL ||
+        ((now[2] >> 16) & 0x7FUL) != 0UL ||
+        now[CM_PORTS_UNIT_FN_CLASS] != copy[CM_PORTS_UNIT_FN_CLASS] ||
+        now[CM_PORTS_UNIT_FN_SUBSYS] != copy[CM_PORTS_UNIT_FN_SUBSYS]) {
+        return CM_PORTS_UNIT_OTHER;
+    }
+    if (CmPortsEpReset(now[1], &now[3])) {
+        return CM_PORTS_UNIT_RESET;
+    }
+    if (now[1] == 0xFFFFFFFFUL || (now[1] & 0x7UL) != (copy[1] & 0x7UL)) {
+        return CM_PORTS_UNIT_STATE;
+    }
+    for (k = 0; k < 6; k++) {
+        if (now[3 + k] == 0xFFFFFFFFUL ||
+            cmPortsBarAddr(now[3 + k]) != cmPortsBarAddr(copy[3 + k])) {
+            return CM_PORTS_UNIT_STATE;
+        }
+        if ((copy[3 + k] & 0x7UL) == 0x4UL && k + 1 < 6) {
+            /* A 64-bit memory BAR's upper half: address, whole. */
+            if (now[3 + k + 1] != copy[3 + k + 1]) {
+                return CM_PORTS_UNIT_STATE;
+            }
+            k++;
+        }
+    }
+    return CM_PORTS_UNIT_ASCOPY;
+}
+
+BOOLEAN CmPortsUnitDoubt(ULONG result)
+{
+    return (BOOLEAN)(result != CM_PORTS_UNIT_N_NONE &&
+                     result != CM_PORTS_UNIT_N_WRITTEN &&
+                     result != CM_PORTS_UNIT_N_ASCOPY);
+}
+
+BOOLEAN CmPortsUnitLost(ULONG kind, ULONG recordedId, BOOLEAN reads,
+                        ULONG id, ULONG typeDword, ULONG buses, ULONG cmd,
+                        const ULONG *bars)
+{
+    if (!reads || id != recordedId || !cmPortsIdAnswers(id) ||
+        typeDword == 0xFFFFFFFFUL) {
+        return FALSE;
+    }
+    if (kind == CM_PORTS_UNIT_BRIDGE) {
+        return (BOOLEAN)(((typeDword >> 16) & 0x7FUL) == 1UL &&
+                         buses != 0xFFFFFFFFUL &&
+                         ((buses >> 8) & 0xFFUL) == 0);
+    }
+    return (BOOLEAN)(((typeDword >> 16) & 0x7FUL) == 0UL && bars != NULL &&
+                     CmPortsEpReset(cmd, bars));
+}
+
+VOID CmPortsUnitVerdict(BOOLEAN owes, BOOLEAN doubt, BOOLEAN reads,
+                        ULONG idNow, ULONG devfn, ULONG upId,
+                        const CM_PORTS_SUB *note, PULONG verdict,
+                        CM_PORTS_SUB *lost)
+{
+    ULONG k;
+
+    if (verdict == NULL || lost == NULL || !owes) {
+        return;
+    }
+    if (doubt) {
+        /* The obligation's own record, whatever the note now holds or the
+         * verdict already says: its upstream port among the entries. */
+        for (k = 0; k < lost->Count && k < CM_PORTS_SUB_MAX; k++) {
+            if (lost->DevFn[k] == devfn && lost->Id[k] == upId) {
+                *verdict = CM_PORTS_SUBV_LOST;
+                return;
+            }
+        }
+        k = lost->Count < CM_PORTS_SUB_MAX ? lost->Count
+                                           : CM_PORTS_SUB_MAX - 1UL;
+        lost->DevFn[k] = devfn;
+        lost->Id[k] = upId;
+        lost->Count = k + 1UL;
+        *verdict = CM_PORTS_SUBV_LOST;
+        return;
+    }
+    if (note == NULL || *verdict == CM_PORTS_SUBV_LOST) {
+        return;
+    }
+    if (!reads || idNow != upId) {
+        /* Not the same device at its place now: today's verdict. */
+        return;
+    }
+    for (k = 0; k < note->Count && k < CM_PORTS_SUB_MAX; k++) {
+        if (note->DevFn[k] == devfn && note->Id[k] == upId &&
+            lost->Count < CM_PORTS_SUB_MAX) {
+            lost->DevFn[lost->Count] = devfn;
+            lost->Id[lost->Count] = upId;
+            lost->Count++;
+            *verdict = CM_PORTS_SUBV_LOST;
+            return;
+        }
+    }
 }

@@ -155,6 +155,25 @@ XHCI_C_ASSERT(xhci_snap_hcd_utime,
               XHCI_SNAPSHOT_HCD_UTIME_AT +
                       XHCI_SNAPSHOT_HCD_UFAIL_COUNT *
                           XHCI_SNAPSHOT_HCD_UTIME_RECORD_WORDS ==
+                  XHCI_SNAPSHOT_HCD_WHY_AT);
+
+/* Task 50.30 step 1: the reasons' two words, then task 50.31's two (design
+ * record 38 section 15.3). */
+XHCI_C_ASSERT(xhci_snap_hcd_why,
+              XHCI_SNAPSHOT_HCD_WHY_AT + 1 == XHCI_SNAPSHOT_HCD_WHY_BYTES &&
+              XHCI_SNAPSHOT_HCD_WHY_BYTES + 1 ==
+                  XHCI_SNAPSHOT_HCD_RETRY_AT &&
+              XHCI_SNAPSHOT_HCD_RETRY_AT + 1 ==
+                  XHCI_SNAPSHOT_HCD_RETRY_BYTES &&
+              XHCI_SNAPSHOT_HCD_RETRY_BYTES + 1 ==
+                  XHCI_SNAPSHOT_HCD_PSW_WORDS);
+
+/* Task 50.34: two words, then the port switchover's record, which ends
+ * the header. */
+XHCI_C_ASSERT(xhci_snap_hcd_psw,
+              XHCI_SNAPSHOT_HCD_PSW_WORDS + 1 == XHCI_SNAPSHOT_HCD_PSW_WRITE &&
+              XHCI_SNAPSHOT_HCD_PSW_WRITE + 1 == XHCI_SNAPSHOT_HCD_PSW_AT &&
+              XHCI_SNAPSHOT_HCD_PSW_AT + XHCI_SNAPSHOT_HCD_PSW_COUNT ==
                   XHCI_SNAPSHOT_HCD_HEAD_WORDS);
 
 /* The image carries the counter block whole, word for word. */
@@ -265,6 +284,16 @@ ULONG XhciSnapHcdHead(ULONG ports, ULONG word)
         return XHCI_SNAPSHOT_HCD_UTIME_RECORD_WORDS;
     case XHCI_SNAPSHOT_HCD_UTIME_FIRST:
         return XHCI_SNAPSHOT_HCD_UTIME_AT;
+    case XHCI_SNAPSHOT_HCD_WHY_AT:
+        return XHCI_FIELD_OFFSET(XHCI_EXTENSION, Why);
+    case XHCI_SNAPSHOT_HCD_WHY_BYTES:
+        return (ULONG)sizeof(XHCI_TOL_WHY);
+    case XHCI_SNAPSHOT_HCD_RETRY_AT:
+        return XHCI_FIELD_OFFSET(XHCI_EXTENSION, Retry);
+    case XHCI_SNAPSHOT_HCD_RETRY_BYTES:
+        return (ULONG)sizeof(XHCI_TOL_RETRY);
+    case XHCI_SNAPSHOT_HCD_PSW_WORDS:
+        return XHCI_SNAPSHOT_HCD_PSW_COUNT;
     default:
         /* XHCI_SNAPSHOT_HCD_TERMINAL, the routing record, the transfer
          * readings, the class driver records, 36.38's DNCTRL words and

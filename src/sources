@@ -83,6 +83,8 @@ SOURCES=xhci_mem.c    \
         xhci_xstat.c  \
         xhci_xpipe.c  \
         xhci_tol.c    \
+        xhci_retry.c  \
+        hcd_retry.c   \
         xhci_pipe.c   \
         xhci_stream.c \
         xhci_func.c   \

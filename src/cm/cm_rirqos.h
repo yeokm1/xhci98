@@ -188,6 +188,9 @@ ULONG CmRirqNtConnect(struct _CM_NHI *nhi);
 ULONG CmRirqNtReArm(struct _CM_NHI *nhi);
 ULONG CmRirqNtDisconnect(struct _CM_NHI *nhi, ULONG how);
 ULONG CmRirqNtVector(struct _CM_NHI *nhi, PULONG data);
+/* The library's end, last in cmUnload (record 21 section 4.5.19).
+ * PASSIVE_LEVEL, DriverUnload. */
+VOID CmRirqNtEnd(VOID);
 /* cm_thr.c: `length` bytes of configuration space at `offset` through the
  * NHI's own route, the liveness gate's rules (with the absence proof's
  * one admission, ProofRead): the bytes moved, 0 when refused. */

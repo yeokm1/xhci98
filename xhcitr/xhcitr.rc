@@ -78,7 +78,7 @@ BEGIN
         MENUITEM SEPARATOR
         MENUITEM "Start at &login",                     IDM_LOGIN
         MENUITEM "&Warn when a device is removed unexpectedly", IDM_RMWARN
-        MENUITEM "Tell me when a device can run &faster", IDM_FAST
+        MENUITEM "Warn when a device can run &faster", IDM_FAST
         MENUITEM "Watch Windows' own USB &ports too",   IDM_FAST_WIN
         MENUITEM SEPARATOR
         MENUITEM "Logging le&vel...",                   IDM_LEVEL
@@ -87,6 +87,7 @@ BEGIN
     POPUP "&Action"
     BEGIN
         MENUITEM "&Safely Remove...\tDel",  IDM_EJECT
+        MENUITEM "&Restart Controller...",  IDM_RESTART
         MENUITEM "&Properties\tEnter",      IDM_PROPS
     END
     POPUP "&Help"
@@ -125,22 +126,41 @@ BEGIN
     PUSHBUTTON      "Cancel", IDCANCEL, 202, 62, 50, 14
 END
 
+/* Task 50.32: the restart's confirmation (record 25 section 27 item 6);
+ * its texts are drafts, set at run time. Cancel is the default. */
+IDD_RESTART DIALOG 0, 0, 300, 196
+STYLE DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "xHCI98 USB Tree"
+FONT 8, "MS Sans Serif"
+BEGIN
+    LTEXT           "", IDC_RST_HEAD, 8, 8, 284, 34
+    EDITTEXT        IDC_RST_LIST, 8, 44, 284, 80, ES_MULTILINE | ES_READONLY |
+                    ES_AUTOVSCROLL | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "", IDC_RST_NOTE, 8, 128, 284, 44
+    PUSHBUTTON      "Restart", IDOK, 128, 176, 100, 14
+    DEFPUSHBUTTON   "Cancel", IDCANCEL, 234, 176, 58, 14
+END
+
+/* Task 50.39: the heading is a read-only box with no border that
+ * scrolls (record 25 section 28 item 4). */
 IDD_SETTINGS DIALOG 0, 0, 330, 262
 STYLE DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "xHCI98 Settings"
 FONT 8, "MS Sans Serif"
 BEGIN
     CONTROL         "", IDC_S_TAB, "SysTabControl32", WS_TABSTOP, 6, 4, 318, 14
-    LTEXT           "", IDC_S_HEAD, 8, 22, 230, 18
+    EDITTEXT        IDC_S_HEAD, 8, 22, 230, 26, ES_MULTILINE | ES_READONLY |
+                    ES_AUTOVSCROLL | WS_VSCROLL | NOT WS_BORDER |
+                    NOT WS_TABSTOP
     PUSHBUTTON      "&Restart now...", IDC_S_RESTART, 244, 22, 80, 14
-    LTEXT           "Applies &to:", IDC_S_SCOPE_L, 8, 44, 40, 10
-    COMBOBOX        IDC_S_SCOPE, 50, 42, 274, 100, CBS_DROPDOWNLIST |
+    LTEXT           "Applies &to:", IDC_S_SCOPE_L, 8, 52, 40, 10
+    COMBOBOX        IDC_S_SCOPE, 50, 50, 274, 100, CBS_DROPDOWNLIST |
                     WS_VSCROLL | WS_TABSTOP
-    LTEXT           "Fi&nd:", IDC_S_FIND_L, 8, 59, 40, 10
-    EDITTEXT        IDC_S_FIND, 50, 57, 274, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "Fi&nd:", IDC_S_FIND_L, 8, 67, 40, 10
+    EDITTEXT        IDC_S_FIND, 50, 65, 274, 12, ES_AUTOHSCROLL | WS_TABSTOP
     CONTROL         "", IDC_S_LIST, "SysListView32", LVS_REPORT |
                     LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER |
-                    WS_TABSTOP, 8, 72, 316, 98
+                    WS_TABSTOP, 8, 80, 316, 90
     AUTOCHECKBOX    "Show &advanced settings", IDC_S_ADV, 8, 175, 150, 10
     PUSHBUTTON      "&Logging level...", IDC_S_LEVEL, 244, 173, 80, 14
     EDITTEXT        IDC_S_NOTE, 8, 190, 316, 28, ES_MULTILINE | ES_READONLY |
@@ -150,19 +170,21 @@ BEGIN
     EDITTEXT        IDC_S_NUM, 8, 222, 60, 12, ES_NUMBER | ES_AUTOHSCROLL
     LTEXT           "", IDC_S_RANGE, 72, 224, 190, 10
     PUSHBUTTON      "&Default", IDC_S_DEF, 268, 221, 56, 14
-    AUTOCHECKBOX    "Start at log&in", IDC_S_LOGIN, 8, 46, 316, 10
+    AUTOCHECKBOX    "Start at log&in", IDC_S_LOGIN, 8, 54, 316, 10
     AUTOCHECKBOX    "&Warn when a device is removed unexpectedly",
-                    IDC_S_WARN, 8, 60, 316, 10
-    AUTOCHECKBOX    "Tell me when a device can run &faster", IDC_S_FAST, 8,
-                    74, 316, 10
+                    IDC_S_WARN, 8, 68, 316, 10
+    AUTOCHECKBOX    "Warn when a device can run &faster", IDC_S_FAST, 8,
+                    82, 316, 10
     AUTOCHECKBOX    "Watch Windows' own USB &ports too", IDC_S_FASTWIN, 20,
-                    88, 304, 10
-    AUTOCHECKBOX    "USB &drive notices", IDC_S_STOR, 8, 102, 316, 10
-    AUTOCHECKBOX    "Quick-save &hotkey:", IDC_S_HK, 8, 122, 80, 10
-    COMBOBOX        IDC_S_HKKEY, 90, 120, 110, 100, CBS_DROPDOWNLIST |
+                    96, 304, 10
+    AUTOCHECKBOX    "USB &drive notices", IDC_S_STOR, 8, 110, 316, 10
+    AUTOCHECKBOX    "Warn when a USB port is put &on hold", IDC_S_HOLD, 8,
+                    124, 316, 10
+    AUTOCHECKBOX    "Quick-save &hotkey:", IDC_S_HK, 8, 144, 80, 10
+    COMBOBOX        IDC_S_HKKEY, 90, 142, 110, 100, CBS_DROPDOWNLIST |
                     WS_VSCROLL | WS_TABSTOP
-    LTEXT           "", IDC_S_HKNOTE, 206, 119, 118, 18
-    AUTOCHECKBOX    "&Sound when a quick save ends", IDC_S_SND, 8, 142, 150,
+    LTEXT           "", IDC_S_HKNOTE, 206, 141, 118, 18
+    AUTOCHECKBOX    "&Sound when a quick save ends", IDC_S_SND, 8, 164, 150,
                     10
     DEFPUSHBUTTON   "Apply", IDOK, 152, 242, 114, 14
     PUSHBUTTON      "Close", IDCANCEL, 272, 242, 52, 14

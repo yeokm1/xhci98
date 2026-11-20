@@ -1,6 +1,23 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 64, 2026-11-14 (roadmap-usb4 task 49.44, reviewed and
+Status: revision 67, 2026-11-20 (a stale bus entry is removed by the
+helper's `removestale` job, which reads the entry's conditions again
+immediately before the removal and keeps it, with its reason, when they no
+longer hold (design record 27 section 9.1); the window's Summary shows the
+plan's line on entries past the 32 one run removes; sections 6.3 and 6.4);
+revision 66, 2026-11-20 (the owner's answer of that day on
+revision 65's readings: the uninstall says its line for an entry it leaves
+once, though it reads Enum three times; a plan row that would pass the
+console's 79 columns puts its action on a line of its own, its words
+unchanged; sections 6.4 and 9.4);
+revision 65, 2026-11-20 (roadmap-usb4 Phase 50, the owner's
+decision of that day, `runs/run-50.md` "50.17 (Setup, deleted key)": a
+driver key deleted by hand under an Enum entry that still names it no
+longer stops Setup - on NT the Enum entry's own service decides, on 98 SE
+and ME the Enum entry must prove the device the package's, and the
+package's own bus entries left with no devnode are removed; sections 5.3,
+5.4, 6.3, 6.4 and 9.4);
+revision 64, 2026-11-14 (roadmap-usb4 task 49.44, reviewed and
 revised: only the controllers the warning covered are taken over, so one
 a barrier's reading finds after a warning that was not shown, or did not
 name it, is left for the run; section 5.4.2);
@@ -1281,6 +1298,24 @@ read has three answers: the value, absent (the key opened and the value
 is not there), or unreadable (the key did not open, or the value is not a
 string, or does not parse); only the first two are used for a decision.
 
+**A driver key deleted by hand** (revision 65; `runs/run-50.md`, "50.17
+(Setup, deleted key)"). A device's `Driver` value can name a key that is
+not there: deleted by hand, the Enum entry left (read on 98 SE, 2000 and
+XP). Such a key is **gone** when all of these hold: the `Driver` value was
+read and has the system's own form - on 98 and ME `<class>\NNNN` (letters,
+digits or `_`, a backslash, four decimal digits), on NT `{GUID}\NNNN` (the
+GUID as 8-4-4-4-12 hex digits) (`inst_driver_value_form`); its path was
+built; and opening it answers `ERROR_FILE_NOT_FOUND`. A gone key is read
+as an absent version, shown "(driver entry missing)" (`KeyGone`), so it
+does not make its group's verdict unknown (section 5.4); its `InfPath`
+stays unreadable, so the uninstall's INF reference check (section 9.2) and
+`/restage` (section 5.7) refuse as before; and the UAS entries not plugged
+in of section 5.5.1 are updated only with a key that is there. Any other
+answer (another form, access denied, another error) is unreadable, as
+above, and handled as before. On 98 and ME the key also named the owner
+(`NTMPDriver`, section 6.3), so there a gone key leaves the device with no
+service read, and section 6.3 decides who owns it.
+
 A device is **matched** by an INF when one of its hardware or compatible
 ids equals one of the INF's model ids for the running system, compared
 without case.
@@ -1379,6 +1414,7 @@ problem code turns it into an install. Then:
 | The same, equal to the package's | current, nothing done, unless a file of its group differs from the package's (section 5.4.1); `/force` reinstalls |
 | The same, newer than the package | refused (section below); `/force` installs the older release (going back) |
 | The same, `DriverVersion` unreadable | unknown: refused, said, `/force` does not override it |
+| The same, its driver key gone (section 5.3, revision 65) | update: the Enum entry's `Service` still names the owner, and the version is absent; on 98 and ME section 6.3 decides first |
 | A tunnel port (`xhcicmf.inf`) bound to `pci` without `xhcicm` in `UpperFilters` | install the filter (the INF keeps `pci.sys` through `machine.inf`'s section) |
 | A tunnel port with `xhcicm` in `UpperFilters` | as for an own service |
 | Bound to any other service | foreign: listed, left |
@@ -3425,6 +3461,61 @@ stays a step (exit 4), but does not make the confirmation speak of an
 install; the run on an otherwise current machine changes nothing and says
 "No changes were made."
 
+**A driver key deleted by hand** (revision 65; section 5.3). With the key
+gone the device's owner went with its `NTMPDriver`, so the plan never
+reads such a device as having no driver on its ids alone (decision D3): it
+installs there only when the Enum entry itself proves the device the
+package's (`inst_keygone_ours9x`) - (a) an id only the package's drivers
+create (`USB\XHCI98_ROOT_HUB`, `_HUB`, `_HUB30`, `_COMPOSITE` and the old
+`XHCI98\` forms, `XHCICM\`, `XHCIUAS\`), or (b) the entry's `Mfg` value
+exactly "xHCI98 Project", the manufacturer of every INF of the package's
+own drivers, which the setup engine copies into the Enum entry when it
+installs from one of them (Stor98's INF has its own, so a Stor98 drive is
+proven by neither). A proven device with a devnode is planned and
+installed as one with no driver, by the helper (record 27), the setup
+engine writing the new driver key. One not proven that an INF of the
+package matches is left: "Skip (driver entry missing)"
+(`INST_ACT_ORPHAN`), never run, never refusing its group, and decided
+before every later per-INF rule (Stor98's gate, the takeover, the names,
+which leave its entry whole whether or not it has a devnode), with a step
+(section 6.4). One no INF matches is only logged. So a missing key no
+longer stops the run; a key that is there and cannot be read still does,
+as above. The Thunderbolt reading still counts a device with a gone key as
+not read whole, so the eject's refusal and Stor98's placement stay as they
+were.
+
+The package's own bus entries (`HKLM\Enum\USB\XHCI98_ROOT_HUB`,
+`XHCI98_HUB`, `XHCI98_HUB30` and `XHCI98_COMPOSITE`) with a gone key and
+no devnode - the root hub of a controller whose own key was deleted too,
+which has no devnode while its controller runs no driver - are **stale bus
+entries**. They are found, read only, with the devices; shown under
+"Supported devices:" with "Remove the old entry" ("would remove the old
+entry" in `/list`) in the console, `/list` and the window's table and
+Summary; counted as a change; and part of the confirmed plan's signature
+(section 5.1), so a list that changed before the first change stops the
+run as a changed device does. One run lists and removes at most 32; more
+are said in the plan ("More old entries like these are left for the next
+run of Setup.", which the window's Summary, the page its confirmation is
+on, shows too: revision 67) and leave the run with a step (exit 4) to
+restart and run Setup again. They are removed only in an install run (not
+`/list`) with the USB drivers in it and the `xhci98.sys` group allowed,
+through the helper's `removestale` job (record 27 section 9.1, revision
+67), which reads the conditions below again itself immediately before the
+removal and keeps the entry when they no longer hold, after the
+controllers' pass: the tree settled and read again as before every later
+pass, the wizard gate, then each entry of the confirmed list read again
+(its key still gone and `CM_Locate_DevNode` answering
+`CR_NO_SUCH_DEVNODE`; any other answer leaves it, logged) and, after its
+removal, read again and gone. After the restart Windows is expected to
+make the entry afresh when the controller enumerates its root hub, and to
+install it from the INF; where it does not, the next run finds the root
+hub present with no driver and installs it, so the run says to run Setup
+again after the restart (section 6.4). Nothing else is written: no
+`Driver` value edited, no driver key made by Setup, no entry of another
+device touched; an entry the helper finds present at its last listing is
+kept, but a devnode Windows makes after that listing is not seen (record
+27 section 9.1).
+
 ### 6.4 What it prints
 
 **The form** (owner, 2026-10-16, revision 10): the tool cannot put the
@@ -3530,6 +3621,37 @@ disk is plugged in (the ME leg of 2026-10-15: a UAS disk as the first
 storage device installed silently from the staged INF and sat at Code 2,
 through a restart, as the release notes say). The run ends with exit 4: staged, steps left for the
 user.
+
+(Revision 65, section 6.3) A device left as "Skip (driver entry missing)":
+in the plan "Its driver entry is missing, and its entry does not show that
+it was this package's: Setup leaves it.", and in the steps, whether or not
+the helper ran, "Its driver entry in the registry is missing. Device
+Manager: remove it, restart, and run Setup again." - a step (exit 4), with
+the offer to open Device Manager. A stale bus entry removed: "Removed the
+old entry of <name>: its driver entry was missing." One not removed (the
+helper failed, declined or was not running, the entry is still recorded
+after its job, the plan made again during the passes refused the
+`xhci98.sys` group, or the run stopped before it) is a step, never a
+failure: exit 4, the rest of the run going on, and under "What to do now",
+whether or not the helper ran, "<name>: its old entry could not be removed
+(<verdict>). Restart Windows and run Setup again." - Device Manager does
+not list an entry with no devnode. After a stale entry removed or a device
+with a gone key installed, the steps also say "After the restart, run
+Setup again: it checks the devices Windows sets up again.", advice that
+leaves the exit code as it is.
+
+(Revision 66) A device's row in the plan ("INF <inf>; driver <driver>
+<text>; <action>") that would pass the console's 79 columns, as the
+orphan's does, is printed with its action on a line of its own under it,
+as a stale bus entry's row is (`inst_plan_row`); a row that fits stays one
+line, and the words are the same either way.
+
+(Revision 67) A stale bus entry the helper keeps (`RESULT kept`: Windows
+set the device up again, or its driver key came back, or its entry could
+not be read as stale immediately before the removal) is a step like any
+entry not removed: "<name>: its old entry could not be removed (Windows
+set it up again)." for `devnode` and `key`, "(it could not be checked)"
+for the other reasons; exit 4, the rest of the run going on.
 
 ### 6.5 After the restart
 
@@ -3976,7 +4098,8 @@ user-visible effect, off or on by default for a reason the user can judge
 
 | Value | INF, section | Asked when | Allowed (asked) | Allowed (`/set`) | Meaning shown |
 |---|---|---|---|---|---|
-| `XhciIntelPortSwitch` | `xhci98.inf`, the controller's | a present controller passes the driver's `XhciPswGate` (Intel 7-, 8- and 9-series, C610) | 0, 1 | 0, 1, 2 (2 is the README's "at your own risk" setting for other Intel controllers) | route the shared connectors from the EHCI controller to this driver. From roadmap-usb4 task 49.47 the INF's 0 is not Enter's at a first install on such a board: Setup proposes 1 (Enter, and `/yes` with no other answer, write it machine-wide once the run has installed a listed controller, after the results check; a refused, failed or cancelled install writes nothing for it), and an update keeps what is set (design record 16 section 19) |
+| `XhciIntelPortSwitch` | `xhci98.inf`, the controller's | a present controller passes the driver's `XhciPswGate` (Intel 7-, 8- and 9-series, C610) | 0, 1 | 0, 1, 2 (2 is the README's "at your own risk" setting for other Intel controllers) | route the shared connectors from the EHCI controller to this driver. From roadmap-usb4 task 49.47 the INF's 0 is not Enter's at a first install on such a board: Setup proposes 1 (Enter, and `/yes` with no other answer, write it machine-wide once the run has installed a listed controller, after the results check; a refused, failed or cancelled install writes nothing for it), and an update keeps what is set (design record 16 section 19). From task 50.34 the INFs write 1 as well (record 16 section 21.8): the proposal is kept, redundant for a new controller key, so that the question still shows the choice and an answer of 0 still writes a machine-wide 0 that wins; on 2000 and later the connectors move only as record 16 section 21 allows |
+| `XhciIntelPortSwitchSetup` | `xhci98.inf`, the controller's | never (task 50.34; the window's Advanced) | - | 0, 1, 2 | the Windows Setup check for the port switchover: 0 automatic, 1 bypass, 2 never move the connectors while the switchover is on (record 16 section 21.4). The guard's own per-controller value, `XhciIntelPortSwitchReady`, is not Setup's: no row, no `/set`, no uninstall step (`INST_LOC_CTRL`; the USB Tree's alone) |
 | `XhciInterruptMode` | `xhci98.inf`, the controller's | never (revision 37, D20 (b); the window's Advanced) | - | 0, 1, 2; 3 on Vista and 7 only (it fails the start elsewhere) | automatic, line only, polling always, message only |
 | `XhciPollFineTimer` | `xhci98.inf`, the controller's | never (owner, 2026-10-15) | - | 0, 1 | a finer system clock while polling |
 | `XhciSelectiveSuspend` | `xhci98.inf`, the controller's | never (owner, 2026-10-15) | - | 0, 1 | put idle devices to sleep (off by default; read on the release notes' terms) |
@@ -4631,6 +4754,28 @@ made for it, (revision 25) the two INFs it placed in `%windir%\INF`
 itself with their `.PNF` files, and the files it copied, each only by
 its record and the reference checks, none while NUSB's
 `Uninstall\USB20U` is present.
+
+(Revision 65, section 5.3) An Enum entry whose driver key is gone no
+longer stops the walk. It is the package's when the entry proves it
+(section 6.3's proofs (a) and (b)); since the key named its driver, its
+place in the removal order is read from the entry itself, so no package
+and no INF is needed: a `PCI\` entry with `PCI\CC_0C0330` among its ids as
+`xhci98`'s, any other `PCI\` entry as `xhcicm`'s (a host interface: no
+other INF of the package installs a PCI function on these systems),
+anything else as a UAS function's, before every parent. So no proven entry
+escapes the removals or the final reading that must find none before the
+files and INFs go. A proven `PCI\` entry whose ids cannot be read stops
+the walk, as an unreadable entry does. An xHCI controller or USB4 host
+interface with a gone key and no proof is left and said ("<id>: its driver
+entry is missing and it does not show that it was this package's: left.");
+any other entry with a gone key and no proof is not the package's and is
+only logged. Neither stops the uninstall.
+
+(Revision 66) The uninstall reads Enum three times (its first walk, the
+one after the gate, the final check); the line for a controller or host
+interface it leaves is said once per entry (`inst_once`), the later
+readings only logged; the list holds 256 entries, as many as the uninstall
+holds of its own, and past that a line is said again rather than lost.
 
 ### 9.5 The xHCI98 USB Tree (`XHCITR`)
 

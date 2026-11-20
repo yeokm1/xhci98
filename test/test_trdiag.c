@@ -54,6 +54,13 @@ static void dv_sz(TR_DVAL *v, const char *s)
     memcpy(v->Data, s, v->Len);
 }
 
+/* A single-byte code page's test: no lead bytes. */
+static int diag_sb(unsigned char c)
+{
+    (void)c;
+    return 0;
+}
+
 static int has(const char *s)
 {
     return strstr(text, s) != NULL;
@@ -69,6 +76,9 @@ static int cols_ok(void)
         if (*p == '\r' || *p == '\n') {
             col = 0;
             continue;
+        }
+        if (*p == TR_FIT_WHOLE && col == 0) {
+            continue;           /* task 50.39's mark, not a column */
         }
         if (++col > 79) {
             return 0;
@@ -245,7 +255,7 @@ static void test_pfw(void)
     tr_text_init(&t, text, sizeof(text));
     tr_pfw_text(&t, TR_DK_OPEN, 0, v, 1);
     CHECK(cols_ok(), "pfw: a 56-character version within 79 columns");
-    CHECK(has("XhciPfwVersion\r\n    \"XHCIPFW.VXD"), "pfw: long version");
+    CHECK(has("XhciPfwVersion\r\n\001    \"XHCIPFW.VXD"), "pfw: long version");
 
     tr_text_init(&t, text, sizeof(text));
     tr_pfw_text(&t, TR_DK_ABSENT, 2, v, 0);
@@ -558,10 +568,98 @@ static void test_node(void)
     tr_diag_nhi(&t, "A Thunderbolt or USB4 host interface whose description "
                     "runs well past the width of one line of the pane",
                 "PCI\\VEN_8086&DEV_15EB&SUBSYS_00000000&REV_06\\"
-                "4&2D2BB2E9&0&00E0&AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+                "4&2D2BB2E9&0&00E0&AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                NULL);
     CHECK(!t.Overflow && cols_ok(), "node: 79 columns");
     CHECK(has("Edit > Copy with nothing selected"), "node: the copy hint");
     CHECK(has("    PCI\\VEN_8086"), "node: the id");
+    CHECK(has("\001    PCI\\VEN_8086"), "node: the id marked whole");
+}
+
+/* Task 50.39 (record 25 section 28 item 11): a name with no space cut into
+ * lines of 77 bytes at indent 2, between characters. */
+static int diag_sjis(unsigned char c)
+{
+    return (c >= 0x81 && c <= 0x9F) || (c >= 0xE0 && c <= 0xFC);
+}
+
+static void diag_dbcs(char *s, int one1, int chars)
+{
+    int i = 0;
+    int k;
+
+    if (one1) {
+        s[i++] = 'a';
+    }
+    for (k = 0; k < chars; k++) {
+        s[i++] = (char)0x82;
+        s[i++] = (char)0xA0;
+    }
+    s[i] = '\0';
+}
+
+static void test_node_lead(void)
+{
+    TR_TEXT t;
+    char nm[200];
+    char want[200];
+    char t0[1024];
+    size_t n;
+    size_t k;
+    int same;
+
+    diag_dbcs(nm, 0, 38);
+    tr_text_init(&t, text, sizeof(text));
+    tr_diag_wrap(&t, 2, nm, diag_sjis);
+    sprintf(want, "\001  %s\r\n", nm);
+    CHECK(strcmp(text, want) == 0, "wrap: a double-byte name under the line whole");
+    diag_dbcs(nm, 1, 38);
+    tr_text_init(&t, text, sizeof(text));
+    tr_diag_wrap(&t, 2, nm, diag_sjis);
+    sprintf(want, "\001  %s\r\n", nm);
+    CHECK(strcmp(text, want) == 0, "wrap: a double-byte name at the line whole");
+    diag_dbcs(nm, 0, 39);
+    tr_text_init(&t, text, sizeof(text));
+    tr_diag_wrap(&t, 2, nm, diag_sjis);
+    memcpy(want, "\001  ", 3);
+    memcpy(want + 3, nm, 76);
+    strcpy(want + 79, "\r\n\001  \x82\xA0\r\n");
+    CHECK(strcmp(text, want) == 0,
+          "wrap: a byte over the line, cut a byte sooner");
+    tr_text_init(&t, text, sizeof(text));
+    tr_diag_wrap(&t, 2, nm, NULL);
+    memcpy(want + 3, nm, 77);
+    strcpy(want + 80, "\r\n\001  \xA0\r\n");
+    CHECK(strcmp(text, want) == 0,
+          "wrap: without a lead test as before, a lead byte last");
+    diag_dbcs(nm, 1, 39);
+    tr_text_init(&t, text, sizeof(text));
+    tr_diag_wrap(&t, 2, nm, diag_sjis);
+    memcpy(want + 3, nm, 77);
+    strcpy(want + 80, "\r\n\001  \x82\xA0\r\n");
+    CHECK(strcmp(text, want) == 0,
+          "wrap: two bytes over, cut at a character's end");
+    same = 1;
+    for (n = 70; n <= 160; n += 3) {
+        for (k = 0; k < n; k++) {
+            nm[k] = (char)('a' + (k % 26));
+        }
+        nm[n] = '\0';
+        tr_text_init(&t, text, sizeof(text));
+        tr_diag_wrap(&t, 2, nm, diag_sjis);
+        tr_text_init(&t, t0, sizeof(t0));
+        tr_diag_wrap(&t, 2, nm, NULL);
+        same = same && strcmp(text, t0) == 0;
+        for (k = 0; k < n; k++) {
+            nm[k] = (char)(0x80 + (k % 0x7F));
+        }
+        tr_text_init(&t, text, sizeof(text));
+        tr_diag_wrap(&t, 2, nm, diag_sb);
+        tr_text_init(&t, t0, sizeof(t0));
+        tr_diag_wrap(&t, 2, nm, NULL);
+        same = same && strcmp(text, t0) == 0;
+    }
+    CHECK(same, "wrap: single-byte names as with no test");
 }
 
 int main(void)
@@ -574,6 +672,7 @@ int main(void)
     test_irq();
     test_irq_full();
     test_node();
+    test_node_lead();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

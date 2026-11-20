@@ -40,6 +40,14 @@ VOID XhciSlotInit(PXHCI_EXTENSION ext)
     hc = HcdControllerFromExt(ext);
     XhciControllerLockAcquire(ext, &oldIrql);
     hc->SlotsUnproven = 0;
+    /* Task 50.30 step 3 (design record 17 section 4.15.3): every slot went
+     * with the HCRST, so a left command's debt, its settlement and the
+     * Enable Slot hold end here, whatever was left; a device's own mark
+     * stays for its reconciliation. */
+    HcdEnumLeftHcrstLocked(hc);
+    /* Task 50.31 (design record 38 section 7.2): a proof is for the
+     * invalidation it proved; an HCRST ends it. */
+    ext->Retry.ReleaseProved = 0;
     XhciControllerLockRelease(ext, oldIrql);
 }
 
@@ -57,6 +65,38 @@ VOID XhciSlotCommandEvent(PXHCI_EXTENSION ext, ULONG completionCode,
     /* The engine recorded the matched TRB before calling here
      * (xhciCommandCompleted); the waiter takes only its own (hcd_enum.c). */
     hc->CmdDonePA = ext->LastCommandTrbPA;
+    /* Task 50.30 step 3 (design record 17 section 4.15.3): a left
+     * command's completion, matched by its TRB and generation, recorded
+     * with its code and Slot ID for the thread's settlement pass. */
+    if (hc->Left.Owed == XHCI_LEFT_OWED &&
+        hc->Left.End == XHCI_LEFT_HOW_NONE &&
+        ext->LastCommandTrbPA == hc->Left.PA &&
+        ext->CommandGeneration == hc->Left.Gen) {
+        hc->Left.End = XHCI_LEFT_HOW_DONE;
+        hc->Left.Code = completionCode;
+        hc->Left.SlotId = XHCI_TRB_GET_SLOT_ID(control);
+    }
+    (VOID)KeSetEvent(&hc->CmdDoneEvent, IO_NO_INCREMENT, FALSE);
+}
+
+/* Task 50.30 step 3 (design record 17 section 4.15.3, verdict 2): the
+ * engine ended an abort cleanly (xhciCommandRingStopped, back to IDLE) and
+ * recorded the TRB it abandoned and its generation; the waiter's mark is
+ * set from them and the waiter woken. A left command it names has ended.
+ * IRQL: DISPATCH_LEVEL, controller lock held. */
+VOID XhciSlotCommandAbortEnded(PXHCI_EXTENSION ext)
+{
+    PHCD_CONTROLLER hc;
+
+    hc = HcdControllerFromExt(ext);
+    XhciCmdAbortSet(&hc->CmdAbort, ext->CommandAbortEndedPA,
+                    ext->CommandAbortEndedGen, ext->CommandAbortEndedHow);
+    if (hc->Left.Owed == XHCI_LEFT_OWED &&
+        hc->Left.End == XHCI_LEFT_HOW_NONE &&
+        ext->CommandAbortEndedPA == hc->Left.PA &&
+        ext->CommandAbortEndedGen == hc->Left.Gen) {
+        hc->Left.End = XHCI_LEFT_HOW_LOST;
+    }
     (VOID)KeSetEvent(&hc->CmdDoneEvent, IO_NO_INCREMENT, FALSE);
 }
 
@@ -68,6 +108,15 @@ VOID XhciSlotCommandLost(PXHCI_EXTENSION ext)
 
     hc = HcdControllerFromExt(ext);
     hc->CmdDoneLost = 1;
+    /* Task 50.30 step 3: a left command aborted, lost or abandoned (the
+     * invalidation calls here before the generation moves): ended, with
+     * no Slot ID to trust. While the debt is OWED nothing else is
+     * submitted, so the outstanding command of that generation is it. */
+    if (hc->Left.Owed == XHCI_LEFT_OWED &&
+        hc->Left.End == XHCI_LEFT_HOW_NONE &&
+        ext->CommandGeneration == hc->Left.Gen) {
+        hc->Left.End = XHCI_LEFT_HOW_LOST;
+    }
     (VOID)KeSetEvent(&hc->CmdDoneEvent, IO_NO_INCREMENT, FALSE);
 }
 
@@ -155,6 +204,38 @@ static VOID hcdTolCountRetry(PHCD_CONTROLLER hc,
         stats->RetryExhausted++;
     }
     stats->RetryRecovered += result->RetryRecovered;
+}
+
+/*
+ * Task 50.30 step 1 (record 17 section 4.15.8): a fatal code on an event of
+ * `dev`'s pipe, staged for the drain's request. The device is named only
+ * when the engine matched the event to a TD queued on that pipe
+ * (`result->Matched`), its place copied now under the lock; an event inside
+ * no TD - its pointer zero, off the ring, or past every queued TD - still
+ * escalates, as the engine's `Fatal` says, but names no device: the pipe
+ * its Slot ID reaches proves nothing about who the event was for. Returns
+ * `reset`. IRQL: DISPATCH_LEVEL, controller lock held.
+ */
+static ULONG hcdWhyXferFatal(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                             const XHCI_XFER_EVENT_RESULT *result,
+                             ULONG reset)
+{
+    XHCI_RESET_REC place;
+    ULONG matched;
+
+    matched = (reset && result->Matched && dev != NULL) ? 1UL : 0UL;
+    if (matched) {
+        place.Slot = dev->SlotId;
+        place.RootPort = dev->Port & 0xFFUL;
+        place.Route = dev->Route;
+        place.VidPid = HcdDeviceVidPid(dev);
+        place.Reason = 0;
+        place.Extra = 0;
+        place.Clock = 0;
+        place.Recoveries = 0;
+    }
+    return XhciTolWhyStageXfer(&hc->Hc.Why, reset, matched, result->Code,
+                               matched ? &place : NULL);
 }
 
 /*
@@ -313,7 +394,8 @@ static ULONG hcdIsoEvent(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG slotId,
             }
             hc->Hc.IsoEventsUnattributed++;
         } else if (pipe->Paused || pipe->Closed || pipe->DrainPending ||
-                   pipe->CancelPending || pipe->Device->Gone) {
+                   pipe->CancelPending || pipe->Device->Gone ||
+                   HCD_DEV_FROZEN(pipe->Device)) {
             /* Gone: the device's teardown froze it and may already have
              * stopped this endpoint to complete its requests before the
              * Disable Slot; a late underrun's doorbell would restart it
@@ -352,7 +434,8 @@ static ULONG hcdIsoEvent(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG slotId,
     if (result.NeedsRecovery && !result.RefusedRetire && !result.Fatal) {
         hc->Hc.IsoTrbErrorRecoveries++;
     }
-    return hcdPipeResult(hc, pipe, &result);
+    return hcdWhyXferFatal(hc, pipe->Device, &result,
+                           hcdPipeResult(hc, pipe, &result));
 }
 
 /* The pipe a Transfer Event names, or NULL. Controller lock held. */
@@ -668,7 +751,14 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
          * 4.3), and a refused code is one on a device. */
         hcdTolCycleEvent(hc, slotId, dci, cc, reset, 1,
                          pipe->TransferType == XHCI_PIPE_XFER_ISOCH, 1);
-        return reset && code.Fatal;
+        if (reset && code.Fatal) {
+            /* Task 50.30 step 1: the reason the drain records. No TD
+             * matched, so no device is named: the Slot ID may have
+             * been recycled since. */
+            XhciTolWhyStage(&ext->Why, XHCI_WHY_XFER_FATAL, cc, NULL);
+            return 1;
+        }
+        return 0;
     }
     if (pipe != NULL && pipe->Streams != NULL) {
         endpoint = pipe;
@@ -706,7 +796,14 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
             hcdTolCycleEvent(hc, slotId, dci, cc, reset, endpoint != NULL, 0,
                              endpoint != NULL);
         }
-        return reset && code.Fatal;
+        if (reset && code.Fatal) {
+            /* Task 50.30 step 1: the reason the drain records. No TD
+             * matched, so no device is named: the Slot ID may have
+             * been recycled since. */
+            XhciTolWhyStage(&ext->Why, XHCI_WHY_XFER_FATAL, cc, NULL);
+            return 1;
+        }
+        return 0;
     }
     cc = XHCI_TRB_GET_COMPLETION(event->Status);
     if (cc == XHCI_CC_STOPPED || cc == XHCI_CC_STOPPED_LENGTH_INVALID ||
@@ -764,9 +861,11 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
                          result.Unattributed, 0, 1);
     }
     if (dci == 1) {
-        return hcdEp0Result(hc, pipe->Device, &result);
+        return hcdWhyXferFatal(hc, pipe->Device, &result,
+                               hcdEp0Result(hc, pipe->Device, &result));
     }
-    return hcdPipeResult(hc, pipe, &result);
+    return hcdWhyXferFatal(hc, pipe->Device, &result,
+                           hcdPipeResult(hc, pipe, &result));
 }
 
 /*
@@ -1083,6 +1182,9 @@ VOID XhciSlotInvalidateAll(PXHCI_EXTENSION ext, ULONG controllerStopped)
     if (!controllerStopped) {
         hc->SlotsUnproven = 1;
     }
+    /* Task 50.31 (design record 38 section 7.2): a new invalidation is
+     * proved, or not, afresh. */
+    ext->Retry.ReleaseProved = 0;
     HcdThreadWake(hc);
 }
 

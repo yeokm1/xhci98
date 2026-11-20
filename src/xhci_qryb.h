@@ -65,4 +65,34 @@ typedef struct _XHCI_QRY_IN {
 ULONG XhciQryAnswer(UCHAR *out, ULONG room, const XHCI_QRY_IN *in,
                     PULONG info);
 
+/*
+ * IOCTL_XHCI98_HOLDS's answer (xhci_qry.h XHH_*, task 50.7) into out (room
+ * bytes): `root` root locations and `hub` hub locations (each held to its
+ * XHH_*_MAX), their holds in `holds`, root ones first; `hubPorts` the hub
+ * locations per hub object; `started` the controller is started (with it
+ * clear the caller passes 0 locations). Returns XHQ_ANS_WHOLE, XHQ_ANS_HEADER
+ * (room < the whole: the header alone, XHH_O_BYTES the size needed) or
+ * XHQ_ANS_TOO_SMALL (room < XHH_HDR_BYTES); *info the bytes written.
+ */
+ULONG XhciHoldsAnswer(UCHAR *out, ULONG room, ULONG started, ULONG root,
+                      ULONG hub, ULONG hubPorts, const UCHAR *holds,
+                      PULONG info);
+
+/*
+ * Task 50.30 step 1: the recovery-status answer (xhci_qry.h, XHR_*).
+ * `head` holds the header's words from XHR_O_FLAGS to XHR_O_RECORDS, in
+ * order (XHR_HDR_BYTES / 4 - 3 of them); `recs` records of XHR_REC_WORDS
+ * words each, newest first, `head`'s last word of them; `counts`
+ * XHR_COUNTS words, or NULL; `life` the lifetime part's XHR_LIFE_WORDS
+ * words (task 50.32), or NULL for an answer without it. The buffer tiers
+ * are xhci_qry.h's: under XHR_HDR_BYTES nothing, under XHR_MAX_BYTES the
+ * header, under XHR_LIFE_BYTES (or `life` NULL) the earlier whole answer,
+ * else the whole answer with XHR_F_LIFETIME set, which `head`'s flags
+ * never carry. Returns XHQ_ANS_* as XhciHoldsAnswer, *info the bytes
+ * written. Pure.
+ */
+ULONG XhciRecoveryAnswer(UCHAR *out, ULONG room, const ULONG *head,
+                         const ULONG *recs, const ULONG *counts,
+                         const ULONG *life, PULONG info);
+
 #endif /* XHCI_QRYB_H */

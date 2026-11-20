@@ -615,9 +615,23 @@ typedef struct _XHCIHC_COUNTERS {
     ULONG UsbdxForeignFrees;
     ULONG PdoQiUnanswered;
     ULONG PdoIoctlRefused;
-    ULONG XferShortRefused;} XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
+    ULONG XferShortRefused;
+    /* Task 50.20 (design record 17 section 4.12.10), from word 320:
+     * 1 when the controller is flagged; the stream commands the backstop
+     * refused (0 unless the design has a defect); the endpoints that came
+     * to owe a withheld position; the stream opens acknowledged to the
+     * contract; the Error exits sent. Thread only. */
+    ULONG StreamDeqUntrusted;
+    ULONG StreamDeqWithheld;
+    ULONG StreamDebts;
+    ULONG StreamContractOpens;
+    ULONG StreamErrorExits;
+    /* Task 50.20, at word 325: XhciStreamDequeueAvoid's packed word, the
+     * fifteenth quirk value's, in the form of words 199 to 212
+     * (xhci_quirk.h, XhciQuirkPacked). Copied with them. */
+    ULONG QuirkStreamDequeueAvoid;} XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
 
 XHCI_C_ASSERT(xhcihc_counters_all_ulong,
-              sizeof(XHCIHC_COUNTERS) == 320 * sizeof(ULONG));
+              sizeof(XHCIHC_COUNTERS) == 326 * sizeof(ULONG));
 
 #endif /* XHCI_COUNTERS_H */

@@ -568,6 +568,10 @@ ULONG XhciSuspAdvance(PXHCI_SUSP_LINK link, ULONG result, ULONG nowMs,
     case XHCI_SUSP_STEP_STOP_FUNCS:
         link->Stopped = 1;
         link->StopMs = nowMs;
+        if (result == XHCI_SUSP_RES_ABORTED) {
+            return xhciSuspEnd(link, XHCI_SUSP_RECOVERING,
+                               XHCI_SUSP_OUT_ALONE, waitMs);
+        }
         if (result == XHCI_SUSP_RES_OK) {
             if (link->ArmWanted) {
                 return xhciSuspStep(link, XHCI_SUSP_STEP_ARM, 0, nowMs,
@@ -612,6 +616,10 @@ ULONG XhciSuspAdvance(PXHCI_SUSP_LINK link, ULONG result, ULONG nowMs,
     case XHCI_SUSP_STEP_STOP:
         link->Stopped = 1;
         link->StopMs = nowMs;
+        if (result == XHCI_SUSP_RES_ABORTED) {
+            return xhciSuspEnd(link, XHCI_SUSP_RECOVERING,
+                               XHCI_SUSP_OUT_ALONE, waitMs);
+        }
         if (result == XHCI_SUSP_RES_OK) {
             return xhciSuspStep(link, XHCI_SUSP_STEP_U3, 0, nowMs, waitMs);
         }

@@ -386,7 +386,7 @@ VOID HcdPollThreadPass(PHCD_CONTROLLER hc)
         if (contained == 0 && !hc->PollContainAsked) {
             hc->PollContainAsked = 1;
             XhciLogNote(ext, "intr.retire.recover", 1);
-            XhciRequestControllerReset(ext);
+            XhciRequestControllerResetWhy(ext, XHCI_WHY_POLL_RETIRE, 0, 0);
         }
     }
     XhciControllerLockAcquire(ext, &oldIrql);

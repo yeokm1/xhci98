@@ -436,6 +436,16 @@ static void test_suspend_outcomes(void)
     step = run_suspend_to(&link, 0, XHCI_SUSP_STEP_STOP,
                           XHCI_SUSP_RES_TIMEOUT, &wait);
     CHECK_EQ(link.State, XHCI_SUSP_RECOVERING, "stop timeout");
+    /* Task 50.30 step 3 (design record 17 section 4.15.5a, hcdSuspRewind's
+     * third outcome): a rewind aborted or left ends the sequence on its own
+     * outcome, never a restart. */
+    step = run_suspend_to(&link, 1, XHCI_SUSP_STEP_STOP,
+                          XHCI_SUSP_RES_ABORTED, &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_END, "stop aborted: ended, no restart");
+    CHECK_EQ(link.State, XHCI_SUSP_RECOVERING, "stop aborted: RECOVERING");
+    CHECK_EQ(link.Outcome, XHCI_SUSP_OUT_ALONE, "stop aborted: ALONE");
+    CHECK_EQ(link.Armed, 0, "stop aborted: the feature does not outlive it");
+    CHECK_EQ(wait, 0, "stop aborted: no wait");
     step = run_suspend_to(&link, 0, XHCI_SUSP_STEP_U3,
                           XHCI_SUSP_RES_TIMEOUT, &wait);
     CHECK_EQ(link.State, XHCI_SUSP_RECOVERING, "U3 request timeout");
@@ -2314,6 +2324,12 @@ static void test_ss_refusals(void)
     step = ss_to(&link, 1, 0, XHCI_SUSP_STEP_STOP_FUNCS,
                  XHCI_SUSP_RES_TIMEOUT, 100, &wait);
     CHECK_EQ(link.State, XHCI_SUSP_RECOVERING, "its timeout: uncertain");
+    /* Task 50.30 step 3: a rewind aborted or left - the device alone. */
+    step = ss_to(&link, 1, 0, XHCI_SUSP_STEP_STOP_FUNCS,
+                 XHCI_SUSP_RES_ABORTED, 100, &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_END, "functions' rewind aborted: ended");
+    CHECK_EQ(link.State, XHCI_SUSP_RECOVERING, "aborted: RECOVERING");
+    CHECK_EQ(link.Outcome, XHCI_SUSP_OUT_ALONE, "aborted: ALONE");
 
     /* The first arm request STALLed, nothing armed: stage A's STALL. */
     step = ss_to(&link, 1, 0, XHCI_SUSP_STEP_ARM, XHCI_SUSP_RES_STALL, 100,

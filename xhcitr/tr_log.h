@@ -143,6 +143,23 @@ int tr_hcd_counters_text(TR_TEXT *t, const unsigned char *img, size_t n);
 const char *tr_hc_name(TR_U32 i);
 TR_U32 tr_hc_count(void);
 
+/* Task 50.18: under XhciInterruptMode 4 with XhciMsiStrategy 0 (design
+ * record 15 section 4.5.2) the message arrives through an IRQ the driver
+ * claimed, and the line Windows assigned is left unconnected. From the
+ * counter block (n bytes): that IRQ when the start ran mode 4 with its
+ * message connected and the claim held - IntrMode 4, IntrReason 21,
+ * IntrDelivery MSI or MSI-X, Msg4ClaimStatus 0, Msg4Irq nonzero - and the
+ * message not lost since (Msg4Lost 0); 0 otherwise, a block from a driver
+ * before mode 4, or none (logging level 0), among them. The words are
+ * XHCIHC_COUNTERS', held to it by test_trlog. */
+#define TR_HCW_INTR_MODE        64UL
+#define TR_HCW_INTR_DELIVERY    65UL
+#define TR_HCW_INTR_REASON      66UL
+#define TR_HCW_MSG4_IRQ         271UL
+#define TR_HCW_MSG4_CLAIM       273UL
+#define TR_HCW_MSG4_LOST        282UL
+TR_U32 tr_msg4_claimed_irq(const unsigned char *ctr, size_t n);
+
 /* ---- xhci98.sys: a held port (roadmap-usb4 task 49.43) -----------------
  *
  * The driver's tolerance holds a root or hub port after repeated failures
@@ -186,6 +203,14 @@ TR_U32 tr_tol_hold_offset(const TR_TOLMAP *m, TR_U32 loc);
  * is not the extension's or does not hold that byte. */
 int tr_tol_hold(const TR_TOLMAP *m, const TR_SNAPW *w, TR_U32 loc);
 
+/* Task 50.7: IOCTL_XHCI98_HOLDS's answer (src\xhci_qry.h XHH_*), n bytes:
+ * 1 with the map's RootLocs, HubLocs and HubPorts set (the rest 0) and the
+ * holds in hold[] (cap bytes, root locations first), 0 when it is not
+ * one (a bad magic, version or size, or more locations than cap or the
+ * request's bounds), -1 for a header alone (the buffer was too small). */
+int tr_xhh_parse(const unsigned char *b, size_t n, TR_TOLMAP *m,
+                 unsigned char *hold, size_t cap);
+
 /* The details note at a held port (owner, 2026-11-13), without its label;
  * NULL for TR_HOLD_NONE or an unknown hold:
  * 1: "This port is on hold after repeated failures. Unplug the device and
@@ -225,6 +250,15 @@ void tr_hold_balloon(int hold, int hub, TR_U32 port, const char *ctrl,
  * is removed unexpectedly", on by default); on 98 SE and ME, where that
  * option is not offered, always. */
 int tr_hold_notice_on(int nt, int warn);
+
+/* The owner, 2026-11-15 (task 50.7): the tray's hold watch - its periodic
+ * reading of the holds and the notice - is the user's to turn on, off by
+ * default: the DWORD TR_HOLD_VALUE under HKCU\Software\xHCI98\XHCITR, only
+ * a REG_DWORD 1 is on (haveValue: a REG_DWORD of 4 bytes was read). Off,
+ * the tray reads nothing for it; the window's own reading is not this
+ * switch's. */
+#define TR_HOLD_VALUE           "HoldNotice"
+int tr_hold_watch_on(int haveValue, TR_U32 value);
 
 /* Announce once per hold (owner, 2026-11-13): each location, keyed by its
  * controller and location number, remembers the hold last seen; a hold
@@ -287,6 +321,24 @@ int tr_holdq_sent(TR_HOLDQ *q, const TR_HQENT *e, int ok);
  * counted on the tray's thread, loaded as the read began and the same at
  * the results): 1 use it, 0 drop it, the next watch reading again (task
  * 49.43). */
+/* Task 50.7 (record 25 section 24 item 5): an owed re-send of the hold
+ * balloon, decided at a watch's results. owedAt/now GetTickCount (wrap-
+ * safe); stillSent: the re-send watch still reads the balloon sent and
+ * unshown; listed: its controller is still listed; usable: this job's
+ * reading of that controller is usable (fresh, no sleep or device change
+ * since its read began); holdNow: that reading's hold at the announced
+ * location; holdSent the kind announced. TR_HR_SEND only on a usable
+ * reading still showing the same hold; TR_HR_DROP when the balloon was
+ * shown meanwhile, the controller is gone, a usable reading shows anything
+ * else, or no usable reading came within TR_BS_NOSHOW_MS of falling due;
+ * TR_HR_WAIT otherwise. */
+#define TR_HR_WAIT              0
+#define TR_HR_SEND              1
+#define TR_HR_DROP              2
+int tr_hold_resend_decide(int stillSent, int listed, int usable, int holdNow,
+                          int holdSent, TR_U32 owedAt, TR_U32 now,
+                          TR_U32 maxMs);
+
 #define TR_HOLD_FRESH_MS        3000UL
 int tr_hold_reading_usable(TR_U32 readAt, TR_U32 now, TR_U32 maxMs,
                            TR_U32 epochAtStart, TR_U32 epochNow);
@@ -404,6 +456,12 @@ int tr_xhq_xport_find(const TR_XHQ *x, TR_U32 port, TR_U32 route,
  * where the count says so. */
 void tr_xport_text(const TR_XPORT *r, char *out, size_t cap);
 
+/* Task 50.5 (design record 25 section 19 item 3a): the note under a
+ * transport of "none" (TR_XPORT_WHY_NO_STREAMS), whatever refused the drive
+ * - a send-back to USB 2.0 that timed out, a root port with no companion,
+ * a SuperSpeed hub. */
+extern const char tr_xport_none_note[];
+
 /* Section 19 item 4: 1 when the record says UAS and `service` (the
  * devnode's driver: a service name, or a 9x file name) is Windows'
  * Bulk-Only usbstor, compared without case or a ".sys". */
@@ -427,5 +485,108 @@ int tr_xport_unrunnable(const TR_XPORT *r, const char *service);
  * serves none there, XHQ_F_WITHHELD alone, and the text says so). nt:
  * 2000 and later. */
 void tr_xhq_log_text(TR_TEXT *t, const TR_XHQ *x, int nt);
+
+/*
+ * Task 50.30 step 1 (design record 25 section 26 items 1 and 2): the
+ * driver's recovery-status request (src\xhci_qry.h XHR_*). A record is the
+ * reset request a recovery began from: reason (record 17 section 4.15.8's
+ * codes), extra, slot, root port, route, VID:PID, the tolerance clock at
+ * it, the recoveries before it, its flags (XHR_RF_LATCH).
+ */
+#define TR_XHR_RECS     4
+/* The longest wait the words can give in seconds (record 38 section 5.7:
+ * the ten-minute cap at the nominal tick, 6 001 ticks, rounded up). */
+#define TR_XHR_NEXT_S_MAX 601UL
+#define TR_XHR_RWORDS   9
+#define TR_XHR_COUNTS   26
+typedef struct _TR_XHR {
+    TR_U32 Flags;           /* XHR_F_*                                   */
+    TR_U32 Terminal;        /* 0 running ... 6 the lost message          */
+    TR_U32 Recoveries;
+    TR_U32 Calls;
+    TR_U32 Involved;        /* records naming the newest's place         */
+    TR_U32 Clock;           /* the tolerance clock when read             */
+    TR_U32 Records;         /* valid records, newest first               */
+    TR_U32 IsoValue;        /* XhciDeviceIsolation read; XHR_NONE absent */
+    TR_U32 IsoListed;       /* the controller is listed                  */
+    TR_U32 IsoApplies;      /* the handling applies                      */
+    /* Task 50.31 (design record 38 section 15.1), where XHR_F_RETRY is
+     * set: the value in effect, the tries since the backing off last
+     * ended and the seconds to the next try (0 due); otherwise 0, 0 and
+     * XHR_NONE. */
+    TR_U32 RetryValue;
+    TR_U32 RetryTry;
+    TR_U32 RetryNextS;      /* at most TR_XHR_NEXT_S_MAX when a try waits */
+    TR_U32 Rec[TR_XHR_RECS][TR_XHR_RWORDS];
+    TR_U32 Counts[TR_XHR_COUNTS];
+    /* Task 50.32: the lifetime part, LifeOk where it was served whole. */
+    int LifeOk;
+    TR_U32 LifeTimeLo;
+    TR_U32 LifeTimeHi;
+    TR_U32 LifeStart;
+} TR_XHR;
+
+/* The answer of n bytes: 1 whole (r filled), -1 a header alone (the
+ * buffer too small), 0 not an answer (bad magic, version or size). The
+ * isolation fields (XHR_O_ISO_*) are read only when XHR_F_ISOLATION says
+ * the driver serves them; otherwise IsoValue is XHR_NONE and the other
+ * two 0. The minimum whole answer stays XHR_MAX_BYTES (312), so an
+ * earlier driver's answer parses; the lifetime part is read only when
+ * XHR_F_LIFETIME is set, n is at least XHR_LIFE_BYTES and so is
+ * XHR_O_BYTES (LifeOk). */
+int tr_xhr_parse(const unsigned char *b, size_t n, TR_XHR *r);
+
+/* Task 50.32 (design record 25 section 27 item 4): a valid lifetime sample
+ * is one with the part served and a start number other than 0; two valid
+ * samples whose three words differ were made by different starts. */
+int tr_xhr_life_valid(const TR_XHR *x);
+int tr_xhr_life_same(const TR_XHR *a, const TR_XHR *b);
+
+/* A reason in words, for a sentence after "it" or a report line
+ * (approved as drafted, owner 2026-11-17): 11 "its control request got no answer", ... ; "an
+ * unrecorded reason" for one this tool does not know. */
+const char *tr_why_words(TR_U32 reason);
+
+/* A reason's short name for a report line: "EP0_LATE" and the others of
+ * record 17 section 4.15.8; "?" for an unknown one. */
+const char *tr_why_name(TR_U32 reason);
+
+/* The place in the tool's words, into out: "port 3", "port 2 of the hub
+ * at port 1", "port 4 of a hub behind port 1" (route depth above one);
+ * "" for root port 0. */
+void tr_place_words(TR_U32 root, TR_U32 route, char *out, size_t cap);
+
+/* The controller tree line's suffix for a terminal: 2 and 3 " (stopped
+ * after repeated failures)", 4 and 5 " (closed off)", 6 " (stopped:
+ * interrupts lost)", otherwise "". */
+const char *tr_xhr_tag(TR_U32 terminal);
+
+/* The controller's details lines for a stopped controller into t
+ * (approved as drafted, owner 2026-11-17; record 25 section 26 item 2),
+ * none for a running one.
+ * x the answer, or NULL when the driver does not serve the request (then
+ * `failed` - the query's XHQ_F_FAILED - alone gives the first line);
+ * name the device's name the tool found for the newest record's VID:PID
+ * (NULL for none), a word of it longer than a line broken between
+ * characters by lead (as tr_copy_lead cuts). Returns the lines written. */
+int tr_xhr_details(TR_TEXT *t, const TR_XHR *x, int failed,
+                   const char *name, TR_LEAD_FN lead);
+
+/* Whether the details may close with "Restart it from Device Manager, or
+ * restart Windows." (record 25 section 26 items 5 and 9): 1 only for a
+ * controller the request says stopped after repeated failures (terminal 2
+ * or 3). 0 for a contained one (4, 5), whose text says a restart could
+ * stop Windows responding; for the lost message (6), whose text says to
+ * restart Windows; for a running one; and where the driver does not
+ * answer the request (x NULL), since the tool cannot tell latched from
+ * contained there. */
+int tr_xhr_restart_ok(const TR_XHR *x);
+
+/* The snapshot report's lines for the records (Save Report and /report):
+ * "reset requested: <name> (<words>) at <place> slot S [vvvv:pppp],
+ * about T s ago", the latch's marked, then the counts by reason, then,
+ * where the driver serves them, "device isolation: value V, listed L,
+ * applies A". */
+void tr_xhr_report(TR_TEXT *t, const TR_XHR *x);
 
 #endif /* TR_LOG_H */

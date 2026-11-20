@@ -91,7 +91,9 @@ void tr_log_advice_cm(TR_TEXT *t, const char *keyPath, int nt)
               "  2 (the default) under this key");
     tr_put(t, nt ? " (as an administrator)" : "");
     tr_put(t, ", then restart Windows:\n");
-    tr_printf(t, "    HKEY_LOCAL_MACHINE\\%s\n",
+    /* The key's path kept whole by the window and Save Report (task
+     * 50.39). */
+    tr_printf(t, "\001    HKEY_LOCAL_MACHINE\\%s\n",
               keyPath != NULL && keyPath[0] ? keyPath
                                             : "(the controller's driver key)");
 }
@@ -388,6 +390,30 @@ const char *tr_hc_name(TR_U32 i)
     return i < tr_hc_count() ? trlHcNames[i] : NULL;
 }
 
+/* src\xhci_poll.h's XHCI_POLL_DELIVERY_MSI and _MSIX, and
+ * XHCI_POLL_R_FORCED_MSG4; test_trlog builds its blocks with those. */
+#define TRL_DELIVERY_MSI        3UL
+#define TRL_DELIVERY_MSIX       4UL
+#define TRL_R_FORCED_MSG4       21UL
+
+TR_U32 tr_msg4_claimed_irq(const unsigned char *ctr, size_t n)
+{
+    TR_U32 d;
+
+    if (ctr == NULL || n < (TR_HCW_MSG4_LOST + 1) * 4) {
+        return 0;
+    }
+    d = trlGet(ctr, TR_HCW_INTR_DELIVERY * 4);
+    if (trlGet(ctr, TR_HCW_INTR_MODE * 4) != 4 ||
+        trlGet(ctr, TR_HCW_INTR_REASON * 4) != TRL_R_FORCED_MSG4 ||
+        (d != TRL_DELIVERY_MSI && d != TRL_DELIVERY_MSIX) ||
+        trlGet(ctr, TR_HCW_MSG4_CLAIM * 4) != 0 ||
+        trlGet(ctr, TR_HCW_MSG4_LOST * 4) != 0) {
+        return 0;
+    }
+    return trlGet(ctr, TR_HCW_MSG4_IRQ * 4);
+}
+
 /* ======================================================================== */
 /* xhci98.sys: a held port (task 49.43)                                      */
 /* ======================================================================== */
@@ -460,6 +486,35 @@ int tr_tol_hold(const TR_TOLMAP *m, const TR_SNAPW *w, TR_U32 loc)
     return (int)w->Payload[at - w->Offset];
 }
 
+int tr_xhh_parse(const unsigned char *b, size_t n, TR_TOLMAP *m,
+                 unsigned char *hold, size_t cap)
+{
+    TR_U32 bytes;
+    TR_U32 root;
+    TR_U32 hub;
+
+    memset(m, 0, sizeof(*m));
+    if (b == NULL || n < XHH_HDR_BYTES || trlGet(b, XHH_O_MAGIC) != XHH_MAGIC ||
+        trlGet(b, XHH_O_VERSION) != XHH_VERSION) {
+        return 0;
+    }
+    bytes = trlGet(b, XHH_O_BYTES);
+    root = trlGet(b, XHH_O_ROOT);
+    hub = trlGet(b, XHH_O_HUB);
+    if (root > XHH_ROOT_MAX || hub > XHH_HUB_MAX ||
+        bytes != XHH_HDR_BYTES + root + hub || (size_t)(root + hub) > cap) {
+        return 0;
+    }
+    if (n < bytes) {
+        return n == XHH_HDR_BYTES ? -1 : 0;
+    }
+    m->RootLocs = root;
+    m->HubLocs = hub;
+    m->HubPorts = trlGet(b, XHH_O_HUB_PORTS);
+    memcpy(hold, b + XHH_HDR_BYTES, (size_t)(root + hub));
+    return 1;
+}
+
 const char tr_hold_fallback[] =
     "If this keeps failing, unplug the device and plug it in again.";
 const char tr_hold_tag[] = " (on hold)";
@@ -523,6 +578,11 @@ void tr_hold_balloon(int hold, int hub, TR_U32 port, const char *ctrl,
         cap = 256;
     }
     tr_sprintf(out, cap, "%s %s", where, tail);
+}
+
+int tr_hold_watch_on(int haveValue, TR_U32 value)
+{
+    return haveValue && value == 1UL;
 }
 
 int tr_hold_notice_on(int nt, int warn)
@@ -718,6 +778,19 @@ int tr_hold_reading_usable(TR_U32 readAt, TR_U32 now, TR_U32 maxMs,
     return (TR_U32)(now - readAt) <= maxMs;
 }
 
+int tr_hold_resend_decide(int stillSent, int listed, int usable, int holdNow,
+                          int holdSent, TR_U32 owedAt, TR_U32 now,
+                          TR_U32 maxMs)
+{
+    if (!stillSent || !listed) {
+        return TR_HR_DROP;
+    }
+    if (usable) {
+        return holdNow == holdSent ? TR_HR_SEND : TR_HR_DROP;
+    }
+    return (TR_U32)(now - owedAt) > maxMs ? TR_HR_DROP : TR_HR_WAIT;
+}
+
 int tr_hold_rot_index(TR_U32 start, int n, int i)
 {
     if (n <= 0 || i < 0) {
@@ -896,6 +969,12 @@ int tr_xhq_xport_find(const TR_XHQ *x, TR_U32 port, TR_U32 route,
     }
     return 0;
 }
+
+const char tr_xport_none_note[] =
+    "This drive runs only as UAS, which needs streams at SuperSpeed, and "
+    "streams are not available on this controller, so Windows has no "
+    "driver for it here. Try a USB 2.0 port or hub: if the drive supports "
+    "USB 2.0, it may work there.";
 
 void tr_xport_text(const TR_XPORT *r, char *out, size_t cap)
 {
@@ -1146,4 +1225,373 @@ int tr_hcd_counters_text(TR_TEXT *t, const unsigned char *img, size_t n)
     tr_printf(t, "    (%lu of %lu nonzero.)\n", (unsigned long)shown,
               (unsigned long)counters);
     return 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* Task 50.30 step 1: the recovery status (record 25 section 26)        */
+/* ------------------------------------------------------------------ */
+
+int tr_xhr_parse(const unsigned char *b, size_t n, TR_XHR *r)
+{
+    TR_U32 i;
+    TR_U32 j;
+
+    if (r != NULL) {
+        memset(r, 0, sizeof(*r));
+    }
+    if (b == NULL || r == NULL || n < XHR_HDR_BYTES ||
+        trlGet(b, XHR_O_MAGIC) != XHR_MAGIC ||
+        trlGet(b, XHR_O_VERSION) != XHR_VERSION ||
+        trlGet(b, XHR_O_BYTES) < XHR_MAX_BYTES) {
+        return 0;
+    }
+    r->Flags = trlGet(b, XHR_O_FLAGS);
+    r->Terminal = trlGet(b, XHR_O_TERMINAL);
+    r->Recoveries = trlGet(b, XHR_O_RECOVERIES);
+    r->Calls = trlGet(b, XHR_O_CALLS);
+    r->Involved = trlGet(b, XHR_O_INVOLVED);
+    r->Clock = trlGet(b, XHR_O_CLOCK);
+    r->Records = trlGet(b, XHR_O_RECORDS);
+    r->IsoValue = XHR_NONE;
+    if ((r->Flags & XHR_F_ISOLATION) != 0) {
+        r->IsoValue = trlGet(b, XHR_O_ISO_VALUE);
+        r->IsoListed = trlGet(b, XHR_O_ISO_LISTED);
+        r->IsoApplies = trlGet(b, XHR_O_ISO_APPLIES);
+    }
+    r->RetryNextS = XHR_NONE;
+    if ((r->Flags & XHR_F_RETRY) != 0) {
+        r->RetryValue = trlGet(b, XHR_O_RETRY_VALUE);
+        r->RetryTry = trlGet(b, XHR_O_RETRY_TRY);
+        r->RetryNextS = trlGet(b, XHR_O_RETRY_NEXT_S);
+    }
+    if (r->Records > TR_XHR_RECS) {
+        return 0;
+    }
+    if (n < XHR_MAX_BYTES) {
+        return -1;
+    }
+    for (i = 0; i < r->Records; i++) {
+        for (j = 0; j < TR_XHR_RWORDS; j++) {
+            r->Rec[i][j] = trlGet(b, XHR_HDR_BYTES + i * XHR_REC_BYTES + j * 4);
+        }
+    }
+    for (i = 0; i < TR_XHR_COUNTS; i++) {
+        r->Counts[i] = trlGet(b, XHR_O_COUNTS + i * 4);
+    }
+    /* Task 50.32: the lifetime part only where the flag, the bytes
+     * returned and the size the answer states all hold it; the 312-byte
+     * minimum above stays, so an earlier driver still parses. */
+    if ((r->Flags & XHR_F_LIFETIME) != 0 && n >= XHR_LIFE_BYTES &&
+        trlGet(b, XHR_O_BYTES) >= XHR_LIFE_BYTES) {
+        r->LifeOk = 1;
+        r->LifeTimeLo = trlGet(b, XHR_O_LIFE_TIME_LO);
+        r->LifeTimeHi = trlGet(b, XHR_O_LIFE_TIME_HI);
+        r->LifeStart = trlGet(b, XHR_O_LIFE_START);
+    }
+    return 1;
+}
+
+int tr_xhr_life_valid(const TR_XHR *x)
+{
+    return x != NULL && x->LifeOk && x->LifeStart != 0;
+}
+
+int tr_xhr_life_same(const TR_XHR *a, const TR_XHR *b)
+{
+    return a->LifeTimeLo == b->LifeTimeLo &&
+           a->LifeTimeHi == b->LifeTimeHi && a->LifeStart == b->LifeStart;
+}
+
+static const char *const trWhyName[25] = {
+    "?", "CMD_KEPT", "CMD_NO_VERDICT", "ENGINE_ABORT_STUCK",
+    "ENGINE_DIVERGED", "HEALTH", "EVENT_RING", "INTERRUPTS", "POLL_RETIRE",
+    "DISABLE_SLOT", "EP0_RECOVERY", "EP0_LATE", "CREATE_LATE", "SLOT_ID",
+    "PORTSC_DEAD", "WARM_RESET", "TEARDOWN_STOP", "CFG_FAULT", "STREAMS",
+    "BOT_XFER", "RESUME_FAILED", "INJECTED", "HUB_UNANSWERED", "CMD_FATAL",
+    "XFER_FATAL"
+};
+
+static const char *const trWhyWords[25] = {
+    "an unrecorded reason",
+    "a command for it was stopped and only a controller reset settles it",
+    "a command for it got no answer",
+    "the controller did not stop a command that got no answer",
+    "the controller's command ring disagreed with the driver",
+    "the controller reported an error or stopped running",
+    "the controller's event delivery failed",
+    "the controller's interrupts could not be switched",
+    "the controller's interrupt could not be retired",
+    "the controller did not release its slot",
+    "its default endpoint could not be recovered",
+    "its control request got no answer",
+    "it did not finish being set up in time",
+    "the controller gave a slot the driver could not use",
+    "its port could not be read",
+    "its port's reset did not end",
+    "one of its endpoints could not be stopped",
+    "the controller refused a command for it",
+    "its streams could not be set up",
+    "its storage check got no answer",
+    "the controller did not come back from sleep",
+    "a test injection asked for it",
+    "the hub did not answer",
+    "the controller reported a fatal command error",
+    "the controller reported a fatal transfer error"
+};
+
+const char *tr_why_name(TR_U32 reason)
+{
+    return reason < 25 ? trWhyName[reason] : "?";
+}
+
+const char *tr_why_words(TR_U32 reason)
+{
+    return reason < 25 ? trWhyWords[reason] : trWhyWords[0];
+}
+
+void tr_place_words(TR_U32 root, TR_U32 route, char *out, size_t cap)
+{
+    TR_U32 tiers[5];
+    TR_U32 depth = 0;
+    TR_U32 r = route;
+
+    if (out == NULL || cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (root == 0) {
+        return;
+    }
+    while (r != 0 && depth < 5) {
+        tiers[depth++] = r & 0xFUL;
+        r >>= 4;
+    }
+    if (depth == 0) {
+        tr_sprintf(out, cap, "port %lu", (unsigned long)root);
+    } else if (depth == 1) {
+        tr_sprintf(out, cap, "port %lu of the hub at port %lu",
+                   (unsigned long)tiers[0], (unsigned long)root);
+    } else {
+        tr_sprintf(out, cap, "port %lu of a hub behind port %lu",
+                   (unsigned long)tiers[depth - 1], (unsigned long)root);
+    }
+}
+
+const char *tr_xhr_tag(TR_U32 terminal)
+{
+    switch (terminal) {
+    case 2:
+    case 3:
+        return " (stopped after repeated failures)";
+    case 4:
+    case 5:
+        return " (closed off)";
+    case 6:
+        return " (stopped: interrupts lost)";
+    default:
+        return "";
+    }
+}
+
+/* One labelled field, its text wrapped at 62 columns under the label; a
+ * word longer than that broken between characters by leadFn. */
+static void trlField(TR_TEXT *t, const char *label, const char *s,
+                     TR_LEAD_FN leadFn)
+{
+    char line[80];
+    char lead[24];
+    size_t n;
+    size_t cut;
+
+    tr_sprintf(lead, sizeof(lead), "  %-15s", label);
+    while (*s != '\0') {
+        n = strlen(s);
+        cut = n;
+        if (n > 62) {
+            cut = 62;
+            while (cut > 0 && s[cut] != ' ') {
+                cut--;
+            }
+            if (cut == 0) {
+                cut = tr_char_floor(s, 62, leadFn);
+            }
+        }
+        memcpy(line, s, cut);
+        line[cut] = '\0';
+        tr_printf(t, "%s%s\n", lead, line);
+        tr_sprintf(lead, sizeof(lead), "  %-15s", "");
+        s += cut;
+        while (*s == ' ') {
+            s++;
+        }
+    }
+}
+
+/* Task 50.31 (design record 38 section 15.2, the owner's decisions of
+ * 2026-11-19): what the driver will do by itself, after the status lines.
+ * Only where the driver serves the retry words; the "will not" flag first;
+ * a pending try (NEXT_S 1 to 601) or one due (0) at terminal 2 or 3; the
+ * value 0 there. Nothing while a burst runs or before the driver's thread
+ * has seen the stop (NEXT_S XHR_NONE, no flag). Returns the lines. */
+static int trlRetryLines(TR_TEXT *t, const TR_XHR *x)
+{
+    char line[160];
+
+    if ((x->Flags & XHR_F_RETRY) == 0) {
+        return 0;
+    }
+    if ((x->Flags & XHR_F_RETRY_NEVER) != 0 && x->RetryValue != 0) {
+        trlField(t, "", "The driver will not try it again by itself. It "
+                        "stays stopped until it is restarted.", NULL);
+        return 1;
+    }
+    if (x->Terminal != 2 && x->Terminal != 3) {
+        return 0;
+    }
+    if (x->RetryValue == 0) {
+        trlField(t, "", "XhciFailedRetrySec is 0, so the driver will not "
+                        "try it again by itself. It stays stopped until it "
+                        "is restarted.", NULL);
+        return 1;
+    }
+    if (x->RetryNextS == 0) {
+        trlField(t, "", "The driver will try it again by itself as soon as "
+                        "it can.", NULL);
+        return 1;
+    }
+    if (x->RetryNextS > TR_XHR_NEXT_S_MAX) {
+        return 0;
+    }
+    tr_sprintf(line, sizeof(line), "The driver will try it again by itself "
+               "in about %lu second%s.", (unsigned long)x->RetryNextS,
+               x->RetryNextS == 1 ? "" : "s");
+    trlField(t, "", line, NULL);
+    trlField(t, "", "A device unplugged from or plugged into one of this "
+                    "controller's own ports, not a hub's, can bring the try "
+                    "sooner.", NULL);
+    return 2;
+}
+
+int tr_xhr_details(TR_TEXT *t, const TR_XHR *x, int failed,
+                   const char *name, TR_LEAD_FN lead)
+{
+    char place[64];
+    char who[200];
+    char line[400];
+    const TR_U32 *rec;
+    int lines = 0;
+
+    if (x == NULL) {
+        if (!failed) {
+            return 0;
+        }
+        trlField(t, "Status:", "Stopped after a failure. Its devices were "
+                               "removed.", NULL);
+        return 1;
+    }
+    if (x->Terminal == 4 || x->Terminal == 5) {
+        trlField(t, "Status:", "Closed off. This controller was closed off "
+                 "because it stopped answering. Restarting it could stop "
+                 "Windows responding: save your work and restart Windows.", NULL);
+        return 1 + trlRetryLines(t, x);
+    }
+    if (x->Terminal == 6) {
+        trlField(t, "Status:", "Stopped: its interrupts were lost. Its "
+                 "devices were removed. Restart Windows.", NULL);
+        return 1 + trlRetryLines(t, x);
+    }
+    if (x->Terminal != 2 && x->Terminal != 3) {
+        return 0;
+    }
+    trlField(t, "Status:", "Stopped after repeated failures. Its devices "
+                           "were removed.", NULL);
+    lines++;
+    if (x->Records == 0) {
+        return lines + trlRetryLines(t, x);
+    }
+    rec = x->Rec[0];
+    tr_place_words(rec[3], rec[4], place, sizeof(place));
+    if (place[0] == '\0') {
+        trlField(t, "Involved:", "The driver did not record which device "
+                                 "was involved.", NULL);
+        return lines + 1 + trlRetryLines(t, x);
+    }
+    if (rec[5] != 0 && name != NULL && name[0] != '\0') {
+        tr_sprintf(who, sizeof(who), " (%s, %04lX:%04lX)", name,
+                   (unsigned long)(rec[5] >> 16),
+                   (unsigned long)(rec[5] & 0xFFFFUL));
+    } else if (rec[5] != 0) {
+        tr_sprintf(who, sizeof(who), " (%04lX:%04lX)",
+                   (unsigned long)(rec[5] >> 16),
+                   (unsigned long)(rec[5] & 0xFFFFUL));
+    } else {
+        who[0] = '\0';
+    }
+    tr_sprintf(line, sizeof(line), "Recovery requests involved the device "
+               "at %s%s; %s.", place, who, tr_why_words(rec[0]));
+    trlField(t, "Involved:", line, lead);
+    lines++;
+    if (x->Involved > 1) {
+        tr_sprintf(line, sizeof(line), "%lu of the last %lu recovery "
+                   "requests involved this port.",
+                   (unsigned long)x->Involved, (unsigned long)x->Records);
+        trlField(t, "", line, NULL);
+        lines++;
+    }
+    return lines + trlRetryLines(t, x);
+}
+
+int tr_xhr_restart_ok(const TR_XHR *x)
+{
+    if (x == NULL) {
+        return 0;
+    }
+    return (x->Terminal == 2 || x->Terminal == 3) ? 1 : 0;
+}
+
+void tr_xhr_report(TR_TEXT *t, const TR_XHR *x)
+{
+    char place[64];
+    const TR_U32 *rec;
+    TR_U32 i;
+    TR_U32 ago;
+    int any = 0;
+
+    for (i = 0; i < x->Records; i++) {
+        rec = x->Rec[i];
+        tr_place_words(rec[3], rec[4], place, sizeof(place));
+        /* The tolerance clock's ticks, at its timer's period. */
+        ago = (x->Clock - rec[6]) / (1000UL / XHR_TICK_MS);
+        tr_printf(t, "    reset requested: %s (%s), extra %lu, at %s slot "
+                  "%lu [%04lX:%04lX], about %lu s ago%s\n",
+                  tr_why_name(rec[0]), tr_why_words(rec[0]),
+                  (unsigned long)rec[1],
+                  place[0] ? place : "no place recorded",
+                  (unsigned long)rec[2], (unsigned long)(rec[5] >> 16),
+                  (unsigned long)(rec[5] & 0xFFFFUL), (unsigned long)ago,
+                  (rec[8] & XHR_RF_LATCH) ? " (the latch's)" : "");
+    }
+    for (i = 1; i < TR_XHR_COUNTS && i < 25; i++) {
+        if (x->Counts[i] == 0) {
+            continue;
+        }
+        tr_printf(t, "%s%s %lu", any ? ", " : "    requests by reason: ",
+                  tr_why_name(i), (unsigned long)x->Counts[i]);
+        any = 1;
+    }
+    if (any) {
+        tr_printf(t, "\n");
+    }
+    if ((x->Flags & XHR_F_ISOLATION) != 0) {
+        if (x->IsoValue == XHR_NONE) {
+            tr_printf(t, "    device isolation: value not set, listed %s, "
+                      "applies %s\n", x->IsoListed ? "yes" : "no",
+                      x->IsoApplies ? "yes" : "no");
+        } else {
+            tr_printf(t, "    device isolation: value %lu, listed %s, "
+                      "applies %s\n", (unsigned long)x->IsoValue,
+                      x->IsoListed ? "yes" : "no",
+                      x->IsoApplies ? "yes" : "no");
+        }
+    }
 }

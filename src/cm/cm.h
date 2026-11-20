@@ -32,15 +32,18 @@
  * FILES. docs/contributing/source-files.md says what each file of this
  * directory is.
  *
- * Beside the roles, three further kinds of device object. The query
+ * Beside the roles, four further kinds of device object. The query
  * device of a started NHI (CM_KIND_QUERY; cm_qryos.c, design record 25
  * section 4), a named control device with no PnP role, which the dispatch
  * routines tell apart by its Kind before anything else; its answer is
  * built by cm_query.c. The network PDO (CM_KIND_NETPDO; cm_net.c, design
  * record 35 section 6): the NHI FDO's one child while XhciCmNet is 1, a
- * bus role. And a member filter (CM_KIND_MEMBER; cm_oscnt.c, design
- * record 32 section 12.8.15.7), NT only: the ASM4242 upstream port's and
- * xHCI's filter of the platform's USB4 handover.
+ * bus role. A member filter (CM_KIND_MEMBER; cm_oscnt.c, design record 32
+ * section 12.8.15.7), NT only: the ASM4242 upstream port's and xHCI's
+ * filter of the platform's USB4 handover. And on 98 SE and ME the
+ * resident object (CM_KIND_RESIDENT; cm_entry.c, design record 21 section
+ * 7.9): made by DriverEntry and never deleted, so the image stays loaded
+ * for the boot; no name, no stack, every request refused.
  *
  * IRQL: as each file's header says; every PnP object this driver creates
  * is DO_POWER_PAGABLE (the filter copies its lower device's power flags).
@@ -85,6 +88,9 @@
 #define CM_KIND_MEMBER 0x4D4D4358UL  /* 'XCMM': an ASM4242 mailbox member's
                                         filter, cm_oscnt.c (record 32
                                         section 12.8.15.7)                */
+#define CM_KIND_RESIDENT 0x524D4358UL /* 'XCMR': 98 SE and ME, the object
+                                        that keeps the image loaded,
+                                        cm_entry.c (record 21 section 7.9) */
 
 /* The connection-manager thread's work (CM_NHI.WorkBits), taken in this
  * order on each wake (cm_thr.c). */
@@ -591,6 +597,10 @@ typedef struct _CM_NHI {
     /* XhciCmQemuFailReenum (cm_cfgwk.c, task 45.27): how many of the 9x
      * worker's member calls are taken as failed before they are made. */
     ULONG QemuFailReenum;
+    /* XhciCmQemuUnitStop, the qemu flavour's alone (cm_cfgwk.c, record 21
+     * section 6.1.6 item 15): how many 98 SE write-back passes are stopped
+     * after the unit's upstream port, so the doubt path can be read. */
+    ULONG QemuUnitStop;
     /* XhciCmQemuOscNoClear, the qemu flavour's alone (cm_oscnt.c, task
      * 46.12): 1 leaves the boot guard's marker as the router's answer
      * finds it, so a QEMU quit after the start stands for a start that
@@ -606,6 +616,12 @@ typedef struct _CM_NHI {
      * wake as if its wake power-up had failed, for the legs. */
     ULONG QemuWpuForce;
 #endif
+    /* The wake order (design record 21 section 6.3.2, task 50.10): the
+     * switch, XhciCmWakeOrder as run with (0 by default), written at the
+     * values' read; PrCounted, counted in the driver's count of NHIs with
+     * it on. */
+    ULONG PowerRel;
+    ULONG PrCounted;
 
     CM_COUNTERS Counters;
 
@@ -1010,6 +1026,35 @@ typedef struct _CM_FILTER {
     PDEVICE_OBJECT WpuDisk[4];
     ULONG WpuDiskLink[4];
     ULONG WpuDiskTok[4];
+
+    /* ---- the wake order (design record 21 section 6.3.2, task 50.10), a
+     * child's, every field under Lock. PrAnsTarget is a token, compared
+     * and never dereferenced: the NHI PDO its last successful
+     * PowerRelations answer gave (NULL: none, or a clearing answer);
+     * PrAnsOk 0 until an answer is recorded after its last start or
+     * removal. The D0 latch is the first device D0 of an epoch. ---- */
+    PVOID PrAnsTarget;
+    ULONG PrAnsOk;
+    ULONG PrAnsFailed;      /* the last query ended without an answer     */
+    PDEVICE_RELATIONS PrEmpty;  /* the clearing answer's list, kept while
+                               a target may be given (paged pool)         */
+    ULONG PrAskOut;         /* an invalidation asked, not yet answered     */
+    ULONG PrAskAt;          /* the tick count's low part at that ask       */
+    ULONG PrAnswering;      /* an answer with a target being made          */
+    ULONG PrWalkSeq;        /* the drop walk's stamp                       */
+    ULONG PrUsagePend;      /* special-file notifications in flight (TRUE) */
+    ULONG PrInPath;         /* special-file uses accepted below            */
+    ULONG PrD0Epoch;        /* the epoch of the latched first D0           */
+    ULONG PrD0Gen;          /* WpuStartGen at its dispatch                 */
+    ULONG PrD0Order;        /* the owner's S0 reached in that epoch then   */
+    ULONG PrD0Ok;           /* the owner's resume succeeded by then        */
+    ULONG PrD0Done;         /* its completion recorded                     */
+    ULONG PrD0Status;
+    ULONG PrD0Count;        /* device D0s seen in that epoch               */
+    ULONG PrD0Logged;       /* the epoch it was logged in                  */
+    ULONG PrBus;            /* its bus read at its last successful start,
+                               under cmRegLock (the location rule)         */
+    ULONG PrBusValid;
 } CM_FILTER, *PCM_FILTER;
 
 /*
@@ -1061,6 +1106,31 @@ BOOLEAN CmWpuOn(VOID);
 VOID CmWpuAdded(PCM_NHI nhi);
 VOID CmWpuCount(PCM_NHI nhi, BOOLEAN on);
 
+/*
+ * The wake order (design record 21 section 6.3.2, task 50.10): on Windows
+ * 7 and later, with XhciCmWakeOrder 1 for its NHI (0 by default),
+ * the child filter on a function directly behind an active tunnel port
+ * answers PowerRelations with that NHI's PDO, so the power manager turns
+ * the NHI on before the function at a system wake. cm_filt.c's half:
+ * CmPrOn (any NHI's switch on: the D0 hook is taken), CmPrRelations (a
+ * PowerRelations request, the PnP dispatch: forwarded, answered on its way
+ * back), CmPrUsage (a special-file usage notification at its dispatch:
+ * FALSE when it is to be refused), CmPrUsageDone (its completion, <=
+ * DISPATCH_LEVEL), CmPrD0Dispatch and CmPrD0Done (a device D0 on the way
+ * down and its completion, <= DISPATCH_LEVEL), CmPrReset (a successful
+ * start or a removal, PASSIVE_LEVEL). CmPrNhiS0 (cm_power.c, <=
+ * DISPATCH_LEVEL): the NHI's system S0 completing, `noDevice` when no
+ * device D0 came with it or that D0 failed.
+ */
+BOOLEAN CmPrOn(VOID);
+NTSTATUS CmPrRelations(PCM_FILTER child, PIRP irp);
+BOOLEAN CmPrUsage(PCM_FILTER child, PIO_STACK_LOCATION stack, PULONG token);
+VOID CmPrUsageDone(PCM_FILTER child, ULONG token, NTSTATUS status);
+VOID CmPrD0Dispatch(PCM_FILTER child);
+VOID CmPrD0Done(PCM_FILTER child, ULONG context, NTSTATUS status);
+VOID CmPrReset(PCM_FILTER child, BOOLEAN removed);
+VOID CmPrNhiS0(PCM_NHI nhi, BOOLEAN noDevice);
+
 /* cm_filt.c: the kept child (design record 31 section 4.10). The
  * dispatch of every major function on one (admission and the lower
  * object's reference, K3 and K7); the I/O manager's FastIoDetachDevice
@@ -1087,6 +1157,9 @@ VOID CmRegKeptNote(PCM_FILTER filter, const char *label, ULONG event);
 
 /* cm_entry.c */
 extern PDRIVER_OBJECT CmDriverObject;
+/* 98 SE and ME: the resident object (CM_KIND_RESIDENT), made before
+ * anything else in DriverEntry and never deleted; NULL on NT. */
+extern PDEVICE_OBJECT CmResidentObject;
 NTSTATUS CmCompleteIrp(PIRP irp, NTSTATUS status, ULONG_PTR information);
 NTSTATUS CmForwardSync(PCM_COMMON common, PIRP irp);
 VOID CmZero(PVOID p, ULONG n);
@@ -1427,6 +1500,11 @@ VOID CmRegIsoGone(PCM_FILTER child);
 VOID CmRegIsoRef(PCM_FILTER child);
 VOID CmRegIsoDeref(PCM_FILTER child);
 VOID CmReadBreqGate(VOID);
+#if defined(XHCI_FLAVOUR_QEMU)
+/* cm_reg.c: a qemu-only test value, machine-wide key alone (task 50.27);
+ * 0 when absent. IRQL: PASSIVE_LEVEL. */
+ULONG CmRegQemuDword(PCWSTR name);
+#endif
 
 /* cm_statos.c: CmStatusOpen in the PnP start's dispatch (the keys and the
  * first record); CmStatusPass once per thread pass; CmStatusStopped after
@@ -1480,6 +1558,9 @@ VOID CmNhiCounterLines(PCM_NHI nhi, UCHAR *out, ULONG room, PULONG at,
 VOID CmLogInit(PCM_NHI nhi);
 VOID CmLogApply(PCM_NHI nhi);
 VOID CmLogNote(PCM_NHI nhi, const char *label, ULONG value);
+/* The image's own record, no NHI: the qemu flavour's port-0xE9 mirror
+ * alone (task 50.27). PASSIVE_LEVEL. */
+VOID CmLogImageNote(const char *label, ULONG value);
 /* A record whose value is an address (a bus address, a devnode handle):
  * XhciLogAppendAddress under LogLock, so it reaches the ring at
  * XhciCmLogVerbosity 4 alone, as xhci98.sys's address records do (design

@@ -228,6 +228,23 @@ typedef struct _UAS_FDO {
     BOOLEAN Streamed;               /* SuperSpeed, streams open */
     BOOLEAN Recovering;
     BOOLEAN RecoveryQueued;
+    /* Task 50.20 (design record 17 section 4.12.10), FDO lock:
+     * StreamContract, the bus acknowledged the contract on every stream
+     * open; StreamOwed, a stream transfer was cancelled and the recovery
+     * owes the device its proof or its reset - the barrier the pump stops
+     * at; StreamGated, the UAS_STREAM_* endpoints whose transfers were
+     * cancelled since; StreamTmfFailed, a task management function answered
+     * but not with an applicable success since; RecoveryCommands, the
+     * worker's own command phase, the one admission past the barrier. */
+    BOOLEAN StreamContract;
+    BOOLEAN StreamOwed;
+    BOOLEAN StreamTmfFailed;
+    BOOLEAN RecoveryCommands;
+    ULONG StreamGated;
+    ULONG StreamCounters[3];        /* UAS_SCTR_*                      */
+    ULONG QemuTest;                 /* qemu flavour only: XhciUasQemuTest,
+                                     * UAS_QT_* (task 50.20's control
+                                     * legs); 0 in every release build   */
     BOOLEAN Dead;                   /* a reset failed: every SRB fails */
     BOOLEAN CycleOwed;              /* task 45.41: a failed reset's cycle
                                      * not yet taken by the bus; retried by
@@ -333,6 +350,19 @@ typedef struct _UAS_FDO {
     BOOLEAN TimerStop;
     KEVENT TimerDone;
     WORK_QUEUE_ITEM Recovery;
+    /* Task 50.38 (design record 17 section 4.12.11): what the recovery
+     * worker sends the bus - its IRP, in this driver's own pool and made
+     * for RecoveryIrpStack locations, and its RESET_PIPE URB - and its
+     * command phase's storage (uas_xport.c's UAS_ICMD), made at the
+     * engine's first start, used by the worker alone and freed with the
+     * engine. RecoveryIcmdBusy (FDO lock): the command taken, not yet
+     * given back. */
+    PIRP RecoveryIrp;
+    USHORT RecoveryIrpSize;
+    CCHAR RecoveryIrpStack;
+    BOOLEAN RecoveryIcmdBusy;
+    PVOID RecoveryIcmd;
+    struct _URB_PIPE_REQUEST RecoveryUrb;
 
     /* Task 45.23 (design record 20 section 4.3.3): the sleep hold and the
      * wake check (uas_xport.c). PowerLock, a synchronization event, is held
@@ -370,6 +400,31 @@ typedef struct _UAS_FDO {
     ULONG LunCount;
     PUAS_PDO Luns[UAS_MAX_LUNS];
 } UAS_FDO, *PUAS_FDO;
+
+/* XhciUasQemuTest bits (qemu flavour only, the drive's device key): the
+ * streams opened without the declaration, so the bus's paths are today's
+ * (the non-declaring control); no command phase after the driver's own
+ * reset (the UNIT ATTENTION loop's control). */
+#define UAS_QT_NO_DECLARE       0x1UL
+#define UAS_QT_NO_PHASE         0x2UL
+/* Task 50.38's legs (design record 17 section 4.12.11): the command
+ * phase's outcome taken as no device answer once its commands have run;
+ * the cycle asked with an op no bus knows, so its CYCLE_PORT fallback
+ * follows; the last allocation of the start's recovery set taken as
+ * failed; each LUN's first phase command after a port reset left to its
+ * finish as soon as it is queued and answered as a resource failure, so
+ * the phase's retry finds the command again only once that finish has
+ * given it back. */
+#define UAS_QT_PHASE_FAILS      0x4UL
+#define UAS_QT_CYCLE_UNKNOWN    0x8UL
+#define UAS_QT_NO_RECOVERY_SET  0x10UL
+#define UAS_QT_PHASE_ABANDON    0x20UL
+
+/* StreamCounters[] slots (task 50.20): endpoint recycles, device resets
+ * the stream recovery chose, UNIT ATTENTIONs read past after a reset. */
+#define UAS_SCTR_RECYCLES       0
+#define UAS_SCTR_RESETS         1
+#define UAS_SCTR_ATTENTIONS     2
 
 /* Counters[] slots. */
 #define UAS_CTR_COMMANDS        0
@@ -447,6 +502,10 @@ NTSTATUS UasFdoPower(PUAS_FDO fdo, PIRP irp);
 NTSTATUS UasSyncUrb(PUAS_FDO fdo, PURB urb);
 NTSTATUS UasSyncIoctl(PUAS_FDO fdo, ULONG code);
 NTSTATUS UasBusIoctl(PUAS_FDO fdo, ULONG code, PVOID arg1);
+/* Task 50.38: the same on the recovery worker's own IRP; the worker
+ * alone calls them, one request at a time. */
+NTSTATUS UasRecoveryIoctl(PUAS_FDO fdo, ULONG code, PVOID arg1);
+NTSTATUS UasRecoveryUrb(PUAS_FDO fdo, PURB urb);
 
 /* uas_pdo.c - PnP at PASSIVE; SCSI and device control at <= DISPATCH. */
 NTSTATUS UasPdoCreate(PUAS_FDO fdo, ULONG lun, const UCHAR *inquiry,

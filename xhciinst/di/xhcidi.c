@@ -178,6 +178,7 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpszCmdLine,
         di_sys_install(&g_run, &g_cmd, hwnd);
         break;
     case DI_JOB_REMOVE:
+    case DI_JOB_REMOVESTALE:
         di_sys_remove(&g_run, &g_cmd, hwnd);
         break;
     default:

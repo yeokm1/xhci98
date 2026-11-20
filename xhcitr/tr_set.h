@@ -69,6 +69,13 @@
 #define TRS_LOC_DEVICE      4   /* one UAS drive's own device key (task
                                    49.38): 2000 to 10 its Enum key's Device
                                    Parameters, 98 SE and ME its Enum key   */
+#define TRS_LOC_CTRL        5   /* one Intel xhci98 controller's own driver
+                                   key, never the machine-wide one (task
+                                   50.34: XhciIntelPortSwitchReady)        */
+
+/* The longest row name: Settings' heading makes room for every row's
+ * (task 50.39); test_trset holds the table to it. */
+#define TRS_NAME_MAX        31
 
 typedef struct _TRS_ROW {
     const char *Name;       /* the value's name; Stor98's 98 SE / ME name */
@@ -98,6 +105,8 @@ typedef struct _TRS_ENV {
     int WalkPartial;        /* the device walk was not read whole: a listed
                                controller may be missing from it          */
     int UasDrives;          /* present UAS drives (task 49.38)            */
+    int PswXhci;            /* xhci98 controllers the port switchover can
+                               apply to (task 50.34; trs_ready_applies)  */
 } TRS_ENV;
 
 /* The settings search (task 49.38): 1 when text is empty or found, without
@@ -133,6 +142,21 @@ const TRS_ROW *trs_row_find(const char *name);
  * NULL for a Stor98 row. */
 const INST_VALUE *trs_value(const TRS_ROW *r);
 
+
+/* Task 50.34: 1 for a row the window applies to one device of its
+ * "Applies to" or to every one - a controller's driver-key row
+ * (TRS_LOC_DRIVER, not Stor98's tab) and a controller's own row
+ * (TRS_LOC_CTRL); a drive's row has its own scope (TRS_LOC_DEVICE). */
+int trs_scoped(const TRS_ROW *r);
+
+/* Task 50.34: whether XhciIntelPortSwitchReady is offered for a controller:
+ * one the switchover can apply to by its identity - an Intel controller
+ * whose board is not the excluded one (its subsystem read and not
+ * refused), and listed, or any Intel one while XhciIntelPortSwitch 2 is in
+ * force for it - so the Tree never writes it where the driver would never
+ * read it. */
+int trs_ready_applies(int intel, int listed, int subsysKnown,
+                      int boardRefused, int override2);
 
 /* A row's state here: not listed, listed, or listed greyed (the system is
  * another's; its hardware is here). */

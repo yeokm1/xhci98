@@ -7,8 +7,10 @@
  * values, the image's refusal table and its latch, the stray-entry brake,
  * the mode-4 decision row by row (the system classes, the table, the
  * quirk, every value's set, the pools, the range and the budget, the line
- * strategy 1 needs), XhciMsiShare's reading, the stranded-event judge and
- * the packing of a refused claim's reasons.
+ * strategy 1 needs), XhciMsiShare's reading, the stranded-event judge,
+ * the packing of a refused claim's reasons, and a refused start's record
+ * (task 50.4, section 4.5.20): which start is one, the record refused and
+ * cleared, and what a value read holds.
  */
 #include <stdio.h>
 #include "../src/xhci_msg4.h"
@@ -582,6 +584,133 @@ static void test_pack(void)
     CHECK_EQ(w[3], 0x100F0E0DUL, "IRQs 12 to 15");
 }
 
+/* Task 50.4 (record 15 section 4.5.20): which start is a mode-4 refusal,
+ * the record's layout refused and cleared, and the reader's state. */
+static void test_record(void)
+{
+    static const ULONG refusals[10] = { 22, 23, 24, 25, 26, 27, 30, 31,
+                                        33, 34 };
+    ULONG poll[XHCI_M4REC_POLL_WORDS];
+    ULONG msg4[XHCI_M4REC_MSG4_WORDS];
+    ULONG w[XHCI_M4REC_WORDS];
+    UCHAR b[XHCI_M4REC_BYTES + 8];
+    XHCI_M4REC_IN in;
+    ULONG i;
+    ULONG n;
+
+    for (i = 0; i < 10; i++) {
+        CHECK_EQ(XhciMsg4IsStartRefusal(1, XHCI_POLL_DELIVERY_NONE,
+                                        refusals[i]), 1,
+                 "every mode-4 refusal reason");
+        CHECK_EQ(XhciMsg4IsStartRefusal(0, XHCI_POLL_DELIVERY_NONE,
+                                        refusals[i]), 0,
+                 "not when the start succeeded");
+        CHECK_EQ(XhciMsg4IsStartRefusal(1, XHCI_POLL_DELIVERY_MSIX,
+                                        refusals[i]), 0,
+                 "not while a delivery stands");
+    }
+    n = 0;
+    for (i = 0; i < 64; i++) {
+        n += XhciMsg4IsStartRefusal(1, XHCI_POLL_DELIVERY_NONE, i);
+    }
+    CHECK_EQ(n, 10, "no other reason, 21 and the reserved 28, 29, 32 included");
+    CHECK_EQ(XhciMsg4IsStartRefusal(1, XHCI_POLL_DELIVERY_NONE,
+                                    XHCI_POLL_R_FORCED_MESSAGE_NOT_CONNECTED),
+             0, "mode 3's refusal is not mode 4's");
+    CHECK_EQ(XhciMsg4IsStartRefusal(1, XHCI_POLL_DELIVERY_NONE,
+                                    XHCI_POLL_R_NONE),
+             0, "a start failed before the delivery was settled");
+
+    for (i = 0; i < XHCI_M4REC_POLL_WORDS; i++) {
+        poll[i] = 0x100UL + i;
+    }
+    for (i = 0; i < XHCI_M4REC_MSG4_WORDS; i++) {
+        msg4[i] = 0x200UL + i;
+    }
+    in.State = XHCI_M4REC_REFUSED;
+    in.TimeLo = 0x11223344UL;
+    in.TimeHi = 0x01DC5566UL;
+    in.Status = 0xC0000182UL;
+    in.System = XHCI_MSG4_SYS_NT5;
+    in.Flavour = 1;
+    in.DriverVersion = 0x03050100UL;
+    in.Location = 0x80000000UL | XhciMsg4Bdf(0, 4, 0);
+    in.Poll = poll;
+    in.ConnectStatus = 4;
+    in.Msg4 = msg4;
+    XhciMsg4RecordBuild(&in, w);
+    CHECK_EQ(w[0], XHCI_M4REC_MAGIC, "the magic");
+    CHECK_EQ(w[1], 0x00370001UL, "version 1, 55 words");
+    CHECK_EQ(w[2], XHCI_M4REC_REFUSED, "refused");
+    CHECK_EQ(w[3], 0x11223344UL, "time low");
+    CHECK_EQ(w[4], 0x01DC5566UL, "time high");
+    CHECK_EQ(w[5], 0xC0000182UL, "the start's status");
+    CHECK_EQ(w[6], 0x0101UL, "the system and the flavour");
+    CHECK_EQ(w[7], 0x03050100UL, "the driver's version");
+    CHECK_EQ(w[8], 0x80000020UL, "the location");
+    CHECK_EQ(w[9], 0, "reserved");
+    CHECK_EQ(w[10], 0x100UL, "IntrModeRead first");
+    CHECK_EQ(w[15], 0x105UL, "IntrPin last");
+    CHECK_EQ(w[16], 4, "the connection's status");
+    CHECK_EQ(w[17], 0x200UL, "Msg4Strategy first");
+    CHECK_EQ(w[54], 0x225UL, "Msg4HighFirstRefused last");
+
+    for (i = 0; i < XHCI_M4REC_WORDS; i++) {
+        put32(b, i * 4, w[i]);
+    }
+    CHECK_EQ(XhciMsg4RecordState(1, 1, b, XHCI_M4REC_BYTES),
+             XHCI_M4REC_IS_REFUSED, "a refused record reads refused");
+    CHECK_EQ(XhciMsg4RecordState(1, 1, b, XHCI_M4REC_BYTES + 8),
+             XHCI_M4REC_IS_REFUSED, "a longer value too");
+    CHECK_EQ(XhciMsg4RecordState(1, 1, b, XHCI_M4REC_BYTES - 1),
+             XHCI_M4REC_FOREIGN, "a shorter value is foreign");
+    CHECK_EQ(XhciMsg4RecordState(1, 0, b, XHCI_M4REC_BYTES),
+             XHCI_M4REC_FOREIGN, "another type is foreign");
+    CHECK_EQ(XhciMsg4RecordState(1, 1, NULL, 0), XHCI_M4REC_FOREIGN,
+             "an empty value is foreign");
+    CHECK_EQ(XhciMsg4RecordState(0, 1, b, XHCI_M4REC_BYTES),
+             XHCI_M4REC_ABSENT, "absent");
+    put32(b, 8, 7);
+    CHECK_EQ(XhciMsg4RecordState(1, 1, b, XHCI_M4REC_BYTES),
+             XHCI_M4REC_FOREIGN, "an unknown state is foreign");
+    put32(b, 8, 1);
+    put32(b, 4, 0x00370002UL);
+    CHECK_EQ(XhciMsg4RecordState(1, 1, b, XHCI_M4REC_BYTES),
+             XHCI_M4REC_FOREIGN, "another version is foreign");
+    put32(b, 4, 0x00370001UL);
+    put32(b, 0, 0x46523459UL);
+    CHECK_EQ(XhciMsg4RecordState(1, 1, b, XHCI_M4REC_BYTES),
+             XHCI_M4REC_FOREIGN, "another magic is foreign");
+
+    in.State = XHCI_M4REC_CLEARED;
+    XhciMsg4RecordBuild(&in, w);
+    CHECK_EQ(w[0], XHCI_M4REC_MAGIC, "cleared: the magic kept");
+    CHECK_EQ(w[1], 0x00370001UL, "cleared: version and count kept");
+    CHECK_EQ(w[2], XHCI_M4REC_CLEARED, "cleared");
+    CHECK_EQ(w[3], 0x11223344UL, "cleared: the time kept");
+    CHECK_EQ(w[6], 0x0101UL, "cleared: the system and flavour kept");
+    CHECK_EQ(w[7], 0x03050100UL, "cleared: the version kept");
+    n = w[5] | w[8];
+    for (i = XHCI_M4REC_AT_POLL; i < XHCI_M4REC_WORDS; i++) {
+        n |= w[i];
+    }
+    CHECK_EQ(n, 0, "cleared: the status, location and payload 0");
+    for (i = 0; i < XHCI_M4REC_WORDS; i++) {
+        put32(b, i * 4, w[i]);
+    }
+    CHECK_EQ(XhciMsg4RecordState(1, 1, b, XHCI_M4REC_BYTES),
+             XHCI_M4REC_IS_CLEARED, "a cleared record reads cleared");
+
+    in.State = 5;
+    in.Poll = NULL;
+    in.Msg4 = NULL;
+    XhciMsg4RecordBuild(&in, w);
+    CHECK_EQ(w[2], XHCI_M4REC_CLEARED, "an unknown state builds cleared");
+    in.State = XHCI_M4REC_REFUSED;
+    XhciMsg4RecordBuild(&in, w);
+    CHECK_EQ(w[10] | w[17] | w[54], 0, "no counter words given: 0");
+}
+
 int main(void)
 {
     test_scan(16);
@@ -593,6 +722,7 @@ int main(void)
     test_share();
     test_judge();
     test_pack();
+    test_record();
     printf("test_msg4: %d checks, %d failures\n", checks, failures);
     return failures;
 }

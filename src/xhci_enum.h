@@ -83,6 +83,20 @@
 #define XHCI_ENUM_FAIL_CONFIG       5UL
 #define XHCI_ENUM_FAIL_PDO          6UL
 #define XHCI_ENUM_FAIL_SPEED        7UL
+/* Task 50.30 step 3 (design record 17 section 4.15.4): an Address Device
+ * or Evaluate Context aborted cleanly or left, or a control transfer the
+ * late path found unanswered by a present device - beside
+ * XHCI_ENUM_FAIL_ADDRESS, which stays for a command answered with an
+ * error code. */
+#define XHCI_ENUM_FAIL_UNANSWERED   8UL
+/* Design record 17 section 4.15.16 B: the Enable Slot refused at admission
+ * (a left command's debt or the Enable Slot hold), nothing submitted - not
+ * the controller's "no slot" and not the device's failure. No retry
+ * (XhciEnumRetriesFor); the caller keeps an obligation to look again. The
+ * COMMAND_DONE event of the Enable Slot says so with Value
+ * XHCI_ENUM_SLOT_NOT_ADMITTED. */
+#define XHCI_ENUM_FAIL_DEFERRED     9UL
+#define XHCI_ENUM_SLOT_NOT_ADMITTED 1UL
 
 /*
  * The machine's speeds: the default Protocol Speed IDs (xHCI 7.2.1), as a
@@ -211,6 +225,81 @@ ULONG XhciEnumRetry(PXHCI_ENUM_PORT port, PXHCI_ENUM_ACTION action);
 
 /* The same with the caller's limit in place of XHCI_ENUM_RETRIES: a hub's
  * port is given XHCI_HUB_PORT_ATTEMPTS attempts in all (xhci_hub.h). */
+/* Task 50.30 step 3 (section 4.15.4): the failure just reached was the
+ * device's unanswered step (XhciEnumUnanswered: the cause made
+ * XHCI_ENUM_FAIL_UNANSWERED, only in XHCI_ENUM_FAILED; returns whether it
+ * was). XhciEnumRetriesFor: the retries a cause allows, the caller's
+ * `retries` (XHCI_ENUM_RETRIES at a root port, XHCI_HUB_PORT_ATTEMPTS - 1
+ * at a hub's) capped at one for UNANSWERED - one retry, begun by a port
+ * reset, since the device's address state is unknown. Pure. */
+ULONG XhciEnumUnanswered(PXHCI_ENUM_PORT port);
+ULONG XhciEnumRetriesFor(ULONG cause, ULONG retries);
+
+/* Design record 17 section 4.15.16 B: whether a deferred enumeration's
+ * port is to be resumed (put back to Empty and looked at again) when its
+ * obligation is served: it still owns the slotless deferred failure it was
+ * taken for - Failed, cause DEFERRED, no slot, no PDO, no device record -
+ * at the same connect generation (`connNow` == `connAtDefer`), and its
+ * place is still the bus's (`placeOk`). Otherwise the obligation is only
+ * dropped. XhciEnumRetriesFor gives the cause no retry. Pure. */
+ULONG XhciEnumDeferResumable(const XHCI_ENUM_PORT *port, ULONG hasDevice,
+                             ULONG connNow, ULONG connAtDefer, ULONG placeOk);
+
+/* Design record 17 section 4.15.16 B: the obligation a deferral leaves -
+ * per port, the flag, the controller's obligation generation it was taken
+ * in, and the port's connect generation at the deferral; per controller,
+ * the ports owed of the current generation and that generation. The
+ * caller keeps both under one lock (the HCD's controller lock). Pure. */
+typedef struct _XHCI_ENUM_DEFER {
+    ULONG Owed;
+    ULONG Gen;
+    ULONG Conn;
+} XHCI_ENUM_DEFER, *PXHCI_ENUM_DEFER;
+
+typedef struct _XHCI_ENUM_DEFERS {
+    ULONG Count;
+    ULONG GenNow;
+} XHCI_ENUM_DEFERS, *PXHCI_ENUM_DEFERS;
+
+/* What serving one port's obligation decided (XhciEnumDeferServe). */
+#define XHCI_ENUM_DEFER_NONE    0UL     /* no flag                        */
+#define XHCI_ENUM_DEFER_STALE   1UL     /* an older generation's flag,
+                                         * cleared, nothing counted       */
+#define XHCI_ENUM_DEFER_RESUME  2UL     /* cleared; the port to resume    */
+#define XHCI_ENUM_DEFER_DROP    3UL     /* cleared; no longer applies     */
+
+/* Every obligation ended at once, walking no port: an HCRST or a start
+ * advances the generation and zeroes the count, so every flag taken
+ * before reads as not current. */
+VOID XhciEnumDefersRenew(PXHCI_ENUM_DEFERS defers);
+/* Whether `defer`'s flag is set and of the current generation. */
+ULONG XhciEnumDeferCurrent(const XHCI_ENUM_DEFERS *defers,
+                           const XHCI_ENUM_DEFER *defer);
+/* The flag cleared, idempotently: the count moves only for a current flag,
+ * so a clearing that loses a race to another (an HCRST, a removal, an
+ * accepted change, the service) does nothing a second time. Returns
+ * whether a current flag was cleared. */
+ULONG XhciEnumDeferDrop(PXHCI_ENUM_DEFERS defers, PXHCI_ENUM_DEFER defer);
+/* The obligation taken, or a standing one replaced (dropped first), at the
+ * current generation with the port's connect generation `conn`. */
+VOID XhciEnumDeferTake(PXHCI_ENUM_DEFERS defers, PXHCI_ENUM_DEFER defer,
+                       ULONG conn);
+/* Whether the obligations are to be served now: some are owed and
+ * admission is open - no debt (`debtClear`), the Enable Slot not held,
+ * the controller neither failed nor halted, its thread not stopping, the
+ * root hub started. While it answers 0 the caller touches nothing, so
+ * every flag and the count stand until it answers 1. */
+ULONG XhciEnumDefersOpen(const XHCI_ENUM_DEFERS *defers, ULONG debtClear,
+                         ULONG enableHeld, ULONG failed, ULONG halted,
+                         ULONG stopping, ULONG rootStarted);
+/* One port's obligation served (admission open): a flag of an older
+ * generation is cleared (STALE); a current one is cleared and counted
+ * down, and the port is resumed only if XhciEnumDeferResumable says it
+ * still owns its deferred failure (RESUME), else DROP. */
+ULONG XhciEnumDeferServe(PXHCI_ENUM_DEFERS defers, PXHCI_ENUM_DEFER defer,
+                         const XHCI_ENUM_PORT *port, ULONG hasDevice,
+                         ULONG connNow, ULONG placeOk);
+
 ULONG XhciEnumRetryUpTo(PXHCI_ENUM_PORT port, ULONG retries,
                         PXHCI_ENUM_ACTION action);
 
@@ -423,6 +512,13 @@ ULONG XhciEnumQuietValid(ULONG mark, ULONG markGen);
  * `parentSerial`: its own children, never one PnP let go of. */
 ULONG XhciEnumAnswerCarries(ULONG parentSerial, ULONG answering,
                             ULONG letGo);
+
+/* MEBOOTDROP.1 (design record 17 section 4.13.10): 1 when a gone PDO is
+ * carried in its parent's relations answers on 98 SE and ME - `marked` by
+ * a containment's drop, its PnP state STOPPED (a STOP and no START since),
+ * no REMOVE received, and not yet reported missing. Pure. */
+ULONG XhciEnumStopCarry(ULONG marked, ULONG stopped, ULONG removeReceived,
+                        ULONG missingReported);
 
 /*
  * A root port's enumeration notes (task 35.3; issue 11 section 7). 35.0's

@@ -821,7 +821,7 @@ static void test_real_infs(void)
             const char *Name;
             INST_U32 Def;
         } want[] = {
-            { "XhciIntelPortSwitch", 0 }, { "XhciInterruptMode", 0 },
+            { "XhciIntelPortSwitch", 1 }, { "XhciInterruptMode", 0 },
             { "XhciLinkKeep", 1 }, { "XhciSsFlapFallback", 1 },
             { "XhciResumeKeep", 1 },
             { "XhciUsb2Bos", 1 }, { "XhciImodInterval250ns", 160 },
@@ -841,7 +841,9 @@ static void test_real_infs(void)
             { "XhciMsiInputBudget", 0 }, { "XhciDmaStaging", 0 },
             { "XhciStagePoolKiB", 2048 }, { "XhciEventRingTrbs", 256 },
             { "XhciTolerance", 1 },
-            { "XhciCommandCheck", 1 }, { "XhciStreamDequeueRepair", 1 },
+            { "XhciCommandCheck", 1 }, { "XhciCancelStatus", 1 },
+            { "XhciUnplugComplete", 1 }, { "XhciFailedRetrySec", 5 },
+            { "XhciStreamDequeueRepair", 1 },
             { "XhciAccept096", 1 },
             { "XhciAcpiTables", 1 }, { "XhciIntervalCap", 1 },
             { "XhciAvgTrbEsit", 0 }, { "XhciUsb2HubSpeedFallback", 1 },
@@ -851,7 +853,10 @@ static void test_real_infs(void)
             { "XhciSuspendHaltTimeout", 1 }, { "XhciAsmediaFlowControl", 1 },
             { "XhciTiIntervalCap", 1 }, { "XhciStuckLinkReset", 1 },
             { "XhciStreamRingPad", 1 }, { "XhciControlLinkNoOp", 1 },
-            { "XhciIsochSpuriousSuccess", 1 }, { "XhciAmdSuspendBitClear", 1 }
+            { "XhciIsochSpuriousSuccess", 1 }, { "XhciAmdSuspendBitClear", 1 },
+            { "XhciStreamDequeueAvoid", 1 }, { "XhciDeviceIsolation", 1 },
+            { "XhciIntelPortSwitchSetup", 0 },
+            { "XhciIntelPortSwitchReady", 0 }
         };
         int rowsSeen = 0;
         for (i = 0; i < instValueCount; i++) {
@@ -1502,6 +1507,143 @@ static void test_ids(void)
     CHECK_EQ(inst_bus_id("XHCI98\\COMPOSITE&VID_1&PID_2\\x"), 2, "old composite");
     CHECK_EQ(inst_bus_id("XHCI98\\OTHER\\x"), 0, "unknown old form");
     CHECK_EQ(inst_bus_id("USB\\VID_046D&PID_C077\\5&1"), 0, "a device");
+}
+
+/* The owner's two layout fixes of 2026-11-20 (run-50 "50.17 (Setup,
+ * deleted key)"): the uninstall's line once per entry, and the plan's row
+ * within the console's columns with its words unchanged. */
+static void test_once_row_5017(void)
+{
+    static char seen[2][INST_ID_CHARS];
+    int count = 0;
+    char row[512];
+    char wrapped[1024];
+    int a;
+
+    CHECK(inst_once(seen, &count, 2, "PCI\\VEN_1B36&DEV_000D\\00E000"),
+          "once: first time said");
+    CHECK(!inst_once(seen, &count, 2, "PCI\\VEN_1B36&DEV_000D\\00E000"),
+          "once: second time not");
+    CHECK(inst_once(seen, &count, 2, "PCI\\VEN_1B21&DEV_2426\\0010"),
+          "once: another entry said");
+    CHECK(inst_once(seen, &count, 2, "PCI\\VEN_8086&DEV_15BF\\1") &&
+          inst_once(seen, &count, 2, "PCI\\VEN_8086&DEV_15BF\\1") &&
+          count == 2, "once: a full list says it again, not lost");
+
+    inst_plan_row(row, sizeof(row), "xhci98.inf", "none",
+                  "(driver entry missing)", "Skip (driver entry missing)");
+    CHECK(strcmp(row, "    INF xhci98.inf; driver none (driver entry "
+                      "missing);\n    Skip (driver entry missing)\n") == 0,
+          "row: the orphan's action on a line of its own");
+    inst_wrap_text(row, wrapped, sizeof(wrapped));
+    CHECK(strcmp(row, wrapped) == 0, "row: the console does not wrap it");
+    inst_plan_row(row, sizeof(row), "xhci98.inf", "none", "", "Install");
+    CHECK(strcmp(row, "    INF xhci98.inf; driver none; Install\n") == 0,
+          "row: a short one unchanged");
+    inst_plan_row(row, sizeof(row), "xhci98.inf", "xhci98", "date 11-20-2026",
+                  "Keep (same version)");
+    CHECK(strcmp(row, "    INF xhci98.inf; driver xhci98 date 11-20-2026; "
+                      "Keep (same version)\n") == 0,
+          "row: with a version, one line as before");
+    inst_plan_row(row, sizeof(row), "xhci98.inf", "xhci98",
+                  "(driver entry missing)", "Update");
+    CHECK(strchr(row, '\n') == row + strlen(row) - 1,
+          "row: NT's gone key with Update, one line");
+    for (a = 0; a <= INST_ACT_ORPHAN; a++) {
+        inst_plan_row(row, sizeof(row), "xhciuas.inf", "none",
+                      "(driver entry missing)", inst_action_text(a));
+        inst_wrap_text(row, wrapped, sizeof(wrapped));
+        CHECK(inst_text_width(row) <= INST_COLUMNS &&
+              strcmp(row, wrapped) == 0, "row: every action fits");
+    }
+}
+
+/* Record 23 sections 5.3 and 6.3, revision 65 (run-50 "50.17 (Setup,
+ * deleted key)"): a driver key deleted by hand. */
+static void test_keygone_5017(void)
+{
+    static const char *infs[5] = {
+        "..\\src\\xhci98.inf", "..\\src\\uas\\xhciuas.inf",
+        "..\\src\\cm\\xhcicm.inf", "..\\src\\cm\\xhcicmf.inf",
+        "..\\src\\net\\xhcinet.inf"
+    };
+    char mfg[128];
+    int i;
+
+    CHECK(inst_driver_value_form(0, "USB\\0000"), "98: USB\\0000");
+    CHECK(inst_driver_value_form(0, "hdc\\0001"), "98: lower case class");
+    CHECK(inst_driver_value_form(0, "Net_X\\0123"), "98: underscore");
+    CHECK(!inst_driver_value_form(0, "USB\\000"), "98: three digits");
+    CHECK(!inst_driver_value_form(0, "USB\\00000"), "98: five digits");
+    CHECK(!inst_driver_value_form(0, "USB\\00A0"), "98: a letter");
+    CHECK(!inst_driver_value_form(0, "\\0000"), "98: no class");
+    CHECK(!inst_driver_value_form(0, "US B\\0000"), "98: a space");
+    CHECK(!inst_driver_value_form(0, "USB\\0000\\1"), "98: two parts");
+    CHECK(!inst_driver_value_form(0, "USB0000"), "98: no backslash");
+    CHECK(!inst_driver_value_form(0, ""), "98: empty");
+    CHECK(!inst_driver_value_form(0, NULL), "98: none");
+    CHECK(!inst_driver_value_form(0,
+          "{36FC9E60-C465-11CF-8056-444553540000}\\0000"), "98: a GUID");
+    CHECK(inst_driver_value_form(1,
+          "{36FC9E60-C465-11CF-8056-444553540000}\\0000"), "NT: USB class");
+    CHECK(inst_driver_value_form(1,
+          "{36fc9e60-c465-11cf-8056-444553540000}\\0012"), "NT: lower hex");
+    CHECK(!inst_driver_value_form(1, "USB\\0000"), "NT: no GUID");
+    CHECK(!inst_driver_value_form(1,
+          "{36FC9E60-C465-11CF-8056-44455354000}\\0000"), "NT: short GUID");
+    CHECK(!inst_driver_value_form(1,
+          "{36FC9E60-C465-11CF-8056-4445535400G0}\\0000"), "NT: not hex");
+    CHECK(!inst_driver_value_form(1,
+          "{36FC9E60xC465-11CF-8056-444553540000}\\0000"), "NT: no dash");
+    CHECK(!inst_driver_value_form(1,
+          "36FC9E60-C465-11CF-8056-444553540000\\0000"), "NT: no braces");
+
+    CHECK(inst_keygone_ours9x("USB\\XHCI98_ROOT_HUB\\0PCI&VEN_1B36&DEV_000D",
+                              NULL), "root hub by id");
+    CHECK(inst_keygone_ours9x("USB\\XHCI98_HUB&VID_05E3&PID_0610\\5", NULL),
+          "hub by id");
+    CHECK(inst_keygone_ours9x("XHCI98\\ROOT_HUB\\0", NULL), "old root hub");
+    CHECK(inst_keygone_ours9x("PCI\\VEN_1B36&DEV_000D&SUBSYS_11001AF4&REV_01"
+                              "\\00E000", INST_MFG_9X), "controller by Mfg");
+    CHECK(!inst_keygone_ours9x("PCI\\VEN_1B36&DEV_000D&SUBSYS_11001AF4&REV_01"
+                               "\\00E000", NULL), "controller, no Mfg");
+    CHECK(!inst_keygone_ours9x("PCI\\VEN_1B36&DEV_000D&SUBSYS_11001AF4&REV_01"
+                               "\\00E000", "xhci98 project"),
+          "Mfg in another case");
+    CHECK(!inst_keygone_ours9x("PCI\\VEN_1B36&DEV_000D&SUBSYS_11001AF4&REV_01"
+                               "\\00E000", "Renesas"), "another manufacturer");
+    CHECK(!inst_keygone_ours9x("USB\\VID_046D&PID_C077\\5&1", ""), "a device");
+
+    CHECK(!inst_action_runs(INST_ACT_ORPHAN, 0) &&
+          !inst_action_runs(INST_ACT_ORPHAN, 1), "an orphan never runs");
+    CHECK(strcmp(inst_action_text(INST_ACT_ORPHAN),
+                 "Skip (driver entry missing)") == 0, "the orphan's row");
+    CHECK(strcmp(inst_action_row_text(INST_ACT_ORPHAN, 0, 1, 1),
+                 "Skip (driver entry missing)") == 0,
+          "the orphan's row with /force");
+
+    for (i = 0; i < 5; i++) {
+        char *t = load(infs[i]);
+        CHECK(t != NULL, infs[i]);
+        if (t == NULL) {
+            continue;
+        }
+        mfg[0] = '\0';
+        CHECK(inst_inf_expand(t, "%Mfg%", mfg, sizeof(mfg)) &&
+              strcmp(mfg, INST_MFG_9X) == 0, "INST_MFG_9X is the INF's Mfg");
+        free(t);
+    }
+    {
+        /* Stor98's own manufacturer proves no device this package's. */
+        char *t = load("..\\src\\stor98\\inf\\stor98-9x.inf");
+        CHECK(t != NULL, "stor98-9x.inf");
+        if (t != NULL) {
+            mfg[0] = '\0';
+            CHECK(inst_inf_expand(t, "%Mfg%", mfg, sizeof(mfg)) &&
+                  strcmp(mfg, INST_MFG_9X) != 0, "Stor98's Mfg is its own");
+            free(t);
+        }
+    }
 }
 
 /* Record 23 section 5.3.1 (roadmap-usb4 task 48.19): very long hardware
@@ -2156,7 +2298,7 @@ static void test_values(void)
                 if (instValues[rs].Loc != INST_LOC_MW &&
                     !inst_eq(instValues[rs].Name, "Restart") &&
                     !inst_eq(instValues[rs].Name, "LogBytes") &&
-                    instValues[rs].Loc != INST_LOC_DRIVE &&
+                    !INST_LOC_TREE_ONLY(instValues[rs].Loc) &&
                     !inst_eq(instValues[rs].Name, "XhciPfwNhiLine")) {
                     break;
                 }
@@ -12125,8 +12267,11 @@ static void test_set_show_4938(void)
     char *argv1[4];
 
     n = inst_settings_list("", NULL, fake_mw, out, sizeof(out));
-    CHECK(n == instValueCount - 2, "every row but a drive's two");
+    CHECK(n == instValueCount - 3,
+          "every row but a drive's two and a controller's own one");
     CHECK(strstr(out, "XhciUasNoAtaPassThrough") == NULL, "no drive row");
+    CHECK(strstr(out, "XhciIntelPortSwitchReady") == NULL,
+          "no controller's own row (task 50.34)");
     n = inst_settings_list("tunnelbridge", NULL, fake_mw, out, sizeof(out));
     CHECK(n == 1 && strstr(out, "XhciCmTunnelBridge: ") == out &&
               strstr(out, "Machine-wide: auto.") != NULL, "one row, its string");
@@ -12478,12 +12623,24 @@ static void test_every_row_4938(void)
           "a drive row: never asked, a drive's key");
     CHECK(inst_value_set("XhciUasNoAtaPassThrough=1", &idx, &v) == 0,
           "and not Setup's /set");
+    /* Task 50.34: the first-session check's note, a controller's own key,
+     * the USB Tree's alone. */
+    {
+        int rdy = inst_value_find("XhciIntelPortSwitchReady");
+        CHECK(rdy >= 0 && instValues[rdy].Loc == INST_LOC_CTRL &&
+                  instValues[rdy].Asked == 0,
+              "XhciIntelPortSwitchReady: never asked, a controller's key");
+        CHECK(inst_value_set("XhciIntelPortSwitchReady=0", &idx, &v) == 0,
+              "and not Setup's /set");
+    }
     inst_caution_text(tb, 0, longText, sizeof(longText));
     CHECK(strncmp(longText, "a list replaces", 15) == 0, "its caution");
 }
 
 int main(void)
 {
+    test_once_row_5017();
+    test_keygone_5017();
     test_every_row_4938();
     test_set_show_4938();
     test_set_show_nine();

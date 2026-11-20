@@ -103,6 +103,13 @@
 VOID HcdSvcWaitMs(PXHCI_EXTENSION ext, ULONG milliseconds);
 MPSTATUS HcdSvcConfigSpace(PXHCI_EXTENSION ext, BOOLEAN read, PVOID buffer,
                            ULONG offset, ULONG length);
+#if defined(XHCI_FLAVOUR_QEMU)
+/* A read through the same IRP whose trace lines for D0h to DCh carry the
+ * reader's own operation code (HCD_PSW_ACC_DIAG or HCD_PSW_ACC_SCAN, hcd.h)
+ * in place of HCD_PSW_ACC_PCI_READ. The qemu flavour only. */
+MPSTATUS HcdSvcConfigReadAs(PXHCI_EXTENSION ext, PVOID buffer, ULONG offset,
+                            ULONG length, ULONG readOp);
+#endif
 /* The same IRP, answering the bytes the bus driver reports it moved
  * (IoStatus.Information) on a success, 0 on a failure: XhciInterruptMode
  * 4's configuration routines, on NT 5.x alone (task 49.24). */
@@ -110,7 +117,36 @@ ULONG HcdSvcConfigBytes(PXHCI_EXTENSION ext, BOOLEAN read, PVOID buffer,
                         ULONG offset, ULONG length);
 ULONG HcdSvcArmTimer(PXHCI_EXTENSION ext, ULONG milliseconds, PVOID context,
                      ULONG contextLength, XHCI_ASYNC_TIMER_CALLBACK *callback);
-VOID HcdSvcRequestReset(PXHCI_EXTENSION ext);
+/* Task 50.30 step 1 (record 17 section 4.15.8): a controller reset
+ * requested with its reason (XHCI_WHY_*), the slot and root port involved
+ * (0 for none; a slot's device names its own place) and the reason's extra
+ * byte. The decision is HcdSvcRequestReset's of before, unchanged; the
+ * reason is recorded. IRQL: <= DISPATCH_LEVEL, controller lock released. */
+VOID HcdSvcRequestResetWhy(PXHCI_EXTENSION ext, ULONG reason, ULONG slot,
+                           ULONG port, ULONG extra);
+/* The same request with the place a staging site copied under the lock
+ * (HcdSvcWhyStageLocked, taken by XhciTolWhyTake): the drain's, made after
+ * it lets the lock go, so nothing is read from a slot then. `place` NULL
+ * names none. IRQL: <= DISPATCH_LEVEL, controller lock released. */
+VOID HcdSvcRequestResetPlaced(PXHCI_EXTENSION ext, ULONG reason, ULONG extra,
+                              const XHCI_RESET_REC *place);
+/* A request outside a reset site that marks the controller failed by a
+ * direct assignment (the failed resume), recorded the same way. IRQL:
+ * <= DISPATCH_LEVEL, controller lock held. */
+VOID HcdSvcRecordWhyLocked(PXHCI_EXTENSION ext, ULONG reason, ULONG slot,
+                           ULONG port, ULONG extra, ULONG begins);
+/* An engine escalation's reason staged for the drain's request, with the
+ * device of `slot` copied now; `slot` only when the event was matched to
+ * that device's TD or to the outstanding command, 0 otherwise. IRQL:
+ * DISPATCH_LEVEL, controller lock held. */
+VOID HcdSvcWhyStageLocked(PXHCI_EXTENSION ext, ULONG reason, ULONG slot,
+                          ULONG extra);
+/* Task 50.30 step 3: the place of a slot's device read for a reset the
+ * debt defers (XhciLeftDebtDefer) - its slot, root port, route and
+ * VID:PID while the lock keeps its record valid; slot 0 or a free slot
+ * names none. IRQL: <= DISPATCH_LEVEL, controller lock held. */
+VOID HcdSvcWhyPlaceLocked(PXHCI_EXTENSION ext, ULONG slot,
+                          PXHCI_RESET_REC place);
 VOID HcdSvcDmaNotStopped(PXHCI_EXTENSION ext);
 PKSPIN_LOCK HcdSvcControllerLock(PXHCI_EXTENSION ext);
 /* Task 47.30 (design record 13 section 11.10, point 3): the event ring's
@@ -139,6 +175,16 @@ ULONG HcdInjDoorbell(PXHCI_EXTENSION ext, ULONG slot, ULONG value);
 ULONG HcdInjEventSwallow(PXHCI_EXTENSION ext, const XHCI_TRB *ev);
 ULONG HcdInjEventTake(PXHCI_EXTENSION ext, XHCI_TRB *ev);
 VOID HcdInjEventDone(PXHCI_EXTENSION ext);
+/* Task 50.30 step 2: the command doorbell (xhci_pci.c), withheld once for a
+ * command the hang faults chose; the watchdog's abort written (xhci_cmd.c,
+ * rung 1), where the chosen outcome is acted out. Controller lock held. */
+ULONG HcdInjCmdDoorbell(PXHCI_EXTENSION ext);
+VOID HcdInjCmdAbortWritten(PXHCI_EXTENSION ext);
+/* The command ring given up or rebuilt (every invalidation, the ring's
+ * setup at start and recovery, the restore): the layer's addresses on it
+ * and its undelivered events dropped. IRQL: <= DISPATCH_LEVEL, the
+ * controller lock held or not. */
+VOID HcdInjCmdRingReset(PXHCI_EXTENSION ext);
 /* Task 49.35's slow reset (hcd_inj.c, XHCI_INJ_RESET_SLOW): the HCRST
  * write in xhciReset stamps the hold, and every read of USBCMD or USBSTS
  * the reset waits make (XhciWaitForBits, the recovery's pre-check, the
@@ -147,6 +193,10 @@ VOID HcdInjEventDone(PXHCI_EXTENSION ext);
  * the operational register's offset. IRQL: any. */
 VOID HcdInjResetWritten(PXHCI_EXTENSION ext);
 ULONG HcdInjResetAnswer(PXHCI_EXTENSION ext, ULONG opOffset, ULONG value);
+/* Task 50.31's fault 34 (design record 38 section 17): the capability
+ * decode's first read in xhciInitDecode, all ones while the attempt the
+ * recovery marked runs. IRQL: any. */
+ULONG HcdInjDecodeAnswer(PXHCI_EXTENSION ext, ULONG value);
 #endif
 
 #endif /* HCD_SVC_H */

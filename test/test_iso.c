@@ -2264,6 +2264,78 @@ static void test_event_rejections(void)
 }
 
 /*
+ * Task 50.30 step 1 (design record 17 section 4.15.8): the isochronous
+ * engine's `Matched`, as `test_xfer.c`'s `test_fatal_matched_fact` reads the
+ * shared one's. A fatal code sets `Fatal` before the pointer is resolved; only
+ * an event inside a queued group sets `Matched`, which is what lets the
+ * caller name the device - an Event Lost inside no group escalates and names
+ * none.
+ */
+static void iso_fatal_case(ULONG code, const char *what)
+{
+    ISO_FIXTURE fix;
+    XHCI_XFER_EVENT_RESULT result;
+
+    iso_fixture_init(&fix, 32);
+    CHECK_EQ(iso_fixture_submit(&fix, 0, 2, 192), XHCI_XFER_OK, what);
+    CHECK_EQ(iso_event(&fix, 0, code, 0, &result), XHCI_XFER_OK, what);
+    CHECK_EQ(result.Fatal, 1UL, what);
+    CHECK_EQ(result.Matched, 1UL, what);
+    CHECK_EQ(result.Unattributed, 0UL, what);
+
+    iso_fixture_init(&fix, 32);
+    CHECK_EQ(iso_fixture_submit(&fix, 0, 2, 192), XHCI_XFER_OK, what);
+    CHECK_EQ(iso_event(&fix, 12, code, 0, &result), XHCI_XFER_OK, what);
+    CHECK_EQ(result.Fatal, 1UL, what);
+    CHECK_EQ(result.Matched, 0UL, what);
+    CHECK_EQ(result.Unattributed, 1UL, what);
+    CHECK_EQ(fix.queue.Count, 1UL, what);
+
+    CHECK_EQ(XhciXferIsoEvent(&fix.queue, &fix.ring, ISO_FIX_SLOT, ISO_FIX_DCI,
+                              0, event_dw2(code, 0),
+                              event_dw3(ISO_FIX_SLOT, ISO_FIX_DCI), &result),
+             XHCI_XFER_OK, what);
+    CHECK_EQ(result.Fatal, 1UL, what);
+    CHECK_EQ(result.Matched, 0UL, what);
+    CHECK_EQ(result.Unattributed, 1UL, what);
+
+    /* A nonzero address on no ring of this queue. */
+    CHECK_EQ(XhciXferIsoEvent(&fix.queue, &fix.ring, ISO_FIX_SLOT, ISO_FIX_DCI,
+                              0x0E000000UL, event_dw2(code, 0),
+                              event_dw3(ISO_FIX_SLOT, ISO_FIX_DCI), &result),
+             XHCI_XFER_OK, what);
+    CHECK_EQ(result.Fatal, 1UL, what);
+    CHECK_EQ(result.Matched, 0UL, what);
+    CHECK_EQ(result.Unattributed, 1UL, what);
+    CHECK_EQ(fix.queue.Count, 1UL, what);
+
+    iso_fixture_init(&fix, 32);
+    CHECK_EQ(iso_event(&fix, 0, code, 0, &result), XHCI_XFER_OK, what);
+    CHECK_EQ(result.Fatal, 1UL, what);
+    CHECK_EQ(result.Matched, 0UL, what);
+    CHECK_EQ(result.Unattributed, 1UL, what);
+}
+
+static void test_fatal_matched_fact(void)
+{
+    ISO_FIXTURE fix;
+    XHCI_XFER_EVENT_RESULT result;
+
+    iso_fatal_case(32UL, "isochronous, Event Lost");
+    iso_fatal_case(33UL, "isochronous, Undefined Error");
+
+    iso_fixture_init(&fix, 32);
+    CHECK_EQ(iso_fixture_submit(&fix, 0, 2, 192), XHCI_XFER_OK, "placed");
+    CHECK_EQ(iso_event(&fix, 0, WANT_CC_SUCCESS, 0, &result), XHCI_XFER_OK,
+             "packet 0");
+    CHECK_EQ(result.Matched, 1UL, "a matched success is matched");
+    CHECK_EQ(result.Fatal, 0UL, "and not fatal");
+    CHECK_EQ(iso_event(&fix, 1, 100, 0, &result), XHCI_XFER_OK,
+             "an unassigned code");
+    CHECK_EQ(result.Matched, 0UL, "refused before the pointer is read");
+}
+
+/*
  * The Stopped family (26-28) on an isochronous ring, which is the same refusal
  * `test_xfer.c`'s `test_event_canceled` makes of the shared path.
  *
@@ -2899,6 +2971,7 @@ int main(void)
     test_sweeps_and_finalise();
     test_submit_refusals();
     test_event_rejections();
+    test_fatal_matched_fact();
     test_event_stopped_family_refused();
     test_submit_across_the_link();
     test_page_bounds();

@@ -140,10 +140,13 @@ int tr_irq_lines(TR_TEXT *t, const unsigned char *log, TR_U32 n,
 /* The node's opening lines. */
 void tr_diag_head(TR_TEXT *t);
 
-/* s at `indent`, cut into lines of at most 79 columns. */
-void tr_diag_wrap(TR_TEXT *t, int indent, const char *s);
+/* s at `indent`, cut into lines of at most 79 columns, between
+ * characters by lead (as tr_copy_lead cuts). */
+void tr_diag_wrap(TR_TEXT *t, int indent, const char *s, TR_LEAD_FN lead);
 
-/* An NHI's heading: its name and instance id (wrapped at 79 columns). */
-void tr_diag_nhi(TR_TEXT *t, const char *name, const char *id);
+/* An NHI's heading: its name, cut by lead, and instance id (wrapped at 79
+ * columns). */
+void tr_diag_nhi(TR_TEXT *t, const char *name, const char *id,
+                 TR_LEAD_FN lead);
 
 #endif /* TR_DIAG_H */

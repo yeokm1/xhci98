@@ -34,7 +34,7 @@ SCALAR = {
     'KINTERRUPT_MODE': (4, 0),
 }
 HASH_TYPES = {'TBT_UUID'}
-HASH_NAMES = re.compile(r'^(Uuid|ChildUuid|ParentUuid|KidUuid|Mac|PeerMac|'
+HASH_NAMES = re.compile(r'^(Uuid|ChildUuid|ParentUuid|KidUuid|SuspUuid|Mac|PeerMac|'
                         r'NetMac|XdMac|NetSerialLo|NetSerialHi)$')
 # Addresses, handles, secrets and blocks that can hold names.
 EXCLUDE_NAMES = re.compile(r'^(Key|Phys|\w*Pa|\w*Va|Devnode|LiveBar0|'

@@ -1500,3 +1500,16 @@ ULONG XhciEventRingErdpValue(const XHCI_EVENT_RING *ring, ULONG ehb)
     }
     return value;
 }
+
+/* Task 50.30 (design record 17 section 4.15.9). */
+ULONG XhciRingStopAbandoned(ULONG outstanding, ULONG aborted,
+                            ULONG pointer)
+{
+    if (outstanding != 0) {
+        return outstanding;
+    }
+    if (aborted != 0 && pointer == aborted) {
+        return aborted;
+    }
+    return 0;
+}

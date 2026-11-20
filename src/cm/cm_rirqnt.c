@@ -1,15 +1,16 @@
 /*
  * cm_rirqnt.c - the NHI's ring interrupt by a message on Windows 2000, XP,
  * Server 2003 and XP x64: the seam to the library msi4nt (design record 21
- * section 4.5.14; roadmap-usb4.md task 49.27). The one file of xhcicm.sys
- * that compiles msi4nt.h's implementation (..\msi4nt.h, the copy
- * xhci98.sys's hcd_msgnt.c compiles too; legal-provenance.md section 2a),
- * hosted, without its Vista path and with the ISA claim: its pool is
- * cm_pool.c's, its configuration access this NHI's own PDO route
- * (cm_thr.c), its names CmRoutine's (amd64's MmGetSystemRoutineAddress, or
- * the x86 helper's minor-1 routine). Each image holds its own copy of the
- * library: xhci98.sys's claims and this driver's never join, and the PnP
- * manager's arbiter decides between them (section 4.5.14, "Two drivers").
+ * sections 4.5.14 and 4.5.19; roadmap-usb4.md tasks 49.27 and 50.27). The
+ * one file of xhcicm.sys that compiles msi4nt.h's implementation
+ * (..\msi4nt.h, the copy xhci98.sys's hcd_msgnt.c compiles too;
+ * legal-provenance.md section 2a), hosted, without its Vista path and with
+ * the ISA claim: its pool is cm_pool.c's, its configuration access this
+ * NHI's own PDO route (cm_thr.c), its names CmRoutine's (amd64's
+ * MmGetSystemRoutineAddress, or the x86 helper's minor-1 routine). Each
+ * image holds its own copy of the library: xhci98.sys's claims and this
+ * driver's never join, and the PnP manager's arbiter decides between them
+ * (section 4.5.14, "Two drivers").
  *
  * The lifetime around these calls - when each is made and what follows a
  * failure - is cm_rirqos.c's; nothing here is called on 98 SE or ME, nor on
@@ -19,7 +20,7 @@
  *
  * IRQL: PASSIVE_LEVEL on the connection-manager thread, a system thread in
  * the system process with no affinity of this driver's (the claim, the
- * connect and the release ask for exactly that).
+ * connect and the release ask for exactly that); CmRirqNtEnd in cmUnload.
  */
 
 #include "cm.h"
@@ -29,6 +30,11 @@
 #define MSI4NT_ISA_LINE
 #define MSI4NT_IMPLEMENTATION
 #include "../msi4nt.h"
+
+/* Section 4.5.19: the unload ends the library's copy. */
+#if !defined(MSGIRQ_CALL_UNINITIALIZE)
+#error "msi4nt.h without MsgIrqUninitialize: take the copy legal-provenance.md section 2a records"
+#endif
 
 XHCI_C_ASSERT(cm_mn_status, MSGIRQ_STATUS_OK == CM_MB_OK &&
                                 MSGIRQ_STATUS_IN_USE == CM_MB_IN_USE &&
@@ -304,6 +310,27 @@ ULONG CmRirqNtDisconnect(PCM_NHI nhi, ULONG how)
         nhi->Rirq.Object = NULL;
     }
     return status;
+}
+
+/*
+ * The library's end (section 4.5.19), last in cmUnload, a defensive step:
+ * that routine runs only while DriverUnload is still set, which the
+ * link-state registration (CmNvlinkInit) and the first claim (section
+ * 4.5.14 item 2) each clear, and once every NHI's removal has joined its
+ * thread, the library's one caller. OK where nothing was started or
+ * mapped. IN_USE is recorded and left: DriverUnload cannot refuse, and a
+ * retry would meet the same holding. PASSIVE_LEVEL.
+ */
+VOID CmRirqNtEnd(VOID)
+{
+    ULONG status;
+
+    status = MsgIrqUninitialize();
+    if (status == MSGIRQ_STATUS_OK) {
+        cmRirqNtReady = 0;
+        cmRirqNtInitStatus = 0;
+    }
+    CmLogImageNote("cm.irq.msg.uninit", status);
 }
 
 ULONG CmRirqNtVector(PCM_NHI nhi, PULONG data)

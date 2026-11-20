@@ -90,7 +90,12 @@ What it checks, grouped by the failure each rule prevents:
            XhciIntelPortSwitch, the Intel port switchover's switch, at 1
            (owner, 2026-10-05) and at 0 since task 36.42 (owner,
            2026-10-09; kept by task 49.47, owner 2026-11-14: Setup, not
-           the INF, turns it on at a first install on a listed board). Task 35-T.7 made it eleven: XhciTolerance
+           the INF, turned it on at a first install on a listed board),
+           and at 1 again from task 50.34 (owner, 2026-11-17), held by the
+           driver while Windows Setup runs, with its setting
+           XhciIntelPortSwitchSetup at 0 on every path and the guard's
+           XhciIntelPortSwitchReady at 0 on the NT paths alone
+           (VAL-NTONLY). Task 35-T.7 made it eleven: XhciTolerance
            at 1, XhciIntervalCap at 1 and XhciAvgTrbEsit at 0 (design
            record 17 sections 4.7 and 4.11). Task 36.3 made it twelve:
            XhciIntelIrqRoute at 1, the Intel interrupt routing quirk
@@ -151,6 +156,34 @@ What it checks, grouped by the failure each rule prevents:
            4.3.4, M18); VAL-BOTABSENT refuses a line that writes it.
            Fifty-one since task 49.39's XhciStreamDequeueRepair joined at
            1 (owner, 2026-11-12), fifty-five on the 32-bit file.
+           Fifty-two (fifty-six on the 32-bit file) since task 50.20's
+           XhciStreamDequeueAvoid joined at 1 (owner, 2026-11-15): this
+           driver's own value in the quirk values' form, 0 off, 1 the
+           listed controllers, 2 every controller.
+           Fifty-three (fifty-seven on the 32-bit file) since task 50.26's
+           XhciCancelStatus joined at 1 (owner, 2026-11-16): the status a
+           cancelled URB and its unanswered isochronous packets carry, 1
+           each Windows' own stack's (0x00010000 on 98 SE and ME,
+           0xC0010000 on 2000 and later), 0 0x00010000, 2 0xC0010000.
+           One more on each file since task 50.30's XhciDeviceIsolation
+           joined at 1 (design record 17 section 4.15.11): 0 today's
+           controller reset, 1 the new handling on the listed controllers
+           (8086:1E31 alone, owner, 2026-11-20), 2 on every controller.
+           Fifty-four (fifty-eight on the 32-bit file) since task 50.28's
+           XhciUnplugComplete joined at 1 (owner, 2026-11-16): a departed
+           device's requests, 1 completed DEVICE_GONE once its PDO is
+           reported on 2000 and later and held on 98 SE and ME, 0 held on
+           every Windows as before.
+           Fifty-five (fifty-nine on the 32-bit file) since task 50.31's
+           XhciFailedRetrySec joined at 5 (owner, 2026-11-17): a
+           controller stopped after repeated failures tried again, 0
+           never, 2 to 600 the first wait in seconds, anything else 5.
+           Since roadmap-usb4 task 50.3 each row carries its history,
+           Since (the first published release writing it) and Was (the
+           defaults before a change), which -PublishedVersion holds a
+           published INF to; VAL-HISTORY refuses a row without it and a
+           version older than 2.4.0.0, where the gate's judgement of a
+           published INF begins.
            (**VAL-SZ was removed with XhciLogFile.** It was the
            string half - a REG_SZ's data is text two setup engines may quote,
            trim or tokenise differently, which a DWORD's is not - and with no
@@ -220,7 +253,13 @@ would put an amd64 binary on a 32-bit machine (PATH-NO9X, OS-DEFAULT).
 The version a published tree was published at (make-release.ps1's upload
 assembly). Empty, the default, is this tree. A version before 3.2.0.0 is
 not held to BOTH-CATALOG: its x64 INF names no catalog (design record 19
-section 3a).
+section 3a). Since roadmap-usb4 task 50.3 it also holds the VAL-* rows to
+that version: a row whose Since is a later release is not required, and a
+required row is held to the default an INF published at that version
+wrote (the row's Was), so a published release's INF can be gated again
+with its own version; a version before 2.4.0.0 fails VAL-HISTORY (before
+it the hubs had other ids, which this gate takes for the controller's).
+Every other rule is this tree's whatever the version.
 
 .PARAMETER PackageDir
 Optional. A staged install-media directory: every file named in
@@ -1595,6 +1634,8 @@ foreach ($m in $models) {
 $requiredValues = @(
     @{
         Name    = "XhciLogVerbosity"
+        Since   = "2.0.0.0"
+        Was     = @(@{ Before = "3.0.0.0"; Default = "0" })
         Type    = "0x00010003"
         Default = "2"
         Why     = "task 13-L.2's 0-4 ladder, and since `0.0.0.6` the WHOLE switch: 0 shuts the PassThru read channel, 1 engages it with the note ring still off, and 2 is the recording switch. Absent, the driver applies its own default, which is also 2"
@@ -1602,12 +1643,14 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciLogDebugView"
+        Since   = "2.0.0.0"
         Type    = "0x00010003"
         Default = "0"
         Why     = "task 11-V.9's DebugView sink, read from the same key, and an EMISSION switch only since task 13-L.2. It hands the ring over from the PASSIVE flush - never live mirroring, which is what bugchecks Windows 98 on metal"
     },
     @{
         Name    = "XhciImodInterval250ns"
+        Since   = "2.0.0.0"
         Type    = "0x00010003"
         Default = "160"
         Why     = "task 23.4's interrupt moderation interval, in 250 ns units, written to IR0's IMOD at every start. Absent, the driver runs at its own default of 4000 (1 ms), so a path missing it runs a different interval from the other paths and nothing says so"
@@ -1615,6 +1658,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciForceBulkOnly"
+        Since   = "2.1.1.0"
         Type    = "0x00010003"
         Default = "0"
         Why     = "roadmap-hcd task 31-A.3's switch to Bulk-Only where a device offers UAS too, read at every enumeration. The INF writes the 0 so the value is where a user looks for it (owner, 2026-10-05; roadmap-hcd task 34.1)"
@@ -1622,6 +1666,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciFastPollFsLs"
+        Since   = "2.1.1.0"
         Type    = "0x00010003"
         Default = "0"
         Why     = "roadmap-hcd task 33.8's root-port Low- and Full-Speed polling above 1000 Hz, read at start. The INF writes the 0 so the value is where a user looks for it (owner, 2026-10-05; roadmap-hcd task 34.1)"
@@ -1629,6 +1674,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciFirstEnumWaitMs"
+        Since   = "2.1.1.0"
         Type    = "0x00010003"
         Default = "5000"
         Why     = "roadmap-hcd task 33.3's longest wait, in ms, for a hub's first report. The INF writes the default so the value is where a user looks for it (owner, 2026-10-05; roadmap-hcd task 34.1)"
@@ -1636,6 +1682,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciFirstEnumPortMs"
+        Since   = "2.1.1.0"
         Type    = "0x00010003"
         Default = "2000"
         Why     = "roadmap-hcd task 33.3's longest hold, in ms, one port may put on that wait. The INF writes the default so the value is where a user looks for it (owner, 2026-10-05; roadmap-hcd task 34.1)"
@@ -1643,13 +1690,33 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciIntelPortSwitch"
+        Since   = "2.1.1.0"
+        Was     = @(@{ Before = "2.3.0.0"; Default = "1" }, @{ Before = "3.6.0.0"; Default = "0" })
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-hcd task 34.3's Intel EHCI-to-xHCI port switchover on the 7-, 8- and 9-series and C610 PCH, read at start on every Intel controller (roadmap-hcd task 35.5): 1 routes on a listed controller, an exact 2 also on an unlisted one at the user's own risk, 0 leaves the routing as firmware set it. The INF writes it, under 34.1's don't-overwrite rule so a user's choice survives an update (owner, 2026-10-05): 1 in every section from task 50.34 (owner, 2026-11-17), the driver holding it on 2000 and later while Windows Setup runs (design record 16 section 21)"
+        DefaultWhy = "every section writes 1 from roadmap-usb4 task 50.34 (owner, 2026-11-17, design record 16 section 21, decision 32): on 2000 and later the driver holds the switchover while Windows Setup's values say Setup is in progress or cannot be read, in Windows PE, on Vista and later until the image state reads complete, and in the Windows session in which it was first turned on for the controller, so an install from the INF alone - by hand, F6 or an integrated image - does not move the switchable connectors during Windows Setup; on 98 SE and ME there is no hold (decision 27). Absent, of another type or 0 is still off (decision 17), so text-mode Setup, which writes no value, keeps the firmware's routing; 0 was the default from task 36.42 to 3.5.0.0 (decisions 10 and 19), and an update keeps it under the don't-overwrite flag"
+    },
+    @{
+        Name    = "XhciIntelPortSwitchSetup"
+        Since   = "3.6.0.0"
         Type    = "0x00010003"
         Default = "0"
-        Why     = "roadmap-hcd task 34.3's Intel EHCI-to-xHCI port switchover on the 7-, 8- and 9-series and C610 PCH, read at start on every Intel controller (roadmap-hcd task 35.5): 1 routes on a listed controller, an exact 2 also on an unlisted one at the user's own risk, 0 leaves the routing as firmware set it. The INF writes the 0 so the switch is where a user looks for it, under 34.1's don't-overwrite rule so a user's 1 survives an update (owner, 2026-10-05; the default 0 since task 36.42, owner, 2026-10-09)"
-        DefaultWhy = "0 is the driver's own default since task 36.42 - absent, of another type or 0 is off (owner, 2026-10-09); roadmap-usb4 task 49.47 (owner, 2026-11-14) keeps it: an install from the INF alone - by hand, F6 or an integrated image - must not move the switchable connectors during Windows Setup, where an install drive may be on one; Setup itself writes 1 at a first install on a listed board"
+        Why     = "roadmap-usb4 task 50.34's setting over the switchover's hold during Windows Setup (design record 16 section 21.4): 0 automatic, 1 bypass (the Setup checks and the first-session guard read and recorded but not obeyed; 98 SE and ME have nothing to bypass), 2 always hold (no routing write at all, at shutdown included); read at start where XhciIntelPortSwitch is on and the board passes, on every system. The INF writes the 0 under 34.1's don't-overwrite rule so a user's choice survives an update"
+        DefaultWhy = "0 is the driver's own default - absent, of another type or any number but 1 and 2 is automatic (owner, 2026-11-17, decision 28)"
+    },
+    @{
+        Name    = "XhciIntelPortSwitchReady"
+        Since   = "3.6.0.0"
+        Type    = "0x00010003"
+        Default = "0"
+        NtOnly  = $true
+        Why     = "roadmap-usb4 task 50.34's first-session guard's own note (design record 16 section 21.5; owner, 2026-11-17, decision 29): 0 until a start with proven session evidence finds the switchover on for the controller, which writes 1; read from the controller's driver key only, never machine-wide, on 2000 and later. The NT sections write the 0 under 34.1's don't-overwrite rule, so an update keeps an armed 1; 98 SE and ME have no guard and the undecorated section writes nothing (VAL-NTONLY)"
+        DefaultWhy = "0 is unarmed: absent, another type or another number reads as 0, and only the driver writes 1"
     },
     @{
         Name    = "XhciIntelIrqRoute"
+        Since   = "2.3.0.0"
         Type    = "0x00010003"
         Default = "1"
         Why     = "roadmap-hcd task 36.3's Intel PCH interrupt routing quirk (issue 12 section 5.1), read at each start and return to D0: on a reviewed 7-, 8- or 9-series or Wellsburg xHCI with a line interrupt it routes D20IR's INTA to the PIRQ that delivers the IRQ the OS assigned. 0 reports and writes nothing, 1 writes on the verified E7250 only, 2 on any reviewed xHCI/LPC pair. The INF writes the 1 so the value is where a user looks for it, under 34.1's don't-overwrite rule so a user's choice survives an update (owner, 2026-10-08)"
@@ -1657,6 +1724,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciIntelNoRouteIrq"
+        Since   = "3.4.2.0"
         Type    = "0x00010003"
         Default = "1"
         Why     = "roadmap-usb4 task 47.33's chipset-routed GSI offer (design record 18 section 16, issue 25), read at AddDevice on Windows 2000, XP and XP x64 (every NT kernel below 6.0; hcdNoRouteStripDecide): where the firmware gives the xHCI no interrupt route, the requirements filter offers the I/O APIC input the PCH routes INTA to (D20IR) before the memory-only configuration, and on Windows 2000 takes the interrupt out of a listed board's list. 0 never offers, 1 on the HP boards of value 1's list (xhciPirqNoRouteBoards[] in src/xhci_pirq.c), 2 on any reviewed xHCI/LPC pair. The INF writes the 1 so the value is where a user looks for it, under 34.1's don't-overwrite rule so a user's choice survives an update (owner, 2026-11-06)"
@@ -1664,6 +1732,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciTolerance"
+        Since   = "2.2.0.0"
         Type    = "0x00010003"
         Default = "1"
         Why     = "roadmap-hcd task 35-T.7's off-switch for the unconditional tolerance behaviours (design record 17 section 4.11), latched at each start: 1 applies sections 4.1 to 4.6, 0 gives 2.1.1.0's handling back without a new build. The INF writes the 1 so the switch is where a user looks for it, under 34.1's don't-overwrite rule so a user's 0 survives an update"
@@ -1671,6 +1740,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciIntervalCap"
+        Since   = "2.2.0.0"
         Type    = "0x00010003"
         Default = "1"
         Why     = "roadmap-hcd task 35-T.7's interrupt-interval cap at 8 (32 ms) on AMD controllers (design record 17 section 4.7) and, since roadmap-hcd task 38.10, on the ATI Navi10 USB-C controller 1002:7316 (design record 20 section 4.10), gated with design record 17 section 2's three values: 1 the list, 0 off, 2 every controller. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
@@ -1678,6 +1748,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciAvgTrbEsit"
+        Since   = "2.2.0.0"
         Type    = "0x00010003"
         Default = "0"
         Why     = "roadmap-hcd task 35-T.7's Average TRB Length switch (design record 17 section 4.7), read at each start: 0 keeps 1024, 1 programs an interrupt endpoint's Average TRB Length as its Max ESIT Payload. The INF writes the 0 so the value is where a tester looks for it, under 34.1's don't-overwrite rule"
@@ -1685,6 +1756,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciMaxTransferKB"
+        Since   = "2.3.0.0"
         Type    = "0x00010003"
         Default = "1024"
         Why     = "roadmap-hcd task 36.22's command size, the size xhciuas.sys advertises to the storage class driver, in KiB: 64 to 2048 in steps of 4, read at each start and asked of the bus by xhciuas.sys at its own start; it takes effect at the next reboot. The INF writes the 1024 so the value is where a user looks for it, under 34.1's don't-overwrite rule so a user's choice survives an update (owner, 2026-10-09)"
@@ -1692,6 +1764,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciInterruptMode"
+        Since   = "2.3.0.0"
         Type    = "0x00010003"
         Default = "0"
         Why     = "roadmap-hcd task 36.6's event delivery (design record 15 section 3), read at each start: 0 automatic (the line where it works, polling where there is none or the line is proven dead), 1 the line, 2 polling, 3 and above as 0. The INF writes the 0 so the value is where a user looks for it, under 34.1's don't-overwrite rule"
@@ -1699,6 +1772,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciMsiStrategy"
+        Since   = "3.5.0.0"
         Type    = "0x00010003"
         Default = "0"
         Why     = "XhciInterruptMode 4's vector source on 2000, XP and XP x64 (design record 15 sections 4.5.1 and 4.5.2; owner, 2026-11-10), read at each mode-4 start there: 0 a free ISA IRQ claimed, 1 the controller's own line borrowed, any other value refuses the start; no value turns into the other. The INF writes the 0 under 34.1's don't-overwrite rule so a user's choice survives an update"
@@ -1706,6 +1780,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciMsiIsaIrq"
+        Since   = "3.5.0.0"
         Type    = "0x00010003"
         Default = "0"
         Why     = "the IRQ XhciMsiStrategy 0 claims (design record 15 sections 4.5.2 and 4.5.16; owner, 2026-11-11): 0 the library's choice, 3 to 7, 10 or 11 that IRQ and no other (on 32-bit 2000 and XP an upper input when the second pool is chosen), any other value refuses the start; read at each mode-4 start under strategy 0. The INF writes the 0 under 34.1's don't-overwrite rule so a user's choice survives an update"
@@ -1713,6 +1788,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciMsiShare"
+        Since   = "3.5.0.0"
         Type    = "0x00010003"
         Default = "8"
         Why     = "XhciInterruptMode 4's shared claim (design record 15 section 4.5.1, decision 5; owner, 2026-11-13): the most controllers on one claimed interrupt before another is taken - 1 every controller an interrupt of its own or none, 2 to 16 a claim shared with this driver's other controllers up to that many, then the next controller claims a fresh one; 0, not offered, runs as 1 and above 16 as 16; read at each mode-4 start under strategy 0. The INF writes the 8 under 34.1's don't-overwrite rule so a user's choice survives an update"
@@ -1720,6 +1796,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciMsiPools"
+        Since   = "3.5.0.0"
         Type    = "0x00010003"
         Default = "0"
         X86Only = $true
@@ -1728,6 +1805,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciMsiInputFirst"
+        Since   = "3.5.0.0"
         Type    = "0x00010003"
         Default = "0"
         X86Only = $true
@@ -1736,6 +1814,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciMsiInputLast"
+        Since   = "3.5.0.0"
         Type    = "0x00010003"
         Default = "0"
         X86Only = $true
@@ -1744,6 +1823,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciMsiInputBudget"
+        Since   = "3.5.0.0"
         Type    = "0x00010003"
         Default = "0"
         X86Only = $true
@@ -1752,6 +1832,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciPollIdleMs"
+        Since   = "2.3.0.0"
         Type    = "0x00010003"
         Default = "50"
         Why     = "roadmap-hcd task 36.6's idle poll period in ms (design record 15 section 3), 0 as 50, held to 5000. The INF writes the 50 under 34.1's don't-overwrite rule"
@@ -1759,6 +1840,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciPollActiveMs"
+        Since   = "2.3.0.0"
         Type    = "0x00010003"
         Default = "1"
         Why     = "roadmap-hcd task 36.6's active poll period in ms (design record 15 section 3), 0 as 1, held to the idle period. The INF writes the 1 under 34.1's don't-overwrite rule"
@@ -1766,6 +1848,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciPollFineTimer"
+        Since   = "2.4.0.0"
         Type    = "0x00010003"
         Default = "0"
         Why     = "roadmap-hcd task 38.3's finer system timer while polling (design record 15 section 7.2.4), read at each start: only a non-zero DWORD turns it on. The INF writes the 0 so the value is where a user looks for it, beside XhciPollActiveMs, under 34.1's don't-overwrite rule so a user's 1 survives an update"
@@ -1773,6 +1856,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciWideMap"
+        Since   = "2.3.0.0"
         Type    = "0x00010003"
         Default = "0"
         Why     = "roadmap-hcd task 36.24's whole-URB mapping (design record 13 section 11.6, point 2), read at each start on Windows 2000 and later: 0 keeps every bulk URB sequential, anything else lets two pieces of one URB onto the ring at once. The INF writes the 0 so the value is where a user looks for it, under 34.1's don't-overwrite rule so a user's 1 survives an update (owner, 2026-10-11; roadmap-hcd task 36.51)"
@@ -1780,6 +1864,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciSelectiveSuspend"
+        Since   = "2.3.0.0"
         Type    = "0x00010003"
         Default = "0"
         Why     = "roadmap-hcd task 36.33's selective suspend, stages A and B (design record 14 section 7), read at each start: only a DWORD 1 turns it on. The INF writes the 0 so the value is where a user looks for it, under 34.1's don't-overwrite rule so a user's 1 survives an update (owner, 2026-10-11; roadmap-hcd task 36.51)"
@@ -1787,6 +1872,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciSilentInstall"
+        Since   = "2.4.0.0"
         Type    = "0x00010003"
         Default = "0"
         Why     = "roadmap-hcd task 38.2's Windows 98 SE and ME silent install (design record 13 section 6.11.3), read at each start on 98 SE and ME only: only a DWORD 1 turns it on, and only with the SilentClasses list, which no INF writes. The INF writes the 0 so the value is where a user looks for it, on every path as every other value is, under 34.1's don't-overwrite rule so silent-on.bat's 1 survives an update (owner, 2026-10-14)"
@@ -1794,6 +1880,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciUsb2HubSpeedFallback"
+        Since   = "2.3.0.0"
         Type    = "0x00010003"
         Default = "1"
         Why     = "issue 18's default speed IDs for a Full- or Low-Speed device behind a hub on a USB 2.0 root port whose speed table names no such speed (roadmap-hcd task 36.49), read at each start: only a DWORD 0 turns it off. The INF writes the 1 so the value is where a user looks for it, under 34.1's don't-overwrite rule so a user's 0 survives an update (owner, 2026-10-11; roadmap-hcd task 36.51)"
@@ -1809,6 +1896,7 @@ $requiredValues = @(
     #
     @{
         Name    = "XhciMsiAvoid"
+        Since   = "2.4.0.0"
         Type    = "0x00010003"
         Default = "1"
         Why     = "roadmap-hcd task 38.10's refusal of a message interrupt on a Fresco Logic controller whose message never arrives (design record 20 section 4.1; Linux's XHCI_BROKEN_MSI), read at AddDevice and at each start: 0 off, 1 Linux's listed controllers, 2 every controller - the line or polling, never a message but at XhciInterruptMode 3. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
@@ -1816,6 +1904,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciStreamsOff"
+        Since   = "2.4.0.0"
         Type    = "0x00010003"
         Default = "1"
         Why     = "roadmap-hcd task 38.10's streamless controller, both consumers of MaxPSASize reading it as 0 (design record 20 section 4.2; Linux's XHCI_BROKEN_STREAMS), read at each start: 0 off, 1 Linux's listed controllers and 17CD:0200, 2 every controller. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
@@ -1823,6 +1912,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciResumeReinit"
+        Since   = "2.4.0.0"
         Type    = "0x00010003"
         Default = "1"
         Why     = "roadmap-hcd task 38.10's re-initialization at every resume in place of save and restore (design record 20 section 4.3; Linux's XHCI_RESET_ON_RESUME), read at each start: 0 off, 1 Linux's listed controllers, 2 every controller. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
@@ -1830,6 +1920,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciIntelShutdownToEhci"
+        Since   = "2.4.0.0"
         Type    = "0x00010003"
         Default = "1"
         Why     = "roadmap-hcd task 38.10's routing of every switchable connector back to EHCI at shutdown on 8086:1E31, 9C31 and 9CB1, whatever XhciIntelPortSwitch says (design record 20 section 4.4; Linux's XHCI_SPURIOUS_REBOOT), read at each start: 0 off, 1 Linux's listed controllers; the registers are Intel's, so a 2 is read as 1 and logged. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
@@ -1837,6 +1928,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciShutdownReset"
+        Since   = "2.4.0.0"
         Type    = "0x00010003"
         Default = "0"
         Why     = "roadmap-hcd task 38.10's HCRST after a proven halt at shutdown (design record 20 section 4.5; Linux's XHCI_SPURIOUS_WAKEUP), read at each start: 0 off, 1 Linux's listed controllers, 2 every controller. The INF writes the 0 under 34.1's don't-overwrite rule so a user's choice survives an update"
@@ -1844,6 +1936,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciSuspendHaltDelay"
+        Since   = "2.4.0.0"
         Type    = "0x00010003"
         Default = "1"
         Why     = "roadmap-hcd task 38.10's wait of about 1.5 ms before the suspend's halt on AMD controllers (design record 20 section 4.6; Linux's XHCI_SUSPEND_DELAY), read at each start: 0 off, 1 Linux's listed controllers, 2 every controller. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
@@ -1851,6 +1944,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciSuspendHaltTimeout"
+        Since   = "2.4.0.0"
         Type    = "0x00010003"
         Default = "1"
         Why     = "roadmap-hcd task 38.10's 640 ms bound on the suspend's halt on the Fresco Logic FL1000 (design record 20 section 4.7; Linux's XHCI_SLOW_SUSPEND), read at each start: 0 off, 1 Linux's listed controllers, 2 every controller. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
@@ -1858,6 +1952,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciAsmediaFlowControl"
+        Since   = "2.4.0.0"
         Type    = "0x00010003"
         Default = "1"
         Why     = "roadmap-hcd task 38.10's vendor flow-control write after each reset and resume on the ASM1042A 1B21:1142 (design record 20 section 4.8; Linux's XHCI_ASMEDIA_MODIFY_FLOWCONTROL), read at each start: 0 off, 1 Linux's listed controllers; the registers are ASMedia's, so a 2 is read as 1 and logged. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
@@ -1865,6 +1960,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciTiIntervalCap"
+        Since   = "2.4.0.0"
         Type    = "0x00010003"
         Default = "1"
         Why     = "roadmap-hcd task 38.10's interrupt-interval cap at 6 at High Speed and above on the TUSB73x0 104C:8241 (design record 20 section 4.9; Linux's XHCI_LIMIT_ENDPOINT_INTERVAL_7), read at each start: 0 off, 1 Linux's listed controllers, 2 every controller. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
@@ -1872,6 +1968,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciStuckLinkReset"
+        Since   = "2.4.0.0"
         Type    = "0x00010003"
         Default = "1"
         Why     = "roadmap-hcd task 38.10's warm reset of a USB3 root port left in Polling with CCS and CAS clear after a restoring resume (design record 20 section 4.11; Linux's XHCI_MISSING_CAS), read at each start: 0 off, 1 Linux's listed controllers, 2 every controller. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
@@ -1879,6 +1976,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciStreamRingPad"
+        Since   = "2.4.0.0"
         Type    = "0x00010003"
         Default = "1"
         Why     = "roadmap-hcd task 38.10's one ring of padding after a stream block on the VIA VL805 and Zhaoxin controllers (design record 20 section 4.12; Linux's XHCI_TRB_OVERFETCH), read at each start: 0 off, 1 Linux's listed controllers, 2 every controller. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
@@ -1886,6 +1984,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciControlLinkNoOp"
+        Since   = "2.4.0.0"
         Type    = "0x00010003"
         Default = "1"
         Why     = "roadmap-hcd task 38.10's No Op TRB so a SuperSpeed control TD's Setup and Data do not straddle the Link TRB on the Etron EJ168 and EJ188 (design record 20 section 4.13; part of Linux's XHCI_ETRON_HOST), read at each start: 0 off, 1 Linux's listed controllers, 2 every controller. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
@@ -1893,6 +1992,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciIsochSpuriousSuccess"
+        Since   = "2.4.0.0"
         Type    = "0x00010003"
         Default = "1"
         Why     = "roadmap-hcd task 38.10's drop of an isochronous Success event after an error on the same TRB on the Etron EJ168 and EJ188 (design record 20 section 4.14; part of Linux's XHCI_ETRON_HOST), read at each start: 0 off, 1 Linux's listed controllers, 2 every controller. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
@@ -1900,13 +2000,23 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciAmdSuspendBitClear"
+        Since   = "2.4.0.0"
         Type    = "0x00010003"
         Default = "1"
         Why     = "roadmap-hcd task 38.10's clear of bit 17 of BAR offset C12Ch before suspend on the AMD Raven2 1022:15E5 (design record 20 section 4.15; Linux's XHCI_DISABLE_SPARSE), read at each start: 0 off, 1 Linux's listed controllers; the bit is AMD's, so a 2 is read as 1 and logged. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
         DefaultWhy = "1 is the driver's own default - absent, another type or another number reads as 1 (owner, 2026-10-13; design record 20 section 9); 0 would suspend a listed controller with the bit Linux clears still set, a new decision"
     },
     @{
+        Name    = "XhciStreamDequeueAvoid"
+        Since   = "3.6.0.0"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-usb4 task 50.20's controller flag (design record 17 section 4.12.10), read at each start in the quirk values' form: 0 off, 1 the listed controllers (the Intel 7 Series 8086:1E31), 2 every controller. Where it applies, a UAS client that declares its own recovery gets no stream Set TR Dequeue on its endpoints. Written by every path (owner, 2026-10-30: every value a released driver reads is written by the install) under 34.1's don't-overwrite rule so a user's choice survives an update (owner, 2026-11-15)"
+        DefaultWhy = "1 is the driver's own default - absent, another type or another number reads as 1; 0 brings back 3.5.0.0's check and cycle on the listed controller, a new decision"
+    },
+    @{
         Name    = "XhciAccept096"
+        Since   = "2.4.0.0"
         Type    = "0x00010003"
         Default = "1"
         Why     = "roadmap-hcd task 38.11's floor (design record 17 section 4.14.4), read at each start and latched for its lifetime: at 1 a controller whose HCIVERSION is 0.96 or above starts, driven as a 1.0 one but for the fields Linux writes differently below 1.0; at 0 one below 1.0 is refused (Code 10). The INF writes the 1 so the value is where a user looks for it, under 34.1's don't-overwrite rule so a user's 0 survives an update (owner, 2026-10-13)"
@@ -1914,13 +2024,47 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciCommandCheck"
+        Since   = "3.4.0.0"
         Type    = "0x00010003"
         Default = "1"
         Why     = "roadmap-usb4 task 45.45's command-state checker (design record 08 section 14), read at each start and latched for its lifetime: it reads the slot and endpoint states before each command and counts and notes what a conforming controller would refuse, changing nothing the driver does. The INF writes the 1 so the value is where a user looks for it, under 34.1's don't-overwrite rule so a user's 0 survives an update (owner, 2026-10-30)"
         DefaultWhy = "1 is the driver's own default - absent, another number or another type is on; only 0 turns it off (owner, 2026-10-30)"
     },
     @{
+        Name    = "XhciDeviceIsolation"
+        Since   = "3.6.0.0"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-usb4 task 50.30's choice of what the driver does when a device stops answering while plugged in (design record 17 sections 4.15.0 item 1 and 4.15.11), read at each start and latched for the lifetime, in the per-controller values' form: 0 today's controller reset, 1 the new handling - the device removed alone and its place held - on the controllers the driver's table lists, 2 on every controller. The table lists the Intel 7 Series, 8086:1E31, alone (the owner's decision of 2026-11-20, without the reading on real hardware section 4.15.10 asks for), so 1 behaves as 0 on every other controller. Written by every path under 34.1's don't-overwrite rule so a user's choice survives an update"
+        DefaultWhy = "1 is the driver's own default - absent, another type or another number reads as 1 (design record 17 section 4.15.11); it applies the handling on the one listed controller, 8086:1E31, and on every other controller behaves as 0"
+    },
+    @{
+        Name    = "XhciCancelStatus"
+        Since   = "3.6.0.0"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-usb4 task 50.26's choice of the status a cancelled URB and its unanswered isochronous packets carry (design record 13 section 6.15), read at each start: 1 each Windows' own USB stack's (0x00010000 on 98 SE and ME, 0xC0010000 on 2000 and later); 0 0x00010000, the Windows 98 and 2000 DDKs' value and every release's before 3.6.0.0; 2 0xC0010000, the later headers' value. Written by every path (owner, 2026-10-30: every value a released driver reads is written by the install) under 34.1's don't-overwrite rule so a user's choice survives an update (owner, 2026-11-16)"
+        DefaultWhy = "1 is the driver's own default (owner, 2026-11-16) - absent, another type or another number reads as 1; 0 keeps the earlier value on 2000 and later too, 2 gives the later value on 98 SE and ME too, each a choice of its own"
+    },
+    @{
+        Name    = "XhciUnplugComplete"
+        Since   = "3.6.0.0"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-usb4 task 50.28's choice for a departed device's requests (design record 13 section 10.5.3), read at each start: 1 completed DEVICE_GONE once the device's PDO is reported on Windows 2000 and later, held on 98 SE and ME; 0 held on every Windows until the client cancels them or the PDO is removed, as every release before 3.6.0.0. No value completes at once on 98 SE or ME. Written by every path (owner, 2026-10-30: every value a released driver reads is written by the install) under 34.1's don't-overwrite rule so a user's choice survives an update (owner, 2026-11-16)"
+        DefaultWhy = "1 is the driver's own default (owner, 2026-11-16) - absent, another type or another number reads as 1; 0 is the earlier rule on every Windows, a choice of its own"
+    },
+    @{
+        Name    = "XhciFailedRetrySec"
+        Since   = "3.6.0.0"
+        Type    = "0x00010003"
+        Default = "5"
+        Why     = "roadmap-usb4 task 50.31's tries of a controller stopped after repeated failures (design record 38), read at each start and latched for its lifetime: 0 never tried again, as every release before 3.6.0.0; 2 to 600 the first wait in seconds, later waits doubling to 600 s; a root-port change brings a try sooner within the storm limit. Written by every path (owner, 2026-10-30: every value a released driver reads is written by the install) under 34.1's don't-overwrite rule so a user's choice survives an update (owner, 2026-11-17)"
+        DefaultWhy = "5 is the driver's own default (owner, 2026-11-17) - absent, 1, above 600 or another type reads as 5; 0 is the earlier behaviour, a choice of its own"
+    },
+    @{
         Name    = "XhciStreamDequeueRepair"
+        Since   = "3.5.0.0"
         Type    = "0x00010003"
         Default = "1"
         Why     = "roadmap-usb4 task 49.39's stream dequeue checks after a cancel (design record 17 section 4.12.8), read at each start: at 1 a stream whose saved dequeue differs from the one just set is set again, and a stream left where the controller could not be cycles the device alone; at 0 the checks only note and count. Written by every path (owner, 2026-10-30: every value a released driver reads is written by the install) under 34.1's don't-overwrite rule so a user's 0 survives an update (owner, 2026-11-12: on by default)"
@@ -1928,6 +2072,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciAcpiTables"
+        Since   = "3.4.1.0"
         Type    = "0x00010003"
         Default = "1"
         Why     = "roadmap-usb4 task 46.21's firmware tables request (design record 13 section 8.13), read at each start: on 98 SE and ME the driver reads the ACPI tables when XHCITR asks and 0 refuses the request; NT answers it as not served whatever the value says. Written by every path (owner, 2026-10-30: every value a released driver reads is written by the install) under 34.1's don't-overwrite rule so a user's 0 survives an update"
@@ -1935,6 +2080,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciUsb2Bos"
+        Since   = "3.4.0.0"
         Type    = "0x00010003"
         Default = "1"
         Why     = "roadmap-usb4 task 43.27's BOS read at High and Full Speed (design record 13 section 8.4.1), read at each start: 0 stops the request for every device. Written since task 45.50 (owner, 2026-10-30: every value a released driver reads is written by the install) so the value is where a user looks for it, under 34.1's don't-overwrite rule so a user's 0 survives an update"
@@ -1942,6 +2088,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciResumeKeep"
+        Since   = "3.4.0.0"
         Type    = "0x00010003"
         Default = "1"
         Why     = "roadmap-usb4 task 45.23's devices kept across a resume's re-initialization (design record 20 section 4.3.2), read at each start. Written since task 45.50 (owner, 2026-10-30) under 34.1's don't-overwrite rule so a user's 0 survives an update"
@@ -1949,6 +2096,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciLinkKeep"
+        Since   = "3.4.0.0"
         Type    = "0x00010003"
         Default = "1"
         Why     = "roadmap-usb4 task 45.41's device kept across its SuperSpeed link's recovery (design record 13 section 15), read at each start. Written since task 45.50 (owner, 2026-10-30) under 34.1's don't-overwrite rule so a user's 0 survives an update"
@@ -1956,6 +2104,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciSsFlapFallback"
+        Since   = "3.4.3.0"
         Type    = "0x00010003"
         Default = "1"
         Why     = "issue 29's SuperSpeed root link that keeps failing (design record 13 section 21), read at each start: 1 sends it to the USB 2.0 side of its connector after three warm resets in a minute, 0 gives it up there instead. Written (owner, 2026-11-09) under 34.1's don't-overwrite rule so a user's 0 survives an update"
@@ -1963,6 +2112,8 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciEventRingTrbs"
+        Since   = "3.4.2.0"
+        Was     = @(@{ Before = "3.5.0.0"; Default = "1024" })
         Type    = "0x00010003"
         Default = "256"
         Why     = "roadmap-usb4 task 47.30's event ring (design record 13 sections 11.10 and 11.10.1), read at each start before the ring is allocated: 256 the one-page ring, any other value the 1,024-entry ring of its own, which falls back to the one-page ring when its memory is not there; a controller below xHCI 1.0 always uses 256 (task 49.35). Written at 256 from 3.5.0.0 (owner, 2026-11-13) under 34.1's don't-overwrite rule, so a fresh install has 256 and an update keeps the 1024 that 3.4.2.0 and 3.4.3.0 wrote, or a user's choice"
@@ -1970,6 +2121,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciBulkOnlyOwnId"
+        Since   = "3.4.2.0"
         Type    = "0x00010003"
         Default = "1"
         Why     = "roadmap-usb4 UASBOT.1's own instance id for the Bulk-Only form of a drive that offers UAS too (design record 13 section 10.7), read at each enumeration beside XhciForceBulkOnly. Written (owner, 2026-11-08) under 34.1's don't-overwrite rule so a user's 0 survives an update"
@@ -1977,6 +2129,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciStagePoolKiB"
+        Since   = "3.4.3.0"
         Type    = "0x00010003"
         Default = "2048"
         Why     = "roadmap-usb4 task 48.33's shared staging pool (design record 13 section 11.11.1), read at each start: the KiB of driver-owned buffers every transfer's data passes through, 256 to 16384. Written (owner, 2026-11-09, Q-STG.2 answer (b)) under 34.1's don't-overwrite rule so a user's value survives an update"
@@ -1984,6 +2137,7 @@ $requiredValues = @(
     },
     @{
         Name    = "XhciDmaStaging"
+        Since   = "3.4.3.0"
         Type    = "0x00010003"
         Default = "0"
         Why     = "roadmap-usb4 task 48.33's switch (owner, 2026-11-09), read at each start: 1 stages every transfer's data through driver-owned buffers, 0 maps the clients' buffers through the map pump as 3.4.2.0 did, with 3.4.2.0's wait on an unproven stop. Written under 34.1's don't-overwrite rule so a user's value survives an update"
@@ -2035,6 +2189,73 @@ if ($Arch -eq "amd64") {
     foreach ($ln in @($inf.Sections.Values | ForEach-Object { $_ })) {
         if ($ln.Text -match '^\s*HKR\s*,[^,]*,\s*"?(XhciMsiPools|XhciMsiInputFirst|XhciMsiInputLast|XhciMsiInputBudget)"?\s*,') {
             Add-Failure "VAL-MSG4POOL" ("line {0} writes '{1}'. The 64-bit driver does not read the second claim pool's values - the pool is not offered on XP x64 (design record 15 section 4.5.16) - so the value would be a switch that switches nothing." -f $ln.Line, $matches[1])
+        }
+    }
+}
+#
+# **The rows by published version** (roadmap-usb4 task 50.3, so the upload
+# assembly can gate a published release's INF): each row's Since is the
+# first published release whose INF writes it, and its Was, where its
+# default changed after it was published, the default an INF published
+# before each Before wrote, ascending. With -PublishedVersion V a row whose
+# Since is later than V is not required, and a required one is held to the
+# default V's INF wrote; with no -PublishedVersion (every build of this
+# tree) every row is required at its Default, as before the task. The
+# history was read from every published xhci98.inf, and
+# test-inf-checks.ps1 gates each from 2.4.0.0 on with its own version. The
+# gate's judgement begins at 2.4.0.0: before it the hubs and composite
+# parents had other ids (roadmap-hcd task 38.8), so this gate takes their
+# install sections for the controller's and finds the values missing
+# there, and before 2.1.1.0 the values had another type (task 34.1). An
+# older V is refused (VAL-HISTORY) rather than judged by rules that do not
+# describe it. A row with no Since, or a malformed Was, fails on every run
+# (VAL-HISTORY), so a row cannot join without its history.
+#
+$valueHistoryFloor = [version]"2.4.0.0"
+$publishedAt = $null
+if ($PublishedVersion -ne "") {
+    $publishedAt = [version]$PublishedVersion
+    if ($publishedAt -lt $valueHistoryFloor) {
+        Add-Failure "VAL-HISTORY" ("-PublishedVersion {0} is older than {1}, where this gate's judgement of the per-device values begins (before it the hubs had other ids, roadmap-hcd task 38.8, and before 2.1.1.0 the values another type). Gate an older release with the tree that cut it." -f $PublishedVersion, $valueHistoryFloor)
+    }
+}
+foreach ($req in $requiredValues) {
+    $req.AtRequired = $true
+    $req.AtDefault = $req.Default
+    $req.AtFrom = ""
+    $since = $null
+    $why = ""
+    if (-not $req.ContainsKey("Since")) {
+        $why = "has no Since, the first published release whose INF writes it"
+    } elseif (-not [version]::TryParse([string]$req.Since, [ref]$since)) {
+        $why = "has a Since that is not a version ('$($req.Since)')"
+    } else {
+        $prev = $since
+        foreach ($w in @($(if ($req.ContainsKey("Was")) { $req.Was } else { @() }))) {
+            $before = $null
+            if (-not ($w -is [hashtable]) -or -not $w.ContainsKey("Before") -or -not $w.ContainsKey("Default") -or
+                -not [version]::TryParse([string]$w.Before, [ref]$before)) {
+                $why = "has a Was entry that is not @{ Before = <version>; Default = <value> }"
+                break
+            }
+            if ($before -le $prev) {
+                $why = "has Was entries that are not each after its Since and after the one before"
+                break
+            }
+            $prev = $before
+        }
+    }
+    if ($why -ne "") {
+        Add-Failure "VAL-HISTORY" ("this gate's row for '{0}' {1} (roadmap-usb4 task 50.3): a published release's INF cannot be gated by a row without its history." -f $req.Name, $why)
+        continue
+    }
+    if ($null -eq $publishedAt) { continue }
+    if ($since -gt $publishedAt) { $req.AtRequired = $false; continue }
+    foreach ($w in @($(if ($req.ContainsKey("Was")) { $req.Was } else { @() }))) {
+        if ($publishedAt -lt [version]$w.Before) {
+            $req.AtDefault = $w.Default
+            $req.AtFrom = $PublishedVersion
+            break
         }
     }
 }
@@ -2096,12 +2317,24 @@ function Get-AddRegValues {
 foreach ($m in $models) {
     if ($m.Role -ne "controller") { continue }    # controller-only rule; the hubs are HCD-ROOTHUB's and HCD-HUB's
     $paths = @(Get-ModelPaths $m | ForEach-Object {
-        @{ Name = $_.Os; Install = ($m.Section + $_.Suffix) }
+        @{ Name = $_.Os; Install = ($m.Section + $_.Suffix); Suffix = $_.Suffix }
     })
     foreach ($p in $paths) {
         if (-not (Test-SectionExists $inf $p.Install)) { continue }  # PATH-* said so
         $addRegs = @(Get-Directive $inf $p.Install "AddReg")
         foreach ($req in $requiredValues) {
+            # A value the NT paths alone write (task 50.34's
+            # XhciIntelPortSwitchReady: 98 SE and ME have no first-session
+            # guard): refused on the undecorated path, required on the others.
+            if ($req.ContainsKey("NtOnly") -and $p.Suffix -eq "") {
+                $hits = @(Get-AddRegValues $inf $addRegs $req.Name)
+                if ($hits.Count -gt 0) {
+                    Add-Failure "VAL-NTONLY" ("the {0} install path ([{1}]) writes '{2}' at line {3}. {4}." -f $p.Name, $p.Install, $req.Name, $hits[0].Line, $req.Why)
+                }
+                continue
+            }
+            # Not yet written by the release -PublishedVersion names (task 50.3).
+            if (-not $req.AtRequired) { continue }
             $hits = @(Get-AddRegValues $inf $addRegs $req.Name)
             if ($hits.Count -eq 0) {
                 Add-Failure "VAL-MISSING" ("the {0} install path ([{1}]) writes no '{2}' value. {3}. A value on one path only is invisible on the other target and nothing reports it." -f $p.Name, $p.Install, $req.Name, $req.Why)
@@ -2123,9 +2356,12 @@ foreach ($m in $models) {
                     Add-Failure "VAL-TYPE" ("[{0}] line {1} writes '{2}' with flags '{3}', not {4} (FLG_ADDREG_TYPE_DWORD). The miniport asks usbport for four bytes; a string would be handed over as its characters." -f $hit.Section, $hit.Line, $req.Name, $hit.Flags, $req.Type)
                 }
             }
-            if ($hit.Data -ne $req.Default) {
+            if ($hit.Data -ne $req.AtDefault) {
                 $defaultWhy = if ($req.ContainsKey("DefaultWhy")) { $req.DefaultWhy } else { "{0} must ship off" -f $req.Name }
-                Add-Failure "VAL-DEFAULT" ("[{0}] line {1} defaults '{2}' to '{3}', not '{4}'. {5}." -f $hit.Section, $hit.Line, $req.Name, $hit.Data, $req.Default, $defaultWhy)
+                if ($req.AtFrom -ne "") {
+                    $defaultWhy = "'{0}' is the default an INF published at {1} writes, by this gate's history of the row (roadmap-usb4 task 50.3); '{2}' is the default from a later release" -f $req.AtDefault, $req.AtFrom, $req.Default
+                }
+                Add-Failure "VAL-DEFAULT" ("[{0}] line {1} defaults '{2}' to '{3}', not '{4}'. {5}." -f $hit.Section, $hit.Line, $req.Name, $hit.Data, $req.AtDefault, $defaultWhy)
             }
             #
             # **VAL-SZ stood here and was removed with

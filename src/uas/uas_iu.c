@@ -5,6 +5,7 @@
  */
 
 #include "uas_iu.h"
+#include "../xhci98_streams.h"
 /* For its structure and numbers alone; its IOCTL codes need the DDK and are
  * not expanded here. */
 #include "../xhci98_xfer.h"
@@ -1834,4 +1835,72 @@ ULONG UasFinalCancelDue(ULONG fast, ULONG final, ULONG dataOutstanding,
 {
     return (fast && final && dataOutstanding &&
             waited >= UAS_FAST_CANCEL_WAIT) ? 1UL : 0UL;
+}
+
+/* ------------------------------------------------------------------ */
+/* Task 50.20 (design record 17 section 4.12.10, section 8)             */
+/* ------------------------------------------------------------------ */
+
+ULONG UasStreamOnCancel(ULONG contract, ULONG streamXfer, ULONG recovering)
+{
+    if (!contract || !streamXfer) {
+        return 0;
+    }
+    return recovering ? UAS_SO_OWE : (UAS_SO_OWE | UAS_SO_ASK);
+}
+
+ULONG UasStreamProof(ULONG active, ULONG tmf, ULONG quarantined,
+                     ULONG tmfFailed, ULONG cancelsBack, ULONG finalBusy,
+                     ULONG budgetGone)
+{
+    if (active != 0 || tmf != 0 || quarantined != 0 || tmfFailed != 0) {
+        return UAS_SP_RESET;
+    }
+    if (!cancelsBack || finalBusy != 0) {
+        return budgetGone ? UAS_SP_RESET : UAS_SP_WAIT;
+    }
+    return UAS_SP_RECYCLE;
+}
+
+ULONG UasRecoveryPhaseNext(ULONG answer, ULONG tries, ULONG resourceFails)
+{
+    switch (answer) {
+    case UAS_RP_A_GOOD:
+    case UAS_RP_A_OTHER:
+        return UAS_RP_DONE;
+    case UAS_RP_A_ATTENTION:
+        return (tries < UAS_RP_TRIES) ? UAS_RP_AGAIN : UAS_RP_DONE;
+    case UAS_RP_A_RESOURCE:
+        return (resourceFails < UAS_RP_RESOURCE_TRIES) ? UAS_RP_RETRY
+                                                       : UAS_RP_FAILED;
+    default:
+        /* A transport failure, the deadline, or an outcome unknown here:
+         * no device answer, so no UNIT ATTENTION was consumed. */
+        return UAS_RP_FAILED;
+    }
+}
+
+ULONG UasStreamsAcked(ULONG ok, ULONG flags)
+{
+    return (ok && (flags & XHCI98_STREAMS_F_ACK_CONTRACT) != 0) ? 1UL : 0UL;
+}
+
+ULONG UasStreamsContract(ULONG acked, ULONG n)
+{
+    if (acked == 0) {
+        return UAS_SC_LEGACY;
+    }
+    return (acked == n) ? UAS_SC_CONTRACT : UAS_SC_FAULT;
+}
+
+ULONG UasPumpBarrier(ULONG recovering, ULONG streamOwed, ULONG phase,
+                     ULONG ended)
+{
+    if (phase) {
+        return 0;
+    }
+    if (recovering) {
+        return 1;
+    }
+    return (streamOwed && !ended) ? 1UL : 0UL;
 }

@@ -95,7 +95,9 @@ reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciForceBulkOnly|0x00010003|0|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciFastPollFsLs|0x00010003|0|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciFirstEnumWaitMs|0x00010003|5000|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciFirstEnumPortMs|0x00010003|2000|keep
-reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciIntelPortSwitch|0x00010003|0|keep
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciIntelPortSwitchSetup|0x00010003|0|keep
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciIntelPortSwitchReady|0x00010003|0|keep
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciIntelPortSwitch|0x00010003|1|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciIntelIrqRoute|0x00010003|1|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciIntelNoRouteIrq|0x00010003|1|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciTolerance|0x00010003|1|keep
@@ -115,6 +117,10 @@ reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciSilentInstall|0x00010003|0|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciUsb2HubSpeedFallback|0x00010003|1|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciAccept096|0x00010003|1|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciCommandCheck|0x00010003|1|keep
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciCancelStatus|0x00010003|1|keep
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciDeviceIsolation|0x00010003|1|keep
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciUnplugComplete|0x00010003|1|keep
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciFailedRetrySec|0x00010003|5|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciStreamDequeueRepair|0x00010003|1|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciAcpiTables|0x00010003|1|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciUsb2Bos|0x00010003|1|keep
@@ -139,6 +145,7 @@ reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciStreamRingPad|0x00010003|1|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciControlLinkNoOp|0x00010003|1|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciIsochSpuriousSuccess|0x00010003|1|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciAmdSuspendBitClear|0x00010003|1|keep
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciStreamDequeueAvoid|0x00010003|1|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciImodInterval250ns|0x00010003|160|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||EnumPropPages32||"usbui.dll,USBControllerPropPageProvider"|remove
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||Controller|1|01|remove
@@ -193,7 +200,9 @@ reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciForceBulkOnly|0x00010003|0|k
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciFastPollFsLs|0x00010003|0|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciFirstEnumWaitMs|0x00010003|5000|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciFirstEnumPortMs|0x00010003|2000|keep
-reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciIntelPortSwitch|0x00010003|0|keep
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciIntelPortSwitchSetup|0x00010003|0|keep
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciIntelPortSwitchReady|0x00010003|0|keep
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciIntelPortSwitch|0x00010003|1|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciIntelIrqRoute|0x00010003|1|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciIntelNoRouteIrq|0x00010003|1|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciTolerance|0x00010003|1|keep
@@ -213,6 +222,10 @@ reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciSilentInstall|0x00010003|0|k
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciUsb2HubSpeedFallback|0x00010003|1|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciAccept096|0x00010003|1|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciCommandCheck|0x00010003|1|keep
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciCancelStatus|0x00010003|1|keep
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciDeviceIsolation|0x00010003|1|keep
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciUnplugComplete|0x00010003|1|keep
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciFailedRetrySec|0x00010003|5|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciStreamDequeueRepair|0x00010003|1|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciAcpiTables|0x00010003|1|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciUsb2Bos|0x00010003|1|keep
@@ -237,6 +250,7 @@ reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciStreamRingPad|0x00010003|1|k
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciControlLinkNoOp|0x00010003|1|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciIsochSpuriousSuccess|0x00010003|1|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciAmdSuspendBitClear|0x00010003|1|keep
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciStreamDequeueAvoid|0x00010003|1|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciImodInterval250ns|0x00010003|160|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||EnumPropPages32||"usbui.dll,USBControllerPropPageProvider"|remove
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||Controller|1|01|remove

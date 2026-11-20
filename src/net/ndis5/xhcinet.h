@@ -123,6 +123,13 @@ typedef struct _NET_ADAPTER {
     PVOID WorkThread;       /* the join on NT (WDM 1.10 and later)        */
     ULONG WorkStop;
     ULONG WorkReq;          /* NET_WORK_*, under TxLock                   */
+#if defined(XHCI_FLAVOUR_QEMU) && defined(_M_IX86)
+    /* The worker's end on 98 SE and ME seen (record 35 section 19), from
+     * the adapter's key at the initialisation: XhciQemuThreadExitSleep
+     * (ms, at most NET_END_SLEEP_MAX) and XhciQemuThreadExitOld (1). */
+    ULONG QemuEndSleepMs;
+    ULONG QemuEndOld;
+#endif
 
     /* OID state. */
     ULONG Filter;

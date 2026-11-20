@@ -272,6 +272,12 @@ typedef struct _INST_FOUND {
 } INST_FOUND;
 int inst_eng_found(int i, INST_FOUND *f);
 
+/* 98 SE and ME: 1 when more stale bus entries were found than one run
+ * lists and removes; the window then shows INST_STALE_MORE_TEXT. */
+int inst_eng_stale_more(void);
+#define INST_STALE_MORE_TEXT \
+    "More old entries like these are left for the next run of Setup."
+
 /* One settings row (record 26 sections 5.4 and 5.5): a value of the table
  * that concerns this machine, asked or advanced. */
 #define INST_ROW_NOW_MAX    8

@@ -91,6 +91,65 @@ static NTSTATUS NTAPI hcdConfigDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
+#if defined(XHCI_FLAVOUR_QEMU)
+/* The operation codes of a read and of a write for the trace below,
+ * passed in the qemu flavour alone so that the release build's IRP is the
+ * one it was. */
+#define HCD_CFG_OP_PARAM    , ULONG readOp, ULONG writeOp
+#define HCD_CFG_OP(r, w)    , (r), (w)
+
+/*
+ * The qemu flavour's trace of the routing registers in configuration space
+ * (hcd_ctl.c HcdPswQemuAccess): one line for each of D0h, D4h, D8h and DCh
+ * an access sent down covers, whatever its caller, so a route, a release
+ * or a shutdown hand-back on a real controller, and every other reader of
+ * those offsets, shows beside the model's lines. The value is the dword's
+ * bytes as the buffer holds them once the IRP is done (a narrower access's
+ * other bytes 0). An IRP whose status is a failure adds HCD_PSW_ACC_FAILED
+ * to the operation, and a failed read prints 0, whatever the bus driver
+ * left in the caller's buffer, which is not touched; a failed write prints
+ * the value it tried to write. The trace only. IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdConfigPswTrace(PHCD_CONTROLLER hc, BOOLEAN read, BOOLEAN ok,
+                              const UCHAR *p, ULONG offset, ULONG length,
+                              ULONG readOp, ULONG writeOp)
+{
+    ULONG reg;
+    ULONG b;
+    ULONG op;
+    ULONG value;
+    ULONG covered;
+
+    if (offset >= XHCI_PSW_USB3PRM + 4UL ||
+        offset + length <= XHCI_PSW_XUSB2PR) {
+        return;
+    }
+    for (reg = XHCI_PSW_XUSB2PR; reg <= XHCI_PSW_USB3PRM; reg += 4UL) {
+        value = 0;
+        covered = 0;
+        for (b = 0; b < 4UL; b++) {
+            if (reg + b >= offset && reg + b < offset + length) {
+                value |= (ULONG)p[reg + b - offset] << (b * 8UL);
+                covered = 1;
+            }
+        }
+        if (covered) {
+            op = read ? readOp : writeOp;
+            if (!ok) {
+                op |= HCD_PSW_ACC_FAILED;
+                if (read) {
+                    value = 0;
+                }
+            }
+            HcdPswQemuAccess(hc, op, reg, value);
+        }
+    }
+}
+#else
+#define HCD_CFG_OP_PARAM
+#define HCD_CFG_OP(r, w)
+#endif
+
 /*
  * IRP_MN_READ_CONFIG / IRP_MN_WRITE_CONFIG, built with IoAllocateIrp and
  * sent to the PCI PDO this FDO was added for - not to the object
@@ -115,7 +174,8 @@ static NTSTATUS NTAPI hcdConfigDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
  * (ext->InitBelowPassive).
  */
 static MPSTATUS hcdConfigIrp(PXHCI_EXTENSION ext, BOOLEAN read, PVOID buffer,
-                             ULONG offset, ULONG length, PULONG moved)
+                             ULONG offset, ULONG length,
+                             PULONG moved HCD_CFG_OP_PARAM)
 {
     PHCD_CONTROLLER hc;
     PIO_STACK_LOCATION next;
@@ -163,6 +223,11 @@ static MPSTATUS hcdConfigIrp(PXHCI_EXTENSION ext, BOOLEAN read, PVOID buffer,
     hc->ConfigLastInformation = (ULONG)irp->IoStatus.Information;
     *moved = NT_SUCCESS(status) ? (ULONG)irp->IoStatus.Information : 0UL;
     IoFreeIrp(irp);
+#if defined(XHCI_FLAVOUR_QEMU)
+    hcdConfigPswTrace(hc, read, (BOOLEAN)(NT_SUCCESS(status) ? TRUE : FALSE),
+                      (const UCHAR *)buffer, offset, length, readOp,
+                      writeOp);
+#endif
 
     hc->ConfigLastStatus = (ULONG)status;
     return NT_SUCCESS(status) ? MP_STATUS_SUCCESS : MP_STATUS_FAILURE;
@@ -173,21 +238,40 @@ MPSTATUS HcdSvcConfigSpace(PXHCI_EXTENSION ext, BOOLEAN read, PVOID buffer,
 {
     ULONG moved;
 
-    return hcdConfigIrp(ext, read, buffer, offset, length, &moved);
+    return hcdConfigIrp(ext, read, buffer, offset, length,
+                        &moved HCD_CFG_OP(HCD_PSW_ACC_PCI_READ,
+                                          HCD_PSW_ACC_PCI_WRITE));
 }
+
+#if defined(XHCI_FLAVOUR_QEMU)
+/* IRQL: PASSIVE_LEVEL, as HcdSvcConfigSpace. */
+MPSTATUS HcdSvcConfigReadAs(PXHCI_EXTENSION ext, PVOID buffer, ULONG offset,
+                            ULONG length, ULONG readOp)
+{
+    ULONG moved;
+
+    return hcdConfigIrp(ext, TRUE, buffer, offset, length, &moved, readOp,
+                        HCD_PSW_ACC_PCI_WRITE);
+}
+#endif
 
 /* Mode 4's (hcd_msgnt.c, task 49.24): msi4nt takes a transfer as made only
  * when every byte was, so a short one is a failed one there, never a
  * success with a zero-filled tail. The Information count is read on NT
  * 5.x, where the PCI driver reports it. The IRP is always sent, also after
  * a surprise removal: an answer of all ones is the bus's, never this
- * driver's (msi4nt's absence proof rests on it). IRQL: PASSIVE_LEVEL. */
+ * driver's (msi4nt's absence proof rests on it). In the qemu flavour its
+ * accesses of D0h to DCh print under the library's own operation codes,
+ * since its capability walk and programming may reach a capability there
+ * on a controller that has one. IRQL: PASSIVE_LEVEL. */
 ULONG HcdSvcConfigBytes(PXHCI_EXTENSION ext, BOOLEAN read, PVOID buffer,
                         ULONG offset, ULONG length)
 {
     ULONG moved;
 
-    if (hcdConfigIrp(ext, read, buffer, offset, length, &moved) !=
+    if (hcdConfigIrp(ext, read, buffer, offset, length,
+                     &moved HCD_CFG_OP(HCD_PSW_ACC_MSG_READ,
+                                       HCD_PSW_ACC_MSG_WRITE)) !=
         MP_STATUS_SUCCESS) {
         return 0;
     }
@@ -559,27 +643,151 @@ VOID HcdTimersOpen(PHCD_CONTROLLER hc)
 /* --------------------------------------------------------------------- */
 
 /*
+ * Task 50.30 step 1: the place of a slot's device, read from the slot's
+ * record while the lock keeps it valid; slot 0 or a free slot names only
+ * `port`. The caller vouches that the slot is the device it means (a slot
+ * it holds, or one an event was matched to); an unmatched event's Slot ID
+ * is never passed here. IRQL: <= DISPATCH_LEVEL, controller lock held.
+ */
+static VOID hcdSvcWhyPlaceLocked(PHCD_CONTROLLER hc, ULONG slot, ULONG port,
+                                 PXHCI_RESET_REC rec)
+{
+    PHCD_USB_DEVICE dev;
+
+    rec->Slot = 0;
+    rec->RootPort = port & 0xFFUL;
+    rec->Route = 0;
+    rec->VidPid = 0;
+    if (slot != 0 && slot <= XHCI_MAX_SLOTS) {
+        rec->Slot = slot;
+        dev = hc->SlotDevice[slot];
+        if (dev != NULL) {
+            rec->RootPort = dev->Port & 0xFFUL;
+            rec->Route = dev->Route;
+            rec->VidPid = HcdDeviceVidPid(dev);
+        }
+    }
+}
+
+/*
+ * The request's record counted, and kept in the ring when it begins a
+ * recovery; `place` gives the slot, root port, route and VID:PID, already
+ * read. IRQL: <= DISPATCH_LEVEL, controller lock held.
+ */
+static VOID hcdSvcRecordRecLocked(PXHCI_EXTENSION ext, ULONG reason,
+                                  ULONG extra, const XHCI_RESET_REC *place,
+                                  ULONG begins)
+{
+    XHCI_RESET_REC rec;
+    ULONG note;
+
+    rec.Reason = reason;
+    rec.Extra = extra & 0xFFUL;
+    rec.Slot = place->Slot;
+    rec.RootPort = place->RootPort & 0xFFUL;
+    rec.Route = place->Route;
+    rec.VidPid = place->VidPid;
+    rec.Clock = ext->Tol.Clock;
+    rec.Recoveries = ext->RecoveryAttempts;
+    note = XhciTolWhyRecord(&ext->Why, &rec, begins);
+    if (begins) {
+        XhciLogNoteLocked(ext, "ctrl.failed.why", note);
+    }
+}
+
+/* Task 50.30 step 1: the request's record - its place and device read
+ * from the slot's record while the lock keeps it valid - counted, and kept
+ * in the ring when it begins a recovery. IRQL: <= DISPATCH_LEVEL,
+ * controller lock held. */
+VOID HcdSvcRecordWhyLocked(PXHCI_EXTENSION ext, ULONG reason, ULONG slot,
+                           ULONG port, ULONG extra, ULONG begins)
+{
+    XHCI_RESET_REC place;
+
+    hcdSvcWhyPlaceLocked(HcdControllerFromExt(ext), slot, port, &place);
+    hcdSvcRecordRecLocked(ext, reason, extra, &place, begins);
+}
+
+/*
+ * Task 50.30 step 1: an engine escalation's reason staged for the drain's
+ * request, with the device of `slot` copied now, while the lock keeps its
+ * record valid, so the request the drain makes after letting the lock go
+ * names the device the event was matched to and never a later holder of
+ * the slot. `slot` is 0 unless the caller matched the event. IRQL:
+ * DISPATCH_LEVEL, controller lock held.
+ */
+VOID HcdSvcWhyStageLocked(PXHCI_EXTENSION ext, ULONG reason, ULONG slot,
+                          ULONG extra)
+{
+    XHCI_RESET_REC place;
+
+    hcdSvcWhyPlaceLocked(HcdControllerFromExt(ext), slot, 0, &place);
+    XhciTolWhyStage(&ext->Why, reason, extra, &place);
+}
+
+/* IRQL: <= DISPATCH_LEVEL, controller lock held. */
+VOID HcdSvcWhyPlaceLocked(PXHCI_EXTENSION ext, ULONG slot,
+                          PXHCI_RESET_REC place)
+{
+    hcdSvcWhyPlaceLocked(HcdControllerFromExt(ext), slot, 0, place);
+}
+
+/*
  * What the miniport's ResetController callback did when usbport delivered
  * the request: mask the interrupt enables, mark the controller failed and
  * raise the recovery request - and then, since the HCD has no usbport to
  * route the request through, wake the controller thread, which performs the
- * recovery (hcd_ctl.c).
+ * recovery (hcd_ctl.c). `place` NULL: read from `slot` and `port` under the
+ * lock; otherwise the place a staging site copied (HcdSvcWhyStageLocked).
  *
  * IRQL: <= DISPATCH_LEVEL, controller lock released.
  */
-VOID HcdSvcRequestReset(PXHCI_EXTENSION ext)
+static VOID hcdSvcRequestReset(PXHCI_EXTENSION ext, ULONG reason, ULONG slot,
+                               ULONG port, ULONG extra,
+                               const XHCI_RESET_REC *place)
 {
     PHCD_CONTROLLER hc;
+    XHCI_RESET_REC read;
+    XHCI_RESET_REC at;
     KIRQL oldIrql;
+    ULONG begins;
 
     if (ext == NULL) {
         return;
     }
     hc = HcdControllerFromExt(ext);
+    XhciControllerLockAcquire(ext, &oldIrql);
+    if (hc->Left.Owed != XHCI_LEFT_CLEAR) {
+        if (place == NULL) {
+            hcdSvcWhyPlaceLocked(hc, slot, port, &at);
+        } else {
+            at = *place;
+        }
+    }
+    if (XhciLeftDebtDefer(&hc->Left, reason, extra,
+                          hc->Left.Owed != XHCI_LEFT_CLEAR ? &at : NULL)) {
+        /* Task 50.30 step 3 (design record 17 section 4.15.3): the
+         * thread's own sites request nothing while a left command's debt
+         * stands. The request is deferred, never discarded - a mandatory
+         * reset (a failed or left Stop Endpoint, a failed Disable Slot, a
+         * tainted scratch) is still owed - with its place read now, and
+         * the settlement pass requests it once the debt has cleared
+         * (hcdLeftService), unless an HCRST has made it unnecessary. */
+        ext->Tol.Stats.ResetLeftSuppressed++;
+        if (ext->Tol.Stats.ResetLeftSuppressed <= XHCI_NOTE_ESCALATIONS) {
+            XhciLogNoteLocked(ext, "ctrl.reset.left",
+                              (reason << 24) | ((slot & 0xFFUL) << 16) |
+                                  (extra & 0xFFUL));
+        }
+        XhciControllerLockRelease(ext, oldIrql);
+        return;
+    }
+    XhciControllerLockRelease(ext, oldIrql);
     ext->ResetControllerCalls++;
     XHCI_DBG_VALUE("hcd: controller reset requested, calls",
                    ext->ResetControllerCalls);
     XhciControllerLockAcquire(ext, &oldIrql);
+    begins = ext->ControllerFailed ? 0UL : 1UL;
     if (!ext->ControllerFailed) {
         if ((ext->Flags & XHCI_EXT_FLAG_INITIALIZED) != 0) {
             XhciMaskInterrupts(ext);
@@ -588,8 +796,36 @@ VOID HcdSvcRequestReset(PXHCI_EXTENSION ext)
         XhciLogNoteLocked(ext, "ctrl.failed.here", ext->ResetControllerCalls);
         ext->RecoveryRequested = 1;
     }
+    if (place == NULL) {
+        hcdSvcWhyPlaceLocked(hc, slot, port, &read);
+        place = &read;
+    }
+    hcdSvcRecordRecLocked(ext, reason, extra, place, begins);
     XhciControllerLockRelease(ext, oldIrql);
     HcdThreadWake(hc);
+}
+
+/* IRQL: <= DISPATCH_LEVEL, controller lock released. */
+VOID HcdSvcRequestResetWhy(PXHCI_EXTENSION ext, ULONG reason, ULONG slot,
+                           ULONG port, ULONG extra)
+{
+    hcdSvcRequestReset(ext, reason, slot, port, extra, NULL);
+}
+
+/* IRQL: <= DISPATCH_LEVEL, controller lock released. */
+VOID HcdSvcRequestResetPlaced(PXHCI_EXTENSION ext, ULONG reason, ULONG extra,
+                              const XHCI_RESET_REC *place)
+{
+    XHCI_RESET_REC none;
+
+    if (place == NULL) {
+        none.Slot = 0;
+        none.RootPort = 0;
+        none.Route = 0;
+        none.VidPid = 0;
+        place = &none;
+    }
+    hcdSvcRequestReset(ext, reason, 0, 0, extra, place);
 }
 
 /* IRQL: any. */

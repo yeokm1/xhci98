@@ -252,14 +252,23 @@ ULONG XhciStreamDoorbell(ULONG dci, ULONG streamId);
  *                             stop, then the stream placed), never a resend;
  *   XHCI_STREAM_RS_GIVEUP     anything else (Context State Error read
  *                             Stopped, Halted or Error; another code; none).
+ *   XHCI_STREAM_RS_REMOVED    task 50.30 step 3 (design record 17 section
+ *                             4.15.5a, hcdCfgDeqReadBack's resend): the
+ *                             resend aborted cleanly or left (`aborted`,
+ *                             the caller's XhciTolCmdVerdict), read before
+ *                             the code and the state: no further resend,
+ *                             restop or placement; the stream's ring and
+ *                             the position sent stay owned; the device is
+ *                             removed, never handled as a failed dequeue.
  * XhciStreamAfterRestop: 1 when the bounded stop left the endpoint exactly
  * Stopped, the only state whose Stream Context the branch may place.
  */
 #define XHCI_STREAM_RS_AGAIN        0UL
 #define XHCI_STREAM_RS_RESTARTED    1UL
 #define XHCI_STREAM_RS_GIVEUP       2UL
+#define XHCI_STREAM_RS_REMOVED      3UL
 
-ULONG XhciStreamResendAfter(ULONG code, ULONG state);
+ULONG XhciStreamResendAfter(ULONG code, ULONG state, ULONG aborted);
 ULONG XhciStreamAfterRestop(ULONG state);
 
 /* Whether c1 may resend at all: the endpoint read Stopped just before, and
@@ -285,5 +294,115 @@ ULONG XhciStreamReadBack(ULONG ctx0, ULONG ctx1, ULONG sentPA,
  */
 ULONG XhciStreamFind(const XHCI_RING *const *rings, ULONG count,
                      ULONG trbPA);
+
+/* ------------------------------------------------------------------ */
+/* A controller whose Set TR Dequeue moves another stream (task 50.20)  */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Design record 17 section 4.12.10.
+ *
+ * XhciStreamSetDeqUntrustedId: 1 for a controller (PCI device << 16 |
+ * vendor) on which a stream's Set TR Dequeue Pointer has been seen to leave
+ * another stream of the endpoint at the position it sent - the Intel 7
+ * Series xHCI 8086:1E31 - else 0: XhciStreamDequeueAvoid's list
+ * (xhci_quirk.c, XHCI_QK_DEQ_AVOID). Whether a controller is "flagged" is
+ * that value's effective policy at the start (XhciQuirkOn: 0 never, 1 on
+ * the listed controllers, the default, 2 on every one), read by
+ * hcd_ctl.c's start.
+ *
+ * XhciStreamFlagDecide: what a site that today sends a stream's Set TR
+ * Dequeue (or the Reset Endpoint and failed-stream dequeue a Halted endpoint
+ * owes) does. `contract` is the endpoint's StreamContract - a flagged
+ * controller and a declaring client - not the controller's flag. `kind` is
+ * the caller's (XHCI_STREAM_KIND_*): KEEP when the
+ * endpoint keeps its context afterwards, REPLACE when the caller gives it a
+ * new one before any doorbell, DROP when the caller removes it. `state` is
+ * the endpoint's (XHCI_EP_STATE_*) after the bounded stop; `taken` whether a
+ * TD came off a stream's ring.
+ *   XHCI_STREAM_FD_TODAY       no contract: today's path, unchanged;
+ *   XHCI_STREAM_FD_FAULT       the endpoint is not at rest: today's give-up;
+ *   XHCI_STREAM_FD_NONE        nothing to send and nothing owed;
+ *   XHCI_STREAM_FD_WITHHELD    the command is not sent and the endpoint
+ *                              pipe's debt is set (KEEP: Halted and Error
+ *                              left as they are; REPLACE and DROP: Halted
+ *                              taken to Stopped by Reset Endpoint first);
+ *   XHCI_STREAM_FD_ERROR_EXIT  DROP in Error: the one stream command still
+ *                              sent (xHCI 4.8.3), with no read-back, no
+ *                              resend and no kick, the Drop before any
+ *                              doorbell; the debt is set;
+ *   XHCI_STREAM_FD_REFUSE      REPLACE in Error: the request fails, the
+ *                              endpoint left in Error with its debt set, for
+ *                              the client's device reset.
+ * XhciStreamFlagSetsDebt: 1 when the decision sets the debt.
+ *
+ * The debt is per endpoint pipe object (`*debt`, the pipe's DeqDebt): set,
+ * it owns exactly one pause reference of that object. XhciStreamDebtSet
+ * answers 1 when that reference is to be taken (clear to set);
+ * XhciStreamDebtReplaced 1 when it is to be released (a successful command
+ * gave this object a new context); XhciStreamDebtClosed clears it with
+ * nothing to release (the object is closed and never publishes again).
+ * The caller holds the controller lock.
+ */
+#define XHCI_STREAM_KIND_KEEP           0UL
+#define XHCI_STREAM_KIND_REPLACE        1UL
+#define XHCI_STREAM_KIND_DROP           2UL
+
+#define XHCI_STREAM_FD_TODAY            0UL
+#define XHCI_STREAM_FD_FAULT            1UL
+#define XHCI_STREAM_FD_NONE             2UL
+#define XHCI_STREAM_FD_WITHHELD         3UL
+#define XHCI_STREAM_FD_ERROR_EXIT       4UL
+#define XHCI_STREAM_FD_REFUSE           5UL
+
+ULONG XhciStreamSetDeqUntrustedId(ULONG vendorDevice);
+
+/*
+ * XhciStreamRecycleFailed: what RESET_PIPE does when its recycle's
+ * Configure Endpoint (the Drop and Add) did not succeed. `contract` is the
+ * endpoint's StreamContract, `code` the command's completion code, 0 when
+ * none came (the command layer has then requested the controller reset, as
+ * for every command that never completes).
+ *   XHCI_STREAM_RF_HOLD   a contract endpoint whose Configure the controller
+ *                         answered with an error code: the controller
+ *                         changed nothing, so the endpoint is held by its
+ *                         debt and the request fails; the client resets the
+ *                         device, which gives every endpoint a new context;
+ *   XHCI_STREAM_RF_FAULT  every other case: today's hcdCfgFault - for no
+ *                         completion the controller reset already requested,
+ *                         for an endpoint without the contract the reset (or
+ *                         the device's cycle) it always took;
+ *   XHCI_STREAM_RF_REMOVE task 50.30 step 3 (design record 17 section
+ *                         4.15.5a): the Configure aborted cleanly or left
+ *                         (`aborted`, the caller's XhciTolCmdVerdict), on
+ *                         either kind of endpoint, read first - no debt, no
+ *                         resume, the recycled rings kept, the device
+ *                         failed alone through hcdCfgFault's step.
+ */
+#define XHCI_STREAM_RF_FAULT            0UL
+#define XHCI_STREAM_RF_HOLD             1UL
+#define XHCI_STREAM_RF_REMOVE           2UL
+
+ULONG XhciStreamRecycleFailed(ULONG contract, ULONG code, ULONG aborted);
+ULONG XhciStreamFlagDecide(ULONG contract, ULONG kind, ULONG state,
+                           ULONG taken);
+ULONG XhciStreamFlagSetsDebt(ULONG decision);
+ULONG XhciStreamDebtSet(PULONG debt);
+ULONG XhciStreamDebtReplaced(PULONG debt);
+VOID XhciStreamDebtClosed(PULONG debt);
+
+/*
+ * XhciStreamAckFlags: the Flags a successful OPEN_STREAMS answers with,
+ * the client's half as it came and the bus's half written: the contract
+ * acknowledged only on a flagged controller for a declaring client - which
+ * is also what makes the endpoint a contract endpoint. A failed open
+ * answers the bus's half 0.
+ *
+ * XhciStreamSurvivorDoorbell: 1 when a cancel may ring its surviving TDs'
+ * stream directly - never while the endpoint pipe's DeqDebt is set, which
+ * the direct doorbell would otherwise pass, as it tests no pause.
+ */
+ULONG XhciStreamAckFlags(ULONG flagged, ULONG inFlags, ULONG success);
+ULONG XhciStreamSurvivorDoorbell(ULONG queued, ULONG debt);
 
 #endif /* XHCI_STREAM_H */

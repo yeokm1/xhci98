@@ -37,6 +37,9 @@ static CM_QN_LINK_IN gl[4];
 static ULONG gw[17];
 static ULONG gFirst;     /* the first entry of gl given */
 
+/* Task 50.39: the first link's host name, NULL for the usual one. */
+static const char *gName;
+
 static ULONG build(ULONG state, ULONG links, int client, ULONG netValue)
 {
     CM_QN_IN in;
@@ -77,7 +80,7 @@ static ULONG build(ULONG state, ULONG links, int client, ULONG netValue)
     gl[0].DeviceRev = 0x80000100UL;
     gl[0].Prtcstns = 7;
     gl[0].VendorText = "Linux";
-    gl[0].DeviceText = "secret-host-name-0123456789abcde";
+    gl[0].DeviceText = gName != NULL ? gName : "secret-host-name-0123456789abcde";
     gl[0].Mbps = 40000;
     gl[0].Lanes = 2;
     gl[0].Sent = gl[0].Received = gl[0].Resends = gl[0].Malformed = 4294967295UL;
@@ -122,7 +125,7 @@ static int lines_ok(const char *s, int *count)
 
     *count = 0;
     for (; *s != '\0'; s++) {
-        if (*s == '\r') {
+        if (*s == '\r' || (*s == TR_FIT_WHOLE && col == 0)) {
             continue;
         }
         if (*s == '\n') {
@@ -301,6 +304,19 @@ static void test_text(void)
     CHECK(strstr(textBuf, "A0-A1-A2-A3-A4-A5") != NULL, "the MAC");
     CHECK(strstr(textBuf, "01234567-89AB-CDEF") != NULL, "the UUID, canonical");
     CHECK(strstr(textBuf, "secret-host-name") != NULL, "the peer's name");
+    /* Task 50.39: the window's data lines kept whole when fitted. */
+    CHECK(strstr(textBuf, "\001  Other computer:       secret-host-name")
+              != NULL, "the peer's name marked whole");
+    {
+        static char fit[sizeof(textBuf)];
+        TR_TEXT f;
+        tr_text_init(&f, fit, sizeof(fit));
+        tr_fit_text(&f, textBuf, tr_report_width(4));
+        CHECK(!f.Overflow && strchr(fit, TR_FIT_WHOLE) == NULL &&
+              strstr(fit, "  Other computer:       "
+                          "secret-host-name-0123456789abcde") != NULL,
+              "the peer's name whole at a report node's width");
+    }
     CHECK(strstr(textBuf, "18446744073709551615 bytes") != NULL, "64-bit bytes");
     CHECK(strstr(textBuf, "start again at 4 GB") != NULL, "the NDIS 5 note");
     CHECK(strstr(textBuf, "(asleep)") != NULL, "asleep");
@@ -315,6 +331,41 @@ static void test_text(void)
     CHECK(strstr(textBuf, "B0-B1") == NULL, "no peer MAC in the snapshot");
     CHECK(strstr(textBuf, "169.254") == NULL, "no IP in the snapshot");
     CHECK(strstr(textBuf, "secret-host-name") == NULL, "no peer name in the snapshot");
+    CHECK(strchr(textBuf, TR_FIT_WHOLE) == NULL, "no mark in the snapshot");
+
+    /* Task 50.39: a 64-character name with a space, on a line of its own,
+     * kept whole at a report node's width; no mark in the snapshot. */
+    {
+        static char longName[65];
+        static char fit[sizeof(textBuf)];
+        static char want[80];
+        TR_TEXT f;
+        memset(longName, 'A', 31);
+        longName[31] = ' ';
+        memset(longName + 32, 'B', 32);
+        longName[64] = '\0';
+        gName = longName;
+        n = build(CM_QN_STATE_UP, 4, 1, 1);
+        gName = NULL;
+        (void)tr_qnet_parse(ans, n, &q);
+        tr_text_init(&t, textBuf, sizeof(textBuf));
+        tr_qnet_text(&t, &q, -1, NULL, 0);
+        strcpy(want, "\r\n\001    ");
+        strcat(want, longName);
+        CHECK(strstr(textBuf, want) != NULL, "a long name on a line marked whole");
+        tr_text_init(&f, fit, sizeof(fit));
+        tr_fit_text(&f, textBuf, tr_report_width(4));
+        strcpy(want, "\r\n    ");
+        strcat(want, longName);
+        strcat(want, "\r\n");
+        CHECK(!f.Overflow && strstr(fit, want) != NULL &&
+              strchr(fit, TR_FIT_WHOLE) == NULL,
+              "a long name whole at a report node's width");
+        tr_text_init(&t, textBuf, sizeof(textBuf));
+        tr_qnet_text(&t, &q, -1, NULL, 1);
+        CHECK(strchr(textBuf, TR_FIT_WHOLE) == NULL &&
+              strstr(textBuf, longName) == NULL, "the snapshot: no mark, no name");
+    }
     CHECK(strstr(textBuf, "01234567") == NULL, "no UUID in the snapshot");
     CHECK(strstr(textBuf, "Linux (thunderbolt_net)") != NULL, "the kind still");
 

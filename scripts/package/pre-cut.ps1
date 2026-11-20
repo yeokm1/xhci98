@@ -16,10 +16,14 @@ failure:
      service (xhcimark\build.cmd), the installer (xhciinst\build.cmd) and
      its helper (xhciinst\di\build.cmd): the tools the gated builds'
      self-tests then read as they are
-  3. both gated builds: scripts\build-driver.cmd all here and then
-     scripts\build-driver.cmd all -amd64 here, one after the other; or with
+  3. both gated builds: scripts\build-driver.cmd cut here and then
+     scripts\build-driver.cmd cut -amd64 here, one after the other; or with
      -TwoTrees, scripts\package\cut-builds.ps1, the amd64 build in a second
-     worktree and imported here (releases\README.md, "Cutting a release")
+     worktree and imported here (releases\README.md, "Cutting a release").
+     "cut" is the release flavour alone, with every self-test in full and
+     every tool built, as "all" runs them (roadmap-usb4 task 50.1; owner,
+     2026-11-14: "just release build will do"); -WithQemu builds "all",
+     the qemu flavour too
   4. make-release.ps1 -CheckOnly, with -WdmFreeRoot when one is given
 
 and then prints the cut's command. It refuses before building anything
@@ -44,6 +48,12 @@ second worktree, instead of both here one after the other.
 .PARAMETER X64Tree
 With -TwoTrees: cut-builds.ps1's -X64Tree.
 
+.PARAMETER WithQemu
+The gated builds build "all", release and qemu, as every pre-cut did
+until task 50.1, in place of "cut", release alone; with -TwoTrees it is
+passed to cut-builds.ps1, which then imports both flavours. Nothing the cut
+or make-package.ps1 -SignOnly reads needs the qemu build.
+
 .PARAMETER Plan
 Check and print the steps; run none.
 
@@ -60,6 +70,7 @@ param(
     [string]$WdmFreeRoot = "",
     [switch]$TwoTrees,
     [string]$X64Tree = "",
+    [switch]$WithQemu,
     [switch]$Plan,
     [switch]$SelfTest
 )
@@ -71,8 +82,9 @@ $ErrorActionPreference = "Stop"
 function Get-PreCutSteps {
     # The steps, in order: Id (the log's name), Title, Kind (cmd: a batch
     # file called through cmd.exe; ps: a PowerShell script) and Path
-    # (relative to the tree) with Args.
-    param([string]$WdmFreeRoot, [bool]$TwoTrees, [string]$X64Tree)
+    # (relative to the tree) with Args. The builds' word is cut, the release
+    # flavour alone (task 50.1), or all with $WithQemu.
+    param([string]$WdmFreeRoot, [bool]$TwoTrees, [string]$X64Tree, [bool]$WithQemu = $false)
     $s = @()
     $s += [pscustomobject]@{ Id = "text"; Title = "text checks"; Kind = "ps"; Path = "scripts\check-text.ps1"; Args = @() }
     $s += [pscustomobject]@{ Id = "pfw"; Title = "XHCIPFW"; Kind = "cmd"; Path = "src\pfw\build.cmd"; Args = @() }
@@ -83,10 +95,12 @@ function Get-PreCutSteps {
     if ($TwoTrees) {
         $a = @()
         if ($X64Tree -ne "") { $a = @("-X64Tree", $X64Tree) }
+        if ($WithQemu) { $a += "-WithQemu" }
         $s += [pscustomobject]@{ Id = "cut-builds"; Title = "both gated builds (cut-builds.ps1)"; Kind = "ps"; Path = "scripts\package\cut-builds.ps1"; Args = $a }
     } else {
-        $s += [pscustomobject]@{ Id = "build-x86"; Title = "the x86 gated build"; Kind = "cmd"; Path = "scripts\build-driver.cmd"; Args = @("all") }
-        $s += [pscustomobject]@{ Id = "build-amd64"; Title = "the amd64 gated build"; Kind = "cmd"; Path = "scripts\build-driver.cmd"; Args = @("all", "-amd64") }
+        $word = if ($WithQemu) { "all" } else { "cut" }
+        $s += [pscustomobject]@{ Id = "build-x86"; Title = "the x86 gated build"; Kind = "cmd"; Path = "scripts\build-driver.cmd"; Args = @($word) }
+        $s += [pscustomobject]@{ Id = "build-amd64"; Title = "the amd64 gated build"; Kind = "cmd"; Path = "scripts\build-driver.cmd"; Args = @($word, "-amd64") }
     }
     $a = @("-CheckOnly")
     if ($WdmFreeRoot -ne "") { $a += @("-WdmFreeRoot", $WdmFreeRoot) }
@@ -190,10 +204,10 @@ function Invoke-PreCut {
     # one fails. Throws with every reason when it refuses or a step fails;
     # returns the steps run.
     param([string]$Repo, [string]$WdmFreeRoot, [bool]$TwoTrees, [string]$X64Tree, [bool]$Plan,
-          [string]$PinPath, [string]$LocalRoot, [scriptblock]$Runner)
+          [string]$PinPath, [string]$LocalRoot, [scriptblock]$Runner, [bool]$WithQemu = $false)
     $faults = @(Get-PreCutFaults -Repo $Repo -WdmFreeRoot $WdmFreeRoot -PinPath $PinPath -LocalRoot $LocalRoot -TwoTrees $TwoTrees -X64Tree $X64Tree)
     if ($faults.Count -ne 0) { throw ("nothing was built:`n  " + ($faults -join "`n  ")) }
-    $steps = @(Get-PreCutSteps -WdmFreeRoot $WdmFreeRoot -TwoTrees $TwoTrees -X64Tree $X64Tree)
+    $steps = @(Get-PreCutSteps -WdmFreeRoot $WdmFreeRoot -TwoTrees $TwoTrees -X64Tree $X64Tree -WithQemu $WithQemu)
     $done = @()
     $n = 0
     foreach ($st in $steps) {
@@ -261,7 +275,17 @@ function Invoke-PreCutSelfTest {
         Assert-True ((($st | ForEach-Object { $_.Id }) -join ",") -eq "text,pfw,xhciqual,xhcimark,xhciinst,xhcidi,cut-builds,checkonly") "-TwoTrees does not run cut-builds.ps1 in place of the two builds."
         Assert-True (($st[6].Args -join "|") -eq "-X64Tree|D:\x64" -and ($st[7].Args -join "|") -eq "-CheckOnly|-WdmFreeRoot|C:\w f") "-X64Tree or -WdmFreeRoot is not passed on."
         $st = @(Get-PreCutSteps -WdmFreeRoot "" -TwoTrees $false -X64Tree "")
-        Assert-True (($st[6].Args -join "|") -eq "all" -and ($st[7].Args -join "|") -eq "all|-amd64" -and $st[6].Path -eq "scripts\build-driver.cmd" -and ($st[8].Args -join "|") -eq "-CheckOnly") "the builds or -CheckOnly have the wrong arguments."
+        Assert-True (($st[6].Args -join "|") -eq "cut" -and ($st[7].Args -join "|") -eq "cut|-amd64" -and $st[6].Path -eq "scripts\build-driver.cmd" -and ($st[8].Args -join "|") -eq "-CheckOnly") "the builds or -CheckOnly have the wrong arguments (task 50.1: cut, the release flavour alone)."
+        $st = @(Get-PreCutSteps -WdmFreeRoot "" -TwoTrees $false -X64Tree "" -WithQemu $true)
+        Assert-True (($st[6].Args -join "|") -eq "all" -and ($st[7].Args -join "|") -eq "all|-amd64") "-WithQemu does not build all, release and qemu."
+        $st = @(Get-PreCutSteps -WdmFreeRoot "" -TwoTrees $true -X64Tree "D:\x64" -WithQemu $true)
+        Assert-True (($st[6].Args -join "|") -eq "-X64Tree|D:\x64|-WithQemu") "-WithQemu is not passed on to cut-builds.ps1."
+        $st = @(Get-PreCutSteps -WdmFreeRoot "" -TwoTrees $true -X64Tree "")
+        Assert-True ($st[6].Args.Count -eq 0) "cut-builds.ps1 is given arguments it was not asked for."
+        $script:ran = @()
+        $r = Invoke-PreCut -Repo $fx -WdmFreeRoot "" -TwoTrees $false -X64Tree "" -Plan $false -PinPath $noPin -LocalRoot $local -WithQemu $true `
+            -Runner { param($Repo, $Step) $script:ran += ($Step.Id + "=" + ($Step.Args -join " ")); return 0 }
+        Assert-True (($script:ran -join ",") -match "build-x86=all,build-amd64=all -amd64") ("Invoke-PreCut -WithQemu ran '{0}'." -f ($script:ran -join ","))
 
         Write-Step "a step that fails stops the run"
         $script:ran = @()
@@ -346,7 +370,7 @@ try {
     $repo = Get-RepoRoot
     $runner = { param($Repo, $Step) return (Invoke-PreCutStep -Repo $Repo -Step $Step) }
     [void](Invoke-PreCut -Repo $repo -WdmFreeRoot $WdmFreeRoot -TwoTrees ([bool]$TwoTrees) -X64Tree $X64Tree -Plan ([bool]$Plan) `
-        -PinPath (Get-DefaultWdmFreePinPath) -LocalRoot (Get-DefaultWdmFreeRoot) -Runner $runner)
+        -PinPath (Get-DefaultWdmFreePinPath) -LocalRoot (Get-DefaultWdmFreeRoot) -Runner $runner -WithQemu ([bool]$WithQemu))
     if (-not $Plan) {
         $cut = "powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1 -TestSignPfx <path to xhci98-test.pfx>"
         if ($WdmFreeRoot -ne "") { $cut += " -WdmFreeRoot `"$WdmFreeRoot`"" }

@@ -200,7 +200,8 @@ Still open in 0.0:
 - Resource rebalance: no stimulus found (G5). IRQL of `ScsiStopAdapter` not instrumented.
 - Real-SSD Flush and SHST latency (the Q-NT numbers are the emulator's; the P14s with an
   enclosure is the next measurement).
-- Windows Me: Device Manager Disable, standby and hibernate not tested.
+- Windows Me: Device Manager Disable, standby and hibernate not tested (standby and
+  hibernation read since, in the emulator: phase 4, "Windows Me with a file open").
 
 #### Qualification before dependent product code
 
@@ -760,7 +761,30 @@ the timer and interrupts active throughout.
 OS applicability: Windows 98 SE and ME have no miniport crash-dump path and their
 hibernation does not go through a dump-mode miniport, so phase 4 covers NT only; what 9x
 standby/hibernate requires of the miniport is part of 0.12 and 2.7. On NT, three scenarios
-are separate deliverables:
+are separate deliverables (the table after the next paragraph).
+
+**Windows Me with a file open** (xhci98's roadmap MESTBYFILE.1, read 2026-11-15 in the
+emulator; xhci98's `runs/run-50.md`, "MESTBYFILE.1"). While any file is open on a Stor98
+volume, even for reading only, Windows Me refuses a standby and a hibernation with "Your
+computer cannot hibernate or standby because the Stor98 Storage Controller for NVMe SSDs
+cannot enter into a low-power state."; once the file is closed, the same session sleeps
+and resumes, and the volume works after the wake. An idle volume, an Explorer window or an
+MS-DOS Prompt on it does not stop the sleep. Read the same on a drive behind a tunnel and
+on an NVMe controller on the root bus with no tunnel, with xhci98's connection manager
+marking nothing removable, and with xhci98 `3.4.3.0`'s package. A test build that logs
+every request and adapter-state call (`STOR98_DBGPORT`) shows no call into the miniport
+at the attempt, refused or not, and `CachesData` FALSE in a test build changed nothing:
+the refusal is made above the miniport. Me's own in-box SCSI miniport for the AMD
+Am53C974 refuses the same way with a file open on its disk ("... because the AMD PCI SCSI
+Controller cannot enter into a low-power state.") and sleeps without one, while a disk
+on Me's IDE driver and a USB stick on Me's own USB storage driver sleep with a file held
+open and keep it. So Me refused for both SCSI miniports read, Stor98 and its own, and for
+neither of the other two storage drivers; the message names the adapter's Device Manager
+description, here the INF's `DeviceDesc`. Which component of Windows makes the refusal
+was not identified. Nothing in this driver changes; users close the files on the drive
+before Stand by or Hibernate on Me. 98 SE does not refuse a standby with a file open;
+there the drive is lost at the wake (xhci98's design record 21, section 6.1.5, item 9,
+"as read").
 
 | Scenario | What it needs | 2000 / XP / 2003 x64 | Vista / 7 |
 |---|---|---|---|

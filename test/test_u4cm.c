@@ -2789,6 +2789,72 @@ static void test_sleep_entry(void)
     CHECK(g_cm.Ports[0].SleepCancelFailed, "TB3 descriptor unread: the port marked");
 }
 
+/* Record 21 section 6.1.6 item 6 (TBSTBYWB9X.1): the router's identity
+ * across the sleep, compared at the end of a successful resume. */
+static void test_resume_same(void)
+{
+    int dev;
+    int d2;
+    LONG rc;
+    const TBT_U4_PORT *p;
+
+    /* Everything survived: the same router. */
+    dev = setupMinimal(1, NULL);
+    TbtU4Suspend(&g_cm);
+    CHECK_EQ(TbtU4PortResumeSame(&g_cm, 1), FALSE, "same: not before the resume");
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_OK, "same: verified");
+    CHECK_EQ(TbtU4PortResumeSame(&g_cm, 1), TRUE, "same: the router kept is the same");
+    CHECK_EQ(TbtU4PortResumeSame(&g_cm, 2), FALSE, "same: a port with nothing");
+    /* A later teardown and connection end it. */
+    p = TbtU4Port(&g_cm, 1);
+    g_fab.R[dev].Rcs[3] &= ~0x80000000UL;
+    poll(&g_cm, &g_fab, 2);
+    CHECK(p->Generation != p->ResumeSameGen, "same: reconnected since");
+    CHECK_EQ(TbtU4PortResumeSame(&g_cm, 1), FALSE, "same: not after a later connection");
+
+    /* The domain lost its configuration, the same router back: rebuilt by
+     * the resume, its identity sampled afresh and compared. */
+    dev = setupMinimal(1, NULL);
+    TbtU4Suspend(&g_cm);
+    fabUnplug(&g_fab, 1);
+    fabPlug(&g_fab, 1, dev);
+    g_fab.RxQCount = 0;
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(TbtU4PortResumeSame(&g_cm, 1),
+             (BOOLEAN)(rc == TBT_OK && state(&g_cm, 1) == TBT_U4_UP),
+             "same: a rebuilt router of the same UUID, up at the resume's end");
+
+    /* Another router in its place during the sleep: never the same. */
+    dev = setupMinimal(1, NULL);
+    TbtU4Suspend(&g_cm);
+    fabUnplug(&g_fab, 1);
+    d2 = fabDevice(&g_fab, FAB_DEV_USB4);
+    g_fab.R[d2].Rcs[7] = 0xCAFEF00DUL;
+    fabPlug(&g_fab, 1, d2);
+    g_fab.RxQCount = 0;
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(TbtU4PortResumeSame(&g_cm, 1), FALSE, "same: another UUID is never the same");
+    poll(&g_cm, &g_fab, 4);
+    CHECK_EQ(TbtU4PortResumeSame(&g_cm, 1), FALSE, "same: nor once it is connected");
+
+    /* The router gone: not the same. */
+    dev = setupMinimal(1, NULL);
+    TbtU4Suspend(&g_cm);
+    fabUnplug(&g_fab, 1);
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(TbtU4PortResumeSame(&g_cm, 1), FALSE, "same: the router gone");
+
+    /* An obligation unmet (the failure path): not the same. */
+    dev = setupMinimal(1, NULL);
+    TbtU4Suspend(&g_cm);
+    g_fab.R[dev].Adp[1].Path[2 * 8] &= ~0x80000000UL;
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_E_STATE, "same: an obligation unmet");
+    CHECK_EQ(TbtU4PortResumeSame(&g_cm, 1), FALSE, "same: not after a failed resume");
+    (void)dev;
+}
+
 static void test_suspend_resume(void)
 {
     TBT_U4_CONFIG c;
@@ -8289,6 +8355,7 @@ int main(void)
     RUN_VEC(test_links);
     RUN_VEC(test_loss_and_eject);
     RUN_VEC(test_suspend_resume);
+    RUN_VEC(test_resume_same);
     RUN_VEC(test_sleep_entry);
     RUN_VEC(test_carry);
     RUN_VEC(test_coarse_clock);

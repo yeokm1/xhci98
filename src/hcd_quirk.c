@@ -242,9 +242,11 @@ VOID HcdQuirkPublishLocked(PHCD_CONTROLLER hc)
     st = &hc->Hc.Quirk;
     c = &hc->Counters;
     packed = &c->QuirkMsiAvoid;
-    for (i = 0; i < XHCI_QK_COUNT; i++) {
+    for (i = 0; i < XHCI_QK_COUNT_BLOCK; i++) {
         packed[i] = XhciQuirkPacked(st, i);
     }
+    /* Task 50.20: the fifteenth value's word, appended at 325. */
+    c->QuirkStreamDequeueAvoid = XhciQuirkPacked(st, XHCI_QK_DEQ_AVOID);
     c->QuirkPciRevision = st->PciRevision;
     c->QuirkIdentity = st->Identity;
     c->QuirkMsiRefused = st->MsiRefused;
@@ -573,14 +575,43 @@ ULONG HcdQuirkShutdown(PHCD_CONTROLLER hc)
     }
     ready = (why == XHCI_QK_WHY_NONE) ? 1UL : 0UL;
 
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* The qemu flavour's stand-in for a listed controller (hcd_ctl.c,
+     * XhciQemuPswModel) reaches this hand-back too, on its modelled
+     * registers: 1E31 is one of the three parts. */
+    if (hc->QemuPswModel) {
+        if (XhciPswShutdownAllowed(&hc->PswLife)) {
+            hc->QemuPswMoment = HCD_PSW_AT_SHUTDOWN;
+            hc->QemuPswReg[2] = 0;
+            HcdPswQemuAccess(hc, HCD_PSW_ACC_WRITE, XHCI_PSW_USB3_PSSEN, 0);
+            hc->QemuPswReg[0] = 0;
+            HcdPswQemuAccess(hc, HCD_PSW_ACC_WRITE, XHCI_PSW_XUSB2PR, 0);
+            hc->QemuPswMoment = HCD_PSW_AT_NONE;
+            XHCI_DBG_TEXT("hcd: qemu psw model, shutdown hand-back: D8h "
+                          "and D0h written 0");
+        } else {
+            XHCI_DBG_TEXT("hcd: qemu psw model, shutdown hand-back held: "
+                          "no access");
+        }
+    }
+#endif
     if (XhciQuirkOn(st, XHCI_QK_SHUT_TO_EHCI)) {
         attempted = 1;
-        if (ready) {
+        if (!XhciPswShutdownAllowed(&hc->PswLife)) {
+            /* A lifetime the port switchover held writes nothing to the
+             * routing registers at all, at shutdown included (record 16
+             * section 21.6; the owner's answer to Q7). */
+            XhciQuirkOutcome(st, XHCI_QK_SHUT_TO_EHCI, XHCI_QK_OUT_SKIPPED,
+                             XHCI_QK_WHY_PSW_HELD);
+            XhciLogNote(ext, "quirk.shutdown.held", 1);
+        } else if (ready) {
             /* Both registers whatever the first's outcome: a USB3_PSSEN
              * that would not clear does not keep the USB 2.0 pairs on the
              * xHCI. The first failure is the one reported. */
+            HCD_PSW_MOMENT(hc, HCD_PSW_AT_QUIRK);
             why = hcdQuirkEhciWrite(hc, HCD_QK_USB3_PSSEN);
             why2 = hcdQuirkEhciWrite(hc, HCD_QK_XUSB2PR);
+            HCD_PSW_MOMENT(hc, HCD_PSW_AT_NONE);
             if (why == XHCI_QK_WHY_NONE) {
                 why = why2;
             }

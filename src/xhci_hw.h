@@ -976,6 +976,10 @@ VOID XhciSlotDrainSettled(PXHCI_EXTENSION ext);
 VOID XhciSlotCommandEvent(PXHCI_EXTENSION ext, ULONG completionCode,
                           ULONG control);
 VOID XhciSlotCommandLost(PXHCI_EXTENSION ext);
+/* Task 50.30 step 3 (design record 17 section 4.15.3): an abort ended
+ * cleanly, the TRB it abandoned in CommandAbortEndedPA and its generation
+ * in CommandAbortEndedGen. IRQL: DISPATCH_LEVEL, controller lock held. */
+VOID XhciSlotCommandAbortEnded(PXHCI_EXTENSION ext);
 VOID XhciSlotCommandSlotFatal(PXHCI_EXTENSION ext, ULONG completionCode,
                               ULONG control);
 
@@ -1443,9 +1447,19 @@ VOID XhciLogNoteAddress(PXHCI_EXTENSION ext, const char *label, ULONG value);
  */
 ULONG XhciControllerHealthPoll(PXHCI_EXTENSION ext);
 
-/* The recovery ladder's deferred usbport service action. Call only with the
- * controller-state lock released. IRQL: <= DISPATCH_LEVEL. */
-VOID XhciRequestControllerReset(PXHCI_EXTENSION ext);
+/* The recovery ladder's deferred usbport service action, with its reason
+ * (XHCI_WHY_*, task 50.30 step 1), the slot of the command or transfer
+ * involved (0 none) and the extra byte. Call only with the controller-state
+ * lock released. IRQL: <= DISPATCH_LEVEL. */
+VOID XhciRequestControllerResetWhy(PXHCI_EXTENSION ext, ULONG reason,
+                                   ULONG slot, ULONG extra);
+
+/* The same with the place a staging site copied under the lock
+ * (XhciTolWhyTake): the drain's request, which reads nothing from a slot
+ * once the lock is gone. Lock released. IRQL: <= DISPATCH_LEVEL. */
+VOID XhciRequestControllerResetPlaced(PXHCI_EXTENSION ext, ULONG reason,
+                                      ULONG extra,
+                                      const XHCI_RESET_REC *place);
 
 /*
  * Is there an async timer service at all?

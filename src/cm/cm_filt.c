@@ -47,6 +47,11 @@
  *       (cmChildD0Done), keeps the logical units of disk type its
  *       BusRelations answer carries (cmUnitRelations), and closes, reopens
  *       and drops them at its PnP requests, for the wake power-up.
+ *       Since task 50.10 (design record 21 section 6.3.2) a child directly
+ *       behind an active tunnel port answers PowerRelations with its NHI's
+ *       PDO where XhciCmWakeOrder is 1 (CmPrRelations), latches
+ *       the first device D0 of each wake for the order's log, and tracks
+ *       special-file use (CmPrUsage).
  *
  * Every attachment, bridge or child, is on the registration list's
  * attachment list from its attach to its removal and reads its PDO's
@@ -259,11 +264,12 @@ static NTSTATUS cmFilterUsageDone(PDEVICE_OBJECT device, PIRP irp,
 {
     PCM_FILTER filter;
 
-    UNREFERENCED_PARAMETER(context);
     filter = (PCM_FILTER)device->DeviceExtension;
     if (irp->PendingReturned) {
         IoMarkIrpPending(irp);
     }
+    /* Record 21 section 6.3.2: a special-file notification's outcome. */
+    CmPrUsageDone(filter, (ULONG)(ULONG_PTR)context, irp->IoStatus.Status);
     if ((filter->Common.Lower->Flags & DO_POWER_PAGABLE) == 0) {
         device->Flags &= ~DO_POWER_PAGABLE;
     }
@@ -933,6 +939,8 @@ static NTSTATUS cmIsoQuery(PCM_FILTER filter, PIRP irp)
  * (CmRegAttRemoved reads KeptDeparted). PASSIVE_LEVEL. */
 static VOID cmKeptDestroy(PCM_FILTER filter)
 {
+    /* Record 21 section 6.3.2: its kept clearing list freed. */
+    CmPrReset(filter, TRUE);
     CmRegAttRemoved(filter, (BOOLEAN)(filter->QueryRemoved &&
                                       !filter->SurpriseRemoved));
     CmRegKeptNote(filter, "cm.kept.final", filter->KeptRemoves & 0xFUL);
@@ -1173,6 +1181,7 @@ static NTSTATUS cmFilterPnpBody(PCM_FILTER filter, PIRP irp, BOOLEAN sync)
     BOOLEAN child;
     BOOLEAN started;
     ULONG irqAct;
+    ULONG prToken;
 
     child = (BOOLEAN)(filter->Common.Kind == CM_KIND_CHILD);
     stack = IoGetCurrentIrpStackLocation(irp);
@@ -1181,6 +1190,13 @@ static NTSTATUS cmFilterPnpBody(PCM_FILTER filter, PIRP irp, BOOLEAN sync)
         status = cmFilterAcquire(filter);
         if (!NT_SUCCESS(status)) {
             return CmCompleteIrp(irp, status, 0);
+        }
+        /* Record 21 section 6.3.2: a special file on a function whose
+         * power relation stands is refused (the related NHI is not given
+         * the notification); otherwise counted until its completion. */
+        if (!CmPrUsage(filter, stack, &prToken)) {
+            cmFilterRelease(filter);
+            return CmCompleteIrp(irp, STATUS_UNSUCCESSFUL, 0);
         }
         self = filter->Common.Self;
         if (self->AttachedDevice == NULL ||
@@ -1192,7 +1208,8 @@ static NTSTATUS cmFilterPnpBody(PCM_FILTER filter, PIRP irp, BOOLEAN sync)
             ObReferenceObject(filter->Common.Lower);
         }
         IoCopyCurrentIrpStackLocationToNext(irp);
-        CM_SET_COMPLETION_ALWAYS(irp, cmFilterUsageDone, NULL);
+        CM_SET_COMPLETION_ALWAYS(irp, cmFilterUsageDone,
+                                 (PVOID)(ULONG_PTR)prToken);
         return IoCallDriver(filter->Common.Lower, irp);
 
     case IRP_MN_START_DEVICE:
@@ -1252,6 +1269,9 @@ static NTSTATUS cmFilterPnpBody(PCM_FILTER filter, PIRP irp, BOOLEAN sync)
                 /* Record 21 section 6.3.1: reopened, its units read
                  * afresh. */
                 CmWpuStarted(filter);
+                /* Record 21 section 6.3.2: its power relation asked
+                 * again. */
+                CmPrReset(filter, FALSE);
             }
         } else {
             CmRegAttEvent(filter, CM_MK_START_FAILED);
@@ -1265,6 +1285,11 @@ static NTSTATUS cmFilterPnpBody(PCM_FILTER filter, PIRP irp, BOOLEAN sync)
         break;
 
     case IRP_MN_QUERY_DEVICE_RELATIONS:
+        if (child &&
+            stack->Parameters.QueryDeviceRelations.Type == PowerRelations) {
+            /* Record 21 section 6.3.2 (task 50.10). */
+            return CmPrRelations(filter, irp);
+        }
         if (stack->Parameters.QueryDeviceRelations.Type != BusRelations) {
             break;
         }
@@ -1369,6 +1394,8 @@ static NTSTATUS cmFilterPnpBody(PCM_FILTER filter, PIRP irp, BOOLEAN sync)
             /* Every unit reference dropped before the removal goes down
              * (the kept child's logical removal too). */
             CmWpuClose(filter, TRUE);
+            /* Record 21 section 6.3.2: its devnode's relations go. */
+            CmPrReset(filter, TRUE);
         }
         filter->Started = 0;
         if (!child) {
@@ -1445,6 +1472,8 @@ static NTSTATUS cmChildD0Done(PDEVICE_OBJECT device, PIRP irp, PVOID context)
         IoMarkIrpPending(irp);
     }
     CmWpuD0Seen(child, (ULONG)(ULONG_PTR)context, irp->IoStatus.Status);
+    /* Record 21 section 6.3.2: the first D0 of the epoch's outcome. */
+    CmPrD0Done(child, (ULONG)(ULONG_PTR)context, irp->IoStatus.Status);
     /* The last access: removal may free the child after this. */
     cmFilterRelease(child);
     return STATUS_SUCCESS;
@@ -1463,11 +1492,13 @@ NTSTATUS CmFilterPower(PCM_FILTER filter, PIRP irp)
         stack->MinorFunction == IRP_MN_SET_POWER &&
         stack->Parameters.Power.Type == DevicePowerState &&
         stack->Parameters.Power.State.DeviceState == PowerDeviceD0 &&
-        CmWpuOn() && NT_SUCCESS(cmFilterAcquire(filter))) {
+        (CmWpuOn() || CmPrOn()) && NT_SUCCESS(cmFilterAcquire(filter))) {
         /* Passed down at once, as every power IRP, with a completion
          * routine that only records the outcome (record 21 section
          * 6.3.1); the epoch and start count read now, so a D0 that
-         * completes after a later sleep or restart is known as stale. */
+         * completes after a later sleep or restart is known as stale.
+         * Record 21 section 6.3.2: the first D0 of an epoch latched. */
+        CmPrD0Dispatch(filter);
         PoStartNextPowerIrp(irp);
         IoCopyCurrentIrpStackLocationToNext(irp);
         CM_SET_COMPLETION_ALWAYS(irp, cmChildD0Done, CmWpuD0Context(filter));

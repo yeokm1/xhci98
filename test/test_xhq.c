@@ -1210,10 +1210,736 @@ static void test_holds(void)
     CHECK_EQ(q.SeenN, TR_HQ_SEEN, "the remembered set's bound");
 }
 
+/* Task 50.7: IOCTL_XHCI98_HOLDS's answer, composed and read back, and the
+ * hold notice's owed re-send. */
+static void test_holds_request(void)
+{
+    static UCHAR out[XHH_MAX_BYTES + 8];
+    UCHAR holds[XHH_ROOT_MAX + XHH_HUB_MAX];
+    unsigned char got[2 * TR_TOL_MAX_LOCS];
+    TR_TOLMAP m;
+    ULONG info;
+    ULONG i;
+
+    CHECK_EQ(XHH_ROOT_MAX, XHCI_TOL_ROOT_PORTS, "the root part's bound");
+    CHECK_EQ(XHH_HUB_MAX, XHCI_TOL_HUB_LOCS, "the hub part's bound");
+    CHECK_EQ(XHH_IOCTL, 0x00222928UL, "CTL_CODE(0x22, 0xA4A, buffered, any)");
+    for (i = 0; i < sizeof(holds); i++) {
+        holds[i] = (UCHAR)(i % 4);
+    }
+    CHECK_EQ(XhciHoldsAnswer(out, XHH_HDR_BYTES - 1, 1, 8, 224, 14, holds,
+                             &info), XHQ_ANS_TOO_SMALL, "under the header");
+    CHECK_EQ(info, 0, "... nothing written");
+    CHECK_EQ(XhciHoldsAnswer(out, XHH_HDR_BYTES, 1, 8, 224, 14, holds, &info),
+             XHQ_ANS_HEADER, "the header alone");
+    CHECK_EQ(info, XHH_HDR_BYTES, "... 32 bytes");
+    CHECK_EQ(tr_xhh_parse(out, info, &m, got, sizeof(got)), -1,
+             "a header alone reads as too small");
+    CHECK_EQ(XhciHoldsAnswer(out, sizeof(out), 1, 8, 224, 14, holds, &info),
+             XHQ_ANS_WHOLE, "the whole answer");
+    CHECK_EQ(info, XHH_HDR_BYTES + 8 + 224, "header, 8 root, 224 hub");
+    CHECK_EQ(tr_xhh_parse(out, info, &m, got, sizeof(got)), 1, "read back");
+    CHECK_EQ(m.RootLocs, 8, "root locations");
+    CHECK_EQ(m.HubLocs, 224, "hub locations");
+    CHECK_EQ(m.HubPorts, 14, "hub ports per hub object");
+    CHECK_EQ(got[1], 1, "root port 2's hold");
+    CHECK_EQ(got[3], 3, "root port 4's hold");
+    CHECK_EQ(got[8 + 5], holds[8 + 5], "a hub location's hold");
+    CHECK_EQ(tr_xhh_parse(out, info, &m, got, 100), 0,
+             "more locations than the caller's room: refused");
+    CHECK_EQ(XhciHoldsAnswer(out, sizeof(out), 1, 300, 300, 14, holds, &info),
+             XHQ_ANS_WHOLE, "bounds held");
+    CHECK_EQ(info, XHH_MAX_BYTES, "... 255 root and 224 hub at most");
+    CHECK_EQ(XhciHoldsAnswer(out, sizeof(out), 0, 0, 0, 14, holds, &info),
+             XHQ_ANS_WHOLE, "not started: no locations");
+    CHECK_EQ(tr_xhh_parse(out, info, &m, got, sizeof(got)), 1,
+             "... read back");
+    CHECK_EQ(m.RootLocs + m.HubLocs, 0, "... none");
+    CHECK_EQ(XhciHoldsAnswer(out, sizeof(out), 1, 8, 224, 14, holds, &info),
+             XHQ_ANS_WHOLE, "again");
+    out[XHH_O_VERSION] = 2;
+    CHECK_EQ(tr_xhh_parse(out, info, &m, got, sizeof(got)), 0,
+             "another version is not one");
+    out[XHH_O_VERSION] = 1;
+    out[XHH_O_MAGIC] ^= 1;
+    CHECK_EQ(tr_xhh_parse(out, info, &m, got, sizeof(got)), 0,
+             "another magic is not one");
+    out[XHH_O_MAGIC] ^= 1;
+    CHECK_EQ(tr_xhh_parse(out, info - 1, &m, got, sizeof(got)), 0,
+             "a cut answer is not one");
+    out[XHH_O_BYTES] = (UCHAR)(out[XHH_O_BYTES] + 1);
+    CHECK_EQ(tr_xhh_parse(out, info + 1, &m, got, sizeof(got)), 0,
+             "a size that does not add up");
+
+    {
+        /* Switched off and on: the queue and what it saw start afresh, so
+         * a hold there all along is announced once (task 50.7). */
+        static TR_HOLDQ q;
+        TR_HQENT e;
+        tr_holdq_init(&q);
+        CHECK_EQ(tr_holdq_observe(&q, 7, 6, 1), 1, "a hold queued");
+        CHECK_EQ(tr_holdq_take(&q, NULL, 0, &e), 0, "not from no reading");
+        {
+            TR_U32 key = 7;
+            CHECK_EQ(tr_holdq_take(&q, &key, 1, &e), 1, "announced");
+        }
+        CHECK_EQ(tr_holdq_observe(&q, 7, 6, 1), 0, "the same hold: once");
+        tr_holdq_init(&q);
+        CHECK_EQ(tr_holdq_observe(&q, 7, 6, 1), 1,
+                 "after the switch went off and on: announced again");
+    }
+    CHECK_EQ(tr_hold_watch_on(0, 1), 0, "the hold watch: absent is off");
+    CHECK_EQ(tr_hold_watch_on(1, 0), 0, "the hold watch: 0 is off");
+    CHECK_EQ(tr_hold_watch_on(1, 2), 0, "the hold watch: 2 is off");
+    CHECK_EQ(tr_hold_watch_on(1, 1), 1, "the hold watch: 1 is on");
+    CHECK_EQ(strcmp(TR_HOLD_VALUE, "HoldNotice"), 0, "its value's name");
+    CHECK_EQ(tr_hold_resend_decide(1, 1, 1, 3, 3, 0, 5000, 60000),
+             TR_HR_SEND, "a fresh reading, the same hold: sent again");
+    CHECK_EQ(tr_hold_resend_decide(1, 1, 1, 0, 3, 0, 5000, 60000),
+             TR_HR_DROP, "the hold ended meanwhile: dropped");
+    CHECK_EQ(tr_hold_resend_decide(1, 1, 1, 1, 3, 0, 5000, 60000),
+             TR_HR_DROP, "another kind now: dropped");
+    CHECK_EQ(tr_hold_resend_decide(1, 0, 0, -1, 3, 0, 5000, 60000),
+             TR_HR_DROP, "the controller gone: dropped");
+    CHECK_EQ(tr_hold_resend_decide(0, 1, 1, 3, 3, 0, 5000, 60000),
+             TR_HR_DROP, "shown meanwhile: nothing owed");
+    CHECK_EQ(tr_hold_resend_decide(1, 1, 0, -1, 3, 0, 60000, 60000),
+             TR_HR_WAIT, "no usable reading yet: waits");
+    CHECK_EQ(tr_hold_resend_decide(1, 1, 0, -1, 3, 0, 60001, 60000),
+             TR_HR_DROP, "none within its bound: dropped");
+    CHECK_EQ(tr_hold_resend_decide(1, 1, 0, -1, 3, 0xFFFFFF00UL, 0x100UL,
+                                   60000), TR_HR_WAIT, "across the wrap");
+}
+
+/* Task 50.30 step 1 (design record 17 section 4.15.8, record 25 section 26
+ * items 1 and 2): the recovery-status request's layout, both directions of
+ * compatibility, the words and the place. */
+/* Shift-JIS's lead bytes, for the recovery name's break between
+ * characters (record 25 section 28 item 11). */
+static int xhq_sjis(unsigned char c)
+{
+    return (c >= 0x81 && c <= 0x9F) || (c >= 0xE0 && c <= 0xFC);
+}
+
+/* One 'a' first with one1, then chars double-byte characters. */
+static void xhq_dbcs(char *s, int one1, int chars)
+{
+    int i = 0;
+    int k;
+
+    if (one1) {
+        s[i++] = 'a';
+    }
+    for (k = 0; k < chars; k++) {
+        s[i++] = (char)0x82;
+        s[i++] = (char)0xA0;
+    }
+    s[i] = '\0';
+}
+
+static void test_recovery(void)
+{
+    UCHAR out[XHR_MAX_BYTES + 8];
+    ULONG head[XHR_HDR_BYTES / 4 - 3];
+    ULONG recs[XHR_REC_MAX * XHR_REC_WORDS];
+    ULONG counts[XHR_COUNTS];
+    TR_XHR x;
+    TR_TEXT t;
+    char buf[2048];
+    char place[64];
+    ULONG info;
+    ULONG i;
+
+    CHECK_EQ(XHR_IOCTL, 0x0022292CUL, "CTL_CODE(0x22, 0xA4B, buffered, any)");
+    CHECK(XHR_IOCTL != XHQ_IOCTL && XHR_IOCTL != XHH_IOCTL,
+          "beside the query and the holds, not one of them");
+    CHECK_EQ(XHR_COUNTS, XHCI_WHY_COUNTERS, "the counts, the driver's");
+    CHECK_EQ(XHR_REC_MAX, XHCI_WHY_RING, "the records, the driver's ring");
+    CHECK_EQ(XHR_REC_WORDS, sizeof(XHCI_RESET_REC) / 4 + 1,
+             "a record's words: the driver's eight and the flags");
+    CHECK_EQ(XHR_TICK_MS, XHCI_TOL_TICK_MS, "the clock's period");
+    CHECK_EQ(XHR_MAX_BYTES, 64 + 4 * 36 + 26 * 4, "312 bytes at most");
+    CHECK_EQ(TR_XHR_COUNTS, XHR_COUNTS, "the tool's counts");
+    CHECK_EQ(TR_XHR_RECS, XHR_REC_MAX, "the tool's records");
+    CHECK_EQ(TR_XHR_RWORDS, XHR_REC_WORDS, "the tool's record words");
+    for (i = 0; i < sizeof(head) / 4; i++) {
+        head[i] = 0;
+    }
+    for (i = 0; i < sizeof(recs) / 4; i++) {
+        recs[i] = 0;
+    }
+    for (i = 0; i < XHR_COUNTS; i++) {
+        counts[i] = i == XHCI_WHY_EP0_LATE ? 1UL
+                    : i == XHCI_WHY_CMD_NO_VERDICT ? 3UL : 0UL;
+    }
+    head[(XHR_O_FLAGS - XHR_O_FLAGS) / 4] = XHR_F_STARTED;
+    head[(XHR_O_TERMINAL - XHR_O_FLAGS) / 4] = 3;
+    head[(XHR_O_RECOVERIES - XHR_O_FLAGS) / 4] = 3;
+    head[(XHR_O_CALLS - XHR_O_FLAGS) / 4] = 7;
+    head[(XHR_O_INVOLVED - XHR_O_FLAGS) / 4] = 3;
+    head[(XHR_O_RETRY_NEXT_S - XHR_O_FLAGS) / 4] = XHR_NONE;
+    head[(XHR_O_CLOCK - XHR_O_FLAGS) / 4] = 1000;
+    head[(XHR_O_RECORDS - XHR_O_FLAGS) / 4] = 3;
+    /* The field report's sequence: an unanswered request, then two
+     * Address Device time-outs at the same port, newest first. */
+    for (i = 0; i < 3; i++) {
+        recs[i * XHR_REC_WORDS + 0] = i == 2 ? XHCI_WHY_EP0_LATE
+                                             : XHCI_WHY_CMD_NO_VERDICT;
+        recs[i * XHR_REC_WORDS + 1] = i == 2 ? 0 : 11;
+        recs[i * XHR_REC_WORDS + 2] = 3;
+        recs[i * XHR_REC_WORDS + 3] = 3;
+        recs[i * XHR_REC_WORDS + 4] = 0;
+        recs[i * XHR_REC_WORDS + 5] = 0x12345678UL;
+        recs[i * XHR_REC_WORDS + 6] = 1000 - 50 * (i + 1);
+        recs[i * XHR_REC_WORDS + 7] = 2 - i;
+        recs[i * XHR_REC_WORDS + 8] = i == 0 ? XHR_RF_LATCH : 0;
+    }
+    CHECK_EQ(XhciRecoveryAnswer(out, XHR_HDR_BYTES - 1, head, recs, counts,
+                                NULL, &info),
+             XHQ_ANS_TOO_SMALL, "under the header");
+    CHECK_EQ(info, 0, "... nothing written");
+    CHECK_EQ(XhciRecoveryAnswer(out, XHR_HDR_BYTES, head, recs, counts,
+                                NULL, &info),
+             XHQ_ANS_HEADER, "the header alone");
+    CHECK_EQ(info, XHR_HDR_BYTES, "... 64 bytes");
+    CHECK_EQ(tr_xhr_parse(out, info, &x), -1, "read as too small");
+    CHECK_EQ(XhciRecoveryAnswer(out, sizeof(out), head, recs, counts, NULL,
+                                &info),
+             XHQ_ANS_WHOLE, "the whole answer");
+    CHECK_EQ(info, XHR_MAX_BYTES, "... all of it");
+    CHECK_EQ(tr_xhr_parse(out, info, &x), 1, "read back");
+    CHECK_EQ(x.Terminal, 3, "the window refused a fourth");
+    CHECK_EQ(x.Records, 3, "three records");
+    CHECK_EQ(x.Involved, 3, "three at one place");
+    CHECK_EQ(x.Rec[0][0], XHCI_WHY_CMD_NO_VERDICT, "newest: a command");
+    CHECK_EQ(x.Rec[0][1], 11, "... Address Device");
+    CHECK_EQ(x.Rec[0][8], XHR_RF_LATCH, "... the latch's");
+    CHECK_EQ(x.Rec[2][0], XHCI_WHY_EP0_LATE, "oldest: the control request");
+    CHECK_EQ(x.Counts[XHCI_WHY_CMD_NO_VERDICT], 3, "the counts read back");
+    CHECK_EQ(x.Flags & (XHR_F_ISOLATION | XHR_F_RETRY), 0,
+             "this answer serves neither isolation nor retries");
+    CHECK_EQ(x.IsoValue, XHR_NONE, "isolation not served: read as none");
+    CHECK_EQ(x.IsoApplies, 0, "... and not applying");
+    /* Task 50.30 step 3: an answer serving the isolation fields - the
+     * value read, listed, applies - read back, and in the report. */
+    head[(XHR_O_FLAGS - XHR_O_FLAGS) / 4] = XHR_F_STARTED | XHR_F_ISOLATION;
+    head[(XHR_O_ISO_VALUE - XHR_O_FLAGS) / 4] = 2;
+    head[(XHR_O_ISO_LISTED - XHR_O_FLAGS) / 4] = 0;
+    head[(XHR_O_ISO_APPLIES - XHR_O_FLAGS) / 4] = 1;
+    CHECK_EQ(XhciRecoveryAnswer(out, sizeof(out), head, recs, counts, NULL,
+                                &info),
+             XHQ_ANS_WHOLE, "an answer with isolation served");
+    CHECK_EQ(tr_xhr_parse(out, info, &x), 1, "read back");
+    CHECK_EQ(x.IsoValue, 2, "the value read");
+    CHECK_EQ(x.IsoListed, 0, "not listed");
+    CHECK_EQ(x.IsoApplies, 1, "applies");
+    tr_text_init(&t, buf, sizeof(buf));
+    tr_xhr_report(&t, &x);
+    CHECK(strstr(buf, "device isolation: value 2, listed no, applies yes") !=
+              NULL, "the report's isolation line");
+    head[(XHR_O_ISO_VALUE - XHR_O_FLAGS) / 4] = XHR_NONE;
+    head[(XHR_O_ISO_APPLIES - XHR_O_FLAGS) / 4] = 0;
+    CHECK_EQ(XhciRecoveryAnswer(out, sizeof(out), head, recs, counts, NULL,
+                                &info),
+             XHQ_ANS_WHOLE, "the value absent");
+    CHECK_EQ(tr_xhr_parse(out, info, &x), 1, "read back");
+    tr_text_init(&t, buf, sizeof(buf));
+    tr_xhr_report(&t, &x);
+    CHECK(strstr(buf, "device isolation: value not set, listed no, "
+                      "applies no") != NULL, "absent in words");
+    head[(XHR_O_FLAGS - XHR_O_FLAGS) / 4] = XHR_F_STARTED;
+    CHECK_EQ(XhciRecoveryAnswer(out, sizeof(out), head, recs, counts, NULL,
+                                &info),
+             XHQ_ANS_WHOLE, "back to the first answer");
+    CHECK_EQ(tr_xhr_parse(out, info, &x), 1, "read back");
+    out[XHR_O_VERSION] = 2;
+    CHECK_EQ(tr_xhr_parse(out, info, &x), 0, "another version: not one");
+    out[XHR_O_VERSION] = 1;
+    out[XHR_O_MAGIC] ^= 1;
+    CHECK_EQ(tr_xhr_parse(out, info, &x), 0, "another magic: not one");
+    out[XHR_O_MAGIC] ^= 1;
+    /* Task 50.31 (design record 38 section 15.1): a driver that serves the
+     * retry words sets XHR_F_RETRY; the value, the tries held at 65534 and
+     * the seconds to the next try travel at their offsets, and an earlier
+     * tool's parse is unchanged by them. */
+    CHECK_EQ(XHCI_RETRY_NEXT_NONE, XHR_NONE, "the core's none is XHR_NONE");
+    CHECK_EQ(XHR_O_RETRY_TRY, XHR_O_RETRY_VALUE + 4, "the try after the value");
+    CHECK_EQ(XHR_O_RETRY_NEXT_S, XHR_O_RETRY_VALUE + 8, "the seconds third");
+    head[(XHR_O_FLAGS - XHR_O_FLAGS) / 4] = XHR_F_STARTED | XHR_F_RETRY;
+    head[(XHR_O_RETRY_VALUE - XHR_O_FLAGS) / 4] = 5;
+    head[(XHR_O_RETRY_TRY - XHR_O_FLAGS) / 4] = XHCI_TOL_RETRY_TRIES_MAX;
+    head[(XHR_O_RETRY_NEXT_S - XHR_O_FLAGS) / 4] = 12;
+    CHECK_EQ(XhciRecoveryAnswer(out, sizeof(out), head, recs, counts, NULL,
+                                &info),
+             XHQ_ANS_WHOLE, "served: the whole answer");
+    CHECK_EQ(get32(out, XHR_O_FLAGS), XHR_F_STARTED | XHR_F_RETRY,
+             "... the flag");
+    CHECK_EQ(get32(out, XHR_O_RETRY_VALUE), 5, "... the value");
+    CHECK_EQ(get32(out, XHR_O_RETRY_TRY), 65534, "... TRY held at 65534");
+    CHECK_EQ(get32(out, XHR_O_RETRY_NEXT_S), 12, "... about 12 s");
+    CHECK_EQ(tr_xhr_parse(out, info, &x), 1, "... read by this tool");
+    CHECK_EQ(x.Flags & XHR_F_RETRY, XHR_F_RETRY, "... the flag read");
+    CHECK_EQ(x.RetryValue, 5, "... the value read");
+    CHECK_EQ(x.RetryTry, 65534, "... the tries read, held");
+    CHECK_EQ(x.RetryNextS, 12, "... the seconds read");
+    CHECK_EQ(x.Terminal, 3, "... the rest as before");
+    CHECK_EQ(x.Records, 3, "... the records as before");
+    head[(XHR_O_RETRY_NEXT_S - XHR_O_FLAGS) / 4] = 0;
+    CHECK_EQ(XhciRecoveryAnswer(out, sizeof(out), head, recs, counts, NULL,
+                                &info),
+             XHQ_ANS_WHOLE, "due");
+    CHECK_EQ(get32(out, XHR_O_RETRY_NEXT_S), 0, "... 0");
+    head[(XHR_O_RETRY_NEXT_S - XHR_O_FLAGS) / 4] = XHR_NONE;
+    CHECK_EQ(XhciRecoveryAnswer(out, sizeof(out), head, recs, counts, NULL,
+                                &info),
+             XHQ_ANS_WHOLE, "none");
+    CHECK_EQ(get32(out, XHR_O_RETRY_NEXT_S), XHR_NONE, "... XHR_NONE");
+    head[(XHR_O_FLAGS - XHR_O_FLAGS) / 4] = XHR_F_STARTED;
+    head[(XHR_O_RETRY_VALUE - XHR_O_FLAGS) / 4] = 0;
+    head[(XHR_O_RETRY_TRY - XHR_O_FLAGS) / 4] = 0;
+    CHECK_EQ(XhciRecoveryAnswer(out, sizeof(out), head, recs, counts, NULL,
+                                &info),
+             XHQ_ANS_WHOLE, "back to the unserved answer");
+    CHECK_EQ(tr_xhr_parse(out, info, &x), 1, "unserved: read");
+    CHECK_EQ(x.RetryValue, 0, "... no value");
+    CHECK_EQ(x.RetryNextS, XHR_NONE, "... no next try");
+    /* New tool, old driver: the request refused leaves nothing to parse;
+     * the details say only what XHQ_F_FAILED allows. */
+    CHECK_EQ(tr_xhr_parse(out, 0, &x), 0, "an old driver's refusal");
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK_EQ(tr_xhr_details(&t, NULL, 1, NULL, NULL), 1, "failed, no detail");
+    CHECK(strstr(buf, "Stopped after a failure. Its devices were removed.") !=
+              NULL, "... its words");
+    CHECK_EQ(tr_xhr_restart_ok(NULL), 0,
+             "an old driver: latched or contained unknown, no restart advice");
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK_EQ(tr_xhr_details(&t, NULL, 0, NULL, NULL), 0, "running: nothing");
+    /* The details of the field report's latch. */
+    CHECK_EQ(tr_xhr_parse(out, info, &x), 1, "again");
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK_EQ(tr_xhr_details(&t, &x, 1, "USB Audio Device", NULL), 3,
+             "status, involved, the count");
+    CHECK(strstr(buf, "  Status:        Stopped after repeated failures. Its "
+                      "devices were removed.") != NULL, "the status line");
+    CHECK(strstr(buf, "Recovery requests involved the device at port 3")
+              != NULL, "the place involved, never a cause");
+    CHECK(strstr(buf, "1234:5678); a command for it got no answer.") != NULL,
+          "the ids and the reason's words");
+    CHECK(strstr(buf, "caused") == NULL, "no cause claimed");
+    CHECK(strstr(buf, "3 of the last 3 recovery") != NULL, "the count");
+    {
+        /* A name with no space longer than the field's 62 columns:
+         * "(" and the name broken between characters. */
+        char nm[80];
+        char want[90];
+        xhq_dbcs(nm, 1, 29);
+        tr_text_init(&t, buf, sizeof(buf));
+        (VOID)tr_xhr_details(&t, &x, 1, nm, xhq_sjis);
+        sprintf(want, "(%s,\r\n", nm);
+        CHECK(strstr(buf, want) != NULL, "a double-byte name under the field whole");
+        xhq_dbcs(nm, 0, 30);
+        tr_text_init(&t, buf, sizeof(buf));
+        (VOID)tr_xhr_details(&t, &x, 1, nm, xhq_sjis);
+        sprintf(want, "(%s,\r\n", nm);
+        CHECK(strstr(buf, want) != NULL, "a double-byte name at the field whole");
+        xhq_dbcs(nm, 1, 30);
+        tr_text_init(&t, buf, sizeof(buf));
+        (VOID)tr_xhr_details(&t, &x, 1, nm, xhq_sjis);
+        sprintf(want, "(%s\r\n", nm);
+        CHECK(strstr(buf, want) != NULL,
+              "a name a byte over the field, broken at a character's end");
+        xhq_dbcs(nm, 0, 31);
+        tr_text_init(&t, buf, sizeof(buf));
+        (VOID)tr_xhr_details(&t, &x, 1, nm, xhq_sjis);
+        want[0] = '(';
+        memcpy(want + 1, nm, 60);
+        strcpy(want + 61, "\r\n");
+        CHECK(strstr(buf, want) != NULL,
+              "a name two bytes over, broken a byte sooner");
+        tr_text_init(&t, buf, sizeof(buf));
+        (VOID)tr_xhr_details(&t, &x, 1, nm, NULL);
+        memcpy(want + 1, nm, 61);
+        strcpy(want + 62, "\r\n");
+        CHECK(strstr(buf, want) != NULL && (unsigned char)want[61] == 0x82,
+              "without a lead test as before, a lead byte last");
+    }
+    CHECK_EQ(tr_xhr_restart_ok(&x), 1, "stopped (2): the restart advice");
+    x.Terminal = 3;
+    CHECK_EQ(tr_xhr_restart_ok(&x), 1, "stopped (3): the restart advice");
+    x.Terminal = 4;
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK_EQ(tr_xhr_details(&t, &x, 1, NULL, NULL), 1, "contained: one line");
+    CHECK(strstr(buf, "Closed off.") != NULL, "... closed off");
+    CHECK(strstr(buf, "Recovery requests") == NULL, "... no records named");
+    CHECK_EQ(tr_xhr_restart_ok(&x), 0, "contained (4): no restart advice");
+    x.Terminal = 5;
+    CHECK_EQ(tr_xhr_restart_ok(&x), 0, "contained (5): no restart advice");
+    x.Terminal = 6;
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK_EQ(tr_xhr_details(&t, &x, 1, NULL, NULL), 1, "interrupts lost: one line");
+    CHECK(strstr(buf, "Restart Windows.") != NULL, "... restart Windows");
+    CHECK_EQ(tr_xhr_restart_ok(&x), 0,
+             "interrupts lost (6): no controller restart advice");
+    x.Terminal = 1;
+    CHECK_EQ(tr_xhr_restart_ok(&x), 0, "a recovery owed: none");
+    x.Terminal = 0;
+    CHECK_EQ(tr_xhr_restart_ok(&x), 0, "running: none");
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK_EQ(tr_xhr_details(&t, &x, 0, NULL, NULL), 0, "running: nothing");
+    x.Terminal = 2;
+    x.Rec[0][3] = 0;
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK_EQ(tr_xhr_details(&t, &x, 1, NULL, NULL), 2, "no device recorded");
+    CHECK(strstr(buf, "The driver did not record which device was "
+                      "involved.") != NULL, "... said so");
+    /* Task 50.31 (design record 38 section 15.2, the owner's decisions of
+     * 2026-11-19): the retry lines, only where the driver serves them. */
+    CHECK_EQ(XHR_F_RETRY_NEVER, 0x08UL, "the never flag's bit");
+    CHECK_EQ(XHR_F_RETRY_NEVER & (XHR_F_STARTED | XHR_F_ISOLATION |
+                                  XHR_F_RETRY), 0, "... its own bit");
+    CHECK_EQ(TR_XHR_NEXT_S_MAX, 601, "the longest wait: 601 s");
+    x.Flags = XHR_F_STARTED | XHR_F_RETRY;
+    x.RetryValue = 5;
+    x.RetryNextS = 7;
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK_EQ(tr_xhr_details(&t, &x, 1, NULL, NULL), 4, "pending: two more lines");
+    CHECK(strstr(buf, "The driver will try it again by itself in about 7 "
+                      "seconds.") != NULL, "... in about 7 seconds");
+    CHECK(strstr(buf, "can bring the try sooner.") != NULL,
+          "... a port change can bring it sooner");
+    x.RetryNextS = 1;
+    tr_text_init(&t, buf, sizeof(buf));
+    (VOID)tr_xhr_details(&t, &x, 1, NULL, NULL);
+    CHECK(strstr(buf, "in about 1 second.") != NULL, "... one second");
+    x.RetryNextS = 601;
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK_EQ(tr_xhr_details(&t, &x, 1, NULL, NULL), 4, "601 s: still a wait");
+    x.RetryNextS = 0;
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK_EQ(tr_xhr_details(&t, &x, 1, NULL, NULL), 3, "due: one line");
+    CHECK(strstr(buf, "The driver will try it again by itself as soon as it "
+                      "can.") != NULL, "... as soon as it can");
+    x.RetryNextS = XHR_NONE;
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK_EQ(tr_xhr_details(&t, &x, 1, NULL, NULL), 2,
+             "XHR_NONE (a burst, or before the thread's pass): no line");
+    CHECK(strstr(buf, "will") == NULL, "... no will, no will not");
+    x.Flags = XHR_F_STARTED | XHR_F_RETRY | XHR_F_RETRY_NEVER;
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK_EQ(tr_xhr_details(&t, &x, 1, NULL, NULL), 3, "never: one line");
+    /* The details wrap at 62 columns: each line's words checked. */
+    CHECK(strstr(buf, "The driver will not try it again by itself. It stays "
+                      "stopped") != NULL, "... will not");
+    CHECK(strstr(buf, "until it is restarted.") != NULL, "... restarted");
+    x.RetryNextS = 9;
+    tr_text_init(&t, buf, sizeof(buf));
+    (VOID)tr_xhr_details(&t, &x, 1, NULL, NULL);
+    CHECK(strstr(buf, "in about") == NULL, "... never judged first");
+    x.Terminal = 4;
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK_EQ(tr_xhr_details(&t, &x, 1, NULL, NULL), 2, "closed off: will not too");
+    x.Terminal = 6;
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK_EQ(tr_xhr_details(&t, &x, 1, NULL, NULL), 2,
+             "interrupts lost: will not too");
+    x.Flags = XHR_F_STARTED | XHR_F_RETRY;
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK_EQ(tr_xhr_details(&t, &x, 1, NULL, NULL), 1,
+             "interrupts lost, not yet seen: no will not");
+    x.Terminal = 2;
+    x.RetryValue = 0;
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK_EQ(tr_xhr_details(&t, &x, 1, NULL, NULL), 3, "the value 0: one line");
+    CHECK(strstr(buf, "XhciFailedRetrySec is 0, so the driver will not try "
+                      "it again") != NULL, "... the value 0's words");
+    CHECK(strstr(buf, "by itself. It stays stopped until it is restarted.") !=
+              NULL, "... and its second line");
+    x.Flags = XHR_F_STARTED;
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK_EQ(tr_xhr_details(&t, &x, 1, NULL, NULL), 2,
+             "a driver without the words: no retry line");
+    /* The tags and the words. */
+    CHECK(strcmp(tr_xhr_tag(2), " (stopped after repeated failures)") == 0,
+          "terminal 2's tag");
+    CHECK(strcmp(tr_xhr_tag(3), tr_xhr_tag(2)) == 0, "terminal 3's tag");
+    CHECK(strcmp(tr_xhr_tag(5), " (closed off)") == 0, "contained");
+    CHECK(strcmp(tr_xhr_tag(6), " (stopped: interrupts lost)") == 0,
+          "the lost message");
+    CHECK(strcmp(tr_xhr_tag(0), "") == 0 && strcmp(tr_xhr_tag(1), "") == 0,
+          "running or a recovery owed: no tag");
+    for (i = 0; i < XHCI_WHY_COUNT; i++) {
+        CHECK(strcmp(tr_why_name(i), "?") != 0 || i == 0, "every name");
+        CHECK(tr_why_words(i)[0] != '\0', "every reason's words");
+    }
+    CHECK(strcmp(tr_why_name(XHCI_WHY_COUNT), "?") == 0, "an unknown one");
+    CHECK(strcmp(tr_why_name(XHCI_WHY_EP0_LATE), "EP0_LATE") == 0,
+          "code 11");
+    CHECK(strcmp(tr_why_name(XHCI_WHY_XFER_FATAL), "XFER_FATAL") == 0,
+          "code 24, the last");
+    tr_place_words(3, 0, place, sizeof(place));
+    CHECK(strcmp(place, "port 3") == 0, "a root port");
+    tr_place_words(1, 2, place, sizeof(place));
+    CHECK(strcmp(place, "port 2 of the hub at port 1") == 0, "a hub's port");
+    tr_place_words(1, 0x42, place, sizeof(place));
+    CHECK(strcmp(place, "port 4 of a hub behind port 1") == 0,
+          "two tiers down");
+    tr_place_words(0, 0, place, sizeof(place));
+    CHECK(place[0] == '\0', "no place");
+    /* The report lines. */
+    CHECK_EQ(XhciRecoveryAnswer(out, sizeof(out), head, recs, counts, NULL,
+                                &info),
+             XHQ_ANS_WHOLE, "once more");
+    CHECK_EQ(tr_xhr_parse(out, info, &x), 1, "read");
+    tr_text_init(&t, buf, sizeof(buf));
+    tr_xhr_report(&t, &x);
+    CHECK(strstr(buf, "reset requested: CMD_NO_VERDICT") != NULL,
+          "a record's line");
+    CHECK(strstr(buf, "about 5 s ago (the latch's)") != NULL,
+          "50 ticks at 100 ms, the latch's marked");
+    CHECK(strstr(buf, "requests by reason: CMD_NO_VERDICT 3, EP0_LATE 1") !=
+              NULL, "the counts");
+    /* Old tool, new driver: the version 3 query is untouched. */
+    CHECK_EQ(XHQ_IOCTL, 0x00222920UL, "the query's code unchanged");
+}
+
+/* Task 50.32 (design record 25 section 27 item 4): the lifetime part, its
+ * flag and every buffer tier, an earlier reader and the new one, and the
+ * identity's rules. */
+static void test_lifetime(void)
+{
+    UCHAR out[XHR_LIFE_BYTES + 8];
+    ULONG head[XHR_HDR_BYTES / 4 - 3];
+    ULONG life[XHR_LIFE_WORDS];
+    ULONG info;
+    ULONG room;
+    ULONG rc;
+    ULONG i;
+    TR_XHR x;
+    TR_XHR y;
+
+    CHECK_EQ(XHR_F_LIFETIME, 0x10UL, "the flag (0x08 is record 38's)");
+    CHECK((XHR_F_LIFETIME & (XHR_F_STARTED | XHR_F_ISOLATION | XHR_F_RETRY |
+                             XHR_F_RETRY_NEVER)) == 0,
+          "beside the started, isolation, retry and never flags");
+    CHECK_EQ(XHR_O_LIFE_TIME_LO, 312, "image time low at 312");
+    CHECK_EQ(XHR_O_LIFE_TIME_HI, 316, "image time high at 316");
+    CHECK_EQ(XHR_O_LIFE_START, 320, "the start number at 320");
+    CHECK_EQ(XHR_LIFE_BYTES, 324, "the whole answer 324 bytes");
+    CHECK_EQ(XHR_O_ISO_VALUE, 32, "the isolation words left at 32");
+    CHECK_EQ(XHR_O_RETRY_VALUE, 44, "the retry words left at 44");
+    for (i = 0; i < sizeof(head) / 4; i++) {
+        head[i] = 0;
+    }
+    head[(XHR_O_FLAGS - XHR_O_FLAGS) / 4] = XHR_F_STARTED | XHR_F_LIFETIME;
+    life[0] = 0x89ABCDEFUL;
+    life[1] = 0x01D9C000UL;
+    life[2] = 7;
+    /* Every tier, byte by byte across the boundaries. */
+    for (room = 0; room <= XHR_LIFE_BYTES + 4; room++) {
+        for (i = 0; i < sizeof(out); i++) {
+            out[i] = 0xA5;
+        }
+        rc = XhciRecoveryAnswer(out, room, head, NULL, NULL, life, &info);
+        if (room < XHR_HDR_BYTES) {
+            CHECK(rc == XHQ_ANS_TOO_SMALL && info == 0 && out[0] == 0xA5,
+                  "below 64: nothing");
+        } else if (room < XHR_MAX_BYTES) {
+            CHECK(rc == XHQ_ANS_HEADER && info == XHR_HDR_BYTES,
+                  "64 to 311: the header alone");
+            CHECK(get32(out, XHR_O_BYTES) == XHR_LIFE_BYTES,
+                  "... the size to ask for, 324");
+            CHECK((get32(out, XHR_O_FLAGS) & XHR_F_LIFETIME) == 0,
+                  "... the flag clear");
+            CHECK(out[XHR_HDR_BYTES] == 0xA5, "... nothing past the header");
+        } else if (room < XHR_LIFE_BYTES) {
+            CHECK(rc == XHQ_ANS_WHOLE && info == XHR_MAX_BYTES,
+                  "312 to 323: the earlier whole answer");
+            CHECK(get32(out, XHR_O_BYTES) == XHR_MAX_BYTES, "... 312");
+            CHECK((get32(out, XHR_O_FLAGS) & XHR_F_LIFETIME) == 0,
+                  "... the flag clear");
+            CHECK(out[XHR_MAX_BYTES] == 0xA5, "... no tail");
+        } else {
+            CHECK(rc == XHQ_ANS_WHOLE && info == XHR_LIFE_BYTES,
+                  "324 and above: the whole answer");
+            CHECK(get32(out, XHR_O_BYTES) == XHR_LIFE_BYTES, "... 324");
+            CHECK((get32(out, XHR_O_FLAGS) & XHR_F_LIFETIME) != 0,
+                  "... the flag set");
+            CHECK(get32(out, XHR_O_LIFE_TIME_LO) == life[0] &&
+                      get32(out, XHR_O_LIFE_TIME_HI) == life[1] &&
+                      get32(out, XHR_O_LIFE_START) == life[2],
+                  "... the three words as given");
+            CHECK(out[XHR_LIFE_BYTES] == 0xA5, "... nothing past 324");
+        }
+    }
+    /* An answer without the part (an earlier build's) at every size. */
+    rc = XhciRecoveryAnswer(out, sizeof(out), head, NULL, NULL, NULL, &info);
+    CHECK(rc == XHQ_ANS_WHOLE && info == XHR_MAX_BYTES,
+          "no part: the earlier answer however large the buffer");
+    CHECK((get32(out, XHR_O_FLAGS) & XHR_F_LIFETIME) == 0,
+          "... the caller's flag never passed through");
+    rc = XhciRecoveryAnswer(out, XHR_HDR_BYTES, head, NULL, NULL, NULL, &info);
+    CHECK(get32(out, XHR_O_BYTES) == XHR_MAX_BYTES,
+          "no part: the header asks for 312");
+    /* The new reader: of the whole answer, of an earlier one, of an
+     * earlier-sized buffer, of a flag without its tail. */
+    rc = XhciRecoveryAnswer(out, sizeof(out), head, NULL, NULL, life, &info);
+    CHECK_EQ(tr_xhr_parse(out, info, &x), 1, "the new answer parses");
+    CHECK(x.LifeOk && x.LifeStart == 7 && x.LifeTimeLo == life[0] &&
+              x.LifeTimeHi == life[1], "... the part read");
+    CHECK(tr_xhr_life_valid(&x), "... a valid sample");
+    CHECK_EQ(tr_xhr_parse(out, XHR_MAX_BYTES, &x), 1,
+             "an earlier reader's 312 bytes of it parse");
+    CHECK(!x.LifeOk, "... with no part");
+    rc = XhciRecoveryAnswer(out, XHR_MAX_BYTES, head, NULL, NULL, life, &info);
+    CHECK_EQ(tr_xhr_parse(out, info, &x), 1,
+             "the answer to a 312-byte buffer parses (the minimum kept)");
+    CHECK(!x.LifeOk && !tr_xhr_life_valid(&x), "... no part, no sample");
+    rc = XhciRecoveryAnswer(out, sizeof(out), head, NULL, NULL, NULL, &info);
+    CHECK_EQ(tr_xhr_parse(out, info, &x), 1, "an earlier driver's answer");
+    CHECK(!x.LifeOk, "... no part");
+    out[XHR_O_FLAGS] = (UCHAR)(out[XHR_O_FLAGS] | XHR_F_LIFETIME);
+    CHECK_EQ(tr_xhr_parse(out, info, &x), 1, "a flag with no tail parses");
+    CHECK(!x.LifeOk, "... but is no lifetime sample");
+    /* The identity: different words are different starts; equal words do
+     * not prove one; number 0 is no start begun. */
+    rc = XhciRecoveryAnswer(out, sizeof(out), head, NULL, NULL, life, &info);
+    (void)tr_xhr_parse(out, info, &x);
+    life[2] = 8;
+    rc = XhciRecoveryAnswer(out, sizeof(out), head, NULL, NULL, life, &info);
+    (void)tr_xhr_parse(out, info, &y);
+    CHECK(!tr_xhr_life_same(&x, &y), "another number: another start");
+    life[2] = 7;
+    life[0] ^= 1;
+    rc = XhciRecoveryAnswer(out, sizeof(out), head, NULL, NULL, life, &info);
+    (void)tr_xhr_parse(out, info, &y);
+    CHECK(!tr_xhr_life_same(&x, &y), "another image time: another start");
+    life[0] ^= 1;
+    rc = XhciRecoveryAnswer(out, sizeof(out), head, NULL, NULL, life, &info);
+    (void)tr_xhr_parse(out, info, &y);
+    CHECK(tr_xhr_life_same(&x, &y), "equal words read as equal");
+    life[2] = 0;
+    rc = XhciRecoveryAnswer(out, sizeof(out), head, NULL, NULL, life, &info);
+    (void)tr_xhr_parse(out, info, &y);
+    CHECK(y.LifeOk && !tr_xhr_life_valid(&y),
+          "number 0: served, but no start began");
+    /* Not started: the part is still served. */
+    head[(XHR_O_FLAGS - XHR_O_FLAGS) / 4] = 0;
+    life[2] = 9;
+    rc = XhciRecoveryAnswer(out, sizeof(out), head, NULL, NULL, life, &info);
+    CHECK_EQ(tr_xhr_parse(out, info, &y), 1, "a stopped controller's answer");
+    CHECK((y.Flags & XHR_F_STARTED) == 0 && tr_xhr_life_valid(&y),
+          "... not started, its last start's number served");
+}
+
+/* Task 50.39: the recovery status as the details pane shows it, at its
+ * widest - every reason counted at its largest, four records with the
+ * longest words, places and numbers, a 126-character name, isolation and a
+ * pending try - fitted within 79 columns with every word kept. */
+static char fitRaw[16384];
+static char fitOut[16384];
+static char fitA[16384];
+static char fitB[16384];
+
+static void fit_squeeze(const char *in, char *out, size_t cap)
+{
+    size_t n = 0;
+    int gap = 0;
+
+    for (; *in != '\0' && n + 2 < cap; in++) {
+        if (*in == ' ' || *in == '\r' || *in == '\n') {
+            gap = n > 0;
+            continue;
+        }
+        if (gap) {
+            out[n++] = ' ';
+            gap = 0;
+        }
+        out[n++] = *in;
+    }
+    out[n] = '\0';
+}
+
+static int fit_widest(const char *s)
+{
+    int w = 0;
+    int c = 0;
+
+    for (; *s != '\0'; s++) {
+        if (*s == '\r') {
+            continue;
+        }
+        if (*s == '\n') {
+            c = 0;
+            continue;
+        }
+        if (++c > w) {
+            w = c;
+        }
+    }
+    return w;
+}
+
+static void test_recovery_width(void)
+{
+    static TR_XHR x;
+    char name[127];
+    TR_TEXT t;
+    TR_U32 i;
+    int k;
+
+    for (k = 0; k < 126; k++) {
+        name[k] = (char)(k % 9 == 8 ? ' ' : 'N');
+    }
+    name[126] = '\0';
+    memset(&x, 0, sizeof(x));
+    x.Flags = XHR_F_STARTED | XHR_F_ISOLATION | XHR_F_RETRY;
+    x.Terminal = 2;
+    x.Records = TR_XHR_RECS;
+    x.Involved = TR_XHR_RECS;
+    x.Clock = 0xFFFFFFFFUL;
+    x.IsoValue = 0xFFFFFFFEUL;
+    x.IsoListed = 1;
+    x.IsoApplies = 1;
+    x.RetryValue = 600;
+    x.RetryNextS = TR_XHR_NEXT_S_MAX;
+    for (i = 0; i < TR_XHR_RECS; i++) {
+        x.Rec[i][0] = 1;                /* the longest words */
+        x.Rec[i][1] = 0xFFFFFFFFUL;
+        x.Rec[i][2] = 0xFFFFFFFFUL;
+        x.Rec[i][3] = 0xFFFFFFFFUL;
+        x.Rec[i][4] = 0xFFFFFUL;
+        x.Rec[i][5] = 0xFFFFFFFFUL;
+        x.Rec[i][6] = 0;
+        x.Rec[i][8] = XHR_RF_LATCH;
+    }
+    for (i = 0; i < TR_XHR_COUNTS; i++) {
+        x.Counts[i] = 0xFFFFFFFFUL;
+    }
+    tr_text_init(&t, fitRaw, sizeof(fitRaw));
+    CHECK(tr_xhr_details(&t, &x, 1, name, NULL) > 0, "widest: the status said");
+    tr_put(&t, "  Recovery requests (newest first):\n");
+    tr_xhr_report(&t, &x);
+    CHECK(!t.Overflow && fit_widest(fitRaw) > 79,
+          "widest: past 79 as written");
+    tr_text_init(&t, fitOut, sizeof(fitOut));
+    tr_fit_text(&t, fitRaw, TR_TEXT_COLS);
+    CHECK(!t.Overflow && fit_widest(fitOut) <= 79, "widest: fitted within 79");
+    fit_squeeze(fitRaw, fitA, sizeof(fitA));
+    fit_squeeze(fitOut, fitB, sizeof(fitB));
+    CHECK(strcmp(fitA, fitB) == 0, "widest: every word kept, in order");
+    CHECK(strstr(fitOut, "requests by reason: CMD_KEPT 4294967295,") != NULL &&
+          strstr(fitOut, "XFER_FATAL 4294967295") != NULL,
+          "widest: every reason counted");
+}
+
 int main(void)
 {
     test_layout();
+    test_recovery_width();
     test_holds();
+    test_recovery();
+    test_lifetime();
+    test_holds_request();
     test_v2();
     test_v3();
     test_failed();

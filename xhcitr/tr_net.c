@@ -394,14 +394,20 @@ static void qn_uuid(const unsigned char *l, char *out, size_t cap)
 }
 
 /* One details line, "<label><head><q><text><q>", within 79 columns: a
- * text too long for the line goes on the next one, indented 4. */
+ * text too long for the line goes on the next one, indented 4. whole
+ * (the window's form): the line holding the text begins with
+ * TR_FIT_WHOLE, so that the window and Save Report never break the
+ * text (task 50.39). */
 static void qn_line(TR_TEXT *t, const char *label, const char *head,
-                    const char *text, const char *q)
+                    const char *text, const char *q, int whole)
 {
+    const char *m = whole ? "\001" : "";
+
     if (strlen(label) + strlen(head) + strlen(text) + 2 * strlen(q) <= 79) {
-        tr_printf(t, "%s%s%s%s%s\n", label, head, q, text, q);
+        tr_printf(t, "%s%s%s%s%s%s\n", m, label, head, q, text, q);
     } else {
-        tr_printf(t, "%s%s\n    %s%s%s\n", label, head, q, text, q);
+        tr_printf(t, "%s%s\n%s    %s%s%s\n", label, head, m, q, text,
+                  q);
     }
 }
 
@@ -432,18 +438,21 @@ static void qn_link_text(TR_TEXT *t, const unsigned char *l, int pub)
     (void)tr_qnet_kind(l, kind, sizeof(kind), name, sizeof(name));
     if (name[0] != '\0') {
         qn_line(t, "  Other computer:       ", "",
-                pub ? "(its name is not included in the snapshot)" : name, "");
+                pub ? "(its name is not included in the snapshot)" : name, "",
+                !pub);
     }
     tr_printf(t, "  Kind:                 %s\n", kind);
     if (flags & CM_QN_LF_BLOCK) {
         qn_text(l, 0, text, sizeof(text));
         tr_sprintf(buf, sizeof(buf), "%04lX ",
                    (unsigned long)qn32(l, CM_QN_L_VENDOR_ID));
-        qn_line(t, "  Its vendor:           ", buf, pub ? "..." : text, "\"");
+        qn_line(t, "  Its vendor:           ", buf, pub ? "..." : text, "\"",
+                !pub);
         qn_text(l, 1, text, sizeof(text));
         tr_sprintf(buf, sizeof(buf), "%04lX ",
                    (unsigned long)qn32(l, CM_QN_L_DEVICE_ID));
-        qn_line(t, "  Its device:           ", buf, pub ? "..." : text, "\"");
+        qn_line(t, "  Its device:           ", buf, pub ? "..." : text, "\"",
+                !pub);
         tr_printf(t, "  Its revision:         %08lX\n",
                   (unsigned long)qn32(l, CM_QN_L_DEVICE_REV));
     }

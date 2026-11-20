@@ -1080,6 +1080,34 @@ static void test_hub_let_go(void)
     CHECK(!XhciEnumAnswerCarries(18, 17, 0), "another hub's child");
 }
 
+/* MEBOOTDROP.1 (design record 17 section 4.13.10): a gone PDO a
+ * containment dropped is carried while PnP holds it stopped. */
+static void test_stop_carry(void)
+{
+    ULONG m;
+    ULONG s;
+    ULONG r;
+    ULONG x;
+    ULONG want;
+
+    CHECK(XhciEnumStopCarry(1, 1, 0, 0), "marked, stopped: carried");
+    CHECK(!XhciEnumStopCarry(0, 1, 0, 0), "not marked: an unplug, omitted");
+    CHECK(!XhciEnumStopCarry(1, 0, 0, 0), "still started: omitted");
+    CHECK(!XhciEnumStopCarry(1, 1, 1, 0), "removed: omitted");
+    CHECK(!XhciEnumStopCarry(1, 1, 0, 1), "missing already: never back");
+    for (m = 0; m < 2; m++) {
+        for (s = 0; s < 2; s++) {
+            for (r = 0; r < 2; r++) {
+                for (x = 0; x < 2; x++) {
+                    want = (m && s && !r && !x) ? 1UL : 0UL;
+                    CHECK_EQ(XhciEnumStopCarry(m, s, r, x), want,
+                             "every input");
+                }
+            }
+        }
+    }
+}
+
 /* Task 35.3: the root port's enumeration notes, each packing and the
  * budget. The E460's port 13 of 35.0 is the worked case: PORTSC 00001203,
  * speed ID 4 unlisted on a USB 3 table, decoded by the fallback. */
@@ -1553,8 +1581,236 @@ static void test_resume_keep(void)
              XHCI_RKEEP_WHY_FAULTED, "the fault is the first reason");
 }
 
+/* Task 50.30 step 3 (design record 17 section 4.15.4): the unanswered
+ * cause and its one retry. */
+static void test_unanswered(void)
+{
+    XHCI_ENUM_PORT p;
+
+    memset(&p, 0, sizeof(p));
+    p.State = XHCI_ENUM_ADDRESS;
+    CHECK_EQ(XhciEnumUnanswered(&p), 0, "not failed: nothing");
+    CHECK_EQ(p.FailCause, XHCI_ENUM_FAIL_NONE, "cause untouched");
+    p.State = XHCI_ENUM_FAILED;
+    p.FailCause = XHCI_ENUM_FAIL_ADDRESS;
+    CHECK_EQ(XhciEnumUnanswered(&p), 1, "failed: unanswered");
+    CHECK_EQ(p.FailCause, XHCI_ENUM_FAIL_UNANSWERED, "the new cause");
+    CHECK_EQ(XhciEnumUnanswered(NULL), 0, "no port");
+    CHECK_EQ(XhciEnumRetriesFor(XHCI_ENUM_FAIL_UNANSWERED, 2), 1,
+             "a hub port's three attempts capped at two");
+    CHECK_EQ(XhciEnumRetriesFor(XHCI_ENUM_FAIL_UNANSWERED, XHCI_ENUM_RETRIES),
+             XHCI_ENUM_RETRIES, "a root port's one retry");
+    CHECK_EQ(XhciEnumRetriesFor(XHCI_ENUM_FAIL_ADDRESS, 2), 2,
+             "an answered failure keeps its attempts");
+    CHECK_EQ(XhciEnumRetriesFor(XHCI_ENUM_FAIL_UNANSWERED, 0), 0,
+             "none stays none");
+}
+
+/* Design record 17 section 4.15.16 B: an Enable Slot refused at admission
+ * defers the enumeration - cause DEFERRED, no retry - and only a port that
+ * still owns that failure is resumed. */
+static void test_deferred(void)
+{
+    XHCI_ENUM_PORT p;
+    XHCI_ENUM_PORT q;
+    XHCI_ENUM_ACTION a;
+    XHCI_ENUM_EVENT e;
+
+    memset(&p, 0, sizeof(p));
+    XhciEnumReset(&p);
+    step(&p, ev(XHCI_ENUM_EV_CONNECT, 1), &a);
+    step(&p, ev(XHCI_ENUM_EV_DEBOUNCED, 1), &a);
+    e = ev(XHCI_ENUM_EV_RESET_DONE, 1);
+    e.Speed = XHCI_ENUM_SPEED_HIGH;
+    step(&p, e, &a);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_ENABLE_SLOT, "asks for a slot");
+    e = ev(XHCI_ENUM_EV_COMMAND_DONE, 0);
+    e.Value = XHCI_ENUM_SLOT_NOT_ADMITTED;
+    CHECK_EQ(step(&p, e, &a), XHCI_ENUM_FAILED, "not admitted: Failed");
+    CHECK_EQ(p.FailCause, XHCI_ENUM_FAIL_DEFERRED, "cause DEFERRED");
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_NONE, "no slot to give back");
+    CHECK_EQ(XhciEnumRetriesFor(XHCI_ENUM_FAIL_DEFERRED, XHCI_ENUM_RETRIES), 0,
+             "no retry at a root port");
+    CHECK_EQ(XhciEnumRetriesFor(XHCI_ENUM_FAIL_DEFERRED, 2), 0,
+             "nor at a hub's port");
+    XhciEnumRetryUpTo(&p, XhciEnumRetriesFor(p.FailCause, 1), &a);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_NONE, "the retry asks for nothing");
+    CHECK_EQ(p.Retries, 0, "no retry spent");
+
+    CHECK_EQ(XhciEnumDeferResumable(&p, 0, 7, 7, 1), 1, "still its own: resume");
+    CHECK_EQ(XhciEnumDeferResumable(&p, 1, 7, 7, 1), 0, "a device record: drop");
+    CHECK_EQ(XhciEnumDeferResumable(&p, 0, 8, 7, 1), 0,
+             "a connect or disconnect since: drop");
+    CHECK_EQ(XhciEnumDeferResumable(&p, 0, 7, 7, 0), 0,
+             "its place departing: drop");
+    CHECK_EQ(XhciEnumDeferResumable(NULL, 0, 7, 7, 1), 0, "no port");
+    q = p;
+    q.SlotId = 3;
+    CHECK_EQ(XhciEnumDeferResumable(&q, 0, 7, 7, 1), 0, "a slot: drop");
+    q = p;
+    q.PdoExists = 1;
+    CHECK_EQ(XhciEnumDeferResumable(&q, 0, 7, 7, 1), 0, "a PDO: drop");
+    q = p;
+    q.FailCause = XHCI_ENUM_FAIL_UNANSWERED;
+    CHECK_EQ(XhciEnumDeferResumable(&q, 0, 7, 7, 1), 0,
+             "another cause since: drop");
+    q = p;
+    q.State = XHCI_ENUM_DEBOUNCE;
+    CHECK_EQ(XhciEnumDeferResumable(&q, 0, 7, 7, 1), 0,
+             "no longer Failed: drop");
+    XhciEnumReset(&p);
+    CHECK_EQ(p.State, XHCI_ENUM_EMPTY, "resumed: Empty");
+    CHECK_EQ(XhciEnumDeferResumable(&p, 0, 7, 7, 1), 0, "Empty: nothing owed");
+    step(&p, ev(XHCI_ENUM_EV_CONNECT, 1), &a);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_DEBOUNCE, "Empty and a connect: enumerates");
+
+    /* The controller's own No Slots Available is unchanged. */
+    XhciEnumReset(&p);
+    step(&p, ev(XHCI_ENUM_EV_CONNECT, 1), &a);
+    step(&p, ev(XHCI_ENUM_EV_DEBOUNCED, 1), &a);
+    e = ev(XHCI_ENUM_EV_RESET_DONE, 1);
+    e.Speed = XHCI_ENUM_SPEED_FULL;
+    step(&p, e, &a);
+    step(&p, ev(XHCI_ENUM_EV_COMMAND_DONE, 0), &a);
+    CHECK_EQ(p.FailCause, XHCI_ENUM_FAIL_NO_SLOT, "no slot: NO_SLOT");
+    CHECK_EQ(XhciEnumDeferResumable(&p, 0, 7, 7, 1), 0, "NO_SLOT is not owed");
+    XhciEnumRetryUpTo(&p, XhciEnumRetriesFor(p.FailCause, XHCI_ENUM_RETRIES),
+                      &a);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_RESET, "NO_SLOT keeps its retry");
+}
+
+/* A port driven to the deferred failure, as hcdRun leaves it. */
+static void defer_port(PXHCI_ENUM_PORT p)
+{
+    XHCI_ENUM_ACTION a;
+    XHCI_ENUM_EVENT e;
+
+    memset(p, 0, sizeof(*p));
+    XhciEnumReset(p);
+    step(p, ev(XHCI_ENUM_EV_CONNECT, 1), &a);
+    step(p, ev(XHCI_ENUM_EV_DEBOUNCED, 1), &a);
+    e = ev(XHCI_ENUM_EV_RESET_DONE, 1);
+    e.Speed = XHCI_ENUM_SPEED_HIGH;
+    step(p, e, &a);
+    e = ev(XHCI_ENUM_EV_COMMAND_DONE, 0);
+    e.Value = XHCI_ENUM_SLOT_NOT_ADMITTED;
+    step(p, e, &a);
+}
+
+/* Design record 17 section 4.15.16 B: the obligation's protocol, the
+ * functions hcd_enum.c's hcdDeferTake, hcdDeferDropLocked, hcdDeferService,
+ * HcdEnumLeftHcrstLocked and HcdEnumInit call: taking and replacing, the
+ * idempotent drop, admission closed leaving everything standing, the
+ * service's resume, drop and stale decisions, and an HCRST's generation. */
+static void test_defer_obligation(void)
+{
+    XHCI_ENUM_DEFERS c;
+    XHCI_ENUM_DEFER da;
+    XHCI_ENUM_DEFER db;
+    XHCI_ENUM_DEFER dc;
+    XHCI_ENUM_PORT pa;
+    XHCI_ENUM_PORT pb;
+    XHCI_ENUM_PORT pc;
+
+    memset(&c, 0, sizeof(c));
+    memset(&da, 0, sizeof(da));
+    memset(&db, 0, sizeof(db));
+    memset(&dc, 0, sizeof(dc));
+    defer_port(&pa);
+    defer_port(&pb);
+    defer_port(&pc);
+    CHECK_EQ(pa.FailCause, XHCI_ENUM_FAIL_DEFERRED, "pa deferred");
+
+    /* The start: nothing owed. */
+    XhciEnumDefersRenew(&c);
+    CHECK_EQ(c.Count, 0, "start: nothing owed");
+    CHECK_EQ(XhciEnumDefersOpen(&c, 1, 0, 0, 0, 0, 1), 0,
+             "nothing owed: no service");
+
+    /* Taken, and replaced. */
+    XhciEnumDeferTake(&c, &da, 5);
+    XhciEnumDeferTake(&c, &db, 9);
+    CHECK_EQ(c.Count, 2, "two ports owed");
+    CHECK_EQ(XhciEnumDeferCurrent(&c, &da), 1, "pa's flag current");
+    XhciEnumDeferTake(&c, &da, 6);
+    CHECK_EQ(c.Count, 2, "a new deferral of the same port replaces");
+    CHECK_EQ(da.Conn, 6, "with the new connect generation");
+
+    /* Admission closed: nothing served, everything stands. */
+    CHECK_EQ(XhciEnumDefersOpen(&c, 0, 0, 0, 0, 0, 1), 0, "a debt: closed");
+    CHECK_EQ(XhciEnumDefersOpen(&c, 1, 1, 0, 0, 0, 1), 0,
+             "the Enable Slot held: closed");
+    CHECK_EQ(XhciEnumDefersOpen(&c, 1, 0, 1, 0, 0, 1), 0, "failed: closed");
+    CHECK_EQ(XhciEnumDefersOpen(&c, 1, 0, 0, 1, 0, 1), 0, "halted: closed");
+    CHECK_EQ(XhciEnumDefersOpen(&c, 1, 0, 0, 0, 1, 1), 0,
+             "the thread stopping: closed");
+    CHECK_EQ(XhciEnumDefersOpen(&c, 1, 0, 0, 0, 0, 0), 0,
+             "the root hub not started: closed");
+    CHECK_EQ(c.Count, 2, "closed: the count stands");
+    CHECK_EQ(da.Owed + db.Owed, 2, "closed: the flags stand");
+    CHECK_EQ(XhciEnumDefersOpen(&c, 1, 0, 0, 0, 0, 1), 1, "open: served");
+
+    /* The idempotent drop. */
+    CHECK_EQ(XhciEnumDeferDrop(&c, &db), 1, "pb's flag dropped");
+    CHECK_EQ(c.Count, 1, "counted down once");
+    CHECK_EQ(XhciEnumDeferDrop(&c, &db), 0, "dropped again: nothing");
+    CHECK_EQ(c.Count, 1, "not counted down twice");
+
+    /* The service: resume while still its own, else drop. */
+    CHECK_EQ(XhciEnumDeferServe(&c, &da, &pa, 0, 6, 1), XHCI_ENUM_DEFER_RESUME,
+             "pa still its own: resume");
+    CHECK_EQ(da.Owed, 0, "its flag cleared");
+    CHECK_EQ(c.Count, 0, "and counted down");
+    CHECK_EQ(XhciEnumDeferServe(&c, &da, &pa, 0, 6, 1), XHCI_ENUM_DEFER_NONE,
+             "served once only");
+    XhciEnumDeferTake(&c, &db, 9);
+    CHECK_EQ(XhciEnumDeferServe(&c, &db, &pb, 0, 10, 1), XHCI_ENUM_DEFER_DROP,
+             "a connect generation moved: drop");
+    CHECK_EQ(c.Count, 0, "dropped and counted down");
+    XhciEnumDeferTake(&c, &db, 9);
+    CHECK_EQ(XhciEnumDeferServe(&c, &db, &pb, 0, 9, 0), XHCI_ENUM_DEFER_DROP,
+             "its place gone: drop");
+    XhciEnumDeferTake(&c, &db, 9);
+    CHECK_EQ(XhciEnumDeferServe(&c, &db, &pb, 1, 9, 1), XHCI_ENUM_DEFER_DROP,
+             "a device record: drop");
+    CHECK_EQ(c.Count, 0, "every drop counted down once");
+
+    /* An HCRST ends every obligation by its generation, walking no port. */
+    XhciEnumDeferTake(&c, &da, 6);
+    XhciEnumDeferTake(&c, &db, 9);
+    XhciEnumDefersRenew(&c);
+    CHECK_EQ(c.Count, 0, "HCRST: nothing owed");
+    CHECK_EQ(XhciEnumDeferCurrent(&c, &da), 0, "pa's flag stale");
+    CHECK_EQ(da.Owed, 1, "though not walked");
+    CHECK_EQ(XhciEnumDefersOpen(&c, 1, 0, 0, 0, 0, 1), 0,
+             "HCRST: no service owed");
+    XhciEnumDeferTake(&c, &dc, 3);
+    CHECK_EQ(c.Count, 1, "a deferral after the HCRST");
+    CHECK_EQ(XhciEnumDeferDrop(&c, &da), 0,
+             "a stale flag dropped: not current");
+    CHECK_EQ(c.Count, 1, "the new generation's count untouched");
+    CHECK_EQ(da.Owed, 0, "the stale flag cleared");
+    CHECK_EQ(XhciEnumDeferServe(&c, &db, &pb, 0, 9, 1), XHCI_ENUM_DEFER_STALE,
+             "a stale flag served: STALE");
+    CHECK_EQ(db.Owed, 0, "cleared");
+    CHECK_EQ(c.Count, 1, "the new generation's count untouched");
+    CHECK_EQ(XhciEnumDeferServe(&c, &dc, &pc, 0, 3, 1), XHCI_ENUM_DEFER_RESUME,
+             "the new generation's port resumed");
+    CHECK_EQ(c.Count, 0, "nothing owed");
+
+    /* A stale flag replaced by a new deferral counts once. */
+    XhciEnumDeferTake(&c, &da, 6);
+    XhciEnumDefersRenew(&c);
+    XhciEnumDeferTake(&c, &da, 7);
+    CHECK_EQ(c.Count, 1, "a stale flag replaced: counted once");
+    CHECK_EQ(XhciEnumDeferCurrent(&c, &da), 1, "and current");
+}
+
 int main(void)
 {
+    test_unanswered();
+    test_deferred();
+    test_defer_obligation();
     test_link_keep();
     test_keep_serial();
     test_resume_keep_bot();
@@ -1576,6 +1832,7 @@ int main(void)
     test_abandoned();
     test_settle();
     test_hub_let_go();
+    test_stop_carry();
     test_notes();
     test_busy();
 

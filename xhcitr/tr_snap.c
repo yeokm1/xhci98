@@ -160,6 +160,8 @@ void __cpuid(int info[4], int leaf);
 #include "tr_log.h"
 #include "tr_net.h"
 #include "tr_cmsw.h"
+#include "tr_reg.h"
+#include "tr_pswt.h"
 
 #define XHCISNAP_VERSION XHCI_VER_STR
 #define XHCISNAP_BUILT   __DATE__ " " __TIME__
@@ -272,6 +274,103 @@ static void say_hang(const char *indent, const char *hang, const char *fmt, ...)
     buf[sizeof(buf) - 1] = '\0';
 
     put_wrapped_to(stdout, indent, hang, buf);
+}
+
+/*
+ * The same layout for any report line (task 50.30). Each line of `text`
+ * (each ended by "\n") is printed whole, as before, when it fits
+ * XHCISNAP_COLS; a wider one is broken and wrapped under its first value,
+ * `hang` columns in. It is broken where its own text marked a clause's end
+ * (FIT_BREAK, written by comp_fit for the space after a ',', ';' or '.' of
+ * its format, never inside a value), each line taking as many clauses as
+ * fit; where no clause's end fits - a clause wider than a line, or a line
+ * with no mark - it is broken at the last space that fits, and the rest
+ * runs on. A word wider than a line is left to put_wrapped_to, which
+ * prints it whole. Only spaces change: the words, their order and their
+ * punctuation are kept. `text` is at most 1023 bytes, as its callers
+ * format it.
+ */
+#define FIT_BREAK '\001'
+
+static void fit_to(FILE *dest, unsigned hang, const char *text)
+{
+    char out[1024];
+    char pad[32];
+    const char *line;
+    const char *end;
+    const char *p;
+    const char *q;
+    const char *best;
+    size_t o;
+    size_t lead;
+    size_t k;
+
+    if (hang > sizeof(pad) - 1) {
+        hang = sizeof(pad) - 1;
+    }
+    memset(pad, ' ', hang);
+    pad[hang] = '\0';
+    for (line = text; *line != '\0'; line = (*end == '\n') ? end + 1 : end) {
+        end = strchr(line, '\n');
+        if (end == NULL) {
+            end = line + strlen(line);
+        }
+        o = 0;
+        lead = 0;
+        p = line;
+        while (lead + (size_t)(end - p) > XHCISNAP_COLS) {
+            /* The last clause's end that fits; failing one, the last space
+             * that does, so the rest of a clause too wide for a line runs
+             * on with the next. */
+            best = NULL;
+            for (q = p + 1; q < end && lead + (size_t)(q - p) <=
+                                           XHCISNAP_COLS; q++) {
+                if (*q == FIT_BREAK) {
+                    best = q;
+                }
+            }
+            for (q = p + (XHCISNAP_COLS - lead); best == NULL && q > p;
+                 q--) {
+                if (*q == ' ' || *q == FIT_BREAK) {
+                    best = q;
+                }
+            }
+            if (best == NULL) {
+                break;
+            }
+            memcpy(out + o, p, (size_t)(best - p));
+            o += (size_t)(best - p);
+            out[o++] = '\n';
+            p = best + 1;
+            while (p < end && *p == ' ') {
+                p++;
+            }
+            lead = hang;
+        }
+        memcpy(out + o, p, (size_t)(end - p));
+        o += (size_t)(end - p);
+        out[o] = '\0';
+        for (k = 0; k < o; k++) {
+            if (out[k] == FIT_BREAK) {
+                out[k] = ' ';
+            }
+        }
+        put_wrapped_to(dest, "", pad, out);
+    }
+}
+
+/* The same between words, onto the screen: the console lines a dump or a
+ * snapshot prints as it goes. */
+static void out_fit(unsigned hang, const char *fmt, ...)
+{
+    char buf[1024];
+    va_list ap;
+
+    va_start(ap, fmt);
+    _vsnprintf(buf, sizeof(buf) - 1, fmt, ap);
+    va_end(ap);
+    buf[sizeof(buf) - 1] = '\0';
+    fit_to(stdout, hang, buf);
 }
 
 /* A registry path is one word to the wrapper, and the class key's is 82
@@ -480,7 +579,7 @@ static const unsigned long snap_guid[4] = {
  * a 35.3 driver's, which has none of it.
  */
 #define SNAP_HCD_TOL_HEAD_WORDS     20UL
-#define SNAP_TOL_NAMED_WORDS        46UL    /* the counters this tool names */
+#define SNAP_TOL_NAMED_WORDS        48UL    /* the counters this tool names */
 #define SNAP_TOL_MIN_WORDS          34UL    /* the fewest a driver serves   */
 #define SNAP_TOL_CODES              256UL   /* the histogram, last          */
 #define SNAP_TOL_LOC_MIN_BYTES      28UL    /* six words, then the bytes    */
@@ -515,6 +614,10 @@ static const unsigned long snap_guid[4] = {
 #define SNAP_S_BAD_REGION           0x00000008UL
 #define SNAP_S_PAST_END             0x00000010UL
 #define SNAP_S_NO_MMIO              0x00000020UL
+/* 50.32 (eject wait), design record 13 section 8.8.1: the driver's power
+ * gate was held, so the window was answered from memory: no register, no
+ * routing record, records of a moment of work under way. */
+#define SNAP_S_BUSY                 0x00000040UL
 
 #define SNAP_B_DEBUG                0x00000001UL
 #define SNAP_B_DIAGNOSTIC           0x00000002UL
@@ -613,6 +716,15 @@ static unsigned char snap_buffer[SNAP_BUFFER_BYTES];
 static SYSTEMTIME runTime;
 static int runTimeSet;
 static char lastWindowWhy[160];
+/* 50.32 (eject wait): a window of this dump came back busy (SNAP_S_BUSY),
+ * one of the HCD region did (its live DNCTRL word and routing record then
+ * not read), and the PORTSC window did (PORTSC not read). Set by
+ * take_window, read_hcd and dump_region, cleared at each dump's start: the
+ * gate can come free, or be taken, between windows, so any of the three
+ * may be set without the others. */
+static int snapBusy;
+static int snapHcdBusy;
+static int snapPscBusy;
 
 static void window_why(const char *fmt, unsigned long a, unsigned long b)
 {
@@ -711,20 +823,20 @@ static int take_window(HANDLE device, unsigned long region,
 
     memcpy(header, block, sizeof(SNAP_HEADER));
     if (header->Signature != SNAP_SIGNATURE) {
-        printf("  the reply carries no snapshot signature (%08lX) - the "
-               "driver answered the GUID but not with a snapshot\n",
-               header->Signature);
+        out_fit(2, "  the reply carries no snapshot signature (%08lX) - the "
+                   "driver answered the GUID but not with a snapshot\n",
+                   header->Signature);
         window_why("the reply carried no snapshot signature (%08lX)%.0lu",
                    header->Signature, 0);
         return 0;
     }
     if (header->HeaderBytes != (unsigned long)sizeof(SNAP_HEADER) ||
         header->SchemaVersion != SNAP_SCHEMA) {
-        printf("  schema mismatch: driver says version %lu / %lu-byte header, "
-               "this tool knows version %lu / %u. Rebuild the tool from the "
-               "same tree as the driver.\n",
-               header->SchemaVersion, header->HeaderBytes,
-               SNAP_SCHEMA, (unsigned)sizeof(SNAP_HEADER));
+        out_fit(2, "  schema mismatch: driver says version %lu / %lu-byte "
+                   "header, this tool knows version %lu / %u. Rebuild the "
+                   "tool from the same tree as the driver.\n",
+                   header->SchemaVersion, header->HeaderBytes,
+                   SNAP_SCHEMA, (unsigned)sizeof(SNAP_HEADER));
         window_why("schema mismatch: the driver's is %lu, this tool's %lu; "
                    "use the XHCITR from the driver's own release",
                    header->SchemaVersion, SNAP_SCHEMA);
@@ -737,14 +849,17 @@ static int take_window(HANDLE device, unsigned long region,
     if (header->PayloadBytes > SNAP_PARAM_BYTES - sizeof(SNAP_HEADER) ||
         (unsigned long)returned < UU_PARAMETERS + sizeof(SNAP_HEADER) +
                                       header->PayloadBytes) {
-        printf("  the reply is %lu bytes, short of the %lu-byte payload it "
-               "claims - refusing it\n", (unsigned long)returned,
-               header->PayloadBytes);
+        out_fit(2, "  the reply is %lu bytes, short of the %lu-byte payload "
+                   "it claims - refusing it\n", (unsigned long)returned,
+                   header->PayloadBytes);
         window_why("a reply of %lu bytes, short of its %lu-byte payload",
                    (unsigned long)returned, header->PayloadBytes);
         return 0;
     }
     *payload = block + sizeof(SNAP_HEADER);
+    if ((header->Status & SNAP_S_BUSY) != 0) {
+        snapBusy = 1;
+    }
     return 1;
 }
 
@@ -807,8 +922,8 @@ static void note_clash(const char *name)
         _snprintf(reportClashName, sizeof(reportClashName) - 1, "%s", name);
         reportClashName[sizeof(reportClashName) - 1] = '\0';
     }
-    printf("  *** %s appeared after this run chose its name - another run "
-           "or program\n      made it. It is left as it was.\n", name);
+    out_fit(6, "  *** %s appeared after this run chose its name - another "
+               "run or program made it. It is left as it was.\n", name);
 }
 
 /* A region's temporary file: replaced by -dump, created new by -report. */
@@ -1009,14 +1124,21 @@ static unsigned long dump_region(HANDLE device, unsigned long region,
          * reply; a window of another would land at the wrong place in the
          * file. */
         if (header.Region != region || header.Offset != offset) {
-            printf("  the driver answered region %lu at offset %lu for region "
-                   "%lu at offset %lu -\n  refusing the reply\n",
-                   header.Region, header.Offset, region, offset);
+            out_fit(2, "  the driver answered region %lu at offset %lu for "
+                       "region %lu at offset %lu -\n  refusing the reply\n",
+                       header.Region, header.Offset, region, offset);
             return abandon_region(file, path);
         }
         if ((header.Status & SNAP_S_NO_MMIO) != 0) {
-            printf("  the controller has no usable register mapping, so "
-                   "PORTSC was not read\n");
+            /* 50.32 (eject wait): the busy line is the owner's (accepted
+             * 2026-11-20). */
+            if ((header.Status & SNAP_S_BUSY) != 0) {
+                snapPscBusy = 1;
+            }
+            printf((header.Status & SNAP_S_BUSY) != 0
+                       ? "  the controller was busy, so PORTSC was not read\n"
+                       : "  the controller has no usable register mapping, so "
+                         "PORTSC was not read\n");
             if (!CloseHandle(file)) {
                 printf("  %s could not be closed, error %lu\n", path,
                        (unsigned long)GetLastError());
@@ -1033,9 +1155,10 @@ static unsigned long dump_region(HANDLE device, unsigned long region,
          * that claims more would send WriteFile past the buffer. Refuse it
          * like every other malformed reply rather than trust the header. */
         if (header.PayloadBytes > SNAP_PARAM_BYTES - sizeof(SNAP_HEADER)) {
-            printf("  the driver claims %lu payload bytes in a %lu-byte "
-                   "window - refusing the reply\n", header.PayloadBytes,
-                   (unsigned long)(SNAP_PARAM_BYTES - sizeof(SNAP_HEADER)));
+            out_fit(2, "  the driver claims %lu payload bytes in a %lu-byte "
+                       "window - refusing the reply\n", header.PayloadBytes,
+                       (unsigned long)(SNAP_PARAM_BYTES -
+                                       sizeof(SNAP_HEADER)));
             return abandon_region(file, path);
         }
         /*
@@ -1060,9 +1183,9 @@ static unsigned long dump_region(HANDLE device, unsigned long region,
          */
         if (total > header.RegionBytes ||
             header.PayloadBytes > header.RegionBytes - total) {
-            printf("  the driver has sent %lu bytes of a %lu-byte region and "
-                   "offers %lu more -\n  refusing the reply\n",
-                   total, header.RegionBytes, header.PayloadBytes);
+            out_fit(2, "  the driver has sent %lu bytes of a %lu-byte region "
+                       "and offers %lu more -\n  refusing the reply\n",
+                       total, header.RegionBytes, header.PayloadBytes);
             return abandon_region(file, path);
         }
 
@@ -1092,8 +1215,8 @@ static unsigned long dump_region(HANDLE device, unsigned long region,
             /* Truncated with nothing copied means the window cannot advance;
              * refuse to spin rather than loop forever on a driver that is
              * behaving unexpectedly. */
-            printf("  the driver reports more to come but copied nothing - "
-                   "giving up rather than looping\n");
+            out_fit(2, "  the driver reports more to come but copied nothing "
+                       "- giving up rather than looping\n");
             return abandon_region(file, path);
         }
     }
@@ -1109,9 +1232,9 @@ static unsigned long dump_region(HANDLE device, unsigned long region,
      * whose `RegionBytes` is about to be printed and recorded.
      */
     if (total != last->RegionBytes) {
-        printf("  the driver sent %lu bytes but its last reply calls the "
-               "region %lu bytes -\n  refusing the dump\n",
-               total, last->RegionBytes);
+        out_fit(2, "  the driver sent %lu bytes but its last reply calls the "
+                   "region %lu bytes -\n  refusing the dump\n",
+                   total, last->RegionBytes);
         return abandon_region(file, path);
     }
 
@@ -1198,6 +1321,10 @@ int trSnapTest;
 /* Task 49.35: the device report leaves the Thunderbolt networking section
  * out (-nonet, an all-controllers run's later controllers). */
 static int netOff;
+/* Task 50.29: the device report leaves the USB devices' driver keys out
+ * (-nokeys): Save Report's own run, which lists them under each device,
+ * and an all-controllers run's later controllers. */
+static int keysOff;
 /* Task 49.37: the run leaves the connection managers' state out (-nocm):
  * an all-controllers run's children, whose parent takes it once. */
 static int cmOff;
@@ -1290,6 +1417,110 @@ static void comp(const char *fmt, ...)
     va_end(ap);
 }
 
+/*
+ * A decoded line in two parts, `head` and `tail`, printed as one line, as
+ * before, when it fits XHCISNAP_COLS; when it does not, broken between the
+ * two parts and wrapped under the line's first value (`hang`), the words
+ * and their order kept. Causes 8 and 9 of a root port's enumeration and a
+ * device failed alone behind a hub made such lines (task 50.30).
+ */
+static void comp_split(const char *hang, const char *head, const char *tail)
+{
+    char buf[512];
+
+    _snprintf(buf, sizeof(buf) - 1, "%s %s", head, tail);
+    buf[sizeof(buf) - 1] = '\0';
+    if (strlen(buf) <= XHCISNAP_COLS) {
+        comp("%s\n", buf);
+        return;
+    }
+    _snprintf(buf, sizeof(buf) - 1, "%s\n%s", head, tail);
+    buf[sizeof(buf) - 1] = '\0';
+    put_wrapped_to((companion != NULL) ? companion : stdout, "", hang, buf);
+}
+
+/*
+ * A report line built in parts (task 50.30): cl_add appends to it, its
+ * format's clauses marked for fit_to (FIT_BREAK for the space after a ',',
+ * ';' or '.' of the format, never inside a value); cl_addw appends a part
+ * unmarked (a value in prose, broken between words). cl_end prints what
+ * was built through fit_to, `hang` columns under, into the companion (else
+ * the screen, as `comp`), and empties it. comp_fit and comp_fitw are the
+ * one-part forms. A format too long to mark is appended unmarked; text past
+ * the line's 1023 bytes is dropped.
+ */
+static char clLine[1024];
+static size_t clLen;
+
+static void cl_add_v(int clauses, const char *fmt, va_list ap)
+{
+    char mark[512];
+    size_t i;
+    int n;
+
+    for (i = 0; clauses && fmt[i] != '\0' && i < sizeof(mark) - 1; i++) {
+        mark[i] = (fmt[i] == ' ' && i > 0 &&
+                   (fmt[i - 1] == ',' || fmt[i - 1] == ';' ||
+                    fmt[i - 1] == '.'))
+                      ? FIT_BREAK
+                      : fmt[i];
+    }
+    mark[i] = '\0';
+    if (clLen >= sizeof(clLine) - 1) {
+        return;
+    }
+    n = _vsnprintf(clLine + clLen, sizeof(clLine) - 1 - clLen,
+                   (clauses && fmt[i] == '\0') ? mark : fmt, ap);
+    clLen = (n < 0) ? sizeof(clLine) - 1 : clLen + (size_t)n;
+    clLine[clLen] = '\0';
+}
+
+static void cl_add(const char *fmt, ...)
+{
+    va_list ap;
+
+    va_start(ap, fmt);
+    cl_add_v(1, fmt, ap);
+    va_end(ap);
+}
+
+static void cl_addw(const char *fmt, ...)
+{
+    va_list ap;
+
+    va_start(ap, fmt);
+    cl_add_v(0, fmt, ap);
+    va_end(ap);
+}
+
+static void cl_end(unsigned hang)
+{
+    clLine[clLen] = '\0';
+    fit_to((companion != NULL) ? companion : stdout, hang, clLine);
+    clLen = 0;
+    clLine[0] = '\0';
+}
+
+static void comp_fit(unsigned hang, const char *fmt, ...)
+{
+    va_list ap;
+
+    va_start(ap, fmt);
+    cl_add_v(1, fmt, ap);
+    va_end(ap);
+    cl_end(hang);
+}
+
+static void comp_fitw(unsigned hang, const char *fmt, ...)
+{
+    va_list ap;
+
+    va_start(ap, fmt);
+    cl_add_v(0, fmt, ap);
+    va_end(ap);
+    cl_end(hang);
+}
+
 static const char *mpstatus_text(unsigned long s)
 {
     /* usbport collapses every registry failure to one code, so this says "read
@@ -1322,11 +1553,11 @@ static void write_companion_imod(const SNAP_HEADER *h)
              SNAP_IMOD_DEFAULT);
     } else if (h->ImodRequested < SNAP_IMOD_MIN ||
                h->ImodRequested > SNAP_IMOD_MAX) {
-        comp("        ^ %lu is outside %lu-%lu, so the driver used its "
-             "default, %lu -\n"
-             "          substituted, not clamped.\n",
-             h->ImodRequested, SNAP_IMOD_MIN, SNAP_IMOD_MAX,
-             SNAP_IMOD_DEFAULT);
+        comp_fit(10, "        ^ %lu is outside %lu-%lu, so the driver used "
+                     "its default, %lu -\n          substituted, not "
+                     "clamped.\n",
+                     h->ImodRequested, SNAP_IMOD_MIN, SNAP_IMOD_MAX,
+                     SNAP_IMOD_DEFAULT);
     }
     if (h->ImodReadback != h->ImodInterval) {
         comp("        ^ the register did NOT read back what was written.\n");
@@ -1383,28 +1614,29 @@ static void write_companion_vhub(const SNAP_HEADER *h)
 {
     comp("    XhciVirtualHSHub   %s, value %lu\n",
          mpstatus_text(h->VhubSwitchStatus), h->VhubSwitchValue);
-    comp("      virtual hub      %s\n", vhub_mode_text(h->VhubApplied));
+    comp_fitw(23, "      virtual hub      %s\n",
+                  vhub_mode_text(h->VhubApplied));
     if (h->VhubRefused == SNAP_VHUB_WHY_SWITCH) {
-        comp("        ^ %lu is not 0, 1 or 2, so the driver applied 0 - "
-             "refused, not clamped.\n", h->VhubSwitchValue);
+        comp_fit(10, "        ^ %lu is not 0, 1 or 2, so the driver applied 0 "
+                     "- refused, not clamped.\n", h->VhubSwitchValue);
     }
     if (h->VhubVidResult == 0 && h->VhubPidResult == 0) {
         return;
     }
-    comp("    XhciVirtualHSHubVid %s, %s%s",
-         mpstatus_text(h->VhubVidStatus), vhub_id_text(h->VhubVidResult),
-         vhub_encoding_text(h->VhubVidEncoding));
+    cl_add("    XhciVirtualHSHubVid %s, %s%s",
+           mpstatus_text(h->VhubVidStatus), vhub_id_text(h->VhubVidResult),
+           vhub_encoding_text(h->VhubVidEncoding));
     if (h->VhubVidResult == 1) {
-        comp(", %04lX", h->VhubVid);
+        cl_add(", %04lX", h->VhubVid);
     }
-    comp("\n");
-    comp("    XhciVirtualHSHubPid %s, %s%s",
-         mpstatus_text(h->VhubPidStatus), vhub_id_text(h->VhubPidResult),
-         vhub_encoding_text(h->VhubPidEncoding));
+    cl_end(24);
+    cl_add("    XhciVirtualHSHubPid %s, %s%s",
+           mpstatus_text(h->VhubPidStatus), vhub_id_text(h->VhubPidResult),
+           vhub_encoding_text(h->VhubPidEncoding));
     if (h->VhubPidResult == 1) {
-        comp(", %04lX", h->VhubPid);
+        cl_add(", %04lX", h->VhubPid);
     }
-    comp("\n");
+    cl_end(24);
     if (h->VhubRefused == SNAP_VHUB_WHY_VID ||
         h->VhubRefused == SNAP_VHUB_WHY_PID) {
         comp("        ^ the %s id failed, so the virtual hub is off for this "
@@ -2544,10 +2776,10 @@ static void write_companion_header(const SNAP_HEADER *h)
          * cannot happen is exactly the kind of claim a later change makes
          * reachable without anyone noticing.
          */
-        comp("    *** the level read was REFUSED, not clamped: it is outside "
-             "0-4, so the\n"
-             "        driver fell back to its default. A dump never reports a "
-             "tier nobody asked for.\n");
+        comp_fit(8, "    *** the level read was REFUSED, not clamped: it is "
+                    "outside 0-4, so the\n"
+                    "        driver fell back to its default. A dump never "
+                    "reports a tier nobody asked for.\n");
     }
     if (h->VerbosityApplied < XHCISNAP_LEVEL_LOG) {
         comp("    This level records nothing into the note ring, ON PURPOSE - "
@@ -2583,13 +2815,16 @@ static const char *const enum_state_names[16] = {
 
 static const char *enum_cause_name(unsigned long cause)
 {
-    static const char *const names[8] = {
+    /* Causes 8 and 9 (design record 17 sections 4.15.4 and 4.15.16 B):
+     * their wording is a draft for the owner. */
+    static const char *const names[10] = {
         "none", "the reset", "no slot", "Address Device",
         "the device descriptor", "the configuration", "the PDO",
-        "the speed (no EP0 size for it)"
+        "the speed (no EP0 size for it)", "the device stopped answering",
+        "not admitted yet (waiting for a command to be settled)"
     };
 
-    return cause < 8 ? names[cause] : "?";
+    return cause < 10 ? names[cause] : "?";
 }
 
 static const char *enum_class_name(unsigned long cls)
@@ -2629,6 +2864,8 @@ static void enum_note_line(const char *line)
         "CSC", "PEC", "WRC", "OCC", "PRC", "PLC", "CEC"
     };
     char changes[32];
+    char head[160];
+    char tail[32];
     const char *eq;
     const char *kind;
     unsigned long v;
@@ -2669,32 +2906,34 @@ static void enum_note_line(const char *line)
                 strcat(changes, change_names[i]);
             }
         }
-        comp("  port %2lu look:  machine %s, fed%s%s%s, link %s; PORTSC%s%s%s "
-             "PLS %lu, changes%s\n",
-             port, enum_state_names[(v >> 20) & 0xF],
-             (v & 0xC000UL) == 0 ? " nothing" : "",
-             (v & 0x8000UL) != 0 ? " connect" : "",
-             (v & 0x4000UL) != 0 ? " disconnect" : "",
-             enum_link_name((v >> 16) & 0xF),
-             (v & 1UL) != 0 ? " CCS" : "", (v & 2UL) != 0 ? " PED" : "",
-             (v & 4UL) != 0 ? " PR" : "", (v >> 3) & 0xF,
-             changes[0] != '\0' ? changes : " none");
+        comp_fit(17, "  port %2lu look:  machine %s, fed%s%s%s, link %s; "
+                     "PORTSC%s%s%s PLS %lu, changes%s\n",
+                     port, enum_state_names[(v >> 20) & 0xF],
+                     (v & 0xC000UL) == 0 ? " nothing" : "",
+                     (v & 0x8000UL) != 0 ? " connect" : "",
+                     (v & 0x4000UL) != 0 ? " disconnect" : "",
+                     enum_link_name((v >> 16) & 0xF),
+                     (v & 1UL) != 0 ? " CCS" : "",
+                     (v & 2UL) != 0 ? " PED" : "",
+                     (v & 4UL) != 0 ? " PR" : "", (v >> 3) & 0xF,
+                     changes[0] != '\0' ? changes : " none");
     } else if (n == 5 && strncmp(kind, "reset", 5) == 0) {
-        comp("  port %2lu reset: attempt %lu %s; PORTSC low %04lX: speed ID "
-             "%lu, PLS %lu%s%s\n",
-             port, (v >> 16) & 0x7F,
-             (v & 0x00800000UL) != 0 ? "came back enabled" : "FAILED",
-             v & 0xFFFFUL, (v >> 10) & 0xF, (v >> 5) & 0xF,
-             (v & 2UL) != 0 ? ", PED" : "", (v & 1UL) != 0 ? ", CCS" : "");
+        comp_fit(17, "  port %2lu reset: attempt %lu %s; PORTSC low %04lX: "
+                     "speed ID %lu, PLS %lu%s%s\n",
+                     port, (v >> 16) & 0x7F,
+                     (v & 0x00800000UL) != 0 ? "came back enabled" : "FAILED",
+                     v & 0xFFFFUL, (v >> 10) & 0xF, (v >> 5) & 0xF,
+                     (v & 2UL) != 0 ? ", PED" : "",
+                     (v & 1UL) != 0 ? ", CCS" : "");
     } else if (n == 6 && strncmp(kind, "prwait", 6) == 0) {
         comp("  port %2lu prwait: a reset already running %s after %lu ms\n",
              port,
              (v & 0x00800000UL) != 0 ? "NEVER ENDED, given up" : "ended",
              v & 0xFFFFUL);
     } else if (n == 5 && strncmp(kind, "speed", 5) == 0) {
-        comp("  port %2lu speed: ID %lu is %s, by %s\n", port,
-             (v >> 16) & 0xFF, enum_class_name((v >> 8) & 0xFF),
-             enum_source_name(v & 0xFF));
+        comp_fit(17, "  port %2lu speed: ID %lu is %s, by %s\n", port,
+                     (v >> 16) & 0xFF, enum_class_name((v >> 8) & 0xFF),
+                     enum_source_name(v & 0xFF));
     } else if (n == 4 && strncmp(kind, "rate", 4) == 0) {
         if ((v & 0x007FFFFFUL) % 10UL == 0) {
             comp("  port %2lu rate:  %lu Mbit/s%s\n", port,
@@ -2706,19 +2945,27 @@ static void enum_note_line(const char *line)
                  (v & 0x00800000UL) != 0 ? ", SuperSpeedPlus" : "");
         }
     } else if (n == 4 && strncmp(kind, "slot", 4) == 0) {
-        comp("  port %2lu slot:  attempt %lu, Enable Slot completion %lu%s, "
-             "slot %lu\n",
-             port, (v >> 8) & 0xFF, (v >> 16) & 0xFF,
-             ((v >> 16) & 0xFF) == 0 ? " (never completed)" :
-             ((v >> 16) & 0xFF) == 1 ? " (Success)" : "", v & 0xFF);
+        comp_fit(17, "  port %2lu slot:  attempt %lu, Enable Slot completion "
+                     "%lu%s, slot %lu\n",
+                     port, (v >> 8) & 0xFF, (v >> 16) & 0xFF,
+                     ((v >> 16) & 0xFF) == 0 ? " (never completed)" :
+                     ((v >> 16) & 0xFF) == 1 ? " (Success)" : "", v & 0xFF);
     } else if (n == 4 && strncmp(kind, "fail", 4) == 0) {
-        comp("  port %2lu fail:  attempt %lu failed on %s; %s\n", port,
-             (v >> 8) & 0xFF, enum_cause_name((v >> 16) & 0xFF),
-             (v & 1UL) != 0 ? "no retry follows" : "a retry follows");
+        _snprintf(head, sizeof(head) - 1,
+                  "  port %2lu fail:  attempt %lu failed on %s;", port,
+                  (v >> 8) & 0xFF, enum_cause_name((v >> 16) & 0xFF));
+        head[sizeof(head) - 1] = '\0';
+        comp_split("                 ", head,
+                   (v & 1UL) != 0 ? "no retry follows" : "a retry follows");
     } else if (n == 3 && strncmp(kind, "end", 3) == 0) {
-        comp("  port %2lu end:   machine %s, cause %s, retries used %lu\n",
-             port, enum_state_names[(v >> 16) & 0xF],
-             enum_cause_name((v >> 8) & 0xFF), v & 0xFF);
+        _snprintf(head, sizeof(head) - 1,
+                  "  port %2lu end:   machine %s, cause %s,", port,
+                  enum_state_names[(v >> 16) & 0xF],
+                  enum_cause_name((v >> 8) & 0xFF));
+        head[sizeof(head) - 1] = '\0';
+        _snprintf(tail, sizeof(tail) - 1, "retries used %lu", v & 0xFF);
+        tail[sizeof(tail) - 1] = '\0';
+        comp_split("                 ", head, tail);
     } else if (n == 5 && strncmp(kind, "quiet", 5) == 0) {
         comp("  port %2lu quiet: its budget of %lu bursts is spent; nothing "
              "more is noted\n           for it until it enumerates\n",
@@ -2779,11 +3026,11 @@ static void write_companion_enum_notes(const unsigned char *ring,
 static void evt_ring_value(unsigned long val, int read)
 {
     if (read == 2) {
-        comp("XhciEventRingTrbs, of another type,");
+        cl_add("XhciEventRingTrbs, of another type,");
     } else if (read == 1) {
-        comp("XhciEventRingTrbs %lu", val);
+        cl_add("XhciEventRingTrbs %lu", val);
     } else {
-        comp("XhciEventRingTrbs");
+        cl_add("XhciEventRingTrbs");
     }
 }
 
@@ -2797,60 +3044,63 @@ static void evt_ring_line(unsigned long v, unsigned long ver, int verSeen,
     pick = (v >> 24) & 0xFFUL;
     route = (v >> 16) & 0xFFUL;
     n = v & 0xFFFFUL;
-    comp("\nevent ring chosen at the start (task 49.35): %lu entries", n);
+    /* Task 50.30: built in parts and fitted (cl_end), its continuations
+     * two columns in. */
+    cl_add("\nevent ring chosen at the start (task 49.35): %lu entries", n);
     switch (route) {
     case 0:
     case 1:
         if (pick == 7) {
-            comp(", the larger ring: ");
+            cl_add(", the larger ring: ");
             evt_ring_value(val, read);
-            comp(" asks for it\n");
+            cl_add(" asks for it\n");
         } else if (pick == 3) {
-            comp(", the larger ring: XhciEventRing 1024 asks for it (a "
-                 "test build)\n");
+            cl_add(", the larger ring: XhciEventRing 1024 asks for it (a "
+                   "test build)\n");
         } else {
-            comp(", the larger ring\n");
+            cl_add(", the larger ring\n");
         }
         break;
     case 2:
-        comp(", the smaller ring: no memory for the larger one\n");
+        cl_add(", the smaller ring: no memory for the larger one\n");
         break;
     case 3:
-        comp(", the smaller ring: XhciQemuEventRing asks for it\n");
+        cl_add(", the smaller ring: XhciQemuEventRing asks for it\n");
         break;
     case 4:
-        comp(", the smaller ring: %s 256 asks for it\n",
-             pick == 1 ? "XhciEventRing" : "XhciEventRingTrbs");
+        cl_add(", the smaller ring: %s 256 asks for it\n",
+               pick == 1 ? "XhciEventRing" : "XhciEventRingTrbs");
         break;
     case 5:
         if (pick == 2) {
-            comp(", the smaller ring: automatic below xHCI 1.0 (a test "
-                 "build)\n");
+            cl_add(", the smaller ring: automatic below xHCI 1.0 (a test "
+                   "build)\n");
             break;
         }
         if (verSeen) {
-            comp(", the smaller ring: the controller is xHCI %lX.%02lX, "
-                 "below 1.0, which always uses 256",
-                 (ver >> 8) & 0xFFUL, ver & 0xFFUL);
+            cl_add(", the smaller ring: the controller is xHCI %lX.%02lX, "
+                   "below 1.0, which always uses 256",
+                   (ver >> 8) & 0xFFUL, ver & 0xFFUL);
         } else {
-            comp(", the smaller ring: the controller is below xHCI 1.0, "
-                 "which always uses 256");
+            cl_add(", the smaller ring: the controller is below xHCI 1.0, "
+                   "which always uses 256");
         }
         if (heldSeen) {
-            comp("; ");
+            cl_add("; ");
             evt_ring_value(val, read);
-            comp(" asks for the larger ring\n");
+            cl_add(" asks for the larger ring\n");
         } else {
-            comp("\n");
+            cl_add("\n");
         }
         break;
     case 6:
-        comp(", the smaller ring: no XhciEventRingTrbs, the default\n");
+        cl_add(", the smaller ring: no XhciEventRingTrbs, the default\n");
         break;
     default:
-        comp(" (route %lu, which this build does not name)\n", route);
+        cl_add(" (route %lu, which this build does not name)\n", route);
         break;
     }
+    cl_end(2);
 }
 
 static void write_companion_evt_note(const unsigned char *ring,
@@ -2960,11 +3210,12 @@ static void write_companion_ring(const SNAP_HEADER *h, const unsigned char *ext,
      * 2^32 would wrap the sum below `extBytes` and pass (roadmap Phase 20,
      * smaller items). */
     if (h->RingOffset > extBytes || h->RingBytes > extBytes - h->RingOffset) {
-        comp("\nnote ring: the driver says it is at +%lu for %lu bytes, which "
-             "is past the\n  end of the %lu bytes that came back. Not printing "
-             "it - a ring read from the\n  wrong place is a wrong reading "
-             "rather than a failed one.\n",
-             h->RingOffset, h->RingBytes, extBytes);
+        comp_fit(2, "\nnote ring: the driver says it is at +%lu for %lu "
+                    "bytes, which is past the\n  end of the %lu bytes that "
+                    "came back. Not printing it - a ring read from the\n"
+                    "  wrong place is a wrong reading rather than a failed "
+                    "one.\n",
+                    h->RingOffset, h->RingBytes, extBytes);
         return;
     }
     /*
@@ -2982,10 +3233,11 @@ static void write_companion_ring(const SNAP_HEADER *h, const unsigned char *ext,
      */
     if (h->RingUsed > h->RingBytes ||
         (h->RingBytes & (h->RingBytes - 1)) != 0) {
-        comp("\nnote ring: the driver says %lu bytes are in use of a %lu-byte "
-             "ring, and this\n  tool's wrap arithmetic needs a used count "
-             "within a power-of-two size. Not\n  printing it - see the .BIN.\n",
-             h->RingUsed, h->RingBytes);
+        comp_fit(2, "\nnote ring: the driver says %lu bytes are in use of a "
+                    "%lu-byte ring, and this\n  tool's wrap arithmetic needs "
+                    "a used count within a power-of-two size. Not\n  printing "
+                    "it - see the .BIN.\n",
+                    h->RingUsed, h->RingBytes);
         return;
     }
 
@@ -3077,8 +3329,10 @@ static void print_portsc(const unsigned char *values, unsigned long ports)
     for (i = 0; i < ports; i++) {
         v = ((const unsigned long *)values)[i];
         if (v == 0xFFFFFFFFUL) {
-            comp("  %4lu  %08lX  <all ones - the read was refused or the "
-                 "controller is gone>\n", i + 1, v);
+            /* The note on a line of its own, under the value, so the row
+             * stays within 79 columns (task 50.30). */
+            comp("  %4lu  %08lX\n        <all ones - the read was refused "
+                 "or the controller is gone>\n", i + 1, v);
             continue;
         }
         if ((v & PORTSC_PP) == 0) {
@@ -3134,10 +3388,10 @@ static void print_portsc(const unsigned char *values, unsigned long ports)
      * everywhere it is the more useful sentence.
      */
     if (unpoweredWithSomething != 0) {
-        comp("\n  *** %lu port(s) report a DEVICE CONNECTED with PP CLEAR - the "
-             "bus is unpowered\n      at the connector while the controller "
-             "still sees the device. This is\n      Finding Q read off the "
-             "register.\n", unpoweredWithSomething);
+        comp_fitw(6, "\n  *** %lu port(s) report a DEVICE CONNECTED with PP "
+                     "CLEAR - the bus is unpowered at the connector while the "
+                     "controller still sees the device. This is Finding Q "
+                     "read off the register.\n", unpoweredWithSomething);
     }
     if (ports != 0 && unpowered == ports) {
         comp("\n  *** PP is CLEAR on EVERY port.\n");
@@ -3263,6 +3517,20 @@ static int selftest_slots(void)
     }
     companion = NULL;
     print_slots(bytes, 5);
+    return 0;
+}
+
+/* `-selftest-portsc` (task 50.30): the PORTSC table over canned values, for
+ * snaptest.cmd - a port unpowered and empty, one read all ones, its note on
+ * a line of its own, and one with every field at its widest. */
+static int selftest_portsc(void)
+{
+    static const unsigned long values[3] = {
+        0x00000000UL, 0xFFFFFFFFUL, 0x7FFFFFFFUL
+    };
+
+    companion = NULL;
+    print_portsc((const unsigned char *)values, 3);
     return 0;
 }
 
@@ -3544,6 +3812,17 @@ static const char *const udx_counter_names[SNAP_UDX_WORDS] = {
     "PdoQiUnanswered", "PdoIoctlRefused", "XferShortRefused"
 };
 
+/* Task 50.20's six (design record 17 section 4.12.10) follow at 320; the
+ * last, at 325, is XhciStreamDequeueAvoid's packed word, which
+ * print_hcd_quirks prints as the quirk block's fifteenth row. */
+#define SNAP_SFIX_AT                320UL
+#define SNAP_SFIX_WORDS             6UL
+#define SNAP_QUIRK_DEQ_AVOID_AT     325UL
+static const char *const sfix_counter_names[SNAP_SFIX_WORDS] = {
+    "StreamDeqUntrusted", "StreamDeqWithheld", "StreamDebts",
+    "StreamContractOpens", "StreamErrorExits", "QuirkStreamDequeueAvoid"
+};
+
 /*
  * The HCD image's layout as its header gives it, checked against the bytes
  * that arrived: 1 when every figure fits. print_hcd refuses a shape that
@@ -3660,6 +3939,9 @@ static const char *hcd_counter_name(unsigned long i)
     if (i >= SNAP_UDX_AT && i - SNAP_UDX_AT < SNAP_UDX_WORDS) {
         return udx_counter_names[i - SNAP_UDX_AT];
     }
+    if (i >= SNAP_SFIX_AT && i - SNAP_SFIX_AT < SNAP_SFIX_WORDS) {
+        return sfix_counter_names[i - SNAP_SFIX_AT];
+    }
     return NULL;
 }
 
@@ -3704,9 +3986,9 @@ static void print_tmr_phase(const char *phase, unsigned long count,
         comp("    %-9s no short-request interval observed\n", phase);
         return;
     }
-    comp("    %-9s %lu interval(s), mean %lu.%lu ms, %lu late (3 ms or more "
-         "past the period)\n", phase, count, sumMs / count,
-         ((sumMs % count) * 10UL) / count, late);
+    comp_fit(14, "    %-9s %lu interval(s), mean %lu.%lu ms, %lu late (3 ms "
+                 "or more past the period)\n", phase, count, sumMs / count,
+                 ((sumMs % count) * 10UL) / count, late);
 }
 
 /*
@@ -3735,19 +4017,23 @@ static void print_hcd_timer(const unsigned char *image,
         comp("  XhciPollFineTimer      %lu; in effect %s\n", v,
              get32(k, 4) != 0 ? "ON" : "off");
     }
-    comp("  the routine            %s\n",
-         poll_code(tmr_source_text, SNAP_TMR_SOURCES, get32(k, 2 * 4)));
-    comp("  the timer thread       %s\n",
-         poll_code(tmr_thread_text, SNAP_TMR_THREADS, get32(k, 3 * 4)));
+    comp_fitw(25, "  the routine            %s\n",
+                  poll_code(tmr_source_text, SNAP_TMR_SOURCES,
+                            get32(k, 2 * 4)));
+    comp_fitw(25, "  the timer thread       %s\n",
+                  poll_code(tmr_thread_text, SNAP_TMR_THREADS,
+                            get32(k, 3 * 4)));
     comp("  asks for               %lu (100 ns units); held now %s\n",
          get32(k, 10 * 4), get32(k, 4 * 4) != 0 ? "YES" : "no");
-    comp("  holds %lu, releases %lu (%lu forced by a boundary); holds raced "
-         "%lu\n", get32(k, 5 * 4), get32(k, 6 * 4), get32(k, 7 * 4),
-         get32(k, 8 * 4));
-    comp("  Windows answered       %lu at the last hold, %lu at the last "
-         "release\n", get32(k, 11 * 4), get32(k, 12 * 4));
-    comp("  last release           %s\n",
-         poll_code(tmr_cause_text, SNAP_TMR_CAUSES, get32(k, 13 * 4)));
+    comp_fit(8, "  holds %lu, releases %lu (%lu forced by a boundary); holds "
+                "raced %lu\n",
+                get32(k, 5 * 4), get32(k, 6 * 4), get32(k, 7 * 4),
+                get32(k, 8 * 4));
+    comp_fit(25, "  Windows answered       %lu at the last hold, %lu at the "
+                 "last release\n", get32(k, 11 * 4), get32(k, 12 * 4));
+    comp_fitw(25, "  last release           %s\n",
+                  poll_code(tmr_cause_text, SNAP_TMR_CAUSES,
+                            get32(k, 13 * 4)));
     comp("  held in this start     %lu ms\n", get32(k, 14 * 4));
     comp("  poll intervals, by the request's phase (runs armed for 5 ms or "
          "less;\n  %lu crossed a call and were not counted):\n",
@@ -3756,9 +4042,11 @@ static void print_hcd_timer(const unsigned char *image,
                     get32(k, 17 * 4));
     print_tmr_phase("held", get32(k, 18 * 4), get32(k, 19 * 4),
                     get32(k, 20 * 4));
-    comp("  the x86 helper's services: MSI %s; timer %s\n",
-         poll_code(hlpr_verdict_text, SNAP_HLPR_VERDICTS, get32(k, 21 * 4)),
-         poll_code(hlpr_verdict_text, SNAP_HLPR_VERDICTS, get32(k, 22 * 4)));
+    comp_fit(29, "  the x86 helper's services: MSI %s; timer %s\n",
+                 poll_code(hlpr_verdict_text, SNAP_HLPR_VERDICTS,
+                           get32(k, 21 * 4)),
+                 poll_code(hlpr_verdict_text, SNAP_HLPR_VERDICTS,
+                           get32(k, 22 * 4)));
 }
 
 /*
@@ -3810,11 +4098,11 @@ static void print_hcd_version(const unsigned char *image,
     reg = versions & 0xFFFFUL;
     eff = (versions >> 16) & 0xFFFFUL;
     if ((policy & SNAP_VERSION_OVERRIDE) != 0) {
-        comp("  (qemu flavour: XhciQemuHciVersion decoded %04lXh in place of "
-             "the register's %04lXh)\n", eff, reg);
+        comp_fitw(3, "  (qemu flavour: XhciQemuHciVersion decoded %04lXh in "
+                     "place of the register's %04lXh)\n", eff, reg);
     } else if (reg != eff) {
-        comp("  (the register read %04lXh and %04lXh was decoded, with no "
-             "override recorded)\n", reg, eff);
+        comp_fit(3, "  (the register read %04lXh and %04lXh was decoded, with "
+                    "no override recorded)\n", reg, eff);
     }
     if (eff == 0xFFFFUL) {
         comp("  HCIVERSION     FFFFh: not decoding, refused (Code 10)\n");
@@ -3822,14 +4110,17 @@ static void print_hcd_version(const unsigned char *image,
         comp("  xHCI %lX.%02lX: XhciAccept096 not applicable%s\n", eff >> 8,
              eff & 0xFFUL, form == 0 ? "; refused at another check" : "");
     } else if (eff < 0x0096UL) {
-        comp("  xHCI %lX.%02lX (HCIVERSION %04lXh): below 0.96, refused at "
-             "every value (Code 10)\n", eff >> 8, eff & 0xFFUL, eff);
+        comp_fit(7, "  xHCI %lX.%02lX (HCIVERSION %04lXh): below 0.96, "
+                    "refused at every value (Code 10)\n",
+                    eff >> 8, eff & 0xFFUL, eff);
     } else if (form == 2) {
-        comp("  xHCI %lX.%02lX (HCIVERSION %04lXh): accepted below 1.0; TD "
-             "Size in 1 KiB units\n", eff >> 8, eff & 0xFFUL, eff);
+        comp_fit(7, "  xHCI %lX.%02lX (HCIVERSION %04lXh): accepted below "
+                    "1.0; TD Size in 1 KiB units\n",
+                    eff >> 8, eff & 0xFFUL, eff);
     } else if (floor == 0x0100UL) {
-        comp("  xHCI %lX.%02lX (HCIVERSION %04lXh): below 1.0, refused at "
-             "XhciAccept096 0 (Code 10)\n", eff >> 8, eff & 0xFFUL, eff);
+        comp_fit(7, "  xHCI %lX.%02lX (HCIVERSION %04lXh): below 1.0, refused "
+                    "at XhciAccept096 0 (Code 10)\n",
+                    eff >> 8, eff & 0xFFUL, eff);
     } else {
         comp("  xHCI %lX.%02lX (HCIVERSION %04lXh): refused at another "
              "check\n", eff >> 8, eff & 0xFFUL, eff);
@@ -3851,18 +4142,18 @@ static void print_hcd_rings(const unsigned char *image,
         return;
     }
     comp("\nendpoint rings (task 38.10, design record 20 section 5):\n");
-    comp("  pool rings held %lu of 32; held for a stale endpoint %lu, "
-         "pinned %lu,\n    released by a later proof %lu\n",
-         get32(image, countersAt + SNAP_RINGS_AT * 4),
-         get32(image, countersAt + (SNAP_RINGS_AT + 1) * 4),
-         get32(image, countersAt + (SNAP_RINGS_AT + 2) * 4),
-         get32(image, countersAt + (SNAP_RINGS_AT + 3) * 4));
-    comp("  selects put back %lu; one-setting STALLs carried out %lu; "
-         "rollbacks %lu,\n    reopened %lu\n",
-         get32(image, countersAt + (SNAP_RINGS_AT + 4) * 4),
-         get32(image, countersAt + (SNAP_RINGS_AT + 5) * 4),
-         get32(image, countersAt + (SNAP_RINGS_AT + 6) * 4),
-         get32(image, countersAt + (SNAP_RINGS_AT + 7) * 4));
+    comp_fit(4, "  pool rings held %lu of 32; held for a stale endpoint %lu, "
+                "pinned %lu,\n    released by a later proof %lu\n",
+                get32(image, countersAt + SNAP_RINGS_AT * 4),
+                get32(image, countersAt + (SNAP_RINGS_AT + 1) * 4),
+                get32(image, countersAt + (SNAP_RINGS_AT + 2) * 4),
+                get32(image, countersAt + (SNAP_RINGS_AT + 3) * 4));
+    comp_fit(4, "  selects put back %lu; one-setting STALLs carried out %lu; "
+                "rollbacks %lu,\n    reopened %lu\n",
+                get32(image, countersAt + (SNAP_RINGS_AT + 4) * 4),
+                get32(image, countersAt + (SNAP_RINGS_AT + 5) * 4),
+                get32(image, countersAt + (SNAP_RINGS_AT + 6) * 4),
+                get32(image, countersAt + (SNAP_RINGS_AT + 7) * 4));
 }
 
 /*
@@ -3881,13 +4172,14 @@ static void print_hcd_compsel(const unsigned char *image,
     }
     comp("\ncomposite selects (task 38.12, design record 13 section "
          "10.14):\n");
-    comp("  recorded %lu, refused or failed %lu; endpoints rewritten %lu, "
-         "not matched %lu;\n    function endpoints at a recorded rate %lu\n",
-         get32(image, countersAt + SNAP_COMPSEL_AT * 4),
-         get32(image, countersAt + (SNAP_COMPSEL_AT + 1) * 4),
-         get32(image, countersAt + (SNAP_COMPSEL_AT + 2) * 4),
-         get32(image, countersAt + (SNAP_COMPSEL_AT + 3) * 4),
-         get32(image, countersAt + (SNAP_COMPSEL_AT + 4) * 4));
+    comp_fit(4, "  recorded %lu, refused or failed %lu; endpoints rewritten "
+                "%lu, not matched %lu;\n    function endpoints at a recorded "
+                "rate %lu\n",
+                get32(image, countersAt + SNAP_COMPSEL_AT * 4),
+                get32(image, countersAt + (SNAP_COMPSEL_AT + 1) * 4),
+                get32(image, countersAt + (SNAP_COMPSEL_AT + 2) * 4),
+                get32(image, countersAt + (SNAP_COMPSEL_AT + 3) * 4),
+                get32(image, countersAt + (SNAP_COMPSEL_AT + 4) * 4));
 }
 
 /*
@@ -3905,19 +4197,20 @@ static void print_hcd_streams(const unsigned char *image,
         return;
     }
     comp("\nstream endpoints (task 36.54, design record 17 section 4.12):\n");
-    comp("  soft retries on a stream %lu; stream rings restarted at base "
-         "%lu\n",
-         get32(image, countersAt + SNAP_STREAMS_AT * 4),
-         get32(image, countersAt + (SNAP_STREAMS_AT + 1) * 4));
+    comp_fit(4, "  soft retries on a stream %lu; stream rings restarted at "
+                "base %lu\n",
+                get32(image, countersAt + SNAP_STREAMS_AT * 4),
+                get32(image, countersAt + (SNAP_STREAMS_AT + 1) * 4));
     if (get32(image, countersAt + (SNAP_STREAMS_AT + 2) * 4) == 0) {
         comp("  QEMU stream-context quirk  not armed (not QEMU's xHCI)\n");
         return;
     }
-    comp("  QEMU stream-context quirk  ARMED (QEMU's xHCI, 1B36:000D): Set "
-         "TR Dequeues %lu,\n    resyncs failed %lu, extra stops %lu\n",
-         get32(image, countersAt + (SNAP_STREAMS_AT + 3) * 4),
-         get32(image, countersAt + (SNAP_STREAMS_AT + 4) * 4),
-         get32(image, countersAt + (SNAP_STREAMS_AT + 5) * 4));
+    comp_fit(4, "  QEMU stream-context quirk  ARMED (QEMU's xHCI, 1B36:000D): "
+                "Set TR Dequeues %lu,\n    resyncs failed %lu, extra stops "
+                "%lu\n",
+                get32(image, countersAt + (SNAP_STREAMS_AT + 3) * 4),
+                get32(image, countersAt + (SNAP_STREAMS_AT + 4) * 4),
+                get32(image, countersAt + (SNAP_STREAMS_AT + 5) * 4));
 }
 
 /*
@@ -3964,13 +4257,14 @@ static const char *const quirk_out_text[4] = {
 };
 
 /* XHCI_QK_WHY_*; 0 is no reason and is not printed. */
-static const char *const quirk_why_text[14] = {
+static const char *const quirk_why_text[15] = {
     "", "no started lifetime or BAR", "not in D0", "window not decoding",
     "a read of all ones", "the BAR does not reach it", "HCH not set",
     "xhciReset's rules refused", "a configuration access failed",
     "read back other than written", "the write bit never cleared",
     "the control byte read FFh", "no PCI id ever read",
-    "the PCI id read before kept"
+    "the PCI id read before kept",
+    "the port switchover held this lifetime"
 };
 
 /* The counts, words 215 to 232, in plain words. */
@@ -3995,18 +4289,49 @@ static const char *const quirk_count_text[SNAP_QUIRK_COUNTS] = {
     "shutdown log flushes not acknowledged"
 };
 
+/* One value's two lines from its packed word. */
+static void print_hcd_quirk_row(const char *name, const char *flag,
+                                unsigned long w)
+{
+    unsigned long raw;
+    unsigned long v;
+    char rawText[16];
+    char why[64];
+
+    raw = (w >> 16) & 0xFFFFUL;
+    if (raw == 0xFFFFUL) {
+        strcpy(rawText, "none");
+    } else {
+        sprintf(rawText, "%lu", raw);
+    }
+    comp("  %s (%s)\n", name, flag);
+    v = (w >> 2) & 0x7UL;
+    comp_fit(9, "    read %s (%s): mode %lu, %s\n", rawText,
+                v < 5 ? quirk_norm_text[v] : "?", w & 0x3UL,
+                (w & 0x3UL) < 3 ? quirk_mode_text[w & 0x3UL] : "?");
+    v = (w >> 12) & 0xFUL;
+    why[0] = '\0';
+    if (v >= 15) {
+        sprintf(why, " (reason %lu)", v);
+    } else if (v != 0) {
+        sprintf(why, " (%s)", quirk_why_text[v]);
+    }
+    v = (w >> 8) & 0xFUL;
+    comp_wrapped("    ", "id %s; policy %s; last %s%s",
+                 (w & 0x20UL) != 0 ? "listed" : "not listed",
+                 (w & 0x80UL) != 0
+                     ? "overridden (XhciInterruptMode 3)"
+                     : (w & 0x40UL) != 0 ? "on" : "off",
+                 v < 4 ? quirk_out_text[v] : "?", why);
+}
+
 static void print_hcd_quirks(const unsigned char *image,
                              unsigned long countersAt,
                              unsigned long counters)
 {
     unsigned long id;
     unsigned long rev;
-    unsigned long w;
-    unsigned long raw;
-    unsigned long v;
     unsigned long i;
-    char rawText[16];
-    char why[64];
 
     if (counters < SNAP_QUIRK_AT + SNAP_QUIRK_WORDS) {
         return;
@@ -4026,32 +4351,18 @@ static void print_hcd_quirks(const unsigned char *image,
         comp("; revision %02lX (never matched)\n", rev & 0xFFUL);
     }
     for (i = 0; i < SNAP_QUIRK_VALUES; i++) {
-        w = get32(image, countersAt + (SNAP_QUIRK_AT + i) * 4);
-        raw = (w >> 16) & 0xFFFFUL;
-        if (raw == 0xFFFFUL) {
-            strcpy(rawText, "none");
-        } else {
-            sprintf(rawText, "%lu", raw);
-        }
-        comp("  %s (%s)\n", quirk_value_names[i], quirk_linux_flags[i]);
-        v = (w >> 2) & 0x7UL;
-        comp("    read %s (%s): mode %lu, %s\n", rawText,
-             v < 5 ? quirk_norm_text[v] : "?", w & 0x3UL,
-             (w & 0x3UL) < 3 ? quirk_mode_text[w & 0x3UL] : "?");
-        v = (w >> 12) & 0xFUL;
-        why[0] = '\0';
-        if (v >= 14) {
-            sprintf(why, " (reason %lu)", v);
-        } else if (v != 0) {
-            sprintf(why, " (%s)", quirk_why_text[v]);
-        }
-        v = (w >> 8) & 0xFUL;
-        comp_wrapped("    ", "id %s; policy %s; last %s%s",
-                     (w & 0x20UL) != 0 ? "listed" : "not listed",
-                     (w & 0x80UL) != 0
-                         ? "overridden (XhciInterruptMode 3)"
-                         : (w & 0x40UL) != 0 ? "on" : "off",
-                     v < 4 ? quirk_out_text[v] : "?", why);
+        print_hcd_quirk_row(quirk_value_names[i], quirk_linux_flags[i],
+                            get32(image, countersAt +
+                                             (SNAP_QUIRK_AT + i) * 4));
+    }
+    /* Task 50.20: the fifteenth value, this driver's own, at word 325 (a
+     * driver before it sends fewer words, and the row is not printed). */
+    if (counters > SNAP_QUIRK_DEQ_AVOID_AT) {
+        print_hcd_quirk_row("XhciStreamDequeueAvoid",
+                            "no Linux quirk; design record 17 section "
+                            "4.12.10",
+                            get32(image, countersAt +
+                                             SNAP_QUIRK_DEQ_AVOID_AT * 4));
     }
     comp("  1002:7316 (ATI Navi10) has no value: XhciIntervalCap's 1 covers "
          "it.\n");
@@ -4080,26 +4391,27 @@ static void print_hcd_hubspeed(const unsigned char *image,
     }
     read = get32(image, countersAt + SNAP_HUBSPEED_AT * 4);
     comp("\nUSB 2.0 speed IDs behind a hub (issue 18):\n");
-    comp("  XhciUsb2HubSpeedFallback  %s; the default IDs %s\n",
-         read == 1 ? "read" : read == 2 ? "not a DWORD, ignored"
-                                        : "absent",
-         get32(image, countersAt + (SNAP_HUBSPEED_AT + 1) * 4) != 0
-             ? "ON (1 Full, 2 Low where the table names neither)"
-             : "OFF (such a device is refused, as before)");
+    comp_fit(28, "  XhciUsb2HubSpeedFallback  %s; the default IDs %s\n",
+                 read == 1 ? "read" : read == 2 ? "not a DWORD, ignored"
+                                                : "absent",
+                 get32(image, countersAt + (SNAP_HUBSPEED_AT + 1) * 4) != 0
+                     ? "ON (1 Full, 2 Low where the table names neither)"
+                     : "OFF (such a device is refused, as before)");
     comp("  refused for want of an ID %lu; given the default ID %lu\n",
          get32(image, countersAt + (SNAP_HUBSPEED_AT + 2) * 4),
          get32(image, countersAt + (SNAP_HUBSPEED_AT + 3) * 4));
     bits = get32(image, countersAt + SNAP_HUBSPEED_SLOTS * 4);
-    comp("  slots holding a default ID:");
+    /* Task 50.30: one line, fitted (cl_end) under its first slot. */
+    cl_add("  slots holding a default ID:");
     if (bits == 0) {
-        comp(" none");
+        cl_add(" none");
     }
     for (i = 0; i < 32; i++) {
         if ((bits & (1UL << i)) != 0) {
-            comp(" %lu", i + 1);
+            cl_add(" %lu", i + 1);
         }
     }
-    comp("\n");
+    cl_end(30);
 }
 
 /*
@@ -4147,9 +4459,10 @@ static void print_hcd_counters(const unsigned char *image,
  */
 static void print_hcd(const unsigned char *image, unsigned long bytes)
 {
-    static const char *const cause_short[8] = {
+    static const char *const cause_short[10] = {
         "none", "reset", "no slot", "Address Device", "device descriptor",
-        "configuration", "PDO", "speed (no EP0 size)"
+        "configuration", "PDO", "speed (no EP0 size)", "no answer",
+        "deferred"
     };
     unsigned long version;
     unsigned long headBytes;
@@ -4176,21 +4489,24 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
     counters = get32(image, 20);
     countersAt = get32(image, 24);
     if (!hcd_shape_ok(image, bytes)) {
-        comp("\nHCD region: version %lu, header %lu bytes, %lu ports of %lu "
-             "bytes at +%lu,\n  %lu counters at +%lu, in %lu bytes - not a "
-             "shape this build reads\n  (it knows version %lu); not "
-             "decoded.\n", version, headBytes, ports, portBytes, portsAt,
-             counters, countersAt, bytes, SNAP_HCD_VERSION);
+        comp_fit(2, "\nHCD region: version %lu, header %lu bytes, %lu ports "
+                    "of %lu bytes at +%lu,\n  %lu counters at +%lu, in %lu "
+                    "bytes - not a shape this build reads\n  (it knows "
+                    "version %lu); not decoded.\n",
+                    version, headBytes, ports, portBytes, portsAt,
+                    counters, countersAt, bytes, SNAP_HCD_VERSION);
         return;
     }
 
     comp("\nroot ports, as the driver's enumeration holds them (HCD region "
          "version %lu):\n", version);
-    comp("  (read while the controller thread may be stepping them: one "
-         "record can mix two\n   enumeration steps, and the tear detector "
-         "does not cover this region)\n");
-    comp("  port  state       cause                tries slot  ID  speed "
-         "(meaning)\n");
+    comp_fitw(3, "  (read while the controller thread may be stepping them: "
+                 "one record can mix two enumeration steps, and the tear "
+                 "detector does not cover this region)\n");
+    /* The speed's meaning on the port's second line, so a row stays within
+     * 79 columns at its longest meaning (task 50.30). */
+    comp("  port  state       cause                tries slot  ID  speed\n"
+         "        (meaning)\n");
     shown = 0;
     for (i = 0; i < ports; i++) {
         r = image + portsAt + i * portBytes;
@@ -4202,9 +4518,9 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
             continue;
         }
         shown++;
-        comp("  %4lu  %-10s  %-19s  %5lu %4lu  %2lu  %s (%s)\n",
+        comp("  %4lu  %-10s  %-19s  %5lu %4lu  %2lu  %s\n        (%s)\n",
              get32(r, 0), enum_state_names[get32(r, 4) & 0xF],
-             get32(r, 8) < 8 ? cause_short[get32(r, 8)] : "?",
+             get32(r, 8) < 10 ? cause_short[get32(r, 8)] : "?",
              get32(r, 12), get32(r, 16),
              get32(r, 20), enum_class_name(get32(r, 24)),
              enum_source_name(get32(r, 28)));
@@ -4212,27 +4528,29 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
         if (get32(r, 36) != 0 || get32(r, 40) != 0 || get32(r, 44) != 0 ||
             get32(r, 52) != 0 || get32(r, 56) != 0 || v != 0 ||
             get32(r, 32) != 0) {
-            comp("        %s%s; warm resets %lu%s; notes %lu of %lu, %lu "
-                 "refused; recreations failed %lu%s%s%s\n",
-                 get32(r, 36) != 0 ? "USB 3" : "USB 2.0",
-                 get32(r, 32) != 0 ? ", PDO" : "", get32(r, 40),
-                 get32(r, 44) != 0 ? ", given up" : "", get32(r, 48),
-                 get32(image, 28), get32(r, 52), get32(r, 56),
-                 (v & 1UL) != 0 ? "; deferred by the settle" : "",
-                 (v & 2UL) != 0 ? "; warm reset in flight" : "",
-                 (v & 4UL) != 0 ? "; PORTSC unreadable" : "");
+            comp_fit(8, "        %s%s; warm resets %lu%s; notes %lu of %lu, "
+                        "%lu refused; recreations failed %lu%s%s%s\n",
+                        get32(r, 36) != 0 ? "USB 3" : "USB 2.0",
+                        get32(r, 32) != 0 ? ", PDO" : "", get32(r, 40),
+                        get32(r, 44) != 0 ? ", given up" : "", get32(r, 48),
+                        get32(image, 28), get32(r, 52), get32(r, 56),
+                        (v & 1UL) != 0 ? "; deferred by the settle" : "",
+                        (v & 2UL) != 0 ? "; warm reset in flight" : "",
+                        (v & 4UL) != 0 ? "; PORTSC unreadable" : "");
         }
         /* Task 45.40's identity words, where the driver appends them. */
         if (portBytes >= SNAP_HCD_PORT_ID_WORDS * 4 &&
             (get32(r, 64) != 0 || get32(r, 68) != 0 || get32(r, 72) != 0)) {
             v = (get32(r, 68) >> 8) & 0xFFUL;
-            comp("        identity: last listed %04lX:%04lX on the %s form; "
-                 "%lu deferred, %lu spent%s\n",
-                 (get32(r, 64) >> 16) & 0xFFFFUL, get32(r, 64) & 0xFFFFUL,
-                 (get32(r, 68) & 1UL) != 0 ? "serial" : "location",
-                 get32(r, 72), get32(r, 76),
-                 v == 1UL ? "; failed, waits for a new connection"
-                          : v == 2UL ? "; bypass for this connection" : "");
+            comp_fit(18, "        identity: last listed %04lX:%04lX on the %s "
+                         "form; %lu deferred, %lu spent%s\n",
+                         (get32(r, 64) >> 16) & 0xFFFFUL,
+                         get32(r, 64) & 0xFFFFUL,
+                         (get32(r, 68) & 1UL) != 0 ? "serial" : "location",
+                         get32(r, 72), get32(r, 76),
+                         v == 1UL   ? "; failed, waits for a new connection"
+                         : v == 2UL ? "; bypass for this connection"
+                                    : "");
         }
     }
     comp("  (%lu of %lu root ports shown; the rest are Empty with nothing "
@@ -4251,8 +4569,9 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
 
 /* ---- controller tolerance: the extension's Tol, placed by the HCD header */
 
-/* XHCI_TOL_STATS (src/xhci_tol.h), its first 46 words in field order (34
- * before task 49.35, all a driver up to 3.4.3.0 serves); the histogram of
+/* XHCI_TOL_STATS (src/xhci_tol.h), its first 48 words in field order (34
+ * before task 49.35, all a driver up to 3.4.3.0 serves; 46 before task
+ * 50.30's step 3); the histogram of
  * 256 follows them. test\test_snap.c holds the driver to it. */
 static const char *const tol_counter_names[SNAP_TOL_NAMED_WORDS] = {
     "Tolerance", "CapMode", "AvgTrbMode", "CapApplied", "CapIntervals",
@@ -4266,7 +4585,8 @@ static const char *const tol_counter_names[SNAP_TOL_NAMED_WORDS] = {
     "HchRecoveries", "WindowRefused", "DeadEpisodes", "Contained",
     "ResetSettles", "ResetSettleMsMax", "ResetUnsettled", "ResetBusy",
     "RecoverPaced", "RecoverReruns", "HcEvents", "HcEventCode", "RearmFails",
-    "CmdDiverged", "CmdFatal", "MaskFails"
+    "CmdDiverged", "CmdFatal", "MaskFails", "ResetLeftSuppressed",
+    "HeldLinkSkips"
 };
 
 /* What each counter is, for the reader of a report (record 17 4.1-4.6). */
@@ -4299,7 +4619,9 @@ static const char *const tol_counter_meanings[SNAP_TOL_NAMED_WORDS] = {
     "Host Controller Events (each fails the controller)",
     "the last one's completion code", "interrupter re-arms that failed",
     "command ring divergences", "fatal Command Completion codes",
-    "interrupt masks or unmasks not proven"
+    "interrupt masks or unmasks not proven",
+    "thread reset requests a left command deferred",
+    "link actions a place held for no answer skipped"
 };
 
 /* xHCI 1.2 Table 6-90. */
@@ -4367,6 +4689,8 @@ static const char *tol_hold_text(unsigned long hold)
         return "HELD UNPOWERED, repowers spent";
     case 3:
         return "HELD UNPOWERED, over-current never cleared";
+    case 4:
+        return "HELD, the device stopped answering";
     default:
         return "held, reason ?";
     }
@@ -4379,14 +4703,492 @@ static unsigned long tol_location(const unsigned char *l, const char *where)
         l[26] == 0) {
         return 0;
     }
-    comp("  %-18s charges %lu: re-enumerations %u of 3, repowers %u of 3\n",
-         where, get32(l, 0), (unsigned)l[24], (unsigned)l[25]);
+    comp_fit(21, "  %-18s charges %lu: re-enumerations %u of 3, repowers %u "
+                 "of 3\n",
+                 where, get32(l, 0), (unsigned)l[24], (unsigned)l[25]);
     comp("  %-18s re-armed %lu, held %lu time(s)\n", "", get32(l, 8),
          get32(l, 4));
     if (l[26] != 0) {
         comp("  %-18s NOW %s\n", "", tol_hold_text(l[26]));
     }
     return 1;
+}
+
+/*
+ * Task 50.30, step 1 (design record 17 section 4.15.8; record 25 section
+ * 26 item 4): why the controller's resets were requested, from the
+ * extension's XHCI_TOL_WHY at the place the HCD header's words 952 and 953
+ * give. A header that ends at word 952 is an earlier driver's: nothing is
+ * printed. Each record is the request a recovery began from.
+ */
+#define SNAP_HCD_WHY_HEAD_WORDS     954UL
+#define SNAP_WHY_COUNTERS           26UL
+/* Task 50.30 step 3 (design record 17 section 4.15.6): the spread records
+ * appended to XHCI_TOL_WHY - the count, the ring's next index, then four
+ * records of place, hub, VID:PID and clock. A block that ends before them
+ * is an earlier driver's: nothing is printed. */
+#define SNAP_WHY_SPREAD_AT          272UL
+#define SNAP_WHY_SPREAD_RING        4UL
+#define SNAP_WHY_SPREAD_END         344UL
+/* Then XhciDeviceIsolation as the start read and decided it: the value
+ * read (0xFFFFFFFF none) and the state (mode 15:8, listed bit 1, applies
+ * bit 0). */
+#define SNAP_WHY_ISO_AT             344UL
+#define SNAP_WHY_ISO_END            352UL
+#define SNAP_WHY_RING               4UL
+#define SNAP_WHY_BYTES              256UL   /* 64 words */
+
+static const char *const snap_why_names[25] = {
+    "none", "CMD_KEPT", "CMD_NO_VERDICT", "ENGINE_ABORT_STUCK",
+    "ENGINE_DIVERGED", "HEALTH", "EVENT_RING", "INTERRUPTS", "POLL_RETIRE",
+    "DISABLE_SLOT", "EP0_RECOVERY", "EP0_LATE", "CREATE_LATE", "SLOT_ID",
+    "PORTSC_DEAD", "WARM_RESET", "TEARDOWN_STOP", "CFG_FAULT", "STREAMS",
+    "BOT_XFER", "RESUME_FAILED", "INJECTED", "HUB_UNANSWERED", "CMD_FATAL",
+    "XFER_FATAL"
+};
+
+/* The devices failed alone this start, newest first; recorded only - the
+ * driver acts on none of it, and a VID:PID names a model, not a device. */
+static void print_spread(const unsigned char *w, unsigned long clock)
+{
+    unsigned long count;
+    unsigned long next;
+    unsigned long shown;
+    unsigned long i;
+    unsigned long at;
+    unsigned long hub;
+    unsigned long vp;
+    const unsigned char *r;
+    char head[160];
+    char tail[48];
+
+    count = get32(w, SNAP_WHY_SPREAD_AT);
+    next = get32(w, SNAP_WHY_SPREAD_AT + 4);
+    if (count == 0) {
+        return;
+    }
+    if (next >= SNAP_WHY_SPREAD_RING) {
+        comp("  failed alone     ring index %lu: not decoded\n", next);
+        return;
+    }
+    comp("  failed alone     %lu device(s) this start, recorded only\n",
+         count);
+    shown = count < SNAP_WHY_SPREAD_RING ? count : SNAP_WHY_SPREAD_RING;
+    for (i = 0; i < shown; i++) {
+        at = (next + 2 * SNAP_WHY_SPREAD_RING - 1 - i) % SNAP_WHY_SPREAD_RING;
+        r = w + SNAP_WHY_SPREAD_AT + 8 + at * 16;
+        hub = get32(r, 4);
+        vp = get32(r, 8);
+        /* Task 50.30: one line as before when it fits, else broken before
+         * "about" (comp_split). */
+        if (hub != 0) {
+            _snprintf(head, sizeof(head) - 1,
+                      "  failed alone:    place %lu behind root port %lu "
+                      "route %05lX", get32(r, 0), hub >> 24, hub & 0xFFFFFUL);
+        } else {
+            _snprintf(head, sizeof(head) - 1,
+                      "  failed alone:    place %lu (a root port)",
+                      get32(r, 0));
+        }
+        head[sizeof(head) - 1] = '\0';
+        if (vp != 0) {
+            _snprintf(head + strlen(head), sizeof(head) - 1 - strlen(head),
+                      " [%04lx:%04lx],", vp >> 16, vp & 0xFFFFUL);
+        } else {
+            _snprintf(head + strlen(head), sizeof(head) - 1 - strlen(head),
+                      " [unknown],");
+        }
+        head[sizeof(head) - 1] = '\0';
+        _snprintf(tail, sizeof(tail) - 1, "about %lu s ago",
+                  (clock - get32(r, 12)) / 10);
+        tail[sizeof(tail) - 1] = '\0';
+        comp_split("                   ", head, tail);
+    }
+}
+
+/*
+ * Task 50.34 (design record 16 section 21.7): the Intel port switchover's
+ * latched decision for the running controller, words 956 to 1015 of the
+ * HCD header - the count, the status of the start's write of
+ * XhciIntelPortSwitchResult, and that record's words (src/xhci.h,
+ * XHCI_SNAPSHOT_HCD_PSW_*). A header that ends at word 956 is an earlier
+ * driver's, and a controller that is not Intel has no decision: nothing
+ * is printed. The words are tr_pswt.c's, the record's reader the driver's.
+ */
+#define SNAP_HCD_PSW_HEAD_WORDS     1016UL
+#define SNAP_HCD_PSW_AT             958UL
+
+static void print_psw(const unsigned char *hcd, unsigned long hcdBytes)
+{
+    char text[3072];
+    char *line;
+    char *nl;
+    unsigned long words;
+
+    if (hcdBytes < SNAP_HCD_PSW_HEAD_WORDS * 4 ||
+        get32(hcd, 4) < SNAP_HCD_PSW_HEAD_WORDS * 4) {
+        return;
+    }
+    words = get32(hcd, 956 * 4);
+    if (words > SNAP_HCD_PSW_HEAD_WORDS - SNAP_HCD_PSW_AT ||
+        !tr_psw_lines(hcd + SNAP_HCD_PSW_AT * 4, words * 4,
+                      get32(hcd, 957 * 4), 1, text, sizeof(text))) {
+        return;
+    }
+    line = text;
+    while (line != NULL && *line != '\0') {
+        nl = strchr(line, '\n');
+        if (nl != NULL) {
+            *nl = '\0';
+        }
+        comp_wrapped("  ", "%s", line);
+        line = (nl != NULL) ? nl + 1 : NULL;
+    }
+}
+
+static void print_why(const unsigned char *hcd, unsigned long hcdBytes,
+                      const unsigned char *ext, unsigned long extBytes,
+                      unsigned long clock)
+{
+    unsigned long headBytes;
+    unsigned long whyAt;
+    unsigned long whyBytes;
+    unsigned long next;
+    unsigned long kept;
+    unsigned long latched;
+    unsigned long i;
+    unsigned long at;
+    unsigned long v;
+    unsigned long shown;
+    const unsigned char *w;
+    const unsigned char *r;
+
+    if (hcdBytes < SNAP_HCD_WHY_HEAD_WORDS * 4 || ext == NULL) {
+        return;
+    }
+    headBytes = get32(hcd, 4);
+    if (headBytes < SNAP_HCD_WHY_HEAD_WORDS * 4) {
+        return;
+    }
+    whyAt = get32(hcd, 952 * 4);
+    whyBytes = get32(hcd, 953 * 4);
+    if (whyBytes < SNAP_WHY_BYTES || whyAt > extBytes ||
+        whyBytes > extBytes - whyAt || (whyAt & 3UL) != 0) {
+        comp_fitw(19, "  reset reasons    %lu bytes at +%lu: not a shape this "
+                      "build reads\n", whyBytes, whyAt);
+        return;
+    }
+    w = ext + whyAt;
+    next = get32(w, SNAP_WHY_COUNTERS * 4);
+    kept = get32(w, SNAP_WHY_COUNTERS * 4 + 4);
+    latched = get32(w, SNAP_WHY_COUNTERS * 4 + 8);
+    if (next >= SNAP_WHY_RING || kept > SNAP_WHY_RING) {
+        comp("  reset reasons    ring index %lu, %lu kept: not decoded\n",
+             next, kept);
+        return;
+    }
+    for (i = 0; i < kept; i++) {
+        at = (next + 2 * SNAP_WHY_RING - 1 - i) % SNAP_WHY_RING;
+        r = w + SNAP_WHY_COUNTERS * 4 + 24 + at * 32;
+        v = get32(r, 0);
+        comp_fit(19, "  reset requested: %s at root port %lu route %05lX slot "
+                     "%lu [%04lx:%04lx], extra %lu, about %lu s ago, after "
+                     "%lu recoveries%s\n",
+                     v < 25 ? snap_why_names[v] : "?", get32(r, 12),
+                     get32(r, 16),
+                     get32(r, 8), get32(r, 20) >> 16, get32(r, 20) & 0xFFFFUL,
+                     get32(r, 4), (clock - get32(r, 24)) / 10, get32(r, 28),
+                     latched == at + 1 ? " (the latch's record)" : "");
+    }
+    shown = 0;
+    for (i = 1; i < 25; i++) {
+        v = get32(w, i * 4);
+        if (v == 0) {
+            continue;
+        }
+        /* Task 50.30: one line, built in parts and fitted (cl_end). */
+        if (shown == 0) {
+            cl_add("  reset requests   by reason: %s %lu", snap_why_names[i],
+                   v);
+        } else {
+            cl_add(", %s %lu", snap_why_names[i], v);
+        }
+        shown++;
+    }
+    if (shown != 0) {
+        cl_end(30);
+    } else if (kept == 0) {
+        comp("  reset requests   none this start\n");
+    }
+    if (whyBytes >= SNAP_WHY_SPREAD_END) {
+        print_spread(w, clock);
+    }
+    if (whyBytes >= SNAP_WHY_ISO_END) {
+        v = get32(w, SNAP_WHY_ISO_AT);
+        next = get32(w, SNAP_WHY_ISO_AT + 4);
+        if (v == 0xFFFFFFFFUL) {
+            cl_add("  isolation        value none (the default 1), ");
+        } else {
+            cl_add("  isolation        value %lu, ", v);
+        }
+        cl_add("mode %lu, listed %s, applies %s", (next >> 8) & 0xFFUL,
+               (next & 2UL) != 0 ? "yes" : "no",
+               (next & 1UL) != 0 ? "yes" : "no");
+        cl_end(19);
+    }
+}
+
+/*
+ * Task 50.31 (design record 38 section 15.3): the retry of a controller
+ * stopped after repeated failures, from the extension's XHCI_TOL_RETRY at
+ * the place the HCD header's words 954 and 955 give. A header that ends
+ * before them is an earlier driver's. The block is judged as
+ * XhciTolRetryBlockShape judges it: the header covering both words, the
+ * size at least the fields this build knows, the offset 4-aligned and the
+ * block inside the image. The lines are drafts until the owner words them
+ * (design record 38 section 22, question 1). The word numbers are
+ * XHCI_TOL_RETRY's fields, held to the structure by test\test_snap.c.
+ */
+#define SNAP_HCD_RETRY_HEAD_WORDS   956UL
+#define SNAP_RETRY_BYTES            208UL   /* 52 words */
+#define SNAP_RETRY_NOT_SERVED       0
+#define SNAP_RETRY_OK               1
+#define SNAP_RETRY_BAD              2
+
+static int snap_retry_block(const unsigned char *hcd, unsigned long hcdBytes,
+                            const unsigned char *ext, unsigned long extBytes,
+                            const unsigned char **block, unsigned long *at,
+                            unsigned long *bytes)
+{
+    *block = NULL;
+    *at = 0;
+    *bytes = 0;
+    if (hcdBytes < SNAP_HCD_RETRY_HEAD_WORDS * 4 ||
+        get32(hcd, 4) < SNAP_HCD_RETRY_HEAD_WORDS * 4) {
+        return SNAP_RETRY_NOT_SERVED;
+    }
+    *at = get32(hcd, 954 * 4);
+    *bytes = get32(hcd, 955 * 4);
+    if (ext == NULL || *bytes < SNAP_RETRY_BYTES || (*at & 3UL) != 0 ||
+        *at > extBytes || *bytes > extBytes - *at) {
+        return SNAP_RETRY_BAD;
+    }
+    *block = ext + *at;
+    return SNAP_RETRY_OK;
+}
+
+/* Ticks to seconds at the nominal 100 ms, rounded up. */
+static unsigned long snap_retry_secs(unsigned long ticks)
+{
+    return ticks / 10UL + (ticks % 10UL != 0 ? 1UL : 0UL);
+}
+
+/* The seconds to a latched controller's deadline, as XHR_O_RETRY_NEXT_S
+ * gives them. */
+static unsigned long snap_retry_next_s(const unsigned char *r,
+                                       unsigned long clock)
+{
+    unsigned long gone;
+    unsigned long wait;
+
+    gone = clock - get32(r, 13 * 4);
+    wait = get32(r, 14 * 4);
+    return snap_retry_secs((gone >= wait) ? 0UL : wait - gone);
+}
+
+/* The terminal line's suffix where a try is pending (LATCHED with its
+ * deadline, or DUE): 1 with out filled; 0 where the earlier text stands. */
+static int snap_retry_suffix(const unsigned char *hcd, unsigned long hcdBytes,
+                             const unsigned char *ext, unsigned long extBytes,
+                             unsigned long clock, char *out, size_t cap)
+{
+    const unsigned char *r;
+    unsigned long at;
+    unsigned long bytes;
+    unsigned long state;
+    unsigned long next;
+
+    if (snap_retry_block(hcd, hcdBytes, ext, extBytes, &r, &at, &bytes) !=
+        SNAP_RETRY_OK) {
+        return 0;
+    }
+    state = get32(r, 8 * 4);
+    if (state == 2 && get32(r, 15 * 4) != 0) {
+        next = snap_retry_next_s(r, clock);
+    } else if (state == 3) {
+        next = 0;
+    } else {
+        return 0;
+    }
+    _snprintf(out, cap, "(next attempt in about %lu s, try %lu)", next,
+              get32(r, 10 * 4) + 1UL);
+    out[cap - 1] = '\0';
+    return 1;
+}
+
+static void print_retry(const unsigned char *hcd, unsigned long hcdBytes,
+                        const unsigned char *ext, unsigned long extBytes,
+                        unsigned long clock, unsigned long terminal)
+{
+    static const char *const outcome[5] = {
+        "none", "recovered", "stopped again", "closed off", "ended by a stop"
+    };
+    const unsigned char *r;
+    unsigned long at;
+    unsigned long bytes;
+    unsigned long value;
+    unsigned long state;
+    unsigned long ceiling;
+    unsigned long level;
+    unsigned long w;
+    unsigned long i;
+    unsigned long n;
+    unsigned long rel;
+    int shape;
+
+    shape = snap_retry_block(hcd, hcdBytes, ext, extBytes, &r, &at, &bytes);
+    if (shape == SNAP_RETRY_NOT_SERVED) {
+        comp("  Retries          not served by this driver\n");
+        return;
+    }
+    if (shape == SNAP_RETRY_BAD) {
+        comp("  Retries          not a shape this build reads\n"
+             "                   (%lu bytes at +%lu)\n", bytes, at);
+        return;
+    }
+    value = get32(r, 2 * 4);
+    if (get32(r, 0) == 0) {
+        comp("  Retries (XhciFailedRetrySec): %lu (not set)\n", value);
+    } else if (get32(r, 0) == 2) {
+        comp("  Retries (XhciFailedRetrySec): invalid (not a number), read "
+             "as %lu\n", value);
+    } else if (value == 0) {
+        comp("  Retries (XhciFailedRetrySec): off\n");
+    } else if (get32(r, 1 * 4) != value) {
+        comp("  Retries (XhciFailedRetrySec): invalid value %lu, read as "
+             "%lu\n", get32(r, 1 * 4), value);
+    } else {
+        comp("  Retries (XhciFailedRetrySec): %lu (read %lu)\n", value,
+             get32(r, 1 * 4));
+    }
+    if (get32(r, 3 * 4) > 1) {
+        comp("    qemu scale %lu\n", get32(r, 3 * 4));
+    }
+    state = get32(r, 8 * 4);
+    switch (state) {
+    case 0:
+        comp("    state: off\n");
+        break;
+    case 1:
+        comp("    state: watching\n");
+        break;
+    case 2:
+        if (get32(r, 15 * 4) != 0) {
+            comp("    state: stopped, next try in about %lu s (try %lu)\n",
+                 snap_retry_next_s(r, clock), get32(r, 10 * 4) + 1UL);
+        } else {
+            comp("    state: stopped\n");
+        }
+        break;
+    case 3:
+        comp("    state: due\n");
+        break;
+    case 4:
+        comp("    state: trying (attempt %lu of the burst)\n",
+             get32(r, 25 * 4));
+        break;
+    case 5:
+        comp("    state: %s\n", terminal == 6 ? "never (interrupts lost)"
+                                             : "never (closed off)");
+        break;
+    default:
+        comp("    state: %lu (?)\n", state);
+        break;
+    }
+    if (value != 0) {
+        /* The driver's W(level) (record 38 section 5.7): the value's
+         * seconds doubled in milliseconds up to ten minutes, then ticks at
+         * the nominal 100 ms plus one, divided by the qemu scale, held
+         * between the base and the ceiling; said in seconds without the
+         * stamp's extra tick. */
+        ceiling = get32(r, 5 * 4);
+        level = get32(r, 9 * 4);
+        w = (value <= 600UL) ? value * 1000UL : 600000UL;
+        for (i = 0; i < level && w < 600000UL; i++) {
+            w = (w > 600000UL - w) ? 600000UL : w + w;
+        }
+        w = (w + 99UL) / 100UL + 1UL;
+        if (get32(r, 3 * 4) > 1UL) {
+            w /= get32(r, 3 * 4);
+        }
+        if (w < get32(r, 4 * 4)) {
+            w = get32(r, 4 * 4);
+        }
+        if (w > ceiling) {
+            w = ceiling;
+        }
+        comp("    level %lu, next wait about %lu s\n", level,
+             snap_retry_secs(w > 1UL ? w - 1UL : w));
+        comp("    tries since the waits last reset: %lu\n", get32(r, 10 * 4));
+        comp("    tries this start: %lu, %lu recovered\n", get32(r, 11 * 4),
+             get32(r, 12 * 4));
+    }
+    if (get32(r, 11 * 4) != 0) {
+        if (get32(r, 16 * 4) == 2) {
+            comp("    last try: after a change at port %lu, about %lu s ago\n",
+                 get32(r, 36 * 4), (clock - get32(r, 17 * 4)) / 10UL);
+        } else {
+            comp("    last try: after the wait, about %lu s ago\n",
+                 (clock - get32(r, 17 * 4)) / 10UL);
+        }
+        n = get32(r, 27 * 4);
+        if (get32(r, 24 * 4) != 0) {
+            comp("    burst running: %lu attempt(s)\n", get32(r, 25 * 4));
+        } else {
+            comp("    last burst: %lu attempt(s), %s\n", get32(r, 26 * 4),
+                 n < 5 ? outcome[n] : "?");
+        }
+    }
+    rel = get32(r, 49 * 4);
+    if ((rel & 0x3FUL) == 0) {
+        comp("    release: none pending\n");
+    } else {
+        comp("    release:%s%s%s%s%s%s\n",
+             (rel & 0x01UL) != 0 ? " pending" : "",
+             (rel & 0x02UL) != 0 ? " unproven" : "",
+             (rel & 0x04UL) != 0 ? " proved" : "",
+             (rel & 0x08UL) != 0 ? " released" : "",
+             (rel & 0x10UL) != 0 ? " devices left" : "",
+             (rel & 0x20UL) != 0 ? " pinned" : "");
+    }
+    if (get32(r, 23 * 4) != 0) {
+        comp("    resume phase failed until the next success\n");
+    }
+    comp("    skipped: %lu (all ones), %lu (capability registers)\n",
+         get32(r, 28 * 4), get32(r, 29 * 4));
+    comp("    waited: %lu passes (power), %lu passes (leaving)\n",
+         get32(r, 30 * 4), get32(r, 31 * 4));
+    comp("    port changes seen: %lu; missed passes: %lu\n", get32(r, 32 * 4),
+         get32(r, 33 * 4));
+    if (get32(r, 34 * 4) != 0) {
+        comp("    sampling stopped (port %lu read all ones)\n",
+             get32(r, 35 * 4));
+    }
+    n = 0;
+    for (i = 0; i < get32(r, 41 * 4) && i < 3; i++) {
+        if (clock - get32(r, (38 + i) * 4) < get32(r, 7 * 4)) {
+            n++;
+        }
+    }
+    comp("    port-change tries in the last ten minutes: %lu of 3; refused: "
+         "%lu\n", n, get32(r, 42 * 4));
+    comp("    waits reset after a clean run: %lu\n", get32(r, 47 * 4));
+    comp("    armed %lu, leaving %lu (generation %lu)\n", get32(r, 19 * 4),
+         get32(r, 21 * 4), get32(r, 22 * 4));
+    comp("    clean run %s\n",
+         get32(r, 44 * 4) != 0 ? "being timed"
+                               : get32(r, 43 * 4) != 0 ? "owed, not timed"
+                                                       : "not owed");
 }
 
 /*
@@ -4425,6 +5227,7 @@ static void print_tol(const unsigned char *hcd, unsigned long hcdBytes,
     unsigned long v;
     const unsigned char *t;
     char where[32];
+    char suffix[64];
 
     if (hcdBytes < SNAP_HCD_HEAD_WORDS * 4 || get32(hcd, 0) == 0 ||
         get32(hcd, 0) > SNAP_HCD_VERSION) {
@@ -4451,9 +5254,9 @@ static void print_tol(const unsigned char *hcd, unsigned long hcdBytes,
     hubPorts = get32(hcd, 72);
     terminal = get32(hcd, 76);
     if (ext == NULL) {
-        comp("\ncontroller tolerance: the extension image is not in hand, "
-             "so it is not decoded;\n  controller: %s.\n",
-             tol_terminal_text(terminal));
+        comp_fit(2, "\ncontroller tolerance: the extension image is not in "
+                    "hand, so it is not decoded;\n");
+        comp_fitw(14, "  controller: %s.\n", tol_terminal_text(terminal));
         return;
     }
     if (tolAt > extBytes || tolBytes > extBytes - tolAt ||
@@ -4466,10 +5269,10 @@ static void print_tol(const unsigned char *hcd, unsigned long hcdBytes,
         rootAt > tolBytes || rootLocs > (tolBytes - rootAt) / locBytes ||
         hubAt > tolBytes || hubLocs > (tolBytes - hubAt) / locBytes ||
         (hubLocs != 0 && hubPorts == 0) || (tolAt & 3UL) != 0) {
-        comp("\ncontroller tolerance: %lu bytes at +%lu of a %lu-byte "
-             "extension,\n  %lu counter words, locations of %lu bytes - not "
-             "a shape this build\n  reads; not decoded.\n",
-             tolBytes, tolAt, extBytes, statsWords, locBytes);
+        comp_fit(2, "\ncontroller tolerance: %lu bytes at +%lu of a %lu-byte "
+                    "extension,\n  %lu counter words, locations of %lu bytes "
+                    "- not a shape this build\n  reads; not decoded.\n",
+                    tolBytes, tolAt, extBytes, statsWords, locBytes);
         return;
     }
     t = ext + tolAt;
@@ -4489,10 +5292,16 @@ static void print_tol(const unsigned char *hcd, unsigned long hcdBytes,
     comp("  XhciAvgTrbEsit   %lu (%s)\n", v,
          v == 0 ? "Average TRB Length 1024"
                 : v == 1 ? "an interrupt endpoint's Max ESIT Payload" : "?");
-    comp("  controller       %s\n", tol_terminal_text(terminal));
-    if (terminal == 2 || terminal == 3 || terminal == 5) {
+    comp_fitw(19, "  controller       %s\n", tol_terminal_text(terminal));
+    /* Task 50.31: a try pending replaces the stop-and-start line. */
+    if ((terminal == 2 || terminal == 3) &&
+        snap_retry_suffix(hcd, hcdBytes, ext, extBytes, clock, suffix,
+                          sizeof(suffix))) {
+        comp("                   %s\n", suffix);
+    } else if (terminal == 2 || terminal == 3 || terminal == 5) {
         comp("                   (it stays failed until a stop and start)\n");
     }
+    print_retry(hcd, hcdBytes, ext, extBytes, clock, terminal);
     count = get32(t, windowAt);
     if (count > SNAP_TOL_WINDOW_SLOTS) {
         count = SNAP_TOL_WINDOW_SLOTS;
@@ -4508,8 +5317,9 @@ static void print_tol(const unsigned char *hcd, unsigned long hcdBytes,
             inside++;
         }
     }
-    comp("  recovery window  %lu of 3 begun inside ten minutes; %lu refused\n",
-         inside, get32(t, windowAt + 16));
+    comp_fitw(19, "  recovery window  %lu of 3 begun inside at least ten "
+                  "minutes (about 22 minutes by the clock); %lu refused\n",
+                  inside, get32(t, windowAt + 16));
     shown = 0;
     for (i = 0; i < count; i++) {
         v = clock - get32(t, windowAt + 4 + i * 4);
@@ -4527,18 +5337,20 @@ static void print_tol(const unsigned char *hcd, unsigned long hcdBytes,
              "and not counted\n", count - inside);
     }
     v = get32(t, 33 * 4);
-    comp("  containment      %s\n",
-         v == 0 ? "none"
-                : v == 1 ? "RELEASED: Bus Master Enable read back clear, "
-                           "devices dropped"
-                : v == 2 ? "PINNED: no proof DMA stopped; buffer, transfers "
-                           "kept"
-                : v == 3 ? "RELEASED: the USB4 tunnel's path read back "
-                           "closed, devices dropped"
-                         : "?");
+    comp_fitw(19, "  containment      %s\n",
+                  v == 0 ? "none"
+                  : v == 1 ? "RELEASED: Bus Master Enable read back clear, "
+                             "devices dropped"
+                  : v == 2 ? "PINNED: no proof DMA stopped; buffer, "
+                             "transfers kept"
+                  : v == 3 ? "RELEASED: the USB4 tunnel's path read back "
+                             "closed, devices dropped"
+                           : "?");
     comp("  all-ones USBSTS  %lu episode(s) begun\n", get32(t, 32 * 4));
     comp("  tolerance clock  %lu ticks (100 ms nominal, at least 45 ms "
          "each)\n", clock);
+    print_why(hcd, hcdBytes, ext, extBytes, clock);
+    print_psw(hcd, hcdBytes);
 
     comp("\ntolerance counters, nonzero only:\n");
     codesAt = statsWords - SNAP_TOL_CODES;
@@ -4552,8 +5364,8 @@ static void print_tol(const unsigned char *hcd, unsigned long hcdBytes,
             continue;
         }
         if (i < SNAP_TOL_NAMED_WORDS) {
-            comp("  %-18s %8lu  %s\n", tol_counter_names[i], v,
-                 tol_counter_meanings[i]);
+            comp_fitw(31, "  %-18s %8lu  %s\n", tol_counter_names[i], v,
+                          tol_counter_meanings[i]);
         } else {
             comp("  counter %-10lu %8lu\n", i, v);
         }
@@ -4709,6 +5521,50 @@ static void pirq_routes(unsigned long v, unsigned long first)
     }
 }
 
+/* 50.32 (eject wait), design record 13 section 8.8.1: the paragraph and the
+ * summary line of a dump with a busy window, saying only what was not read.
+ * The register reads are PORTSC (its own window) and the HCD region's live
+ * DNCTRL word with the routing record (the HCD window). Both busy: the
+ * owner's texts (accepted 2026-11-20). The other three are DRAFTS for the
+ * owner. */
+static const char *busy_paragraph(int pscBusy, int hcdBusy)
+{
+    if (pscBusy && hcdBusy) {
+        return "\nThe controller was busy: its registers and its interrupt "
+               "routing were not read, and its records may be caught in the "
+               "middle of a change. Save the snapshot again in a minute.";
+    }
+    if (pscBusy) {
+        return "\nThe controller was busy: its port registers (PORTSC) were "
+               "not read, and its records may be caught in the middle of a "
+               "change. Save the snapshot again in a minute.";
+    }
+    if (hcdBusy) {
+        return "\nThe controller was busy: its DNCTRL register and its "
+               "interrupt routing were not read, and its records may be "
+               "caught in the middle of a change. Save the snapshot again in "
+               "a minute.";
+    }
+    return "\nThe controller was busy while part of this snapshot was taken, "
+           "so its records may be caught in the middle of a change. Save the "
+           "snapshot again in a minute.";
+}
+
+static const char *busy_summary(int pscBusy, int hcdBusy)
+{
+    if (pscBusy && hcdBusy) {
+        return "the controller was busy: registers not read; save again";
+    }
+    if (pscBusy) {
+        return "the controller was busy: PORTSC not read; save again";
+    }
+    if (hcdBusy) {
+        return "the controller was busy: DNCTRL and routing not read; save "
+               "again";
+    }
+    return "the controller was busy: records may be mixed; save again";
+}
+
 /*
  * Task 36.3: the interrupt routing quirk's record named. It is the HCD's,
  * not the extension's, so it is read from the header alone; the three
@@ -4737,6 +5593,14 @@ static void print_pirq(const unsigned char *hcd, unsigned long hcdBytes)
     char buf[16];
     char buf2[16];
 
+    /* 50.32 (eject wait): a busy HCD window carries no routing record (its
+     * words NOT_READ). The line is the owner's (accepted 2026-11-20). */
+    if (snapHcdBusy) {
+        comp("\ninterrupt routing (XhciIntelIrqRoute): not read - the controller "
+             "was busy.\n");
+        return;
+    }
+
     if (hcdBytes < SNAP_HCD_HEAD_WORDS * 4 || get32(hcd, 0) == 0 ||
         get32(hcd, 0) > SNAP_HCD_VERSION) {
         return;
@@ -4749,18 +5613,18 @@ static void print_pirq(const unsigned char *hcd, unsigned long hcdBytes)
         return;
     }
     if (hcdBytes < SNAP_HCD_PIRQ_HEAD_WORDS * 4) {
-        comp("\ninterrupt routing (XhciIntelIrqRoute): the HCD region "
-             "came back %lu bytes,\n  shorter than its %lu-byte header; "
-             "not decoded.\n", hcdBytes, headBytes);
+        comp_fit(2, "\ninterrupt routing (XhciIntelIrqRoute): the HCD region "
+                    "came back %lu bytes,\n  shorter than its %lu-byte "
+                    "header; not decoded.\n", hcdBytes, headBytes);
         return;
     }
     count = get32(hcd, SNAP_PIRQ_COUNT_AT * 4);
     if (count < SNAP_PIRQ_WORDS ||
         count > headBytes / 4 - SNAP_PIRQ_AT ||
         count > hcdBytes / 4 - SNAP_PIRQ_AT) {
-        comp("\ninterrupt routing (XhciIntelIrqRoute): a record of %lu "
-             "words in a %lu-byte\n  header - not a shape this build reads; "
-             "not decoded.\n", count, headBytes);
+        comp_fit(2, "\ninterrupt routing (XhciIntelIrqRoute): a record of %lu "
+                    "words in a %lu-byte\n  header - not a shape this build "
+                    "reads; not decoded.\n", count, headBytes);
         return;
     }
     p = hcd + SNAP_PIRQ_AT * 4;
@@ -4795,8 +5659,8 @@ static void print_pirq(const unsigned char *hcd, unsigned long hcdBytes)
     }
     v = PW(SNAP_PIRQ_DECISION);
     if (v < SNAP_PIRQ_DECISIONS) {
-        comp("  decision         %lu %s\n                   %s\n", v,
-             pirq_decision_name[v], pirq_decision_text[v]);
+        comp_fitw(19, "  decision         %lu %s\n                   %s\n", v,
+                      pirq_decision_name[v], pirq_decision_text[v]);
     } else {
         comp("  decision         %lu (unknown to this build)\n", v);
     }
@@ -4810,16 +5674,16 @@ static void print_pirq(const unsigned char *hcd, unsigned long hcdBytes)
     } else if ((PW(SNAP_PIRQ_IRQ_FLAGS) & 2UL) != 0) {
         /* CM_RESOURCE_INTERRUPT_MESSAGE: the first word is a reserved
          * USHORT then MessageCount, not a level. */
-        comp("  raw interrupt    %lu descriptor(s), a message grant: %lu "
-             "message(s),\n                   vector %lX, flags %lX, share "
-             "%lu\n", v, PW(SNAP_PIRQ_IRQ_LEVEL) >> 16,
-             PW(SNAP_PIRQ_IRQ_VECTOR), PW(SNAP_PIRQ_IRQ_FLAGS),
-             PW(SNAP_PIRQ_IRQ_SHARE));
+        comp_fit(19, "  raw interrupt    %lu descriptor(s), a message grant: "
+                     "%lu message(s),\n                   vector %lX, flags "
+                     "%lX, share %lu\n", v, PW(SNAP_PIRQ_IRQ_LEVEL) >> 16,
+                     PW(SNAP_PIRQ_IRQ_VECTOR), PW(SNAP_PIRQ_IRQ_FLAGS),
+                     PW(SNAP_PIRQ_IRQ_SHARE));
     } else {
-        comp("  raw interrupt    %lu descriptor(s); level %lu, vector %lu, "
-             "flags %lX, share %lu\n", v, PW(SNAP_PIRQ_IRQ_LEVEL),
-             PW(SNAP_PIRQ_IRQ_VECTOR), PW(SNAP_PIRQ_IRQ_FLAGS),
-             PW(SNAP_PIRQ_IRQ_SHARE));
+        comp_fit(19, "  raw interrupt    %lu descriptor(s); level %lu, vector "
+                     "%lu, flags %lX, share %lu\n", v, PW(SNAP_PIRQ_IRQ_LEVEL),
+                     PW(SNAP_PIRQ_IRQ_VECTOR), PW(SNAP_PIRQ_IRQ_FLAGS),
+                     PW(SNAP_PIRQ_IRQ_SHARE));
     }
     /* XHCI_PIRQ_IRQ_NONE (0) is also what a run that never reached the
      * IRQ leaves, so "neither" only where the IRQ was judged so. */
@@ -4972,8 +5836,8 @@ static void xs_time(const char *name, const unsigned char *p,
         comp("  %-27s %lu, the clock's rate unknown\n", name, n);
         return;
     }
-    comp("  %-27s %lu, mean %.1f us, longest %.1f us\n", name, n,
-         sum / (double)n, xs_us(get32(p, (at + 3) * 4), 0, perUs));
+    comp_fit(30, "  %-27s %lu, mean %.1f us, longest %.1f us\n", name, n,
+             sum / (double)n, xs_us(get32(p, (at + 3) * 4), 0, perUs));
 }
 
 static void xs_hist(const char *lead, const unsigned char *p,
@@ -4982,11 +5846,14 @@ static void xs_hist(const char *lead, const unsigned char *p,
 {
     unsigned long i;
 
-    comp("    %s", lead);
+    /* Task 50.30: one line, fitted (cl_end) under its first bucket, each
+     * bucket a clause of its own (a FIT_BREAK before it), so a name and
+     * its count are never parted. */
+    cl_addw("    %s", lead);
     for (i = 0; i < count; i++) {
-        comp(" %s %lu", names[i], get32(p, (at + i) * 4));
+        cl_addw("%c%s %lu", FIT_BREAK, names[i], get32(p, (at + i) * 4));
     }
-    comp("\n");
+    cl_end((unsigned)(5 + strlen(lead)));
 }
 
 /*
@@ -5149,10 +6016,10 @@ static void print_ata_latch(const unsigned char *hcd, unsigned long hcdBytes,
     bits = get32(ut, 9 * 4);
     for (lun = 0; lun < 16; lun++) {
         if ((bits >> (2 * lun)) & 3UL) {
-            comp("    LUN %lu: ATA PASS-THROUGH%s%s refused by the drive: "
-                 "answered here until it is replugged\n", lun,
-                 ((bits >> (2 * lun)) & 1UL) ? " (12)" : "",
-                 ((bits >> (2 * lun)) & 2UL) ? " (16)" : "");
+            comp_fitw(6, "    LUN %lu: ATA PASS-THROUGH%s%s refused by the "
+                         "drive: answered here until it is replugged\n", lun,
+                         ((bits >> (2 * lun)) & 1UL) ? " (12)" : "",
+                         ((bits >> (2 * lun)) & 2UL) ? " (16)" : "");
         }
     }
 }
@@ -5189,8 +6056,8 @@ static void print_ufail(const unsigned char *hcd, unsigned long hcdBytes,
         first > headBytes / 4 || first > hcdBytes / 4 ||
         records * words > headBytes / 4 - first ||
         records * words > hcdBytes / 4 - first) {
-        comp("    failures: %lu records of %lu words at word %lu - not a "
-             "shape this build reads\n", records, words, first);
+        comp_fitw(14, "    failures: %lu records of %lu words at word %lu - "
+                      "not a shape this build reads\n", records, words, first);
         return;
     }
     if (r >= records) {
@@ -5207,8 +6074,9 @@ static void print_ufail(const unsigned char *hcd, unsigned long hcdBytes,
     if (ut != NULL && get32(ut, 0) != count) {
         ut = NULL;      /* times from another send: not this ring's */
     }
-    comp("    failures: %lu recorded, the last %lu, oldest first%s:\n",
-         count, n, ut != NULL ? " (at: the class driver's seconds)" : "");
+    comp_fit(14, "    failures: %lu recorded, the last %lu, oldest first%s:\n",
+                 count, n,
+                 ut != NULL ? " (at: the class driver's seconds)" : "");
     for (i = 0; i < n; i++) {
         k = (count - n + i) % SNAP_UFAIL_ENTRIES;
         e = f + (1 + k * SNAP_UFAIL_ENTRY_WORDS) * 4;
@@ -5216,33 +6084,37 @@ static void print_ufail(const unsigned char *hcd, unsigned long hcdBytes,
         w1 = get32(e, 4);
         w2 = get32(e, 8);
         w3 = get32(e, 12);
+        /* Task 50.30: each of the two lines built in parts and fitted
+         * (cl_end), its continuations ten columns in. */
         if (ut != NULL) {
-            comp("      at %lu s: ", get32(ut, (1 + k) * 4));
+            cl_add("      at %lu s: ", get32(ut, (1 + k) * 4));
         } else {
-            comp("      ");
+            cl_add("      ");
         }
-        comp("%s, %s, tag %lu, CDB %02lXh, %lu bytes, timeout %lu s\n",
-             (w0 >> 24) < 11 ? ufail_event[w0 >> 24] : "?",
-             ((w0 >> 16) & 0xFFUL) < 3 ? ufail_origin[(w0 >> 16) & 0xFFUL]
-                                       : "?",
-             (w0 >> 8) & 0xFFUL, w0 & 0xFFUL, w3, w2 & 0xFFUL);
-        comp("        SRB status %02lXh, SCSI status %02lXh, ", w1 >> 24,
-             (w1 >> 16) & 0xFFUL);
+        cl_add("%s, %s, tag %lu, CDB %02lXh, %lu bytes, timeout %lu s",
+               (w0 >> 24) < 11 ? ufail_event[w0 >> 24] : "?",
+               ((w0 >> 16) & 0xFFUL) < 3 ? ufail_origin[(w0 >> 16) & 0xFFUL]
+                                         : "?",
+               (w0 >> 8) & 0xFFUL, w0 & 0xFFUL, w3, w2 & 0xFFUL);
+        cl_end(10);
+        cl_add("        SRB status %02lXh, SCSI status %02lXh, ", w1 >> 24,
+               (w1 >> 16) & 0xFFUL);
         if ((w2 >> 24) == 0xFFUL) {
-            comp("no sense");
+            cl_add("no sense");
         } else {
-            comp("sense %lX/%02lX/%02lX", w2 >> 24, (w1 >> 8) & 0xFFUL,
-                 w1 & 0xFFUL);
+            cl_add("sense %lX/%02lX/%02lX", w2 >> 24, (w1 >> 8) & 0xFFUL,
+                   w1 & 0xFFUL);
         }
-        comp("; slot state %lu, transfers%s%s%s%s%s%s%s\n",
-             (w2 >> 16) & 0xFFUL,
-             ((w2 >> 8) & 0x3FUL) == 0 ? " none" : "",
-             (w2 & 0x0100UL) ? " status" : "",
-             (w2 & 0x0200UL) ? " data" : "",
-             (w2 & 0x0400UL) ? " command" : "",
-             (w2 & 0x0800UL) ? " cancelling" : "",
-             (w2 & 0x1000UL) ? " final-IU-in" : "",
-             (w2 & 0x2000UL) ? " data-posted" : "");
+        cl_add("; slot state %lu, transfers%s%s%s%s%s%s%s",
+               (w2 >> 16) & 0xFFUL,
+               ((w2 >> 8) & 0x3FUL) == 0 ? " none" : "",
+               (w2 & 0x0100UL) ? " status" : "",
+               (w2 & 0x0200UL) ? " data" : "",
+               (w2 & 0x0400UL) ? " command" : "",
+               (w2 & 0x0800UL) ? " cancelling" : "",
+               (w2 & 0x1000UL) ? " final-IU-in" : "",
+               (w2 & 0x2000UL) ? " data-posted" : "");
+        cl_end(10);
     }
     print_ata_latch(hcd, hcdBytes, headBytes, r);
 }
@@ -5289,9 +6161,10 @@ static void print_xstat(const unsigned char *hcd, unsigned long hcdBytes)
         return;
     }
     if (hcdBytes < SNAP_HCD_XSTAT_HEAD_WORDS * 4) {
-        comp("\ntransfer size: the HCD region came back %lu bytes, shorter "
-             "than its %lu-byte\n  header; not decoded.\n", hcdBytes,
-             headBytes);
+        comp_fit(2, "\ntransfer size: the HCD region came back %lu bytes, "
+                    "shorter than its %lu-byte\n  header; not decoded.\n",
+                    hcdBytes,
+                    headBytes);
         return;
     }
     records = get32(hcd, SNAP_TELE_RECORDS_AT * 4);
@@ -5303,10 +6176,11 @@ static void print_xstat(const unsigned char *hcd, unsigned long hcdBytes)
         records > 16 ||
         SNAP_TELE_AT + records * recWords > headBytes / 4 ||
         SNAP_TELE_AT + records * recWords > hcdBytes / 4) {
-        comp("\ntransfer size: %lu readings and %lu records of %lu words in "
-             "a %lu-byte header -\n  not a shape this build reads; not "
-             "decoded.\n", get32(hcd, SNAP_XSTAT_COUNT_AT * 4), records,
-             recWords, headBytes);
+        comp_fit(2, "\ntransfer size: %lu readings and %lu records of %lu "
+                    "words in a %lu-byte header -\n  not a shape this build "
+                    "reads; not decoded.\n",
+                    get32(hcd, SNAP_XSTAT_COUNT_AT * 4), records,
+                    recWords, headBytes);
         return;
     }
     s = hcd + SNAP_XSTAT_AT * 4;
@@ -5323,12 +6197,14 @@ static void print_xstat(const unsigned char *hcd, unsigned long hcdBytes)
     perUs = (dTime >= 10000000.0 && dTsc > 0.0) ? dTsc / (dTime / 10.0)
                                                 : 0.0;
 
-    comp("\ntransfer size (task 36.21, since the controller's start");
+    /* Task 50.30: the heading built in parts and fitted (cl_end). */
+    cl_add("\ntransfer size (task 36.21, since the controller's start");
     /* The two pairs may be two processors' (src/xhci_xstat.h): the rate and
      * the ages are approximate where their counters disagree. */
     if (perUs > 0.0) {
-        comp(", %.0f s; the time-stamp\n  counter at %.1f counts a "
-             "microsecond):\n", dTime / 10000000.0, perUs);
+        cl_add(", %.0f s; the time-stamp\n  counter at %.1f counts a "
+               "microsecond):\n", dTime / 10000000.0, perUs);
+        cl_end(2);
         comp("  (times and ages converted at that rate, taken from two "
              "readings that may be\n  two processors': approximate where "
              "their counters disagree)\n");
@@ -5342,7 +6218,8 @@ static void print_xstat(const unsigned char *hcd, unsigned long hcdBytes)
                  "in this section is approximate)\n");
         }
     } else {
-        comp("; under 1 s or no\n  clock, so times are not converted):\n");
+        cl_add("; under 1 s or no\n  clock, so times are not converted):\n");
+        cl_end(2);
     }
     v = XW(SNAP_XS_WHY);
     comp("  XhciMaxTransferKB           %s", v < 6 ? why_text[v] : "?");
@@ -5351,17 +6228,18 @@ static void print_xstat(const unsigned char *hcd, unsigned long hcdBytes)
     }
     comp("\n  command size in effect      %lu bytes; asked %lu times\n",
          XW(SNAP_XS_BYTES), XW(SNAP_XS_QUERIES));
-    comp("  map grant                   %lu registers; a chunk spans at "
-         "most %lu pages\n", XW(SNAP_XS_GRANT), XW(SNAP_XS_PAGES));
-    comp("  bulk data URBs              %lu, %.0f bytes, the longest %lu\n",
-         XW(SNAP_XS_URBS),
-         (double)XW(SNAP_XS_BYTES_HI) * 4294967296.0 +
-             (double)XW(SNAP_XS_BYTES_LO),
-         XW(SNAP_XS_LENGTH_MAX));
+    comp_fit(30, "  map grant                   %lu registers; a chunk spans "
+                 "at most %lu pages\n", XW(SNAP_XS_GRANT), XW(SNAP_XS_PAGES));
+    comp_fit(30, "  bulk data URBs              %lu, %.0f bytes, the longest "
+                 "%lu\n",
+                 XW(SNAP_XS_URBS),
+                 (double)XW(SNAP_XS_BYTES_HI) * 4294967296.0 +
+                     (double)XW(SNAP_XS_BYTES_LO),
+                 XW(SNAP_XS_LENGTH_MAX));
     xs_hist("by length:", s, SNAP_XS_HIST, 9, xs_bucket_name);
-    comp("  chunks published            %lu; URBs of more than one %lu, the "
-         "most %lu\n", XW(SNAP_XS_CHUNKS), XW(SNAP_XS_MULTI),
-         XW(SNAP_XS_CHUNKS_MAX));
+    comp_fit(30, "  chunks published            %lu; URBs of more than one "
+                 "%lu, the most %lu\n", XW(SNAP_XS_CHUNKS), XW(SNAP_XS_MULTI),
+                 XW(SNAP_XS_CHUNKS_MAX));
     xs_hist("chunks a URB:", s, SNAP_XS_CHUNK_HIST, 5, chunk_names);
     xs_time("gap, retired to published", s, SNAP_XS_GAP, perUs);
     xs_time("ring empty, URB unfinished", s, SNAP_XS_EMPTY, perUs);
@@ -5380,47 +6258,52 @@ static void print_xstat(const unsigned char *hcd, unsigned long hcdBytes)
             continue;
         }
         b = t + SNAP_TELE_BODY * 4;
-        comp("  record %lu: %s, slot %lu, %lu sends taken", r + 1,
-             v == 1 ? "its device present"
-                    : v == 2 ? "its device departed" : "state unknown",
-             get32(t, 0), get32(t, 4));
+        /* Task 50.30: one line, built in parts and fitted (cl_end). */
+        cl_add("  record %lu: %s, slot %lu, %lu sends taken", r + 1,
+               v == 1 ? "its device present"
+                      : v == 2 ? "its device departed" : "state unknown",
+               get32(t, 0), get32(t, 4));
         if (perUs > 0.0) {
-            comp(", the last %.1f s before this dump",
-                 (((double)XW(SNAP_XS_TSC_NOW + 1) - (double)get32(t, 12)) *
-                      4294967296.0 +
-                  (double)XW(SNAP_XS_TSC_NOW) - (double)get32(t, 8)) /
-                     perUs / 1000000.0);
+            cl_add(", the last %.1f s before this dump",
+                   (((double)XW(SNAP_XS_TSC_NOW + 1) - (double)get32(t, 12)) *
+                        4294967296.0 +
+                    (double)XW(SNAP_XS_TSC_NOW) - (double)get32(t, 8)) /
+                       perUs / 1000000.0);
         }
-        comp("\n");
+        cl_end(4);
         v = get32(b, SNAP_TL_SOURCE * 4);
-        comp("    send %lu: command size %lu bytes (%s), %s, depth %lu, in "
-             "flight %lu (most %lu)\n", get32(b, SNAP_TL_SEQUENCE * 4),
-             get32(b, SNAP_TL_COMMAND_BYTES * 4),
-             v < 6 ? source_text[v] : "?",
-             get32(b, SNAP_TL_STREAMED * 4) ? "streamed" : "streamless",
-             get32(b, SNAP_TL_QUEUE_DEPTH * 4), get32(b, SNAP_TL_ACTIVE * 4),
-             get32(b, SNAP_TL_ACTIVE_MAX * 4));
-        comp("    commands %lu, with data %lu, %.0f bytes, the longest "
-             "%lu\n", get32(b, SNAP_TL_COMMANDS * 4),
-             get32(b, SNAP_TL_DATA_COMMANDS * 4),
-             (double)get32(b, SNAP_TL_DATA_HI * 4) * 4294967296.0 +
-                 (double)get32(b, SNAP_TL_DATA_LO * 4),
-             get32(b, SNAP_TL_LENGTH_MAX * 4));
+        comp_fit(6, "    send %lu: command size %lu bytes (%s), %s, depth "
+                    "%lu, in flight %lu (most %lu)\n",
+                    get32(b, SNAP_TL_SEQUENCE * 4),
+                    get32(b, SNAP_TL_COMMAND_BYTES * 4),
+                    v < 6 ? source_text[v] : "?",
+                    get32(b, SNAP_TL_STREAMED * 4) ? "streamed" : "streamless",
+                    get32(b, SNAP_TL_QUEUE_DEPTH * 4),
+                    get32(b, SNAP_TL_ACTIVE * 4),
+                    get32(b, SNAP_TL_ACTIVE_MAX * 4));
+        comp_fit(13, "    commands %lu, with data %lu, %.0f bytes, the "
+                     "longest %lu\n", get32(b, SNAP_TL_COMMANDS * 4),
+                     get32(b, SNAP_TL_DATA_COMMANDS * 4),
+                     (double)get32(b, SNAP_TL_DATA_HI * 4) * 4294967296.0 +
+                         (double)get32(b, SNAP_TL_DATA_LO * 4),
+                     get32(b, SNAP_TL_LENGTH_MAX * 4));
         xs_hist("by length:", b, SNAP_TL_HIST, 9, xs_bucket_name);
         xs_hist("in flight as one started:", b, SNAP_TL_DEPTH_HIST, 6,
                 depth_names);
-        comp("    sense %lu, protocol %lu, timeouts %lu, aborts %lu, LUN "
-             "resets %lu, port resets %lu, busy %lu\n",
-             get32(b, (SNAP_TL_COUNTERS + 1) * 4),
-             get32(b, (SNAP_TL_COUNTERS + 2) * 4),
-             get32(b, (SNAP_TL_COUNTERS + 3) * 4),
-             get32(b, (SNAP_TL_COUNTERS + 4) * 4),
-             get32(b, (SNAP_TL_COUNTERS + 5) * 4),
-             get32(b, (SNAP_TL_COUNTERS + 6) * 4),
-             get32(b, (SNAP_TL_COUNTERS + 7) * 4));
-        comp("    the size question since load: older bus %lu, out of contract "
-             "%lu, failed %lu\n", get32(b, SNAP_TL_UNSUPPORTED * 4),
-             get32(b, SNAP_TL_MALFORMED * 4), get32(b, SNAP_TL_TRANSPORT * 4));
+        comp_fit(10, "    sense %lu, protocol %lu, timeouts %lu, aborts %lu, "
+                     "LUN resets %lu, port resets %lu, busy %lu\n",
+                     get32(b, (SNAP_TL_COUNTERS + 1) * 4),
+                     get32(b, (SNAP_TL_COUNTERS + 2) * 4),
+                     get32(b, (SNAP_TL_COUNTERS + 3) * 4),
+                     get32(b, (SNAP_TL_COUNTERS + 4) * 4),
+                     get32(b, (SNAP_TL_COUNTERS + 5) * 4),
+                     get32(b, (SNAP_TL_COUNTERS + 6) * 4),
+                     get32(b, (SNAP_TL_COUNTERS + 7) * 4));
+        comp_fit(6, "    the size question since load: older bus %lu, out of "
+                    "contract %lu, failed %lu\n",
+                    get32(b, SNAP_TL_UNSUPPORTED * 4),
+                    get32(b, SNAP_TL_MALFORMED * 4),
+                    get32(b, SNAP_TL_TRANSPORT * 4));
         print_ufail(hcd, hcdBytes, headBytes, r);
     }
 #undef XW
@@ -5548,11 +6431,12 @@ static void print_intr_values(const unsigned char *k)
     read = get32(k, 0);
     used = get32(k, 1 * 4);
     if ((found & SNAP_POLL_FOUND_MODE) == 0) {
-        comp("  XhciInterruptMode      not found; in effect %lu (%s), the "
-             "default\n", used, poll_code(mode_text, 5, used));
+        comp_fit(25, "  XhciInterruptMode      not found; in effect %lu (%s), "
+                     "the default\n", used, poll_code(mode_text, 5, used));
     } else {
-        comp("  XhciInterruptMode      value %lu; in effect %lu (%s)\n",
-             read, used, poll_code(mode_text, 5, used));
+        comp_fit(25, "  XhciInterruptMode      value %lu; in effect %lu "
+                     "(%s)\n",
+                     read, used, poll_code(mode_text, 5, used));
         if (read > 4) {
             comp("        ^ %lu is reserved, so it runs as 0.\n", read);
         } else if (read == 4 && used == 0) {
@@ -5651,6 +6535,41 @@ static void msg4_value(const char *name, unsigned long v)
     }
 }
 
+/* The owner, 2026-11-15 (task 50.18): the amd64 driver reads none of the
+ * second claim pool's four values and its INF writes none (record 15
+ * section 4.5.16), so on 64-bit Windows they read as unused, not as not
+ * found. snapWin64: -1 not asked yet; the self-tests set it. */
+static int snapWin64 = -1;
+
+static int snap_win64(void)
+{
+    if (snapWin64 < 0) {
+#if defined(_WIN64)
+        snapWin64 = 1;
+#else
+        HMODULE k32 = GetModuleHandleA("kernel32.dll");
+        PFN_ISWOW64 isWow64 = NULL;
+        BOOL wow = FALSE;
+
+        if (k32 != NULL) {
+            isWow64 = (PFN_ISWOW64)GetProcAddress(k32, "IsWow64Process");
+        }
+        snapWin64 = (isWow64 != NULL && isWow64(GetCurrentProcess(), &wow) &&
+                     wow) ? 1 : 0;
+#endif
+    }
+    return snapWin64;
+}
+
+static void msg4_pool_value(const char *name, unsigned long v)
+{
+    if (v == 0xFFFFFFFFUL && snap_win64()) {
+        comp("  %-22s not used on 64-bit Windows\n", name);
+    } else {
+        msg4_value(name, v);
+    }
+}
+
 static void print_msg4(const unsigned char *k, unsigned long counters)
 {
     const unsigned char *m;
@@ -5666,15 +6585,16 @@ static void print_msg4(const unsigned char *k, unsigned long counters)
     comp("\nmessage interrupt, XhciInterruptMode 4:\n");
     status = get32(k, (SNAP_MSI_FIRST + 3) * 4);
     if (status < 15) {
-        comp("  connection status      %lu (%s)\n", status,
-             msg4_status_text[status]);
+        comp_fitw(25, "  connection status      %lu (%s)\n", status,
+                      msg4_status_text[status]);
     } else if ((status & 0xFF00UL) == 0x0100UL) {
-        comp("  connection status      %08lX (the controller could not be "
-             "quieted before the connect, step %lu)\n", status,
-             status & 0xFFUL);
+        comp_fitw(25, "  connection status      %08lX (the controller could "
+                      "not be quieted before the connect, step %lu)\n", status,
+                      status & 0xFFUL);
     } else if ((status & 0xFF00UL) == 0x0200UL) {
-        comp("  connection status      %08lX (the controller's PCI "
-             "location not found: %lu matches)\n", status, status & 0xFFUL);
+        comp_fitw(25, "  connection status      %08lX (the controller's PCI "
+                      "location not found: %lu matches)\n",
+                      status, status & 0xFFUL);
     } else if (status == 0x0300UL) {
         comp("  connection status      %08lX (not in this driver for this "
              "Windows)\n", status);
@@ -5687,17 +6607,19 @@ static void print_msg4(const unsigned char *k, unsigned long counters)
     msg4_value("XhciMsiStrategy", get32(m, 0));
     msg4_value("XhciMsiIsaIrq", get32(m, 1 * 4));
     msg4_value("XhciMsiShare", get32(m, 2 * 4));
-    msg4_value("XhciMsiPools", get32(m, 3 * 4));
-    msg4_value("XhciMsiInputFirst", get32(m, 4 * 4));
-    msg4_value("XhciMsiInputLast", get32(m, 5 * 4));
-    msg4_value("XhciMsiInputBudget", get32(m, 6 * 4));
+    msg4_pool_value("XhciMsiPools", get32(m, 3 * 4));
+    msg4_pool_value("XhciMsiInputFirst", get32(m, 4 * 4));
+    msg4_pool_value("XhciMsiInputLast", get32(m, 5 * 4));
+    msg4_pool_value("XhciMsiInputBudget", get32(m, 6 * 4));
     irq = get32(m, 7 * 4);
     status = get32(m, 9 * 4);
     if (irq != 0 || status != 0) {
-        comp("  claimed IRQ            %lu%s, %lu on it; the claim's "
-             "status %lu (%s)\n", irq, irq > 23 ? " (an input above 23)" : "",
-             get32(m, 8 * 4), status,
-             status < 15 ? msg4_status_text[status] : "this driver's own");
+        comp_fit(25, "  claimed IRQ            %lu%s, %lu on it; the claim's "
+                     "status %lu (%s)\n",
+                     irq, irq > 23 ? " (an input above 23)" : "",
+                     get32(m, 8 * 4), status,
+                     status < 15 ? msg4_status_text[status]
+                                 : "this driver's own");
         for (i = 0; i < 16; i++) {
             r = (get32(m, (12 + i / 4) * 4) >> ((i % 4) * 8)) & 0xFFUL;
             if (r != 0) {
@@ -5710,31 +6632,32 @@ static void print_msg4(const unsigned char *k, unsigned long counters)
     comp("  stranded events        %lu\n", get32(m, 17 * 4));
     r = get32(m, 18 * 4);
     if (r != 0) {
-        comp("  LOST                   %s\n",
-             r < 5 ? msg4_lost_text[r] : "?");
+        comp_fitw(25, "  LOST                   %s\n",
+                      r < 5 ? msg4_lost_text[r] : "?");
         if (r != 1) {
             comp("                         restart Windows to use this "
                  "controller\n");
         }
     }
     if (get32(m, 19 * 4) != 0 || get32(m, 22 * 4) != 0) {
-        comp("  brake                  claim %lu entries, %lu stray, run "
-             "%lu; this controller %lu, %lu stray\n", get32(m, 19 * 4),
-             get32(m, 20 * 4), get32(m, 21 * 4), get32(m, 22 * 4),
-             get32(m, 23 * 4));
+        comp_fit(25, "  brake                  claim %lu entries, %lu stray, "
+                     "run %lu; this controller %lu, %lu stray\n",
+                     get32(m, 19 * 4),
+                     get32(m, 20 * 4), get32(m, 21 * 4), get32(m, 22 * 4),
+                     get32(m, 23 * 4));
     }
     if (get32(m, 24 * 4) != 0) {
-        comp("  refused this boot      %lu function(s) in the table (one "
-             "more when it is full)\n", get32(m, 24 * 4));
+        comp_fitw(25, "  refused this boot      %lu function(s) in the table "
+                      "(one more when it is full)\n", get32(m, 24 * 4));
     }
     if (get32(m, 25 * 4) & 2UL) {
-        comp("  inputs above 23        scanned %lu to %lu on %lu I/O APIC(s); "
-             "highest with a vector %lu\n", get32(m, 26 * 4),
-             get32(m, 27 * 4), get32(m, 29 * 4), get32(m, 30 * 4));
-        comp("    budget               %lu; this claim charged %lu; the "
-             "boot's charges %lu; refused for the budget %lu\n",
-             get32(m, 33 * 4), get32(m, 34 * 4), get32(m, 35 * 4),
-             get32(m, 36 * 4));
+        comp_fit(25, "  inputs above 23        scanned %lu to %lu on %lu I/O "
+                     "APIC(s); highest with a vector %lu\n", get32(m, 26 * 4),
+                     get32(m, 27 * 4), get32(m, 29 * 4), get32(m, 30 * 4));
+        comp_fit(25, "    budget               %lu; this claim charged %lu; "
+                     "the boot's charges %lu; refused for the budget %lu\n",
+                     get32(m, 33 * 4), get32(m, 34 * 4), get32(m, 35 * 4),
+                     get32(m, 36 * 4));
         if (get32(m, 37 * 4) != 0) {
             comp("    first refused        input %lu, %s\n",
                  (get32(m, 37 * 4) >> 8) & 0xFFUL,
@@ -5770,23 +6693,24 @@ static void print_held(const unsigned char *k, unsigned long counters)
         comp("  line held by another   not looked for (98 SE and ME, a "
              "line given)\n");
     } else if (scan == 1) {
-        comp("  line held by another   no: IRQ %lu, %lu functions read, "
-             "%lu not confirmed\n",
-             get32(h, 5 * 4), get32(h, 1 * 4), get32(h, 2 * 4));
+        comp_fit(25, "  line held by another   no: IRQ %lu, %lu functions "
+                     "read, %lu not confirmed\n",
+                     get32(h, 5 * 4), get32(h, 1 * 4), get32(h, 2 * 4));
     } else if (scan == 2) {
-        comp("  line held by another   likely: %02lX:%02lX.%lu %04lX:%04lX "
-             "seen asserting\n                         IRQ %lu at every "
-             "read (%lu functions read)\n",
-             (bdf >> 8) & 0xFFUL, (bdf >> 3) & 0x1FUL, bdf & 0x7UL,
-             id & 0xFFFFUL, (id >> 16) & 0xFFFFUL, get32(h, 5 * 4),
-             get32(h, 1 * 4));
+        comp_fit(25, "  line held by another   likely: %02lX:%02lX.%lu "
+                     "%04lX:%04lX seen asserting\n"
+                     "                         IRQ %lu at every read (%lu "
+                     "functions read)\n",
+                     (bdf >> 8) & 0xFFUL, (bdf >> 3) & 0x1FUL, bdf & 0x7UL,
+                     id & 0xFFFFUL, (id >> 16) & 0xFFFFUL, get32(h, 5 * 4),
+                     get32(h, 1 * 4));
     } else if (scan == 4) {
-        comp("  line held by another   inconclusive: IRQ %lu, %lu "
-             "candidates not confirmed\n",
-             get32(h, 5 * 4), get32(h, 2 * 4));
+        comp_fit(25, "  line held by another   inconclusive: IRQ %lu, %lu "
+                     "candidates not confirmed\n",
+                     get32(h, 5 * 4), get32(h, 2 * 4));
     } else {
-        comp("  line held by another   not known: the line (%lu) or "
-             "config space unread\n", get32(h, 5 * 4));
+        comp_fitw(25, "  line held by another   not known: the line (%lu) or "
+                      "config space unread\n", get32(h, 5 * 4));
     }
 }
 
@@ -5820,21 +6744,22 @@ static void print_intr(const unsigned char *hcd, unsigned long hcdBytes,
         return;
     }
     if (counters < SNAP_HCD_COUNTER_WORDS) {
-        comp("\nevent delivery: %lu counter words at +%lu in %lu bytes - "
-             "not a shape this build\n  reads; not decoded.\n", counters,
-             countersAt, hcdBytes);
+        comp_fit(2, "\nevent delivery: %lu counter words at +%lu in %lu bytes "
+                    "- not a shape this build\n  reads; not decoded.\n",
+                    counters,
+                    countersAt, hcdBytes);
         return;
     }
     k = hcd + countersAt + SNAP_POLL_FIRST * 4;
     delivery = get32(k, 2 * 4);
 
-    comp("\nevent delivery (design record 15), as the last start or the "
-         "dead-line move set it:\n");
+    comp_fit(2, "\nevent delivery (design record 15), as the last start or "
+                "the dead-line move set it:\n");
     print_intr_values(k);
     comp("  delivery in effect     %s\n",
          poll_code(poll_delivery_text, SNAP_POLL_DELIVERIES, delivery));
-    comp("    reason               %s\n",
-         poll_reason_name(get32(k, 3 * 4)));
+    comp_fitw(25, "    reason               %s\n",
+                  poll_reason_name(get32(k, 3 * 4)));
     status = get32(k, 4 * 4);
     pin = get32(k, 5 * 4);
     if (status == SNAP_POLL_PIN_READ) {
@@ -5851,20 +6776,21 @@ static void print_intr(const unsigned char *hcd, unsigned long hcdBytes,
         comp("  Interrupt Pin          not read\n");
     }
     if (delivery == SNAP_POLL_DELIVERY_POLL) {
-        comp("        ^ polled: XhciImodInterval250ns has no effect, since "
-             "nothing interrupts;\n          an event waits for the next "
-             "poll, at most the period below.\n");
+        comp_fitw(10, "        ^ polled: XhciImodInterval250ns has no "
+                      "effect, since nothing interrupts; an event waits for "
+                      "the next poll, at most the period below.\n");
     }
 
-    comp("  poller                 %s; last armed %lu ms (%s)\n",
-         poll_code(poll_role_text, 3, get32(k, 10 * 4)), get32(k, 11 * 4),
-         poll_code(poll_bus_text, 5, get32(k, 12 * 4)));
-    comp("  poll runs              %lu, %lu of them found an event; peeks "
-         "%lu, %lu hits\n", get32(k, 13 * 4), get32(k, 14 * 4),
-         get32(k, 15 * 4), get32(k, 16 * 4));
-    comp("  promotions %lu, parks %lu, kicks %lu, arms displaced %lu\n",
-         get32(k, 17 * 4), get32(k, 18 * 4), get32(k, 19 * 4),
-         get32(k, 20 * 4));
+    comp_fit(25, "  poller                 %s; last armed %lu ms (%s)\n",
+                 poll_code(poll_role_text, 3, get32(k, 10 * 4)),
+                 get32(k, 11 * 4),
+                 poll_code(poll_bus_text, 5, get32(k, 12 * 4)));
+    comp_fit(25, "  poll runs              %lu, %lu of them found an event; "
+                 "peeks %lu, %lu hits\n", get32(k, 13 * 4), get32(k, 14 * 4),
+                 get32(k, 15 * 4), get32(k, 16 * 4));
+    comp_fit(13, "  promotions %lu, parks %lu, kicks %lu, arms displaced "
+                 "%lu\n", get32(k, 17 * 4), get32(k, 18 * 4), get32(k, 19 * 4),
+                 get32(k, 20 * 4));
     v = get32(k, 21 * 4);
     if (v == SNAP_POLL_NOT_FOUND) {
         comp("  interval between runs  none observed yet (%lu discarded)\n",
@@ -5873,20 +6799,21 @@ static void print_intr(const unsigned char *hcd, unsigned long hcdBytes,
         comp("  interval between runs  %lu to %lu ms (%lu discarded)\n", v,
              get32(k, 22 * 4), get32(k, 23 * 4));
     }
-    comp("  watcher                looks %lu, asserted %lu, stale pairs "
-         "%lu\n", get32(k, 24 * 4), get32(k, 25 * 4), get32(k, 26 * 4));
+    comp_fit(25, "  watcher                looks %lu, asserted %lu, stale "
+                 "pairs %lu\n",
+                 get32(k, 24 * 4), get32(k, 25 * 4), get32(k, 26 * 4));
     if (get32(k, 27 * 4) != 0) {
-        comp("  dead-line move         MOVED to polling; the interrupter's "
-             "mask %s at the move\n",
-             get32(k, 31 * 4) != 0 ? "read back down"
-                                   : "was NOT proven down");
+        comp_fit(25, "  dead-line move         MOVED to polling; the "
+                     "interrupter's mask %s at the move\n",
+                     get32(k, 31 * 4) != 0 ? "read back down"
+                                           : "was NOT proven down");
     } else {
         comp("  dead-line move         none\n");
     }
-    comp("    line's retirement    %s; attempts %lu\n",
-         poll_code(poll_retired_text, SNAP_POLL_RETIRED_STATES,
-                   get32(k, 29 * 4)),
-         get32(k, 28 * 4));
+    comp_fit(25, "    line's retirement    %s; attempts %lu\n",
+                 poll_code(poll_retired_text, SNAP_POLL_RETIRED_STATES,
+                           get32(k, 29 * 4)),
+                 get32(k, 28 * 4));
     if (get32(k, 30 * 4) != 0) {
         comp("  PCI Interrupt Disable  found set and cleared by a start "
              "(%lu)\n", get32(k, 30 * 4));
@@ -5896,8 +6823,8 @@ static void print_intr(const unsigned char *hcd, unsigned long hcdBytes,
 
     if (headBytes < SNAP_HCD_DELIVERY_HEAD_WORDS * 4 ||
         hcdBytes < SNAP_HCD_DELIVERY_HEAD_WORDS * 4) {
-        comp("  extension words        not placed by this driver's HCD "
-             "header (%lu bytes)\n", headBytes);
+        comp_fitw(25, "  extension words        not placed by this driver's "
+                      "HCD header (%lu bytes)\n", headBytes);
         return;
     }
     at = get32(hcd, SNAP_HCD_DELIVERY_AT * 4);
@@ -5908,27 +6835,27 @@ static void print_intr(const unsigned char *hcd, unsigned long hcdBytes,
     }
     if (words < SNAP_POLL_EXT_WORDS || (at & 3UL) != 0 || at > extBytes ||
         SNAP_POLL_EXT_WORDS > (extBytes - at) / 4) {
-        comp("  extension words        %lu at +%lu of a %lu-byte extension "
-             "- not a shape this build\n                         reads; not "
-             "decoded\n", words, at, extBytes);
+        comp_fitw(25, "  extension words        %lu at +%lu of a %lu-byte "
+                      "extension - not a shape this build reads; not "
+                      "decoded\n", words, at, extBytes);
         return;
     }
     e = ext + at;
-    comp("  extension words        EventDelivery %lu (%s),\n"
-         "                         PollService %lu, PollServiceGen %lu, "
-         "LineMoved %lu,\n"
-         "                         LineRetired %lu, "
-         "LineRetireState %lu (%s)\n",
-         get32(e, 0),
-         poll_code(poll_delivery_text, SNAP_POLL_DELIVERIES, get32(e, 0)),
-         get32(e, 4), get32(e, 8), get32(e, 12), get32(e, 16),
-         get32(e, 20),
-         poll_code(poll_retired_text, SNAP_POLL_RETIRED_STATES,
-                   get32(e, 20)));
+    comp_fit(25, "  extension words        EventDelivery %lu (%s),\n"
+                 "                         PollService %lu, PollServiceGen "
+                 "%lu, LineMoved %lu,\n                         LineRetired "
+                 "%lu, LineRetireState %lu (%s)\n",
+                 get32(e, 0),
+                 poll_code(poll_delivery_text, SNAP_POLL_DELIVERIES,
+                           get32(e, 0)),
+                 get32(e, 4), get32(e, 8), get32(e, 12), get32(e, 16),
+                 get32(e, 20),
+                 poll_code(poll_retired_text, SNAP_POLL_RETIRED_STATES,
+                           get32(e, 20)));
     if (get32(e, 0) != delivery) {
-        comp("        ^ the extension and the counter block name different "
-             "deliveries: the two\n          regions were read at different "
-             "times (see the coherence line).\n");
+        comp_fitw(10, "        ^ the extension and the counter block name "
+                      "different deliveries: the two regions were read at "
+                      "different times (see the coherence line).\n");
     }
 }
 
@@ -6237,33 +7164,37 @@ static void print_msi(const unsigned char *hcd, unsigned long hcdBytes)
         return;
     }
     if (counters < SNAP_MSI_FIRST + SNAP_MSI_WORDS) {
-        comp("\nmessage interrupts: %lu counter words - not a shape this "
-             "build reads; not decoded.\n", counters);
+        comp_fit(2, "\nmessage interrupts: %lu counter words - not a shape "
+                    "this build reads; not decoded.\n", counters);
         return;
     }
     k = hcd + countersAt + SNAP_MSI_FIRST * 4;
 
-    comp("\nmessage interrupts (design records 15 and 18), as the last "
-         "start and filter set them:\n");
-    comp("  routines               %s\n",
-         poll_code(msi_routines_text, SNAP_MSI_ROUTINES, get32(k, 0)));
-    comp("  messages connected     %lu%s; capability %s\n", get32(k, 1 * 4),
-         get32(k, 1 * 4) != 0 ? " (the connection's table; one is served)"
-                              : " (no message connected)",
-         msi_capability(get32(k, 2 * 4)));
+    comp_fit(2, "\nmessage interrupts (design records 15 and 18), as the last "
+                "start and filter set them:\n");
+    comp_fitw(25, "  routines               %s\n",
+                  poll_code(msi_routines_text, SNAP_MSI_ROUTINES,
+                            get32(k, 0)));
+    comp_fit(25, "  messages connected     %lu%s; capability %s\n",
+                 get32(k, 1 * 4),
+                 get32(k, 1 * 4) != 0
+                     ? " (the connection's table; one is served)"
+                     : " (no message connected)",
+                 msi_capability(get32(k, 2 * 4)));
     comp("    connection status    %08lX; message descriptors in the "
          "grant %lu\n", get32(k, 3 * 4), get32(k, 4 * 4));
     v = get32(k, 5 * 4);
     if (v == 0 && get32(k, 6 * 4) == 0) {
         comp("  x86 helper             not looked for\n");
     } else {
-        comp("  x86 helper             %s; looks %lu, last status %08lX\n",
-             poll_code(msi_state_text, SNAP_MSI_STATES, v),
-             get32(k, 6 * 4), get32(k, 7 * 4));
+        comp_fit(25, "  x86 helper             %s; looks %lu, last status "
+                     "%08lX\n",
+                     poll_code(msi_state_text, SNAP_MSI_STATES, v),
+                     get32(k, 6 * 4), get32(k, 7 * 4));
         if (get32(k, 8 * 4) != 0) {
-            comp("    refused for          %s\n",
-                 poll_code(msi_refusal_text, SNAP_MSI_REFUSALS,
-                           get32(k, 8 * 4)));
+            comp_fitw(25, "    refused for          %s\n",
+                          poll_code(msi_refusal_text, SNAP_MSI_REFUSALS,
+                                    get32(k, 8 * 4)));
         }
         v = get32(k, 9 * 4);
         if (v != 0) {
@@ -6278,19 +7209,20 @@ static void print_msi(const unsigned char *hcd, unsigned long hcdBytes)
              "ME, 2000 and XP never\n                         send one)\n");
         return;
     }
-    comp("  requirements filter    #%lu: %s\n", get32(k, 10 * 4),
-         poll_code(msi_class_text, SNAP_MSI_CLASSES, get32(k, 11 * 4)));
-    comp("    outcome              %s\n",
-         msi_outcome_name(get32(k, 12 * 4)));
+    comp_fitw(25, "  requirements filter    #%lu: %s\n", get32(k, 10 * 4),
+                  poll_code(msi_class_text, SNAP_MSI_CLASSES,
+                            get32(k, 11 * 4)));
+    comp_fitw(25, "    outcome              %s\n",
+                  msi_outcome_name(get32(k, 12 * 4)));
     v = get32(k, 13 * 4);
     if (v == SNAP_POLL_NOT_FOUND) {
         comp("    mode as read         not set (mode 0's default)\n");
     } else {
         comp("    mode as read         %lu\n", v);
     }
-    comp("    the list             %lu configuration(s), %lu message and "
-         "%lu line member(s); %lu stripped\n", get32(k, 14 * 4),
-         get32(k, 15 * 4), get32(k, 16 * 4), get32(k, 17 * 4));
+    comp_fit(25, "    the list             %lu configuration(s), %lu message "
+                 "and %lu line member(s); %lu stripped\n", get32(k, 14 * 4),
+                 get32(k, 15 * 4), get32(k, 16 * 4), get32(k, 17 * 4));
 }
 
 /*
@@ -6463,16 +7395,18 @@ static void print_ssusp(const unsigned char *image, unsigned long bytes)
              "reads\n", records, words);
         return;
     }
-    comp("  slot  link        Ss win armed root step  firsts     capable    "
-         "pending    far armedfn    last\n");
+    /* Two rows a slot, the second under the first's link column, so the
+     * table stays within 79 columns (task 50.30). */
+    comp("  slot  link        Ss win armed root step  firsts     capable\n"
+         "        pending    far armedfn    last\n");
     for (i = 0; i < records; i++) {
         r = image + (at + i * words) * 4;
         if (get32(r, 0) == 0) {
             continue;
         }
         v = get32(r, 4);
-        comp("  %4lu  %-10s  %2lu %3lu %5lu %4lu %4lu  0x%08lX 0x%08lX "
-             "0x%08lX %3lu 0x%08lX 0x%06lX\n",
+        comp("  %4lu  %-10s  %2lu %3lu %5lu %4lu %4lu  0x%08lX 0x%08lX\n"
+             "        0x%08lX %3lu 0x%08lX 0x%06lX\n",
              get32(r, 0), (v & 0xFUL) < 6 ? link_names[v & 0xFUL] : "?",
              (v >> 8) & 1UL, (v >> 9) & 1UL, (v >> 10) & 1UL,
              (v >> 11) & 1UL, (v >> 16) & 0xFFUL, get32(r, 8),
@@ -6516,8 +7450,8 @@ static void print_xport(const unsigned char *image, unsigned long bytes)
     if (words < 10 || words > 64 || records > 255 ||
         at < SNAP_HCD_XPORT_HEAD + 3 || at > headBytes / 4 ||
         records > (headBytes / 4 - at) / words) {
-        comp("  device records: %lu of %lu words at %lu - not a shape this "
-             "build reads\n", records, words, at);
+        comp_fitw(18, "  device records: %lu of %lu words at %lu - not a "
+                      "shape this build reads\n", records, words, at);
         return;
     }
     for (i = 0; i < records; i++) {
@@ -6537,11 +7471,13 @@ static void print_xport(const unsigned char *image, unsigned long bytes)
         x.Triple = get32(r, 32);
         x.Count = get32(r, 36);
         tr_xport_text(&x, text, sizeof(text));
-        comp("  slot %2lu, root port %lu, route %05lX: %s\n", x.Slot, x.Port,
-             x.Route, text);
-        comp("           transport %lu, why %lu, alternate %lu, inputs 0x%lX, "
-             "triple %06lX\n", x.Transport, x.Why, x.Alternate, x.Inputs,
-             x.Triple);
+        comp_fitw(11, "  slot %2lu, root port %lu, route %05lX: %s\n",
+                      x.Slot, x.Port,
+                      x.Route, text);
+        comp_fit(11, "           transport %lu, why %lu, alternate %lu, "
+                     "inputs 0x%lX, triple %06lX\n",
+                     x.Transport, x.Why, x.Alternate, x.Inputs,
+                     x.Triple);
         shown++;
     }
     if (shown == 0) {
@@ -6583,8 +7519,8 @@ static void print_idplace(const unsigned char *image, unsigned long bytes)
     if (words < 5 || words > 64 || records > 255 ||
         at < SNAP_HCD_IDPLACE_HEAD + 3 || at > headBytes / 4 ||
         records > (headBytes / 4 - at) / words) {
-        comp("  places: %lu of %lu words at %lu - not a shape this build "
-             "reads\n", records, words, at);
+        comp_fitw(10, "  places: %lu of %lu words at %lu - not a shape this "
+                      "build reads\n", records, words, at);
         return;
     }
     for (i = 0; i < records; i++) {
@@ -6594,14 +7530,15 @@ static void print_idplace(const unsigned char *image, unsigned long bytes)
             continue;
         }
         latch = (get32(r, 8) >> 8) & 0xFFUL;
-        comp("  root port %lu, route %05lX: last listed %04lX:%04lX on the "
-             "%s form; %lu deferred, %lu spent%s\n",
-             key & 0xFFUL, (key >> 8) & 0xFFFFFUL,
-             (get32(r, 4) >> 16) & 0xFFFFUL, get32(r, 4) & 0xFFFFUL,
-             (get32(r, 8) & 1UL) != 0 ? "serial" : "location",
-             get32(r, 12), get32(r, 16),
-             latch == 1UL ? "; failed, waits for a new connection"
-                          : latch == 2UL ? "; bypass for this connection" : "");
+        comp_fit(4, "  root port %lu, route %05lX: last listed %04lX:%04lX on "
+                    "the %s form; %lu deferred, %lu spent%s\n",
+                    key & 0xFFUL, (key >> 8) & 0xFFFFFUL,
+                    (get32(r, 4) >> 16) & 0xFFFFUL, get32(r, 4) & 0xFFFFUL,
+                    (get32(r, 8) & 1UL) != 0 ? "serial" : "location",
+                    get32(r, 12), get32(r, 16),
+                    latch == 1UL   ? "; failed, waits for a new connection"
+                    : latch == 2UL ? "; bypass for this connection"
+                                   : "");
         shown++;
     }
     if (shown == 0) {
@@ -6717,8 +7654,8 @@ static void print_isop(const unsigned char *image, unsigned long bytes)
     if (words < 16 || words > 64 || records > 64 ||
         at < SNAP_HCD_ISOP_HEAD + 4 || at > headBytes / 4 ||
         records > (headBytes / 4 - at) / words) {
-        comp("  streams: %lu of %lu words at %lu - not a shape this build "
-             "reads\n", records, words, at);
+        comp_fitw(11, "  streams: %lu of %lu words at %lu - not a shape this "
+                      "build reads\n", records, words, at);
         return;
     }
     perUs = hcd_tsc_per_us(image, bytes);
@@ -6728,18 +7665,19 @@ static void print_isop(const unsigned char *image, unsigned long bytes)
         if (v == 0) {
             continue;
         }
-        comp("  slot %lu, endpoint %lu (DCI %lu): a ring of %lu TRBs%s; "
-             "%lu of %lu requests out at most\n",
-             (v >> 8) & 0xFFUL, (v & 0xFFUL) / 2, v & 0xFFUL,
-             get32(r, 4) & 0xFFFFUL,
-             (get32(r, 4) & 0x10000UL) != 0 ? " (its own page)" : "",
-             (get32(r, 8) >> 8) & 0xFFUL, get32(r, 8) & 0xFFUL);
-        comp("    publications               %lu, %lu onto an empty ring, "
-             "%lu after waiting\n", get32(r, 12), get32(r, 16),
-             get32(r, 20));
+        comp_fit(4, "  slot %lu, endpoint %lu (DCI %lu): a ring of %lu "
+                    "TRBs%s; %lu of %lu requests out at most\n",
+                    (v >> 8) & 0xFFUL, (v & 0xFFUL) / 2, v & 0xFFUL,
+                    get32(r, 4) & 0xFFFFUL,
+                    (get32(r, 4) & 0x10000UL) != 0 ? " (its own page)" : "",
+                    (get32(r, 8) >> 8) & 0xFFUL, get32(r, 8) & 0xFFUL);
+        comp_fit(31, "    publications               %lu, %lu onto an empty "
+                     "ring, %lu after waiting\n", get32(r, 12), get32(r, 16),
+                     get32(r, 20));
         if (get32(r, 12) > get32(r, 16)) {
-            comp("    ring fill                  %lu TRBs at least before "
-                 "one, %lu at most after\n", get32(r, 24), get32(r, 28));
+            comp_fit(31, "    ring fill                  %lu TRBs at least "
+                         "before one, %lu at most after\n",
+                         get32(r, 24), get32(r, 28));
         } else {
             comp("    ring fill                  %lu TRBs at most after one\n",
                  get32(r, 28));
@@ -6761,9 +7699,9 @@ static void print_isop(const unsigned char *image, unsigned long bytes)
             comp("    longest gap                not measured yet\n");
         }
         isop_span("longest wait", get32(r, 48), perUs);
-        comp("    not measured               %lu across processors, %lu "
-             "backward\n", get32(r, 52) & 0xFFFFUL,
-             (get32(r, 52) >> 16) & 0xFFFFUL);
+        comp_fit(31, "    not measured               %lu across processors, "
+                     "%lu backward\n", get32(r, 52) & 0xFFFFUL,
+                     (get32(r, 52) >> 16) & 0xFFFFUL);
         comp("    ran dry                    %lu (Ring Underrun or Overrun)\n",
              get32(r, 56));
         if (get32(r, 56) != 0) {
@@ -6774,10 +7712,10 @@ static void print_isop(const unsigned char *image, unsigned long bytes)
     if (shown == 0) {
         comp("  no isochronous stream open.\n");
     } else {
-        comp("  (a gap ended by a request that had waited for a record, or "
-             "one with a long wait,\n   points at this driver; one ended "
-             "by a request that neither waited nor sat\n   long is "
-             "consistent with the program sending late)\n");
+        comp_fitw(3, "  (a gap ended by a request that had waited for a "
+                     "record, or one with a long wait, points at this driver; "
+                     "one ended by a request that neither waited nor sat long "
+                     "is consistent with the program sending late)\n");
         if (perUs > 0.0 && tsc_state() == TSC_VARIANT) {
             comp("  (this processor's time-stamp counter is not invariant, so "
                  "these times are\n   approximate)\n");
@@ -6850,13 +7788,13 @@ static int selftest_hcd_bad(void)
 /*
  * `-selftest-counters`: every counter word named through print_hcd, as the
  * dump prints it, over a canned image whose word i holds i + 1 (so every
- * word is nonzero and its value names its place): 0 to 319 and two words
+ * word is nonzero and its value names its place): 0 to 324 and two words
  * past the last block. selftest.cmd compares each printed name and value
  * with the field order of src\xhci_counters.h, so a lookup that the
  * compiler turns into the wrong table or offset fails there (task 36.35's
  * 18-word shift under MSVC 6.0 /O2).
  */
-#define SNAP_COUNTERS_TEST_WORDS    (SNAP_UDX_AT + SNAP_UDX_WORDS + 2UL)
+#define SNAP_COUNTERS_TEST_WORDS    (SNAP_SFIX_AT + SNAP_SFIX_WORDS + 2UL)
 static int selftest_counters(void)
 {
     static unsigned char image[32 + SNAP_COUNTERS_TEST_WORDS * 4];
@@ -6981,8 +7919,9 @@ static int selftest_timer(void)
  * words (src\xhci_quirk.h's layout): every normalization, a value listed
  * and not, the policy on, off and overridden, each outcome with and
  * without a reason, codes past the known ones; the PCI id and revision
- * read, then neither read; and a 232-word block, a driver before 38.10,
- * which prints nothing. selftest.cmd checks the lines.
+ * read, then neither read; a 326-word block with task 50.20's fifteenth
+ * row (XhciStreamDequeueAvoid at word 325); and a 232-word block, a driver
+ * before 38.10, which prints nothing. selftest.cmd checks the lines.
  */
 #define SNAP_QK(mode, norm, listed, on, over, out, why, raw) \
     ((unsigned long)(mode) | ((unsigned long)(norm) << 2) | \
@@ -7007,7 +7946,7 @@ static int selftest_quirks(void)
         SNAP_QK(1, 1, 0, 0, 0, 0, 0, 0xFFFF),
         SNAP_QK(1, 1, 1, 1, 0, 2, 6, 0xFFFF)
     };
-    static unsigned char image[32 + (SNAP_QUIRK_AT + SNAP_QUIRK_WORDS) * 4];
+    static unsigned char image[32 + (SNAP_QUIRK_DEQ_AVOID_AT + 1) * 4];
     const unsigned long c = 32;
     unsigned long i;
 
@@ -7034,6 +7973,12 @@ static int selftest_quirks(void)
     put32(image, c + SNAP_QUIRK_REVISION * 4, 0xFFFFFFFFUL);
     put32(image, c + SNAP_QUIRK_IDENTITY * 4, 0);
     print_hcd_quirks(image, c, SNAP_QUIRK_AT + SNAP_QUIRK_WORDS);
+
+    /* Task 50.20: a 326-word block, XhciStreamDequeueAvoid at 2 on a
+     * controller not listed. */
+    put32(image, c + SNAP_QUIRK_DEQ_AVOID_AT * 4,
+          SNAP_QK(2, 0, 0, 1, 0, 0, 0, 2));
+    print_hcd_quirks(image, c, SNAP_QUIRK_DEQ_AVOID_AT + 1);
 
     /* A driver before 38.10: one word short, nothing printed. */
     print_hcd_quirks(image, c, SNAP_QUIRK_AT + SNAP_QUIRK_WORDS - 1);
@@ -7203,15 +8148,15 @@ static void print_xpipe(const unsigned char *hcd, unsigned long hcdBytes)
         get32(hcd, SNAP_XPIPE_COUNT_AT * 4) > 64UL ||
         (SNAP_XPIPE_AT + get32(hcd, SNAP_XPIPE_COUNT_AT * 4)) * 4 >
             headBytes) {
-        comp("\nstage 2: %lu counters in a %lu-byte region - not a shape "
-             "this build reads;\n  not decoded.\n",
-             get32(hcd, SNAP_XPIPE_COUNT_AT * 4), hcdBytes);
+        comp_fit(2, "\nstage 2: %lu counters in a %lu-byte region - not a "
+                    "shape this build reads;\n  not decoded.\n",
+                    get32(hcd, SNAP_XPIPE_COUNT_AT * 4), hcdBytes);
         return;
     }
     s = hcd + SNAP_XPIPE_AT * 4;
 #define PW(i) get32(s, (i) * 4)
-    comp("\nstage 2, two TDs of one URB on the ring (task 36.24, since the "
-         "controller's start):\n");
+    comp_fit(2, "\nstage 2, two TDs of one URB on the ring (task 36.24, since "
+                "the controller's start):\n");
     v = PW(0);
     if (v == 0xFFFFFFFFUL) {
         comp("  XhciWideMap                 not set (the default)\n");
@@ -7219,27 +8164,31 @@ static void print_xpipe(const unsigned char *hcd, unsigned long hcdBytes)
         comp("  XhciWideMap                 %lu\n", v);
     }
     v = PW(2);
-    comp("  promotion                   %s; the register-free check %s\n",
-         PW(1) ? "on" : "off", v < 9 ? check_text[v] : "?");
+    comp_fitw(30, "  promotion                   %s; the register-free check "
+                  "%s\n",
+                  PW(1) ? "on" : "off", v < 9 ? check_text[v] : "?");
     comp("  wide entries                %lu, %lu in use; claimed %lu\n",
          PW(3), PW(4), PW(5));
     comp("  turned away                 over the span %lu, no entry %lu\n",
          PW(6), PW(7));
-    comp("  first mappings              promoted %lu; not: registers handed "
-         "%lu, off or grant %lu, a run %lu\n", PW(8), PW(9), PW(10),
-         PW(11));
-    comp("  URBs with two TDs at once   %lu; TDs %lu, refills %lu (held: "
-         "pause %lu, busy %lu)\n", PW(12), PW(13), PW(14), PW(15), PW(16));
-    comp("  early ends with a successor short %lu, error %lu, verdict %lu; "
-         "taken off %lu\n", PW(17), PW(18), PW(19), PW(20));
-    comp("  next TD ready at retirement %lu; failures before the ring %lu; "
-         "out of order %lu\n", PW(21), PW(22), PW(23));
+    comp_fit(30, "  first mappings              promoted %lu; not: registers "
+                 "handed %lu, off or grant %lu, a run %lu\n",
+                 PW(8), PW(9), PW(10),
+                 PW(11));
+    comp_fit(30, "  URBs with two TDs at once   %lu; TDs %lu, refills %lu "
+                 "(held: pause %lu, busy %lu)\n",
+                 PW(12), PW(13), PW(14), PW(15), PW(16));
+    comp_fit(30, "  early ends with a successor short %lu, error %lu, verdict "
+                 "%lu; taken off %lu\n", PW(17), PW(18), PW(19), PW(20));
+    comp_fit(30, "  next TD ready at retirement %lu; failures before the ring "
+                 "%lu; out of order %lu\n", PW(21), PW(22), PW(23));
     if (get32(hcd, SNAP_XPIPE_COUNT_AT * 4) >= SNAP_XPIPE_BIG_WORDS &&
         headBytes >= SNAP_HCD_BIG_HEAD_WORDS * 4 &&
         hcdBytes >= SNAP_HCD_BIG_HEAD_WORDS * 4) {
-        comp("  stage 3 big stream blocks   built %lu, refused %lu; one-TD "
-             "URBs %lu, the largest %lu TRBs\n", PW(24), PW(25), PW(26),
-             PW(27));
+        comp_fit(30, "  stage 3 big stream blocks   built %lu, refused %lu; "
+                     "one-TD URBs %lu, the largest %lu TRBs\n",
+                     PW(24), PW(25), PW(26),
+                     PW(27));
         comp("  TDs of 256/257/512/513 TRBs %lu / %lu / %lu / %lu\n", PW(28),
              PW(29), PW(30), PW(31));
     } else {
@@ -7259,7 +8208,8 @@ static void print_xpipe(const unsigned char *hcd, unsigned long hcdBytes)
  * canned 306-word header whose word i holds i + 1, but for the layout
  * words (version, header size, the stage 2 count 32 at 204, the record
  * count and size 8 at 240 and 241). Each printed value names the word it
- * came from, so a reader off by a word shows here. Then a stage B branch
+ * came from, so a reader off by a word shows here. Then the first record
+ * again at its widest, on its two rows (task 50.30). Then a stage B branch
  * build's 273-word header, with DNCTRL's not-read 0xFFFFFFFF at 204, which
  * both readers refuse.
  */
@@ -7277,6 +8227,20 @@ static int selftest_ssusp(void)
     put32(hcd, (SNAP_HCD_SSUSP_HEAD + 3) * 4, 8);
     put32(hcd, (SNAP_HCD_SSUSP_HEAD + 4) * 4, 8);
     print_xpipe(hcd, sizeof(hcd));
+    print_ssusp(hcd, sizeof(hcd));
+
+    /* Task 50.30: the first record at its widest - slot 255, the longest
+     * link name, every flag and the step set, each word at its field's
+     * width - on its two rows. */
+    i = (SNAP_HCD_SSUSP_HEAD + 5) * 4;
+    put32(hcd, i, 255);
+    put32(hcd, i + 4, 0x00FF0F01UL);
+    put32(hcd, i + 8, 0xFFFFFFFFUL);
+    put32(hcd, i + 12, 0xFFFFFFFFUL);
+    put32(hcd, i + 16, 0xFFFFFFFFUL);
+    put32(hcd, i + 20, 255);
+    put32(hcd, i + 24, 0xFFFFFFFFUL);
+    put32(hcd, i + 28, 0x00FFFFFFUL);
     print_ssusp(hcd, sizeof(hcd));
 
     put32(hcd, 4, SNAP_HCD_SSUSP_BRANCH_WORDS * 4);
@@ -7576,12 +8540,26 @@ static int selftest_pirq(void)
     put32(hcd, 4, SNAP_HCD_PIRQ_HEAD_WORDS * 4);
     put32(hcd, SNAP_PIRQ_COUNT_AT * 4, 40);
     print_pirq(hcd, sizeof(hcd));
+
+    /* 50.32 (eject wait): an HCD region answered busy - no routing record. */
+    snapHcdBusy = 1;
+    print_pirq(hcd, sizeof(hcd));
+    snapHcdBusy = 0;
+
+    /* The busy paragraph and summary line for each of the four outcomes of
+     * the PORTSC and HCD windows (the gate free or taken between windows). */
+    for (i = 0; i < 4; i++) {
+        comp_wrapped("", busy_paragraph((int)(i & 1), (int)((i >> 1) & 1)));
+        printf("  busy       %s\n",
+               busy_summary((int)(i & 1), (int)((i >> 1) & 1)));
+    }
     return 0;
 }
 
 /* `-selftest-hcd`: the HCD region's decode over a canned image, for
  * xhcisnap\selftest.cmd: 35.0's E460 port 13 Failed on the speed, a
- * working port 14, an empty port 1 left out, and two counters. */
+ * working port 14, an empty port 1 left out, and two counters; then the
+ * cases below, the last a root port at its widest (task 50.30). */
 static int selftest_hcd(void)
 {
     static unsigned char image[32 + 3 * 64 + 63 * 4];
@@ -7679,6 +8657,29 @@ static int selftest_hcd(void)
     put32(image, base + 72, 2);
     put32(image, base + 76, 1);
     print_hcd(image, 32 + 2 * 80);
+
+    /* Task 50.30: a root port at its widest - port 255, the longest state
+     * and cause, each number at its field's width - its longest meaning on
+     * the port's second line. */
+    memset(image, 0, sizeof(image));
+    put32(image, 0, 1);
+    put32(image, 4, 32);
+    put32(image, 8, 1);
+    put32(image, 12, 64);
+    put32(image, 16, 32);
+    put32(image, 20, 0);
+    put32(image, 24, 32 + 64);
+    put32(image, 28, 8);
+    base = 32;
+    put32(image, base + 0, 255);
+    put32(image, base + 4, 9);
+    put32(image, base + 8, 7);
+    put32(image, base + 12, 65535);
+    put32(image, base + 16, 255);
+    put32(image, base + 20, 15);
+    put32(image, base + 24, 4);
+    put32(image, base + 28, 3);
+    print_hcd(image, 32 + 64);
     return 0;
 }
 
@@ -7687,12 +8688,17 @@ static int selftest_hcd(void)
  * extension image, laid out as an x86 build lays XHCI_TOL_STATE: a mouse
  * that kept failing - soft retries, two cycles for a refused code, its root
  * port held - on a controller whose window then refused a recovery; a hub
- * port re-armed. Then a 35.3 header, a state past the image, and no image.
+ * port re-armed. Then a 35.3 header, a state past the image, and no image;
+ * and the devices failed alone and the reset reasons at their widest (task
+ * 50.30).
  */
 static int selftest_tol(void)
 {
     static unsigned char hcd[SNAP_HCD_TOL_HEAD_WORDS * 4];
     static unsigned char ext[64 + 16552];
+    static unsigned char why[SNAP_WHY_SPREAD_END];
+    static unsigned char whyHcd[SNAP_HCD_WHY_HEAD_WORDS * 4];
+    static unsigned char whyExt[SNAP_WHY_ISO_END];
     const unsigned long tolAt = 64;
     const unsigned long windowAt = 290 * 4 + 24;
     const unsigned long clockAt = windowAt + 20 + 12 + 4;
@@ -7700,6 +8706,7 @@ static int selftest_tol(void)
     const unsigned long hubAt = rootAt + 255 * 32;
     unsigned char *t;
     unsigned char *l;
+    unsigned long i;
 
     memset(hcd, 0, sizeof(hcd));
     memset(ext, 0, sizeof(ext));
@@ -7780,6 +8787,199 @@ static int selftest_tol(void)
     /* The unproven-DMA containment, its own terminal reason. */
     put32(hcd, 76, 5);
     print_tol(hcd, sizeof(hcd), NULL, 0);
+
+    /* Task 50.30: the devices failed alone, newest first - one behind a hub
+     * at the widest values, one at a root port - each line within
+     * XHCISNAP_COLS. */
+    memset(why, 0, sizeof(why));
+    put32(why, SNAP_WHY_SPREAD_AT, 2);
+    put32(why, SNAP_WHY_SPREAD_AT + 4, 2);
+    l = why + SNAP_WHY_SPREAD_AT + 8;
+    put32(l, 0, 3);
+    put32(l, 8, 0x06270001UL);
+    put32(l, 12, 0xFFFFFFFFUL - 100);
+    l += 16;
+    put32(l, 0, 255);
+    put32(l, 4, 0xFF0FFFFFUL);
+    put32(l, 8, 0xFFFFFFFFUL);
+    print_spread(why, 0xFFFFFFFFUL);
+
+    /* Task 50.30: the reset reasons at their widest - the latch's record
+     * with every field at its most digits, every reason counted at the
+     * most, isolation unset in mode 255, listed and applying - each line
+     * within XHCISNAP_COLS. */
+    memset(whyHcd, 0, sizeof(whyHcd));
+    memset(whyExt, 0, sizeof(whyExt));
+    put32(whyHcd, 4, SNAP_HCD_WHY_HEAD_WORDS * 4);
+    put32(whyHcd, 953 * 4, SNAP_WHY_ISO_END);
+    for (i = 1; i < 25; i++) {
+        put32(whyExt, i * 4, 0xFFFFFFFFUL);
+    }
+    put32(whyExt, SNAP_WHY_COUNTERS * 4, 1);
+    put32(whyExt, SNAP_WHY_COUNTERS * 4 + 4, 1);
+    put32(whyExt, SNAP_WHY_COUNTERS * 4 + 8, 1);
+    l = whyExt + SNAP_WHY_COUNTERS * 4 + 24;
+    put32(l, 0, 3);
+    put32(l, 4, 0xFFFFFFFFUL);
+    put32(l, 8, 255);
+    put32(l, 12, 255);
+    put32(l, 16, 0xFFFFFUL);
+    put32(l, 20, 0xFFFFFFFFUL);
+    put32(l, 28, 0xFFFFFFFFUL);
+    put32(whyExt, SNAP_WHY_ISO_AT, 0xFFFFFFFFUL);
+    put32(whyExt, SNAP_WHY_ISO_AT + 4, 0xFF03UL);
+    print_why(whyHcd, sizeof(whyHcd), whyExt, sizeof(whyExt), 0xFFFFFFFFUL);
+    return 0;
+}
+
+/*
+ * `-selftest-retry`: task 50.31's "Retries" block (design record 38 section
+ * 15.3) over a canned HCD header and extension image: a latched controller
+ * with a try pending, one due, one closed off, one whose interrupts were
+ * lost, one off and one with an invalid value; then an earlier driver's
+ * header, a header one word short, an offset past the image, a size below
+ * the known fields and an unaligned offset.
+ */
+static void selftest_retry_case(const unsigned char *hcd,
+                                unsigned long hcdBytes,
+                                const unsigned char *ext,
+                                unsigned long extBytes, unsigned long clock,
+                                unsigned long terminal, const char *title)
+{
+    char suffix[64];
+
+    comp("\n%s\n  controller       %s\n", title, tol_terminal_text(terminal));
+    if (snap_retry_suffix(hcd, hcdBytes, ext, extBytes, clock, suffix,
+                          sizeof(suffix))) {
+        comp("                   %s\n", suffix);
+    } else if (terminal == 2 || terminal == 3 || terminal == 5) {
+        comp("                   (it stays failed until a stop and start)\n");
+    }
+    print_retry(hcd, hcdBytes, ext, extBytes, clock, terminal);
+}
+
+static int selftest_retry(void)
+{
+    static unsigned char hcd[SNAP_HCD_RETRY_HEAD_WORDS * 4];
+    static unsigned char ext[64 + SNAP_RETRY_BYTES];
+    unsigned char *r;
+
+    memset(hcd, 0, sizeof(hcd));
+    memset(ext, 0, sizeof(ext));
+    put32(hcd, 0, 1);
+    put32(hcd, 4, SNAP_HCD_RETRY_HEAD_WORDS * 4);
+    put32(hcd, 954 * 4, 64);
+    put32(hcd, 955 * 4, SNAP_RETRY_BYTES);
+    r = ext + 64;
+    /* Latched again after a try's burst of three failed, at level 1: the
+     * next wait 101 ticks (10 s, record 38 section 5.7) from 1030, read
+     * at 1100. */
+    put32(r, 0 * 4, 1);
+    put32(r, 1 * 4, 5);
+    put32(r, 2 * 4, 5);
+    put32(r, 3 * 4, 1);
+    put32(r, 4 * 4, 51);
+    put32(r, 5 * 4, 6001);
+    put32(r, 7 * 4, 6001);
+    put32(r, 8 * 4, 2);
+    put32(r, 9 * 4, 1);
+    put32(r, 10 * 4, 1);
+    put32(r, 11 * 4, 1);
+    put32(r, 13 * 4, 1030);
+    put32(r, 14 * 4, 101);
+    put32(r, 15 * 4, 1);
+    put32(r, 16 * 4, 1);
+    put32(r, 17 * 4, 600);
+    put32(r, 26 * 4, 3);
+    put32(r, 27 * 4, 2);
+    put32(r, 32 * 4, 2);
+    put32(r, 33 * 4, 4);
+    put32(r, 49 * 4, 0x06);
+    selftest_retry_case(hcd, sizeof(hcd), ext, sizeof(ext), 1100, 2,
+                        "latched, a try pending:");
+
+    /* Due, the try having come from a change at root port 3. */
+    put32(r, 8 * 4, 3);
+    put32(r, 20 * 4, 2);
+    put32(r, 16 * 4, 2);
+    put32(r, 36 * 4, 3);
+    put32(r, 38 * 4, 1050);
+    put32(r, 41 * 4, 1);
+    put32(r, 42 * 4, 1);
+    put32(r, 49 * 4, 0);
+    selftest_retry_case(hcd, sizeof(hcd), ext, sizeof(ext), 1100, 3,
+                        "due:");
+
+    /* Trying: the second attempt of the burst. */
+    put32(r, 8 * 4, 4);
+    put32(r, 24 * 4, 1);
+    put32(r, 25 * 4, 2);
+    selftest_retry_case(hcd, sizeof(hcd), ext, sizeof(ext), 1100, 1,
+                        "trying:");
+    put32(r, 24 * 4, 0);
+
+    /* Closed off, and the interrupts lost: never tried. */
+    put32(r, 8 * 4, 5);
+    put32(r, 34 * 4, 1);
+    put32(r, 35 * 4, 2);
+    put32(r, 49 * 4, 0x20);
+    selftest_retry_case(hcd, sizeof(hcd), ext, sizeof(ext), 1100, 5,
+                        "closed off:");
+    selftest_retry_case(hcd, sizeof(hcd), ext, sizeof(ext), 1100, 6,
+                        "interrupts lost:");
+
+    /* Off; then an invalid value read as 5; then a recovered try and the
+     * waits reset after a clean run. */
+    memset(r, 0, SNAP_RETRY_BYTES);
+    put32(r, 0 * 4, 1);
+    selftest_retry_case(hcd, sizeof(hcd), ext, sizeof(ext), 1100, 3,
+                        "off:");
+    put32(r, 1 * 4, 601);
+    put32(r, 2 * 4, 5);
+    put32(r, 4 * 4, 51);
+    put32(r, 5 * 4, 6001);
+    put32(r, 7 * 4, 6001);
+    put32(r, 8 * 4, 1);
+    put32(r, 11 * 4, 4);
+    put32(r, 12 * 4, 2);
+    put32(r, 16 * 4, 1);
+    put32(r, 17 * 4, 900);
+    put32(r, 26 * 4, 1);
+    put32(r, 27 * 4, 1);
+    put32(r, 23 * 4, 1);
+    put32(r, 43 * 4, 1);
+    put32(r, 44 * 4, 1);
+    put32(r, 47 * 4, 1);
+    selftest_retry_case(hcd, sizeof(hcd), ext, sizeof(ext), 1100, 0,
+                        "invalid value, recovered:");
+
+    /* A value of another type. */
+    put32(r, 0 * 4, 2);
+    put32(r, 1 * 4, 0);
+    selftest_retry_case(hcd, sizeof(hcd), ext, sizeof(ext), 1100, 0,
+                        "another type:");
+
+    /* An earlier driver's header; one word short; the shapes refused. */
+    put32(hcd, 4, 954 * 4);
+    selftest_retry_case(hcd, sizeof(hcd), ext, sizeof(ext), 1100, 3,
+                        "an earlier driver:");
+    put32(hcd, 4, 955 * 4);
+    selftest_retry_case(hcd, sizeof(hcd), ext, sizeof(ext), 1100, 3,
+                        "one word short:");
+    selftest_retry_case(hcd, 955 * 4, ext, sizeof(ext), 1100, 3,
+                        "a header image cut short:");
+    put32(hcd, 4, SNAP_HCD_RETRY_HEAD_WORDS * 4);
+    put32(hcd, 954 * 4, 0xFFFFFF00UL);
+    selftest_retry_case(hcd, sizeof(hcd), ext, sizeof(ext), 1100, 3,
+                        "past the image:");
+    put32(hcd, 954 * 4, 64);
+    put32(hcd, 955 * 4, SNAP_RETRY_BYTES - 8);
+    selftest_retry_case(hcd, sizeof(hcd), ext, sizeof(ext), 1100, 3,
+                        "below the known fields:");
+    put32(hcd, 955 * 4, SNAP_RETRY_BYTES);
+    put32(hcd, 954 * 4, 62);
+    selftest_retry_case(hcd, sizeof(hcd), ext, sizeof(ext), 1100, 3,
+                        "unaligned:");
     return 0;
 }
 
@@ -7788,7 +8988,10 @@ static int selftest_tol(void)
  * failure as 2.1.1.0 met it (speed ID 4 unknown, one retry, then Failed and
  * a change storm noted once); port 14 the same link with 35.1's fallback,
  * after a running reset waited out (37.2);
- * port 15 a spent budget. The ring starts mid-record, as a wrapped one does. */
+ * port 15 a spent budget; then task 50.30's causes 8 and 9 at port 13 and at
+ * the widest port, attempt and machine name, and its look, reset, speed, slot
+ * and prwait records with every field at its widest, each line within
+ * XHCISNAP_COLS. The ring starts mid-record, as a wrapped one does. */
 static int selftest_notes(void)
 {
     static const char text[] =
@@ -7812,7 +9015,17 @@ static int selftest_notes(void)
         "enum.port.rate=0200000F\r\n"
         "enum.port.slot=0E010005\r\n"
         "enum.port.end=0E0A0000\r\n"
-        "enum.port.quiet=0F000008\r\n";
+        "enum.port.quiet=0F000008\r\n"
+        "enum.port.fail=0D080101\r\n"
+        "enum.port.fail=0D090100\r\n"
+        "enum.port.end=0D0D0801\r\n"
+        "enum.port.fail=FF09FF01\r\n"
+        "enum.port.end=FF0909FF\r\n"
+        "enum.port.look=FF94FFFF\r\n"
+        "enum.port.reset=FFFFFFFF\r\n"
+        "enum.port.speed=FFFF0403\r\n"
+        "enum.port.slot=FF00FFFF\r\n"
+        "enum.port.prwait=FF80FFFF\r\n";
     static unsigned char ring[1024];
 
     static const char evt[] =
@@ -8485,10 +9698,11 @@ static void find_driver_keys_under(const char *classPath)
              * class key full of candidates does not produce sixteen lines.
              */
             if (!complained) {
-                printf("  more than %d driver keys here - keeping the ones "
-                       "identified most strongly. That is not a machine this "
-                       "tool was written for; check the list below.\n",
-                       MAX_DRIVER_KEYS);
+                out_fit(2, "  more than %d driver keys here - keeping the "
+                           "ones identified most strongly. That is not a "
+                           "machine this tool was written for; check the list "
+                           "below.\n",
+                           MAX_DRIVER_KEYS);
                 complained = 1;
             }
             continue;
@@ -9880,7 +11094,20 @@ static int res_nt_shape(unsigned long size, unsigned long hdr,
     if (count == 0 && size - hdr == type) {
         return 1;
     }
-    return (size - hdr == count * type) ? 1 : 0;
+    if (size - hdr == count * type) {
+        return 1;
+    }
+    /* XP x64's cfgmgr32.dll hands a native x64 caller a descriptor padded
+     * to a multiple of 8, the alignment of its 64-bit fields (task 50.21:
+     * the field report of 2026-11-15, an allocated IRQ of 40 bytes, a
+     * 24-byte header and one 12-byte range, count 0), the header's fields
+     * where the packed layout has them. 32-bit Windows hands back the packed
+     * sizes above, so none of its descriptors reads differently. */
+    if (count == 0) {
+        count = 1;
+    }
+    return ((hdr + count * type) % 8 != 0 &&
+            ((hdr + count * type + 7UL) & ~7UL) == size) ? 1 : 0;
 }
 
 /*
@@ -9987,7 +11214,8 @@ static void res_decode(unsigned long rid, const unsigned char *b,
         return;
     case 4:
         /* IRQ_DES: count, type, flags, number, then the affinity, 4 bytes
-         * (a 20-byte header, 2000) or 8 (24, XP and later). */
+         * (a 20-byte header, 2000) or 8 (24, XP and later; on XP x64 the
+         * whole descriptor padded to 40, res_nt_shape). */
         if (res_nt_shape(size, 20, b) || res_nt_shape(size, 24, b)) {
             flags = rd32(b, 8);
             num = rd32(b, 12);
@@ -10064,7 +11292,15 @@ static int selftest_res(void)
         0x00, 0x00, 0x00, 0x00, 0x0C, 0x00, 0x00, 0x00,
         0x02, 0x00, 0x01, 0x00, 0xFE, 0xFF, 0xFF, 0xFF
     };
+    /* XP x64's 40-byte IRQ, its first 32 bytes (task 50.21). */
+    static const unsigned char irqX64[32] = {
+        0x00, 0x00, 0x00, 0x00, 0x0C, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00,
+        0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    };
     unsigned char b[68];
+    unsigned char w[80];
 
     memset(b, 0, sizeof(b));
     memcpy(b, hdr, sizeof(hdr));
@@ -10097,6 +11333,40 @@ static int selftest_res(void)
     memcpy(b, irq7, sizeof(irq7));
     printf("irq 7:\n");
     res_decode(4, b, 36);
+
+    /* Task 50.21: XP x64's padded descriptors for a native x64 caller. The
+     * IRQ is the field report's (2026-11-15), its 32 bytes as the .DEV
+     * printed them and the last 8, past the range's first two words, zero;
+     * the others are built to the same rule: I/O (28 + 48, or 28 + 40
+     * padded), DMA (16 + 12 padded), bus numbers (20 + 16 padded), and
+     * an IRQ 4 bytes past any padding, which stays raw. */
+    memset(w, 0, sizeof(w));
+    memcpy(w, irqX64, sizeof(irqX64));
+    printf("irq xp x64:\n");
+    res_decode(4, w, 40);
+    printf("irq odd x64:\n");
+    res_decode(4, w, 44);
+    memset(w, 0, sizeof(w));
+    w[4] = 48;
+    w[9] = 0xE0;
+    w[16] = 0x1F;
+    w[17] = 0xE0;
+    printf("io x64 48:\n");
+    res_decode(2, w, 80);
+    w[4] = 40;
+    printf("io x64 40:\n");
+    res_decode(2, w, 72);
+    memset(w, 0, sizeof(w));
+    w[4] = 12;
+    w[12] = 5;
+    printf("dma x64:\n");
+    res_decode(3, w, 32);
+    memset(w, 0, sizeof(w));
+    w[4] = 16;
+    w[12] = 2;
+    w[16] = 3;
+    printf("bus x64:\n");
+    res_decode(6, w, 40);
     printf("[end]\n");
     return 0;
 }
@@ -10378,8 +11648,644 @@ static void dev_resources(DWORD dn, int haveDn, const char *id)
     }
 }
 
+/*
+ * ---- a refused mode-4 start's record (task 50.4) ----------------------
+ *
+ * XhciMode4Refusal, REG_BINARY in the controller's driver key (design record
+ * 15 section 4.5.20; src/xhci_msg4.h, XHCI_M4REC_*, duplicated here): the
+ * driver writes it when XhciInterruptMode 4 refused a start on 2000 or
+ * later, and rewrites it as cleared at the next start that is not such a
+ * refusal. A controller that did not start has no door, so this is the one
+ * place a tester reads the reason: in the .DEV under the controller, and
+ * in /dump when no controller opens. The words copied are the counter
+ * block's, so the texts are the event delivery section's.
+ */
+#define SNAP_M4REC_VALUE        "XhciMode4Refusal"
+#define SNAP_M4REC_MAGIC        0x46523458UL
+#define SNAP_M4REC_WORDS        55UL
+#define SNAP_M4REC_POLL         10UL
+#define SNAP_M4REC_CONNECT      16UL
+#define SNAP_M4REC_MSG4         17UL
+
+typedef void (*m4rec_emit_fn)(const char *label, const char *text);
+
+static void m4rec_emit_dev(const char *label, const char *text)
+{
+    dev_line(label, "%s", text);
+}
+
+static void m4rec_emit_screen(const char *label, const char *text)
+{
+    char lead[64];
+
+    _snprintf(lead, sizeof(lead) - 1, "    %-13s", label);
+    lead[sizeof(lead) - 1] = '\0';
+    put_wrapped_to(stdout, lead, "                 ", text);
+}
+
+/* A FILETIME's two words (100 ns since 1601, UTC) as a date and a time,
+ * by the civil calendar; 0 is "time not recorded". */
+static void m4rec_when(unsigned long lo, unsigned long hi, char *out,
+                       size_t outBytes)
+{
+    unsigned __int64 t;
+    unsigned long sod;
+    long z;
+    long era;
+    long doe;
+    long yoe;
+    long y;
+    long doy;
+    long mp;
+    long d;
+    long m;
+
+    if (lo == 0 && hi == 0) {
+        _snprintf(out, outBytes - 1, "at a time not recorded");
+        out[outBytes - 1] = '\0';
+        return;
+    }
+    t = (((unsigned __int64)hi) << 32) | (unsigned __int64)lo;
+    t /= 10000000;
+    sod = (unsigned long)(t % 86400);
+    /* Days since 1601-01-01, moved to 0000-03-01's count. */
+    z = (long)(t / 86400) - 134774L + 719468L;
+    era = z / 146097L;
+    doe = z - era * 146097L;
+    yoe = (doe - doe / 1460L + doe / 36524L - doe / 146096L) / 365L;
+    y = yoe + era * 400L;
+    doy = doe - (365L * yoe + yoe / 4L - yoe / 100L);
+    mp = (5L * doy + 2L) / 153L;
+    d = doy - (153L * mp + 2L) / 5L + 1L;
+    m = (mp < 10L) ? mp + 3L : mp - 9L;
+    if (m <= 2L) {
+        y++;
+    }
+    _snprintf(out, outBytes - 1, "%04ld-%02ld-%02ld %02lu:%02lu UTC", y, m,
+              d, sod / 3600UL, (sod / 60UL) % 60UL);
+    out[outBytes - 1] = '\0';
+}
+
+/* A setting as the start read it: "-" not set, or not read on that path. */
+static const char *m4rec_value(unsigned long v, char *buf)
+{
+    if (v == SNAP_POLL_NOT_FOUND) {
+        return "-";
+    }
+    sprintf(buf, "%lu", v);
+    return buf;
+}
+
+/* The connection's status, as print_msg4 names it. */
+static void m4rec_status(unsigned long status, char *out, size_t outBytes)
+{
+    if (status < 15) {
+        _snprintf(out, outBytes - 1, "%lu (%s)", status,
+                  msg4_status_text[status]);
+    } else if ((status & 0xFF00UL) == 0x0100UL) {
+        _snprintf(out, outBytes - 1, "%08lX (the controller could not be "
+                  "quieted before the connect, step %lu)", status,
+                  status & 0xFFUL);
+    } else if ((status & 0xFF00UL) == 0x0200UL) {
+        _snprintf(out, outBytes - 1, "%08lX (the controller's PCI location "
+                  "not found: %lu matches)", status, status & 0xFFUL);
+    } else if (status == 0x0300UL) {
+        _snprintf(out, outBytes - 1, "%08lX (not in this driver for this "
+                  "Windows)", status);
+    } else if (status == 0x0400UL) {
+        _snprintf(out, outBytes - 1, "%08lX (the interrupt could not be "
+                  "readied)", status);
+    } else {
+        _snprintf(out, outBytes - 1, "%08lX", status);
+    }
+    out[outBytes - 1] = '\0';
+}
+
+static void m4rec_text(m4rec_emit_fn emit, const unsigned char *b,
+                       unsigned long len)
+{
+    static const char *const flavour[5] = {
+        "build unknown", "release", "debug", "qemu", "host test"
+    };
+    char t[600];
+    char when[48];
+    char st[200];
+    char v1[16];
+    char v2[16];
+    char v3[16];
+    char v4[16];
+    const unsigned char *m;
+    unsigned long state;
+    unsigned long ver;
+    unsigned long fl;
+    unsigned long loc;
+    unsigned long reason;
+    unsigned long irq;
+    unsigned long cs;
+    unsigned long r;
+    unsigned long i;
+
+    state = 0xFFFFFFFFUL;
+    if (len >= SNAP_M4REC_WORDS * 4 && get32(b, 0) == SNAP_M4REC_MAGIC &&
+        (get32(b, 4) & 0xFFFFUL) == 1UL) {
+        state = get32(b, 8);
+    }
+    if (state > 1) {
+        _snprintf(t, sizeof(t) - 1, "XhciMode4Refusal holds %lu bytes this "
+                  "XHCITR cannot read (another build's record?)", len);
+        t[sizeof(t) - 1] = '\0';
+        emit("mode 4", t);
+        return;
+    }
+    m4rec_when(get32(b, 12), get32(b, 16), when, sizeof(when));
+    ver = get32(b, 28);
+    fl = (get32(b, 24) >> 8) & 0xFFUL;
+    if (state == 0) {
+        _snprintf(t, sizeof(t) - 1, "the last start was not refused by "
+                  "XhciInterruptMode 4 (recorded %s by xhci98.sys "
+                  "%lu.%lu.%lu.%lu)", when, ver >> 24, (ver >> 16) & 0xFFUL,
+                  (ver >> 8) & 0xFFUL, ver & 0xFFUL);
+        t[sizeof(t) - 1] = '\0';
+        emit("mode 4", t);
+        return;
+    }
+    _snprintf(t, sizeof(t) - 1, "XhciInterruptMode 4 refused the last "
+              "start, %s (status %08lX)", when, get32(b, 20));
+    t[sizeof(t) - 1] = '\0';
+    emit("mode 4", t);
+    loc = get32(b, 32);
+    if ((loc & 0x80000000UL) != 0) {
+        _snprintf(st, sizeof(st) - 1, "the controller at PCI %02lX:%02lX.%lu",
+                  (loc >> 8) & 0xFFUL, (loc >> 3) & 0x1FUL, loc & 0x7UL);
+    } else {
+        _snprintf(st, sizeof(st) - 1, "the controller's PCI location not "
+                  "known");
+    }
+    st[sizeof(st) - 1] = '\0';
+    _snprintf(t, sizeof(t) - 1, "written by xhci98.sys %lu.%lu.%lu.%lu (%s) "
+              "for %s", ver >> 24, (ver >> 16) & 0xFFUL, (ver >> 8) & 0xFFUL,
+              ver & 0xFFUL, fl < 5 ? flavour[fl] : flavour[0], st);
+    t[sizeof(t) - 1] = '\0';
+    emit("", t);
+    reason = get32(b, (SNAP_M4REC_POLL + 3) * 4);
+    _snprintf(t, sizeof(t) - 1, "reason: %s", poll_reason_name(reason));
+    t[sizeof(t) - 1] = '\0';
+    emit("", t);
+    _snprintf(t, sizeof(t) - 1, "XhciInterruptMode %s, in effect %lu",
+              m4rec_value(get32(b, SNAP_M4REC_POLL * 4), v1),
+              get32(b, (SNAP_M4REC_POLL + 1) * 4));
+    t[sizeof(t) - 1] = '\0';
+    emit("", t);
+    if (reason == 22 || reason == 23 || reason == 24 || reason == 27 ||
+        reason == 30) {
+        emit("", "connection: not tried");
+    } else {
+        m4rec_status(get32(b, SNAP_M4REC_CONNECT * 4), st, sizeof(st));
+        _snprintf(t, sizeof(t) - 1, "connection status %s", st);
+        t[sizeof(t) - 1] = '\0';
+        emit("", t);
+    }
+    m = b + SNAP_M4REC_MSG4 * 4;
+    if (reason == 27) {
+        emit("", "values: not read (refused before they are read)");
+        return;
+    }
+    if (get32(m, 12) == SNAP_POLL_NOT_FOUND && snap_win64()) {
+        _snprintf(t, sizeof(t) - 1, "XhciMsiStrategy %s, XhciMsiIsaIrq %s, "
+                  "XhciMsiShare %s (- not set, or not read); XhciMsiPools "
+                  "not used on 64-bit Windows",
+                  m4rec_value(get32(m, 0), v1), m4rec_value(get32(m, 4), v2),
+                  m4rec_value(get32(m, 8), v3));
+    } else {
+        _snprintf(t, sizeof(t) - 1, "XhciMsiStrategy %s, XhciMsiIsaIrq %s, "
+                  "XhciMsiShare %s, XhciMsiPools %s (- not set, or not read)",
+                  m4rec_value(get32(m, 0), v1), m4rec_value(get32(m, 4), v2),
+                  m4rec_value(get32(m, 8), v3), m4rec_value(get32(m, 12), v4));
+    }
+    t[sizeof(t) - 1] = '\0';
+    emit("", t);
+    if (get32(m, 12) == 1UL || get32(m, 12) == 2UL) {
+        _snprintf(t, sizeof(t) - 1, "XhciMsiInputFirst %s, XhciMsiInputLast "
+                  "%s, XhciMsiInputBudget %s", m4rec_value(get32(m, 16), v1),
+                  m4rec_value(get32(m, 20), v2),
+                  m4rec_value(get32(m, 24), v3));
+        t[sizeof(t) - 1] = '\0';
+        emit("", t);
+    }
+    irq = get32(m, 7 * 4);
+    cs = get32(m, 9 * 4);
+    if (irq == 0 && cs == 0) {
+        return;
+    }
+    _snprintf(t, sizeof(t) - 1, "claim: IRQ %lu, %lu on it; the claim's "
+              "status %lu (%s)", irq, get32(m, 8 * 4), cs,
+              cs < 15 ? msg4_status_text[cs] : "this driver's own");
+    t[sizeof(t) - 1] = '\0';
+    emit("", t);
+    for (i = 0; i < 16; i++) {
+        r = (get32(m, (12 + i / 4) * 4) >> ((i % 4) * 8)) & 0xFFUL;
+        if (r != 0) {
+            _snprintf(t, sizeof(t) - 1, "  IRQ %-2lu %s", i,
+                      r < 17 ? msg4_irq_reason_text[r] : "?");
+            t[sizeof(t) - 1] = '\0';
+            emit("", t);
+        }
+    }
+}
+
+/* The value from one key: 1 when it is there, its first bytes in `buf`
+ * (`cap` of them at most, the rest 0) and `*len` its own length; a value
+ * of another type, or one that cannot be read, leaves `buf` 0, which no
+ * record reads as. */
+static int m4rec_read_value(HKEY root, const char *keyPath,
+                            const char *value, unsigned char *buf, DWORD cap,
+                            DWORD *len);
+
+static int m4rec_read(HKEY root, const char *keyPath, unsigned char *buf,
+                      DWORD cap, DWORD *len)
+{
+    return m4rec_read_value(root, keyPath, SNAP_M4REC_VALUE, buf, cap, len);
+}
+
+/* The same read of another REG_BINARY the driver writes (task 50.34's
+ * XhciIntelPortSwitchResult). */
+static int m4rec_read_value(HKEY root, const char *keyPath,
+                            const char *value, unsigned char *buf, DWORD cap,
+                            DWORD *len)
+{
+    unsigned char *all;
+    HKEY key;
+    DWORD type;
+    DWORD bytes;
+    DWORD again;
+    LONG rc;
+
+    *len = 0;
+    memset(buf, 0, cap);
+    if (RegOpenKeyExA(root, keyPath, 0, KEY_QUERY_VALUE, &key) !=
+        ERROR_SUCCESS) {
+        return 0;
+    }
+    bytes = cap;
+    type = 0;
+    rc = RegQueryValueExA(key, value, NULL, &type, buf, &bytes);
+    if (rc == ERROR_MORE_DATA) {
+        /* Longer than `cap`: the bytes of a short read are not defined,
+         * so the whole value is read again and its head kept. */
+        memset(buf, 0, cap);
+        all = (bytes != 0 && bytes < 0x100000UL)
+                  ? (unsigned char *)malloc(bytes) : NULL;
+        if (all != NULL) {
+            again = bytes;
+            if (RegQueryValueExA(key, value, NULL, &type, all,
+                                 &again) == ERROR_SUCCESS) {
+                memcpy(buf, all, (again < cap) ? again : cap);
+                bytes = again;
+                rc = ERROR_SUCCESS;
+            }
+            free(all);
+        }
+    }
+    RegCloseKey(key);
+    if (rc != ERROR_SUCCESS && rc != ERROR_MORE_DATA) {
+        return 0;
+    }
+    *len = bytes;
+    if (rc != ERROR_SUCCESS || type != REG_BINARY) {
+        memset(buf, 0, cap);
+    }
+    return 1;
+}
+
+/*
+ * Task 50.34 (design record 16 section 21.7): the port switchover's
+ * record, XhciIntelPortSwitchResult, as recorded at its time - never the
+ * running controller's state, which the snapshot gives. Output only: the
+ * driver never reads it back.
+ */
+#define SNAP_PSWREC_VALUE       "XhciIntelPortSwitchResult"
+
+static void pswrec_text(m4rec_emit_fn emit, const unsigned char *b,
+                        unsigned long len)
+{
+    char text[3072];
+    char when[64];
+    char lead[96];
+    char *line;
+    char *nl;
+    unsigned long lo;
+    unsigned long hi;
+
+    if (!tr_psw_lines(b, len, 0, 0, text, sizeof(text))) {
+        emit("port switch", "XhciIntelPortSwitchResult is not a record this "
+                            "build reads");
+        return;
+    }
+    (VOID)tr_psw_time(b, len, &lo, &hi);
+    m4rec_when(lo, hi, when, sizeof(when));
+    _snprintf(lead, sizeof(lead) - 1, "as recorded %s%s:",
+              (lo == 0 && hi == 0) ? "" : "at ", when);
+    lead[sizeof(lead) - 1] = '\0';
+    emit("port switch", lead);
+    line = text;
+    while (line != NULL && *line != '\0') {
+        nl = strchr(line, '\n');
+        if (nl != NULL) {
+            *nl = '\0';
+        }
+        emit("", line);
+        line = (nl != NULL) ? nl + 1 : NULL;
+    }
+}
+
+static void pswrec_dev(const char *keyPath)
+{
+    unsigned char buf[1024];
+    DWORD len;
+
+    if (m4rec_read_value(HKEY_LOCAL_MACHINE, keyPath, SNAP_PSWREC_VALUE, buf,
+                         sizeof(buf), &len) && len != 0) {
+        pswrec_text(m4rec_emit_dev, buf, len);
+    }
+}
+
+/* /dump with no controller to open: every controller key with a record. */
+static int pswrec_dump_class(const char *classPath, int shown)
+{
+    unsigned char buf[1024];
+    char name[MAX_PATH];
+    char path[MAX_PATH];
+    const char *tail;
+    HKEY parent;
+    DWORD nameLen;
+    DWORD index;
+    DWORD len;
+
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, classPath, 0,
+                      KEY_ENUMERATE_SUB_KEYS, &parent) != ERROR_SUCCESS) {
+        return shown;
+    }
+    for (index = 0; index < 100000UL; index++) {
+        nameLen = sizeof(name);
+        if (RegEnumKeyExA(parent, index, name, &nameLen, NULL, NULL, NULL,
+                          NULL) != ERROR_SUCCESS) {
+            break;
+        }
+        if (!compose_key_path(path, sizeof(path), classPath, name) ||
+            !m4rec_read_value(HKEY_LOCAL_MACHINE, path, SNAP_PSWREC_VALUE,
+                              buf, sizeof(buf), &len) || len == 0) {
+            continue;
+        }
+        if (shown == 0) {
+            printf("\nIntel port switchover records in this driver's "
+                   "keys:\n");
+        }
+        shown++;
+        tail = strstr(path, "ControlSet\\");
+        tail = (tail != NULL) ? tail + 11 : path;
+        printf("  driver key %s\n", tail);
+        pswrec_text(m4rec_emit_screen, buf, len);
+    }
+    RegCloseKey(parent);
+    return shown;
+}
+
+static void pswrec_dump_all(void)
+{
+    int shown;
+
+    shown = pswrec_dump_class(XHCI_CLASS_NT, 0);
+    (VOID)pswrec_dump_class(XHCI_CLASS_9X, shown);
+}
+
+/* The record under keyPath (HKLM-relative) for the Tree's controller
+ * details where the driver serves no snapshot (xhcitr.c psw_details): "As
+ * recorded at <time>:" and tr_psw_lines' lines, '\n'-separated, into out
+ * - the .DEV's words; 1 when there is a record this build reads, else 0
+ * with out empty. */
+int tr_snap_pswrec_lines(const char *keyPath, char *out, size_t cap)
+{
+    unsigned char buf[1024];
+    char text[3072];
+    char when[64];
+    DWORD len;
+    unsigned long lo;
+    unsigned long hi;
+
+    if (out == NULL || cap == 0) {
+        return 0;
+    }
+    out[0] = '\0';
+    if (!m4rec_read_value(HKEY_LOCAL_MACHINE, keyPath, SNAP_PSWREC_VALUE, buf,
+                          sizeof(buf), &len) || len == 0 ||
+        !tr_psw_lines(buf, (unsigned long)len, 0, 0, text, sizeof(text))) {
+        return 0;
+    }
+    (VOID)tr_psw_time(buf, (unsigned long)len, &lo, &hi);
+    m4rec_when(lo, hi, when, sizeof(when));
+    _snprintf(out, cap - 1, "As recorded %s%s:\n%s",
+              (lo == 0 && hi == 0) ? "" : "at ", when, text);
+    out[cap - 1] = '\0';
+    return 1;
+}
+
+/* The .DEV's lines for one controller's driver key. */
+static void m4rec_dev(const char *keyPath)
+{
+    unsigned char buf[1024];
+    DWORD len;
+
+    if (m4rec_read(HKEY_LOCAL_MACHINE, keyPath, buf, sizeof(buf), &len)) {
+        m4rec_text(m4rec_emit_dev, buf, len);
+    }
+}
+
+/* Every subkey of one class key that holds a record (only xhci98.sys writes
+ * the name, so no other test is needed and no key is left out); the count
+ * shown. */
+static int m4rec_dump_class(const char *classPath, int shown)
+{
+    unsigned char buf[1024];
+    char name[MAX_PATH];
+    char path[MAX_PATH];
+    const char *tail;
+    HKEY parent;
+    DWORD nameLen;
+    DWORD index;
+    DWORD len;
+
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, classPath, 0,
+                      KEY_ENUMERATE_SUB_KEYS, &parent) != ERROR_SUCCESS) {
+        return shown;
+    }
+    for (index = 0; index < 100000UL; index++) {
+        nameLen = sizeof(name);
+        if (RegEnumKeyExA(parent, index, name, &nameLen, NULL, NULL, NULL,
+                          NULL) != ERROR_SUCCESS) {
+            break;
+        }
+        if (!compose_key_path(path, sizeof(path), classPath, name) ||
+            !m4rec_read(HKEY_LOCAL_MACHINE, path, buf, sizeof(buf), &len)) {
+            continue;
+        }
+        if (shown == 0) {
+            printf("\nXhciInterruptMode 4 records in this driver's keys:\n");
+        }
+        shown++;
+        /* The path below CurrentControlSet, within a console line. */
+        tail = strstr(path, "ControlSet\\");
+        tail = (tail != NULL) ? tail + 11 : path;
+        printf("  driver key %s\n", tail);
+        m4rec_text(m4rec_emit_screen, buf, len);
+    }
+    RegCloseKey(parent);
+    return shown;
+}
+
+/* /dump with no controller to open: every key that holds a record, since
+ * a controller that did not start has no door number. */
+static void m4rec_dump_all(void)
+{
+    int shown;
+
+    shown = m4rec_dump_class(XHCI_CLASS_NT, 0);
+    shown = m4rec_dump_class(XHCI_CLASS_9X, shown);
+    if (shown == 0) {
+        printf("\nNo XhciInterruptMode 4 refusal is recorded in this "
+               "driver's keys.\n");
+    }
+}
+
+/*
+ * `-selftest-m4rec`: task 50.4's decode over canned records: a value out of
+ * range at the decision on XP (release, location known), the forced IRQ
+ * refused at the claim with each IRQ's reason and the upper pool's values,
+ * the quarantine (nothing read, nothing tried), Vista's "no system" with no
+ * location, a cleared record, and three that are not records (a wrong
+ * magic, a short value, an unknown state).
+ */
+static void m4rec_canned(unsigned char *b, unsigned long state,
+                         unsigned long reason)
+{
+    unsigned long i;
+
+    memset(b, 0, SNAP_M4REC_WORDS * 4);
+    put32(b, 0, SNAP_M4REC_MAGIC);
+    put32(b, 4, 1UL | (SNAP_M4REC_WORDS << 16));
+    put32(b, 8, state);
+    put32(b, 12, 0x8BF25000UL);
+    put32(b, 16, 0x01DD74ECUL);
+    put32(b, 20, state == 1 ? 0xC0000182UL : 0);
+    put32(b, 24, 1UL | (1UL << 8));
+    put32(b, 28, 0x03050100UL);
+    if (state != 1) {
+        return;
+    }
+    put32(b, 32, 0x80000000UL | (4UL << 3));
+    put32(b, SNAP_M4REC_POLL * 4, 4);
+    put32(b, (SNAP_M4REC_POLL + 1) * 4, 4);
+    put32(b, (SNAP_M4REC_POLL + 3) * 4, reason);
+    for (i = 0; i < 7; i++) {
+        put32(b, (SNAP_M4REC_MSG4 + i) * 4, SNAP_POLL_NOT_FOUND);
+    }
+}
+
+static int selftest_m4rec(void)
+{
+    unsigned char b[SNAP_M4REC_WORDS * 4];
+    unsigned char *m;
+
+    companion = NULL;
+    snapWin64 = 0;
+    m = b + SNAP_M4REC_MSG4 * 4;
+
+    printf("case 1, a value out of range:\n");
+    m4rec_canned(b, 1, 30);
+    put32(m, 0, 5);
+    m4rec_text(m4rec_emit_screen, b, sizeof(b));
+
+    printf("case 2, the forced IRQ refused at the claim:\n");
+    m4rec_canned(b, 1, 33);
+    put32(b, SNAP_M4REC_CONNECT * 4, 4);
+    put32(m, 0, 0);
+    put32(m, 4, 4);
+    put32(m, 8, 8);
+    put32(m, 12, 2);
+    put32(m, 16, 24);
+    put32(m, 20, 0);
+    put32(m, 24, 16);
+    put32(m, 9 * 4, 4);
+    put32(m, 13 * 4, 6UL | (2UL << 24));
+    m4rec_text(m4rec_emit_screen, b, sizeof(b));
+
+    printf("case 3, the quarantine:\n");
+    m4rec_canned(b, 1, 27);
+    put32(b, SNAP_M4REC_POLL * 4, 0);
+    put32(b, (SNAP_M4REC_POLL + 1) * 4, 0);
+    m4rec_text(m4rec_emit_screen, b, sizeof(b));
+
+    printf("case 4, Vista:\n");
+    m4rec_canned(b, 1, 22);
+    put32(b, 32, 0);
+    put32(b, 24, 2UL | (3UL << 8));
+    m4rec_text(m4rec_emit_screen, b, sizeof(b));
+
+    printf("case 5, cleared:\n");
+    m4rec_canned(b, 0, 0);
+    m4rec_text(m4rec_emit_screen, b, sizeof(b));
+
+    printf("case 6, a wrong magic:\n");
+    m4rec_canned(b, 1, 30);
+    put32(b, 0, 0x12345678UL);
+    m4rec_text(m4rec_emit_screen, b, sizeof(b));
+
+    printf("case 7, a short value:\n");
+    m4rec_canned(b, 1, 30);
+    m4rec_text(m4rec_emit_screen, b, 16);
+
+    printf("case 8, an unknown state:\n");
+    m4rec_canned(b, 2, 30);
+    m4rec_text(m4rec_emit_screen, b, sizeof(b));
+
+    /* Task 50.18: on 64-bit Windows the four pool values are unused. */
+    printf("case 9, a value out of range, 64-bit Windows:\n");
+    snapWin64 = 1;
+    m4rec_canned(b, 1, 30);
+    put32(m, 0, 5);
+    m4rec_text(m4rec_emit_screen, b, sizeof(b));
+    snapWin64 = 0;
+    {
+        static unsigned char k[(SNAP_MSG4_AT + SNAP_MSG4_WORDS) * 4];
+        unsigned char *q = k + SNAP_MSG4_AT * 4;
+        unsigned long i;
+
+        memset(k, 0, sizeof(k));
+        put32(k, (SNAP_POLL_FIRST + 1) * 4, 4);
+        put32(q, 2 * 4, 8);
+        for (i = 3; i < 7; i++) {
+            put32(q, i * 4, SNAP_POLL_NOT_FOUND);
+        }
+        put32(q, 7 * 4, 7);
+        put32(q, 8 * 4, 1);
+        put32(q, 13 * 4, 1UL << 24);
+        put32(q, 16 * 4, 0x151UL);
+        printf("case 10, a mode-4 section, 32-bit Windows:\n");
+        print_msg4(k, SNAP_MSG4_AT + SNAP_MSG4_WORDS);
+        printf("case 11, a mode-4 section, 64-bit Windows:\n");
+        snapWin64 = 1;
+        print_msg4(k, SNAP_MSG4_AT + SNAP_MSG4_WORDS);
+        snapWin64 = -1;
+    }
+    printf("[end]\n");
+    return 0;
+}
+
 static int devListed;
 static int devSeen;
+/* Task 50.29: the USB devices' driver keys from HKEY_DYN_DATA's list, the
+ * route with no tree (write_dev_keys walks the tree itself). */
+static int devKeysPass;
+static void dev_keys_one(DWORD dn, int haveDn, const char *id);
 /* PCI xHCI controllers xhci98 drives, and the first of them Device Manager
  * reports as not working (disabled, a Code, or not started): on 98 SE and
  * ME a disabled controller's \\.\HCDn stays open and a dump is still taken
@@ -10414,6 +12320,10 @@ static void dev_consider(DWORD dn, int haveDn, const char *id, int haveSt,
     char shown[SYS_TEXT_MAX + 8];
 
     devSeen++;
+    if (devKeysPass) {
+        dev_keys_one(dn, haveDn, id);
+        return;
+    }
     dev_prop(dn, haveDn, id, CMX_DRP_HARDWAREID, "HardwareID", hw, sizeof(hw));
     dev_prop(dn, haveDn, id, CMX_DRP_COMPATIBLEIDS, "CompatibleIDs", compat,
              sizeof(compat));
@@ -10572,6 +12482,11 @@ static void dev_consider(DWORD dn, int haveDn, const char *id, int haveSt,
         dev_line("status", "not read");
         say_hang("  ", "    ", "%s: status not read", shown);
     }
+    /* Task 50.4: why mode 4 refused its last start, if it did. */
+    if (isXhci && ours && haveDriverKey) {
+        m4rec_dev(keyPath);
+        pswrec_dev(keyPath);
+    }
     dev_resources(dn, haveDn, id);
 }
 
@@ -10656,13 +12571,13 @@ static void write_dev_devices(void)
     devFlag[0] = '\0';
     cmx_load();
     if (cmx.Module == NULL) {
-        comp("    configuration manager: not read: cfgmgr32.dll did not load "
-             "(error %lu)\n", (unsigned long)cmx.LoadError);
+        comp_fitw(27, "    configuration manager: not read: cfgmgr32.dll did "
+                      "not load (error %lu)\n", (unsigned long)cmx.LoadError);
     } else if (cmx.Locate == NULL || cmx.Child == NULL ||
                cmx.Sibling == NULL || cmx.DeviceId == NULL) {
-        comp("    configuration manager: not read: cfgmgr32.dll lacks "
-             "CM_Locate_DevNodeA, CM_Get_Child, CM_Get_Sibling or "
-             "CM_Get_Device_IDA\n");
+        comp_fit(27, "    configuration manager: not read: cfgmgr32.dll lacks "
+                     "CM_Locate_DevNodeA, CM_Get_Child, CM_Get_Sibling or "
+                     "CM_Get_Device_IDA\n");
     } else {
         root = 0;
         rc = cmx.Locate(&root, NULL, 0);
@@ -10676,11 +12591,11 @@ static void write_dev_devices(void)
     }
     if (devSeen == 0) {
         if (dev_walk_dyn()) {
-            comp("    (read from HKEY_DYN_DATA\\Config Manager\\Enum: status "
-                 "and problem, no resources)\n");
+            comp_fitw(5, "    (read from HKEY_DYN_DATA\\Config Manager\\Enum: "
+                         "status and problem, no resources)\n");
         } else {
-            comp("    HKEY_DYN_DATA\\Config Manager\\Enum: not read either "
-                 "(it exists on 98 SE and ME only)\n");
+            comp_fitw(6, "    HKEY_DYN_DATA\\Config Manager\\Enum: not read "
+                         "either (it exists on 98 SE and ME only)\n");
         }
     }
     cmx_unload();
@@ -10693,6 +12608,278 @@ static void write_dev_devices(void)
         comp("\n    %d device(s) listed, of %d devnodes looked at\n",
              devListed, devSeen);
     }
+}
+
+/*
+ * Task 50.29 (design record 25 section 25): every value of each USB
+ * device's driver key, and of the devnodes below the device - its
+ * functions and interfaces, and the HID, disk and other devnodes their
+ * drivers made, whatever their enumerator, to TR_REG_TREE_DEPTH levels and
+ * never below a hub, whose devnodes are the devices on its ports, each
+ * listed as a device of its own - read only, through tr_reg.c's walk, the
+ * one Save Report takes (xhcitr.c, report_keys). A device is every devnode
+ * whose device id begins USB\ reached through no other USB device, root
+ * hubs excepted. The device report is pasted publicly, so its strings are
+ * screened for this machine's names as every other string here is
+ * (keys_screen), and a value whose name suggests a key or password keeps
+ * its data to itself (tr_reg_secret_name).
+ */
+#define CMX_NO_SUCH_DEVNODE     0x0000000DUL
+
+static int keysDevices;
+static int keysListed;
+static int on_nt(void);
+
+static int keys_has(const char *chunk, void *context)
+{
+    (void)context;
+    return sys_has_name(chunk);
+}
+
+/* tr_reg.c's screen: sys_has_name (which folds 2047 characters at most)
+ * over the text in tr_reg_screen_windows's overlapping windows, so a name
+ * across a window's edge is still whole in one. */
+static int keys_screen(const char *text, void *context)
+{
+    static char chunk[TR_REG_WINDOW + 1];
+
+    (void)context;
+    if (!sys_can_screen()) {
+        return TR_REG_UNSCREENED;
+    }
+    return tr_reg_screen_windows(text, chunk, keys_has, NULL)
+               ? TR_REG_WITHHOLD
+               : TR_REG_SHOW;
+}
+
+/* A TR_TEXT's lines into the companion: its CR LF as LF, which the text
+ * mode stream writes as CR LF. */
+static void comp_lines(const char *s)
+{
+    char chunk[512];
+    size_t k = 0;
+
+    for (; *s != '\0'; s++) {
+        if (*s == '\r') {
+            continue;
+        }
+        chunk[k++] = *s;
+        if (k == sizeof(chunk) - 1) {
+            chunk[k] = '\0';
+            comp("%s", chunk);
+            k = 0;
+        }
+    }
+    chunk[k] = '\0';
+    if (k != 0) {
+        comp("%s", chunk);
+    }
+}
+
+/* One devnode's entry: at level 0 a USB device, else a devnode below the
+ * device listed last. */
+static void dev_keys_entry(DWORD dn, int haveDn, const char *id, int level)
+{
+    static char text[TR_REG_KEY_TEXT + TR_REG_VALUE_MAX + 4096];
+    static char desc[1024];
+    char driver[200];
+    char shown[SYS_TEXT_MAX + 8];
+    char path[400];
+    TR_TEXT t;
+
+    keysListed++;
+    dev_public_id(id, shown, sizeof(shown));
+    if (level == 0) {
+        keysDevices++;
+        comp("\n  USB device %d: %s\n", keysDevices, shown);
+    } else {
+        comp("\n  USB device %d, a devnode below it (level %d): %s\n",
+             keysDevices, level, shown);
+    }
+    if (dev_prop(dn, haveDn, id, CMX_DRP_DEVICEDESC, "DeviceDesc", desc,
+                 sizeof(desc)) && desc[0] != '\0') {
+        sys_clean(desc, shown, sizeof(shown));
+        dev_line("description", "%s", shown);
+    }
+    dev_prop(dn, haveDn, id, CMX_DRP_DRIVER, "Driver", driver, sizeof(driver));
+    if (driver[0] == '\0') {
+        dev_line("driver key", "none: no driver is installed for it");
+        return;
+    }
+    sys_clean_id(driver, shown, sizeof(shown));
+    dev_line("driver key", "%s", shown);
+    tr_text_init(&t, text, sizeof(text));
+    tr_regw_key_text(&t, "      ", on_nt(), driver, path, sizeof(path),
+                     keys_screen, NULL, 0);
+    tr_text_mark_cut(&t);
+    comp_lines(text);
+}
+
+/* 98 SE and ME without cfgmgr32.dll's tree (dev_walk_dyn's pass): each USB
+ * devnode on its own, nothing below it followed. */
+static void dev_keys_one(DWORD dn, int haveDn, const char *id)
+{
+    if (_strnicmp(id, "USB\\", 4) != 0 || text_has_ci(id, "ROOT_HUB")) {
+        return;
+    }
+    dev_keys_entry(dn, haveDn, id, 0);
+}
+
+/* ---- tr_reg_tree_walk's callbacks over the configuration manager -------- */
+
+static TR_U32 keys_rel(DWORD rc, DWORD got, TR_U32 *out)
+{
+    if (rc == CMX_SUCCESS) {
+        *out = (TR_U32)got;
+        return TR_REG_REL_OK;
+    }
+    return rc == CMX_NO_SUCH_DEVNODE ? TR_REG_REL_NONE : (TR_U32)rc;
+}
+
+static TR_U32 keys_child(void *context, TR_U32 node, TR_U32 *child)
+{
+    DWORD got = 0;
+    DWORD rc;
+
+    (void)context;
+    rc = cmx.Child(&got, (DWORD)node, 0);
+    return keys_rel(rc, got, child);
+}
+
+static TR_U32 keys_sibling(void *context, TR_U32 node, TR_U32 *next)
+{
+    DWORD got = 0;
+    DWORD rc;
+
+    (void)context;
+    rc = cmx.Sibling(&got, (DWORD)node, 0);
+    return keys_rel(rc, got, next);
+}
+
+/* A hub: by its id (a root hub, xhci98's hubs), or USB\Class_09 among its
+ * hardware or compatible ids (Windows' own hubs). */
+static int keys_is_hub(void *context, TR_U32 node)
+{
+    static char ids[2048];
+    char id[400];
+
+    (void)context;
+    if (cmx.DeviceId((DWORD)node, id, sizeof(id), 0) != CMX_SUCCESS) {
+        return 0;
+    }
+    id[sizeof(id) - 1] = '\0';
+    if (tr_reg_hub_id(id)) {
+        return 1;
+    }
+    if (dev_prop((DWORD)node, 1, id, CMX_DRP_HARDWAREID, "HardwareID", ids,
+                 sizeof(ids)) && text_has_ci(ids, "USB\\Class_09")) {
+        return 1;
+    }
+    return dev_prop((DWORD)node, 1, id, CMX_DRP_COMPATIBLEIDS,
+                    "CompatibleIDs", ids, sizeof(ids)) &&
+           text_has_ci(ids, "USB\\Class_09");
+}
+
+static int keys_emit(void *context, TR_U32 node, int level)
+{
+    char id[400];
+
+    (void)context;
+    if (cmx.DeviceId((DWORD)node, id, sizeof(id), 0) != CMX_SUCCESS) {
+        comp("\n  %s (level %d): its device id was not read\n",
+             level == 0 ? "USB device" : "a devnode below it", level);
+        return 1;
+    }
+    id[sizeof(id) - 1] = '\0';
+    dev_keys_entry((DWORD)node, 1, id, level);
+    return 1;
+}
+
+static int keys_note(void *context, int level, const char *line)
+{
+    (void)context;
+    (void)level;
+    comp("    %s\n", line);
+    return 1;
+}
+
+static const TR_REG_TREE keysTree = {
+    keys_child, keys_sibling, keys_is_hub, keys_emit, keys_note, NULL
+};
+
+/* The tree: a USB device (not a root hub) is listed with its devnodes and
+ * the walk does not go below it, unless it is a hub, whose devnodes are
+ * the devices on its ports. */
+static void keys_walk(DWORD dn, int depth)
+{
+    char id[400];
+    DWORD child;
+    DWORD next;
+
+    if (devSeen > 4096) {
+        return;
+    }
+    devSeen++;
+    if (cmx.DeviceId(dn, id, sizeof(id), 0) == CMX_SUCCESS) {
+        id[sizeof(id) - 1] = '\0';
+        if (_strnicmp(id, "USB\\", 4) == 0 && !text_has_ci(id, "ROOT_HUB")) {
+            tr_reg_tree_walk(&keysTree, dn);
+            if (!keys_is_hub(NULL, dn)) {
+                return;
+            }
+        }
+    }
+    if (depth >= 64 || cmx.Child(&child, dn, 0) != CMX_SUCCESS) {
+        return;
+    }
+    for (;;) {
+        keys_walk(child, depth + 1);
+        if (devSeen > 4096 || cmx.Sibling(&next, child, 0) != CMX_SUCCESS) {
+            break;
+        }
+        child = next;
+    }
+}
+
+static void write_dev_keys(void)
+{
+    DWORD root;
+    DWORD rc;
+    int seen = devSeen;
+
+    keysListed = 0;
+    keysDevices = 0;
+    devSeen = 0;
+    cmx_load();
+    if (cmx.Module != NULL && cmx.Locate != NULL && cmx.Child != NULL &&
+        cmx.Sibling != NULL && cmx.DeviceId != NULL) {
+        root = 0;
+        rc = cmx.Locate(&root, NULL, 0);
+        if (rc == CMX_SUCCESS) {
+            keys_walk(root, 0);
+        } else {
+            comp("    configuration manager: not read: CM_Locate_DevNodeA "
+                 "answered %lu\n", (unsigned long)rc);
+        }
+    }
+    if (devSeen == 0) {
+        devKeysPass = 1;
+        if (dev_walk_dyn()) {
+            comp("\n    (read from HKEY_DYN_DATA\\Config Manager\\Enum, which "
+                 "holds no tree: each USB\n    devnode listed on its own, "
+                 "the devnodes below a device not followed)\n");
+        } else {
+            comp_fitw(14, "    not read: neither cfgmgr32.dll nor "
+                          "HKEY_DYN_DATA\\Config Manager\\Enum answered\n");
+        }
+        devKeysPass = 0;
+    }
+    cmx_unload();
+    comp_fit(6, "\n    %d USB device(s) listed, with %d devnode(s) below "
+                "them, of %d devnodes looked at\n",
+                keysDevices, keysListed - keysDevices,
+                devSeen);
+    devSeen = seen;
 }
 
 /*
@@ -10973,9 +13160,9 @@ static int take_cms_only(const char *given)
     printf("%s", dev);
     printf("\n--- files written in the current directory\n%s", files);
     if (rc == TR_CMS_TAKE_CLASH) {
-        printf("  *** %s appeared after this run chose its name - another "
-               "run or program\n      made it. It is left as it was.\n",
-               clash);
+        out_fit(6, "  *** %s appeared after this run chose its name - "
+                   "another run or program made it. It is left as it "
+                   "was.\n", clash);
         return REPORT_CLASH;
     }
     return rc == TR_CMS_TAKE_INCOMPLETE ? REPORT_TXT_BAD : REPORT_OK;
@@ -11033,23 +13220,24 @@ static int take_report(unsigned long controller, const char *given)
             return REPORT_NAMES_FULL;
         }
         sprintf(devPath, "%s.DEV", base);
-        printf("XHCITR /snapshot: %04u-%02u-%02u %02u:%02u, files named %s "
-               "(the name given), in the\ncurrent directory\n",
-               (unsigned)runTime.wYear, (unsigned)runTime.wMonth,
-               (unsigned)runTime.wDay, (unsigned)runTime.wHour,
-               (unsigned)runTime.wMinute, base);
+        out_fit(0, "XHCITR /snapshot: %04u-%02u-%02u %02u:%02u, files named "
+                   "%s (the name given), in the current directory\n",
+                   (unsigned)runTime.wYear, (unsigned)runTime.wMonth,
+                   (unsigned)runTime.wDay, (unsigned)runTime.wHour,
+                   (unsigned)runTime.wMinute, base);
         goto named;
     }
     again = "Run it again: it will take the next letter.";
     rc = stamp_base(runTime.wMonth, runTime.wDay, runTime.wHour,
                     runTime.wMinute, stamp_exists_here, NULL, base);
     if (rc == STAMP_BADCLOCK) {
-        printf("XHCITR /snapshot: the clock reads %04u-%02u-%02u %02u:%02u, "
-               "which is not a date and time\nthis tool can name a file "
-               "after. Set the clock and run it again. Nothing was written.\n",
-               (unsigned)runTime.wYear, (unsigned)runTime.wMonth,
-               (unsigned)runTime.wDay, (unsigned)runTime.wHour,
-               (unsigned)runTime.wMinute);
+        out_fit(0, "XHCITR /snapshot: the clock reads %04u-%02u-%02u "
+                   "%02u:%02u, which is not a date and time this tool can "
+                   "name a file after. Set the clock and run it again. "
+                   "Nothing was written.\n",
+                   (unsigned)runTime.wYear, (unsigned)runTime.wMonth,
+                   (unsigned)runTime.wDay, (unsigned)runTime.wHour,
+                   (unsigned)runTime.wMinute);
         report_attach_line(base, 0, 0);
         return REPORT_BAD_CLOCK;
     }
@@ -11086,13 +13274,13 @@ named:
             _close(fd);
             DeleteFileA(devPath);
         }
-        printf("  *** cannot create %s (errno %d). Nothing else is written: "
-               "the disk may be full\n      or read-only. Copy this "
-               "directory somewhere you can write to and run it\n      "
-               "there.%s\n", devPath, errno,
-               on_nt() ? " On Vista and later, run it from a command "
-                         "prompt\n      started with Run as administrator."
-                       : "");
+        out_fit(6, "  *** cannot create %s (errno %d). Nothing else is "
+                   "written: the disk may be full or read-only. Copy this "
+                   "directory somewhere you can write to and run it "
+                   "there.%s\n", devPath, errno,
+                   on_nt() ? " On Vista and later, run it from a command "
+                             "prompt started with Run as administrator."
+                           : "");
         report_attach_line(base, 0, 0);
         return REPORT_DEV_BAD;
     }
@@ -11116,17 +13304,18 @@ named:
          XHCISNAP_BUILT);
     write_dev_time();
     snap_door_path(door, controller, 0);
-    comp("  controller asked   /c %lu, %s%s\n", controller, door,
-         on_nt() ? " (else \\\\.\\HCD of that number, a driver before "
-                   "3.3.0.0)" : "");
+    comp_fitw(21, "  controller asked   /c %lu, %s%s\n", controller, door,
+                  on_nt() ? " (else \\\\.\\HCD of that number, a driver "
+                            "before 3.3.0.0)"
+                          : "");
     comp("  files              %s.DEV (this), %s.TXT, %s.BIN, %s.PSC\n", base,
          base, base, base);
     write_companion_system();
     if (!sys_can_screen()) {
-        comp("\n  %s: this machine's names were not read, so no free text "
-             "below could be\n  screened for them and none is printed; ids "
-             "are printed in their own\n  characters only.\n",
-             sysNamesOff ? "/nosysinfo" : "not screened");
+        comp_fitw(2, "\n  %s: this machine's names were not read, so no "
+                     "free text below could be screened for them and none is "
+                     "printed; ids are printed in their own characters "
+                     "only.\n", sysNamesOff ? "/nosysinfo" : "not screened");
     }
     printf("\ndevices:\n");
     write_dev_devices();
@@ -11139,6 +13328,20 @@ named:
         comp("  in the first controller's device report of this run.\n");
     } else {
         write_dev_net();
+    }
+    comp("\n  USB devices' driver keys - every value of each USB device's "
+         "driver key and of\n  the devnodes below it (its functions and "
+         "interfaces, and the devnodes their\n  drivers made, %d levels "
+         "down, not below a hub), read only; root hubs not\n  listed:\n",
+         TR_REG_TREE_DEPTH);
+    if (keysOff) {
+        /* Task 50.29: Save Report's own run and an all-controllers run's
+         * later controllers (xhcitr.c, /nokeys). */
+        comp("  left out of this run: Save Report lists them under each USB "
+             "device, and a\n  snapshot of every controller in its first "
+             "controller's device report.\n");
+    } else {
+        write_dev_keys();
     }
     comp("\n  dump: taken after this file was written; its result is "
          "appended below. If\n  nothing follows, the dump did not "
@@ -11192,9 +13395,9 @@ named:
                             sizeof(cmsClash));
         printf("%s", cmsDev);
         if (cmsRc == TR_CMS_TAKE_CLASH) {
-            printf("  *** %s appeared after this run chose its name - another "
-                   "run or program\n      made it. It is left as it was.\n",
-                   cmsClash);
+            out_fit(6, "  *** %s appeared after this run chose its name - "
+                       "another run or program made it. It is left as it "
+                       "was.\n", cmsClash);
         }
     }
 
@@ -11271,9 +13474,9 @@ named:
     }
     printf("%s", cmsFiles);
     if ((dumpRc == 0 || dumpRc == 3) && devFlagNo != 0) {
-        printf("*** dump taken from a controller Device Manager reports as "
-               "%s%s;\n    %s.DEV says so.\n", devFlag,
-               (devOurCtl > 1) ? " (if it is this one)" : "", base);
+        out_fit(4, "*** dump taken from a controller Device Manager reports "
+                   "as %s%s; %s.DEV says so.\n", devFlag,
+                   (devOurCtl > 1) ? " (if it is this one)" : "", base);
     }
     if (!devOk || !appendOk) {
         rc = REPORT_DEV_BAD;
@@ -11311,11 +13514,12 @@ named:
                                : "Run XHCITR /snapshot again: it takes the "
                                  "next letter.");
     } else if (rc == REPORT_DEV_BAD) {
-        printf("%s.DEV could not be written in full: the disk may be full "
-               "or read-only. Copy\nthis directory somewhere you can write "
-               "to and run it there.%s\n", base,
-               on_nt() ? " On Vista and\nlater, run it from a command "
-                         "prompt started with Run as administrator." : "");
+        out_fit(0, "%s.DEV could not be written in full: the disk may be "
+                   "full or read-only. Copy this directory somewhere you can "
+                   "write to and run it there.%s\n", base,
+                   on_nt() ? " On Vista and later, run it from a command "
+                             "prompt started with Run as administrator."
+                           : "");
     } else if (rc == REPORT_TXT_BAD) {
         printf("The dump's .TXT or a connection manager's state file is not "
                "complete: read\nthe lines above, and say so when you attach "
@@ -11619,7 +13823,8 @@ static unsigned long read_slots(HANDLE device, int *state,
             *tearTorn = 1;
         }
         *tearLast = header.TearDetector;
-        if ((header.Status & ~(SNAP_S_TRUNCATED | SNAP_S_PAST_END)) != 0) {
+        if ((header.Status &
+             ~(SNAP_S_TRUNCATED | SNAP_S_PAST_END | SNAP_S_BUSY)) != 0) {
             printf("  slots: the driver refused the read, status %08lX\n",
                    header.Status);
             return 0;
@@ -11636,9 +13841,10 @@ static unsigned long read_slots(HANDLE device, int *state,
             header.PayloadBytes > header.RegionBytes - header.Offset ||
             (header.PayloadBytes == 0 &&
              (header.Status & SNAP_S_TRUNCATED) != 0)) {
-            printf("  slots: an inconsistent reply (region %lu, offset %lu, "
-                   "%lu of %lu bytes)\n", header.Region, header.Offset,
-                   header.PayloadBytes, header.RegionBytes);
+            out_fit(9, "  slots: an inconsistent reply (region %lu, offset "
+                       "%lu, %lu of %lu bytes)\n",
+                       header.Region, header.Offset,
+                       header.PayloadBytes, header.RegionBytes);
             return 0;
         }
         while (header.PayloadBytes >= record) {
@@ -11652,8 +13858,9 @@ static unsigned long read_slots(HANDLE device, int *state,
         }
     }
     if (have * record != header.RegionBytes) {
-        printf("  slots: %lu of %lu device record(s) arrived - incomplete, "
-               "not reported\n", have, header.RegionBytes / record);
+        out_fit(9, "  slots: %lu of %lu device record(s) arrived - "
+                   "incomplete, not reported\n",
+                   have, header.RegionBytes / record);
         return 0;
     }
     *state = 1;
@@ -11701,7 +13908,8 @@ static unsigned long read_words(HANDLE device, unsigned long region,
             *tearTorn = 1;
         }
         *tearLast = header.TearDetector;
-        if ((header.Status & ~(SNAP_S_TRUNCATED | SNAP_S_PAST_END)) != 0 ||
+        if ((header.Status &
+             ~(SNAP_S_TRUNCATED | SNAP_S_PAST_END | SNAP_S_BUSY)) != 0 ||
             header.Region != region || header.Offset != have ||
             (header.RegionBytes & 3UL) != 0 ||
             header.RegionBytes > SNAP_WORDS_MAX_BYTES ||
@@ -11758,7 +13966,8 @@ static unsigned long read_hcd(HANDLE device, int *state,
             *tearTorn = 1;
         }
         *tearLast = header.TearDetector;
-        if ((header.Status & ~(SNAP_S_TRUNCATED | SNAP_S_PAST_END)) != 0) {
+        if ((header.Status &
+             ~(SNAP_S_TRUNCATED | SNAP_S_PAST_END | SNAP_S_BUSY)) != 0) {
             printf("  HCD region: the driver refused the read, status %08lX\n",
                    header.Status);
             return 0;
@@ -11772,10 +13981,14 @@ static unsigned long read_hcd(HANDLE device, int *state,
             header.PayloadBytes > header.RegionBytes - header.Offset ||
             (header.PayloadBytes == 0 &&
              (header.Status & SNAP_S_TRUNCATED) != 0)) {
-            printf("  HCD region: an inconsistent reply (region %lu, offset "
-                   "%lu, %lu of %lu bytes)\n", header.Region, header.Offset,
-                   header.PayloadBytes, header.RegionBytes);
+            out_fit(14, "  HCD region: an inconsistent reply (region %lu, "
+                        "offset %lu, %lu of %lu bytes)\n",
+                        header.Region, header.Offset,
+                        header.PayloadBytes, header.RegionBytes);
             return 0;
+        }
+        if ((header.Status & SNAP_S_BUSY) != 0) {
+            snapHcdBusy = 1;
         }
         memcpy(hcd_image + have, payload, header.PayloadBytes);
         have += header.PayloadBytes;
@@ -11948,10 +14161,11 @@ int tr_snap_main(int argc, char **argv)
              * `.BIN`).
              */
             if (strlen(base) > (size_t)(MAX_PATH - 12)) {
-                printf("the output basename is too long - at most %d "
-                       "characters, and this tool adds .BIN, .PSC and .TXT to "
-                       "it (and .BIN.TMP while a dump is being taken).\n",
-                       MAX_PATH - 12);
+                out_fit(0, "the output basename is too long - at most %d "
+                           "characters, and this tool adds .BIN, .PSC and "
+                           ".TXT to it (and .BIN.TMP while a dump is being "
+                           "taken).\n",
+                           MAX_PATH - 12);
                 return 2;
             }
         } else if (strcmp(argv[i], "-dump") == 0) {
@@ -11999,12 +14213,16 @@ int tr_snap_main(int argc, char **argv)
             probeOnly = 1;
         } else if (strcmp(argv[i], "-selftest-slots") == 0) {
             return selftest_slots();
+        } else if (strcmp(argv[i], "-selftest-portsc") == 0) {
+            return selftest_portsc();
         } else if (strcmp(argv[i], "-selftest-notes") == 0) {
             return selftest_notes();
         } else if (strcmp(argv[i], "-selftest-hcd") == 0) {
             return selftest_hcd();
         } else if (strcmp(argv[i], "-selftest-tol") == 0) {
             return selftest_tol();
+        } else if (strcmp(argv[i], "-selftest-retry") == 0) {
+            return selftest_retry();
         } else if (strcmp(argv[i], "-selftest-pirq") == 0) {
             return selftest_pirq();
         } else if (strcmp(argv[i], "-selftest-hcd-bad") == 0) {
@@ -12013,6 +14231,8 @@ int tr_snap_main(int argc, char **argv)
             return selftest_intr();
         } else if (strcmp(argv[i], "-selftest-msi") == 0) {
             return selftest_msi();
+        } else if (strcmp(argv[i], "-selftest-m4rec") == 0) {
+            return selftest_m4rec();
         } else if (strcmp(argv[i], "-selftest-counters") == 0) {
             return selftest_counters();
         } else if (strcmp(argv[i], "-selftest-version") == 0) {
@@ -12054,6 +14274,10 @@ int tr_snap_main(int argc, char **argv)
             /* Task 49.35: XHCITR's own, for every controller of an
              * all-controllers run but the first. */
             netOff = 1;
+        } else if (strcmp(argv[i], "-nokeys") == 0) {
+            /* Task 50.29: XHCITR's own, for Save Report's run and every
+             * controller of an all-controllers run but the first. */
+            keysOff = 1;
         } else if (strcmp(argv[i], "-nocm") == 0) {
             cmOff = 1;
         } else if (strcmp(argv[i], "-cmonly") == 0) {
@@ -12222,6 +14446,12 @@ static int take_dump(unsigned long controller, const char *base,
                "   xhci98.sys's own, or usbport's for the 1.x miniport; if it\n"
                "   does not exist, no such controller is started at this "
                "index)\n");
+        /* Task 50.4: a controller mode 4 refused has no door; its record
+         * says why. */
+        if (!probeOnly) {
+            m4rec_dump_all();
+            pswrec_dump_all();
+        }
         return 1;
     }
 
@@ -12237,6 +14467,9 @@ static int take_dump(unsigned long controller, const char *base,
     tearLast = 0;
     tearTorn = 0;
     tearSeen = 0;
+    snapBusy = 0;
+    snapHcdBusy = 0;
+    snapPscBusy = 0;
 
     printf("\nextension:\n");
     extBytes = dump_region(device, SNAP_REGION_EXTENSION, extTmpPath,
@@ -12259,9 +14492,9 @@ static int take_dump(unsigned long controller, const char *base,
          * console, and a set published with a "send this" underneath it is a
          * set somebody will send as a good one. */
         extMismatch = 1;
-        printf("  *** WARNING: %lu bytes came back but the driver says the "
-               "extension is %lu. Do not decode this dump.\n",
-               extBytes, extLast.ExtensionBytes);
+        out_fit(6, "  *** WARNING: %lu bytes came back but the driver says "
+                   "the extension is %lu. Do not decode this dump.\n",
+                   extBytes, extLast.ExtensionBytes);
     }
 
     printf("\nPORTSC:\n");
@@ -12397,17 +14630,19 @@ static int take_dump(unsigned long controller, const char *base,
      */
     if (extLast.VerbosityApplied >= XHCISNAP_LEVEL_LOG) {
         if (extBytes > sizeof(ext_image)) {
-            comp("\nnote ring: the extension is %lu bytes and this build keeps "
-                 "%lu, so the image\n  in memory is short and the ring is not "
-                 "printed. The .BIN is complete.\n",
-                 extBytes, (unsigned long)sizeof(ext_image));
+            comp_fitw(2, "\nnote ring: the extension is %lu bytes and this "
+                         "build keeps %lu, so the image in memory is short "
+                         "and the ring is not printed. The .BIN is "
+                         "complete.\n",
+                         extBytes, (unsigned long)sizeof(ext_image));
         } else {
             write_companion_ring(&extLast, ext_image, extBytes);
         }
     } else {
-        comp("\nnote ring: not printed - the driver was at verbosity %lu, "
-             "which records\n  nothing into it. That is a real report, not a "
-             "failure; Logging level 2 fills it.\n", extLast.VerbosityApplied);
+        comp_fitw(2, "\nnote ring: not printed - the driver was at "
+                     "verbosity %lu, which records nothing into it. That is a "
+                     "real report, not a failure; Logging level 2 fills "
+                     "it.\n", extLast.VerbosityApplied);
     }
 
     if (portscBytes != 0) {
@@ -12530,6 +14765,10 @@ static int take_dump(unsigned long controller, const char *base,
                      tearFirst);
     }
 
+    if (snapBusy) {
+        comp_wrapped("", busy_paragraph(snapPscBusy, snapHcdBusy));
+    }
+
     companionWasWritten = finish_companion();
 
     /*
@@ -12563,6 +14802,9 @@ static int take_dump(unsigned long controller, const char *base,
            (extLast.RingUsed == 0) ? "   EMPTY - the report says why" : "");
     printf("  coherence  %s\n",
            tearTorn ? "*** TORN - counters may be a mixture" : "no tearing");
+    if (snapBusy) {
+        printf("  busy       %s\n", busy_summary(snapPscBusy, snapHcdBusy));
+    }
     {
         /*
          * **The path is resolved, not echoed.** With no `-o` the basename is
@@ -12651,9 +14893,9 @@ static int take_dump(unsigned long controller, const char *base,
              */
             printf("  report     *** NOT CREATED: %s - the report went to the "
                    "screen only.\n", full);
-            printf("             Name a writable location with /o and run "
-                   "the dump again; the .BIN and .PSC\n             beside it "
-                   "are still the raw evidence.\n");
+            out_fit(13, "             Name a writable location with /o and "
+                        "run the dump again; the .BIN and .PSC beside it are "
+                        "still the raw evidence.\n");
         }
     }
     if (extMismatch || !companionWasWritten) {

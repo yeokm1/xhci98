@@ -62,6 +62,11 @@ static void env_nt(TRS_ENV *e, INST_U32 major, INST_U32 minor)
     e->Inst.CmNhi = 1;
 }
 
+/* src\xhci_psw.c's identity predicates, linked as XHCITR links them. */
+unsigned long XhciPswIntel(unsigned long vendorDevice);
+unsigned long XhciPswGate(unsigned long vendorDevice);
+unsigned long XhciPswBoardRefused(unsigned long subsystem);
+
 /* ---- every row classified -------------------------------------------- */
 
 static void test_coverage(void)
@@ -96,12 +101,73 @@ static void test_coverage(void)
         CHECK(trs_row_at(i)->View != TRS_VIEW_OUT ||
                   trs_row_at(i)->Note != NULL,
               "an out row says why");
+        CHECK(strlen(trs_row_at(i)->Name) <= TRS_NAME_MAX,
+              "task 50.39: a row's name within Settings' heading's room");
     }
     CHECK(trs_row_find("storwritethrough") == trs_row_find("StorWriteThrough"),
           "Stor98 by its NT key");
     CHECK(trs_row_find("XhciCommandCheck") != NULL &&
               trs_row_find("XhciCommandCheck")->View == TRS_VIEW_ADV,
           "task 49.38: the checker is an advanced row");
+    {
+        /* Task 50.26 (design record 13 section 6.15.2): 0 to 2, 1 absent
+         * and as installed (owner, 2026-11-16), any other number read as
+         * 1, at the controller's next start. */
+        const TRS_ROW *cs = trs_row_find("XhciCancelStatus");
+        int how;
+        CHECK(cs != NULL && cs->View == TRS_VIEW_ADV &&
+                  cs->Effect == TRS_EFF_LIST && cs->Accept == 0x7UL &&
+                  cs->Apply == TRS_AP_CTRL && trs_absent_def(cs) == 1 &&
+                  trs_install_def(cs) == 1,
+              "task 50.26: XhciCancelStatus, 0 to 2, default 1");
+        CHECK(cs != NULL && trs_effective(cs, 1, 2, TRS_NO_HOLD, &how) == 2 &&
+                  trs_effective(cs, 1, 0, TRS_NO_HOLD, &how) == 0 &&
+                  trs_effective(cs, 1, 3, TRS_NO_HOLD, &how) == 1 &&
+                  trs_effective(cs, 0, 0, TRS_NO_HOLD, &how) == 1,
+              "task 50.26: 2 and 0 as set, 3 and absent as 1");
+    }
+    {
+        /* Task 50.28 (design record 13 section 10.5.3, point 13): 0 or 1,
+         * 1 absent and as installed (owner, 2026-11-16), any other number
+         * read as 1, at the controller's next start. */
+        const TRS_ROW *uc = trs_row_find("XhciUnplugComplete");
+        int how;
+        CHECK(uc != NULL && uc->View == TRS_VIEW_ADV &&
+                  uc->Effect == TRS_EFF_LIST && uc->Accept == 0x3UL &&
+                  uc->Apply == TRS_AP_CTRL && trs_absent_def(uc) == 1 &&
+                  trs_install_def(uc) == 1,
+              "task 50.28: XhciUnplugComplete, 0 or 1, default 1");
+        CHECK(uc != NULL && trs_effective(uc, 1, 0, TRS_NO_HOLD, &how) == 0 &&
+                  trs_effective(uc, 1, 2, TRS_NO_HOLD, &how) == 1 &&
+                  trs_effective(uc, 0, 0, TRS_NO_HOLD, &how) == 1,
+              "task 50.28: 0 as set, 2 and absent as 1");
+    }
+    {
+        /* Task 50.31 (design record 38 section 4): 0 off, 2 to 600 the
+         * first wait, anything else - 1 and above 600 included - read as
+         * 5, absent and as installed 5 (owner, 2026-11-17). */
+        const TRS_ROW *fr = trs_row_find("XhciFailedRetrySec");
+        int how;
+        CHECK(fr != NULL && fr->Effect == TRS_EFF_RANGE &&
+                  fr->Apply == TRS_AP_CTRL && trs_absent_def(fr) == 5 &&
+                  trs_install_def(fr) == 5,
+              "task 50.31: XhciFailedRetrySec, default 5");
+        CHECK(fr != NULL && trs_effective(fr, 1, 0, TRS_NO_HOLD, &how) == 0 &&
+                  trs_effective(fr, 1, 2, TRS_NO_HOLD, &how) == 2 &&
+                  trs_effective(fr, 1, 600, TRS_NO_HOLD, &how) == 600 &&
+                  trs_effective(fr, 1, 1, TRS_NO_HOLD, &how) == 5 &&
+                  trs_effective(fr, 1, 601, TRS_NO_HOLD, &how) == 5 &&
+                  trs_effective(fr, 0, 0, TRS_NO_HOLD, &how) == 5,
+              "task 50.31: 0, 2 and 600 as set; 1, 601 and absent as 5");
+        /* The owner's decision of 2026-11-19 (record 38 section 15.2): the
+         * Settings window's own note in place of Setup's. */
+        CHECK(fr != NULL && trs_caution(fr) != NULL &&
+                  strcmp(trs_caution(fr),
+                         "The seconds before the driver tries a stopped "
+                         "controller again: 2 to 600, or 0 for never. "
+                         "Restart the controller after a change.") == 0,
+              "task 50.31: the Settings window's note");
+    }
     CHECK(trs_row_find("XhciQemuNoInterrupt") == NULL, "nor a qemu value");
     CHECK_EQ(trs_row_find("XhciLogVerbosity")->View, TRS_VIEW_OUT,
              "the log level is the Logging level dialog's");
@@ -255,6 +321,13 @@ static const char *const trsNotSetting[] = {
     "XhciCmNoIrqDiag", "XhciUasCommandBytes", "XhciUasCommandSource",
     "XhciUasCommandStatus", "XhciUasDeviceLimit", "XhciUasDeviceLimitWhy",
     "XhciHlprInject", "XhciMsi86NoStrip", "XhciMsi86InjNoLine",
+    /* Task 50.4: a refused mode-4 start's record (record 15 section
+     * 4.5.20), read by the driver only to know whether to clear it. */
+    "XhciMode4Refusal",
+    /* Task 50.34: the port switchover's record of each start, output
+     * only, and the volatile session key the first-session check
+     * creates (design record 16 sections 21.5 and 21.7). */
+    "XhciIntelPortSwitchResult", "XhciIntelPortSwitchSession",
     NULL
 };
 
@@ -886,6 +959,75 @@ static void test_new_rows(void)
         }
     }
     {
+        /* Task 50.34: the first-session check's note, one Intel
+         * controller's own key, never machine-wide, on 2000 and later. */
+        const TRS_ROW *rd = trs_row_find("XhciIntelPortSwitchReady");
+        CHECK(rd != NULL, "XhciIntelPortSwitchReady has a row");
+        if (rd != NULL) {
+            CHECK_EQ(trs_loc(rd), TRS_LOC_CTRL, "a controller's own key");
+            env_nt(&e, 6, 1);
+            CHECK_EQ(trs_state(rd, &e), TRS_HIDE,
+                     "no controller the switchover applies to: hidden");
+            e.PswXhci = 1;
+            CHECK_EQ(trs_state(rd, &e), TRS_SHOW, "one on 7");
+            env_98(&e);
+            e.PswXhci = 1;
+            CHECK_EQ(trs_state(rd, &e), TRS_HIDE, "98 SE: no first-session check");
+            env_nt(&e, 6, 1);
+            e.PswXhci = 1;
+            CHECK(trs_scoped(rd), "the selected controller is its scope");
+            CHECK(trs_scoped(trs_row_find("XhciIntelPortSwitch")),
+                  "as a driver-key row's");
+            CHECK(!trs_scoped(trs_row_find("XhciUasFastReset")),
+                  "a drive row has its own");
+            CHECK(trs_ready_applies(1, 1, 1, 0, 0), "a listed Intel controller");
+            CHECK(trs_ready_applies(1, 0, 1, 0, 1),
+                  "an unlisted Intel one under the override 2");
+            CHECK(!trs_ready_applies(1, 0, 1, 0, 0), "an unlisted Intel one");
+            CHECK(!trs_ready_applies(1, 1, 1, 1, 0), "the excluded board");
+            CHECK(!trs_ready_applies(1, 1, 1, 1, 1),
+                  "the excluded board under the override 2");
+            CHECK(!trs_ready_applies(1, 1, 0, 0, 0), "a board not read");
+            CHECK(!trs_ready_applies(0, 1, 1, 0, 1), "not Intel");
+            /* A hardware id parsed as the Tree parses it, through the
+             * switchover's own predicates (xhcitr.c dn_is_intel and
+             * dn_psw_applies): PCI offset 0's layout, the vendor low. */
+            {
+                INST_U32 vd = 0;
+                TR_U32 ss = 0;
+                const char *id =
+                    "PCI\\VEN_8086&DEV_1E31&SUBSYS_90A8104D&REV_04";
+                CHECK(inst_pci_vendev(id, &vd) && vd == 0x1E318086UL,
+                      "the id's vendor in the low word");
+                CHECK(XhciPswIntel((unsigned long)vd) &&
+                          XhciPswGate((unsigned long)vd),
+                      "an Intel 1E31: Intel, listed");
+                CHECK(trs_subsys(id, &ss) &&
+                          XhciPswBoardRefused((unsigned long)ss),
+                      "its subsystem the excluded board's");
+                CHECK(inst_pci_vendev("PCI\\VEN_8086&DEV_A12F", &vd) &&
+                          XhciPswIntel((unsigned long)vd) &&
+                          !XhciPswGate((unsigned long)vd),
+                      "an Intel 100-series: Intel, not listed");
+                CHECK(inst_pci_vendev("PCI\\VEN_1B36&DEV_000D", &vd) &&
+                          !XhciPswIntel((unsigned long)vd),
+                      "QEMU's controller: not Intel");
+                CHECK(inst_pci_vendev("PCI\\VEN_1E31&DEV_8086", &vd) &&
+                          !XhciPswIntel((unsigned long)vd),
+                      "a device id of 8086 is not the vendor");
+            }
+            CHECK(trs_parse(rd, &e, "0", out, sizeof(out), &why) &&
+                      trs_parse(rd, &e, "1", out, sizeof(out), &why) &&
+                      !trs_parse(rd, &e, "2", out, sizeof(out), &why),
+                  "0 and 1 offered");
+            CHECK(trs_parse(rd, &e, "default", out, sizeof(out), &why) &&
+                      strcmp(out, "0") == 0, "default: the INFs' 0");
+            CHECK_EQ(trs_effective(rd, 1, 2, TRS_NO_HOLD, &how), 0,
+                     "only an exact 1 counts");
+            CHECK_EQ(trs_apply(rd, 1), TRS_AP_BOOT, "a restart of Windows");
+        }
+    }
+    {
         const TRS_ROW *sp = trs_row_find("XhciStagePoolKiB");
         CHECK_EQ(trs_effective(sp, 1, 319, TRS_NO_HOLD, &how), 256,
                  "the pool in whole 64 KiB blocks");
@@ -1006,7 +1148,7 @@ static void test_parse(void)
     CHECK(!trs_parse(psw, &e, "x", out, sizeof(out), &why), "not a number");
     CHECK(!trs_parse(psw, &e, "0x1", out, sizeof(out), &why), "no hex");
     CHECK(trs_parse(psw, &e, "default", out, sizeof(out), &why) &&
-              strcmp(out, "0") == 0, "default");
+              strcmp(out, "1") == 0, "default: the INFs' 1 (task 50.34)");
     CHECK(trs_parse(imod, &e, "10", out, sizeof(out), &why), "imod low");
     CHECK(!trs_parse(imod, &e, "9", out, sizeof(out), &why), "imod below");
     CHECK(trs_parse(imod, &e, "default", out, sizeof(out), &why) &&

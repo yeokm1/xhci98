@@ -12080,6 +12080,17 @@ VOID TbtU4Suspend(PTBT_U4CM cm)
     k = 0;
     for (i = 0; i < cm->PortCount; i++) {
         p = &cm->Ports[i];
+        /* Record 21 section 6.1.6 item 6: the router's identity at the
+         * suspend, for the comparison after the resume. */
+        p->ResumeSame = FALSE;
+        p->SuspIdValid = (BOOLEAN)(p->Pcie.Up && p->Dev.Present &&
+                                   p->Dev.UuidValid);
+        p->SuspVendor = p->Dev.Vendor;
+        p->SuspDevice = p->Dev.Device;
+        p->SuspUuid[0] = p->Dev.Uuid[0];
+        p->SuspUuid[1] = p->Dev.Uuid[1];
+        p->SuspUuid[2] = p->Dev.Uuid[2];
+        p->SuspUuid[3] = p->Dev.Uuid[3];
         if (p->Pcie.Up && k < TBT_U4_OBLIGATIONS) {
             o = &cm->Obligations[k++];
             o->Used = TRUE;
@@ -12403,6 +12414,9 @@ LONG TbtU4Resume(PTBT_U4CM cm)
     ULONG hostSleep[3];
     BOOLEAN entered;
 
+    for (i = 0; i < cm->PortCount && i < TBT_U4_MAX_PORTS; i++) {
+        cm->Ports[i].ResumeSame = FALSE;
+    }
     if (cm->Contained) {
         cm->Counters.ContainedRefused++;
         return TBT_E_STOPPED;
@@ -12634,7 +12648,33 @@ LONG TbtU4Resume(PTBT_U4CM cm)
     for (i = 0; i < cm->PortCount; i++) {
         cm->Ports[i].CheckPending = TRUE;
     }
+    /* Record 21 section 6.1.6 item 6: a successful resume, each port's
+     * router compared with the suspend's record after everything above
+     * (a rebuild samples the identity afresh), once. */
+    for (i = 0; i < cm->PortCount && i < TBT_U4_MAX_PORTS; i++) {
+        p = &cm->Ports[i];
+        p->ResumeSame = (BOOLEAN)(
+            allMet && p->SuspIdValid && p->State == TBT_U4_UP &&
+            p->Pcie.Up && p->Dev.Present && p->Dev.UuidValid &&
+            p->Dev.Vendor == p->SuspVendor && p->Dev.Device == p->SuspDevice &&
+            p->Dev.Uuid[0] == p->SuspUuid[0] &&
+            p->Dev.Uuid[1] == p->SuspUuid[1] &&
+            p->Dev.Uuid[2] == p->SuspUuid[2] &&
+            p->Dev.Uuid[3] == p->SuspUuid[3]);
+        p->ResumeSameGen = p->Generation;
+        p->SuspIdValid = FALSE;
+    }
     return allMet ? TBT_OK : TBT_E_STATE;
+}
+
+BOOLEAN TbtU4PortResumeSame(PTBT_U4CM cm, ULONG port)
+{
+    PTBT_U4_PORT p;
+
+    p = tbtU4PortOf(cm, port);
+    return (BOOLEAN)(p != NULL && p->ResumeSame &&
+                     p->Generation == p->ResumeSameGen &&
+                     p->State == TBT_U4_UP && p->Pcie.Up);
 }
 
 /*

@@ -270,6 +270,19 @@ ULONG XhciUsbdxStreamsUsbd(ULONG answer, ULONG gone);
 ULONG XhciUsbdxIoctlAlias(ULONG code);
 
 /*
+ * Task 50.25 (design record 13 section 6.13.12): whether a transfer that
+ * ends short completes as a success. `flagSet`: its URB set
+ * USBD_SHORT_TRANSFER_OK. `in`: a transfer from the device. `bulkOrInterrupt`:
+ * a bulk or interrupt transfer (not control, not isochronous). `contract`:
+ * its PDO answered GUID_USBD_INTERFACE_V1 at version 0x602 since the
+ * device's last IRP_MN_REMOVE_DEVICE. The flag always allows it; without
+ * it, only a bulk or interrupt IN of a 0x602 client does, as Windows 8's
+ * USB 3 stack completes one. 1 or 0.
+ */
+ULONG XhciUsbdxShortOk(ULONG flagSet, ULONG in, ULONG bulkOrInterrupt,
+                       ULONG contract);
+
+/*
  * Task 49.45 (design record 13 section 6.13.11): the log notes a device
  * PDO writes about what its client asks, with no change to any answer.
  * Each value packs its fields as below; a field wider than its place is

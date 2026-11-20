@@ -400,6 +400,108 @@ static void test_verdicts(void)
     CHECK(strcmp(di_verdict(DI_JOB_NONE, 0, 0), "failed") == 0, "no verdict without a job");
 }
 
+/* Record 27 section 9.1 (design record 23 revision 67): removestale's
+ * conditions, each refusal on its own, and its job line. */
+static void test_stale(void)
+{
+    static const char *rh =
+        "USB\\XHCI98_ROOT_HUB\\0PCI&VEN_1B36&DEV_000D&SUBSYS_11001AF4&REV_01"
+        "&00F000";
+    char path[300];
+    DI_CMD c;
+
+    CHECK(di_stale_id(rh), "stale id: the root hub");
+    CHECK(di_stale_id("usb\\xhci98_hub&vid_05e3&pid_0610\\5"), "stale id: a hub, any case");
+    CHECK(di_stale_id("USB\\XHCI98_HUB30\\1"), "stale id: HUB30");
+    CHECK(di_stale_id("USB\\XHCI98_COMPOSITE&VID_1&PID_2\\1"), "stale id: composite");
+    CHECK(!di_stale_id("USB\\XHCI98_HUB3\\1"), "stale id: no such kind");
+    CHECK(!di_stale_id("USB\\XHCI98_ROOT_HUB"), "stale id: no instance");
+    CHECK(!di_stale_id("XHCI98\\ROOT_HUB\\0"), "stale id: the old form is not removed here");
+    CHECK(!di_stale_id("PCI\\VEN_1B36&DEV_000D\\00E000"), "stale id: a controller");
+    CHECK(!di_stale_id("USB\\VID_046D&PID_C077\\5&1"), "stale id: another device");
+    CHECK(!di_stale_id(0), "stale id: none");
+
+    {
+        char b[16];
+        memcpy(b, "USB\\0009\0", 9);
+        CHECK(di_driver_text(DI_REG_SZ, b, 9UL, sizeof b) && strcmp(b, "USB\\0009") == 0,
+              "driver text: a string with its NUL");
+        memcpy(b, "USB\\0009XXXXXXX", 15);
+        CHECK(di_driver_text(DI_REG_SZ, b, 8UL, sizeof b) && strcmp(b, "USB\\0009") == 0,
+              "driver text: a string without its NUL, terminated here");
+        memcpy(b, "USB\\0009\0", 9);
+        CHECK(!di_driver_text(3UL, b, 9UL, sizeof b), "driver text: REG_BINARY refused");
+        memcpy(b, "USB\\0009\0", 9);
+        CHECK(!di_driver_text(4UL, b, 9UL, sizeof b), "driver text: REG_DWORD refused");
+        memcpy(b, "USB\\0009\0", 9);
+        CHECK(!di_driver_text(2UL, b, 9UL, sizeof b), "driver text: REG_EXPAND_SZ refused");
+        memcpy(b, "USB\\0009\0xy\0", 12);
+        CHECK(!di_driver_text(DI_REG_SZ, b, 12UL, sizeof b), "driver text: bytes after a NUL");
+        memcpy(b, "\0", 1);
+        CHECK(!di_driver_text(DI_REG_SZ, b, 1UL, sizeof b), "driver text: empty");
+        CHECK(!di_driver_text(DI_REG_SZ, b, 0UL, sizeof b), "driver text: no bytes");
+        memcpy(b, "USB\\0009\0", 9);
+        CHECK(!di_driver_text(DI_REG_SZ, b, 16UL, sizeof b), "driver text: as long as the buffer");
+    }
+    CHECK(di_driver_value_ok("USB\\0009"), "driver: USB\\0009");
+    CHECK(!di_driver_value_ok("USB\\009"), "driver: three digits");
+    CHECK(!di_driver_value_ok("USB\\00090"), "driver: five digits");
+    CHECK(!di_driver_value_ok("US B\\0009"), "driver: a space");
+    CHECK(!di_driver_value_ok("USB\\00\\09"), "driver: two backslashes");
+    CHECK(!di_driver_value_ok("\\0009"), "driver: no class");
+    CHECK(!di_driver_value_ok(""), "driver: empty");
+
+    CHECK(di_class_path(path, sizeof path, "USB\\0009") &&
+          strcmp(path, "System\\CurrentControlSet\\Services\\Class\\USB\\0009") == 0,
+          "the class key's path");
+    CHECK(di_enum_path(path, sizeof path, rh) && strncmp(path, "Enum\\USB\\", 9) == 0,
+          "the Enum entry's path");
+    CHECK(!di_class_path(path, 10, "USB\\0009") && path[0] == '\0', "a path too long");
+
+    CHECK(di_stale_check(rh, 0UL, 1, "USB\\0009", 0) == 0, "stale: first checks passed");
+    CHECK(strcmp(di_stale_check("PCI\\VEN_1\\2", 0UL, 1, "USB\\0009", 0),
+                 DI_KEPT_DEVICE) == 0, "kept: not a bus id");
+    CHECK(strcmp(di_stale_check(rh, 0xC2920074UL, 1, "USB\\0009", 0),
+                 DI_KEPT_DEVNODE) == 0, "kept: a devnode in the entry found");
+    CHECK(strcmp(di_stale_check(rh, 0UL, 0, "", 0),
+                 DI_KEPT_DRIVER) == 0, "kept: no Driver value");
+    CHECK(strcmp(di_stale_check(rh, 0UL, 1, "USB\\9", 0),
+                 DI_KEPT_DRIVER) == 0, "kept: a Driver value of another form");
+    CHECK(strcmp(di_stale_check(rh, 0UL, 1, "USB\\0009", 1),
+                 DI_KEPT_KEY) == 0, "kept: the key is back");
+    CHECK(strcmp(di_stale_check(rh, 0UL, 1, "USB\\0009", -1),
+                 DI_KEPT_KEY_UNREADABLE) == 0, "kept: the key not known");
+    /* The last check, presence, made only after the first ones passed. */
+    CHECK(di_stale_final(0) == 0, "final: not present, removed");
+    CHECK(strcmp(di_stale_final(1), DI_KEPT_DEVNODE) == 0, "final: present again");
+    CHECK(strcmp(di_stale_final(-1), DI_KEPT_LIST) == 0, "final: the present list not made");
+
+    CHECK(di_class_parent(path, sizeof path, "USB\\0009") &&
+          strcmp(path, "System\\CurrentControlSet\\Services\\Class\\USB") == 0,
+          "the class key above the driver key");
+    CHECK(!di_class_parent(path, sizeof path, "USB0009"), "no class key without a backslash");
+    CHECK(strcmp(di_class_child("USB\\0009"), "0009") == 0, "the driver key's name");
+    CHECK(di_class_child("USB0009") == 0, "no name without a backslash");
+    CHECK(di_listed("0009", "0009", 0UL) == 1, "listed: the name");
+    CHECK(di_listed("0009", "0001", 0UL) == 0, "listed: another name");
+    CHECK(di_listed("0009", "0009", 0UL) == 1 && di_listed("0009", "0009", 0UL) == 1,
+          "listed: the same answer again");
+    CHECK(di_listed("0009", 0, DI_REG_NO_MORE_ITEMS) == 0, "listed: the end, not there");
+    CHECK(di_listed("0009", 0, 1011UL) == -1, "listed: 1011 proves nothing");
+    CHECK(di_listed("0009", 0, 2UL) == -1, "listed: any other end proves nothing");
+
+    CHECK(di_parse(V " " JOBPATH, jobfile("removestale C:\\XHCI98\\XHCIDI.RES 0 "
+                   "USB\\XHCI98_ROOT_HUB\\0PCI&VEN_1B36&DEV_000D&00F000"), V, &c) ==
+          DI_PARSE_OK && c.job == DI_JOB_REMOVESTALE, "removestale parsed");
+    CHECK(di_parse(V " " JOBPATH, jobfile("removestale C:\\XHCI98\\XHCIDI.RES 0 "
+                   "PCI\\VEN_1B36&DEV_000D\\00E000"), V, &c) == DI_PARSE_COMMAND &&
+          strcmp(c.why, "device-id") == 0, "removestale refuses a non-bus id");
+    CHECK(strcmp(di_verdict(DI_JOB_REMOVESTALE, 0, 0), "removed") == 0,
+          "removestale removed");
+    CHECK(strcmp(di_verdict(DI_JOB_REMOVESTALE, DI_ERR_USER_CANCEL, 0),
+                 "cancelled") == 0, "removestale cancelled");
+}
+
 static void test_errnames(void)
 {
     CHECK(strcmp(di_err_name(0), "OK") == 0, "0 is OK");
@@ -742,6 +844,7 @@ int main(void)
     test_inf_helpers();
     test_system();
     test_verdicts();
+    test_stale();
     test_errnames();
     test_header();
     test_writer();

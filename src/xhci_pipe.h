@@ -825,6 +825,149 @@ ULONG XhciPipeNtStatus(ULONG usbd);
 ULONG XhciPipeConfigureUsbdStatus(ULONG completionCode);
 
 /* ------------------------------------------------------------------ */
+/* The status a cancelled URB carries (task 50.26, record 13 s. 6.15)   */
+/* ------------------------------------------------------------------ */
+
+/* The later headers' value of USBD_STATUS_CANCELED (WDK 7.1
+ * inc\api\usb.h:472), error class; XHCI_PIPE_USBD_CANCELED above is the
+ * Windows 98 and 2000 DDKs' (usbdi.h:312), success class, and is the
+ * driver's own value inside. */
+#define XHCI_PIPE_USBD_CANCELED_E           0xC0010000UL
+
+/* 1 for either value of USBD_STATUS_CANCELED, else 0. */
+ULONG XhciPipeUsbdIsCancel(ULONG usbd);
+
+/* XhciCancelStatus's values; 1 is the default (owner, 2026-11-16). */
+#define XHCI_PIPE_CANCEL_L          0UL     /* 0x00010000 everywhere        */
+#define XHCI_PIPE_CANCEL_OWN        1UL     /* each system's own stack's    */
+#define XHCI_PIPE_CANCEL_E          2UL     /* 0xC0010000 everywhere        */
+
+/*
+ * The status a cancelled URB leaves with: `taken` 1 when XhciCancelStatus
+ * was read as a DWORD, `value` it, `nt` 0 on Windows 98 SE and ME and 1 on
+ * 2000 and later (IoIsWdmVersionAvailable(1, 0x10), the test the driver
+ * makes everywhere for it): L for 0, E for 2, and for 1 - the default,
+ * also for anything absent, of another type or out of range - the value
+ * each system's own stack gives, from xhci_pipe.c's table.
+ */
+ULONG XhciPipeCancelPick(ULONG taken, ULONG value, ULONG nt);
+
+/*
+ * Task 50.28 (design record 13 section 10.5.3): a departed device's
+ * requests on Windows 2000 and later.
+ *
+ * XhciUnplugComplete's values; 1 is the default (owner, 2026-11-16). The
+ * policy: XHCI_PIPE_UNPLUG_AT_ONCE (completed DEVICE_GONE once the PDO is
+ * reported) or XHCI_PIPE_UNPLUG_HELD (held, section 10.5's rule). `taken`
+ * 1 when the value was read as a DWORD, `value` it, `nt` as for
+ * XhciPipeCancelPick. 98 SE and ME are always held - no value completes at
+ * once there (27-V.1's hidclass loop); on NT 0 holds, and 1, absent,
+ * another type or any other number is at once.
+ */
+#define XHCI_PIPE_UNPLUG_HOLD_ALL   0UL     /* held on every system         */
+#define XHCI_PIPE_UNPLUG_DEFAULT    1UL     /* at once on 2000 and later    */
+#define XHCI_PIPE_UNPLUG_HELD       0UL
+#define XHCI_PIPE_UNPLUG_AT_ONCE    1UL
+ULONG XhciPipeUnplugPick(ULONG taken, ULONG value, ULONG nt);
+
+/* The hold's kinds (HcdIoPark's `kind`): a contained controller's new
+ * request or a ghost's; a contained controller's queued command, a
+ * departure's hold that no report ends; and the departure drain's two hold
+ * points, whose hold the PDO's report ends. */
+#define XHCI_PARK_KIND_HOLD         0UL
+#define XHCI_PARK_KIND_DEPART       1UL
+#define XHCI_PARK_KIND_DRAIN        2UL
+
+/* The hold decision's inputs, read under the cancel spin lock - but
+ * CONTAINED, the snapshot the hold point took under the controller lock
+ * before it, and ISO_KEEP, a build constant. */
+#define XHCI_PARK_IN_CLOSING        0x0001UL    /* the PDO stops or goes    */
+#define XHCI_PARK_IN_CANCELLED      0x0002UL    /* irp->Cancel              */
+#define XHCI_PARK_IN_PARK_CLOSED    0x0004UL    /* the controller's holds closed */
+#define XHCI_PARK_IN_ABORTED        0x0008UL    /* an abort horizon covers it */
+#define XHCI_PARK_IN_ISO_RELEASED   0x0010UL    /* 98 SE's and ME's latch (18.5) */
+#define XHCI_PARK_IN_ISO            0x0020UL    /* an isochronous URB       */
+#define XHCI_PARK_IN_GONE_NOW       0x0040UL    /* the PDO marked reported  */
+#define XHCI_PARK_IN_CONTAINED      0x0080UL    /* the controller contained */
+#define XHCI_PARK_IN_ISO_KEEP       0x0100UL    /* section 10.5.3's fallback */
+
+/* The hold decision's verdicts. DECLINE and NOT_HELD make HcdIoPark return
+ * 0 (the caller completes the request); CANCEL and HOLD 1. */
+#define XHCI_PARK_DECLINE           0UL     /* closing, cancelled, closed   */
+#define XHCI_PARK_CANCEL            1UL     /* completed CANCELED here      */
+#define XHCI_PARK_NOT_HELD          2UL     /* the caller completes it gone */
+#define XHCI_PARK_HOLD              3UL     /* listed on the PDO            */
+
+/*
+ * The hold decision (section 10.5.3, point 6), in this order: the PDO
+ * closing, the IRP cancelled or the controller's holds closed - declined;
+ * an abort covers it, or a departure's isochronous request after 98 SE's
+ * and ME's latch - cancelled here; the drain's kind on a PDO marked
+ * reported, on a controller not contained, and not an isochronous request
+ * the fallback keeps - not held; anything else held. A contained
+ * controller's request is therefore held whatever the mark says.
+ */
+ULONG XhciPipeParkVerdict(ULONG kind, ULONG in);
+
+/* The report's claim of one held IRP (point 6, step 4): left - not the
+ * drain's mark, the PDO closing (its release completes it), the controller
+ * contained, or an isochronous request the fallback keeps - else claimed
+ * CANCELED when an abort covers it, otherwise DEVICE_GONE. `drainMark` 1
+ * when the IRP carries the drain's mark; `in` as above. */
+#define XHCI_PARK_CLAIM_LEAVE       0UL
+#define XHCI_PARK_CLAIM_CANCEL      1UL
+#define XHCI_PARK_CLAIM_GONE        2UL
+ULONG XhciPipeClaimVerdict(ULONG drainMark, ULONG in);
+
+/* `usbd` as the client receives it: L becomes `out` (L or E), every other
+ * status is unchanged. Idempotent. */
+ULONG XhciPipeUsbdOut(ULONG usbd, ULONG out);
+
+/*
+ * The URB's fixed fields, per pointer width (Windows 2000 DDK usbdi.h and
+ * WDK 7.1 inc\api\usb.h; the driver half asserts its FIELD_OFFSETs against
+ * these): the header's Length, Function and Status, and of struct
+ * _URB_ISOCH_TRANSFER NumberOfPackets, ErrorCount and IsoPacket[0].
+ */
+#define XHCI_PIPE_URB_LENGTH_OFF        0x00UL      /* USHORT */
+#define XHCI_PIPE_URB_FUNCTION_OFF      0x02UL      /* USHORT */
+#define XHCI_PIPE_URB_STATUS_OFF        0x04UL
+#define XHCI_PIPE_URB_ISO_FUNCTION      0x000AUL    /* usbdi.h:79 */
+#define XHCI_PIPE_ISOURB_NPKT_32        0x4CUL
+#define XHCI_PIPE_ISOURB_ERRORS_32      0x50UL
+#define XHCI_PIPE_ISOURB_PACKET0_32     0x54UL
+#define XHCI_PIPE_ISOURB_NPKT_64        0x84UL
+#define XHCI_PIPE_ISOURB_ERRORS_64      0x88UL
+#define XHCI_PIPE_ISOURB_PACKET0_64     0x8CUL
+#define XHCI_PIPE_ISO_PACKET_BYTES      0x0CUL
+#define XHCI_PIPE_ISO_PACKET_STATUS_OFF 0x08UL
+
+/*
+ * HcdUrbOut's rewrite, just before a URB IRP completes (record 13 section
+ * 6.15.3): nothing unless `urbIrp` (IOCTL_INTERNAL_USB_SUBMIT_URB),
+ * `devicePdo` (sent to a device PDO) and `ours` are all 1, `urb` is not
+ * NULL and `out` is E; then L becomes E in the header and, for an
+ * isochronous URB whose Length holds its fixed fields, in each of the
+ * first min(NumberOfPackets, the packets its Length holds) packets.
+ * `ours` is 1 where this completion's own path wrote every field it may
+ * rewrite (the header, and those packets), and 0 for a refusal or answer
+ * at the dispatch (HcdCompleteIrp), which never writes the cancelled value
+ * and may leave a client's own header or packets as they came. Lengths,
+ * ErrorCount and every other status are untouched; nothing outside the
+ * URB's Length is read or written beyond the header. `wide` 1 for the
+ * 64-bit layout. Returns how many fields it rewrote.
+ */
+ULONG XhciPipeUrbCancelOut(ULONG urbIrp, ULONG devicePdo, ULONG ours,
+                           PVOID urb, ULONG out, ULONG wide);
+
+/* For the qemu flavour's log: an isochronous URB's ErrorCount in *errors
+ * and how many of its packets, within the same bound, carry `usbd`.
+ * Returns 1 for an isochronous URB whose Length holds its fixed fields;
+ * else 0, with 0 in both. */
+ULONG XhciPipeUrbIsoCount(PVOID urb, ULONG wide, ULONG usbd,
+                          PULONG errors, PULONG carrying);
+
+/* ------------------------------------------------------------------ */
 /* What Windows XP onward asks a device PDO (task 28-A.1)               */
 /* ------------------------------------------------------------------ */
 

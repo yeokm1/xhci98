@@ -31,6 +31,7 @@ static volatile const char CmFlavourMarker[] = CM_FLAVOUR_NAME;
 static volatile const char CmVersionString[] = "xhcicm " XHCI_VER_STR;
 
 PDRIVER_OBJECT CmDriverObject;
+PDEVICE_OBJECT CmResidentObject;
 
 /* ---- the kept child's driver-wide part (design record 31 section 4.10,
  * task 48.29): the system, the detach owner and the callback ---- */
@@ -367,12 +368,62 @@ static VOID cmUnload(PDRIVER_OBJECT driver)
      * driver that never started one (cm_cfgwk.c), and finds none. */
     CmCfgwkDrain();
     CmNvlinkUnload();
+    /* Task 50.27 (record 21 section 4.5.19): the library's copy ended
+     * last, a defensive step; an image that asked it for a claim, or that
+     * published the link-state table, never unloads. */
+    CmRirqNtEnd();
 }
 
-/* Every dispatch routine tells the query device (CM_KIND_QUERY,
- * cm_qryos.c) from the PnP roles first: it has no lower object. */
+/*
+ * Design record 21 section 7.9 (task 50.40): on 98 SE and ME an image with
+ * no DriverUnload is still unloaded once its driver object has no device
+ * object left (runs/run-46.md, "46.20 follow-up"), which the removal of the
+ * last NHI brings about; and this image must stay for the boot there - the
+ * link-state proof key's handler (cm_nvlinkos.c), the CONFIGMG worker a
+ * stop leaves inside a call (cm_cfgwk.c), the call workers and their late
+ * takers (cm_callwk.c) run its code after their NHI is gone. So
+ * DriverEntry makes one device object there that nothing ever deletes:
+ * unnamed, in no stack, reported to nobody. PASSIVE_LEVEL, DriverEntry.
+ */
+static NTSTATUS cmResidentCreate(PDRIVER_OBJECT driver)
+{
+    PDEVICE_OBJECT self;
+    PCM_COMMON common;
+    NTSTATUS status;
+
+    status = IoCreateDevice(driver, sizeof(CM_COMMON), NULL,
+                            FILE_DEVICE_UNKNOWN, 0, FALSE, &self);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+    common = (PCM_COMMON)self->DeviceExtension;
+    CmZero(common, sizeof(CM_COMMON));
+    common->Kind = CM_KIND_RESIDENT;
+    common->Self = self;
+    self->Flags &= ~DO_DEVICE_INITIALIZING;
+    CmResidentObject = self;
+    return STATUS_SUCCESS;
+}
+
+/* No request is expected at the resident object (no name, no stack); any
+ * that comes is refused. <= DISPATCH_LEVEL. */
+static NTSTATUS cmResidentDispatch(PDEVICE_OBJECT device, PIRP irp)
+{
+    UNREFERENCED_PARAMETER(device);
+    if (IoGetCurrentIrpStackLocation(irp)->MajorFunction == IRP_MJ_POWER) {
+        PoStartNextPowerIrp(irp);
+    }
+    return CmCompleteIrp(irp, STATUS_INVALID_DEVICE_REQUEST, 0);
+}
+
+/* Every dispatch routine tells the resident object and the query device
+ * (CM_KIND_QUERY, cm_qryos.c) from the PnP roles first: neither has a
+ * lower object. */
 static NTSTATUS cmDispatchPnp(PDEVICE_OBJECT device, PIRP irp)
 {
+    if (((PCM_COMMON)device->DeviceExtension)->Kind == CM_KIND_RESIDENT) {
+        return cmResidentDispatch(device, irp);
+    }
     if (((PCM_COMMON)device->DeviceExtension)->Kind == CM_KIND_QUERY) {
         return CmQueryDispatch(device, irp);
     }
@@ -393,6 +444,9 @@ static NTSTATUS cmDispatchPnp(PDEVICE_OBJECT device, PIRP irp)
 
 static NTSTATUS cmDispatchPower(PDEVICE_OBJECT device, PIRP irp)
 {
+    if (((PCM_COMMON)device->DeviceExtension)->Kind == CM_KIND_RESIDENT) {
+        return cmResidentDispatch(device, irp);
+    }
     if (((PCM_COMMON)device->DeviceExtension)->Kind == CM_KIND_QUERY) {
         return CmQueryDispatch(device, irp);
     }
@@ -421,6 +475,9 @@ static NTSTATUS cmDispatchOther(PDEVICE_OBJECT device, PIRP irp)
     PCM_COMMON common;
 
     common = (PCM_COMMON)device->DeviceExtension;
+    if (common->Kind == CM_KIND_RESIDENT) {
+        return cmResidentDispatch(device, irp);
+    }
     if (common->Kind == CM_KIND_QUERY) {
         return CmQueryDispatch(device, irp);
     }
@@ -437,6 +494,7 @@ static NTSTATUS cmDispatchOther(PDEVICE_OBJECT device, PIRP irp)
 
 NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 {
+    NTSTATUS status;
     ULONG i;
 
     UNREFERENCED_PARAMETER(RegistryPath);
@@ -445,15 +503,26 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         return STATUS_UNSUCCESSFUL;
     }
     CmDriverObject = DriverObject;
+    /* 98 SE and ME (stor98cm.h R4; record 21 section 7.9): the resident
+     * object before anything is set up, so a failure, which fails the
+     * load, leaves nothing to undo and deletes nothing here (on 98 an
+     * IoDeleteDevice inside DriverEntry calls the unload routine,
+     * win98-wdm.md). */
+    if (!IoIsWdmVersionAvailable(1, 0x10)) {
+        status = cmResidentCreate(DriverObject);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+    }
     KeInitializeSpinLock(&cmDetachLock);
     CmPoolInit();
     /* The unload routine is set before CmNvlinkInit: on NT, the load that
      * publishes the link-state table takes the routine away there, before
      * its callback can answer (task 45.31), and nothing after gives it
-     * back. Windows 98 SE and ME: resident for the boot, whatever the PnP
-     * devices do (stor98cm.h R4: the link-state channel's proof key is
-     * answered from this image, cm_nvlinkos.c), as a CONFIGMG worker's
-     * start made it before. */
+     * back. Windows 98 SE and ME: none either, though what keeps the image
+     * for the boot there is the resident object above (stor98cm.h R4: the
+     * link-state channel's proof key is answered from this image,
+     * cm_nvlinkos.c). */
     DriverObject->DriverUnload =
         IoIsWdmVersionAvailable(1, 0x10) ? cmUnload : NULL;
     CmRegInit();

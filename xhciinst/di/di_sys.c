@@ -341,6 +341,102 @@ cleanup:
 }
 
 /*
+ * Record 27 section 9.1 (design record 23 revision 67): removestale's
+ * conditions read again in the helper. First, here, everything that reads
+ * the registry or writes a trace line: no dnDevnode in the entry found
+ * ("If set, this contains the address of the DevNode associated with the
+ * device", setupx.h), its Enum entry's Driver value read and of 98's form,
+ * and the driver key it names not there: it does not open, and its class
+ * key's subkeys, enumerated to their end (ERROR_NO_MORE_ITEMS), do not hold
+ * its name (SURegOpenKey answered 1011, not 2, for a missing key on 98 SE,
+ * so its code proves nothing). Then di_sys_remove reads presence again as
+ * the last act before DIF_REMOVE. Read, never written.
+ */
+static int di_key_listed(DI_RUN *run, const char *driver)
+{
+    static char parent[DI_PATH_MAX + 1];
+    static char name[64];
+    const char *child = di_class_child(driver);
+    DWORD rc;
+    DWORD i;
+    HKEY hk;
+    int r = -1;
+
+    if (child == NULL || !di_class_parent(parent, sizeof parent, driver)) {
+        return -1;
+    }
+    rc = SURegOpenKey(HKEY_LOCAL_MACHINE, parent, &hk);
+    if (rc != DI_REG_OK) {
+        di_call(run, "SURegOpenKey", parent, (RETERR)rc);
+        return -1;
+    }
+    for (i = 0; i < 10000UL; i++) {
+        name[0] = '\0';
+        rc = SURegEnumKey(hk, i, name, sizeof name);
+        if (rc != DI_REG_OK) {
+            r = di_listed(child, NULL, (unsigned long)rc);
+            break;
+        }
+        name[sizeof name - 1] = '\0';
+        if (di_listed(child, name, 0UL) > 0) {
+            r = 1;
+            break;
+        }
+    }
+    SURegCloseKey(hk);
+    /* The code the enumeration ended on; 0 when it met the name, 65535
+     * when it stopped after 10000 names with no end (kept as not known). */
+    di_call(run, "SURegEnumKey", child,
+            (RETERR)(r == 1 ? 0 : i >= 10000UL ? 65535U : rc));
+    return r;
+}
+
+static const char *di_stale_why(DI_RUN *run, const DI_CMD *cmd,
+                                unsigned long devnode)
+{
+    static char path[DI_PATH_MAX + 1];
+    static char driver[64];
+    int driverRead = 0;
+    int keyState = -1;
+    DWORD rc;
+    DWORD cb;
+    DWORD type;
+    HKEY hk;
+
+    driver[0] = '\0';
+    if (di_enum_path(path, sizeof path, cmd->devid) &&
+        SURegOpenKey(HKEY_LOCAL_MACHINE, path, &hk) == DI_REG_OK) {
+        /* A string, read whole and terminated, or no Driver value at all
+         * (kept, "driver"): another type, an over-long value or bytes
+         * after a NUL are no value of 98's form. */
+        cb = sizeof driver - 1;
+        type = 0;
+        if (SURegQueryValueEx(hk, "Driver", NULL, &type, driver, &cb) ==
+                DI_REG_OK &&
+            di_driver_text((unsigned long)type, driver, (unsigned long)cb,
+                           sizeof driver)) {
+            driverRead = 1;
+        } else {
+            driver[0] = '\0';
+        }
+        SURegCloseKey(hk);
+    }
+    if (driverRead && di_driver_value_ok(driver) &&
+        di_class_path(path, sizeof path, driver)) {
+        rc = SURegOpenKey(HKEY_LOCAL_MACHINE, path, &hk);
+        di_call(run, "SURegOpenKey", driver, (RETERR)rc);
+        if (rc == DI_REG_OK) {
+            SURegCloseKey(hk);
+            keyState = 1;
+        } else {
+            keyState = di_key_listed(run, driver);
+        }
+    }
+    return di_stale_check(cmd->devid, devnode, driverRead, driver,
+                          keyState);
+}
+
+/*
  * Record 27 section 9: the entry found among every entry of the enumerator,
  * present or not, rebuilt with its own class (there is no INF), and removed
  * globally through the class installer, the engine's DiRemoveDevice the
@@ -355,8 +451,14 @@ void di_sys_remove(DI_RUN *run, const DI_CMD *cmd, HWND hwnd)
     LPDEVICE_INFO list = NULL;
     LPDEVICE_INFO lpdi = NULL;
     LPDEVICE_INFO e;
+    LPDEVICE_INFO present = NULL;
+    char enumerator[DI_ENUM_MAX];
+    const char *kept = NULL;
     unsigned long flags;
+    unsigned long devnode;
     RETERR err;
+    RETERR presentErr = OK;
+    int found;
 
     err = di_list(run, cmd, hwnd, 0, &list);
     if (err != OK) {
@@ -369,6 +471,7 @@ void di_sys_remove(DI_RUN *run, const DI_CMD *cmd, HWND hwnd)
         di_emit(run, di_out_result(&run->out, DI_V_NOT_FOUND, 0));
         goto cleanup;
     }
+    devnode = (unsigned long)e->dnDevnode;
     err = DiCreateDeviceInfo(&lpdi, e->szDescription, e->dnDevnode,
                              e->hRegKey, e->szRegSubkey,
                              e->szClassName[0] != '\0' ? e->szClassName : NULL,
@@ -383,6 +486,19 @@ void di_sys_remove(DI_RUN *run, const DI_CMD *cmd, HWND hwnd)
     DiDestroyDeviceInfoList(list);
     list = NULL;
 
+    if (cmd->job == DI_JOB_REMOVESTALE) {
+        /* Every registry read and trace line first (record 27 9.1). */
+        kept = di_stale_why(run, cmd, devnode);
+        if (kept == NULL &&
+            !di_enumerator(cmd->devid, enumerator, sizeof enumerator)) {
+            kept = DI_KEPT_LIST;
+        }
+        if (kept != NULL) {
+            di_emit(run, di_out_result_text(&run->out, DI_V_KEPT, kept));
+            goto cleanup;
+        }
+    }
+
     rdp.cbSize = sizeof rdp;
     rdp.dwFlags = DI_REMOVEDEVICE_GLOBAL;
     rdp.dwConfigID = 0;
@@ -390,7 +506,33 @@ void di_sys_remove(DI_RUN *run, const DI_CMD *cmd, HWND hwnd)
     lpdi->lpClassInstallParams = (LPARAM)(LPREMOVEDEVICE_PARAMS)&rdp;
     lpdi->Flags |= DI_CLASSINSTALLPARAMS;
 
-    err = DiCallClassInstaller(DIF_REMOVE, lpdi);
+    if (cmd->job == DI_JOB_REMOVESTALE) {
+        /* The last act before DIF_REMOVE: presence read again, with no
+         * registry call and no trace line between it and the dispatch;
+         * the listing's own line is written after. This narrows the
+         * window; neither call locks the configuration manager. */
+        presentErr = DiGetClassDevsEx(&present, NULL, enumerator, hwnd,
+                                      DIGCF_PRESENT | DIGCF_ALLCLASSES);
+        found = presentErr != OK ? -1 :
+                di_find(present, cmd->devid) != NULL ? 1 : 0;
+        kept = di_stale_final(found);
+        if (kept == NULL) {
+            err = DiCallClassInstaller(DIF_REMOVE, lpdi);
+        }
+        if (present != NULL) {
+            DiDestroyDeviceInfoList(present);
+        }
+        di_call(run, "DiGetClassDevsEx", "DIGCF_PRESENT|DIGCF_ALLCLASSES",
+                presentErr);
+        if (kept != NULL) {
+            lpdi->Flags &= ~DI_CLASSINSTALLPARAMS;
+            lpdi->lpClassInstallParams = 0;
+            di_emit(run, di_out_result_text(&run->out, DI_V_KEPT, kept));
+            goto cleanup;
+        }
+    } else {
+        err = DiCallClassInstaller(DIF_REMOVE, lpdi);
+    }
     di_call(run, "DiCallClassInstaller", "DIF_REMOVE", err);
     flags = (unsigned long)lpdi->Flags;
     di_emit(run, di_out_flags(&run->out, flags));
